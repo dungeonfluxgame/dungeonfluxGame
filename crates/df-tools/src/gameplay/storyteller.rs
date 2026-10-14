@@ -292,6 +292,9 @@ pub(super) enum ValidationFailure {
         slot: String,
         reason: &'static str,
     },
+    RepeatedSentence {
+        slot: String,
+    },
     NotTheRequestedShape,
 }
 
@@ -308,6 +311,7 @@ impl ValidationFailure {
             Self::ForbiddenTerm { .. } => "forbidden_term",
             Self::ControlCharacter { .. } => "control_character",
             Self::SpokenRule { .. } => "spoken_rule",
+            Self::RepeatedSentence { .. } => "repeated_sentence",
             Self::NotTheRequestedShape => "shape",
         }
     }
@@ -341,9 +345,28 @@ impl ValidationFailure {
                 format!("slot \"{slot}\" contained a control character or line break")
             }
             Self::SpokenRule { slot, reason } => format!("slot \"{slot}\": {reason}"),
+            Self::RepeatedSentence { slot } => format!(
+                "slot \"{slot}\" repeated a sentence already spoken in this scene; write a new sentence"
+            ),
             Self::NotTheRequestedShape => {
                 "the answer was not the requested JSON object of string fields".to_owned()
             }
+        }
+    }
+
+    fn slot(&self) -> Option<&str> {
+        match self {
+            Self::MissingSlot(slot) | Self::EmptySlot(slot) | Self::UnexpectedSlot(slot) => {
+                Some(slot)
+            }
+            Self::TooLong { slot, .. }
+            | Self::MissingMention { slot }
+            | Self::MechanicsLeak { slot }
+            | Self::ForbiddenTerm { slot }
+            | Self::ControlCharacter { slot }
+            | Self::SpokenRule { slot, .. }
+            | Self::RepeatedSentence { slot } => Some(slot),
+            Self::NotTheRequestedShape => None,
         }
     }
 }
@@ -362,7 +385,10 @@ pub(super) enum StorytellerError {
     /// The provider or transport failed, by safe failure class.
     Provider(ProviderFailureClass),
     /// The text broke a rule on both the first attempt and the single retry.
-    Rejected(ValidationFailure),
+    Rejected {
+        failure: ValidationFailure,
+        words: Option<String>,
+    },
 }
 
 impl fmt::Display for StorytellerError {
@@ -373,7 +399,7 @@ impl fmt::Display for StorytellerError {
             Self::InvalidRequest(reason) => write!(formatter, "invalid expression: {reason}"),
             Self::DeadlineExceeded => formatter.write_str("storyteller deadline exceeded"),
             Self::Provider(class) => write!(formatter, "provider failure: {class:?}"),
-            Self::Rejected(failure) => write!(formatter, "text rejected: {failure:?}"),
+            Self::Rejected { failure, .. } => write!(formatter, "text rejected: {failure:?}"),
         }
     }
 }
@@ -578,7 +604,7 @@ impl Storyteller {
             Err(StorytellerError::InvalidRequest(_)) => "invalid_request",
             Err(StorytellerError::DeadlineExceeded) => "deadline",
             Err(StorytellerError::Provider(_)) => "provider_failure",
-            Err(StorytellerError::Rejected(_)) => "rejected",
+            Err(StorytellerError::Rejected { .. }) => "rejected",
         });
         outcome
     }
@@ -612,7 +638,7 @@ impl Storyteller {
             Err(StorytellerError::InvalidRequest(_)) => "invalid_request",
             Err(StorytellerError::DeadlineExceeded) => "deadline",
             Err(StorytellerError::Provider(_)) => "provider_failure",
-            Err(StorytellerError::Rejected(_)) => "rejected",
+            Err(StorytellerError::Rejected { .. }) => "rejected",
         });
         outcome
     }
@@ -640,7 +666,10 @@ impl Storyteller {
         let started = Instant::now();
         let mut tokens = 0_u64;
         let mut complaint: Option<String> = None;
-        let mut last = StorytellerError::Rejected(ValidationFailure::NotTheRequestedShape);
+        let mut last = StorytellerError::Rejected {
+            failure: ValidationFailure::NotTheRequestedShape,
+            words: None,
+        };
         for attempt in 1_u64..=2 {
             let pending: Vec<Slot> = request
                 .slots
@@ -681,15 +710,27 @@ impl Storyteller {
                             ("storyteller.rejected", rejected.len().to_string()),
                         ],
                     );
-                    if let Some((_, failure)) = rejected.iter().next() {
+                    let chosen = rejected
+                        .iter()
+                        .find(|(slot, _)| slot.as_str() == "reply")
+                        .or_else(|| rejected.iter().next());
+                    if let Some((slot, failure)) = chosen {
                         complaint = Some(failure.complaint());
-                        last = StorytellerError::Rejected(failure.clone());
+                        last = StorytellerError::Rejected {
+                            failure: failure.clone(),
+                            words: (slot == "reply")
+                                .then(|| values.get(slot).cloned())
+                                .flatten(),
+                        };
                     }
                 }
                 Ok(Attempt::BadShape) => {
                     let failure = ValidationFailure::NotTheRequestedShape;
                     complaint = Some(failure.complaint());
-                    last = StorytellerError::Rejected(failure);
+                    last = StorytellerError::Rejected {
+                        failure,
+                        words: None,
+                    };
                 }
                 Err(error) => {
                     span.event(
@@ -744,7 +785,10 @@ impl Storyteller {
         }
         let started = Instant::now();
         let mut complaint: Option<String> = None;
-        let mut last = StorytellerError::Rejected(ValidationFailure::NotTheRequestedShape);
+        let mut last = StorytellerError::Rejected {
+            failure: ValidationFailure::NotTheRequestedShape,
+            words: None,
+        };
         for attempt in 1_u64..=2 {
             let prompt = build_prompt(request, complaint.as_deref());
             let reserved = online.reserve(&prompt, request)?;
@@ -787,13 +831,21 @@ impl Storyteller {
                             &[("storyteller.attempt", attempt.to_string())],
                         );
                         complaint = Some(failure.complaint());
-                        last = StorytellerError::Rejected(failure);
+                        last = StorytellerError::Rejected {
+                            words: (failure.slot() == Some("reply"))
+                                .then(|| values.get("reply").cloned())
+                                .flatten(),
+                            failure,
+                        };
                     }
                 },
                 Ok(Attempt::BadShape) => {
                     let failure = ValidationFailure::NotTheRequestedShape;
                     complaint = Some(failure.complaint());
-                    last = StorytellerError::Rejected(failure);
+                    last = StorytellerError::Rejected {
+                        failure,
+                        words: None,
+                    };
                 }
                 Err(error) => {
                     span.event(
@@ -1420,6 +1472,11 @@ fn validate_slot(
         });
     }
     if let Some(reason) = slot.spoken.iter().find_map(|rule| rule.violation(text)) {
+        if reason.starts_with("a sentence repeated something already said") {
+            return Err(ValidationFailure::RepeatedSentence {
+                slot: slot.name.clone(),
+            });
+        }
         return Err(ValidationFailure::SpokenRule {
             slot: slot.name.clone(),
             reason,

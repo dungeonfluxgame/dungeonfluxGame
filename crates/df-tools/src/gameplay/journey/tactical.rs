@@ -151,14 +151,36 @@ fn preferred_scene(id: &str) -> Option<&'static str> {
         .map(|(known, _)| *known)
 }
 
+#[cfg(test)]
+fn playable_scene_ids() -> impl Iterator<Item = &'static str> {
+    SCENES.iter().filter_map(|(id, _)| {
+        if preferred_scene(id) != Some(*id) {
+            return None;
+        }
+        let scene = df_render::battle::load_embedded(id)
+            .expect("every server scene is embedded in the renderer")
+            .expect("every server scene parses");
+        scene.playable.then_some(*id)
+    })
+}
+
 /// Records the forced scene at startup. The id must be one of the scenes the server holds.
 pub(in crate::gameplay) fn force_scene(id: Option<&str>) -> Result<(), String> {
     let forced = match id {
         None => None,
-        Some(id) => Some(
-            preferred_scene(id)
-                .ok_or_else(|| format!("DF_GAMEPLAY_BATTLE_SCENE {id:?} has no authored grid"))?,
-        ),
+        Some(id) => {
+            let scene_id = preferred_scene(id)
+                .ok_or_else(|| format!("DF_GAMEPLAY_BATTLE_SCENE {id:?} has no authored grid"))?;
+            let scene = df_render::battle::load_embedded(scene_id)
+                .ok_or_else(|| format!("DF_GAMEPLAY_BATTLE_SCENE {id:?} has no rendered scene"))?
+                .map_err(|error| {
+                    format!("DF_GAMEPLAY_BATTLE_SCENE {id:?} is invalid: {error:?}")
+                })?;
+            if !scene.playable {
+                return Err(format!("DF_GAMEPLAY_BATTLE_SCENE {id:?} is not playable"));
+            }
+            Some(scene_id)
+        }
     };
     FORCED_SCENE
         .set(forced)
@@ -365,10 +387,7 @@ fn binding<'a>(
 /// Records `step` as the refusing step when `result` is an error, then passes it through.
 /// The first note of a command wins, so the innermost named step is what the session
 /// owner's `REFUSAL` line prints.
-fn noted<T>(
-    step: &'static str,
-    result: Result<T, RepositoryError>,
-) -> Result<T, RepositoryError> {
+fn noted<T>(step: &'static str, result: Result<T, RepositoryError>) -> Result<T, RepositoryError> {
     if result.is_err() {
         crate::gameplay::refusal_detail::note(step);
     }
@@ -1027,8 +1046,10 @@ pub(super) fn start(
             .map(|(_, bytes)| *bytes)
             .ok_or(RepositoryError::InvalidCandidate),
     )?;
-    let scene: tactical_rules::BattleSceneData =
-        noted("fight-scene-parse", serde_json::from_slice(bytes).map_err(bad))?;
+    let scene: tactical_rules::BattleSceneData = noted(
+        "fight-scene-parse",
+        serde_json::from_slice(bytes).map_err(bad),
+    )?;
     if scene.layouts.is_empty() {
         return noted(
             "fight-scene-layouts",
@@ -1116,8 +1137,9 @@ pub(super) fn start(
         specs.push(spec);
         actors.push((id, entity));
     }
-    for (index, (who, source_id, ammunition)) in
-        noted("fight-enemy-roster", enemies())?.into_iter().enumerate()
+    for (index, (who, source_id, ammunition)) in noted("fight-enemy-roster", enemies())?
+        .into_iter()
+        .enumerate()
     {
         let id = u32::try_from(index + 3).map_err(bad)?;
         let cell = *noted(
@@ -1304,6 +1326,22 @@ pub(in crate::gameplay) fn combat_action(kind: rpc::GameplayActionKind) -> bool 
             | rpc::GameplayActionKind::PickUpWeapon
     )
 }
+fn dash_has_destination(
+    battle: &Battle,
+    actor: u32,
+    context: DrawBinding<'_>,
+) -> Result<bool, RuleError> {
+    let dashed = match tactical_rules::resolve(battle, actor, &Action::Dash, context, &[]) {
+        Ok(resolution) => resolution.battle,
+        Err(RuleError::ActionSpent) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let origin = battle.actor(actor)?.cell();
+    Ok(dashed
+        .reachable_cells(actor)?
+        .into_iter()
+        .any(|destination| destination != origin))
+}
 fn options(
     state: &GameState,
     actor: u32,
@@ -1434,7 +1472,18 @@ fn options(
                     ));
                 }
             }
-            K::Dash => candidates.push((String::new(), Action::Dash, "Dash".to_owned())),
+            K::Dash => {
+                let has_destination = match dash_has_destination(&battle, actor, context) {
+                    Ok(has_destination) => has_destination,
+                    Err(error) => {
+                        crate::gameplay::refusal_detail::note("dash-destination-check");
+                        return Err(bad(error));
+                    }
+                };
+                if has_destination {
+                    candidates.push((String::new(), Action::Dash, "Dash".to_owned()));
+                }
+            }
             K::Dodge => candidates.push((String::new(), Action::Dodge, "Dodge".to_owned())),
             K::Disengage => {
                 candidates.push((String::new(), Action::Disengage, "Disengage".to_owned()))
@@ -2685,6 +2734,31 @@ pub(super) mod tests {
         )
         .unwrap()
     }
+    fn with_dying_companion(current: &Checkpoint, helper: EntityId, target: EntityId) -> GameState {
+        let mut state = current.state().clone();
+        let helper_id = super::actor_id(&state, helper).unwrap();
+        let target_id = super::actor_id(&state, target).unwrap();
+        let snapshot = state.encounters[0].tactical.as_mut().unwrap();
+        let mut battle: serde_json::Value = serde_json::from_slice(&snapshot.state).unwrap();
+        let order = battle["order"].as_array().unwrap();
+        let active = order
+            .iter()
+            .position(|id| id.as_u64() == Some(u64::from(helper_id)))
+            .unwrap();
+        battle["active"] = serde_json::json!(active);
+        battle["needs_death_save"] = serde_json::json!(false);
+        let actors = battle["actors"].as_array_mut().unwrap();
+        let target = actors
+            .iter_mut()
+            .find(|actor| actor["spec"]["id"].as_u64() == Some(u64::from(target_id)))
+            .unwrap();
+        target["health"]["hit_points"] = serde_json::json!(0);
+        target["health"]["unconscious"] = serde_json::json!(true);
+        target["health"]["dead"] = serde_json::json!(false);
+        target["health"]["stable"] = serde_json::json!(false);
+        snapshot.state = serde_json::to_vec(&battle).unwrap();
+        state
+    }
     pub(in crate::gameplay::journey) fn current_defeat(approach: &str) -> Checkpoint {
         use rpc::GameplayActionKind as K;
         let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -2875,12 +2949,9 @@ pub(super) mod tests {
                 operation
             })
             .find(|operation| {
-                operation
-                    .iter()
-                    .fold(0_usize, |hash, value| {
-                        hash.wrapping_mul(31).wrapping_add(usize::from(*value))
-                    })
-                    % layouts
+                operation.iter().fold(0_usize, |hash, value| {
+                    hash.wrapping_mul(31).wrapping_add(usize::from(*value))
+                }) % layouts
                     == wanted
             })
             .expect("an operation id selects each layout")
@@ -3038,6 +3109,7 @@ pub(super) mod tests {
             recovery_hours: 4,
             lines: vec![line; 4],
             sequence: u64::MAX,
+            stabilization: None,
         };
         let encoded = outcome.encode_to_vec().len();
         assert!(encoded <= 2048, "one worst-case outcome is {encoded} bytes");
@@ -3070,11 +3142,12 @@ pub(super) mod tests {
                     .into_iter()
                     .map(|participant| participant.character.unwrap())
                     .collect::<Vec<_>>();
-                for id in scene_ids() {
+                for id in playable_scene_ids() {
                     let bytes = scene_bytes(id).unwrap();
                     let data: tactical_rules::BattleSceneData =
                         serde_json::from_slice(bytes).unwrap();
-                    TEST_SCENE_OVERRIDE.with(|own| own.set(scene_ids().find(|known| *known == id)));
+                    TEST_SCENE_OVERRIDE
+                        .with(|own| own.set(playable_scene_ids().find(|known| *known == id)));
                     for layout in &data.layouts {
                         let layout_index = data
                             .layouts
@@ -3291,13 +3364,64 @@ pub(super) mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn dash_is_not_offered_when_doubled_movement_has_no_destination_srd_521_p180() {
+        with_live(|| {
+            use rpc::GameplayActionKind as K;
+            TEST_SCENE_OVERRIDE.with(|own| own.set(Some("scan-village-voxel-v1")));
+            let current = staged_fight_with_character_storage_order(
+                true,
+                operation_for_layout(1, 2),
+                &[20, 17, 1],
+                false,
+            )
+            .unwrap();
+            let original_state = current.state().clone();
+            let battle = read(&original_state).unwrap();
+            let active = battle.active_actor().unwrap();
+            let mut saved: serde_json::Value =
+                serde_json::from_slice(&battle.snapshot().unwrap()).unwrap();
+            for actor in saved["actors"].as_array_mut().unwrap() {
+                let id = actor["spec"]["id"].as_u64().unwrap() as u32;
+                if id == active {
+                    actor["spec"]["cell"] = serde_json::json!([4, 0]);
+                }
+            }
+            let battle =
+                Battle::from_snapshot(battle.map().clone(), &serde_json::to_vec(&saved).unwrap())
+                    .unwrap();
+            let actor = battle.actor(active).unwrap();
+            let maximum_movement = actor
+                .movement_remaining_ft()
+                .saturating_add(actor.speed_ft());
+            let (cols, rows) = battle.map().dimensions();
+            assert!((0..rows).all(|row| {
+                (0..cols).all(|col| {
+                    let destination = tactical_rules::Cell(col, row);
+                    destination == actor.cell()
+                        || battle
+                            .shortest_path(active, destination, Some(maximum_movement))
+                            .is_err()
+                })
+            }));
+
+            let mut state = original_state;
+            state.encounters[0].tactical.as_mut().unwrap().state = battle.snapshot().unwrap();
+            let current = model::checkpoint(current.basis(), state).unwrap();
+            assert!(
+                options(current.state(), active, K::Dash)
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    }
     /// A test fight against one to the most enemies starts on every battle scene the server
     /// holds (the two painted-story scenes, the others and the four scans): each enemy of the
     /// roster stands on its own enemy spawn cell of the chosen layout, and the heroes on theirs.
     #[test]
     fn a_test_fight_of_one_to_the_most_enemies_places_everyone_on_every_battle_scene() {
         with_live(|| {
-            for id in scene_ids() {
+            for id in playable_scene_ids() {
                 let bytes = scene_bytes(id).unwrap();
                 let data: tactical_rules::BattleSceneData = serde_json::from_slice(bytes).unwrap();
                 for layout in &data.layouts {
@@ -3308,7 +3432,8 @@ pub(super) mod tests {
                         layout.id
                     );
                 }
-                TEST_SCENE_OVERRIDE.with(|own| own.set(scene_ids().find(|known| *known == id)));
+                TEST_SCENE_OVERRIDE
+                    .with(|own| own.set(playable_scene_ids().find(|known| *known == id)));
                 for count in [1, 2, 3, MAXIMUM_ENEMIES] {
                     TEST_FIGHT_OVERRIDE.with(|own| {
                         *own.borrow_mut() = Some(TestFight {
@@ -3576,6 +3701,115 @@ pub(super) mod tests {
         )
         .unwrap();
         pack::with_test_pack(loaded, run);
+    }
+    #[test]
+    fn stabilisation_offers_name_a_dying_companion_and_only_carriers_get_the_kit_srd_521_p18_p97() {
+        // Help stabilization is SRD 5.2.1 p18; the Healer's Kit is p97.
+        with_live(|| {
+            use rpc::GameplayActionKind as K;
+            let current = fight(true);
+            let battle = read(current.state()).unwrap();
+            let kit_owner = current
+                .state()
+                .inventory
+                .iter()
+                .find(|item| item.origin.entry.as_str() == "healers-kit")
+                .unwrap()
+                .owner;
+            let kit_actor = super::actor_id(current.state(), kit_owner).unwrap();
+            let kit_cell = battle.actor(kit_actor).unwrap().cell();
+            let target = battle
+                .combatants()
+                .iter()
+                .find(|actor| {
+                    actor.id() != kit_actor
+                        && actor.side() == Side::Heroes
+                        && actor.cell().distance(kit_cell) <= 5
+                })
+                .unwrap();
+            let target_owner = super::canonical(current.state(), target.id()).unwrap();
+            let dying = with_dying_companion(&current, kit_owner, target_owner);
+            let kit = options(&dying, kit_actor, K::StabiliseWithHealersKit).unwrap();
+            let medicine = options(&dying, kit_actor, K::StabiliseMedicine).unwrap();
+            let target_name = super::name(&dying, target_owner).unwrap();
+            assert_eq!(kit.len(), 1);
+            assert!(kit[0].2.contains(&target_name));
+            assert!(kit[0].2.contains("Healer's Kit"));
+            assert!(kit[0].2.contains("10 uses left"));
+            assert_eq!(medicine.len(), 1);
+            assert!(medicine[0].2.contains(&target_name));
+            assert!(medicine[0].2.contains("Wisdom (Medicine) DC 10"));
+
+            let archer = entity(ENTITIES[1]).unwrap();
+            let archer_actor = super::actor_id(current.state(), archer).unwrap();
+            let archer_cell = battle.actor(archer_actor).unwrap().cell();
+            let archer_target = battle
+                .combatants()
+                .iter()
+                .find(|actor| {
+                    actor.id() != archer_actor
+                        && actor.side() == Side::Heroes
+                        && actor.cell().distance(archer_cell) <= 5
+                })
+                .unwrap();
+            let archer_target_owner =
+                super::canonical(current.state(), archer_target.id()).unwrap();
+            let archer_dying = with_dying_companion(&current, archer, archer_target_owner);
+            assert!(
+                options(&archer_dying, archer_actor, K::StabiliseWithHealersKit)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                options(&archer_dying, archer_actor, K::StabiliseMedicine)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        });
+    }
+    #[test]
+    fn stored_games_without_a_healer_kit_use_field_load_ten_for_a_carrier_srd_521_p97() {
+        // A Healer's Kit has ten uses (SRD 5.2.1 p97); Fighter B + Soldier B carries none.
+        with_live(|| {
+            let current = fight(true);
+            let carrier = current
+                .state()
+                .inventory
+                .iter()
+                .find(|item| item.origin.entry.as_str() == "healers-kit")
+                .unwrap()
+                .owner;
+            let mut stored = current.state().clone();
+            let label = model::label("healer-kit-uses").unwrap();
+            stored
+                .resources
+                .retain(|resource| !(resource.owner == carrier && resource.resource == label));
+
+            assert_eq!(
+                super::super::value(&stored, carrier, "healer-kit-uses").unwrap(),
+                10
+            );
+            let sheet = super::super::character_sheet(&stored, carrier).unwrap();
+            assert!(
+                sheet
+                    .facts
+                    .iter()
+                    .any(|fact| fact.label == "Healer's Kit" && fact.value == "10 uses")
+            );
+            let archer = entity(ENTITIES[1]).unwrap();
+            assert_eq!(
+                super::super::value(&stored, archer, "healer-kit-uses").unwrap(),
+                0
+            );
+            assert!(
+                super::super::character_sheet(&stored, archer)
+                    .unwrap()
+                    .facts
+                    .iter()
+                    .all(|fact| fact.label != "Healer's Kit")
+            );
+        });
     }
     #[test]
     fn tactical_illegal_cell_target_wrong_turn_and_stale_revision_refuse_without_draw_or_state_change()
@@ -5353,12 +5587,55 @@ mod shared_scene_tests {
         df_render::battle::Cell::new(col, row)
     }
 
+    fn scan_distances(
+        grid: &df_render::battle::Grid,
+        free: &std::collections::BTreeSet<df_render::battle::Cell>,
+        start: df_render::battle::Cell,
+        excluded: Option<df_render::battle::Cell>,
+    ) -> std::collections::BTreeMap<df_render::battle::Cell, usize> {
+        let mut distances = std::collections::BTreeMap::new();
+        if !free.contains(&start) || excluded == Some(start) {
+            return distances;
+        }
+        let mut pending = std::collections::VecDeque::from([start]);
+        distances.insert(start, 0);
+        while let Some(current) = pending.pop_front() {
+            let current_distance = distances[&current];
+            for row_delta in -1..=1 {
+                for col_delta in -1..=1 {
+                    if col_delta == 0 && row_delta == 0 {
+                        continue;
+                    }
+                    let next = cell(current.col + col_delta, current.row + row_delta);
+                    if excluded == Some(next)
+                        || !free.contains(&next)
+                        || !grid.step_clear(current, next)
+                    {
+                        continue;
+                    }
+                    if col_delta != 0
+                        && row_delta != 0
+                        && (!free.contains(&cell(current.col + col_delta, current.row))
+                            || !free.contains(&cell(current.col, current.row + row_delta)))
+                    {
+                        continue;
+                    }
+                    if !distances.contains_key(&next) {
+                        distances.insert(next, current_distance + 1);
+                        pending.push_back(next);
+                    }
+                }
+            }
+        }
+        distances
+    }
+
     /// Every scene the server can stage a fight on, with its layouts as the rules parse them and
     /// as the renderer parses the same file.
     #[test]
-    fn every_scan_layout_the_server_can_choose_is_valid_for_the_rules_and_matches_the_renderer() {
+    fn every_scan_layout_the_server_can_choose_matches_the_renderer_srd_521_p15() {
         let mut scans = 0;
-        for id in scene_ids() {
+        for id in playable_scene_ids() {
             let bytes = scene_bytes(id).unwrap();
             let data: BattleSceneData = serde_json::from_slice(bytes).unwrap();
             let render = df_render::battle::load_embedded(id)
@@ -5427,6 +5704,92 @@ mod shared_scene_tests {
                         );
                     }
                 }
+                if id.ends_with("-voxel-v1") {
+                    let free: std::collections::BTreeSet<_> = grid.walkable_cells().collect();
+                    let occupied: std::collections::BTreeSet<_> =
+                        drawn.heroes.iter().chain(&drawn.enemies).copied().collect();
+                    let largest = free
+                        .iter()
+                        .map(|&start| scan_distances(&grid, &free, start, None).len())
+                        .max()
+                        .unwrap_or(0);
+                    for side in [&drawn.heroes, &drawn.enemies] {
+                        for &spawn in side {
+                            let exits = (-1..=1)
+                                .flat_map(|row_delta| {
+                                    (-1..=1).map(move |col_delta| (col_delta, row_delta))
+                                })
+                                .filter(|&(col_delta, row_delta)| {
+                                    if col_delta == 0 && row_delta == 0 {
+                                        return false;
+                                    }
+                                    let next = cell(spawn.col + col_delta, spawn.row + row_delta);
+                                    free.contains(&next)
+                                        && !occupied.contains(&next)
+                                        && grid.step_clear(spawn, next)
+                                        && (col_delta == 0
+                                            || row_delta == 0
+                                            || (free
+                                                .contains(&cell(spawn.col + col_delta, spawn.row))
+                                                && free.contains(&cell(
+                                                    spawn.col,
+                                                    spawn.row + row_delta,
+                                                ))))
+                                })
+                                .count();
+                            assert!(
+                                exits >= 2,
+                                "{id}/{}: {spawn:?} has fewer than two free exits",
+                                layout.id
+                            );
+                            assert_eq!(
+                                scan_distances(&grid, &free, spawn, None).len(),
+                                largest,
+                                "{id}/{}: {spawn:?} is outside the largest walkable area",
+                                layout.id
+                            );
+                            for &other in side.iter().filter(|&&other| other != spawn) {
+                                let largest_without = free
+                                    .iter()
+                                    .filter(|&&candidate| candidate != other)
+                                    .map(|&candidate| {
+                                        scan_distances(&grid, &free, candidate, Some(other)).len()
+                                    })
+                                    .max()
+                                    .unwrap_or(0);
+                                assert_eq!(
+                                    scan_distances(&grid, &free, spawn, Some(other)).len(),
+                                    largest_without,
+                                    "{id}/{}: removing same-side spawn {other:?} isolates {spawn:?}",
+                                    layout.id
+                                );
+                            }
+                        }
+                    }
+                    for &hero in &drawn.heroes {
+                        let distances = scan_distances(&grid, &free, hero, None);
+                        for &enemy in &drawn.enemies {
+                            assert!(
+                                distances.get(&enemy).is_some_and(|steps| *steps >= 3),
+                                "{id}/{}: hero {hero:?} and enemy {enemy:?} are fewer than three steps apart",
+                                layout.id
+                            );
+                        }
+                    }
+                    let north_south = layout.id == "north-south";
+                    let opposing_banks = if north_south {
+                        drawn.heroes.iter().map(|spawn| spawn.row).min().unwrap()
+                            > drawn.enemies.iter().map(|spawn| spawn.row).max().unwrap()
+                    } else {
+                        drawn.enemies.iter().map(|spawn| spawn.col).min().unwrap()
+                            > drawn.heroes.iter().map(|spawn| spawn.col).max().unwrap()
+                    };
+                    assert!(
+                        opposing_banks,
+                        "{id}/{}: start squares are not on opposing banks",
+                        layout.id
+                    );
+                }
                 for &[from, to] in &data.grid.blocked_steps {
                     assert!(!grid.step_clear(
                         cell(i32::from(from.0), i32::from(from.1)),
@@ -5435,7 +5798,29 @@ mod shared_scene_tests {
                     // A fence between two cells that share an edge stops a line as well as a
                     // body; a blocked diagonal step only stops the body.
                     if from.0 == to.0 || from.1 == to.1 {
-                        assert_eq!(map.cover_between(from, to, &[]), Ok(Cover::Total));
+                        let height = data.grid.step_heights_dm.as_ref().and_then(|heights| {
+                            data.grid
+                                .blocked_steps
+                                .iter()
+                                .position(|step| *step == [from, to])
+                                .map(|index| heights[index])
+                        });
+                        let expected = height.map_or(Cover::Total, |height_dm| {
+                            let height = u32::from(height_dm);
+                            if height * 4 < 18 {
+                                Cover::None
+                            } else if height * 2 <= 18 {
+                                Cover::Half
+                            } else if height * 4 <= 54 {
+                                Cover::ThreeQuarters
+                            } else {
+                                Cover::Total
+                            }
+                        });
+                        assert!(
+                            map.cover_between(from, to, &[]).unwrap() >= expected,
+                            "{id}: barrier between {from:?} and {to:?} has insufficient cover"
+                        );
                     }
                 }
                 for hero in &drawn.heroes {
@@ -5491,9 +5876,17 @@ mod shared_scene_tests {
                 }
             }
         }
+        assert_eq!(scans, 3, "three playable collider-authored scan revisions");
+    }
+
+    #[test]
+    fn unplayable_scan_is_kept_but_cannot_be_forced_or_swept() {
+        let summit = "scan-summit-voxel-v1";
+        assert!(scene_ids().any(|id| id == summit));
+        assert!(!playable_scene_ids().any(|id| id == summit));
         assert_eq!(
-            scans, 8,
-            "four original and four collider-authored scan revisions"
+            force_scene(Some("scan-summit")),
+            Err("DF_GAMEPLAY_BATTLE_SCENE \"scan-summit\" is not playable".to_owned())
         );
     }
 
@@ -5582,6 +5975,64 @@ mod shared_scene_tests {
         assert_eq!(staged_location("salt-quay".to_owned()), "salt-quay");
     }
 
+    // Stabilising with Help uses Medicine (SRD 5.2.1 p18); a Healer's Kit uses one of ten
+    // uses without a check (p97).
+    #[test]
+    fn stabilisation_audit_lines_include_method_and_result_srd_521_p18_p97() {
+        let kit = rpc::CombatOutcome {
+            actor_name: "Brakka".to_owned(),
+            target_name: "Sigrun".to_owned(),
+            kind: rpc::OutcomeKind::Stabilisation as i32,
+            stabilization: Some(rpc::StabilizationResult {
+                method: rpc::StabilizationMethod::HealersKit as i32,
+                uses_left: 9,
+                succeeded: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::super::super::table_log::audit_line(&kit),
+            "COMBAT stabilise actor=\"Brakka\" target=\"Sigrun\" method=kit uses_left=9"
+        );
+        let lines = super::super::super::table_log::action_lines(
+            rpc::GameplayActionKind::StabiliseWithHealersKit,
+            "Brakka",
+            std::slice::from_ref(&kit),
+            "",
+            "",
+            "Stabilise Sigrun with the Healer's Kit (9 uses left)",
+        );
+        assert_eq!(lines[0].text, "steadies Sigrun: Sigrun is stable");
+
+        let medicine = rpc::CombatOutcome {
+            stabilization: Some(rpc::StabilizationResult {
+                method: rpc::StabilizationMethod::Medicine as i32,
+                die: 7,
+                wisdom_modifier: 1,
+                dc: 10,
+                succeeded: false,
+                ..Default::default()
+            }),
+            ..kit
+        };
+        assert_eq!(
+            super::super::super::table_log::audit_line(&medicine),
+            "COMBAT stabilise actor=\"Brakka\" target=\"Sigrun\" method=medicine die=7 modifier=1 dc=10 result=failure"
+        );
+        let lines = super::super::super::table_log::action_lines(
+            rpc::GameplayActionKind::StabiliseMedicine,
+            "Brakka",
+            std::slice::from_ref(&medicine),
+            "",
+            "",
+            "Stabilise Sigrun (Wisdom (Medicine) DC 10)",
+        );
+        assert_eq!(
+            lines[0].text,
+            "tries to steady Sigrun, but the Medicine check fails"
+        );
+    }
     /// SRD 5.2.1 p. 14: an Opportunity Attack is a melee attack made as a Reaction.
     #[test]
     fn tactical_opportunity_attack_audit_line_names_its_reaction() {

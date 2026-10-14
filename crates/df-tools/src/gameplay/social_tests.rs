@@ -95,6 +95,184 @@ fn the_keyword_reader_names_the_social_approach_of_a_line() {
 }
 
 #[test]
+fn the_keyword_reader_covers_ten_lines_for_each_approach_srd_5_2_1_page_184() {
+    // SRD 5.2.1, p. 184: “Describe or roleplay how you're communicating with the monster.”
+    // These examples classify table talk only; they do not make or resolve an Influence check.
+    let examples: [(Approach, [&str; 10]); 11] = [
+        (
+            Approach::Question,
+            [
+                "Who is waiting at the ferry?",
+                "What happened to the parcel?",
+                "Why did you come here?",
+                "Where should we go next?",
+                "When does the boat leave?",
+                "How do you know the mapmaker?",
+                "Could you explain the warning?",
+                "Tell me about this office.",
+                "Would you name the person involved?",
+                "May I ask what you need?",
+            ],
+        ),
+        (
+            Approach::Kindness,
+            [
+                "Thank you for trusting us.",
+                "I am sorry this frightened you.",
+                "We will help you carry it.",
+                "Don't worry, you're safe with us.",
+                "Are you alright after that journey?",
+                "I understand this must be hard.",
+                "Here to help, if you'll let us.",
+                "Thanks for telling us the truth.",
+                "Must be difficult to wait alone.",
+                "I will help you reach your friend.",
+            ],
+        ),
+        (
+            Approach::Flattery,
+            [
+                "You are wise to be cautious.",
+                "That was a brilliant plan.",
+                "Your work is impressive.",
+                "You are wonderfully clever.",
+                "That is an amazing map.",
+                "You have a famous reputation.",
+                "You are a talented guide.",
+                "Your judgment is magnificent.",
+                "That was a great choice.",
+                "You are the bravest clerk I know.",
+            ],
+        ),
+        (
+            Approach::Flirting,
+            [
+                "You look beautiful tonight.",
+                "That smile is charming.",
+                "Would you have dinner with me?",
+                "Your eyes are lovely.",
+                "I would gladly kiss you.",
+                "You are gorgeous in that coat.",
+                "May I call you sweetheart?",
+                "I fancy you, if I'm honest.",
+                "You have a handsome face.",
+                "Care to share a dance, darling?",
+            ],
+        ),
+        (
+            Approach::Persuasion,
+            [
+                "Trust me, we can do this.",
+                "I promise we will return it.",
+                "Believe me, this is the safest path.",
+                "Surely you can see the reason.",
+                "Please let us explain our plan.",
+                "The map will help us find him.",
+                "We can reach the inn before night.",
+                "Our plan gives everyone a chance.",
+                "This is the best way to protect them.",
+                "You should let us carry the message.",
+            ],
+        ),
+        (
+            Approach::Deception,
+            [
+                "I am the harbourmaster's deputy.",
+                "I'm the captain's new courier.",
+                "The harbourmaster sent us to inspect it.",
+                "I work for the city watch.",
+                "We came from the royal office.",
+                "The captain told us you agreed already.",
+                "I am a sworn mapmaker from the guild.",
+                "The guard ordered us to take charge.",
+                "I'm carrying an official order from the duke.",
+                "The magistrate says you must tell us everything.",
+            ],
+        ),
+        (
+            Approach::Intimidation,
+            [
+                "Give it to me or else.",
+                "Hand over the key or I will break your arm.",
+                "I will hurt you if you refuse.",
+                "Tell me or I will end you.",
+                "You will regret making me wait.",
+                "Talk or I draw my sword.",
+                "Last warning before I burn this place down.",
+                "I will make you bleed for that lie.",
+                "Tell me now or I leave and Tomas can fend for himself.",
+                "Give up the letter, or I'll cut your throat.",
+            ],
+        ),
+        (
+            Approach::Bribe,
+            [
+                "Here are ten gold pieces for your trouble.",
+                "I will pay you to keep quiet.",
+                "Take this silver if you help us.",
+                "I offer a purse of coins for the key.",
+                "Let me give you gold for the map.",
+                "A few coins will make this worth your while.",
+                "I'll pay you well to carry the note.",
+                "Accept this payment and open the door.",
+                "This gold is yours if you guide us.",
+                "I can reward you with coin for your silence.",
+            ],
+        ),
+        (
+            Approach::Bargain,
+            [
+                "What will you pay us for carrying it?",
+                "What do we get if we help you?",
+                "How much is the reward?",
+                "Name your price for the errand.",
+                "Our price is ten gold.",
+                "Will we be compensated for the danger?",
+                "What do you offer in return?",
+                "What's in it for us if we agree?",
+                "Is there a payment for the journey?",
+                "What reward can we expect?",
+            ],
+        ),
+        (
+            Approach::Insult,
+            [
+                "You are an idiot.",
+                "That was foolish of you.",
+                "You coward, answer me.",
+                "That is a stupid idea.",
+                "You are worthless at this job.",
+                "What a pathetic excuse.",
+                "You are useless to us.",
+                "Don't be such a liar.",
+                "You look disgusting in that coat.",
+                "Only a fool would lose the letter.",
+            ],
+        ),
+        (
+            Approach::Other,
+            [
+                "Hmm.",
+                "I tap the table twice.",
+                "The rain is getting heavier.",
+                "Let me think for a moment.",
+                "I set my pack down here.",
+                "That is a curious sound.",
+                "We should keep moving soon.",
+                "I look toward the doorway.",
+                "This room smells of smoke.",
+                "I nod once and wait.",
+            ],
+        ),
+    ];
+    for (expected, lines) in examples {
+        for line in lines {
+            assert_eq!(classify_keywords(line), expected, "{line}");
+        }
+    }
+}
+
+#[test]
 fn the_keyword_reader_recognizes_plain_threats_without_mistaking_unrelated_death_words() {
     for line in [
         "Hand over the coin you owe us or I will break your arm.",
@@ -488,6 +666,13 @@ fn what_an_npc_has_said_survives_a_reload_and_a_new_scene_starts_a_new_conversat
     );
     assert!(carried.voiced.contains(&"trait:want".to_owned()));
     assert!(carried.voiced.contains(&"line:origin_line".to_owned()));
+    assert_eq!(
+        carried.said,
+        [
+            "I don't know who else would ask.".to_owned(),
+            "Because someone has to.".to_owned(),
+        ]
+    );
     assert!(
         !carried.last_asked,
         "the last line did not end in a question"
@@ -505,6 +690,10 @@ fn what_an_npc_has_said_survives_a_reload_and_a_new_scene_starts_a_new_conversat
     assert!(
         next_scene.voiced.contains(&"trait:want".to_owned()),
         "what was said is not said again in a later scene"
+    );
+    assert!(
+        next_scene.said.is_empty(),
+        "repeat checks start with the scene"
     );
     fs::remove_dir_all(directory).unwrap();
 }

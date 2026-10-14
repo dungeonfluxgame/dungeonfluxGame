@@ -407,11 +407,13 @@ pub(super) async fn save_checkpoint(
         let checkpoint = state.service.updates.borrow().clone();
         let table_floor = state.table.position();
         let social = state.social.snapshot();
+        let notebook = state.notebook.snapshot();
         if state.service.updates.borrow().basis().revision == checkpoint.basis().revision {
             moment = Some(super::history::SavedMoment {
                 checkpoint,
                 table_floor,
                 social,
+                notebook,
             });
             break;
         }
@@ -422,6 +424,7 @@ pub(super) async fn save_checkpoint(
             checkpoint,
             table_floor: state.table.position(),
             social: state.social.snapshot(),
+            notebook: state.notebook.snapshot(),
         }
     });
     let revision = checkpoint_revision_json(&moment.checkpoint);
@@ -514,6 +517,12 @@ fn describe_json() -> Value {
             {"command": "view", "method": "GET", "path": "/dev/view?as=tv|<hero>",
              "args": {"as": "tv or hero name"},
              "output": "{as, revision, view}: exactly the view that screen is being sent"},
+            {"command": "notes", "method": "GET", "path": "/dev/notes?hero=<name>",
+             "args": {"hero": "seat or hero name"},
+             "output": "{hero, entries[{kind, title, text, scene, order, owner, author}]}: private clues are filtered to that hero"},
+            {"command": "note", "method": "POST", "path": "/dev/note",
+             "args": {"hero": "seat or hero name", "text": "1-4096 UTF-8 bytes"},
+             "output": "{status: added, hero, scene, order}: adds one shared party note"},
             {"command": "log", "method": "GET", "path": "/dev/log?since=<sequence>",
              "args": {"since": "optional table sequence number"},
              "output": "{revision, lines[{sequence, speaker, role, kind, text}], overrides}"},

@@ -1088,6 +1088,8 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         return Ok(());
     };
     report_presented(client);
+    let battlefield_beat_log = super::live_battlefield::beat_log();
+    let beat_log = merge_battlefield_beat_log(&beat_log, &battlefield_beat_log);
     {
         let state = client.borrow();
         if let Some(stage) = state.live.tv.as_ref() {
@@ -1110,10 +1112,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             root.set_attribute("data-display-instance", &display_instance().to_string())?;
             root.set_attribute("data-latest-seq", &latest.to_string())?;
             root.set_attribute("data-beat-log", &beat_log)?;
-            root.set_attribute(
-                "data-battlefield-beat-log",
-                &super::live_battlefield::beat_log(),
-            )?;
+            root.set_attribute("data-battlefield-beat-log", &battlefield_beat_log)?;
             root.set_attribute(
                 "data-battlefield-live",
                 if battlefield_live() { "true" } else { "false" },
@@ -1133,6 +1132,28 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     )
 }
 
+fn merge_battlefield_beat_log(conductor: &str, battlefield: &str) -> String {
+    let details: HashMap<&str, &str> = battlefield
+        .split(',')
+        .filter_map(|record| record.split_once(':'))
+        .collect();
+    conductor
+        .split(',')
+        .map(|record| {
+            let Some((sequence, phase)) = record.split_once(':') else {
+                return record.to_owned();
+            };
+            if phase.starts_with("rolling:")
+                && let Some(detail) = details.get(sequence)
+            {
+                return format!("{record}:battlefield={detail}");
+            }
+            record.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn redraw(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let drawn = redraw_current(client);
     live_voice::observe(client);
@@ -1141,7 +1162,16 @@ fn redraw(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 
 fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result<(), JsValue> {
     let mut first_error = None;
+    let mut pending_battle = None;
     for command in commands {
+        let command = match command {
+            Command::Battle(state) => {
+                pending_battle = Some(state);
+                continue;
+            }
+            command => command,
+        };
+        let entered = matches!(&command, Command::Enter { .. });
         let outcome = match command {
             Command::Skip { detail } => {
                 battlefield_cue_named("skipped", detail.as_ref());
@@ -1194,12 +1224,26 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
                 Ok(())
             }
             Command::Actor { slot, state } => actor_command(client, slot, state),
-            Command::Battle(state) => set_battle_state(client, state),
+            Command::Battle(state) => {
+                pending_battle = Some(state);
+                Ok(())
+            }
             Command::ClipState { id, state } => set_clip_state(client, id, state),
         };
         if let Err(error) = outcome {
             first_error.get_or_insert(error);
         }
+        if entered
+            && let Some(state) = pending_battle.take()
+            && let Err(error) = set_battle_state(client, state)
+        {
+            first_error.get_or_insert(error);
+        }
+    }
+    if let Some(state) = pending_battle
+        && let Err(error) = set_battle_state(client, state)
+    {
+        first_error.get_or_insert(error);
     }
     first_error.map_or(Ok(()), Err)
 }
@@ -2080,7 +2124,7 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{fresh_outcomes, restore_pending_move_origin};
+    use super::{fresh_outcomes, merge_battlefield_beat_log, restore_pending_move_origin};
     use std::collections::HashMap;
 
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
@@ -2121,5 +2165,17 @@ mod tests {
             (1..=7).collect::<Vec<_>>()
         );
         assert_eq!(fresh_outcomes(&outcomes, 6)[0].sequence, 7);
+    }
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display diagnostics only.
+    #[test]
+    fn beat_log_attaches_battlefield_parts_to_the_matching_rolling_record() {
+        assert_eq!(
+            merge_battlefield_beat_log(
+                "4:rolling:0:1200:wait=0,4:impact:1200:2700:wait=0,6:rolling:2700:3900:wait=0",
+                "4:Weasel 2:heading=320:walk=440:roll=1500:approach=300:strike=500:settle=250",
+            ),
+            "4:rolling:0:1200:wait=0:battlefield=4:Weasel 2:heading=320:walk=440:roll=1500:approach=300:strike=500:settle=250,4:impact:1200:2700:wait=0,6:rolling:2700:3900:wait=0"
+        );
     }
 }

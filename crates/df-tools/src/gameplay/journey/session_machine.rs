@@ -18,7 +18,7 @@
 //! from the same table (`kind_accepted`), and the Aftermath rest rule is
 //! decided here too (`rest_accepted`).
 
-use df_model::checkpoint::{Checkpoint, FactValue};
+use df_model::checkpoint::Checkpoint;
 use df_protocol::common as rpc;
 use df_session::submission::RepositoryError;
 
@@ -236,34 +236,27 @@ pub(super) fn internal_reason(state: SessionState, event: Event) -> Option<&'sta
 /// while some living hero has something to regain: hit points below the
 /// maximum, a Second Wind use below the maximum, or a knockout to wake
 /// from. (The rest itself currently restores Second Wind and wakes the
-/// knocked out; spending Hit Dice to heal is not built yet.) Derived from
-/// the checkpoint like the state itself, so a stored game that resumes
-/// inside an aftermath that has already rested loads and continues with
-/// its other offers.
+/// knocked out; a Hit Point Die choice can remain pending in the aftermath.)
+/// Derived from the checkpoint like the state itself, so a stored game that
+/// resumes during those choices can continue with the unresolved hero.
 pub(super) fn rest_accepted(current: &Checkpoint) -> Result<bool, RepositoryError> {
     if SessionState::of(current)? != SessionState::Aftermath {
         return Ok(false);
     }
     let state = current.state();
-    // This aftermath began at the latest fight-end fact; a rest recorded
-    // after it is this aftermath's one rest.
-    let fight_end = state.facts.iter().rposition(|fact| {
-        matches!(&fact.value, FactValue::ContentEvent { definition, .. }
-            if matches!(definition.entry.as_str(), "combat-victory" | "combat-defeat"))
-    });
-    let rested = state.facts.iter().enumerate().any(|(index, fact)| {
-        fight_end.is_none_or(|end| index > end)
-            && matches!(&fact.value, FactValue::ContentEvent { definition, .. }
-                if definition.entry.as_str() == "short-rest-start")
-    });
-    if rested {
-        return Ok(false);
+    if super::short_rest_started(state) {
+        return if super::short_rest_completed(state) {
+            Ok(false)
+        } else {
+            super::pending_hit_point_die_choices(state)
+        };
     }
     for character in &state.characters {
         let who = character.entity;
         let hit_points = super::value(state, who, "hit-points")?;
         if hit_points > 0
-            && (hit_points < super::maximum_hit_points(state, who)?
+            && ((hit_points < super::maximum_hit_points(state, who)?
+                && super::value(state, who, "hit-point-dice")? > 0)
                 || super::value(state, who, "second-wind")?
                     < u32::from(super::super::pack::second_wind().uses_max)
                 || super::value(state, who, "unconscious")? != 0)
@@ -295,8 +288,7 @@ pub(super) fn outcome_legal(
     }
     // And the fight is entered by no other event, however far a script
     // edge travels.
-    if after == SessionState::Fight && before != SessionState::Fight && event != Event::StartFight
-    {
+    if after == SessionState::Fight && before != SessionState::Fight && event != Event::StartFight {
         return false;
     }
     match transition {

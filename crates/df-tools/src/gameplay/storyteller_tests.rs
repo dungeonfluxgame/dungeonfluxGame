@@ -319,11 +319,54 @@ async fn output_missing_the_requested_field_is_retried_then_refused_as_the_wrong
         .await
         .unwrap_err();
 
+    assert!(matches!(
+        error,
+        StorytellerError::Rejected {
+            failure: ValidationFailure::NotTheRequestedShape,
+            words: None,
+        }
+    ));
+    assert_eq!(endpoint.connections(), 2);
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_normalised_scene_sentence_is_rejected_and_named_for_the_retry_srd_5_2_1_page_184() {
+    // SRD 5.2.1, p. 184: dialogue is roleplayed table talk; this does not perform an Influence check.
+    let repeated = "Please warn Tomas before dawn.";
+    let endpoint = FakeEndpoint::start(vec![
+        reply("please WARN tomas before dawn!"),
+        reply("Please warn Tomas before dawn."),
+    ]);
+    let cache = cache_directory("repeated-sentence");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (
+        facts(),
+        vec![
+            Slot::new("reply", 80).speaking(vec![SpokenRule::NoRepeat(vec![repeated.to_owned()])]),
+        ],
+    );
+
+    let error = storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap_err();
+
     assert_eq!(
         error,
-        StorytellerError::Rejected(ValidationFailure::NotTheRequestedShape)
+        StorytellerError::Rejected {
+            failure: ValidationFailure::RepeatedSentence {
+                slot: "reply".to_owned(),
+            },
+            words: Some(repeated.to_owned()),
+        }
     );
-    assert_eq!(endpoint.connections(), 2);
+    assert!(
+        endpoint.bodies()[1]["input"]
+            .as_str()
+            .unwrap()
+            .contains("repeated a sentence")
+    );
     let _ = std::fs::remove_dir_all(cache);
 }
 
@@ -341,7 +384,10 @@ async fn an_over_length_answer_is_rejected_whole_not_truncated() {
 
     assert!(matches!(
         error,
-        StorytellerError::Rejected(ValidationFailure::TooLong { maximum: 80, .. })
+        StorytellerError::Rejected {
+            failure: ValidationFailure::TooLong { maximum: 80, .. },
+            ..
+        }
     ));
     assert!(!cache.exists(), "a rejected text is never cached");
 }
@@ -361,7 +407,10 @@ async fn a_missing_must_mention_term_is_rejected() {
 
     assert!(matches!(
         error,
-        StorytellerError::Rejected(ValidationFailure::MissingMention { .. })
+        StorytellerError::Rejected {
+            failure: ValidationFailure::MissingMention { .. },
+            ..
+        }
     ));
 }
 
@@ -380,12 +429,13 @@ async fn a_forbidden_term_is_rejected_even_in_a_different_case() {
         .await
         .unwrap_err();
 
-    assert_eq!(
+    assert!(matches!(
         error,
-        StorytellerError::Rejected(ValidationFailure::ForbiddenTerm {
-            slot: "reply".to_owned()
-        })
-    );
+        StorytellerError::Rejected {
+            failure: ValidationFailure::ForbiddenTerm { .. },
+            words: Some(_),
+        }
+    ));
     assert!(!cache.exists());
 }
 
@@ -428,7 +478,7 @@ async fn two_rejected_answers_give_a_typed_error_after_exactly_two_calls() {
         .await
         .unwrap_err();
 
-    assert!(matches!(error, StorytellerError::Rejected(_)));
+    assert!(matches!(error, StorytellerError::Rejected { .. }));
     assert_eq!(endpoint.connections(), 2);
 }
 
@@ -674,7 +724,10 @@ async fn a_partial_cache_retries_missing_slots_and_merges_the_newly_accepted_slo
         .unwrap_err();
     assert!(matches!(
         error,
-        StorytellerError::Rejected(ValidationFailure::ForbiddenTerm { .. })
+        StorytellerError::Rejected {
+            failure: ValidationFailure::ForbiddenTerm { .. },
+            ..
+        }
     ));
     std::fs::remove_dir_all(cache).unwrap();
 }

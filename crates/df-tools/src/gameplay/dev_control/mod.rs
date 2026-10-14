@@ -31,13 +31,14 @@ use super::{actor, timing};
 use crate::BUILD_ID;
 
 mod actions;
-pub(super) mod direct;
-pub(super) mod directions;
 pub(super) mod candidate;
 pub(crate) mod commands;
 pub(super) mod config;
+pub(super) mod direct;
+pub(super) mod directions;
 pub(crate) mod history;
 mod jumps;
+mod notebook;
 mod parse;
 mod reads;
 
@@ -50,6 +51,7 @@ pub(super) struct Bundle {
     pub history: Arc<std::sync::Mutex<history::History>>,
     pub table: Arc<super::table_log::TableLog>,
     pub social: Arc<super::social::SocialLedger>,
+    pub notebook: Arc<super::notebook::NotebookLedger>,
 }
 
 /// Shared development control state, cloned into every route handler.
@@ -70,6 +72,8 @@ struct Shared {
     table: Arc<super::table_log::TableLog>,
     /// The NPC social ledger (for save-time snapshots and rewinds).
     social: Arc<super::social::SocialLedger>,
+    /// The party notebook shared by all players.
+    notebook: Arc<super::notebook::NotebookLedger>,
 }
 
 /// The two joinable seats and the session scope learned from the first join.
@@ -167,6 +171,7 @@ pub(super) fn setup(
         history: bundle.history,
         table: bundle.table,
         social: bundle.social,
+        notebook: bundle.notebook,
     };
     let state = Arc::new(shared);
     let router = Router::new()
@@ -181,6 +186,8 @@ pub(super) fn setup(
         .route("/dev/state", get(reads::game_state))
         .route("/dev/view", get(reads::view_as))
         .route("/dev/log", get(reads::game_log))
+        .route("/dev/notes", get(notebook::read))
+        .route("/dev/note", post(notebook::add))
         .route("/dev/checkpoint", post(reads::save_checkpoint))
         .route("/dev/checkpoints", get(reads::list_checkpoints))
         .route("/dev/restore", post(jumps::restore_named))

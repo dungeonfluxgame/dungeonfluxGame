@@ -707,3 +707,36 @@ field dungeonflux.public.v1.ReclaimRoomResponse 1 joined type=11 label=1 presenc
 field dungeonflux.public.v1.ReclaimRoomResponse 2 refused type=14 label=1 presence=true target=.dungeonflux.public.v1.SeatReclaimRefusal oneof=outcome
 field dungeonflux.public.v1.ReclaimRoomResponse 3 away_heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.AwayHero oneof=-
 method dungeonflux.public.v1.RoomService Reclaim .dungeonflux.public.v1.ReclaimRoomRequest .dungeonflux.public.v1.ReclaimRoomResponse client-stream=false server-stream=false
+# RUL-13: additive hero stabilization actions and their typed combat result.
+enum dungeonflux.public.v1.StabilizationMethod
+enum-value dungeonflux.public.v1.StabilizationMethod 0 STABILIZATION_METHOD_UNSPECIFIED
+enum-value dungeonflux.public.v1.StabilizationMethod 1 STABILIZATION_METHOD_HEALERS_KIT
+enum-value dungeonflux.public.v1.StabilizationMethod 2 STABILIZATION_METHOD_MEDICINE
+enum-value dungeonflux.public.v1.GameplayActionKind 22 STABILISE_WITH_HEALERS_KIT
+enum-value dungeonflux.public.v1.GameplayActionKind 23 STABILISE_MEDICINE
+enum-value dungeonflux.public.v1.OutcomeKind 6 OUTCOME_KIND_STABILISATION
+message dungeonflux.public.v1.StabilizationResult
+field dungeonflux.public.v1.StabilizationResult 1 method type=14 label=1 presence=false target=.dungeonflux.public.v1.StabilizationMethod oneof=-
+field dungeonflux.public.v1.StabilizationResult 2 die type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 3 wisdom_modifier type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 4 dc type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 5 succeeded type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 6 uses_left type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 35 stabilization type=11 label=1 presence=false target=.dungeonflux.public.v1.StabilizationResult oneof=-
+message dungeonflux.public.v1.NotebookEntry
+field dungeonflux.public.v1.NotebookEntry 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.NotebookKind oneof=-
+field dungeonflux.public.v1.NotebookEntry 2 title type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 3 text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 4 scene type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 5 order type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 6 owner type=9 label=1 presence=true target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 7 author type=9 label=1 presence=true target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 8 attitude type=9 label=1 presence=true target=- oneof=-
+field dungeonflux.public.v1.JourneyView 77 notebook type=11 label=3 presence=false target=.dungeonflux.public.v1.NotebookEntry oneof=-
+enum dungeonflux.public.v1.NotebookKind
+enum-value dungeonflux.public.v1.NotebookKind 0 NOTEBOOK_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.NotebookKind 1 NOTEBOOK_KIND_PERSON
+enum-value dungeonflux.public.v1.NotebookKind 2 NOTEBOOK_KIND_PLACE
+enum-value dungeonflux.public.v1.NotebookKind 3 NOTEBOOK_KIND_TASK
+enum-value dungeonflux.public.v1.NotebookKind 4 NOTEBOOK_KIND_CLUE
+enum-value dungeonflux.public.v1.NotebookKind 5 NOTEBOOK_KIND_NOTE

@@ -1,6 +1,6 @@
 use super::{
     beat_script_runtime as runtime,
-    beat_script_tests::{build, input},
+    beat_script_tests::{build, input, prepared_story},
     journey, model, pack, wire,
 };
 use df_model::checkpoint::*;
@@ -9,6 +9,45 @@ use df_types::MemberId;
 use prost::Message;
 const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
 const TUNING: &[u8] = include_bytes!("fixtures/harbor-journey-tuning-baseline.json");
+
+mod adventure {
+    use super::*;
+
+    #[test]
+    fn search_study_modifiers_use_hero_scores_srd_p6_p187_p189() {
+        let current = prepared_story();
+        let state = current.state();
+        let hero = state.characters[0].entity;
+        assert_eq!(runtime::passive_perception(state, hero).unwrap(), 13);
+        let success = runtime::resolve_skill_check(state, hero, "perception", 12, 15).unwrap();
+        assert_eq!(success.total, 15);
+        assert!(success.succeeded);
+        let failure = runtime::resolve_skill_check(state, hero, "perception", 11, 15).unwrap();
+        assert_eq!(failure.total, 14);
+        assert!(!failure.succeeded);
+
+        for (skill, expected) in [
+            ("perception", (1, 2)),
+            ("insight", (1, 0)),
+            ("survival", (1, 2)),
+            ("medicine", (1, 0)),
+            ("investigation", (0, 0)),
+            ("arcana", (0, 0)),
+            ("history", (0, 0)),
+            ("nature", (0, 0)),
+            ("religion", (0, 0)),
+            ("athletics", (3, 2)),
+            ("intimidation", (-1, 2)),
+        ] {
+            assert_eq!(
+                runtime::skill_check_modifiers(state, hero, skill).unwrap(),
+                expected,
+                "skill modifier for {skill}"
+            );
+        }
+    }
+}
+
 pub(super) fn first() -> MemberId {
     MemberId::from_bytes(&[0x61; 16]).unwrap()
 }

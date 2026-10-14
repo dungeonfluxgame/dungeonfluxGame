@@ -625,6 +625,10 @@ pub(crate) fn generate_with_prose(
             }
         }
         let sheet = FactSheet {
+            scene: scene_key.and_then(|key| {
+                let value = serde_json::to_value(key).ok()?;
+                value.as_str().map(str::to_owned)
+            }),
             beat: beat.into(),
             slot: slot.into(),
             speaker: context

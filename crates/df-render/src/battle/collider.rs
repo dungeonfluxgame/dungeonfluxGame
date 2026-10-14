@@ -335,6 +335,25 @@ impl VoxelCollider {
                 .then_some(top)
         })
     }
+
+    /// Highest solid surface above `ground_y` in this voxel column, measured from the local floor.
+    pub fn solid_height_above_ground(
+        &self,
+        x: f32,
+        z: f32,
+        ground_y: f32,
+        search_height_m: f32,
+    ) -> Option<f32> {
+        if ![x, z, ground_y, search_height_m]
+            .into_iter()
+            .all(f32::is_finite)
+            || search_height_m <= self.cell_m
+        {
+            return None;
+        }
+        self.ground_height(x, z, ground_y + self.cell_m, ground_y + search_height_m)
+            .map(|top| top - ground_y)
+    }
 }
 
 // Squared distance of a segment to an AABB. Between face-crossing times the squared
@@ -458,6 +477,27 @@ mod tests {
         );
         assert!(collider.ground_height(0.0, 0.0, -0.2, 0.2).is_some());
         assert!(collider.ground_height(1.5, 1.5, -0.2, 0.2).is_none());
+    }
+
+    #[test]
+    fn solid_height_query_measures_barriers_above_the_local_ground() {
+        let ground = splat(0.0, 0.03, 0.0, [0.5, 0.03, 0.5], 255);
+        let floor = build(&[ground]);
+        let ground_y = floor.ground_height(0.0, 0.0, -0.2, 0.2).unwrap();
+        assert_eq!(
+            floor.solid_height_above_ground(0.0, 0.0, ground_y, 2.0),
+            None
+        );
+
+        let wall: Vec<_> = (0..12)
+            .map(|index| splat(0.0, 0.2 + index as f32 * 0.1, 0.0, [0.2; 3], 255))
+            .collect();
+        let collider = build(&[ground].into_iter().chain(wall).collect::<Vec<_>>());
+        let ground_y = collider.ground_height(0.0, 0.0, -0.2, 0.2).unwrap();
+        let height = collider
+            .solid_height_above_ground(0.0, 0.0, ground_y, 2.0)
+            .unwrap();
+        assert!(height > 0.8, "measured barrier height {height}");
     }
     #[test]
     fn contact_is_exact_at_box_corners_and_capsule_ends() {

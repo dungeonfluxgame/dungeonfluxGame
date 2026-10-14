@@ -270,7 +270,7 @@ fn error_label(error: &StorytellerError) -> &'static str {
         StorytellerError::InvalidRequest(_) => "invalid_request",
         StorytellerError::DeadlineExceeded => "deadline",
         StorytellerError::Provider(_) => "provider_error",
-        StorytellerError::Rejected(_) => "rejected",
+        StorytellerError::Rejected { .. } => "rejected",
     }
 }
 

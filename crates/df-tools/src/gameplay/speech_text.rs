@@ -205,7 +205,6 @@ impl SpokenRule {
                 let known: BTreeSet<String> = earlier
                     .iter()
                     .flat_map(|line| sentences(line))
-                    .filter(|part| words(part).len() >= REPEAT_MIN_WORDS)
                     .map(|part| sentence_key(&part))
                     .collect();
                 let known_clauses: BTreeSet<String> = earlier
@@ -301,7 +300,9 @@ mod tests {
         ] {
             assert!(is_denial(dodge), "{dodge}");
         }
-        assert!(!is_denial("I buried the one I loved. Do not ask that of me."));
+        assert!(!is_denial(
+            "I buried the one I loved. Do not ask that of me."
+        ));
     }
 
     #[test]

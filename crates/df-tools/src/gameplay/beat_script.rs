@@ -895,6 +895,11 @@ pub(super) fn validate_step(
             } else {
                 BeatTrigger::FightLost
             }
+        } else if offer.effect == BeatEffect::ShortRest
+            && journey::short_rest_started(after.state())
+            && !journey::short_rest_completed(after.state())
+        {
+            return Ok(());
         } else if offer.effect == BeatEffect::ShortRest {
             BeatTrigger::RestComplete
         } else {

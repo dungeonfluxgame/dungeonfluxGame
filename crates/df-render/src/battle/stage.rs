@@ -975,8 +975,8 @@ impl Stage {
                 Some(runtime) => {
                     if runtime.token.cell != incoming.cell {
                         // A downed figure is placed, never walked: bodies do not move.
-                        let laid_low = runtime.downed
-                            || incoming.hit_points.is_some_and(|hp| hp.current == 0);
+                        let laid_low =
+                            runtime.downed || incoming.hit_points.is_some_and(|hp| hp.current == 0);
                         if had_figures && !laid_low {
                             moves.push((incoming.id.clone(), runtime.token.cell, incoming.cell));
                         } else {
@@ -1245,9 +1245,7 @@ impl Stage {
             }
             // The hold's clock runs only while no beats are showing: while earlier
             // beats play, this blow is still coming, so its bar must not drop early.
-            if !showing_beats
-                && let Some(left) = runtime.hp_hold_s
-            {
+            if !showing_beats && let Some(left) = runtime.hp_hold_s {
                 if left <= dt {
                     // The blow never reached the screen: let the bar catch up with the server.
                     runtime.hp_hold_s = None;
@@ -3753,6 +3751,7 @@ mod tests {
             attack: crate::battle::model::AttackStyle::Melee,
             voice: None,
             cell: None,
+            position_sequence: 0,
             statuses: Vec::new(),
         };
         feed.apply(
@@ -3765,6 +3764,8 @@ mod tests {
                 ],
                 active: None,
                 round: 1,
+                latest_sequence: 0,
+                presented_sequence: 0,
                 outcomes: vec![],
                 initiative: vec![],
                 begun_live: false,
@@ -3800,6 +3801,7 @@ mod tests {
             attack: crate::battle::model::AttackStyle::Melee,
             voice: None,
             cell,
+            position_sequence: 0,
             statuses: Vec::new(),
         };
         feed.apply(
@@ -3811,6 +3813,8 @@ mod tests {
                 ],
                 active: None,
                 round: 1,
+                latest_sequence: 0,
+                presented_sequence: 0,
                 outcomes: vec![],
                 initiative: vec![],
                 begun_live: false,
@@ -3984,6 +3988,7 @@ mod tests {
             attack: crate::battle::model::AttackStyle::Melee,
             voice: None,
             cell: None,
+            position_sequence: 0,
             statuses: Vec::new(),
         };
         crate::battle::CombatSnapshot {
@@ -3994,6 +3999,8 @@ mod tests {
             ],
             active: Some("e".to_owned()),
             round,
+            latest_sequence: 0,
+            presented_sequence: 0,
             outcomes: (0..outcomes)
                 .map(|_| Outcome {
                     actor: "e".to_owned(),

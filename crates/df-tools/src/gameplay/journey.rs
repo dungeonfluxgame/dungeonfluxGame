@@ -211,12 +211,15 @@ pub(super) fn phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, Repositor
     }) {
         return phase;
     }
-    let phase = narrative_phase::validate(current)?;
-    encounter_outcome::validate(current, phase)?;
+    let phase = narrative_phase::validate(current)
+        .inspect_err(|_| refusal_detail::note("phase-narrative"))?;
+    encounter_outcome::validate(current, phase)
+        .inspect_err(|_| refusal_detail::note("phase-encounter"))?;
     super::beat_script::with_script(|script| {
         script.current(current.state())?;
         super::beat_script_runtime::validate_encounter_choices(current, script)
-    })?;
+    })
+    .inspect_err(|_| refusal_detail::note("phase-script-choices"))?;
     Ok(phase)
 }
 pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
@@ -298,6 +301,10 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
             ("wisdom", 1, 20),
             ("charisma", 1, 20),
             ("second-wind", 0, i64::from(pack::second_wind().uses_max)),
+            ("hit-point-dice", 0, if enemy { 0 } else { 1 }),
+            ("short-rest-choice", 0, if enemy { 0 } else { 2 }),
+            ("short-rest-die-roll", 0, if enemy { 0 } else { 10 }),
+            ("healer-kit-uses", 0, if enemy { 0 } else { 10 }),
             ("unconscious", 0, 1),
             ("prone", 0, 1),
             ("held-weapon", 0, 1),
@@ -314,6 +321,11 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
         }
     }
     Ok(result)
+}
+fn carries_healers_kit(state: &GameState, who: EntityId) -> bool {
+    state.inventory.iter().any(|item| {
+        item.owner == who && item.origin.entry.as_str() == "healers-kit" && item.quantity > 0
+    })
 }
 fn add_resource(
     state: &mut GameState,
@@ -338,12 +350,43 @@ fn add_resource(
 }
 pub(super) fn value(state: &GameState, who: EntityId, name: &str) -> Result<u32, RepositoryError> {
     let label = model::label(name)?;
-    state
+    match state
         .resources
         .iter()
         .find(|resource| resource.owner == who && resource.resource == label)
-        .ok_or(RepositoryError::InvalidCandidate)
-        .and_then(|resource| u32::try_from(resource.value).map_err(bad))
+    {
+        Some(resource) => u32::try_from(resource.value).map_err(bad),
+        None if name == "hit-point-dice"
+            && state
+                .characters
+                .iter()
+                .any(|character| character.entity == who) =>
+        {
+            Ok(1)
+        }
+        None if name == "short-rest-choice"
+            && state
+                .characters
+                .iter()
+                .any(|character| character.entity == who) =>
+        {
+            Ok(0)
+        }
+        None if name == "short-rest-die-roll"
+            && state
+                .characters
+                .iter()
+                .any(|character| character.entity == who) =>
+        {
+            Ok(0)
+        }
+        None if name == "healer-kit-uses" => Ok(if carries_healers_kit(state, who) {
+            10
+        } else {
+            0
+        }),
+        None => Err(RepositoryError::InvalidCandidate),
+    }
 }
 fn set(
     state: &mut GameState,
@@ -352,6 +395,41 @@ fn set(
     value: u32,
 ) -> Result<(), RepositoryError> {
     let label = model::label(name)?;
+    if !state
+        .resources
+        .iter()
+        .any(|resource| resource.owner == who && resource.resource == label)
+    {
+        let initial = match name {
+            "hit-point-dice"
+                if state
+                    .characters
+                    .iter()
+                    .any(|character| character.entity == who) =>
+            {
+                1
+            }
+            "short-rest-choice"
+                if state
+                    .characters
+                    .iter()
+                    .any(|character| character.entity == who) =>
+            {
+                0
+            }
+            "short-rest-die-roll"
+                if state
+                    .characters
+                    .iter()
+                    .any(|character| character.entity == who) =>
+            {
+                0
+            }
+            "healer-kit-uses" if carries_healers_kit(state, who) => 10,
+            _ => return Err(RepositoryError::InvalidCandidate),
+        };
+        add_resource(state, who, name, initial)?;
+    }
     let resource = state
         .resources
         .iter_mut()
@@ -471,6 +549,15 @@ pub(super) fn character_sheet(
             .map(|row| u32::from(row.quantity))
             .sum::<u32>()
     };
+    if equipment
+        .iter()
+        .any(|row| row.item == "healers-kit" && row.quantity > 0)
+    {
+        facts.push(rpc::SheetFact {
+            label: "Healer's Kit".to_owned(),
+            value: format!("{} uses", value(state, who, "healer-kit-uses")?),
+        });
+    }
     for (label, value) in [
         ("Species", option_label("species")?),
         ("Class", option_label("class")?),
@@ -540,6 +627,27 @@ pub(super) fn character_sheet(
         facts.push(rpc::SheetFact {
             label: label.to_owned(),
             value: selected.selected.as_str().replace('-', " "),
+        });
+    }
+    facts.push(rpc::SheetFact {
+        label: "Hit Point Dice".to_owned(),
+        value: format!(
+            "{}/1 (d{})",
+            value(state, who, "hit-point-dice")?,
+            rules::LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES
+        ),
+    });
+    let hit_point_die_roll = value(state, who, "short-rest-die-roll")?;
+    if hit_point_die_roll != 0 {
+        let constitution = u8::try_from(value(state, who, "constitution")?).map_err(bad)?;
+        let modifier = rules::ability_modifier(constitution);
+        let total = (i32::try_from(hit_point_die_roll).map_err(bad)? + modifier).max(1);
+        facts.push(rpc::SheetFact {
+            label: "Hit Point Die roll".to_owned(),
+            value: format!(
+                "d{} {hit_point_die_roll} {modifier:+} = {total}",
+                rules::LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES,
+            ),
         });
     }
     facts.push(rpc::SheetFact {
@@ -700,13 +808,25 @@ pub(super) fn offered(
             Vec::new()
         });
     }
+    if state == session_machine::SessionState::Aftermath
+        && short_rest_started(current.state())
+        && !short_rest_completed(current.state())
+    {
+        let who = player_entity(member, current)?;
+        return Ok(if hit_point_die_offered(current.state(), who)? {
+            vec![(
+                rpc::GameplayActionKind::ShortRest,
+                "Choose whether to spend your Hit Point Die".to_owned(),
+            )]
+        } else {
+            Vec::new()
+        });
+    }
     if tactical::present(current.state()) {
         if state == session_machine::SessionState::Fight {
             return tactical::offered(current, member);
         }
-        if state == session_machine::SessionState::Aftermath
-            && tactical::dying(current.state())?
-        {
+        if state == session_machine::SessionState::Aftermath && tactical::dying(current.state())? {
             return Ok(vec![(
                 rpc::GameplayActionKind::EndTurn,
                 if tactical::needs_saves(current.state())? {
@@ -1469,38 +1589,45 @@ fn finish(
         facts.push(fact_id);
     }
     if entry == "short-rest" {
-        let id = make_id(facts.len() as u32)?;
-        state.facts.push(GameFact {
-            id,
-            revision: basis.revision,
-            operation,
-            ordinal: facts.len() as u32,
-            cause: current.state().facts.last().map(|fact| fact.id),
-            audience: AudienceScope::Shared,
-            value: FactValue::ContentEvent {
-                definition: model::content("short-rest-start")?,
-                subjects: state
-                    .characters
-                    .iter()
-                    .map(|character| character.entity)
-                    .collect(),
-            },
-        });
-        facts.push(id);
-        let id = make_id(facts.len() as u32)?;
-        state.facts.push(GameFact {
-            id,
-            revision: basis.revision,
-            operation,
-            ordinal: facts.len() as u32,
-            cause: facts.last().copied(),
-            audience: AudienceScope::Shared,
-            value: FactValue::TimeAdvanced {
-                before: current.state().logical_time,
-                after: state.logical_time,
-            },
-        });
-        facts.push(id);
+        if !short_rest_started(current.state()) {
+            let id = make_id(facts.len() as u32)?;
+            state.facts.push(GameFact {
+                id,
+                revision: basis.revision,
+                operation,
+                ordinal: facts.len() as u32,
+                cause: current.state().facts.last().map(|fact| fact.id),
+                audience: AudienceScope::Shared,
+                value: FactValue::ContentEvent {
+                    definition: model::content("short-rest-start")?,
+                    subjects: state
+                        .characters
+                        .iter()
+                        .map(|character| character.entity)
+                        .collect(),
+                },
+            });
+            facts.push(id);
+        }
+        if state.logical_time != current.state().logical_time {
+            let id = make_id(facts.len() as u32)?;
+            state.facts.push(GameFact {
+                id,
+                revision: basis.revision,
+                operation,
+                ordinal: facts.len() as u32,
+                cause: facts
+                    .last()
+                    .copied()
+                    .or_else(|| current.state().facts.last().map(|fact| fact.id)),
+                audience: AudienceScope::Shared,
+                value: FactValue::TimeAdvanced {
+                    before: current.state().logical_time,
+                    after: state.logical_time,
+                },
+            });
+            facts.push(id);
+        }
     }
     for resource in &state.resources {
         if let Some(before) = current
@@ -2338,6 +2465,131 @@ fn complete_short_rest(
     Ok(())
 }
 
+pub(super) fn short_rest_started(state: &GameState) -> bool {
+    let fight_end = state.facts.iter().rposition(|fact| {
+        matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+            if matches!(definition.entry.as_str(), "combat-victory" | "combat-defeat"))
+    });
+    state.facts.iter().enumerate().any(|(index, fact)| {
+        fight_end.is_none_or(|end| index > end)
+            && matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+                if definition.entry.as_str() == "short-rest-start")
+    })
+}
+
+pub(super) fn short_rest_completed(state: &GameState) -> bool {
+    let start = state.facts.iter().rposition(|fact| {
+        matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+            if definition.entry.as_str() == "short-rest-start")
+    });
+    start.is_some_and(|start| {
+        state.facts.iter().enumerate().any(|(index, fact)| {
+            index > start
+                && matches!(&fact.value, FactValue::TimeAdvanced { before, after }
+                    if after.ticks > before.ticks)
+        })
+    })
+}
+
+fn hit_point_die_eligible(state: &GameState, who: EntityId) -> Result<bool, RepositoryError> {
+    let hit_points = value(state, who, "hit-points")?;
+    Ok(hit_points > 0
+        && hit_points < maximum_hit_points(state, who)?
+        && value(state, who, "hit-point-dice")? > 0
+        && value(state, who, "short-rest-choice")? == 0)
+}
+
+pub(super) fn pending_hit_point_die_choices(state: &GameState) -> Result<bool, RepositoryError> {
+    for character in &state.characters {
+        if hit_point_die_eligible(state, character.entity)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(super) fn hit_point_die_offered(
+    state: &GameState,
+    who: EntityId,
+) -> Result<bool, RepositoryError> {
+    hit_point_die_eligible(state, who)
+}
+
+fn start_short_rest(
+    current: &Checkpoint,
+    state: &mut GameState,
+    operation: OperationId,
+) -> Result<(), RepositoryError> {
+    prepare_short_rest(current)?;
+    let heroes = state
+        .characters
+        .iter()
+        .map(|character| character.entity)
+        .collect::<Vec<_>>();
+    for who in heroes {
+        set(state, who, "short-rest-choice", 0)?;
+        set(state, who, "short-rest-die-roll", 0)?;
+    }
+    if !pending_hit_point_die_choices(state)? {
+        complete_short_rest(current, state, operation)?;
+    }
+    Ok(())
+}
+
+fn choose_short_rest_hit_point_die(
+    current: &Checkpoint,
+    state: &mut GameState,
+    who: EntityId,
+    selected: &str,
+    operation: OperationId,
+    draws: &mut Vec<ActualDraw>,
+    supplier: DiceSource<'_>,
+) -> Result<(), RepositoryError> {
+    if !short_rest_started(current.state()) {
+        refusal_detail::note("short-rest-not-started");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    if !hit_point_die_eligible(current.state(), who)? {
+        refusal_detail::note("short-rest-die-ineligible");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    match selected {
+        "keep" => set(state, who, "short-rest-choice", 1)?,
+        "spend" => {
+            let die = draw(
+                operation,
+                rules::LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES,
+                draws,
+                supplier,
+            )?;
+            let constitution = u8::try_from(value(state, who, "constitution")?).map_err(bad)?;
+            let constitution_modifier = rules::ability_modifier(constitution);
+            let (hit_points, _) = rules::heal_hit_point_die(
+                die,
+                constitution_modifier,
+                value(state, who, "hit-points")?,
+                maximum_hit_points(state, who)?,
+            )
+            .map_err(|_| {
+                refusal_detail::note("short-rest-hit-die-heal");
+                RepositoryError::InvalidCandidate
+            })?;
+            set(state, who, "hit-point-dice", 0)?;
+            set(state, who, "hit-points", hit_points)?;
+            set(state, who, "short-rest-choice", 2)?;
+            set(state, who, "short-rest-die-roll", die)?;
+        }
+        _ => {
+            refusal_detail::note("short-rest-hit-die-option");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+    }
+    if !pending_hit_point_die_choices(state)? {
+        complete_short_rest(current, state, operation)?;
+    }
+    Ok(())
+}
+
 fn attack(
     state: &mut GameState,
     operation: OperationId,
@@ -2741,6 +2993,9 @@ fn accept_character(
         ("wisdom", u32::from(build.abilities[4])),
         ("charisma", u32::from(build.abilities[5])),
         ("second-wind", build.second_wind_uses),
+        ("hit-point-dice", 1),
+        ("short-rest-choice", 0),
+        ("short-rest-die-roll", 0),
         ("unconscious", 0),
         ("prone", 0),
         ("held-weapon", 1),
@@ -2758,6 +3013,14 @@ fn accept_character(
         pack::archer_equipment().map_err(bad)?
     } else {
         pack::with_content(|pack| pack.equipment.clone())
+    };
+    let healer_kit_uses = if equipment
+        .iter()
+        .any(|row| row.item == "healers-kit" && row.quantity > 0)
+    {
+        10
+    } else {
+        0
     };
     for row in equipment {
         let entry = row.item.as_str();
@@ -2785,6 +3048,7 @@ fn accept_character(
             attunement_owner: None,
         });
     }
+    add_resource(state, who, "healer-kit-uses", healer_kit_uses)?;
     Ok(())
 }
 /// The one entry into a fight, called by `stage_using` only after the
@@ -2935,9 +3199,7 @@ fn stage_using(
     };
     // The machine also decides the Aftermath rest rule: once per
     // aftermath, and only while a living hero has something to regain.
-    if machine_event == session_machine::Event::Rest
-        && !session_machine::rest_accepted(current)?
-    {
+    if machine_event == session_machine::Event::Rest && !session_machine::rest_accepted(current)? {
         refusal_detail::note("session-machine-rest");
         return Err(RepositoryError::InvalidCandidate);
     }
@@ -3126,12 +3388,26 @@ fn stage_using(
             }
             beat(&mut state, "harbor-inn")?;
         }
-        rpc::GameplayActionKind::ShortRest => {
-            if !choices.is_empty() {
+        rpc::GameplayActionKind::ShortRest => match choices.as_slice() {
+            [] if !short_rest_started(current.state()) => {
+                start_short_rest(current, &mut state, command.operation)?;
+            }
+            [(group, option)] if group.as_str() == "hit-point-die" => {
+                choose_short_rest_hit_point_die(
+                    current,
+                    &mut state,
+                    *who,
+                    option.as_str(),
+                    command.operation,
+                    &mut draws,
+                    supplier,
+                )?;
+            }
+            _ => {
+                refusal_detail::note("short-rest-choice-shape");
                 return Err(RepositoryError::InvalidCandidate);
             }
-            complete_short_rest(current, &mut state, command.operation)?;
-        }
+        },
         rpc::GameplayActionKind::EndTurn => {
             if !choices.is_empty() {
                 return Err(RepositoryError::InvalidCandidate);
@@ -3552,8 +3828,7 @@ mod tests {
             // The ordinary played fight leaves both heroes untouched, and
             // the machine refuses a rest nobody gains from, so this journey
             // rests after a victory where a hero spent Second Wind.
-            let victory =
-                tactical::tests::current_victory_with_spent_second_wind("escort-courier");
+            let victory = tactical::tests::current_victory_with_spent_second_wind("escort-courier");
             let rested = stage_with_supplier(
                 &victory,
                 &input(&victory, first, 201, "short-rest", vec![]),
@@ -5028,6 +5303,133 @@ mod tests {
         assert!(
             stage_with_supplier(&rest, &invalid, &mut |_| panic!("second rest cannot draw"))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn srd_p17_p47_p187_short_rest_waits_for_each_eligible_hero_choice() {
+        let loaded = pack::load_from_bytes(
+            include_bytes!("fixtures/harbor-journey-pack-integration-baseline.json"),
+            include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, short_rest_hit_point_die_choice_flow);
+    }
+
+    fn short_rest_hit_point_die_choice_flow() {
+        let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let victory = gaining_victory();
+        let mut state = victory.state().clone();
+        let first_hero = player_entity(first, &victory).unwrap();
+        let second_hero = player_entity(second, &victory).unwrap();
+        set(&mut state, first_hero, "hit-points", 9).unwrap();
+        set(&mut state, second_hero, "hit-points", 9).unwrap();
+        let victory = model::checkpoint(victory.basis(), state).unwrap();
+
+        let started = stage_with_supplier(
+            &victory,
+            &input(&victory, first, 20, "short-rest", vec![]),
+            &mut |_| panic!("starting the rest does not roll"),
+        )
+        .unwrap();
+        assert_eq!(started.state().logical_time, victory.state().logical_time);
+        assert_eq!(value(started.state(), first_hero, "hit-point-dice"), Ok(1));
+        assert_eq!(value(started.state(), second_hero, "hit-point-dice"), Ok(1));
+
+        let kept = stage_with_supplier(
+            &started,
+            &input(
+                &started,
+                first,
+                21,
+                "short-rest",
+                vec![(
+                    model::label("hit-point-die").unwrap(),
+                    model::label("keep").unwrap(),
+                )],
+            ),
+            &mut |_| panic!("keeping a die does not roll"),
+        )
+        .unwrap();
+        assert_eq!(kept.state().logical_time, victory.state().logical_time);
+        assert_eq!(value(kept.state(), first_hero, "hit-point-dice"), Ok(1));
+        assert_eq!(value(kept.state(), first_hero, "short-rest-choice"), Ok(1));
+        assert!(
+            stage_with_supplier(
+                &kept,
+                &input(
+                    &kept,
+                    first,
+                    23,
+                    "short-rest",
+                    vec![(
+                        model::label("hit-point-die").unwrap(),
+                        model::label("spend").unwrap(),
+                    )],
+                ),
+                &mut |_| panic!("one hero cannot answer twice"),
+            )
+            .is_err()
+        );
+
+        assert!(short_rest_started(kept.state()));
+        assert!(hit_point_die_eligible(kept.state(), second_hero).unwrap());
+        let spent = stage_with_supplier(
+            &kept,
+            &input(
+                &kept,
+                second,
+                24,
+                "short-rest",
+                vec![(
+                    model::label("hit-point-die").unwrap(),
+                    model::label("spend").unwrap(),
+                )],
+            ),
+            &mut |sides| {
+                assert_eq!(sides, rules::LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES);
+                Ok(sides)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            value(spent.state(), second_hero, "hit-points"),
+            Ok(maximum_hit_points(spent.state(), second_hero).unwrap())
+        );
+        assert_eq!(value(spent.state(), second_hero, "hit-point-dice"), Ok(0));
+        assert_eq!(value(spent.state(), first_hero, "hit-point-dice"), Ok(1));
+        assert_eq!(
+            value(spent.state(), second_hero, "short-rest-die-roll"),
+            Ok(10)
+        );
+        let sheet = character_sheet(spent.state(), second_hero).unwrap();
+        assert!(
+            sheet.facts.iter().any(|fact| {
+                fact.label == "Hit Point Die roll" && fact.value == "d10 10 +2 = 12"
+            })
+        );
+        assert!(!session_machine::rest_accepted(&spent).unwrap());
+        assert_eq!(
+            spent.state().logical_time.ticks,
+            victory.state().logical_time.ticks + 3600
+        );
+        assert!(
+            stage_with_supplier(
+                &spent,
+                &input(
+                    &spent,
+                    second,
+                    25,
+                    "short-rest",
+                    vec![(
+                        model::label("hit-point-die").unwrap(),
+                        model::label("spend").unwrap()
+                    )],
+                ),
+                &mut |_| panic!("a spent die cannot be spent twice"),
+            )
+            .is_err()
         );
     }
 

@@ -23,15 +23,15 @@ use df_types::MemberId;
 use serde_json::{Value, json};
 
 use super::{
-    adventure::dossier::{Dossier, NpcRole, mentions_term},
+    adventure::dossier::{Attitude, Dossier, NpcRole, mentions_term},
     approach_model::ApproachModel,
     npc_dossier::{self, Clue, Inputs, Turn, Withheld, released_terms},
     pack::{Age, PackFile, SceneKey, SpeakerProfile},
-    social::{Approach, Shift, SocialLedger, classify_keywords, shift_line},
+    social::{Approach, Shift, SocialLedger, classify_keywords_reading, shift_line},
     speech_text::{coverage, sentences},
     startup_configuration::content_rating,
     storyteller::{
-        CallProfile, Expression, Slot, Storyteller, StorytellerError, age_group,
+        CallProfile, Expression, Slot, Storyteller, StorytellerError, ValidationFailure, age_group,
         contains_whole_word, sexual_content_allowed,
     },
     table_log::TableLog,
@@ -130,6 +130,48 @@ fn add_character_limits(facts: &mut Value, profile: Option<&SpeakerProfile>) {
     {
         npc.extend(limits);
     }
+}
+
+fn asks_about_private_clue(words: &str) -> bool {
+    let lowered = words.to_lowercase();
+    [
+        "clue",
+        "whisper",
+        "what did you tell me",
+        "what did you say to me",
+    ]
+    .iter()
+    .any(|phrase| contains_whole_word(&lowered, phrase))
+}
+
+fn private_clue_refusal(turn: &Turn) -> (String, String) {
+    const LINES: [&str; 4] = [
+        "That whisper was meant for someone else. I won't repeat it.",
+        "I shared that confidence with another hero, and it stays with them.",
+        "What I said in private belongs to the person I told.",
+        "I won't pass another person's confidence to you.",
+    ];
+    let said: std::collections::BTreeSet<String> = turn
+        .said
+        .iter()
+        .flat_map(|line| sentences(line))
+        .map(|sentence| super::speech_text::sentence_key(&sentence))
+        .collect();
+    LINES
+        .iter()
+        .enumerate()
+        .find(|(index, line)| {
+            let key = format!("private_clue:withheld:{index}");
+            !turn.conversation.voiced.iter().any(|voiced| voiced == &key)
+                && !said.contains(&super::speech_text::sentence_key(line))
+        })
+        .map(|(index, line)| (line.to_string(), format!("private_clue:withheld:{index}")))
+        .unwrap_or_else(|| {
+            (
+                "I have already told you that confidence stays with its owner.".to_owned(),
+                "private_clue:withheld:repeat".to_owned(),
+            )
+        })
 }
 
 /// Everything one reply needs, captured by the actor and owned so the model call can run
@@ -290,7 +332,9 @@ impl NpcReplyContext {
         let gave_clue = dossier.role == NpcRole::Patron
             && !story.clue.is_empty()
             && mentions_term(&story.clue, &dossier.name);
-        let told = gave_clue && !player.private_clue.is_empty();
+        let standing = social.standing(member, dossier);
+        let told =
+            gave_clue && !player.private_clue.is_empty() && standing.attitude != Attitude::Hostile;
         let released = if told {
             // Names the scenes say aloud are not the clue's to give: the table already hears them.
             let clue_terms: Vec<String> = story
@@ -321,7 +365,6 @@ impl NpcReplyContext {
             released,
             content_rating(),
         );
-        let standing = social.standing(member, dossier);
         let recent = social.recent(member, &dossier.npc_id);
         let scripted = if actor.speaking {
             journey.dialogue.as_str()
@@ -368,7 +411,9 @@ impl NpcReplyContext {
             .iter()
             .filter(|(from_hero, _)| !from_hero)
             .map(|(_, text)| text.clone())
+            .chain(conversation.said.iter().cloned())
             .chain(said_lines)
+            .chain((!scripted.is_empty()).then(|| scripted.to_owned()))
             .collect();
         said.sort();
         said.dedup();
@@ -812,7 +857,7 @@ impl NpcVoice {
         mut context: NpcReplyContext,
         log: &TableLog,
     ) -> Option<Exchange> {
-        let approach = self
+        let reading = self
             .approach_model
             .classify(
                 &context.typed_words,
@@ -820,14 +865,37 @@ impl NpcVoice {
                 &context.public_scene,
             )
             .await
-            .unwrap_or_else(|| classify_keywords(&context.typed_words));
+            .unwrap_or_else(|| classify_keywords_reading(&context.typed_words));
+        let approach = reading.approach;
         context.facts["player"]["approach"] = json!(approach.label());
+        context.facts["player"]["subject"] = json!(reading.subject.label());
+        let private_clue_withheld = context.facts.get("private_matter").is_some()
+            && asks_about_private_clue(&context.typed_words);
+        if private_clue_withheld {
+            context.facts["npc_reaction"] = json!(
+                "This hero was not told the private clue. Say plainly that you will not share what was whispered, without hinting at its contents."
+            );
+            context.facts["answer_from"] = json!([]);
+            if let Some(facts) = context.facts.as_object_mut() {
+                facts.remove("volunteer");
+            }
+        }
         let threat_shift = if approach == Approach::Intimidation {
             let turn = context.turn.as_mut()?;
             let shift = turn
                 .ledger
                 .threaten(context.member, &turn.dossier, &turn.scene);
             turn.standing = turn.ledger.standing(context.member, &turn.dossier);
+            context.facts["attitude_toward_hero"] = json!(format!("{:?}", turn.standing.attitude));
+            context.facts["npc_reaction"] = json!(format!(
+                "The hero has just threatened you; you are now {:?} to them.",
+                turn.standing.attitude
+            ));
+            context.facts["answer_from"] = json!([]);
+            turn.answer_offered = false;
+            if let Some(facts) = context.facts.as_object_mut() {
+                facts.remove("volunteer");
+            }
             shift
         } else {
             None
@@ -844,9 +912,39 @@ impl NpcVoice {
             log.push(
                 &context.speaker,
                 rpc::TableRole::Npc,
-                0,
+                context.hero_index,
                 rpc::TableKind::Action,
                 &shift_line(shift, &context.hero_name),
+            );
+        }
+        let subject_answer = if approach == Approach::Intimidation || private_clue_withheld {
+            None
+        } else {
+            let turn = context.turn.as_ref()?;
+            npc_dossier::subject_fallback(
+                &turn.dossier,
+                reading.subject,
+                &turn.withheld,
+                &npc_dossier::Memory {
+                    conversation: &turn.conversation,
+                    said: &turn.said,
+                    offered: &turn.offered,
+                },
+            )
+        };
+        if let Some((answer, _)) = &subject_answer {
+            context.facts["answer_from"] = json!([answer]);
+            if let Some(facts) = context.facts.as_object_mut() {
+                facts.remove("volunteer");
+            }
+        }
+        if let Some(turn) = context.turn.as_mut() {
+            turn.answer_offered = subject_answer.is_some();
+            context.facts["already_said"] = json!(
+                turn.said
+                    .iter()
+                    .filter(|line| !turn.withheld.leaks(line))
+                    .collect::<Vec<_>>()
             );
         }
         let modeled = self.model_dialogue(&context).await;
@@ -867,20 +965,29 @@ impl NpcVoice {
                     reason.label(),
                     turn.dossier.npc_id,
                 );
-                let (answer, answer_key) = npc_dossier::fallback(
-                    &turn.dossier,
-                    turn.standing,
-                    &context.typed_words,
-                    approach,
-                    &turn.withheld,
-                    &npc_dossier::Memory {
-                        conversation: &turn.conversation,
-                        said: &turn.said,
-                        offered: &turn.offered,
-                    },
-                );
+                let (answer, answer_key): (String, Option<String>) = if private_clue_withheld {
+                    let (answer, key) = private_clue_refusal(turn);
+                    (answer, Some(key))
+                } else if let Some((answer, key)) = subject_answer.clone() {
+                    (answer, Some(key))
+                } else {
+                    npc_dossier::fallback(
+                        &turn.dossier,
+                        turn.standing,
+                        &context.typed_words,
+                        approach,
+                        &turn.withheld,
+                        &npc_dossier::Memory {
+                            conversation: &turn.conversation,
+                            said: &turn.said,
+                            offered: &turn.offered,
+                        },
+                    )
+                };
                 // A prepared, confided or curt answer counts as said under its memory key.
-                if let Some(key) = answer_key {
+                if let Some(key) = answer_key
+                    && subject_answer.is_none()
+                {
                     turn.ledger.remember_offered(
                         context.member,
                         &turn.dossier,
@@ -898,7 +1005,7 @@ impl NpcVoice {
             log.push(
                 &context.speaker,
                 rpc::TableRole::Npc,
-                0,
+                context.hero_index,
                 rpc::TableKind::Action,
                 &format!("murmurs to {}", context.hero_name),
             );
@@ -906,7 +1013,7 @@ impl NpcVoice {
             log.push(
                 &context.speaker,
                 rpc::TableRole::Npc,
-                0,
+                context.hero_index,
                 rpc::TableKind::Speech,
                 &text,
             );
@@ -926,13 +1033,17 @@ impl NpcVoice {
             .filter(|line| coverage(&line.text, &text) >= USED_COVERAGE)
             .map(|line| line.key.clone())
             .collect();
+        let mut used = used;
+        if let Some((_, key)) = &subject_answer {
+            used.push(key.clone());
+        }
         turn.ledger
             .remember_offered(context.member, &turn.dossier, &used);
         if let Some(shift) = recorded.shift {
             log.push(
                 &context.speaker,
                 rpc::TableRole::Npc,
-                0,
+                context.hero_index,
                 rpc::TableKind::Action,
                 &shift_line(shift, &context.hero_name),
             );
@@ -1004,7 +1115,17 @@ impl NpcVoice {
             .map_err(|error| match error {
                 StorytellerError::Off => FallbackReason::ModelOff,
                 StorytellerError::BudgetExhausted => FallbackReason::BudgetExhausted,
-                StorytellerError::Rejected(_) => FallbackReason::ReplyRejected,
+                StorytellerError::Rejected { failure, words } => {
+                    let detail = words
+                        .as_deref()
+                        .map(|words| turn.withheld.redacted_detail(&turn.dossier, words))
+                        .unwrap_or_else(|| "<no reply words>".to_owned());
+                    eprintln!(
+                        "{}",
+                        rejected_reply_log_line(&turn.dossier.npc_id, &failure, &detail)
+                    );
+                    FallbackReason::ReplyRejected
+                }
                 StorytellerError::InvalidRequest(label) => FallbackReason::RequestInvalid(label),
                 StorytellerError::DeadlineExceeded | StorytellerError::Provider(_) => {
                     FallbackReason::CallFailed
@@ -1061,6 +1182,14 @@ pub(super) fn reply_slots(turn: &Turn) -> [Slot; 2] {
     ]
 }
 
+fn rejected_reply_log_line(npc_id: &str, failure: &ValidationFailure, detail: &str) -> String {
+    let detail = serde_json::to_string(detail).unwrap_or_else(|_| "\"<unavailable>\"".to_owned());
+    format!(
+        "NPC REPLY rejected npc={npc_id} rule={} detail={detail}",
+        failure.label()
+    )
+}
+
 /// Models like to wrap a spoken line in quotation marks; the bubble shows the words only.
 fn strip_outer_quotes(text: &str) -> String {
     let text = text.trim();
@@ -1115,6 +1244,51 @@ mod tests {
             speakers: Vec::new(),
             scene_lines: Vec::new(),
         }
+    }
+
+    #[test]
+    fn rejected_reply_diagnostic_names_its_rule_and_words_srd_5_2_1_page_184() {
+        // SRD 5.2.1, p. 184: this records dialogue validation, not an Influence check.
+        let line = rejected_reply_log_line(
+            "patron:ferry-clerk",
+            &ValidationFailure::RepeatedSentence {
+                slot: "reply".to_owned(),
+            },
+            "Please warn Tomas before dawn.",
+        );
+        assert_eq!(
+            line,
+            "NPC REPLY rejected npc=patron:ferry-clerk rule=repeated_sentence detail=\"Please warn Tomas before dawn.\""
+        );
+    }
+
+    #[test]
+    fn rejected_reply_diagnostic_redacts_secret_terms_to_their_key_srd_5_2_1_page_184() {
+        // SRD 5.2.1, p. 184: rejection diagnostics identify the dialogue rule without exposing secrets.
+        let adventure = super::super::npc_dossier_tests::adventure(0x7f4a_7c15);
+        let dossier = adventure
+            .dossiers
+            .iter()
+            .find(|dossier| dossier.role == NpcRole::Patron)
+            .unwrap();
+        let withheld = npc_dossier::Withheld::new(
+            dossier,
+            vec!["Vell".to_owned()],
+            Vec::new(),
+            content_rating(),
+        );
+        let detail = withheld.redacted_detail(dossier, "The packet goes to Vell.");
+        let line = rejected_reply_log_line(
+            &dossier.npc_id,
+            &ValidationFailure::ForbiddenTerm {
+                slot: "reply".to_owned(),
+            },
+            &detail,
+        );
+
+        assert!(!line.contains("Vell"), "{line}");
+        assert!(line.contains("rule=forbidden_term"), "{line}");
+        assert!(line.contains("adventure_secret."), "{line}");
     }
 
     /// A generated pack: explicit secret terms and a profile for each speaker.

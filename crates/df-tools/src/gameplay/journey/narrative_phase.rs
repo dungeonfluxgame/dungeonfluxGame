@@ -9,6 +9,7 @@ use super::{
 };
 
 fn invalid<T>() -> Result<T, RepositoryError> {
+    crate::gameplay::refusal_detail::note("narrative-phase");
     Err(RepositoryError::InvalidCandidate)
 }
 
@@ -568,29 +569,10 @@ fn accepted_rest(
         }) else {
             continue;
         };
-        if !shared_empty(event) || accepted(decision)?.phase != rpc::JourneyPhase::Complete as i32 {
-            return invalid();
-        }
-        validate_terminal_cause(state, event, decision)?;
-        let began = state
-            .facts
-            .iter()
-            .find(|fact| {
-                fact.operation == event.operation
-                    && fact.revision == event.revision
-                    && fact.ordinal == 0
-                    && fact.audience == AudienceScope::Shared
-                    && matches!(&fact.value, FactValue::ContentEvent { definition, subjects }
-                    if *definition == start && subjects.len() == actors.len()
-                        && actors.iter().all(|actor| subjects.contains(actor)))
-            })
-            .ok_or(RepositoryError::InvalidCandidate)?;
-        validate_terminal_cause(state, began, decision)?;
-        let advanced = state.facts.iter().any(|fact| {
+        let advancement = state.facts.iter().find(|fact| {
             fact.operation == event.operation && fact.revision == event.revision
-                && fact.ordinal == 1 && fact.cause == Some(began.id)
                 && fact.audience == AudienceScope::Shared
-                && decision.facts.get(1) == Some(&fact.id)
+                && decision.facts.get(fact.ordinal as usize) == Some(&fact.id)
                 && matches!(&fact.value, FactValue::TimeAdvanced { before, after }
                     if before.ticks_per_second != 0
                         && before.ticks_per_second == after.ticks_per_second
@@ -598,9 +580,101 @@ fn accepted_rest(
                         && after.ticks_per_second == state.logical_time.ticks_per_second
                         && after.ticks <= state.logical_time.ticks)
         });
-        if !advanced {
+        let Some(advancement) = advancement else {
+            continue;
+        };
+        validate_terminal_cause(state, advancement, decision).map_err(|_| {
+            crate::gameplay::refusal_detail::note("rest-time-advance");
+            RepositoryError::InvalidCandidate
+        })?;
+        if !shared_empty(event) {
             return invalid();
         }
+        let receipt = accepted(decision).map_err(|_| {
+            crate::gameplay::refusal_detail::note("rest-completion-receipt");
+            RepositoryError::InvalidCandidate
+        })?;
+        if receipt.phase != rpc::JourneyPhase::Complete as i32 {
+            return invalid();
+        }
+        validate_terminal_cause(state, event, decision).map_err(|_| {
+            crate::gameplay::refusal_detail::note("rest-completion-terminal");
+            RepositoryError::InvalidCandidate
+        })?;
+        let completion_index = state
+            .facts
+            .iter()
+            .position(|fact| fact.id == completion.id)
+            .ok_or_else(|| {
+                crate::gameplay::refusal_detail::note("rest-completion-source");
+                RepositoryError::InvalidCandidate
+            })?;
+        let event_index = state
+            .facts
+            .iter()
+            .position(|fact| fact.id == event.id)
+            .ok_or_else(|| {
+                crate::gameplay::refusal_detail::note("rest-completion-event");
+                RepositoryError::InvalidCandidate
+            })?;
+        let began = state
+            .facts
+            .iter()
+            .enumerate()
+            .find(|(index, fact)| {
+                *index > completion_index
+                    && *index < event_index
+                    && fact.audience == AudienceScope::Shared
+                    && matches!(&fact.value, FactValue::ContentEvent { definition, subjects }
+                    if *definition == start && subjects.len() == actors.len()
+                        && actors.iter().all(|actor| subjects.contains(actor)))
+            })
+            .map(|(_, fact)| fact)
+            .ok_or_else(|| {
+                crate::gameplay::refusal_detail::note("rest-start-event");
+                RepositoryError::InvalidCandidate
+            })?;
+        let started = state
+            .decisions
+            .iter()
+            .find(|started| {
+                started.operation == began.operation
+                    && started.revision == began.revision
+                    && started.facts.get(began.ordinal as usize) == Some(&began.id)
+            })
+            .ok_or_else(|| {
+                crate::gameplay::refusal_detail::note("rest-start-decision");
+                RepositoryError::InvalidCandidate
+            })?;
+        let start_event = state
+            .facts
+            .iter()
+            .find(|fact| started.facts.last() == Some(&fact.id))
+            .ok_or_else(|| {
+                crate::gameplay::refusal_detail::note("rest-start-terminal");
+                RepositoryError::InvalidCandidate
+            })?;
+        if started.source_policy.as_str() != THREAD_POLICY
+            || !matches!(&start_event.value, FactValue::ContentEvent { definition, .. }
+                if *definition == terminal)
+        {
+            return invalid();
+        }
+        let start_receipt = accepted(started).map_err(|_| {
+            crate::gameplay::refusal_detail::note("rest-start-receipt");
+            RepositoryError::InvalidCandidate
+        })?;
+        if start_receipt.phase != rpc::JourneyPhase::Complete as i32 {
+            return invalid();
+        }
+        validate_terminal_cause(state, began, started).map_err(|_| {
+            crate::gameplay::refusal_detail::note("rest-start-cause");
+            RepositoryError::InvalidCandidate
+        })?;
+        validate_terminal_cause(state, start_event, started).map_err(|_| {
+            crate::gameplay::refusal_detail::note("rest-start-terminal-cause");
+            RepositoryError::InvalidCandidate
+        })?;
         return Ok(true);
     }
     Ok(false)
@@ -684,7 +758,9 @@ pub(super) fn completion_source<'a>(
 mod tests {
     use super::super::{
         MEMBERS, bootstrap_member, initial, offered, phase, stage_join, stage_with_supplier,
-        tests::{build, gaining_victory, inn_command, inn_victory, input, opening_story, prepared_story},
+        tests::{
+            build, gaining_victory, inn_command, inn_victory, input, opening_story, prepared_story,
+        },
     };
     use super::*;
     use df_types::MemberId;

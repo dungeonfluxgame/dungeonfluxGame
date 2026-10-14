@@ -1,4 +1,4 @@
-use super::RuleError;
+use super::{RuleError, Size};
 use serde::{Deserialize, Serialize, de::IgnoredAny};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -58,6 +58,8 @@ pub struct GridData {
     pub blocked: Vec<Cell>,
     #[serde(default)]
     pub blocked_steps: Vec<[Cell; 2]>,
+    #[serde(default)]
+    pub step_heights_dm: Option<Vec<u16>>,
     #[serde(flatten)]
     pub rendering_fields: BTreeMap<String, IgnoredAny>,
 }
@@ -97,6 +99,7 @@ pub struct BattleMap {
     rows: u16,
     blocked: BTreeSet<Cell>,
     blocked_steps: BTreeSet<[Cell; 2]>,
+    step_heights: BTreeMap<[Cell; 2], Option<u16>>,
     difficult: BTreeSet<Cell>,
     cover: BTreeMap<Cell, Cover>,
     hero_spawns: Vec<Cell>,
@@ -126,6 +129,14 @@ impl BattleMap {
             || data.grid.blocked_steps.len() > cell_capacity * 4
         {
             return Err(RuleError::Capacity);
+        }
+        if data
+            .grid
+            .step_heights_dm
+            .as_ref()
+            .is_some_and(|heights| heights.len() != data.grid.blocked_steps.len())
+        {
+            return Err(RuleError::MapData);
         }
         let mut ids = BTreeSet::new();
         let mut result = None;
@@ -162,6 +173,7 @@ impl BattleMap {
                 rows: data.grid.rows,
                 blocked: BTreeSet::new(),
                 blocked_steps: BTreeSet::new(),
+                step_heights: BTreeMap::new(),
                 difficult: BTreeSet::new(),
                 cover: BTreeMap::new(),
                 hero_spawns: layout.spawns.heroes.clone(),
@@ -175,15 +187,22 @@ impl BattleMap {
                 }
             }
             let mut obstacle_ids = BTreeSet::new();
-            for &[from, to] in &data.grid.blocked_steps {
+            for (index, &[from, to]) in data.grid.blocked_steps.iter().enumerate() {
                 map.require_cell(from)?;
                 map.require_cell(to)?;
                 if from.distance(to) != 5 {
                     return Err(RuleError::MapData);
                 }
-                if !map.blocked_steps.insert(ordered_step(from, to)) {
+                let step = ordered_step(from, to);
+                if !map.blocked_steps.insert(step) {
                     return Err(RuleError::DuplicateCell);
                 }
+                let height = data
+                    .grid
+                    .step_heights_dm
+                    .as_ref()
+                    .map(|heights| heights[index]);
+                map.step_heights.insert(step, height);
             }
             for obstacle in &layout.obstacles {
                 if !valid_id(&obstacle.id) || !obstacle_ids.insert(&obstacle.id) {
@@ -318,15 +337,27 @@ impl BattleMap {
         to: Cell,
         creatures: &[Cell],
     ) -> Result<Cover, RuleError> {
+        self.cover_between_for_size(from, to, creatures, Size::Medium)
+    }
+    pub(crate) fn cover_between_for_size(
+        &self,
+        from: Cell,
+        to: Cell,
+        creatures: &[Cell],
+        target_size: Size,
+    ) -> Result<Cover, RuleError> {
         if creatures.len() > 64 {
             return Err(RuleError::Capacity);
         }
         self.require_cell(from)?;
         self.require_cell(to)?;
         let mut cover = Cover::None;
-        if barrier_between(&self.blocked_steps, from, to) {
-            cover = Cover::Total;
-        }
+        cover = cover.max(barrier_between(
+            &self.step_heights,
+            from,
+            to,
+            target_height_dm(target_size),
+        ));
         for (&cell, &grade) in &self.cover {
             if cell != from && intersects(from, to, cell) {
                 cover = cover.max(grade);
@@ -354,9 +385,37 @@ fn ordered_step(from: Cell, to: Cell) -> [Cell; 2] {
 // stopped, the same way a line that only touches an obstacle's corner takes no cover from it.
 // A blocked diagonal step is a body-width fact (a figure cannot squeeze round that corner) and
 // stops no line. All arithmetic is integral.
-fn barrier_between(steps: &BTreeSet<[Cell; 2]>, from: Cell, to: Cell) -> bool {
+fn target_height_dm(size: Size) -> u16 {
+    // The scene rules have no creature-height field; use representative heights for its sizes.
+    match size {
+        Size::Small => 12,
+        Size::Medium => 18,
+        Size::Large => 30,
+    }
+}
+
+fn barrier_cover(height_dm: u16, target_height_dm: u16) -> Cover {
+    let height = u32::from(height_dm);
+    let target = u32::from(target_height_dm);
+    if height * 4 < target {
+        Cover::None
+    } else if height * 2 <= target {
+        Cover::Half
+    } else if height * 4 <= target * 3 {
+        Cover::ThreeQuarters
+    } else {
+        Cover::Total
+    }
+}
+
+fn barrier_between(
+    steps: &BTreeMap<[Cell; 2], Option<u16>>,
+    from: Cell,
+    to: Cell,
+    target_height_dm: u16,
+) -> Cover {
     if from == to {
-        return false;
+        return Cover::None;
     }
     let p = [i64::from(from.0) * 2 + 1, i64::from(from.1) * 2 + 1];
     let q = [i64::from(to.0) * 2 + 1, i64::from(to.1) * 2 + 1];
@@ -368,8 +427,12 @@ fn barrier_between(steps: &BTreeSet<[Cell; 2]>, from: Cell, to: Cell) -> bool {
             .all(|axis| p[axis].min(q[axis]) <= point[axis] && point[axis] <= p[axis].max(q[axis]))
     };
     // Corners the line touches, with the sides of the line a barrier leaves them on.
-    let mut touched: Vec<([i64; 2], bool, bool)> = Vec::new();
-    for &[a, b] in steps {
+    let mut cover = Cover::None;
+    let mut touched: Vec<([i64; 2], Option<Cover>, Option<Cover>)> = Vec::new();
+    for (&[a, b], &height_dm) in steps {
+        let grade = height_dm.map_or(Cover::Total, |height_dm| {
+            barrier_cover(height_dm, target_height_dm)
+        });
         let delta = [
             i64::from(b.0) - i64::from(a.0),
             i64::from(b.1) - i64::from(a.1),
@@ -386,7 +449,7 @@ fn barrier_between(steps: &BTreeSet<[Cell; 2]>, from: Cell, to: Cell) -> bool {
         let (side_r, side_s) = (cross(p, q, r).signum(), cross(p, q, s).signum());
         if side_r * side_s < 0 {
             if cross(r, s, p).signum() * cross(r, s, q).signum() < 0 {
-                return true;
+                cover = cover.max(grade);
             }
             continue;
         }
@@ -397,15 +460,26 @@ fn barrier_between(steps: &BTreeSet<[Cell; 2]>, from: Cell, to: Cell) -> bool {
             let index = match touched.iter().position(|(known, _, _)| *known == corner) {
                 Some(index) => index,
                 None => {
-                    touched.push((corner, false, false));
+                    touched.push((corner, None, None));
                     touched.len() - 1
                 }
             };
-            touched[index].1 |= side > 0;
-            touched[index].2 |= side < 0;
+            let slot = if side > 0 {
+                &mut touched[index].1
+            } else if side < 0 {
+                &mut touched[index].2
+            } else {
+                continue;
+            };
+            *slot = Some(slot.map_or(grade, |existing| existing.max(grade)));
         }
     }
-    touched.iter().any(|(_, left, right)| *left && *right)
+    for (_, left, right) in touched {
+        if let (Some(left), Some(right)) = (left, right) {
+            cover = cover.max(left).max(right);
+        }
+    }
+    cover
 }
 
 fn valid_id(id: &str) -> bool {
@@ -541,6 +615,77 @@ mod collision_tests {
         assert_eq!(
             corner.cover_between(Cell(3, 2), Cell(2, 1), &[]),
             Ok(Cover::None)
+        );
+    }
+
+    #[test]
+    fn scan_barrier_heights_grade_cover_against_medium_height_srd_p15() {
+        let map_at = |height_dm: Option<u16>| {
+            let mut data = serde_json::json!({
+                "schema": 2,
+                "grid": {
+                    "cols": 4,
+                    "rows": 4,
+                    "blocked": [],
+                    "blocked_steps": [[[1, 1], [2, 1]]]
+                },
+                "layouts": [{
+                    "id": "scan",
+                    "obstacles": [],
+                    "difficult": [],
+                    "spawns": {"heroes": [[0, 0]], "enemies": [[0, 3]]}
+                }]
+            });
+            if let Some(height_dm) = height_dm {
+                data["grid"]["step_heights_dm"] = serde_json::json!([height_dm]);
+            }
+            BattleMap::from_json(data.to_string().as_bytes(), "scan").unwrap()
+        };
+
+        for (height_dm, expected) in [
+            (Some(4), Cover::None),
+            (Some(5), Cover::Half),
+            (Some(9), Cover::Half),
+            (Some(10), Cover::ThreeQuarters),
+            (Some(13), Cover::ThreeQuarters),
+            (Some(14), Cover::Total),
+            (None, Cover::Total),
+        ] {
+            assert_eq!(
+                map_at(height_dm).cover_between(Cell(0, 1), Cell(3, 1), &[]),
+                Ok(expected),
+                "height {height_dm:?} dm"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_barrier_cover_scales_to_the_target_size_srd_p15() {
+        let map = serde_json::from_value::<BattleSceneData>(serde_json::json!({
+            "schema": 2,
+            "grid": {
+                "cols": 4,
+                "rows": 4,
+                "blocked": [],
+                "blocked_steps": [[[1, 1], [2, 1]]],
+                "step_heights_dm": [4]
+            },
+            "layouts": [{
+                "id": "scan",
+                "obstacles": [],
+                "difficult": [],
+                "spawns": {"heroes": [[0, 0]], "enemies": [[0, 3]]}
+            }]
+        }))
+        .unwrap();
+        let map = BattleMap::from_data(&map, "scan").unwrap();
+        assert_eq!(
+            map.cover_between_for_size(Cell(0, 1), Cell(3, 1), &[], Size::Medium),
+            Ok(Cover::None)
+        );
+        assert_eq!(
+            map.cover_between_for_size(Cell(0, 1), Cell(3, 1), &[], Size::Small),
+            Ok(Cover::Half)
         );
     }
 }

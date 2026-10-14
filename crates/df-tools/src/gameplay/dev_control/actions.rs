@@ -459,6 +459,11 @@ fn fill_action_choices(
         }
     } else if action == parse::PlayAction::Attack {
         attack_option(body, &group.options)?
+    } else if matches!(
+        action,
+        parse::PlayAction::StabiliseWithHealersKit | parse::PlayAction::StabiliseMedicine
+    ) {
+        target_option(body, &group.options)?
     } else {
         return Err(bad_request(format!(
             "this action needs a selection; options: {}",
@@ -470,6 +475,18 @@ fn fill_action_choices(
         option_id,
     }];
     Ok(())
+}
+
+fn target_option(
+    body: &Value,
+    options: &[rpc::JourneyOption],
+) -> Result<String, (axum::http::StatusCode, Json<Value>)> {
+    let target = body
+        .get("target")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_request("stabilisation needs {\"target\": \"<hero>\"}"))?;
+    let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
+    unique_label_match(&labels, options, target)
 }
 
 fn unique_label_match(
@@ -744,5 +761,21 @@ mod offer_tests {
             )),
         };
         assert!(player_offers(&view).is_err());
+    }
+
+    #[test]
+    fn stabilisation_target_selects_the_named_companion() {
+        // The target is a dying 0 HP creature under SRD 5.2.1 p18 or p97.
+        let options = vec![rpc::JourneyOption {
+            option_id: "stabilise:hero-2".to_owned(),
+            label: "Stabilise Sigrun with the Healer's Kit (9 uses left)".to_owned(),
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            target_option(&json!({"target": "Sigrun"}), &options).unwrap(),
+            "stabilise:hero-2"
+        );
+        assert!(target_option(&json!({}), &options).is_err());
     }
 }

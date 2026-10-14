@@ -55,6 +55,8 @@ pub(super) enum PlayAction {
     Move,
     Attack,
     SecondWind,
+    StabiliseWithHealersKit,
+    StabiliseMedicine,
     EndTurn,
     Dash,
     Dodge,
@@ -79,6 +81,8 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "move" => PlayAction::Move,
         "attack" => PlayAction::Attack,
         "second-wind" => PlayAction::SecondWind,
+        "stabilise-kit" | "stabilise-with-healers-kit" => PlayAction::StabiliseWithHealersKit,
+        "stabilise-medicine" => PlayAction::StabiliseMedicine,
         "end-turn" => PlayAction::EndTurn,
         "dash" => PlayAction::Dash,
         "dodge" => PlayAction::Dodge,
@@ -105,6 +109,8 @@ impl PlayAction {
             Self::Move => rpc::GameplayActionKind::Move,
             Self::Attack => rpc::GameplayActionKind::GreatswordAttack,
             Self::SecondWind => rpc::GameplayActionKind::SecondWind,
+            Self::StabiliseWithHealersKit => rpc::GameplayActionKind::StabiliseWithHealersKit,
+            Self::StabiliseMedicine => rpc::GameplayActionKind::StabiliseMedicine,
             Self::EndTurn => rpc::GameplayActionKind::EndTurn,
             Self::Dash => rpc::GameplayActionKind::Dash,
             Self::Dodge => rpc::GameplayActionKind::Dodge,
@@ -120,7 +126,14 @@ impl PlayAction {
 
     /// Whether this action needs a tactical option chosen from the offers.
     pub(super) fn needs_option(self) -> bool {
-        matches!(self, Self::Move | Self::Attack | Self::PickUpWeapon)
+        matches!(
+            self,
+            Self::Move
+                | Self::Attack
+                | Self::StabiliseWithHealersKit
+                | Self::StabiliseMedicine
+                | Self::PickUpWeapon
+        )
     }
 }
 
@@ -176,9 +189,16 @@ mod tests {
 
     #[test]
     fn action_parsing_maps_known_words_and_refuses_the_rest() {
+        // The two stabilisation actions map to SRD 5.2.1 p18 Help and p97 Healer's Kit use.
         assert_eq!(parse_action("move"), Ok(PlayAction::Move));
         assert_eq!(parse_action("Attack"), Ok(PlayAction::Attack));
         assert_eq!(parse_action("begin-story"), Ok(PlayAction::BeginStory));
+        let kit = parse_action("stabilise-kit").unwrap();
+        assert_eq!(kit.kind(), rpc::GameplayActionKind::StabiliseWithHealersKit);
+        assert!(kit.needs_option());
+        let medicine = parse_action("stabilise-medicine").unwrap();
+        assert_eq!(medicine.kind(), rpc::GameplayActionKind::StabiliseMedicine);
+        assert!(medicine.needs_option());
         assert!(parse_action("do something brave").is_err());
         assert!(parse_action("").is_err());
     }

@@ -10,7 +10,7 @@
 use df_model::checkpoint::ActualDraw;
 use df_rules::tactical::{
     Action, AttackReason, AttackSpend, AttackSummary, AttackUse, Battle, BattleSceneData, Cell,
-    Combatant, Cover, CreatureKind, Mastery, Resolution, Side, Weapon,
+    Combatant, Cover, CreatureKind, Mastery, Resolution, Side, Size, Weapon,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,8 +79,10 @@ pub struct Grid {
     pub cols: u16,
     pub rows: u16,
     blocked: BTreeSet<Cell>,
+    blocked_steps: BTreeSet<[Cell; 2]>,
     difficult: BTreeSet<Cell>,
     cover: BTreeMap<Cell, Cover>,
+    barriers: Vec<([Cell; 2], Option<u16>)>,
     pub hero_spawns: Vec<Cell>,
     pub enemy_spawns: Vec<Cell>,
     /// The scene's lighting fact (SRD 5.2.1 p302 Sunlight Sensitivity).
@@ -95,6 +97,21 @@ impl Grid {
             .find(|candidate| candidate.id == layout)
             .expect("layout present");
         let mut blocked: BTreeSet<Cell> = data.grid.blocked.iter().copied().collect();
+        let barriers = data
+            .grid
+            .blocked_steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| {
+                (
+                    *step,
+                    data.grid
+                        .step_heights_dm
+                        .as_ref()
+                        .map(|heights| heights[index]),
+                )
+            })
+            .collect();
         let mut cover = BTreeMap::new();
         for obstacle in &chosen.obstacles {
             for &cell in &obstacle.cells {
@@ -109,8 +126,10 @@ impl Grid {
             cols: data.grid.cols,
             rows: data.grid.rows,
             blocked,
+            blocked_steps: data.grid.blocked_steps.iter().map(|step| *step).collect(),
             difficult: chosen.difficult.iter().copied().collect(),
             cover,
+            barriers,
             hero_spawns: chosen.spawns.heroes.clone(),
             enemy_spawns: chosen.spawns.enemies.clone(),
             sunlight,
@@ -122,29 +141,143 @@ impl Grid {
     pub fn blocked(&self, cell: Cell) -> bool {
         !self.contains(cell) || self.blocked.contains(&cell)
     }
+    pub fn step_clear(&self, from: Cell, to: Cell) -> bool {
+        let blocked_step =
+            self.blocked_steps.contains(&[from, to]) || self.blocked_steps.contains(&[to, from]);
+        !blocked_step
+            && squares(from, to) == 1
+            && !self.blocked(to)
+            && (from.0 == to.0
+                || from.1 == to.1
+                || (!self.blocked(Cell(from.0, to.1)) && !self.blocked(Cell(to.0, from.1))))
+    }
     pub fn difficult(&self, cell: Cell) -> bool {
         self.difficult.contains(&cell)
     }
-    /// SRD p15 Cover with the project's disclosed centre-line convention: the segment between
-    /// the two centres must enter the open interior of an obstacle square (or of another
-    /// living creature's square, Half Cover). Separating-axis test, exact integer arithmetic.
-    pub fn cover(&self, from: Cell, to: Cell, creatures: &[Cell]) -> Cover {
-        let mut result = Cover::None;
+    /// SRD p15 Cover with the project's disclosed centre-line convention. A barrier gives no,
+    /// half, three-quarters, or total cover according to its height relative to the target.
+    pub fn cover(&self, from: Cell, to: Cell, creatures: &[Coverer], target_size: Size) -> Cover {
+        let mut result = barrier_cover(&self.barriers, from, to, target_height_dm(target_size));
         for (&cell, &grade) in &self.cover {
             if cell != from && segment_enters(from, to, cell) {
                 result = result.max(grade);
             }
         }
-        for &cell in creatures {
-            if cell != from && cell != to && segment_enters(from, to, cell) {
+        for creature in creatures {
+            if creature.cell != from
+                && creature.cell != to
+                && covers_when_standing_or_large_enough(*creature, target_size)
+                && segment_enters(from, to, creature.cell)
+            {
                 result = result.max(Cover::Half);
             }
         }
         result
     }
     pub fn in_sight(&self, from: Cell, to: Cell) -> bool {
-        self.cover(from, to, &[]) != Cover::Total
+        self.cover(from, to, &[], Size::Medium) != Cover::Total
     }
+}
+#[derive(Clone, Copy)]
+pub struct Coverer {
+    pub cell: Cell,
+    pub size: Size,
+    pub prone: bool,
+}
+fn target_height_dm(size: Size) -> u16 {
+    match size {
+        Size::Small => 12,
+        Size::Medium => 18,
+        Size::Large => 30,
+    }
+}
+fn covers_when_standing_or_large_enough(creature: Coverer, target_size: Size) -> bool {
+    !creature.prone
+        || match creature.size {
+            Size::Small => false,
+            Size::Medium => target_size == Size::Small,
+            Size::Large => target_size != Size::Large,
+        }
+}
+fn barrier_cover(
+    barriers: &[([Cell; 2], Option<u16>)],
+    from: Cell,
+    to: Cell,
+    target_height_dm: u16,
+) -> Cover {
+    if from == to {
+        return Cover::None;
+    }
+    let start = [i64::from(from.0) * 2 + 1, i64::from(from.1) * 2 + 1];
+    let end = [i64::from(to.0) * 2 + 1, i64::from(to.1) * 2 + 1];
+    let cross = |a: [i64; 2], b: [i64; 2], c: [i64; 2]| {
+        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    };
+    let inside = |point: [i64; 2]| {
+        (0..2).all(|axis| {
+            start[axis].min(end[axis]) <= point[axis] && point[axis] <= start[axis].max(end[axis])
+        })
+    };
+    let mut strongest = Cover::None;
+    let mut touched: Vec<([i64; 2], Option<Cover>, Option<Cover>)> = Vec::new();
+    for (step, height) in barriers {
+        let [left, right] = *step;
+        let delta = [
+            i64::from(right.0) - i64::from(left.0),
+            i64::from(right.1) - i64::from(left.1),
+        ];
+        if delta[0] != 0 && delta[1] != 0 {
+            continue;
+        }
+        let grade = match height {
+            None => Cover::Total,
+            Some(height) if u32::from(*height) * 4 < u32::from(target_height_dm) => Cover::None,
+            Some(height) if u32::from(*height) * 2 <= u32::from(target_height_dm) => Cover::Half,
+            Some(height) if u32::from(*height) * 4 <= u32::from(target_height_dm) * 3 => {
+                Cover::ThreeQuarters
+            }
+            Some(_) => Cover::Total,
+        };
+        let midpoint = [
+            i64::from(left.0) + i64::from(right.0) + 1,
+            i64::from(left.1) + i64::from(right.1) + 1,
+        ];
+        let a = [midpoint[0] - delta[1], midpoint[1] + delta[0]];
+        let b = [midpoint[0] + delta[1], midpoint[1] - delta[0]];
+        let sides = (cross(start, end, a).signum(), cross(start, end, b).signum());
+        if sides.0 * sides.1 < 0 {
+            if cross(a, b, start).signum() * cross(a, b, end).signum() < 0 {
+                strongest = strongest.max(grade);
+            }
+            continue;
+        }
+        for (corner, side) in [(a, sides.1), (b, sides.0)] {
+            if cross(start, end, corner) != 0 || !inside(corner) {
+                continue;
+            }
+            let index = match touched.iter().position(|(known, _, _)| *known == corner) {
+                Some(index) => index,
+                None => {
+                    touched.push((corner, None, None));
+                    touched.len() - 1
+                }
+            };
+            let slot = if side > 0 {
+                &mut touched[index].1
+            } else if side < 0 {
+                &mut touched[index].2
+            } else {
+                continue;
+            };
+            *slot = Some(slot.map_or(grade, |existing| existing.max(grade)));
+        }
+    }
+    for (_, before, after) in touched {
+        if let (Some(before), Some(after)) = (before, after) {
+            strongest = strongest.max(before).max(after);
+        }
+    }
+    strongest
 }
 fn segment_enters(from: Cell, to: Cell, cell: Cell) -> bool {
     let p = [i64::from(from.0) * 2 + 1, i64::from(from.1) * 2 + 1];
@@ -262,11 +395,15 @@ pub fn allowance(c: &Combatant) -> u16 {
 pub fn capable(c: &Combatant) -> bool {
     !c.health().unconscious && !c.health().dead
 }
-fn living_cells(b: &Battle) -> Vec<Cell> {
+fn living_coverers(b: &Battle) -> Vec<Coverer> {
     b.combatants()
         .iter()
         .filter(|c| !c.health().dead)
-        .map(Combatant::cell)
+        .map(|c| Coverer {
+            cell: c.cell(),
+            size: c.spec().size,
+            prone: c.health().prone,
+        })
         .collect()
 }
 
@@ -383,6 +520,7 @@ pub fn opportunity_reactors(
                 && !o.budget().reaction_used
                 && feet(o.cell(), from) <= 5
                 && feet(o.cell(), to) > 5
+                && g.step_clear(o.cell(), from)
                 && g.in_sight(o.cell(), from)
         })
         .map(Combatant::id)
@@ -487,6 +625,12 @@ pub fn judge_attack(
     if usage.weapon != Weapon::UnarmedStrike && a.weapon_count(usage.weapon) == 0 {
         return Err("weapon-not-held");
     }
+    if a.spec().kind != CreatureKind::Hero
+        && usage.weapon != Weapon::UnarmedStrike
+        && !a.spec().weapons.contains(&usage.weapon)
+    {
+        return Err("weapon-not-in-stat-block");
+    }
     let distance = feet(a.cell(), t.cell());
     if usage.ranged {
         let Some((_, long)) = range_of(usage.weapon) else {
@@ -503,7 +647,11 @@ pub fn judge_attack(
             return Err("beyond-reach");
         }
     }
-    if g.cover(a.cell(), t.cell(), &living_cells(b)) == Cover::Total {
+    let cover = g.cover(a.cell(), t.cell(), &living_coverers(b), t.spec().size);
+    if !usage.ranged && !g.step_clear(a.cell(), t.cell()) && cover != Cover::Total {
+        return Err("melee-blocked");
+    }
+    if cover == Cover::Total {
         return Err("total-cover");
     }
     Ok(())
@@ -996,13 +1144,41 @@ impl<'g> FightAudit<'g> {
                 spent: sim.spent,
             });
             self.audit.tally("opportunity-windows");
+            let window = path.get(*index).copied();
+            let geometry = reactors
+                .iter()
+                .filter_map(|id| before.actor(*id).ok())
+                .map(|reactor| {
+                    let unarmed = AttackUse {
+                        weapon: Weapon::UnarmedStrike,
+                        ranged: false,
+                        hands: 0,
+                        finesse_dexterity: false,
+                        knockout: false,
+                        savage_attacker: false,
+                        use_mastery: false,
+                    };
+                    format!(
+                        "reactor {} at {:?}: step_clear={} sight={} cover={:?} engine-melee={:?}",
+                        reactor.id(),
+                        reactor.cell(),
+                        self.grid.step_clear(reactor.cell(), b.cell()),
+                        self.grid.in_sight(reactor.cell(), b.cell()),
+                        self.grid.cover(reactor.cell(), b.cell(), &[], Size::Medium),
+                        before.attack_from(reactor.id(), reactor.cell(), actor, unarmed)
+                    )
+                })
+                .collect::<Vec<_>>();
             self.audit.expect(
                 after.reaction_offers() == reactors.as_slice(),
                 "M-OA-OFFERS",
                 || {
                     format!(
-                        "offers {:?} vs recomputed {reactors:?}",
-                        after.reaction_offers()
+                        "offers {:?} vs recomputed {reactors:?} before={:?} mover={} at {:?}, next={window:?}; {geometry:?}",
+                        after.reaction_offers(),
+                        b.side(),
+                        actor,
+                        b.cell()
                     )
                 },
             );
@@ -1103,6 +1279,12 @@ impl<'g> FightAudit<'g> {
                     });
             }
             self.audit.tally("opportunity-attacks");
+            if before
+                .actor(actor)
+                .is_ok_and(|reactor| reactor.side() == Side::Enemies)
+            {
+                self.audit.tally("enemy-opportunity-attacks");
+            }
         } else {
             self.audit
                 .expect(res.attacks.is_empty(), "M-OA-ATTACKS", || {
@@ -1453,6 +1635,9 @@ impl<'g> FightAudit<'g> {
             return;
         };
         let g = self.grid;
+        if a.spec().kind != CreatureKind::Hero {
+            self.audit.tally("stat-block-attacks");
+        }
         if let Err(reason) = judge_attack(before, g, s.actor, s.target, usage) {
             self.audit.fail(
                 "A-ACCEPTED-ILLEGAL",
@@ -1494,7 +1679,7 @@ impl<'g> FightAudit<'g> {
             });
         }
         // Cover.
-        let cover = g.cover(a.cell(), t.cell(), &living_cells(before));
+        let cover = g.cover(a.cell(), t.cell(), &living_coverers(before), t.spec().size);
         self.audit.expect(s.cover == cover, "A-COVER", || {
             format!("cover reported {:?}, grid says {cover:?}", s.cover)
         });
@@ -1611,8 +1796,10 @@ impl<'g> FightAudit<'g> {
         let hit = chosen != 1 && (chosen == 20 || total >= i32::from(t.spec().armor_class + bonus));
         self.audit.expect(s.hit == hit, "A-HIT", || {
             format!(
-                "d20 {chosen} + {bonus_expected} vs AC {}: hit {hit}",
-                t.spec().armor_class + bonus
+                "d20 {chosen} + {bonus_expected} vs AC {}: hit {hit}; actor={:?}; target={:?}; usage={usage:?}; summary={s:?}",
+                t.spec().armor_class + bonus,
+                a.spec(),
+                t.spec()
             )
         });
         let critical = hit && (chosen == 20 || (t.health().unconscious && distance <= 5));
@@ -1894,4 +2081,67 @@ impl KindHint for AttackSummary {
 /// Side of a creature id, for harnesses.
 pub fn side_of(b: &Battle, id: u32) -> Option<Side> {
     b.actor(id).ok().map(Combatant::side)
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::{Cover, Coverer, Grid};
+    use df_rules::tactical::{Cell, Size};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn grid(barriers: Vec<([Cell; 2], Option<u16>)>, cols: u16, rows: u16) -> Grid {
+        Grid {
+            cols,
+            rows,
+            blocked: BTreeSet::new(),
+            blocked_steps: BTreeSet::new(),
+            difficult: BTreeSet::new(),
+            cover: BTreeMap::new(),
+            barriers,
+            hero_spawns: Vec::new(),
+            enemy_spawns: Vec::new(),
+            sunlight: false,
+        }
+    }
+
+    #[test]
+    fn srd_521_p15_barrier_cover_is_graded_by_height() {
+        let edge = [Cell(0, 0), Cell(1, 0)];
+        let cover_for = |height| {
+            grid(vec![(edge, height)], 2, 1).cover(Cell(0, 0), Cell(1, 0), &[], Size::Medium)
+        };
+
+        assert_eq!(cover_for(Some(4)), Cover::None);
+        assert_eq!(cover_for(Some(9)), Cover::Half);
+        assert_eq!(cover_for(Some(13)), Cover::ThreeQuarters);
+        assert_eq!(cover_for(Some(14)), Cover::Total);
+        assert_eq!(cover_for(None), Cover::Total);
+    }
+
+    #[test]
+    fn srd_521_p15_prone_medium_body_does_not_cover_medium_target() {
+        let grid = grid(Vec::new(), 3, 1);
+        let prone_body = [Coverer {
+            cell: Cell(1, 0),
+            size: Size::Medium,
+            prone: true,
+        }];
+
+        assert_eq!(
+            grid.cover(Cell(0, 0), Cell(2, 0), &prone_body, Size::Medium),
+            Cover::None
+        );
+        assert_eq!(
+            grid.cover(
+                Cell(0, 0),
+                Cell(2, 0),
+                &[Coverer {
+                    prone: false,
+                    ..prone_body[0]
+                }],
+                Size::Medium
+            ),
+            Cover::Half
+        );
+    }
 }

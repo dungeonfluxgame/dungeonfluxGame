@@ -95,6 +95,8 @@ pub(super) struct TvModel {
     pub(super) narrated: bool,
     /// The adventure's end card, shown over the scene and kept up until the next step.
     pub(super) end: Option<crate::presentation::Card>,
+    /// Shared People, Task and Clues on the closing card only.
+    pub(super) end_notebook: Option<df_ui::NotebookView>,
 }
 
 struct WordmarkSlot {
@@ -119,6 +121,7 @@ struct BigCard {
     line: Element,
     place: Element,
     heroes: Element,
+    notebook: Element,
 }
 
 /// PLAY-V09: the layer that shows the scene plate: two pictures (the shown one and the one that is
@@ -280,6 +283,8 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
     let next = node(document, &root, "p", "tv-bigcard-next", "")?;
     next.set_attribute("data-slot", "next-step")?;
     set_hidden(&next, true)?;
+    let notebook = node(document, &root, "div", "tv-bigcard-notebook", "")?;
+    set_hidden(&notebook, true)?;
     Ok(BigCard {
         root,
         kicker,
@@ -287,6 +292,7 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
         line,
         place,
         heroes,
+        notebook,
     })
 }
 
@@ -675,6 +681,15 @@ impl TvStage {
     /// Fills the title or closing card; the stylesheet shows it while the director is in the
     /// matching state.
     pub(super) fn show_card(&self, document: &Document, card: &Card) -> Result<(), JsValue> {
+        self.show_card_with_notebook(document, card, None)
+    }
+
+    pub(super) fn show_card_with_notebook(
+        &self,
+        document: &Document,
+        card: &Card,
+        notebook: Option<&df_ui::NotebookView>,
+    ) -> Result<(), JsValue> {
         let shown = &self.card;
         shown.root.set_attribute(
             "data-kind",
@@ -699,6 +714,62 @@ impl TvStage {
             crest.set_attribute("style", &format!("background-image:url({})", hero.portrait))?;
             node(document, &item, "b", "tv-bigcard-name", &hero.name)?;
             node(document, &item, "span", "tv-bigcard-role", &hero.role)?;
+        }
+        shown.notebook.set_text_content(None);
+        let show_notebook = card.kind == CardKind::End && notebook.is_some();
+        set_hidden(&shown.notebook, !show_notebook)?;
+        if let Some(notebook) = notebook.filter(|_| card.kind == CardKind::End) {
+            for (kind, label, empty) in [
+                (df_ui::NotebookKind::Person, "People", "No people recorded."),
+                (df_ui::NotebookKind::Task, "Task", "No task recorded."),
+                (df_ui::NotebookKind::Clue, "Clues", "No clues recorded."),
+            ] {
+                let section = node(
+                    document,
+                    &shown.notebook,
+                    "section",
+                    "tv-bigcard-notebook-section",
+                    "",
+                )?;
+                node(document, &section, "h3", "", label)?;
+                let entries = notebook
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.kind == kind)
+                    .collect::<Vec<_>>();
+                if entries.is_empty() {
+                    node(document, &section, "p", "", empty)?;
+                }
+                for entry in entries {
+                    let item = node(
+                        document,
+                        &section,
+                        "article",
+                        "tv-bigcard-notebook-entry",
+                        "",
+                    )?;
+                    node(document, &item, "h4", "", &entry.title)?;
+                    node(document, &item, "p", "", &entry.text)?;
+                    if kind == df_ui::NotebookKind::Clue
+                        && let Some(author) = &entry.author
+                    {
+                        node(
+                            document,
+                            &item,
+                            "p",
+                            "tv-bigcard-notebook-meta",
+                            &format!("Found by {author}."),
+                        )?;
+                    }
+                    node(
+                        document,
+                        &item,
+                        "p",
+                        "tv-bigcard-notebook-meta",
+                        &format!("Scene: {}", entry.scene.replace('_', " ")),
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -829,7 +900,7 @@ impl TvStage {
                     .root
                     .owner_document()
                     .ok_or_else(|| JsValue::from_str("display document absent"))?;
-                self.show_card(&document, card)?;
+                self.show_card_with_notebook(&document, card, model.end_notebook.as_ref())?;
             }
             None => {
                 self.root.remove_attribute("data-ended")?;

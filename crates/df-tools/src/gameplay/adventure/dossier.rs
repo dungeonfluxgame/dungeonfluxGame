@@ -130,6 +130,45 @@ pub(crate) enum Topic {
     Bribe,
     WhatAreYouHiding,
 }
+
+/// The factual part of an ordinary question to a speaking character.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AnswerSubject {
+    Errand,
+    People,
+    Stakes,
+    Deadline,
+    Where,
+    Reward,
+    Enemy,
+    SealedLetter,
+    Other,
+}
+
+impl AnswerSubject {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Errand => "errand",
+            Self::People => "people",
+            Self::Stakes => "stakes",
+            Self::Deadline => "deadline",
+            Self::Where => "where",
+            Self::Reward => "reward",
+            Self::Enemy => "enemy",
+            Self::SealedLetter => "sealed_letter",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// A pattern answer plus a shorter, different sentence for the same follow-up question.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubjectAnswer {
+    pub(crate) text: String,
+    pub(crate) restatement: String,
+}
 impl Topic {
     pub(crate) const ALL: [Self; 9] = [
         Self::WhoAreYou,
@@ -390,6 +429,9 @@ pub(crate) struct Dossier {
     pub(crate) starting_attitude: Attitude,
     pub(crate) speech_style: SpeechStyle,
     pub(crate) prepared_answers: BTreeMap<Topic, String>,
+    /// Source-bound answers prepared from the adventure's facts. Missing in older stored records.
+    #[serde(default)]
+    pub(crate) subject_answers: BTreeMap<AnswerSubject, SubjectAnswer>,
     /// Short in-character lines for a Hostile NPC when no text model answers; they reveal
     /// nothing.
     pub(crate) curt_answers: Vec<String>,
@@ -1159,6 +1201,7 @@ fn roll_one(
             tags: style.tags.clone(),
         },
         prepared_answers,
+        subject_answers: BTreeMap::new(),
         curt_answers,
         rolls: roller.rolls,
     })
@@ -1913,6 +1956,16 @@ impl Dossier {
             .collect();
         for (topic, text) in &self.prepared_answers {
             public.push((format!("prepared_answers.{}", topic.label()), text));
+        }
+        for (subject, answer) in &self.subject_answers {
+            public.push((
+                format!("subject_answers.{}", subject.label()),
+                answer.text.as_str(),
+            ));
+            public.push((
+                format!("subject_answers.{}.restatement", subject.label()),
+                answer.restatement.as_str(),
+            ));
         }
         for (index, text) in self.curt_answers.iter().enumerate() {
             public.push((format!("curt_answers.{index}"), text));

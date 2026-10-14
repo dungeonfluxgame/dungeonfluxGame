@@ -1563,3 +1563,35 @@ fn invalid_tempo_is_refused_with_a_typed_tuning_error() {
         }
     ));
 }
+
+mod adventure {
+    use super::*;
+
+    #[test]
+    fn generated_scene_findings_are_accepted_srd_5_2_1_pages_6_186_187_189() {
+        let pack = edit(&shipped_pack(), |document| {
+            document["scenes"][1]["findings"] = json!([
+                {
+                    "id": "ledger-mark",
+                    "sentence": "The ledger's last page is torn out.",
+                    "skill": "investigation",
+                    "dc": 25,
+                    "private": false,
+                    "consequence": "enemy-weakness"
+                },
+                {
+                    "id": "wet-footprints",
+                    "sentence": "Wet footprints lead toward the ferry gate.",
+                    "skill": "perception",
+                    "dc": 30,
+                    "private": false
+                }
+            ]);
+        });
+
+        assert!(
+            load_from_bytes(pack.as_bytes(), shipped_tuning().as_bytes()).is_ok(),
+            "generated scene findings should be part of the scene contract"
+        );
+    }
+}

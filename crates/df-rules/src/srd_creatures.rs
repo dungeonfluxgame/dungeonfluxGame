@@ -11,6 +11,8 @@ pub struct SrdCreature {
     pub page: u16,
     pub languages: &'static str,
     pub exact: bool,
+    /// Whether the enemy policy may target a hero at 0 Hit Points when no standing hero is actionable.
+    pub attacks_unconscious: bool,
     pub weapon_label: &'static str,
     pub rules: BanditRules,
 }
@@ -28,6 +30,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 261,
         languages: "Common",
         exact: true,
+        attacks_unconscious: false,
         weapon_label: "scimitar",
         rules: BanditRules {
             hit_points: 11,
@@ -48,6 +51,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 278,
         languages: "Common",
         exact: false,
+        attacks_unconscious: false,
         weapon_label: "ritual sickle",
         rules: BanditRules {
             hit_points: 9,
@@ -68,6 +72,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 296,
         languages: "Common",
         exact: true,
+        attacks_unconscious: false,
         weapon_label: "spear",
         rules: BanditRules {
             hit_points: 11,
@@ -88,6 +93,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 290,
         languages: "Common, Goblin",
         exact: true,
+        attacks_unconscious: false,
         weapon_label: "scimitar",
         rules: BanditRules {
             hit_points: 10,
@@ -108,6 +114,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 302,
         languages: "Common, Draconic",
         exact: true,
+        attacks_unconscious: false,
         weapon_label: "dagger",
         rules: BanditRules {
             hit_points: 7,
@@ -128,6 +135,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 325,
         languages: "Understands the languages it knew in life but can't speak",
         exact: true,
+        attacks_unconscious: false,
         weapon_label: "shortsword",
         rules: BanditRules {
             hit_points: 13,
@@ -148,6 +156,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 343,
         languages: "Understands the languages it knew in life but can't speak",
         exact: false,
+        attacks_unconscious: true,
         weapon_label: "slam",
         rules: BanditRules {
             hit_points: 15,
@@ -168,6 +177,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 364,
         languages: "None",
         exact: false,
+        attacks_unconscious: true,
         weapon_label: "bite",
         rules: BanditRules {
             hit_points: 11,
@@ -188,6 +198,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 353,
         languages: "None",
         exact: true,
+        attacks_unconscious: true,
         weapon_label: "bite",
         rules: BanditRules {
             hit_points: 7,
@@ -208,6 +219,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 355,
         languages: "None",
         exact: true,
+        attacks_unconscious: true,
         weapon_label: "bite",
         rules: BanditRules {
             hit_points: 9,
@@ -228,6 +240,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 357,
         languages: "None",
         exact: false,
+        attacks_unconscious: true,
         weapon_label: "bite",
         rules: BanditRules {
             hit_points: 5,
@@ -248,6 +261,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         page: 322,
         languages: "Common, Goblin",
         exact: false,
+        attacks_unconscious: false,
         weapon_label: "shortsword",
         rules: BanditRules {
             hit_points: 16,
@@ -357,7 +371,7 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "Shortbow",
         Action,
         Implemented,
-        "ranged 80/320 ft, plus 1d4 with Advantage; the shield is doffed first",
+        "ranged 80/320 ft, plus 1d4 with Advantage; used at stat-block AC 15 without a doff action",
     ),
     feature(
         "goblin-warrior",
@@ -603,5 +617,21 @@ mod tests {
             .expect("Wolf has Pack Tactics");
         assert!(pack_tactics.note.contains("non-Incapacitated ally"));
         assert!(pack_tactics.note.contains("within 5 ft of the target"));
+    }
+
+    /// SRD 5.2.1 p. 18 permits damage at 0 Hit Points; this table pins the game's enemy policy.
+    #[test]
+    fn unconscious_target_policy_is_explicit_for_each_creature() {
+        for creature in &SRD_521_CREATURES {
+            let expected = matches!(
+                creature.id,
+                "zombie" | "wolf" | "giant-rat" | "giant-weasel" | "mastiff"
+            );
+            assert_eq!(
+                creature.attacks_unconscious, expected,
+                "{} policy at SRD page {}",
+                creature.id, creature.page
+            );
+        }
     }
 }

@@ -1157,6 +1157,28 @@ fn dossiers_are_stored_with_the_adventure_and_an_adventure_saved_without_them_st
     let mut documents = generated.documents(true).unwrap();
     let (_, stored) = record::reload(&documents).unwrap();
     assert_eq!(stored.dossiers, generated.dossiers);
+    assert!(generated.dossiers.iter().all(|dossier| {
+        dossier.subject_answers.len() == 8
+            && dossier.subject_answers.values().all(|answer| {
+                !answer.text.trim().is_empty() && !answer.restatement.trim().is_empty()
+            })
+    }));
+
+    // SRD 5.2.1, p. 184 (Influence): this checks stored dialogue facts, not an Influence check.
+    let mut old_dossier_record = documents.clone();
+    let mut old_value: serde_json::Value =
+        serde_json::from_slice(&old_dossier_record.record).unwrap();
+    for dossier in old_value["dossiers"].as_array_mut().unwrap() {
+        dossier.as_object_mut().unwrap().remove("subject_answers");
+    }
+    old_dossier_record.record = serde_json::to_vec_pretty(&old_value).unwrap();
+    let (_, old_dossiers) = record::reload(&old_dossier_record).unwrap();
+    assert!(
+        old_dossiers
+            .dossiers
+            .iter()
+            .all(|dossier| dossier.subject_answers.is_empty())
+    );
 
     let mut value: serde_json::Value = serde_json::from_slice(&documents.record).unwrap();
     value.as_object_mut().unwrap().remove("dossiers");
@@ -1215,13 +1237,15 @@ fn sha256(bytes: &[u8]) -> String {
 /// (no sentence starts with a lower-case stake) and re-pinned the same way (tuning unchanged).
 /// DIALOGUE-001 M1 fixed one colon in a `npc-social.json` bribe fallback line (spoken register),
 /// so the dossier tables revision and the record hashes moved; pack and tuning are unchanged.
+/// NTE-01 adds the compact scene facts used to populate the durable notebook, changing records
+/// while leaving the pack and tuning bytes unchanged.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
             "575733f0349983b147b0cbc9511a3aa0b9cf7ed9244076dded9f97afae2f4bef",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "9cfefad545bc26dbf4877b6d842e9195ee61558327fc931abb79bd78db06ce97",
+            "045ebeaffc7ddf4a9c7f4e1135016ef618a2a3bd01b69cc2c4f83f1e6833bb90",
         ],
     ),
     (
@@ -1229,7 +1253,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "94829369c00648864f8c968fb01b5f9736b8504197404813bae399c2b34e44c8",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "73a10213df2c7571a22d7ee8d2a6c96f56acf263a0369e0ccd0f25eb65d3aa42",
+            "4415262dfc417c9e2a92189524163bc4fb9d1e40727b020299c41fd81ffa4dea",
         ],
     ),
     (
@@ -1237,7 +1261,7 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
         [
             "f281627efc12c4dd8fccdc14cadd747ffdf77bbf1ee17ddb06d0cb14ef728674",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "bc48d41480a937ca03120dde501bf1b25ce420af02022b74132118826ef52767",
+            "74c832ffba3a593ac8dd8f5671e198feacee536eb92f767799c42a2f9187e093",
         ],
     ),
 ];

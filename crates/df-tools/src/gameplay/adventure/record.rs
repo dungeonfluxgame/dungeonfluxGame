@@ -42,6 +42,10 @@ pub(crate) struct AdventureRecord {
     /// existed, which keep playing without them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) dossiers: Vec<Dossier>,
+    /// The bounded structured expression facts, retained so the notebook can cite only
+    /// entities the generated scene actually names. Older adventures continue without them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) fact_sheet: Vec<super::FactSheet>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +60,7 @@ struct SceneCastRecord {
 struct Expression {
     /// `patterns` or `model`; `model` carries the details below.
     source: String,
+    #[serde(default)]
     fact_sheet_sha256: String,
     output_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,6 +173,11 @@ impl GeneratedAdventure {
                 .collect(),
             settings: Some(self.settings.clone()),
             dossiers: self.dossiers.clone(),
+            // Only what the notebook reads at run time (the scene, who speaks, the named
+            // facts and what the text must mention). The voice, delivery, tone, forbidden terms
+            // and baseline text are generation inputs: stored whole they took the record past
+            // the storage limit for one document and the server would not start.
+            fact_sheet: notebook_fact_sheets(&self.fact_sheet),
         };
         let record =
             serde_json::to_vec_pretty(&record).map_err(|_| GenerateError::Serialization)?;
@@ -178,6 +188,72 @@ impl GeneratedAdventure {
         })
     }
 }
+/// The facts of a scene's sheet the party notebook reads (`gameplay/notebook.rs`): who the named
+/// people are and where they are found, the places named, and the reward. Each sheet repeats
+/// about ninety facts; storing them all for fifty-seven sheets was 210 KiB of one record.
+fn notebook_reads(key: &str) -> bool {
+    matches!(
+        key,
+        "setting.meeting.name"
+            | "setting.destination.name"
+            | "setting.confrontation.name"
+            | "place_short"
+            | "place_detail"
+            | "loc.name"
+            | "loc.short"
+            | "dest.name"
+            | "reward.line"
+    ) || ["patron.", "contact.", "ant."].iter().any(|prefix| {
+        key.strip_prefix(prefix)
+            .is_some_and(|rest| matches!(rest, "full" | "first" | "short" | "role" | "the"))
+    })
+}
+fn notebook_fact_sheets(sheets: &[super::FactSheet]) -> Vec<super::FactSheet> {
+    let mut stored = Vec::<super::FactSheet>::new();
+    for sheet in sheets {
+        let Some(scene) = sheet.scene.as_deref() else {
+            continue;
+        };
+        let stored_sheet = if let Some(stored_sheet) = stored
+            .iter_mut()
+            .find(|stored_sheet| stored_sheet.scene.as_deref() == Some(scene))
+        {
+            stored_sheet
+        } else {
+            stored.push(super::FactSheet {
+                scene: Some(scene.to_owned()),
+                beat: String::new(),
+                slot: String::new(),
+                speaker: String::new(),
+                voice: String::new(),
+                delivery: String::new(),
+                facts: sheet
+                    .facts
+                    .iter()
+                    .filter(|(key, _)| notebook_reads(key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                must_mention: Vec::new(),
+                forbidden: Vec::new(),
+                bounds: 0,
+                baseline: String::new(),
+                tone: String::new(),
+            });
+            stored.last_mut().expect("the sheet was just stored")
+        };
+        for mention in &sheet.must_mention {
+            if stored_sheet
+                .facts
+                .values()
+                .any(|fact| fact.eq_ignore_ascii_case(mention))
+                && !stored_sheet.must_mention.contains(mention)
+            {
+                stored_sheet.must_mention.push(mention.clone());
+            }
+        }
+    }
+    stored
+}
 /// Validate exact stored content/record without reading any table or drawing entropy.
 pub(crate) fn reload(
     documents: &DemoAdventure,
@@ -186,6 +262,14 @@ pub(crate) fn reload(
         .iter()
         .any(|bytes| bytes.is_empty() || bytes.len() > 256 * 1024)
     {
+        // Say which document and by how much: "document size" alone cost a debugging session.
+        eprintln!(
+            "ADVENTURE RECORD refused: document size pack={} tuning={} record={} limit={}",
+            documents.pack.len(),
+            documents.tuning.len(),
+            documents.record.len(),
+            256 * 1024
+        );
         return Err(RecordError::Invalid("document size"));
     }
     let loaded =
@@ -203,7 +287,7 @@ pub(crate) fn reload(
             ("patterns", None) | ("model", Some(_))
         )
         || !valid_hash(&record.tables_revision)
-        || !valid_hash(&record.expression.fact_sheet_sha256)
+        || (!record.fact_sheet.is_empty() && !valid_hash(&record.expression.fact_sheet_sha256))
         || record.pack_sha256 != hash(&documents.pack)
         || record.tuning_sha256 != hash(&documents.tuning)
         || loaded.pack.id != format!("adv-{seed:016x}")
@@ -212,6 +296,37 @@ pub(crate) fn reload(
         return Err(RecordError::Invalid(
             "schema, version, seed or byte revisions",
         ));
+    }
+    if !record.fact_sheet.is_empty()
+        && (record.fact_sheet.len() > 128
+            || record.fact_sheet.iter().any(|sheet| {
+                sheet.scene.as_deref().is_some_and(|scene| {
+                    !pack::SceneKey::ALL.iter().any(|key| {
+                        serde_json::to_value(key)
+                            .ok()
+                            .and_then(|value| value.as_str().map(|value| value == scene))
+                            == Some(true)
+                    })
+                }) || sheet.slot.len() > 96
+                    || sheet.beat.len() > 96
+                    || sheet.speaker.len() > 96
+                    || sheet.voice.len() > 256
+                    || sheet.delivery.len() > 256
+                    || sheet.tone.len() > 256
+                    || sheet.baseline.len() > 4096
+                    || sheet.bounds > 4096
+                    || sheet.facts.len() > 128
+                    || sheet.must_mention.len() > 32
+                    || sheet.forbidden.len() > 128
+                    || sheet
+                        .facts
+                        .iter()
+                        .any(|(key, value)| key.len() > 96 || value.len() > 4096)
+                    || sheet.must_mention.iter().any(|value| value.len() > 256)
+                    || sheet.forbidden.iter().any(|value| value.len() > 4096)
+            }))
+    {
+        return Err(RecordError::Invalid("fact sheet"));
     }
     let mut output = Sha256::new();
     output.update(&documents.pack);

@@ -980,6 +980,10 @@ pub(super) fn action_lines(
     let own = combat
         .iter()
         .find(|outcome| outcome.actor_name == hero && is_attack(outcome));
+    let stabilisation = combat.iter().find(|outcome| {
+        outcome.actor_name == hero
+            && rpc::OutcomeKind::try_from(outcome.kind) == Ok(rpc::OutcomeKind::Stabilisation)
+    });
     // The resolved attack names the weapon it used (a longbow for an archer); the hero's melee
     // weapon is only the fallback when the outcome carries none.
     let used = own
@@ -1014,6 +1018,18 @@ pub(super) fn action_lines(
             "miss".to_owned()
         };
         format!("{attack} \u{2014} {result}")
+    } else if let Some(outcome) = stabilisation {
+        match &outcome.stabilization {
+            Some(result) if result.succeeded => format!(
+                "steadies {}: {} is stable",
+                outcome.target_name, outcome.target_name
+            ),
+            Some(_) => format!(
+                "tries to steady {}, but the Medicine check fails",
+                outcome.target_name
+            ),
+            None => format!("acts to steady {}", outcome.target_name),
+        }
     } else {
         match kind {
             Kind::GreatswordAttack => format!("strikes with the {used}"),
@@ -1134,6 +1150,35 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
             "COMBAT stable_recovery actor={:?} hours={}",
             outcome.actor_name, outcome.recovery_hours
         ),
+        Ok(rpc::OutcomeKind::Stabilisation) => match &outcome.stabilization {
+            Some(result) => match rpc::StabilizationMethod::try_from(result.method) {
+                Ok(rpc::StabilizationMethod::HealersKit) => format!(
+                    "COMBAT stabilise actor={:?} target={:?} method=kit uses_left={}",
+                    outcome.actor_name, outcome.target_name, result.uses_left
+                ),
+                Ok(rpc::StabilizationMethod::Medicine) => format!(
+                    "COMBAT stabilise actor={:?} target={:?} method=medicine die={} modifier={} dc={} result={}",
+                    outcome.actor_name,
+                    outcome.target_name,
+                    result.die,
+                    result.wisdom_modifier,
+                    result.dc,
+                    if result.succeeded {
+                        "success"
+                    } else {
+                        "failure"
+                    }
+                ),
+                _ => format!(
+                    "COMBAT stabilise actor={:?} target={:?} method=unspecified",
+                    outcome.actor_name, outcome.target_name
+                ),
+            },
+            None => format!(
+                "COMBAT stabilise actor={:?} target={:?} method=unspecified",
+                outcome.actor_name, outcome.target_name
+            ),
+        },
         Ok(rpc::OutcomeKind::DeathSave) => format!(
             "COMBAT death_save actor={:?} die={} result={:?} successes={} failures={}",
             outcome.actor_name,
@@ -1279,6 +1324,18 @@ pub(super) fn story_choice_audit_line(
 
 pub(super) fn story_rest_audit_line(actor: &str) -> String {
     format!("STORY rest actor={actor:?}")
+}
+
+pub(super) fn story_rest_hit_die_audit_line(
+    actor: &str,
+    hit_die: u32,
+    modifier: i32,
+    healed: u32,
+    hit_points: u32,
+) -> String {
+    format!(
+        "STORY rest actor={actor:?} hit_die={hit_die} modifier={modifier} healed={healed} hit_points={hit_points}"
+    )
 }
 
 pub(super) fn story_say_audit_line(actor: &str, chars: usize, target: &str) -> String {
@@ -1486,6 +1543,14 @@ mod tests {
         assert_eq!(
             story_rest_audit_line("Brakka"),
             "STORY rest actor=\"Brakka\""
+        );
+    }
+
+    #[test]
+    fn story_rest_hit_die_audit_formatter_records_the_spend_result_srd_p187() {
+        assert_eq!(
+            story_rest_hit_die_audit_line("Brakka", 8, 2, 4, 13),
+            "STORY rest actor=\"Brakka\" hit_die=8 modifier=2 healed=4 hit_points=13"
         );
     }
 

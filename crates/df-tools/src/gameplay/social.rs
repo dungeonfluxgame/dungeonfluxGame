@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use super::{
-    adventure::dossier::{Attitude, Dossier, Effect, Topic},
+    adventure::dossier::{AnswerSubject, Attitude, Dossier, Effect, Topic},
     storyteller::contains_whole_word,
 };
 
@@ -61,6 +61,7 @@ pub(super) enum Approach {
     Deception,
     Intimidation,
     Bribe,
+    Bargain,
     Insult,
     Other,
 }
@@ -76,6 +77,7 @@ impl Approach {
             Self::Deception => "deception",
             Self::Intimidation => "intimidation",
             Self::Bribe => "bribe",
+            Self::Bargain => "bargain",
             Self::Insult => "insult",
             Self::Other => "other",
         }
@@ -93,12 +95,19 @@ impl Approach {
             Self::Deception,
             Self::Intimidation,
             Self::Bribe,
+            Self::Bargain,
             Self::Insult,
             Self::Other,
         ]
         .into_iter()
         .find(|approach| approach.label().eq_ignore_ascii_case(word))
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ApproachReading {
+    pub(super) approach: Approach,
+    pub(super) subject: AnswerSubject,
 }
 
 fn mentions_any(lowered: &str, phrases: &[&str]) -> bool {
@@ -113,6 +122,10 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     let has = |phrases: &[&str]| mentions_any(&lowered, phrases);
     if has(&[
         "or else",
+        "or i leave",
+        "or i'll leave",
+        "or we leave",
+        "or i walk away",
         "or you die",
         "i will hurt",
         "i'll hurt",
@@ -141,11 +154,35 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     ]) {
         Approach::Intimidation
     } else if has(&[
+        "what do we get",
+        "what will you pay us",
+        "what will you pay me",
+        "what do you pay us",
+        "what is your price",
+        "name your price",
+        "how much is the reward",
+        "what is the fee",
+        "what is the price",
+        "what do you offer in return",
+        "what's in it for us",
+        "what is in it for us",
+        "our price",
+        "my price",
+        "price is",
+        "be compensated",
+        "payment for",
+        "reward can we expect",
+        "what can we expect",
+        "is there a payment",
+    ]) {
+        Approach::Bargain
+    } else if has(&[
         "bribe",
         "gold",
         "coin",
         "coins",
         "silver",
+        "accept this payment",
         "pay you",
         "paid",
         "how much",
@@ -155,6 +192,7 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     } else if has(&[
         "idiot",
         "fool",
+        "foolish",
         "coward",
         "stupid",
         "worthless",
@@ -229,7 +267,21 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "i am the",
         "i'm the",
         "sent me",
+        "sent us",
+        "sent you",
         "i work for",
+        "we work for",
+        "we came from",
+        "i am a",
+        "he says you",
+        "she says you",
+        "the captain told us",
+        "the harbourmaster sent",
+        "the magistrate says",
+        "official order",
+        "ordered us to",
+        "ordered me to",
+        "i have authority",
         "pretend",
         "i am a king",
         "royal",
@@ -241,6 +293,13 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "believe me",
         "surely you",
         "please",
+        "we can",
+        "our plan",
+        "you should",
+        "this is the best",
+        "best way to",
+        "will help us",
+        "give everyone a chance",
     ]) {
         Approach::Persuasion
     } else if typed.contains('?')
@@ -254,6 +313,98 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     }
 }
 
+/// The factual subject of a typed line. It never changes a game rule or outcome.
+pub(super) fn subject_keywords(typed: &str) -> AnswerSubject {
+    let lowered = typed.to_lowercase();
+    let has = |phrases: &[&str]| mentions_any(&lowered, phrases);
+    if has(&[
+        "enemy",
+        "villain",
+        "who is behind",
+        "who's behind",
+        "who is after",
+        "who's after",
+        "bandit",
+        "goblin",
+        "kobold",
+        "kelbin",
+        "what do you know about",
+    ]) {
+        AnswerSubject::Enemy
+    } else if has(&[
+        "pay",
+        "paid",
+        "payment",
+        "reward",
+        "gold piece",
+        "gold pieces",
+        "sum",
+        "coin for",
+        "coins for",
+        "price",
+        "fee",
+        "compensated",
+        "compensation",
+        "get for",
+        "get if",
+        "in it for",
+    ]) {
+        AnswerSubject::Reward
+    } else if has(&["what happens", "why", "matter", "fail", "lose", "at stake"]) {
+        AnswerSubject::Stakes
+    } else if has(&[
+        "when",
+        "deadline",
+        "before dawn",
+        "before morning",
+        "tonight",
+        "what time",
+    ]) {
+        AnswerSubject::Deadline
+    } else if has(&[
+        "where",
+        "destination",
+        "take it",
+        "bring it",
+        "go with",
+        "which place",
+    ]) {
+        AnswerSubject::Where
+    } else if has(&[
+        "letter",
+        "sealed",
+        "what does it say",
+        "what is written",
+        "words inside",
+    ]) {
+        AnswerSubject::SealedLetter
+    } else if !has(&["who are you", "who am i"])
+        && has(&[
+            "who is", "who are", "who was", "who sent", "tomas", "contact", "mapmaker",
+        ])
+    {
+        AnswerSubject::People
+    } else if has(&[
+        "want done",
+        "need us to",
+        "errand",
+        "job",
+        "troubles",
+        "what do you want",
+    ]) {
+        AnswerSubject::Errand
+    } else {
+        AnswerSubject::Other
+    }
+}
+
+pub(super) fn classify_keywords_reading(typed: &str) -> ApproachReading {
+    ApproachReading {
+        approach: classify_keywords(typed),
+        subject: subject_keywords(typed),
+    }
+}
+
 /// The fixed topic a typed line is closest to, for the prepared answer. The approach takes
 /// precedence where it names one (a compliment, a threat, a bribe).
 pub(super) fn topic_of(typed: &str, approach: Approach) -> Topic {
@@ -261,6 +412,7 @@ pub(super) fn topic_of(typed: &str, approach: Approach) -> Topic {
         Approach::Flattery | Approach::Flirting => return Topic::ComplimentOrFlirt,
         Approach::Intimidation => return Topic::Threat,
         Approach::Bribe => return Topic::Bribe,
+        Approach::Bargain => return Topic::Bribe,
         _ => {}
     }
     let lowered = typed.to_lowercase();
@@ -377,6 +529,9 @@ struct Relationship {
     scene: String,
     scene_start: Attitude,
     recent: Vec<Line>,
+    /// Every NPC reply in the current scene, for sentence-level repeat checks.
+    #[serde(default)]
+    scene_said: Vec<String>,
     /// Keys of the facts and traits this NPC has already offered or said to this hero, such as
     /// `trait:want` or `line:origin_line`. Kept across scenes so nothing is volunteered twice.
     #[serde(default)]
@@ -404,6 +559,7 @@ impl Relationship {
             scene: String::new(),
             scene_start: dossier.starting_attitude,
             recent: Vec::new(),
+            scene_said: Vec::new(),
             voiced: Vec::new(),
             exchanges: 0,
             admitted_ignorance: false,
@@ -418,6 +574,7 @@ impl Relationship {
             self.scene = scene.to_owned();
             self.scene_start = self.attitude;
             self.exchanges = 0;
+            self.scene_said.clear();
             self.admitted_ignorance = false;
             self.last_asked = false;
         }
@@ -455,6 +612,7 @@ impl Relationship {
             self.scene = scene.to_owned();
             self.scene_start = self.attitude;
             self.exchanges = 0;
+            self.scene_said.clear();
             self.admitted_ignorance = false;
             self.last_asked = false;
         }
@@ -499,6 +657,8 @@ pub(super) struct Conversation {
     /// This reply's number in the conversation, from 1.
     pub(super) exchange: u32,
     pub(super) voiced: Vec<String>,
+    /// Every NPC reply in this scene, including lines outside the recent prompt window.
+    pub(super) said: Vec<String>,
     pub(super) admitted_ignorance: bool,
     pub(super) last_asked: bool,
 }
@@ -793,6 +953,11 @@ impl SocialLedger {
                 1
             },
             voiced: relationship.voiced.clone(),
+            said: if continuing {
+                relationship.scene_said.clone()
+            } else {
+                Vec::new()
+            },
             admitted_ignorance: continuing && relationship.admitted_ignorance,
             last_asked: continuing && relationship.last_asked,
         }
@@ -839,6 +1004,9 @@ impl SocialLedger {
         relationship.exchanges = relationship.exchanges.saturating_add(1);
         relationship.admitted_ignorance |= admits_not_knowing(npc_line);
         relationship.last_asked = npc_line.trim_end().ends_with('?');
+        relationship
+            .scene_said
+            .push(npc_line.chars().take(RECENT_LINE_CHARACTERS).collect());
         for (hero, text) in [(true, hero_line), (false, npc_line)] {
             relationship.recent.push(Line {
                 hero,
@@ -961,7 +1129,9 @@ fn effect_of(dossier: &Dossier, approach: Approach) -> Effect {
         Approach::Bribe => temperament.bribes.effect,
         Approach::Kindness => Effect::Warm,
         Approach::Insult => Effect::Cool,
-        Approach::Question | Approach::Persuasion | Approach::Other => Effect::Steady,
+        Approach::Question | Approach::Persuasion | Approach::Bargain | Approach::Other => {
+            Effect::Steady
+        }
     }
 }
 

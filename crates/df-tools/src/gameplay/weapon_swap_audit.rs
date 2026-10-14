@@ -46,24 +46,47 @@ fn draws(
         .collect()
 }
 
-fn encounter(hero_weapons: Vec<Weapon>) -> Battle {
+fn encounter(archer: bool) -> Battle {
     let map = BattleMap::from_json(MAP, "swap-audit").unwrap();
+    let (abilities, armor_class, weapons, masteries, archery) = if archer {
+        (
+            [13, 17, 15, 10, 12, 8],
+            15,
+            vec![Weapon::Longbow, Weapon::Scimitar, Weapon::Shortsword],
+            vec![Weapon::Longbow, Weapon::Scimitar, Weapon::Shortsword],
+            true,
+        )
+    } else {
+        (
+            [17, 13, 15, 10, 12, 8],
+            17,
+            vec![
+                Weapon::Greatsword,
+                Weapon::Flail,
+                Weapon::Javelin,
+                Weapon::Spear,
+                Weapon::Shortbow,
+            ],
+            vec![Weapon::Greatsword, Weapon::Flail, Weapon::Javelin],
+            false,
+        )
+    };
     let hero = CombatantSpec {
         id: 1,
         side: Side::Heroes,
         cell: Cell(1, 1),
         size: Size::Medium,
         kind: CreatureKind::Hero,
-        abilities: [16, 14, 15, 10, 12, 8],
-        armor_class: 17,
+        abilities,
+        armor_class,
         hit_points: 13,
         speed_ft: 30,
-        weapons: hero_weapons,
-        masteries: Vec::new(),
+        weapons,
+        masteries,
         arrows: 20,
         bolts: 0,
-        archery: false,
-        savage_attacker: false,
+        archery,
+        savage_attacker: true,
         second_wind_uses: 2,
         shield: false,
     };
@@ -101,50 +124,48 @@ fn step(
     tactical::resolve(battle, actor, action, binding, &draws).unwrap()
 }
 
-// SRD 5.2.1 p177 allows one weapon change during the Attack action; p13 grants one free object
-// interaction on the turn. Here, LightBonus also equips another weapon and drops the original
-// without using that interaction; a later opportunity attack changes the hand again off-turn.
+// SRD 5.2.1 p177 allows weapon changes for attacks in the Attack action; p13 grants one free
+// object interaction on the turn. The Nick attack stays within the Attack action, and the later
+// opportunity attack uses a weapon already in hand.
 #[test]
-fn srd_p13_p177_attacks_and_opportunity_reaction_change_weapons_without_interaction() {
-    let battle = encounter(vec![
-        Weapon::Longbow,
-        Weapon::Scimitar,
-        Weapon::Shortsword,
-        Weapon::Javelin,
-    ]);
+fn srd_p13_p177_attack_action_nick_and_opportunity_reaction_need_no_interaction() {
+    let battle = encounter(true);
     let attack = Action::Attack {
         target: 2,
-        weapon: use_weapon(Weapon::Scimitar, false, 1),
+        weapon: use_weapon(Weapon::Shortsword, false, 1),
         spend: AttackSpend::Action,
     };
     let battle = step(&battle, 1, &attack, 2, &[(20, 15), (6, 3)]).battle;
     assert_eq!(
         battle.actor(1).unwrap().held_weapons(),
-        &[Weapon::Longbow, Weapon::Scimitar]
+        &[Weapon::Shortsword]
     );
     assert!(!battle.actor(1).unwrap().budget().object_interaction_used);
-    let light_attack = Action::Attack {
+    let mut nick = use_weapon(Weapon::Scimitar, false, 1);
+    nick.use_mastery = true;
+    let nick_attack = Action::Attack {
         target: 2,
-        weapon: use_weapon(Weapon::Shortsword, false, 1),
-        spend: AttackSpend::LightBonus,
+        weapon: nick,
+        spend: AttackSpend::Nick,
     };
-    let battle = step(&battle, 1, &light_attack, 3, &[(20, 15), (6, 3)]).battle;
+    let battle = step(&battle, 1, &nick_attack, 3, &[(20, 15), (6, 3)]).battle;
     assert_eq!(
         battle.actor(1).unwrap().held_weapons(),
-        &[Weapon::Scimitar, Weapon::Shortsword]
+        &[Weapon::Shortsword, Weapon::Scimitar]
     );
     assert!(!battle.actor(1).unwrap().budget().object_interaction_used);
+    assert!(!battle.actor(1).unwrap().budget().bonus_action_used);
 
     let battle = step(&battle, 1, &Action::EndTurn, 4, &[]).battle;
     let moved = step(&battle, 2, &Action::Move(vec![Cell(3, 1)]), 5, &[]).battle;
     assert_eq!(moved.reaction_offers(), &[1]);
     let opportunity = Action::Opportunity {
-        attack: Some(use_weapon(Weapon::Javelin, false, 1)),
+        attack: Some(use_weapon(Weapon::Scimitar, false, 1)),
     };
     let after_reaction = step(&moved, 1, &opportunity, 6, &[(20, 15), (6, 3)]).battle;
     assert_eq!(
         after_reaction.actor(1).unwrap().held_weapons(),
-        &[Weapon::Shortsword, Weapon::Javelin]
+        &[Weapon::Shortsword, Weapon::Scimitar]
     );
     assert!(
         !after_reaction
@@ -156,14 +177,45 @@ fn srd_p13_p177_attacks_and_opportunity_reaction_change_weapons_without_interact
 }
 
 #[test]
+fn srd_p15_p177_opportunity_attack_uses_only_a_held_weapon() {
+    let battle = encounter(false);
+    let battle = step(&battle, 1, &Action::EndTurn, 8, &[]).battle;
+    let moved = step(&battle, 2, &Action::Move(vec![Cell(3, 1)]), 9, &[]).battle;
+    let source = source();
+    let binding = binding(&source, 10);
+    let draws = draws(&source, &binding, &[]);
+    assert_eq!(
+        tactical::resolve(
+            &moved,
+            1,
+            &Action::Opportunity {
+                attack: Some(use_weapon(Weapon::Javelin, false, 1)),
+            },
+            binding,
+            &draws,
+        )
+        .unwrap_err(),
+        tactical::RuleError::InvalidWeapon
+    );
+    let attack = Action::Opportunity {
+        attack: Some(use_weapon(Weapon::Greatsword, false, 2)),
+    };
+    let after_reaction = step(&moved, 1, &attack, 11, &[(20, 15), (6, 3), (6, 3)]).battle;
+    assert_eq!(
+        after_reaction.actor(1).unwrap().held_weapons(),
+        &[Weapon::Greatsword]
+    );
+}
+
+#[test]
 fn srd_p177_a_shortbow_attack_replaces_the_actual_in_hand_weapon() {
-    let battle = encounter(vec![Weapon::Greatsword, Weapon::Shortbow]);
+    let battle = encounter(false);
     let attack = Action::Attack {
         target: 2,
         weapon: use_weapon(Weapon::Shortbow, true, 2),
         spend: AttackSpend::Action,
     };
-    let result = step(&battle, 1, &attack, 7, &[(20, 15), (6, 3)]);
+    let result = step(&battle, 1, &attack, 7, &[(20, 15), (20, 15), (6, 3)]);
     assert_eq!(
         result.battle.actor(1).unwrap().held_weapons(),
         &[Weapon::Shortbow]

@@ -216,6 +216,11 @@ fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
 
 fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     let lobby = input.phase == rpc::JourneyPhase::Room;
+    let end_notebook = if input.journey.adventure_ended {
+        Some(super::live_notebook::view(input.journey)?)
+    } else {
+        None
+    };
     let join_url = join_address(input.journey)?;
     let (art, art_fallback) = art(input.phase, input.scene);
     let speaker = (!input.journey.dialogue.is_empty()).then(|| TvSpeaker {
@@ -276,6 +281,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
                 input.narration,
             )
         }),
+        end_notebook,
     })
 }
 

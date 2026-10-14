@@ -16,6 +16,7 @@ use df_model::checkpoint::Checkpoint;
 use std::collections::{BTreeMap, VecDeque};
 use std::mem::size_of;
 
+use super::super::notebook::NotebookSnapshot;
 use super::super::social::SocialSnapshot;
 
 /// A session revision as a plain comparable pair (epoch, sequence).
@@ -34,6 +35,7 @@ pub(crate) struct SavedMoment {
     pub checkpoint: Checkpoint,
     pub table_floor: u64,
     pub social: SocialSnapshot,
+    pub notebook: NotebookSnapshot,
 }
 
 impl SavedMoment {
@@ -46,6 +48,7 @@ impl SavedMoment {
             .retained_bytes()?
             .checked_add(size_of::<Self>())
             .and_then(|bytes| bytes.checked_add(self.social.retained_heap_bytes()?))
+            .and_then(|bytes| bytes.checked_add(self.notebook.retained_heap_bytes()?))
     }
 }
 
@@ -82,10 +85,16 @@ impl History {
     /// Refreshes the newest entry's actor-side state after a rewind: the
     /// publication hook records the new checkpoint during the commit, before
     /// the table log and the social ledger are rewound on the owner thread.
-    pub(crate) fn refresh_latest_aux(&mut self, table_floor: u64, social: SocialSnapshot) {
+    pub(crate) fn refresh_latest_aux(
+        &mut self,
+        table_floor: u64,
+        social: SocialSnapshot,
+        notebook: NotebookSnapshot,
+    ) {
         if let Some(latest) = self.past.back_mut() {
             latest.table_floor = table_floor;
             latest.social = social;
+            latest.notebook = notebook;
         }
     }
 

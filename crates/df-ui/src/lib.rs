@@ -35,6 +35,11 @@ pub use theme::ThemeToken;
 
 pub use phase_assets::{MAX_PHASE_ASSET_BYTES, PHASE_ASSETS, PhaseAsset, PhaseAssetFallback};
 
+mod notebook_phase;
+pub use notebook_phase::{
+    MAX_NOTEBOOK_ENTRIES, NotebookEntryView, NotebookKind, NotebookValidationError, NotebookView,
+};
+
 mod join_phase;
 #[cfg(target_arch = "wasm32")]
 mod join_phase_theme;

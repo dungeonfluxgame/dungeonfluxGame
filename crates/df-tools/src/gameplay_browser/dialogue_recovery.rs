@@ -276,7 +276,7 @@ pub(super) fn mount(
         &panel,
         "p",
         "scope",
-        "Say it sends your words right away. Offered actions still need confirmation.",
+        "Say it sends your words right away. Choose “About the game” and start with “note:” or “write down” to save a party note. Offered actions still need confirmation.",
     )?;
     let revision = client.borrow().revision;
     {
@@ -645,6 +645,38 @@ pub(super) fn submit(client: Rc<RefCell<Client>>) {
             live_presence::signal(&client, live_presence::Intent::Submitted);
             dispatch(client, Call::Raw(body));
         }
+        Err(message) => show(&client, &message),
+    }
+}
+
+pub(super) fn submit_notebook_command(client: Rc<RefCell<Client>>, command: String) {
+    let prepared = (|| -> Result<_, String> {
+        let state = client.borrow();
+        if state.role != "player" {
+            return Err("A player seat is required.".to_owned());
+        }
+        if state.busy
+            || state.dialogue.confirmation.is_some()
+            || (!state.last_confirmed && state.last_request.is_some())
+        {
+            return Err("Finish the current choice before changing notebook notes.".to_owned());
+        }
+        if command.trim().is_empty() || command.len() > 4096 + "write down ".len() {
+            return Err("Notebook command is outside its text bound.".to_owned());
+        }
+        Ok(rpc::RawDialogueRequest {
+            session_id: state.session.clone(),
+            run_id: state.run.clone(),
+            observed_revision: state.revision.clone(),
+            input_id: Some(operation()?),
+            text: command,
+            context: rpc::DialogueContext::Meta as i32,
+            finality: rpc::DialogueFinality::Final as i32,
+            offer_id: String::new(),
+        })
+    })();
+    match prepared {
+        Ok(request) => dispatch(client, Call::Raw(request)),
         Err(message) => show(&client, &message),
     }
 }

@@ -96,6 +96,32 @@ fn resolve_dice(
         }
     }
 }
+fn resolve_faces(battle: &Battle, actor: u32, action: &Action, faces: &[u32]) -> Resolution {
+    let source = source();
+    let mut rng = Rng(31);
+    let mut supplied = Vec::new();
+    loop {
+        match resolve(battle, actor, action, binding(&source), &supplied) {
+            Err(RuleError::MissingDraw { sides }) => {
+                let ordinal = supplied.len() as u32;
+                let value = faces
+                    .get(ordinal as usize)
+                    .copied()
+                    .expect("the fixture supplies every requested die");
+                assert!(value > 0 && value <= sides);
+                supplied.push(ActualDraw {
+                    value,
+                    ..record(&mut rng, sides, ordinal, &source)
+                });
+            }
+            Ok(result) => {
+                assert_eq!(supplied.len(), faces.len());
+                return result;
+            }
+            Err(error) => panic!("the fixture action must resolve: {error:?}"),
+        }
+    }
+}
 
 const SCENES: &[(&str, &[u8])] = &[
     (
@@ -887,6 +913,8 @@ fn generated_fights_with_planner_enemies_and_random_hero_inputs_obey_the_srd() {
         "moves-completed",
         "opportunity-windows",
         "opportunity-attacks",
+        "enemy-opportunity-attacks",
+        "stat-block-attacks",
         "ranged-attacks",
         "melee-attacks",
         "death-saves",
@@ -1298,6 +1326,125 @@ fn a_kobold_that_cannot_reach_melee_this_turn_walks_into_range_and_throws_its_da
     assert!(!dashed, "it should throw, not Dash");
     assert_eq!(thrown, Some((true, 20, Weapon::Dagger)));
     assert_eq!(battle.actor(10).unwrap().weapon_count(Weapon::Dagger), 2);
+}
+
+/// SRD 5.2.1 pp. 18, 190: damage at 0 HP causes a Death Saving Throw failure, doubled on a Critical Hit.
+#[test]
+fn wolf_attacks_a_dying_hero_when_no_standing_hero_can_be_attacked_this_turn() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":16,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[0,1],[10,2]],"enemies":[[9,2],[10,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(0, 1), false),
+        hero(2, Cell(10, 2), false),
+        CombatantSpec::creature(10, "bandit", Cell(9, 2), 0).unwrap(),
+        CombatantSpec::creature(11, "wolf", Cell(10, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(37);
+    let mut initiative = Vec::new();
+    for (ordinal, face) in [18, 17, 20, 19].into_iter().enumerate() {
+        let mut draw = record(&mut rng, 20, ordinal as u32, &source);
+        draw.value = face;
+        initiative.push(draw);
+    }
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    assert_eq!(battle.active_actor(), Some(10));
+
+    let bandit_attack = Action::Attack {
+        target: 2,
+        weapon: AttackUse {
+            weapon: Weapon::Scimitar,
+            ranged: false,
+            hands: 1,
+            finesse_dexterity: false,
+            knockout: false,
+            savage_attacker: false,
+            use_mastery: false,
+        },
+        spend: AttackSpend::Action,
+    };
+    let downed = resolve_faces(&battle, 10, &bandit_attack, &[20, 6, 6]).battle;
+    assert_eq!(downed.actor(2).unwrap().health().hit_points, 0);
+    assert!(downed.actor(2).unwrap().health().unconscious);
+    let wolf_turn = resolve_dice(&downed, 10, &Action::EndTurn, &mut rng)
+        .unwrap()
+        .battle;
+    assert_eq!(wolf_turn.active_actor(), Some(11));
+
+    let action = df_combat::tactical::propose_latest(&wolf_turn, 11)
+        .unwrap()
+        .unwrap();
+    let Action::Attack { target, weapon, .. } = &action else {
+        panic!("the wolf should attack the nearby dying hero");
+    };
+    assert_eq!(*target, 2);
+    assert_eq!(weapon.weapon, Weapon::Bite);
+    let attacked = resolve_faces(&wolf_turn, 11, &action, &[17, 1, 1, 1]);
+    assert!(attacked.attacks[0].hit);
+    assert!(attacked.attacks[0].critical);
+    assert_eq!(attacked.battle.actor(2).unwrap().health().death_failures, 2);
+}
+
+/// SRD 5.2.1 p. 18 permits damage at 0 HP; humanoid targeting remains the table's policy choice.
+#[test]
+fn bandit_approaches_a_standing_hero_instead_of_attacking_a_dying_hero() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":16,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[0,1],[10,2]],"enemies":[[9,2],[10,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(0, 1), false),
+        hero(2, Cell(10, 2), false),
+        CombatantSpec::creature(10, "bandit", Cell(9, 2), 0).unwrap(),
+        CombatantSpec::creature(11, "bandit", Cell(10, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(41);
+    let mut initiative = Vec::new();
+    for (ordinal, face) in [18, 17, 20].into_iter().enumerate() {
+        let mut draw = record(&mut rng, 20, ordinal as u32, &source);
+        draw.value = face;
+        initiative.push(draw);
+    }
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    let bandit_attack = Action::Attack {
+        target: 2,
+        weapon: AttackUse {
+            weapon: Weapon::Scimitar,
+            ranged: false,
+            hands: 1,
+            finesse_dexterity: false,
+            knockout: false,
+            savage_attacker: false,
+            use_mastery: false,
+        },
+        spend: AttackSpend::Action,
+    };
+    let downed = resolve_faces(&battle, 10, &bandit_attack, &[20, 6, 6]).battle;
+    let bandit_turn = resolve_dice(&downed, 10, &Action::EndTurn, &mut rng)
+        .unwrap()
+        .battle;
+    assert_eq!(bandit_turn.active_actor(), Some(11));
+    assert_eq!(bandit_turn.actor(2).unwrap().health().hit_points, 0);
+    assert!(bandit_turn.actor(2).unwrap().health().unconscious);
+
+    assert_eq!(
+        df_combat::tactical::propose_latest(&bandit_turn, 11).unwrap(),
+        Some(Action::Dash)
+    );
+    let dashed = resolve_dice(&bandit_turn, 11, &Action::Dash, &mut rng)
+        .unwrap()
+        .battle;
+    let approach = df_combat::tactical::propose_latest(&dashed, 11)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(approach, Action::Move(_)));
+    let moved = resolve_dice(&dashed, 11, &approach, &mut rng)
+        .unwrap()
+        .battle;
+    assert_eq!(moved.actor(11).unwrap().cell().distance(Cell(0, 1)), 5);
 }
 
 /// SRD 5.2.1 p. 14: a visible creature leaving reach provokes an attack made as a Reaction.

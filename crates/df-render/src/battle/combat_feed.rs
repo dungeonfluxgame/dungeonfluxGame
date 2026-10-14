@@ -45,6 +45,8 @@ pub struct Member {
     /// The cell the server placed the combatant on. `None` stages it on the layout's spawn
     /// cells (or the derived formation); when the server supplies cells the renderer is unchanged.
     pub cell: Option<super::grid::Cell>,
+    /// Outcome sequence that last put this member in `cell`, or zero when the sequence is unknown.
+    pub position_sequence: u64,
     /// Conditions and states the server reports, plus any the adapter derives from the server's
     /// own knockout state. Hit-point based states (bloodied) are derived at display time.
     pub statuses: Vec<Status>,
@@ -94,6 +96,10 @@ pub struct CombatSnapshot {
     pub members: Vec<Member>,
     pub active: Option<String>,
     pub round: u32,
+    /// Latest move or attack sequence carried by the server snapshot.
+    pub latest_sequence: u64,
+    /// Highest outcome sequence whose result the display has shown.
+    pub presented_sequence: u64,
     pub outcomes: Vec<Outcome>,
     /// The server's recorded initiative rolls, first to act first. Empty when none are carried.
     pub initiative: Vec<InitiativeEntry>,
@@ -138,6 +144,24 @@ fn token_for(member: &Member, cell: super::grid::Cell) -> Token {
     }
 }
 
+fn sequence_was_presented(sequence: u64, presented_sequence: u64) -> bool {
+    sequence != 0 && sequence <= presented_sequence
+}
+
+fn active_was_presented(snapshot: &CombatSnapshot) -> bool {
+    let Some(active) = snapshot.active.as_deref() else {
+        return false;
+    };
+    sequence_was_presented(snapshot.latest_sequence, snapshot.presented_sequence)
+        && snapshot
+            .members
+            .iter()
+            .find(|member| member.id == active)
+            .is_some_and(|member| {
+                sequence_was_presented(member.position_sequence, snapshot.presented_sequence)
+            })
+}
+
 impl CombatFeed {
     pub fn new(mode: FeedMode) -> Self {
         Self {
@@ -163,6 +187,8 @@ impl CombatFeed {
         .ok()?;
         let (mut hero_cells, mut enemy_cells) =
             (seats.heroes.into_iter(), seats.enemies.into_iter());
+        let roster_changed = roster != self.roster;
+        let stale_active = self.started && !roster_changed && active_was_presented(snapshot);
         let tokens: Vec<Token> = snapshot
             .members
             .iter()
@@ -171,10 +197,19 @@ impl CombatFeed {
                     Side::Hero => hero_cells.next(),
                     Side::Enemy => enemy_cells.next(),
                 };
-                Some(token_for(member, member.cell.or(seat)?))
+                let mut token = token_for(member, member.cell.or(seat)?);
+                if self.started
+                    && !roster_changed
+                    && sequence_was_presented(member.position_sequence, snapshot.presented_sequence)
+                    && let Some(current) = stage.tokens().find(|current| current.id == token.id)
+                {
+                    // A stale view may still carry a cell from a position already walked by its
+                    // cue. Keep the stage's position so set_tokens cannot replay that movement.
+                    token.cell = current.cell;
+                }
+                Some(token)
             })
             .collect();
-        let roster_changed = roster != self.roster;
         let mut report = FeedReport::default();
 
         if !self.started || roster_changed {
@@ -297,6 +332,8 @@ impl CombatFeed {
                 && self.mode == FeedMode::StageOutcomes
                 && fresh.is_empty()
                 && snapshot.active != self.last_active
+                && !stale_active
+                && !sequence_was_presented(snapshot.latest_sequence, snapshot.presented_sequence)
                 && let Some(active) = &snapshot.active
             {
                 let beat = Beat::TurnStart {
@@ -306,10 +343,14 @@ impl CombatFeed {
                     report.dropped += 1;
                 }
             }
-            self.last_active = snapshot.active.clone();
+            if !stale_active {
+                self.last_active = snapshot.active.clone();
+            }
         }
         stage.set_round(snapshot.round);
-        stage.set_active(snapshot.active.clone().map(TokenId::new));
+        if !stale_active {
+            stage.set_active(snapshot.active.clone().map(TokenId::new));
+        }
         let order: Vec<TokenId> = if snapshot.initiative.is_empty() {
             snapshot
                 .members
@@ -392,6 +433,7 @@ mod tests {
             attack: AttackStyle::Melee,
             voice: None,
             cell: None,
+            position_sequence: 0,
             statuses: Vec::new(),
         }
     }
@@ -405,6 +447,8 @@ mod tests {
             ],
             active: Some("a".to_owned()),
             round: 1,
+            latest_sequence: 0,
+            presented_sequence: 0,
             outcomes,
             initiative: vec![],
             begun_live: false,
@@ -626,6 +670,7 @@ mod round_tests {
             attack: AttackStyle::Melee,
             voice: None,
             cell: None,
+            position_sequence: 0,
             statuses: Vec::new(),
         };
         CombatSnapshot {
@@ -636,6 +681,8 @@ mod round_tests {
             ],
             active: Some("a".to_owned()),
             round: 1,
+            latest_sequence: 0,
+            presented_sequence: 0,
             outcomes,
             initiative: Vec::new(),
             begun_live: false,
@@ -772,12 +819,15 @@ mod hold_tests {
             attack: AttackStyle::Melee,
             voice: None,
             cell: None,
+            position_sequence: 0,
             statuses: Vec::new(),
         };
         let snapshot = |hp, outcomes| CombatSnapshot {
             members: vec![member("a", Side::Hero, 12), member("e", Side::Enemy, hp)],
             active: Some("a".to_owned()),
             round: 1,
+            latest_sequence: 0,
+            presented_sequence: 0,
             outcomes,
             initiative: vec![],
             begun_live: false,
@@ -845,6 +895,7 @@ mod hold_tests {
             attack: AttackStyle::Melee,
             voice: None,
             cell: None,
+            position_sequence: 0,
             statuses: Vec::new(),
         };
         let bite = |after| Outcome {
@@ -865,6 +916,8 @@ mod hold_tests {
             members: vec![member("a", Side::Hero, shown), member("e", Side::Enemy, 9)],
             active: Some("a".to_owned()),
             round: 2,
+            latest_sequence: 0,
+            presented_sequence: 0,
             outcomes,
             initiative: vec![],
             begun_live: false,
@@ -893,5 +946,212 @@ mod hold_tests {
             feed.apply(&mut stage, &snapshot(8, both())).unwrap().staged,
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod presented_move_tests {
+    use super::*;
+    use crate::battle::{AttackResult, Beat, Cell, TokenId, load_embedded};
+    use std::time::Duration;
+
+    fn member(id: &str, side: Side, cell: Cell, position_sequence: u64) -> Member {
+        Member {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            side,
+            hit_points: if side == Side::Hero { 13 } else { 9 },
+            maximum_hit_points: 13,
+            height_m: 1.5,
+            figure: None,
+            portrait: None,
+            attack: AttackStyle::Melee,
+            voice: None,
+            cell: Some(cell),
+            position_sequence,
+            statuses: Vec::new(),
+        }
+    }
+
+    fn snapshot(
+        cells: [Cell; 4],
+        positions: [u64; 4],
+        latest_sequence: u64,
+        presented_sequence: u64,
+        active: &str,
+    ) -> CombatSnapshot {
+        CombatSnapshot {
+            members: vec![
+                member("Brakka", Side::Hero, cells[0], positions[0]),
+                member("Weasel 1", Side::Enemy, cells[1], positions[1]),
+                member("Weasel 2", Side::Enemy, cells[2], positions[2]),
+                member("Weasel 3", Side::Enemy, cells[3], positions[3]),
+            ],
+            active: Some(active.to_owned()),
+            round: 1,
+            latest_sequence,
+            presented_sequence,
+            outcomes: Vec::new(),
+            initiative: Vec::new(),
+            begun_live: false,
+        }
+    }
+
+    fn remember_heading(stage: &Stage, headings: &mut Vec<String>, previous: &mut Option<String>) {
+        let Some(active) = stage.hud().active.as_ref() else {
+            return;
+        };
+        if previous.as_deref() != Some(active.0.as_str()) {
+            *previous = Some(active.0.clone());
+            headings.push(active.0.clone());
+        }
+    }
+
+    /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
+    #[test]
+    fn live_recorded_round_one_movers_are_not_replayed_after_their_attacks() {
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
+        stage.set_feel_enabled(false);
+        let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+        let mut cells = [
+            Cell::new(4, 4),
+            Cell::new(1, 1),
+            Cell::new(1, 3),
+            Cell::new(1, 5),
+        ];
+        let mut positions = [0; 4];
+        feed.apply(&mut stage, &snapshot(cells, positions, 0, 0, "Brakka"))
+            .unwrap();
+        stage.skip_to_idle();
+
+        let mut headings = Vec::new();
+        let mut previous = None;
+        let mut hit_points = 13;
+        for (index, (actor, move_sequence, attack_sequence)) in
+            [("Weasel 1", 1, 2), ("Weasel 2", 3, 4), ("Weasel 3", 5, 6)]
+                .into_iter()
+                .enumerate()
+        {
+            let actor_id = TokenId::new(actor);
+            let from = cells[index + 1];
+            let to = stage
+                .grid()
+                .reachable_from(from)
+                .into_iter()
+                .find(|cell| *cell != from && !cells.contains(cell))
+                .unwrap();
+
+            stage.hold_active(true);
+            stage.show_turn_now(Some(actor_id.clone()));
+            remember_heading(&stage, &mut headings, &mut previous);
+            stage
+                .stage(Beat::TurnStart {
+                    actor: actor_id.clone(),
+                })
+                .unwrap();
+            stage.stage_move(&actor_id, to).unwrap();
+            stage
+                .stage(Beat::Approach {
+                    attacker: actor_id.clone(),
+                    target: TokenId::new("Brakka"),
+                })
+                .unwrap();
+            let mut elapsed_ms = 0;
+            while stage.is_busy() && elapsed_ms < 20_000 {
+                stage.update(Duration::from_millis(50));
+                elapsed_ms += 50;
+                remember_heading(&stage, &mut headings, &mut previous);
+            }
+            assert!(!stage.is_busy(), "the move and approach should drain");
+
+            cells[index + 1] = to;
+            positions[index + 1] = move_sequence;
+            hit_points -= 1;
+            let mut stale_cells = cells;
+            stale_cells[index + 1] = from;
+            let stale_active = ["Weasel 1", "Weasel 1", "Weasel 2"][index];
+            stage.hold_active(false);
+            feed.apply(
+                &mut stage,
+                &snapshot(
+                    stale_cells,
+                    positions,
+                    attack_sequence,
+                    attack_sequence,
+                    stale_active,
+                ),
+            )
+            .unwrap();
+            remember_heading(&stage, &mut headings, &mut previous);
+            assert_eq!(stage.hud().active.as_ref(), Some(&actor_id));
+            assert_eq!(
+                stage
+                    .tokens()
+                    .find(|token| token.id == actor_id)
+                    .unwrap()
+                    .cell,
+                to,
+                "a presented move must keep its walked-to cell"
+            );
+            assert!(
+                !stage.is_busy(),
+                "a presented move must not be staged again"
+            );
+            stage
+                .stage(Beat::Strike {
+                    attacker: actor_id,
+                    target: TokenId::new("Brakka"),
+                    result: AttackResult::Hit {
+                        damage: 1,
+                        critical: false,
+                        downed: false,
+                    },
+                    target_hit_points_after: Some(hit_points),
+                })
+                .unwrap();
+            let mut elapsed_after_result_ms = None;
+            let mut elapsed_ms = 0;
+            while stage.is_busy() && elapsed_ms < 20_000 {
+                stage.update(Duration::from_millis(50));
+                elapsed_ms += 50;
+                remember_heading(&stage, &mut headings, &mut previous);
+                let shown_hp = stage
+                    .frame()
+                    .figures
+                    .iter()
+                    .find(|figure| figure.id.0 == "Brakka")
+                    .and_then(|figure| figure.hit_points)
+                    .map(|hp| hp.current);
+                if elapsed_after_result_ms.is_none() && shown_hp == Some(hit_points) {
+                    elapsed_after_result_ms = Some(0);
+                } else if let Some(elapsed) = &mut elapsed_after_result_ms {
+                    *elapsed += 50;
+                }
+            }
+            assert!(!stage.is_busy(), "the strike should drain");
+            if attack_sequence == 6 {
+                assert!(
+                    elapsed_after_result_ms.is_some_and(|elapsed| elapsed <= 1_500),
+                    "the last strike left the stage busy more than 1.5 seconds after its result"
+                );
+            }
+        }
+
+        feed.apply(&mut stage, &snapshot(cells, positions, 6, 6, "Brakka"))
+            .unwrap();
+        stage.hold_active(false);
+        stage.set_active(Some(TokenId::new("Brakka")));
+        let mut hero_heading_ms = 0;
+        while headings.last().map(String::as_str) != Some("Brakka") && hero_heading_ms < 1_500 {
+            stage.update(Duration::from_millis(50));
+            hero_heading_ms += 50;
+            remember_heading(&stage, &mut headings, &mut previous);
+        }
+        assert!(
+            hero_heading_ms <= 1_500,
+            "the hero heading should follow the last blow promptly"
+        );
+        assert_eq!(headings, ["Weasel 1", "Weasel 2", "Weasel 3", "Brakka"]);
+        assert!(!stage.is_busy());
     }
 }

@@ -23,10 +23,12 @@
 use std::sync::Arc;
 
 use super::{
-    adventure::dossier::{Attitude, Dossier, ForbiddenScope, Knowledge, Topic, mentions_term},
+    adventure::dossier::{
+        AnswerSubject, Attitude, Dossier, ForbiddenScope, Knowledge, Topic, mentions_term,
+    },
     npc_facts::Offered,
     social::{Approach, Conversation, SocialLedger, Standing, topic_of},
-    speech_text::{REPEAT_MIN_WORDS, SpokenRule, sentence_key, sentences, words},
+    speech_text::{SpokenRule, sentence_key, sentences},
     startup_configuration::ContentRating,
     storyteller::{
         CallProfile, RESTRAINED_GORE, RESTRAINED_PROFANITY, contains_whole_word, mature_themes,
@@ -58,13 +60,10 @@ const REPLY_SENTENCES: usize = 3;
 /// Words a single spoken sentence may carry at most: one breath, one thought.
 const MAX_SENTENCE_WORDS: usize = 25;
 
-pub(super) const STYLE: &str = "A person talking, not writing: first person, one to three short \
-sentences, no quotation marks, fragments welcome. Short plain words, contractions, one thought \
-at a time, with a false start or a trailing-off where feeling calls for it. facts.npc and \
-facts.how_you_speak colour word choice and rhythm. Never a semicolon, never a colon, no \
-balanced clauses or proverbs as speeches. Never narrate your own body or feelings; show them in \
-how the line is said. Dossier sentences in the facts are things you know: say them over in your \
-own speech, never word for word.";
+pub(super) const STYLE: &str = "Speak in first person as a person, not a writer. Use one to three \
+short sentences in plain words, without quotes, semicolons or colons. Let facts.npc and \
+facts.how_you_speak shape your voice. Show feelings through speech, not narration. Paraphrase \
+dossier facts in your own words.";
 
 /// The rules before the rating-dependent items; shared by both ratings. Tight wording:
 /// the storyteller refuses guidance over its bound, and a refused reply is heard as an
@@ -75,7 +74,8 @@ macro_rules! reply_rules_start {
 You voice facts.npc, speaking to facts.hero. Slot \"reply\" is what they say aloud, as talking.\n\
 a. One to three short sentences, forty words at most, in short plain words. Never a \
 semicolon, colon, or restated question.\n\
-b. Answer first, from facts.answer_from, in your own voice, one clause per question part in \
+b. When facts.npc_reaction is present, answer it first. Otherwise answer from facts.answer_from, \
+in your own voice, one clause per question part in \
 facts.player.question_parts, in order. Never open with a greeting, saying, name or \
 interjection. Never quote a dossier sentence word for word. Name the hero or use a term of \
 address at most every fourth reply; never reuse a clause from facts.already_said or \
@@ -102,7 +102,7 @@ other facts. facts.private_matter: decline without hinting at it. \
 facts.courtship, when present, is the standing answer to romance: refuse from it every time; \
 never invent a partner there is none.\n\
 Slot \"approach\" is one word for the hero's words: question, kindness, flattery, flirting, \
-persuasion, deception, intimidation, bribe, insult or other.\n\
+persuasion, deception, intimidation, bribe, bargain, insult or other.\n\
 "
     };
 }
@@ -147,7 +147,7 @@ const GUIDANCE_MATURE: &str = concat!(
     reply_rules_start!(),
     "h. Answer flirting and threats as this person would, by facts.reactions and \
 facts.attitude_toward_hero: A devout, spoken-for or uninterested person declines; an \
-interested one reciprocates with real heat and meets threats with menace. If \
+interested one reciprocates and meets threats with menace. If \
 facts.npc.sexual_content_allowed is false, deflect without heat. ",
     reply_rules_promise!(),
     "i. ",
@@ -398,6 +398,29 @@ impl Withheld {
             .any(|term| term.found_in(&lowered, &spoken))
     }
 
+    /// Rejected candidate text for diagnostics, with every withheld phrase replaced by its key.
+    pub(super) fn redacted_detail(&self, dossier: &Dossier, text: &str) -> String {
+        let mut redacted = text.to_owned();
+        for (index, term) in self.secrets.iter().enumerate() {
+            let key = dossier
+                .knowledge
+                .never_says
+                .iter()
+                .find(|item| {
+                    item.terms
+                        .iter()
+                        .any(|candidate| candidate.trim().eq_ignore_ascii_case(&term.lowered))
+                })
+                .map(|item| format!("never_says.{}", item.source))
+                .unwrap_or_else(|| format!("adventure_secret.{index}"));
+            let spans = term.spans(&tokens(&redacted));
+            for (start, end) in spans.into_iter().rev() {
+                redacted.replace_range(start..end, &format!("[{key}]"));
+            }
+        }
+        redacted
+    }
+
     /// The player's words with each secret phrase they happen to contain replaced by an
     /// ellipsis, so the prompt never holds one even when the player typed it.
     pub(super) fn redact(&self, words: &str) -> String {
@@ -605,13 +628,11 @@ pub(super) fn fallback(
     let said_sentences: std::collections::BTreeSet<String> = said
         .iter()
         .flat_map(|line| sentences(line))
-        .filter(|part| words(part).len() >= REPEAT_MIN_WORDS)
         .map(|part| sentence_key(&part))
         .collect();
     let repeats = |text: &str| {
         sentences(text)
             .iter()
-            .filter(|part| words(part).len() >= REPEAT_MIN_WORDS)
             .any(|part| said_sentences.contains(&sentence_key(part)))
     };
     let fresh = |text: &str| {
@@ -696,6 +717,40 @@ pub(super) fn fallback(
         FALLBACK_REDIRECTS[(conversation.exchange as usize) % FALLBACK_REDIRECTS.len()].to_owned(),
         None,
     )
+}
+
+/// The factual answer for a recognized subject, or its shorter restatement after it was answered.
+pub(super) fn subject_fallback(
+    dossier: &Dossier,
+    subject: AnswerSubject,
+    withheld: &Withheld,
+    memory: &Memory<'_>,
+) -> Option<(String, String)> {
+    let answer = dossier.subject_answers.get(&subject)?;
+    let key = format!("subject:{}", subject.label());
+    let asked_before = memory
+        .conversation
+        .voiced
+        .iter()
+        .any(|voiced| voiced == &key);
+    let candidates = if asked_before {
+        [&answer.restatement, &answer.text]
+    } else {
+        [&answer.text, &answer.restatement]
+    };
+    let said: std::collections::BTreeSet<String> = memory
+        .said
+        .iter()
+        .flat_map(|line| sentences(line))
+        .map(|sentence| sentence_key(&sentence))
+        .collect();
+    let selected = candidates.into_iter().find(|candidate| {
+        !withheld.leaks(candidate)
+            && sentences(candidate)
+                .iter()
+                .all(|sentence| !said.contains(&sentence_key(sentence)))
+    })?;
+    Some((selected.clone(), key))
 }
 
 /// Memory key for a fallback answer of `kind` on `topic`, so it is never given twice.

@@ -19,7 +19,7 @@ mod native {
     };
     use serde_json::{Value, json};
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::{BTreeMap, BTreeSet, VecDeque},
         path::{Path, PathBuf},
         process::Command,
     };
@@ -196,6 +196,272 @@ mod native {
             }
         }
     }
+
+    fn neighbours(
+        grid: &Grid,
+        free: &BTreeSet<Cell>,
+        from: Cell,
+        excluded: Option<Cell>,
+    ) -> Vec<Cell> {
+        let mut result = Vec::new();
+        for row_delta in -1..=1 {
+            for col_delta in -1..=1 {
+                if col_delta == 0 && row_delta == 0 {
+                    continue;
+                }
+                let next = Cell::new(from.col + col_delta, from.row + row_delta);
+                if excluded == Some(next) || !free.contains(&next) || !grid.step_clear(from, next) {
+                    continue;
+                }
+                if col_delta != 0
+                    && row_delta != 0
+                    && (!free.contains(&Cell::new(from.col + col_delta, from.row))
+                        || !free.contains(&Cell::new(from.col, from.row + row_delta)))
+                {
+                    continue;
+                }
+                result.push(next);
+            }
+        }
+        result
+    }
+
+    fn reachable(
+        grid: &Grid,
+        free: &BTreeSet<Cell>,
+        from: Cell,
+        excluded: Option<Cell>,
+    ) -> BTreeSet<Cell> {
+        let mut reached = BTreeSet::new();
+        if !free.contains(&from) || excluded == Some(from) {
+            return reached;
+        }
+        let mut pending = vec![from];
+        reached.insert(from);
+        while let Some(current) = pending.pop() {
+            for next in neighbours(grid, free, current, excluded) {
+                if reached.insert(next) {
+                    pending.push(next);
+                }
+            }
+        }
+        reached
+    }
+
+    fn largest_area(grid: &Grid, free: &BTreeSet<Cell>, excluded: Option<Cell>) -> usize {
+        free.iter()
+            .copied()
+            .filter(|cell| excluded != Some(*cell))
+            .map(|cell| reachable(grid, free, cell, excluded).len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn distance(grid: &Grid, free: &BTreeSet<Cell>, from: Cell, to: Cell) -> Option<usize> {
+        if !free.contains(&from) || !free.contains(&to) {
+            return None;
+        }
+        let mut reached = BTreeSet::from([from]);
+        let mut pending = VecDeque::from([(from, 0)]);
+        while let Some((current, current_distance)) = pending.pop_front() {
+            let next_distance = current_distance + 1;
+            for next in neighbours(grid, free, current, None) {
+                if next == to {
+                    return Some(next_distance);
+                }
+                if reached.insert(next) {
+                    pending.push_back((next, next_distance));
+                }
+            }
+        }
+        None
+    }
+
+    fn validate_spawns(
+        grid: &Grid,
+        free: &BTreeSet<Cell>,
+        heroes: &[Cell],
+        enemies: &[Cell],
+    ) -> Result<(), String> {
+        let occupied: BTreeSet<_> = heroes.iter().chain(enemies).copied().collect();
+        if occupied.len() != heroes.len() + enemies.len() {
+            return Err("duplicate spawn cells".into());
+        }
+        let largest = largest_area(grid, free, None);
+        for side in [heroes, enemies] {
+            for &spawn in side {
+                if !free.contains(&spawn) {
+                    return Err(format!("spawn {spawn:?} is not free ground"));
+                }
+                if neighbours(grid, free, spawn, None)
+                    .iter()
+                    .filter(|neighbour| !occupied.contains(neighbour))
+                    .count()
+                    < 2
+                {
+                    return Err(format!("spawn {spawn:?} has fewer than two free exits"));
+                }
+                if reachable(grid, free, spawn, None).len() != largest {
+                    return Err(format!("spawn {spawn:?} is outside the largest area"));
+                }
+                for &other in side.iter().filter(|&&other| other != spawn) {
+                    if reachable(grid, free, spawn, Some(other)).len()
+                        != largest_area(grid, free, Some(other))
+                    {
+                        return Err(format!("removing spawn {other:?} isolates {spawn:?}"));
+                    }
+                }
+            }
+        }
+        for &hero in heroes {
+            for &enemy in enemies {
+                let steps =
+                    distance(grid, free, hero, enemy).ok_or("opposing starts are disconnected")?;
+                if steps < 3 {
+                    return Err(format!("opposing starts are only {steps} steps apart"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn largest_connectivity_after_removal(
+        grid: &Grid,
+        free: &BTreeSet<Cell>,
+    ) -> BTreeMap<(Cell, Cell), bool> {
+        let mut result = BTreeMap::new();
+        for removed in free {
+            let mut remaining: BTreeSet<_> = free
+                .iter()
+                .copied()
+                .filter(|cell| cell != removed)
+                .collect();
+            let mut components = Vec::new();
+            while let Some(&start) = remaining.iter().next() {
+                let component = reachable(grid, free, start, Some(*removed));
+                for cell in &component {
+                    remaining.remove(cell);
+                }
+                components.push(component);
+            }
+            let largest = components.iter().map(BTreeSet::len).max().unwrap_or(0);
+            for component in components {
+                let is_largest = component.len() == largest;
+                for cell in component {
+                    result.insert((cell, *removed), is_largest);
+                }
+            }
+        }
+        result
+    }
+
+    fn legal_spawn_sets(
+        grid: &Grid,
+        free: &BTreeSet<Cell>,
+        candidates: &[Cell],
+        count: usize,
+        connected_after_removal: &BTreeMap<(Cell, Cell), bool>,
+    ) -> Vec<Vec<Cell>> {
+        fn collect(
+            grid: &Grid,
+            free: &BTreeSet<Cell>,
+            candidates: &[Cell],
+            connected_after_removal: &BTreeMap<(Cell, Cell), bool>,
+            start: usize,
+            remaining: usize,
+            selected: &mut Vec<Cell>,
+            results: &mut Vec<Vec<Cell>>,
+        ) {
+            if remaining == 0 {
+                let occupied: BTreeSet<_> = selected.iter().copied().collect();
+                let valid = selected.iter().all(|&spawn| {
+                    neighbours(grid, free, spawn, None)
+                        .iter()
+                        .filter(|neighbour| !occupied.contains(neighbour))
+                        .count()
+                        >= 2
+                        && selected
+                            .iter()
+                            .filter(|&&other| other != spawn)
+                            .all(|&other| {
+                                connected_after_removal.get(&(spawn, other)) == Some(&true)
+                            })
+                });
+                if valid {
+                    results.push(selected.clone());
+                }
+                return;
+            }
+            if candidates.len().saturating_sub(start) < remaining {
+                return;
+            }
+            for index in start..=candidates.len() - remaining {
+                selected.push(candidates[index]);
+                collect(
+                    grid,
+                    free,
+                    candidates,
+                    connected_after_removal,
+                    index + 1,
+                    remaining - 1,
+                    selected,
+                    results,
+                );
+                selected.pop();
+            }
+        }
+
+        let mut results = Vec::new();
+        collect(
+            grid,
+            free,
+            candidates,
+            connected_after_removal,
+            0,
+            count,
+            &mut Vec::new(),
+            &mut results,
+        );
+        results
+    }
+
+    fn assign_nearest_starts(original: &[Cell], selected: &[Cell]) -> Vec<Cell> {
+        let mut available = selected.to_vec();
+        original
+            .iter()
+            .map(|old| {
+                let index = available
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, cell)| {
+                        let dc = cell.col.abs_diff(old.col);
+                        let dr = cell.row.abs_diff(old.row);
+                        (dc * dc + dr * dr, cell.row, cell.col)
+                    })
+                    .map(|(index, _)| index)
+                    .expect("same number of original and selected starts");
+                available.remove(index)
+            })
+            .collect()
+    }
+
+    fn json_cell(value: &Value) -> Result<Cell, String> {
+        Ok(Cell::new(
+            i32::try_from(value[0].as_i64().ok_or("spawn column")?)
+                .map_err(|_| "spawn column bounds")?,
+            i32::try_from(value[1].as_i64().ok_or("spawn row")?).map_err(|_| "spawn row bounds")?,
+        ))
+    }
+
+    fn json_cells(value: &Value) -> Result<Vec<Cell>, String> {
+        value
+            .as_array()
+            .ok_or("spawn cells")?
+            .iter()
+            .map(json_cell)
+            .collect()
+    }
+
     pub fn run() -> Result<(), String> {
         let args: Vec<_> = std::env::args().skip(1).collect();
         if args.len() != 4 {
@@ -423,6 +689,26 @@ mod native {
             }
         }
         println!("{sweep_queries} sweep capsules checked");
+        let mut step_heights_dm = Vec::with_capacity(steps.len());
+        for &[a, b] in &steps {
+            let from = grid.cell_centre(a);
+            let to = grid.cell_centre(b);
+            let delta = to - from;
+            let count = (delta.x.hypot(delta.z) / 0.05).ceil().max(1.0) as u32;
+            let mut height = 0.0f32;
+            for sample in 0..=count {
+                let point = from + delta * (sample as f32 / count as f32);
+                if let Some(sample_height) = collider.solid_height_above_ground(
+                    point.x,
+                    point.z,
+                    grid.ground_height(point.x, point.z),
+                    2.0,
+                ) {
+                    height = height.max(sample_height);
+                }
+            }
+            step_heights_dm.push((height * 10.0).round() as u16);
+        }
         grid = Grid::open_except(
             grid.origin(),
             grid.cell_m(),
@@ -442,8 +728,10 @@ mod native {
                 .map(|[a, b]| [[a.col, a.row], [b.col, b.row]])
                 .collect::<Vec<_>>()
         );
+        value["grid"]["step_heights_dm"] = json!(step_heights_dm);
         println!("DERIVED BLOCKED {}", value["grid"]["blocked"]);
         println!("DERIVED STEPS {}", value["grid"]["blocked_steps"]);
+        println!("DERIVED STEP HEIGHTS {}", value["grid"]["step_heights_dm"]);
         ascii(&value, &grid);
         value["terrain"]["heights_cm"] = json!(
             heights
@@ -467,16 +755,14 @@ mod native {
                     ));
                 }
             }
-            let free: Vec<_> = layout_grid
+            let free: BTreeSet<_> = layout_grid
                 .walkable_cells()
                 .filter(|c| !obstacles.contains(c))
                 .collect();
-            let reachable = free
-                .iter()
-                .map(|c| layout_grid.reachable_from(*c))
-                .max_by_key(BTreeSet::len)
-                .ok_or("no free ground")?;
-            let mut used = BTreeSet::new();
+            let largest = largest_area(&layout_grid, &free, None);
+            if largest == 0 {
+                return Err("no free ground".into());
+            }
             let north_south = layout["id"] == "north-south";
             let axis = |cell: Cell| if north_south { cell.row } else { cell.col };
             let side = if north_south {
@@ -488,55 +774,136 @@ mod native {
                 .iter()
                 .copied()
                 .filter(|c| {
-                    reachable.contains(c)
-                        && free.iter().any(|other| layout_grid.step_clear(*c, *other))
+                    reachable(&layout_grid, &free, *c, None).len() == largest
+                        && neighbours(&layout_grid, &free, *c, None).len() >= 2
                 })
                 .collect();
-            let split = (0..side - 1)
-                .filter(|cut| {
-                    candidates.iter().filter(|c| axis(**c) <= *cut).count() >= 4
-                        && candidates.iter().filter(|c| axis(**c) > *cut).count() >= 4
-                })
-                .min_by_key(|cut| (2 * cut - (side - 2)).abs())
-                .ok_or("no opposing spawn banks")?;
+            let connected_after_removal = largest_connectivity_after_removal(&layout_grid, &free);
             println!(
                 "layout {}: {} free, {} connected",
                 layout["id"],
                 free.len(),
-                reachable.len()
+                largest
             );
-            for side in ["heroes", "enemies"] {
-                let greater = if north_south {
-                    side == "heroes"
-                } else {
-                    side == "enemies"
-                };
-                for spawn in layout["spawns"][side].as_array_mut().ok_or("spawns")? {
-                    let old = Cell::new(
-                        spawn[0].as_i64().ok_or("spawn col")? as i32,
-                        spawn[1].as_i64().ok_or("spawn row")? as i32,
-                    );
-                    let nearest = free
+            let hero_original = json_cells(&layout["spawns"]["heroes"])?;
+            let enemy_original = json_cells(&layout["spawns"]["enemies"])?;
+            let (hero_on_greater_bank, enemy_on_greater_bank) = if north_south {
+                (true, false)
+            } else {
+                (false, true)
+            };
+            let (lesser_count, greater_count) = if hero_on_greater_bank {
+                (enemy_original.len(), hero_original.len())
+            } else {
+                (hero_original.len(), enemy_original.len())
+            };
+            let (mut hero_sets, mut enemy_sets) = (0..side - 1)
+                .filter(|cut| {
+                    candidates.iter().filter(|c| axis(**c) <= *cut).count() >= lesser_count
+                        && candidates.iter().filter(|c| axis(**c) > *cut).count() >= greater_count
+                })
+                .filter_map(|split| {
+                    let hero_candidates: Vec<_> = candidates
                         .iter()
-                        .filter(|c| {
-                            reachable.contains(*c)
-                                && (axis(**c) > split) == greater
-                                && !used.contains(*c)
-                                && free.iter().any(|other| layout_grid.step_clear(**c, *other))
+                        .copied()
+                        .filter(|cell| {
+                            if hero_on_greater_bank {
+                                axis(*cell) > split
+                            } else {
+                                axis(*cell) <= split
+                            }
                         })
-                        .min_by_key(|c| {
-                            let dc = c.col.abs_diff(old.col);
-                            let dr = c.row.abs_diff(old.row);
-                            (dc * dc + dr * dr, c.row, c.col)
+                        .collect();
+                    let enemy_candidates: Vec<_> = candidates
+                        .iter()
+                        .copied()
+                        .filter(|cell| {
+                            if enemy_on_greater_bank {
+                                axis(*cell) > split
+                            } else {
+                                axis(*cell) <= split
+                            }
                         })
-                        .ok_or("not enough connected spawn cells")?;
-                    used.insert(*nearest);
-                    *spawn = json!([nearest.col, nearest.row]);
-                }
-            }
+                        .collect();
+                    let hero_sets = legal_spawn_sets(
+                        &layout_grid,
+                        &free,
+                        &hero_candidates,
+                        hero_original.len(),
+                        &connected_after_removal,
+                    );
+                    let enemy_sets = legal_spawn_sets(
+                        &layout_grid,
+                        &free,
+                        &enemy_candidates,
+                        enemy_original.len(),
+                        &connected_after_removal,
+                    );
+                    let separated = hero_sets.iter().any(|heroes| {
+                        enemy_sets.iter().any(|enemies| {
+                            heroes.iter().all(|hero| {
+                                enemies.iter().all(|enemy| {
+                                    distance(&layout_grid, &free, *hero, *enemy)
+                                        .is_some_and(|steps| steps >= 3)
+                                })
+                            })
+                        })
+                    });
+                    separated.then_some((split, hero_sets, enemy_sets))
+                })
+                .min_by_key(|(split, _, _)| (2 * split - (side - 2)).abs())
+                .map(|(_, hero_sets, enemy_sets)| (hero_sets, enemy_sets))
+                .ok_or("no legal opposing spawn banks")?;
+            let cost = |original: &[Cell], selected: &[Cell]| {
+                assign_nearest_starts(original, selected)
+                    .iter()
+                    .zip(original)
+                    .map(|(cell, old)| {
+                        let dc = cell.col.abs_diff(old.col);
+                        let dr = cell.row.abs_diff(old.row);
+                        dc * dc + dr * dr
+                    })
+                    .sum::<u32>()
+            };
+            hero_sets.sort_by_key(|set| cost(&hero_original, set));
+            enemy_sets.sort_by_key(|set| cost(&enemy_original, set));
+            let (heroes, enemies) = hero_sets
+                .iter()
+                .find_map(|heroes| {
+                    enemy_sets.iter().find_map(|enemies| {
+                        heroes
+                            .iter()
+                            .all(|hero| {
+                                enemies.iter().all(|enemy| {
+                                    distance(&layout_grid, &free, *hero, *enemy)
+                                        .is_some_and(|steps| steps >= 3)
+                                })
+                            })
+                            .then_some((heroes, enemies))
+                    })
+                })
+                .ok_or("no legal spawn arrangement")?;
+            let heroes = assign_nearest_starts(&hero_original, heroes);
+            let enemies = assign_nearest_starts(&enemy_original, enemies);
+            layout["spawns"]["heroes"] = json!(
+                heroes
+                    .iter()
+                    .map(|cell| [cell.col, cell.row])
+                    .collect::<Vec<_>>()
+            );
+            layout["spawns"]["enemies"] = json!(
+                enemies
+                    .iter()
+                    .map(|cell| [cell.col, cell.row])
+                    .collect::<Vec<_>>()
+            );
+            validate_spawns(&layout_grid, &free, &heroes, &enemies)
+                .map_err(|error| format!("layout {}: {error}", layout["id"]))?;
         }
         let id = value["location_id"].as_str().ok_or("scene id")?.to_owned();
-        value["location_id"] = json!(format!("{id}-voxel-v1"));
+        if !id.ends_with("-voxel-v1") {
+            value["location_id"] = json!(format!("{id}-voxel-v1"));
+        }
         // Reuse the original scene's camera occupancy at load time; never add a voxel dump.
         value
             .as_object_mut()

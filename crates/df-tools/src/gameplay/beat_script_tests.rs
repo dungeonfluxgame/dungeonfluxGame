@@ -339,6 +339,36 @@ fn codec() -> df_persistence::NativeCodecLimits {
         maximum_text_bytes: 4096,
     }
 }
+
+#[test]
+fn stored_game_without_hit_point_dice_loads_with_one_unspent_d10_for_short_rest_srd_p47() {
+    let loaded = pack::load_from_bytes(
+        include_bytes!("fixtures/harbor-journey-pack-integration-baseline.json"),
+        TUNING,
+    )
+    .unwrap();
+    pack::with_test_pack(loaded, || {
+        let mut basis = model::basis().unwrap();
+        for _ in 0..8 {
+            basis.revision = basis.revision.next_sequence().unwrap();
+        }
+        let stored = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+            include_bytes!("fixtures/legacy-beats/victory.bin"),
+            basis,
+            &model::pins().unwrap(),
+            &model::recovery().unwrap(),
+            codec(),
+        )
+        .unwrap();
+        for character in &stored.state().characters {
+            assert_eq!(
+                value(stored.state(), character.entity, "hit-point-dice").unwrap(),
+                1
+            );
+        }
+    });
+}
+
 #[test]
 fn real_pre_change_checkpoint_bytes_resume_with_exact_pins_and_reencode_unchanged() {
     let loaded = pack::load_from_bytes(

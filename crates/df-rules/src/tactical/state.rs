@@ -530,13 +530,6 @@ impl Battle {
             .find(|a| a.id() == id)
             .ok_or(RuleError::UnknownActor)
     }
-    pub(crate) fn cells(&self) -> Vec<Cell> {
-        self.actors
-            .iter()
-            .filter(|a| !a.health.dead)
-            .map(Combatant::cell)
-            .collect()
-    }
     pub(crate) fn can_see(&self, from: Cell, to: Cell) -> bool {
         self.map
             .cover_between(from, to, &[])

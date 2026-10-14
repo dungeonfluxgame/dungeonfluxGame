@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     fs::File,
     io::{self, Read},
@@ -845,6 +845,32 @@ impl SceneKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FindingSkill {
+    Perception,
+    Investigation,
+    Insight,
+    Survival,
+    Medicine,
+    Arcana,
+    History,
+    Nature,
+    Religion,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Finding {
+    pub(super) id: String,
+    pub(super) sentence: String,
+    pub(super) skill: FindingSkill,
+    pub(super) dc: u8,
+    pub(super) private: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) consequence: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Scene {
@@ -870,6 +896,8 @@ pub(super) struct Scene {
     pub(super) setting: Option<super::adventure::setting::SceneSetting>,
     #[serde(default)]
     pub(super) speaker_portrait: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) findings: Vec<Finding>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1909,6 +1937,44 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
             0,
             TEXT_CHARACTERS_MAX,
         )?;
+        if !scene.findings.is_empty() {
+            range(
+                FILE,
+                &format!("{at}.findings"),
+                length(scene.findings.len()),
+                2,
+                3,
+            )?;
+        }
+        let mut finding_ids = BTreeSet::new();
+        for (finding_index, finding) in scene.findings.iter().enumerate() {
+            let finding_at = format!("{at}.findings[{finding_index}]");
+            identifier(FILE, &format!("{finding_at}.id"), &finding.id)?;
+            if !finding_ids.insert(finding.id.as_str()) {
+                return Err(cross_reference(
+                    FILE,
+                    &format!("{finding_at}.id"),
+                    CrossRefReason::DuplicateId,
+                ));
+            }
+            text(
+                FILE,
+                &format!("{finding_at}.sentence"),
+                &finding.sentence,
+                1,
+                TEXT_CHARACTERS_MAX,
+            )?;
+            if !matches!(finding.dc, 5 | 10 | 15 | 20 | 25 | 30) {
+                return Err(PackError::Malformed {
+                    file: FILE,
+                    path: format!("{finding_at}.dc"),
+                    expected: "typical SRD ability check DC (5, 10, 15, 20, 25, or 30)",
+                });
+            }
+            if let Some(consequence) = &finding.consequence {
+                identifier(FILE, &format!("{finding_at}.consequence"), consequence)?;
+            }
+        }
         range(FILE, &format!("{at}.cast"), length(scene.cast.len()), 0, 6)?;
         for (position, actor) in scene.cast.iter().enumerate() {
             let member = format!("{at}.cast[{position}]");

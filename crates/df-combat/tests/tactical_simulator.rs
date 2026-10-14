@@ -243,7 +243,7 @@ fn admitted_choice(state: &Battle, actor: u32, dice: &Dice) -> Action {
         definition: &policy_ref,
         criteria: &[],
     };
-    choose(
+    let choice = choose(
         state,
         actor,
         TacticContext {
@@ -257,8 +257,25 @@ fn admitted_choice(state: &Battle, actor: u32, dice: &Dice) -> Action {
             draws: dice.binding(&source),
         },
     )
-    .unwrap()
-    .expect("legal tactic")
+    .unwrap();
+    choice.unwrap_or_else(|| {
+        let combatant = state.actor(actor).unwrap();
+        let proposed = propose(state, actor).unwrap();
+        let legality = proposed
+            .as_ref()
+            .map(|action| resolve(state, actor, action, dice.binding(&source), &[]));
+        panic!(
+            "no legal tactic: proposed={proposed:?} legality={legality:?} actor={actor} side={:?} kind={:?} cell={:?} hp={} active={:?} finished={} reactions={:?} budget={:?}",
+            combatant.side(),
+            combatant.spec().kind,
+            combatant.cell(),
+            combatant.health().hit_points,
+            state.active_actor(),
+            state.finished(),
+            state.reaction_offers(),
+            combatant.budget()
+        )
+    })
 }
 fn simulate(layout: &str, enemies: &[&str], seed: u64) -> (u32, String) {
     let mut dice = Dice {

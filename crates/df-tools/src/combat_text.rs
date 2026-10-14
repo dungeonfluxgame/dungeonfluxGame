@@ -1,3 +1,9 @@
+pub(crate) const SHEET_ABILITIES_AND_SAVES: &str = "Abilities and saves";
+pub(crate) const SHEET_SKILLS: &str = "Skills";
+pub(crate) const SHEET_COMBAT: &str = "Combat";
+pub(crate) const SHEET_EQUIPMENT: &str = "Equipment";
+pub(crate) const SHEET_FEATURES_AND_TRAITS: &str = "Features and traits";
+
 pub(crate) const fn second_wind_full_hp_label() -> &'static str {
     "Second Wind (you are at full hit points)"
 }
@@ -40,5 +46,25 @@ mod tests {
         assert!(at_full_hit_points(11, 10));
         assert!(!at_full_hit_points(9, 10));
         assert!(!at_full_hit_points(0, 0));
+    }
+
+    #[test]
+    fn srd_p47_p83_p84_character_sheet_group_titles_cover_the_character_facts() {
+        assert_eq!(
+            [
+                SHEET_ABILITIES_AND_SAVES,
+                SHEET_SKILLS,
+                SHEET_COMBAT,
+                SHEET_EQUIPMENT,
+                SHEET_FEATURES_AND_TRAITS,
+            ],
+            [
+                "Abilities and saves",
+                "Skills",
+                "Combat",
+                "Equipment",
+                "Features and traits",
+            ]
+        );
     }
 }

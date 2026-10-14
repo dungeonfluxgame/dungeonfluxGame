@@ -146,6 +146,7 @@ impl RunningActor {
         let table_log = super::table_log::TableLog::new();
         let actor = actor::Actor {
             table_log: table_log.clone(),
+            notebook: super::notebook::NotebookLedger::none(),
             social: super::social::SocialLedger::none(),
             table_settings: super::table_settings::TableSettings::startup(None, false),
             tempo: None,

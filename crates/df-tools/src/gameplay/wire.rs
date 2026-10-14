@@ -536,22 +536,24 @@ fn shared_source_decision(
             && decision.source_policy.as_str() == super::journey::THREAD_POLICY
             && decision.facts.get(source.ordinal as usize) == Some(&source.id)
     });
-    let owner: &AcceptedDecision = owners.next().ok_or(RepositoryError::InvalidCandidate)?;
+    let owner: &AcceptedDecision = owners
+        .next()
+        .ok_or_else(|| refused("view-source-decision-1"))?;
     if owners.next().is_some() || super::journey::accepted(owner)?.phase != phase as i32 {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-source-decision-2"));
     }
     let terminal = selected
         .iter()
         .copied()
         .find(|fact| Some(&fact.id) == owner.facts.last())
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refused("view-source-decision-3"))?;
     let preceding = match super::beat_script_runtime::choice(state, owner)? {
         Some((marker, _, _)) if marker.ordinal > source.ordinal => {
             if source.ordinal.checked_add(1) != Some(marker.ordinal)
                 || marker.cause != Some(source.id)
                 || marker.ordinal.checked_add(1) != Some(terminal.ordinal)
             {
-                return Err(RepositoryError::InvalidCandidate);
+                return Err(refused("view-source-decision-4"));
             }
             marker
         }
@@ -564,7 +566,7 @@ fn shared_source_decision(
         || !matches!(&terminal.value, FactValue::ContentEvent { definition, subjects }
             if *definition == model::content(terminal_entry)? && subjects.is_empty())
     {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-source-decision-5"));
     }
     Ok(())
 }
@@ -585,27 +587,27 @@ fn witnessed_courier_support(
         return Ok(None);
     };
     if reactions.next().is_some() {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-courier-witness-1"));
     }
     let courier = super::journey::entity([0x67; 16])?;
     let FactValue::ContentEvent { subjects, .. } = &reaction.value else {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-courier-witness-2"));
     };
     let [observer, hero] = subjects.as_slice() else {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-courier-witness-3"));
     };
     if *observer != courier {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-courier-witness-4"));
     }
     let contact = selected
         .iter()
         .copied()
         .find(|fact| Some(fact.id) == reaction.cause)
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refused("view-courier-witness-5"))?;
     if !matches!(&contact.value, FactValue::ContentEvent { definition, subjects }
         if *definition == model::content("courier-escort-contact")? && subjects.as_slice() == [*hero])
     {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-courier-witness-6"));
     }
     shared_source_decision(
         state,
@@ -646,15 +648,15 @@ fn witnessed_courier_support(
             | df_knowledge::perception::PerceptionError::AllocationCapacity => {
                 RepositoryError::Capacity
             }
-            _ => RepositoryError::InvalidCandidate,
+            _ => refused("view-courier-witness-7"),
         })?
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refused("view-courier-witness-8"))?;
     if audience_basis != current.basis()
         || witness.observer != courier
         || witnessed.id != contact.id
         || witness.source != witness_source
     {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-courier-witness-9"));
     }
     let relationship_policy = model::content("courier-escort-relationship")?;
     let courier_definition = model::content("lantern-wharf-courier")?;
@@ -678,14 +680,14 @@ fn witnessed_courier_support(
             && relationship.policy == relationship_policy
             && relationship.state.as_str() == "escort-supported"
     }) {
-        return Err(RepositoryError::InvalidCandidate);
+        return Err(refused("view-courier-witness-10"));
     }
     let member = party
         .iter()
         .find(|member| {
             member.character_ready && member.participant_id.as_slice() == hero.as_bytes()
         })
-        .ok_or(RepositoryError::InvalidCandidate)?;
+        .ok_or_else(|| refused("view-courier-witness-11"))?;
     Ok(Some(member.name.clone()))
 }
 
@@ -722,11 +724,27 @@ pub(super) struct PublicJourneyProjection {
 
 pub(super) fn public_scene_asset(current: &Checkpoint) -> Result<String, RepositoryError> {
     let state = current.state();
-    if super::beat_script_runtime::native_inn(state)? {
+    if stage(
+        "view-native-inn",
+        super::beat_script_runtime::native_inn(state),
+    )? {
         Ok(super::journey::inn_scene().scene_asset)
     } else {
-        Ok(super::beat_script_runtime::scene(state)?.asset)
+        Ok(stage("view-scene", super::beat_script_runtime::scene(state))?.asset)
     }
+}
+
+/// Notes which stage of the view projection refused, so the server's `UNAVAILABLE` line names
+/// it after `step=`. The first note of a call wins, so a stage that names its own refusal
+/// inside is not overwritten by the stage that called it.
+fn stage<T>(step: &'static str, result: Result<T, RepositoryError>) -> Result<T, RepositoryError> {
+    result.inspect_err(|_| super::refusal_detail::note(step))
+}
+
+/// An `InvalidCandidate` refusal that names its step for the log.
+fn refused(step: &'static str) -> RepositoryError {
+    super::refusal_detail::note(step);
+    RepositoryError::InvalidCandidate
 }
 
 pub(super) fn journey_view(
@@ -734,7 +752,76 @@ pub(super) fn journey_view(
     role: df_persistence::local_demo_scope::LocalDemoRole,
     principal: df_types::MemberId,
 ) -> Result<rpc::ViewMessage, RepositoryError> {
-    project_journey(current, role, principal).map(|projection| projection.view)
+    project_journey(current, role, principal)
+        .inspect_err(|_| super::refusal_detail::note("view-projection"))
+        .map(|projection| projection.view)
+}
+
+pub(super) fn attach_notebook(
+    view: &mut rpc::ViewMessage,
+    entries: &[super::notebook::EntryView],
+) -> Result<(), &'static str> {
+    let Some(audience) = view.audience.as_ref() else {
+        return Err("notebook audience absent");
+    };
+    let standing = match audience {
+        rpc::view_message::Audience::Display(_) => Vec::new(),
+        rpc::view_message::Audience::Player(player) => {
+            let Some(journey) = player.journey.as_ref() else {
+                return Err("notebook journey absent");
+            };
+            journey.standing.clone()
+        }
+    };
+    let Some(audience) = view.audience.as_mut() else {
+        return Err("notebook audience absent");
+    };
+    let journey = match audience {
+        rpc::view_message::Audience::Display(display) => {
+            display.journey.as_mut().ok_or("notebook journey absent")?
+        }
+        rpc::view_message::Audience::Player(player) => {
+            player.journey.as_mut().ok_or("notebook journey absent")?
+        }
+    };
+    super::notebook::validate_view_entries(entries).map_err(|_| "notebook view invalid")?;
+    journey.notebook = entries
+        .iter()
+        .map(|entry| {
+            let attitude = (entry.kind == super::notebook::Kind::Person)
+                .then(|| {
+                    standing
+                        .iter()
+                        .find(|item| item.name.eq_ignore_ascii_case(&entry.title))
+                        .and_then(|item| match item.attitude {
+                            1 => Some("hostile"),
+                            2 => Some("indifferent"),
+                            3 => Some("friendly"),
+                            _ => None,
+                        })
+                        .map(str::to_owned)
+                })
+                .flatten();
+            let kind = match entry.kind {
+                super::notebook::Kind::Person => rpc::NotebookKind::Person,
+                super::notebook::Kind::Place => rpc::NotebookKind::Place,
+                super::notebook::Kind::Task => rpc::NotebookKind::Task,
+                super::notebook::Kind::Clue => rpc::NotebookKind::Clue,
+                super::notebook::Kind::Note => rpc::NotebookKind::Note,
+            };
+            rpc::NotebookEntry {
+                kind: kind as i32,
+                title: entry.title.clone(),
+                text: entry.text.clone(),
+                scene: entry.scene.clone(),
+                order: entry.order,
+                owner: entry.owner.clone(),
+                author: entry.author.clone(),
+                attitude,
+            }
+        })
+        .collect();
+    Ok(())
 }
 
 /// What the players can choose right now, as labels only, for the shared display: every ready
@@ -815,13 +902,15 @@ pub(super) fn project_journey(
         | df_knowledge::perception::PerceptionError::AllocationCapacity => {
             RepositoryError::Capacity
         }
-        _ => RepositoryError::InvalidCandidate,
+        _ => refused("view-perceive"),
     })?;
     let state = current.state();
-    let phase = journey::phase(current)?;
+    let phase = stage("view-phase", journey::phase(current))?;
     let mut party = Vec::new();
     for member in journey::participants(current) {
-        let who = member.character.ok_or(RepositoryError::InvalidCandidate)?;
+        let who = member
+            .character
+            .ok_or_else(|| refused("view-party-character"))?;
         party.push(party_member(
             state,
             who,
@@ -836,18 +925,26 @@ pub(super) fn project_journey(
     let mut offers = Vec::new();
     let mut private_clue = String::new();
     if role == LocalDemoRole::Player {
-        let who = journey::player_entity(principal, current)?;
+        let who = stage(
+            "view-player-entity",
+            journey::player_entity(principal, current),
+        )?;
         if state
             .characters
             .iter()
             .any(|character| character.entity == who)
         {
-            own = Some(journey::character_sheet(state, who)?);
+            own = Some(stage(
+                "view-character-sheet",
+                journey::character_sheet(state, who),
+            )?);
         } else {
-            creation = Some(creation_offer()?);
+            creation = Some(stage("view-creation-offer", creation_offer())?);
         }
-        for (kind, label, offer_id) in super::beat_script_runtime::view_offers(current, principal)?
-        {
+        for (kind, label, offer_id) in stage(
+            "view-offers",
+            super::beat_script_runtime::view_offers(current, principal),
+        )? {
             offers.push(rpc::GameplayActionOffer {
                 offer_id,
                 action_kind: kind as i32,
@@ -861,7 +958,10 @@ pub(super) fn project_journey(
                     Vec::new()
                 },
                 input_groups: if journey::tactical::present(state) {
-                    journey::tactical::groups(current, principal, kind)?
+                    stage(
+                        "view-tactical-groups",
+                        journey::tactical::groups(current, principal, kind),
+                    )?
                 } else if kind == rpc::GameplayActionKind::GreatswordAttack {
                     vec![
                         attack_group(
@@ -891,9 +991,12 @@ pub(super) fn project_journey(
             // Canonical audience selection only gates eligibility. The existing
             // courier owner still checks the exact authored reveal, recipient,
             // committed recording and saved response before rendering its text.
-            private_clue = super::courier_ai::saved_response(current, principal)?
-                .unwrap_or_default()
-                .to_owned();
+            private_clue = stage(
+                "view-private-clue",
+                super::courier_ai::saved_response(current, principal),
+            )?
+            .unwrap_or_default()
+            .to_owned();
         }
     }
     let mut combat = None;
@@ -904,7 +1007,8 @@ pub(super) fn project_journey(
                 .participants
                 .iter()
                 .map(|who| party_member(state, *who, true))
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()
+                .inspect_err(|_| super::refusal_detail::note("view-combat-participants"))?;
         } else {
             participants.push(party_member(state, journey::entity([0x65; 16])?, true)?);
         }
@@ -913,7 +1017,8 @@ pub(super) fn project_journey(
             .iter()
             .filter(|decision| decision.source_policy.as_str() == journey::THREAD_POLICY)
             .map(journey::accepted)
-            .collect::<Result<Vec<_>, _>>()?
+            .collect::<Result<Vec<_>, _>>()
+            .inspect_err(|_| super::refusal_detail::note("view-combat-outcomes"))?
             .into_iter()
             .flat_map(|accepted| accepted.combat)
             .collect::<Vec<_>>();
@@ -975,7 +1080,7 @@ pub(super) fn project_journey(
                 .unwrap_or_default(),
             round: journey::combat_round(current).map_err(|error| match error {
                 journey::CombatRoundError::Capacity => RepositoryError::Capacity,
-                _ => RepositoryError::InvalidCandidate,
+                _ => refused("view-combat-round"),
             })?,
             outcomes,
             move_outcomes,
@@ -992,7 +1097,7 @@ pub(super) fn project_journey(
                 .map_or_else(Vec::new, |who| who.as_bytes().to_vec()),
             initiative: journey::initiative_rolls(current).map_err(|error| match error {
                 journey::CombatRoundError::Capacity => RepositoryError::Capacity,
-                _ => RepositoryError::InvalidCandidate,
+                _ => refused("view-initiative"),
             })?,
 
             ..Default::default()
@@ -1002,14 +1107,20 @@ pub(super) fn project_journey(
         && let Some(view) = combat.as_mut()
     {
         let own = if role == LocalDemoRole::Player {
-            Some(journey::player_entity(principal, current)?)
+            Some(stage(
+                "view-player-entity",
+                journey::player_entity(principal, current),
+            )?)
         } else {
             None
         };
-        journey::tactical::project_combat(current, own, view)?;
+        stage(
+            "view-tactical-combat",
+            journey::tactical::project_combat(current, own, view),
+        )?;
     }
     use super::pack::{self, SceneKey};
-    let authored = super::beat_script_runtime::scene(state)?;
+    let authored = stage("view-scene", super::beat_script_runtime::scene(state))?;
     let key = authored.key;
     let rested = state
         .narrative
@@ -1025,7 +1136,10 @@ pub(super) fn project_journey(
     };
     // The story text and the rules wording are separate strings in the pack and stay separate
     // on the wire: the story is narrated and spoken, the rules note is only read.
-    let narration = match witnessed_courier_support(current, observer, perceived.facts(), &party)? {
+    let narration = match stage(
+        "view-courier-support",
+        witnessed_courier_support(current, observer, perceived.facts(), &party),
+    )? {
         Some(name) => pack::with_content(|content| {
             format!(
                 "{narration} {}",
@@ -1075,12 +1189,13 @@ pub(super) fn project_journey(
     };
     if key == SceneKey::Combat && super::journey::tactical::present(current.state()) {
         rules_note.push_str(" Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres.");
+        add_scan_barrier_reach_note(&mut rules_note);
         rules_note.push_str(&journey::tactical::unmodelled_features_note(
             current.state(),
         )?);
     }
     let table_choices = if role == LocalDemoRole::Display {
-        table_choices(current, phase)?
+        stage("view-table-choices", table_choices(current, phase))?
     } else {
         Vec::new()
     };
@@ -1100,6 +1215,7 @@ pub(super) fn project_journey(
         speaker: authored.speaker.clone(),
         dialogue: authored.dialogue.clone(),
         table_log: Vec::new(),
+        notebook: Vec::new(),
         tempo: None,
         standing: Vec::new(),
         live_faces: Vec::new(),
@@ -1108,9 +1224,15 @@ pub(super) fn project_journey(
         reply_speaker: String::new(),
         home: (phase == rpc::JourneyPhase::Room)
             .then(|| super::home_theme::lobby_view(&authored.asset, authored.setting.as_ref())),
-        adventure_ended: super::beat_script_runtime::ended(state)?,
+        adventure_ended: stage(
+            "view-adventure-ended",
+            super::beat_script_runtime::ended(state),
+        )?,
         preparing_adventure: super::journey::new_adventure_requested(current),
-        adventure_title: super::beat_script_runtime::adventure_title(state)?,
+        adventure_title: stage(
+            "view-adventure-title",
+            super::beat_script_runtime::adventure_title(state),
+        )?,
         // The room's setting is attached to every view by the owner (see `TableSettings::attach`).
         choice_hints_hidden: false,
         // PLAY-V12: the opening scene's title is the adventure's own title on every view.
@@ -1121,7 +1243,10 @@ pub(super) fn project_journey(
         home_video_path: String::new(),
     };
     // The persisted decision outputs carry no cast; the view adds who is on stage.
-    let mut scene = if super::beat_script_runtime::native_inn(state)? {
+    let mut scene = if stage(
+        "view-native-inn",
+        super::beat_script_runtime::native_inn(state),
+    )? {
         journey::inn_scene()
     } else {
         rpc::GameplayScene {
@@ -1143,7 +1268,7 @@ pub(super) fn project_journey(
     scene.rules_note = rules_note;
     // A chapter's closing scenes are story scenes, not the aftermath of its fight: the screens
     // draw them as the peaceful chapters' resolution, epilogue and end card.
-    if super::beat_script_runtime::closing(state)?
+    if stage("view-closing", super::beat_script_runtime::closing(state))?
         || super::beat_script_runtime::settled_defeat(state)?
     {
         scene.destination = rpc::HarborDestination::HarborInn as i32;
@@ -1189,6 +1314,10 @@ pub(super) fn project_journey(
     })
 }
 
+fn add_scan_barrier_reach_note(rules_note: &mut String) {
+    rules_note.push_str(" The 2024 rules do not say whether melee reach crosses a barrier below half the target's height; this game refuses melee reach across every blocked step.");
+}
+
 #[cfg(test)]
 #[path = "perception_tests.rs"]
 mod perception_tests;
@@ -1196,6 +1325,14 @@ mod perception_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_barrier_melee_reach_note_discloses_the_table_ruling_srd_p15() {
+        let mut rules_note = String::new();
+        add_scan_barrier_reach_note(&mut rules_note);
+        assert!(rules_note.contains("do not say whether melee reach crosses a barrier below half"));
+        assert!(rules_note.contains("refuses melee reach across every blocked step"));
+    }
 
     #[test]
     fn defeat_context_names_enemy_kind_count_and_fallen_heroes() {
@@ -1274,7 +1411,7 @@ pub(super) fn action_offer_rejection(
         super::refusal_detail::note("new-adventure-machine");
         return Ok(Some(rpc::RejectionCode::StaleOffer));
     }
-    if super::journey::phase(current)? == rpc::JourneyPhase::Combat
+    if stage("view-phase", super::journey::phase(current))? == rpc::JourneyPhase::Combat
         && !current_combat_turn(current, member)?
     {
         return Ok(Some(rpc::RejectionCode::WrongTurn));

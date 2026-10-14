@@ -146,6 +146,82 @@ pub(super) fn phase_of(beat: &Beat) -> rpc::JourneyPhase {
         }
     }
 }
+
+/// Ability and proficiency components for the local SRD Search and Study skills.
+pub(super) fn skill_check_modifiers(
+    state: &GameState,
+    actor: EntityId,
+    skill: &str,
+) -> Result<(i8, u8), RepositoryError> {
+    let ability_name = match skill {
+        "perception" | "insight" | "survival" | "medicine" => "wisdom",
+        "investigation" | "arcana" | "history" | "nature" | "religion" => "intelligence",
+        "athletics" => "strength",
+        "intimidation" => "charisma",
+        _ => {
+            refusal_detail::note("search-skill");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+    };
+    let character = state
+        .characters
+        .iter()
+        .find(|character| character.entity == actor)
+        .ok_or_else(|| {
+            refusal_detail::note("search-character");
+            RepositoryError::InvalidCandidate
+        })?;
+    let score = u8::try_from(journey::value(state, actor, ability_name)?).map_err(|_| {
+        refusal_detail::note("search-ability-score");
+        RepositoryError::InvalidCandidate
+    })?;
+    let background_proficiency = character.build.entry.as_str() == "dwarf-fighter-soldier"
+        && matches!(skill, "athletics" | "intimidation");
+    let chosen_proficiency = character.choices.iter().any(|choice| {
+        matches!(choice.offer.as_str(), "skill-1" | "skill-2") && choice.selected.as_str() == skill
+    });
+    let proficiency = if background_proficiency || chosen_proficiency {
+        pack::with_creation(|creation| creation.proficiency_bonus)
+    } else {
+        0
+    };
+    let ability_modifier = df_rules::local_journey::ability_modifier(score);
+    let ability_modifier = i8::try_from(ability_modifier).map_err(|_| {
+        refusal_detail::note("search-ability-modifier");
+        RepositoryError::InvalidCandidate
+    })?;
+    Ok((ability_modifier, proficiency))
+}
+
+/// Passive Perception for this local normal-check profile.
+pub(super) fn passive_perception(
+    state: &GameState,
+    actor: EntityId,
+) -> Result<i16, RepositoryError> {
+    let (ability_modifier, proficiency) = skill_check_modifiers(state, actor, "perception")?;
+    Ok(10 + i16::from(ability_modifier) + i16::from(proficiency))
+}
+
+pub(super) fn resolve_skill_check(
+    state: &GameState,
+    actor: EntityId,
+    skill: &str,
+    die: u8,
+    difficulty_class: u8,
+) -> Result<df_rules::ability_check::AbilityCheckResult, RepositoryError> {
+    let (ability_modifier, proficiency_bonus) = skill_check_modifiers(state, actor, skill)?;
+    df_rules::ability_check::resolve(df_rules::ability_check::AbilityCheckInput {
+        die,
+        ability_modifier,
+        proficiency_bonus,
+        difficulty_class,
+    })
+    .map_err(|_| {
+        refusal_detail::note("search-check");
+        RepositoryError::InvalidCandidate
+    })
+}
+
 pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
     beat_script::with_script(|script| {
         let beat = script.current(state)?;
@@ -881,6 +957,15 @@ pub(super) fn validate_encounter_choices(
             .iter()
             .find(|offer| offer.id == id)
             .ok_or(RepositoryError::InvalidCandidate)?;
+        if offer.effect == BeatEffect::ShortRest
+            && !decision.facts.iter().any(|fact_id| {
+                current.state().facts.iter().any(|fact| {
+                    fact.id == *fact_id && matches!(fact.value, FactValue::TimeAdvanced { .. })
+                })
+            })
+        {
+            continue;
+        }
         let trigger = if offer.effect == BeatEffect::ShortRest {
             BeatTrigger::RestComplete
         } else if beat.kind == BeatKind::Fight {

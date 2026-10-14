@@ -8,8 +8,8 @@ use crate::ranking::{
     UtilityRankingError, rank_tactics,
 };
 use df_rules::tactical::{
-    Action, AttackSpend, AttackUse, Battle, Cell, CreatureKind, DrawBinding, RuleError, Weapon,
-    resolve,
+    Action, AttackSpend, AttackUse, Battle, Cell, CreatureKind, DrawBinding, RuleError, Side,
+    Weapon, resolve,
 };
 
 /// Current canonical source/basis/policy and actor perception, supplied by engine/session.
@@ -88,7 +88,16 @@ pub fn choose(
     actor: u32,
     context: TacticContext<'_>,
 ) -> Result<Option<Action>, TacticError> {
-    choose_with_policy(battle, actor, context, false)
+    choose_with_policy(battle, actor, context, false, false)
+}
+
+/// Policy revision that approaches standing heroes and follows the source-data downed-target rule.
+pub fn choose_latest(
+    battle: &Battle,
+    actor: u32,
+    context: TacticContext<'_>,
+) -> Result<Option<Action>, TacticError> {
+    choose_with_policy(battle, actor, context, false, true)
 }
 
 /// Preserve the historical policy for fights whose stored tactical source revision predates
@@ -98,7 +107,7 @@ pub fn choose_legacy(
     actor: u32,
     context: TacticContext<'_>,
 ) -> Result<Option<Action>, TacticError> {
-    choose_with_policy(battle, actor, context, true)
+    choose_with_policy(battle, actor, context, true, false)
 }
 
 fn choose_with_policy(
@@ -106,9 +115,12 @@ fn choose_with_policy(
     actor: u32,
     context: TacticContext<'_>,
     legacy: bool,
+    latest: bool,
 ) -> Result<Option<Action>, TacticError> {
     let proposed = if legacy {
         propose_legacy(battle, actor)
+    } else if latest {
+        propose_latest(battle, actor)
     } else {
         propose(battle, actor)
     }
@@ -379,6 +391,60 @@ pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
         Ok(Some(Action::EndTurn))
     }
 }
+
+/// Current enemy action policy; `propose` remains the RUL-02 policy for stored fights.
+pub fn propose_latest(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
+    let action = propose(battle, id)?;
+    let actor = battle.actor(id)?;
+    if matches!(&action, Some(Action::Dash)) && actor.speed_ft() == 0 {
+        return Ok(Some(Action::Dodge));
+    }
+    if actor.side() != Side::Enemies
+        || actor.budget().action_used
+        || matches!(&action, Some(Action::Attack { .. } | Action::Move(_)))
+        || !attacks_unconscious_target(actor.spec().kind)?
+    {
+        return Ok(action);
+    }
+    let mut dying_heroes: Vec<_> = battle
+        .combatants()
+        .iter()
+        .filter(|target| {
+            target.side() == Side::Heroes
+                && target.health().hit_points == 0
+                && target.health().unconscious
+                && !target.health().dead
+                && actor.cell().distance(target.cell()) <= 5
+        })
+        .collect();
+    dying_heroes.sort_by_key(|target| (actor.cell().distance(target.cell()), target.id()));
+    for target in dying_heroes {
+        for &weapon in &actor.spec().weapons {
+            if weapon.ranged_weapon() {
+                continue;
+            }
+            let use_ = weapon_use(weapon, false);
+            if battle.legal_targets(id, use_)?.contains(&target.id()) {
+                return Ok(Some(Action::Attack {
+                    target: target.id(),
+                    weapon: use_,
+                    spend: AttackSpend::Action,
+                }));
+            }
+        }
+    }
+    Ok(action)
+}
+
+fn attacks_unconscious_target(kind: CreatureKind) -> Result<bool, RuleError> {
+    let id = kind.srd_id().ok_or(RuleError::InvalidCombatant)?;
+    let source = df_rules::SRD_521_CREATURES
+        .iter()
+        .find(|creature| creature.id == id)
+        .ok_or(RuleError::UnsupportedCreature)?;
+    Ok(source.attacks_unconscious)
+}
+
 fn opportunity_weapon(weapons: &[Weapon], held: &[Weapon]) -> Weapon {
     weapons
         .iter()
@@ -481,8 +547,8 @@ fn weapon_use(weapon: Weapon, ranged: bool) -> AttackUse {
 
 #[cfg(test)]
 mod tests {
-    use super::opportunity_weapon;
-    use df_rules::tactical::Weapon;
+    use super::{attacks_unconscious_target, opportunity_weapon};
+    use df_rules::tactical::{CreatureKind, Weapon};
 
     /// SRD 5.2.1 pp. 14, 176: a Reaction uses a weapon in hand or an Unarmed Strike.
     #[test]
@@ -495,5 +561,30 @@ mod tests {
             opportunity_weapon(&[Weapon::Javelin], &[]),
             Weapon::UnarmedStrike
         );
+    }
+
+    /// SRD 5.2.1 p. 18: damage at 0 HP is permitted; the table's targeting choice is creature data.
+    #[test]
+    fn downed_target_policy_uses_the_creature_record() {
+        for kind in [
+            CreatureKind::Zombie,
+            CreatureKind::Wolf,
+            CreatureKind::GiantRat,
+            CreatureKind::GiantWeasel,
+            CreatureKind::Mastiff,
+        ] {
+            assert!(attacks_unconscious_target(kind).unwrap());
+        }
+        for kind in [
+            CreatureKind::Bandit,
+            CreatureKind::Cultist,
+            CreatureKind::Guard,
+            CreatureKind::Goblin,
+            CreatureKind::Kobold,
+            CreatureKind::Skeleton,
+            CreatureKind::Scout,
+        ] {
+            assert!(!attacks_unconscious_target(kind).unwrap());
+        }
     }
 }

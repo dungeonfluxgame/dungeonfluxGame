@@ -79,8 +79,11 @@ pub(crate) struct Roll {
     pub(crate) status: RollStatus,
 }
 /// One bounded expression request. Mechanical text bypasses this interface entirely.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FactSheet {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scene: Option<String>,
     pub(crate) beat: String,
     pub(crate) slot: String,
     pub(crate) speaker: String,

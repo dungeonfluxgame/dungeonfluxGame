@@ -116,6 +116,14 @@ fn view(player: bool, frame: FixtureFrame) -> rpc::ViewMessage {
             rpc::JourneyPhase::Opening
         } as i32,
         room_code: "LANTERN".to_owned(),
+        own_character: player.then_some(rpc::CharacterSheet {
+            name: "Brakka".to_owned(),
+            hit_points: 12,
+            maximum_hit_points: 12,
+            armor_class: 14,
+            source_revision: "synthetic-notebook-fixture-v1".to_owned(),
+            ..Default::default()
+        }),
         creation: if player && snapshot.creation {
             Some(rpc::CharacterCreationOffer {
                 description: if conflicting {
@@ -150,6 +158,37 @@ fn view(player: bool, frame: FixtureFrame) -> rpc::ViewMessage {
             })
         } else {
             None
+        },
+        notebook: if player {
+            vec![
+                rpc::NotebookEntry {
+                    kind: rpc::NotebookKind::Person as i32,
+                    title: "Tomas Greaves".to_owned(),
+                    text: "Mapmaker at Tin Street Tea House.".to_owned(),
+                    scene: "opening".to_owned(),
+                    order: 1,
+                    ..Default::default()
+                },
+                rpc::NotebookEntry {
+                    kind: rpc::NotebookKind::Clue as i32,
+                    title: "A folded letter".to_owned(),
+                    text: "Jorun says the letter is hidden beneath the ferry desk.".to_owned(),
+                    scene: "opening".to_owned(),
+                    order: 2,
+                    owner: Some("Brakka".to_owned()),
+                    author: Some("Brakka".to_owned()),
+                    ..Default::default()
+                },
+            ]
+        } else {
+            vec![rpc::NotebookEntry {
+                kind: rpc::NotebookKind::Person as i32,
+                title: "Tomas Greaves".to_owned(),
+                text: "Mapmaker at Tin Street Tea House.".to_owned(),
+                scene: "opening".to_owned(),
+                order: 1,
+                ..Default::default()
+            }]
         },
         ..Default::default()
     };

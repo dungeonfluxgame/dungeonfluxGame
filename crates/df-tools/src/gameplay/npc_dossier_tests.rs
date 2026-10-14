@@ -1327,7 +1327,10 @@ fn personal_questions_are_answered_from_the_personal_life() {
         let (value, _) =
             conversation_facts(&adventure, &dossier, friendly(), question, &conversation);
         let lines = answer_lines(&value);
-        assert!(!lines.is_empty(), "{question} is answered with nothing: {value}");
+        assert!(
+            !lines.is_empty(),
+            "{question} is answered with nothing: {value}"
+        );
         for line in &lines {
             let source = dossier
                 .knowledge
@@ -1353,10 +1356,7 @@ fn knowing_the_cast_is_answered_with_the_acquaintance_not_the_secret() {
         .find(|dossier| dossier.role == NpcRole::Contact)
         .expect("a contact")
         .clone();
-    let question = format!(
-        "How do you know {}? Are you two old friends?",
-        contact.name
-    );
+    let question = format!("How do you know {}? Are you two old friends?", contact.name);
     let (value, _) = conversation_facts(
         &adventure,
         &patron,
@@ -1761,11 +1761,14 @@ fn clue_only_terms(adventure: &GeneratedAdventure) -> Vec<String> {
 fn the_hero_told_a_clue_in_private_hears_it_discussed_and_no_other_hero_gets_a_word_of_it() {
     let mut proved = 0;
     for seed in 1..200 {
-        let adventure = adventure(seed);
+        let mut adventure = adventure(seed);
         let clue = adventure.pack.courier_clue.clone();
         let terms = clue_only_terms(&adventure);
         if terms.is_empty() || !mentions_term(&clue, &adventure.dossiers[0].name) {
             continue;
+        }
+        for dossier in &mut adventure.dossiers {
+            dossier.starting_attitude = Attitude::Indifferent;
         }
         let ledger = SocialLedger::open(adventure.dossiers.clone(), "0xclue", None).unwrap();
         let ask = |told: bool, hero: u8| {
@@ -1819,6 +1822,180 @@ fn the_hero_told_a_clue_in_private_hears_it_discussed_and_no_other_hero_gets_a_w
         proved > 100,
         "only {proved} of 199 seeds had a clue to test"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recorded_errand_talk_answers_subjects_and_reacts_to_threat_srd_5_2_1_page_184() {
+    // SRD 5.2.1, p. 184: “Describe or roleplay how you're communicating with the monster.”
+    // These exchanges classify and voice table talk; they do not resolve an Influence check.
+    let adventure = adventure(0x7f4a_7c15);
+    let dossier = adventure
+        .dossiers
+        .iter()
+        .find(|dossier| dossier.role == NpcRole::Patron)
+        .unwrap()
+        .clone();
+    let ledger = SocialLedger::open(adventure.dossiers.clone(), "0xrecorded-talk", None).unwrap();
+    let voice = NpcVoice::new(Arc::new(
+        crate::gameplay::storyteller::Storyteller::disabled(),
+    ));
+    let log = TableLog::new();
+    let lines = [
+        "What is in the letter, and who is Tomas?",
+        "What exactly does the letter say?",
+        "What happens at dawn if Tomas is not warned?",
+        "Who is after Tomas, and why?",
+        "This sounds dangerous. What will you pay us for carrying it?",
+        "Tell me the truth about that letter right now, or I leave and Tomas can fend for himself.",
+        "The harbourmaster sent us. He says you are to tell us everything you know about Kelbin Underhill.",
+    ];
+    let opening = adventure
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::Opening)
+        .unwrap()
+        .dialogue
+        .clone();
+    let mut said = vec![opening];
+    let mut subjects_seen = std::collections::BTreeSet::new();
+    for line in lines {
+        let reading = super::social::classify_keywords_reading(line);
+        let response = NpcReplyContext::for_cast(
+            &view(&adventure, SceneKey::Opening, "Brannoch"),
+            member(1),
+            line,
+            &story(&adventure),
+            &ledger,
+            "Opening",
+        )
+        .unwrap();
+        let response = voice.converse(response, &log).await.unwrap();
+        let parts = super::speech_text::sentences(&response);
+        for part in &parts {
+            assert!(
+                !said
+                    .iter()
+                    .flat_map(|previous| super::speech_text::sentences(previous))
+                    .any(|previous| {
+                        super::speech_text::sentence_key(&previous)
+                            == super::speech_text::sentence_key(part)
+                    }),
+                "repeated sentence in response to {line:?}: {part:?}"
+            );
+        }
+        said.push(response.clone());
+        if reading.approach == Approach::Intimidation {
+            assert!(
+                [
+                    "Keep your voice down and your hands where I can see them.",
+                    "Do not threaten me. Tell me what you want.",
+                    "I hear you. Put the blade away and we can talk.",
+                    "No. I will not give in to threats. Put the weapon away.",
+                    "No. I will not be bullied, and I will remember this.",
+                    "Threaten me again and I will end this conversation.",
+                ]
+                .contains(&response.as_str()),
+                "{response}"
+            );
+        } else {
+            let answer = &dossier.subject_answers[&reading.subject];
+            if subjects_seen.insert(reading.subject) {
+                assert_eq!(response, answer.text, "{line:?}");
+            } else {
+                assert_eq!(response, answer.restatement, "{line:?}");
+            }
+        }
+        if line.starts_with("The harbourmaster") {
+            assert_eq!(reading.approach, Approach::Deception);
+        }
+    }
+}
+
+#[test]
+fn reply_context_keeps_every_spoken_sentence_for_scene_repeat_checks_srd_5_2_1_page_184() {
+    // SRD 5.2.1, p. 184: the character's spoken words are part of the ongoing conversation.
+    let adventure = adventure(0x7f4a_7c15);
+    let dossier = adventure
+        .dossiers
+        .iter()
+        .find(|dossier| dossier.role == NpcRole::Patron)
+        .unwrap();
+    let ledger = SocialLedger::open(adventure.dossiers.clone(), "0xrepeat-history", None).unwrap();
+    for exchange in 0..10 {
+        let reply = if exchange == 0 {
+            "Please warn Tomas before dawn.".to_owned()
+        } else {
+            format!("A different sentence for exchange {exchange}.")
+        };
+        ledger.record_exchange(
+            member(1),
+            dossier,
+            "Opening",
+            Approach::Question,
+            &format!("Question {exchange}?"),
+            &reply,
+        );
+    }
+    assert!(
+        !ledger
+            .recent(member(1), &dossier.npc_id)
+            .iter()
+            .any(|(_, line)| line == "Please warn Tomas before dawn.")
+    );
+
+    let context = NpcReplyContext::for_cast(
+        &view(&adventure, SceneKey::Opening, "Brannoch"),
+        member(1),
+        "Where does the errand go?",
+        &story(&adventure),
+        &ledger,
+        "Opening",
+    )
+    .unwrap();
+
+    assert!(
+        context
+            .turn
+            .unwrap()
+            .said
+            .contains(&"Please warn Tomas before dawn.".to_owned())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_hostile_hero_is_told_that_a_private_clue_is_withheld_srd_5_2_1_page_184() {
+    // SRD 5.2.1, p. 184: this is in-character conversation, not an Influence check.
+    let (adventure, ledger) = confiding_patron(Attitude::Hostile);
+    let clue = adventure.pack.courier_clue.clone();
+    let terms = clue_only_terms(&adventure);
+    let ask = NpcReplyContext::for_cast(
+        &view_with_clue(&adventure, true),
+        member(1),
+        "What did you whisper to me?",
+        &story(&adventure),
+        &ledger,
+        "Opening",
+    )
+    .unwrap();
+    assert!(ask.facts.get("you_told_this_hero_in_private").is_none());
+    assert!(ask.facts.get("private_matter").is_some());
+    assert!(ask.turn.as_ref().unwrap().withheld.released().is_empty());
+    for term in &terms {
+        assert!(ask.turn.as_ref().unwrap().withheld.leaks_secret(term));
+    }
+
+    let reply = NpcVoice::silent()
+        .converse(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert!(
+        reply.contains("whisper") || reply.contains("confidence"),
+        "{reply}"
+    );
+    assert!(terms.iter().all(|term| !reply.contains(term)));
+    assert!(!reply.contains(&clue));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1893,7 +2070,8 @@ fn every_dossier_fixture_builds_a_request_the_storyteller_accepts() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {
-            path.extension().is_some_and(|extension| extension == "json")
+            path.extension()
+                .is_some_and(|extension| extension == "json")
                 && path
                     .file_stem()
                     .is_some_and(|stem| stem.to_string_lossy().starts_with("after-"))
@@ -1922,9 +2100,8 @@ fn every_dossier_fixture_builds_a_request_the_storyteller_accepts() {
                     style: npc_dossier::STYLE,
                     profile: npc_dossier::profile(rating),
                 };
-                check_request(&request).unwrap_or_else(|error| {
-                    panic!("{name} at {rating:?}: {error:?}")
-                });
+                check_request(&request)
+                    .unwrap_or_else(|error| panic!("{name} at {rating:?}: {error:?}"));
                 requests += 1;
             }
         }

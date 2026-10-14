@@ -2,7 +2,13 @@
 //! `CharacterSheetSurface` in a full-screen overlay opened from it. All character facts come
 //! from the server; the compact sheet also derives each ability modifier from its score.
 
-use crate::gameplay_browser::{Client, button, feedback, node};
+use crate::{
+    combat_text::{
+        SHEET_ABILITIES_AND_SAVES, SHEET_COMBAT, SHEET_EQUIPMENT, SHEET_FEATURES_AND_TRAITS,
+        SHEET_SKILLS,
+    },
+    gameplay_browser::{Client, button, feedback, node},
+};
 use df_protocol::common as rpc;
 use df_ui::{
     CharacterSheetSurface, CharacterSheetView, SheetLabels, SheetOwnerGeneration, SheetRow,
@@ -264,30 +270,37 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
         .collect();
     [
         (
-            "combat",
-            SheetTab::Character,
-            "Combat",
-            "Hit points, armor, movement and resources",
-            combat,
-        ),
-        (
             "abilities-and-saves",
             SheetTab::Character,
-            "Abilities and saves",
+            SHEET_ABILITIES_AND_SAVES,
             "Scores and saving throw proficiencies",
             abilities_and_saves,
         ),
         (
             "skills",
             SheetTab::Character,
-            "Skills",
+            SHEET_SKILLS,
             "Background and class proficiencies",
             skills,
         ),
         (
+            "combat",
+            SheetTab::Character,
+            SHEET_COMBAT,
+            "Hit points, armor, movement and resources",
+            combat,
+        ),
+        (
+            "equipment",
+            SheetTab::Equipment,
+            SHEET_EQUIPMENT,
+            "What you carry into the story",
+            equipment,
+        ),
+        (
             "features-and-traits",
             SheetTab::Character,
-            "Features and traits",
+            SHEET_FEATURES_AND_TRAITS,
             "Character, origin and species features",
             features_and_traits,
         ),
@@ -297,13 +310,6 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
             "More details",
             "Other accepted facts",
             other,
-        ),
-        (
-            "equipment",
-            SheetTab::Equipment,
-            "Equipment",
-            "What you carry into the story",
-            equipment,
         ),
     ]
     .into_iter()
@@ -652,7 +658,7 @@ pub(in crate::gameplay_browser) fn mount_inline(
         "live-hero-line",
         &format!("Armor Class {}", sheet.armor_class),
     )?;
-    node(&document, &section, "h2", "", "Abilities and saves")?;
+    node(&document, &section, "h2", "", SHEET_ABILITIES_AND_SAVES)?;
     let grid = node(&document, &section, "div", "live-abilities", "")?;
     for (short, long) in ABILITIES {
         let Some(score) = fact(sheet, short) else {
@@ -681,11 +687,6 @@ pub(in crate::gameplay_browser) fn mount_inline(
         .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
         .collect();
     list(client, &section, "Saving throws", &saves)?;
-    let combat: Vec<(&str, String)> = COMBAT_FACTS
-        .iter()
-        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
-        .collect();
-    list(client, &section, "Combat", &combat)?;
     let mut skills = Vec::new();
     if let Some(soldier) = fact(sheet, "Soldier skill proficiencies") {
         skills.push(("Soldier skills", soldier.to_owned()));
@@ -694,7 +695,12 @@ pub(in crate::gameplay_browser) fn mount_inline(
     if !class_skills.is_empty() {
         skills.push(("Fighter skills", class_skills));
     }
-    list(client, &section, "Skills", &skills)?;
+    list(client, &section, SHEET_SKILLS, &skills)?;
+    let combat: Vec<(&str, String)> = COMBAT_FACTS
+        .iter()
+        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
+        .collect();
+    list(client, &section, SHEET_COMBAT, &combat)?;
     let mut proficiencies = Vec::new();
     if let Some(set) = fact(sheet, "Gaming set") {
         proficiencies.push(("Gaming set", set.to_owned()));
@@ -711,7 +717,7 @@ pub(in crate::gameplay_browser) fn mount_inline(
         .iter()
         .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
         .collect();
-    list(client, &section, "Equipment", &gear)?;
+    list(client, &section, SHEET_EQUIPMENT, &gear)?;
     let features: Vec<(&str, String)> = [
         "Origin feat",
         "Masteries",
@@ -725,7 +731,7 @@ pub(in crate::gameplay_browser) fn mount_inline(
     .iter()
     .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
     .collect();
-    list(client, &section, "Features and traits", &features)?;
+    list(client, &section, SHEET_FEATURES_AND_TRAITS, &features)?;
     let open = button(client, &section, "Full character sheet", open_from_button)?;
     open.set_class_name("live-sheet-open");
     Ok(())

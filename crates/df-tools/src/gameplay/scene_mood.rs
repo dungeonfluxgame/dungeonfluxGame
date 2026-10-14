@@ -483,7 +483,7 @@ pub(super) fn exchange_reading(signal: &ExchangeSignal, recent: &[Approach]) -> 
             Effect::Cool => (Mood::Tense, Expression::Contemptuous),
             Effect::Warm | Effect::Steady => (Mood::Tense, Expression::Neutral),
         },
-        Approach::Question | Approach::Persuasion | Approach::Other => (
+        Approach::Question | Approach::Persuasion | Approach::Bargain | Approach::Other => (
             Mood::Calm,
             match signal.attitude {
                 Attitude::Friendly => Expression::Smiling,

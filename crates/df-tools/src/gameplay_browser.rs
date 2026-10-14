@@ -11,6 +11,7 @@ mod live_home_video;
 mod live_lobby;
 mod live_motion;
 mod live_music;
+mod live_notebook;
 mod live_presence;
 mod live_rules;
 mod live_screens;
@@ -1370,8 +1371,8 @@ fn complete_action_response(
                             state.last_request = None;
                             ACTION_REFUSAL_FEEDBACK.to_owned()
                         }
-                                None=>"The server returned no decision outcome.".to_owned(),
-                            }
+                        None => "The server returned no decision outcome.".to_owned(),
+                    }
                 }
             }
             Some(rpc::submit_action_response::Outcome::OperationObservation(_)) => {
@@ -1993,6 +1994,10 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         _ => return Err(JsValue::from_str("server audience mismatch")),
     };
     let journey = journey.ok_or_else(|| JsValue::from_str("server journey missing"))?;
+    if let Some(own) = journey.own_character.as_ref() {
+        let notebook = live_notebook::view(&journey)?;
+        live_notebook::render(client, &notebook, &own.name)?;
+    }
     if journey.preparing_adventure {
         let surface = root
             .query_selector(".view")?

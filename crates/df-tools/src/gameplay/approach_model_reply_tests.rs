@@ -10,7 +10,7 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
             "Hand over the coin you owe us or I will break your arm.",
         ),
     ] {
-        let decision = FakeEndpoint::start(vec![answer("o7")]);
+        let decision = FakeEndpoint::start(vec![answer("o7"), answer("o9")]);
         let reply = FakeEndpoint::start(vec![Reply::Output(json!({
             "reply": "Keep your voice down. Dangerous people are listening.",
             "approach": "bribe"
@@ -64,7 +64,7 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
                 .iter()
                 .any(|line| line.text == "cools toward Brannoch")
         );
-        assert_eq!(decision.connections(), 1);
+        assert_eq!(decision.connections(), 2);
         assert_eq!(
             decision.bodies()[0]["state"]["public_scene"],
             "The party meets Perrin in a tavern."

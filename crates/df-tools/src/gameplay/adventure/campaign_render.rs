@@ -639,6 +639,7 @@ pub(crate) fn generate_chapter(
             ] {
                 check(text, 220, "epilogue")?;
                 generated.fact_sheet.push(super::FactSheet {
+                    scene: None,
                     beat: "resolution".into(),
                     slot: slot.into(),
                     speaker: String::new(),

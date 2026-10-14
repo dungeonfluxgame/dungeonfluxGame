@@ -128,7 +128,7 @@ fn archer(id: u32, cell: Cell) -> CombatantSpec {
         .unwrap()
         .combatant(id, cell)
 }
-fn battle(specs: Vec<CombatantSpec>) -> Battle {
+fn battle_with_map(map: BattleMap, specs: Vec<CombatantSpec>) -> Battle {
     let src = source();
     let mut kinds = Vec::new();
     let mut faces = Vec::new();
@@ -145,14 +145,12 @@ fn battle(specs: Vec<CombatantSpec>) -> Battle {
         }
         kinds.push(spec.kind);
     }
-    begin(
-        map("open-court"),
-        specs,
-        binding(&src),
-        &records(&src, &faces),
-    )
-    .unwrap()
-    .battle
+    begin(map, specs, binding(&src), &records(&src, &faces))
+        .unwrap()
+        .battle
+}
+fn battle(specs: Vec<CombatantSpec>) -> Battle {
+    battle_with_map(map("open-court"), specs)
 }
 fn usage(weapon: Weapon, ranged: bool) -> AttackUse {
     AttackUse {
@@ -356,6 +354,30 @@ fn standing_crawling_dash_and_disengage_use_source_budgets() {
     state.actor_mut(1).unwrap().health.prone = true;
     rejects(&state, 1, Action::Stand, RuleError::InvalidPath);
 }
+#[test]
+fn srd_521_p15_opportunity_attack_is_not_offered_through_a_blocked_corner() {
+    let map = BattleMap::from_json(
+        br#"{"schema":2,"grid":{"cols":4,"rows":4,"blocked":[[2,1],[1,2]]},"layouts":[{"id":"blocked-corner","obstacles":[],"difficult":[],"spawns":{"heroes":[[1,1]],"enemies":[[2,2]]}}]}"#,
+        "blocked-corner",
+    )
+    .unwrap();
+    let mut state = battle_with_map(
+        map,
+        vec![
+            melee(1, Cell(1, 1)),
+            CombatantSpec::creature(3, "bandit", Cell(2, 2), 0).unwrap(),
+        ],
+    );
+    assert_eq!(state.active_actor(), Some(1));
+    state = step(&state, 1, Action::EndTurn, &[]).battle;
+    assert_eq!(state.active_actor(), Some(3));
+
+    let moved = step(&state, 3, Action::Move(vec![Cell(3, 2)]), &[]).battle;
+
+    assert!(moved.reaction_offers().is_empty());
+    assert_eq!(moved.actor(3).unwrap().cell(), Cell(3, 2));
+}
+
 #[test]
 fn opportunity_window_is_optional_before_exit_and_reaction_refreshes_at_own_turn() {
     let state = battle(vec![
@@ -578,6 +600,57 @@ fn cover_and_dodge_change_recorded_attack_and_dexterity_save_adjustments() {
         Ok((2, false, false))
     );
 }
+
+#[test]
+fn a_prone_creature_gives_no_cover_to_same_size_or_larger_targets_srd_p15() {
+    let mut wolf_target = battle(vec![
+        archer(1, Cell(1, 1)),
+        melee(2, Cell(5, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(9, 1), 0).unwrap(),
+    ]);
+    wolf_target.actor_mut(2).unwrap().health.prone = true;
+    wolf_target.actor_mut(2).unwrap().health.unconscious = true;
+    assert_eq!(wolf_target.attack_cover(1, 3), Ok(Cover::None));
+
+    let mut rat_target = battle(vec![
+        archer(1, Cell(1, 1)),
+        melee(2, Cell(5, 1)),
+        CombatantSpec::creature(3, "giant-rat", Cell(9, 1), 0).unwrap(),
+    ]);
+    rat_target.actor_mut(2).unwrap().health.prone = true;
+    rat_target.actor_mut(2).unwrap().health.unconscious = true;
+    assert_eq!(rat_target.attack_cover(1, 3), Ok(Cover::Half));
+
+    let small_body = CombatantSpec::creature(2, "giant-rat", Cell(5, 1), 0).unwrap();
+    let mut larger_target = battle(vec![
+        archer(1, Cell(1, 1)),
+        small_body,
+        CombatantSpec::creature(3, "wolf", Cell(9, 1), 0).unwrap(),
+    ]);
+    larger_target.actor_mut(2).unwrap().health.prone = true;
+    larger_target.actor_mut(2).unwrap().health.unconscious = true;
+    assert_eq!(larger_target.attack_cover(1, 3), Ok(Cover::None));
+}
+
+#[test]
+fn melee_reach_across_a_low_scan_barrier_remains_refused_srd_p15() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap(),
+    ]);
+    state.map = BattleMap::from_json(
+        br#"{"schema":2,"grid":{"cols":4,"rows":4,"blocked":[],"blocked_steps":[[[1,1],[2,1]]],"step_heights_dm":[4]},"layouts":[{"id":"scan","obstacles":[],"difficult":[],"spawns":{"heroes":[[0,0]],"enemies":[[3,3]]}}]}"#,
+        "scan",
+    )
+    .unwrap();
+    rejects(
+        &state,
+        1,
+        strike(3, Weapon::Greatsword, false),
+        RuleError::Blocked,
+    );
+}
+
 #[test]
 fn weapon_properties_hands_heavy_finesse_versatile_and_thrown_inventory() {
     let mut state = battle(vec![
@@ -1445,14 +1518,14 @@ fn tactical_snapshot_rejects_pending_diagonal_path_through_blocked_corners() {
         vec![
             melee(1, Cell(1, 1)),
             melee(2, Cell(3, 3)),
-            CombatantSpec::creature(3, "bandit", Cell(0, 2), 0).unwrap(),
+            CombatantSpec::creature(3, "bandit", Cell(0, 0), 0).unwrap(),
         ],
         binding(&src),
         &records(&src, &[(20, 20), (20, 1), (20, 1)]),
     )
     .unwrap()
     .battle;
-    let pending = step(&pending, 1, Action::Move(vec![Cell(1, 0)]), &[]).battle;
+    let pending = step(&pending, 1, Action::Move(vec![Cell(0, 1), Cell(0, 2)]), &[]).battle;
     assert_eq!(pending.reaction_offers(), &[3]);
 
     let mut snapshot: serde_json::Value =

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
 
 use super::{
-    model, refusal_detail,
+    model, notebook, refusal_detail,
     table_settings::{self, TableSettings},
     wire,
 };
@@ -295,6 +295,7 @@ impl PublicationOwner<NativeScope<LocalDemoAuthority>> for Publication {
                 checkpoint: checkpoint.clone(),
                 table_floor: bundle.table.position(),
                 social: bundle.social.snapshot(),
+                notebook: bundle.notebook.snapshot(),
             });
         }
         Ok(())
@@ -451,6 +452,8 @@ pub(super) struct Actor {
     pub owner: Owner,
     /// The public table log; an accepted action and a typed line are appended here.
     pub table_log: std::sync::Arc<super::table_log::TableLog>,
+    /// The shared and per-hero notebook, persisted beside the adventure record.
+    pub notebook: std::sync::Arc<notebook::NotebookLedger>,
     /// Each NPC's backstory and attitude toward each hero.
     pub social: std::sync::Arc<super::social::SocialLedger>,
     /// The room's table settings, as stored and carried in every view.
@@ -511,7 +514,7 @@ fn authority_unavailable() -> tonic::Status {
 
 /// One `UNAVAILABLE` line on stdout and the same fact on the shared observability path, for every
 /// place the phone is told to retain its operation or reconnect. `site` names the server path.
-fn record_unavailable(site: &'static str, reason: &str) {
+pub(super) fn record_unavailable(site: &'static str, reason: &str) {
     let step = refusal_detail::step_or_unknown();
     println!("UNAVAILABLE site={site} reason={reason} step={step}");
     let context = OperationContext {
@@ -1276,6 +1279,11 @@ impl Actor {
                         record_unavailable("authority", &format!("social rewind: {error}"));
                         return Err(authority_unavailable());
                     }
+                    if let Err(error) = self.notebook.restore_snapshot(&moment.notebook) {
+                        self.fence();
+                        record_unavailable("authority", &format!("notebook rewind: {error}"));
+                        return Err(authority_unavailable());
+                    }
                 }
                 let revision = receipt.basis().revision;
                 self.table_log.push(
@@ -1725,7 +1733,11 @@ impl Actor {
         if let Some(history) = &self.dev_history
             && let Ok(mut history) = history.lock()
         {
-            history.refresh_latest_aux(self.table_log.position(), self.social.snapshot());
+            history.refresh_latest_aux(
+                self.table_log.position(),
+                self.social.snapshot(),
+                self.notebook.snapshot(),
+            );
         }
     }
 
@@ -1760,6 +1772,16 @@ impl Actor {
         let Ok(kind) = rpc::GameplayActionKind::try_from(request.action_kind) else {
             return;
         };
+        let task_status = match kind {
+            rpc::GameplayActionKind::EscortCourier => Some("accepted"),
+            rpc::GameplayActionKind::ResolveErrand => Some("done"),
+            _ => None,
+        };
+        if let Some(status) = task_status
+            && let Err(error) = self.notebook.mark_task_status(status)
+        {
+            record_unavailable("notebook-save", &error.to_string());
+        }
         let weapon = super::pack::hero_weapon_item().replace('-', " ");
         let destination = super::pack::destination_label();
         let label = match super::beat_script_runtime::action_label(&request.offer_id, kind) {
@@ -2040,13 +2062,64 @@ impl Actor {
             .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
         let mut view = wire::journey_view(current, role, member).map_err(unavailable)?;
         self.table_settings.attach(&mut view);
-        self.table_log.attach(&mut view);
         self.social.attach(&mut view, member);
+        if role == LocalDemoRole::Player
+            && let Some(rpc::view_message::Audience::Player(player)) = view.audience.as_ref()
+            && let (Some(journey), Some(hero)) = (
+                player.journey.as_ref(),
+                player
+                    .journey
+                    .as_ref()
+                    .and_then(|journey| journey.own_character.as_ref())
+                    .map(|character| character.name.as_str()),
+            )
+        {
+            let scene = super::beat_script_runtime::scene(current.state()).map_err(unavailable)?;
+            let entries = self
+                .notebook
+                .observe_scene(
+                    member,
+                    hero,
+                    &scene,
+                    &player.private_clue,
+                    journey.adventure_ended,
+                )
+                .map_err(|error| {
+                    record_unavailable("notebook-save", &error.to_string());
+                    tonic::Status::unavailable("notebook state unavailable")
+                })?;
+            for entry in entries {
+                self.log_notebook_entry(&entry);
+            }
+        }
+        let notebook = if role == LocalDemoRole::Display {
+            self.notebook.public_entries()
+        } else {
+            self.notebook.visible_to(member)
+        };
+        wire::attach_notebook(&mut view, &notebook)
+            .map_err(|_| tonic::Status::internal("notebook view invalid"))?;
+        self.table_log.attach(&mut view);
         if let Some(tempo) = self.tempo.as_mut() {
             tempo::observe(tempo.decorate(&mut view, current, Instant::now()));
         }
         self.seat_activity(&credential)?;
         Ok((role, view))
+    }
+
+    fn log_notebook_entry(&self, entry: &notebook::EntryView) {
+        self.table_log.push(
+            "table",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            &format!(
+                "NOTE added kind={} title={:?} scene={}",
+                entry.kind.label(),
+                entry.title,
+                entry.scene
+            ),
+        );
     }
 }
 impl Actor {

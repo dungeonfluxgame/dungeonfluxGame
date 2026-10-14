@@ -26,6 +26,39 @@ fn member_key(index: usize, member: &rpc::PartyMemberView) -> String {
     }
 }
 
+fn short_rest_label() -> &'static str {
+    "Short Rest · 1 hour"
+}
+
+fn short_rest_benefit() -> &'static str {
+    "Spend a Hit Point Die to heal, and get one Second Wind back"
+}
+
+fn own_hit_point_die_roll(journey: &rpc::JourneyView) -> Option<&str> {
+    journey
+        .own_character
+        .as_ref()?
+        .facts
+        .iter()
+        .find(|fact| fact.label == "Hit Point Die roll")
+        .map(|fact| fact.value.as_str())
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn short_rest_button_label() -> String {
+    format!("{}\n{}", short_rest_label(), short_rest_benefit())
+}
+
+fn preserve_rest_label_layout(surface: &CampfireSurface) -> Result<(), JsValue> {
+    if let Some(button) = surface
+        .root()
+        .query_selector(":scope > .camp-actions > button:first-child")?
+    {
+        button.set_attribute("style", "white-space: pre-line")?;
+    }
+    Ok(())
+}
+
 fn condition(member: &rpc::PartyMemberView) -> &'static str {
     if member
         .conditions
@@ -195,6 +228,10 @@ fn offer_of(
     offers.iter().find(|offer| offer.action_kind == kind as i32)
 }
 
+fn is_extra_control(offer: &rpc::GameplayActionOffer) -> bool {
+    offer.action_kind == rpc::GameplayActionKind::EndTurn as i32 || !offer.input_groups.is_empty()
+}
+
 /// A player's rest and continue choices, enabled only while a request can be made.
 pub(super) fn present_rest(
     client: &Rc<RefCell<Client>>,
@@ -242,7 +279,10 @@ pub(super) fn present_rest(
             detail: &details[index],
         })
         .collect();
-    let rest = offer_of(view.offers, rpc::GameplayActionKind::ShortRest);
+    let rest = offer_of(view.offers, rpc::GameplayActionKind::ShortRest)
+        .filter(|offer| offer.input_groups.is_empty());
+    let rest_choice = offer_of(view.offers, rpc::GameplayActionKind::ShortRest)
+        .filter(|offer| !offer.input_groups.is_empty());
     let proceed = offer_of(view.offers, rpc::GameplayActionKind::ChooseHarborScene);
     // The offered destination is part of the label so the choice is never ambiguous.
     let proceed_label = proceed.map(|offer| match offer.destinations.as_slice() {
@@ -253,6 +293,13 @@ pub(super) fn present_rest(
     // The view carries no location name, so the eyebrow is only the outcome.
     let location = outcome_word(view);
     let result_line = dialogue_line(view.journey);
+    let rest_label = short_rest_button_label();
+    let roll_notice =
+        own_hit_point_die_roll(view.journey).map(|roll| format!("Hit Point Die: {roll}"));
+    let choice_notice = result_line.as_ref().map_or_else(
+        || "Choose what your hero does with the Hit Point Die.".to_owned(),
+        |line| format!("{line} Choose what your hero does with the Hit Point Die."),
+    );
     let campfire = CampfireView {
         owner_generation: revision.epoch().get(),
         revision: revision.sequence(),
@@ -260,16 +307,24 @@ pub(super) fn present_rest(
         location,
         narration: view.narration,
         party_label: "Your party",
-        notice: match (&result_line, rest.is_some() || proceed.is_some()) {
-            (Some(line), _) => line,
-            (None, true) => "Choose how the party spends its time. The server records the result.",
-            (None, false) => "Waiting for the next choice.",
+        notice: if let Some(roll) = roll_notice.as_deref() {
+            roll
+        } else if rest_choice.is_some() {
+            &choice_notice
+        } else {
+            match (&result_line, proceed.is_some()) {
+                (Some(line), _) => line,
+                (None, true) => {
+                    "Choose how the party spends its time. The server records the result."
+                }
+                (None, false) => "Waiting for the next choice.",
+            }
         },
         connected,
         members: &members,
         rest: rest.map(|offer| CampfireOffer {
             id: &offer.offer_id,
-            label: &offer.label,
+            label: &rest_label,
             enabled: !blocked,
             pending: busy,
         }),
@@ -287,11 +342,7 @@ pub(super) fn present_rest(
     }
     let extra =
         crate::gameplay_browser::node(&document, host, "div", "aftermath-tactical-controls", "")?;
-    for offer in view
-        .offers
-        .iter()
-        .filter(|offer| offer.action_kind == rpc::GameplayActionKind::EndTurn as i32)
-    {
+    for offer in view.offers.iter().filter(|offer| is_extra_control(offer)) {
         crate::gameplay_browser::action_button(client, &extra, offer.clone())?;
     }
     let mounted = match &client.borrow().combat.mounted {
@@ -300,6 +351,7 @@ pub(super) fn present_rest(
     };
     if let Some(surface) = mounted {
         if surface.update(&campfire).is_ok() {
+            preserve_rest_label_layout(&surface)?;
             return Ok(());
         }
         // The surface disposes itself when its owner changes; rebuild from the accepted view.
@@ -312,6 +364,7 @@ pub(super) fn present_rest(
         }
     })
     .map_err(|_| error(client, "rest-create"))?;
+    preserve_rest_label_layout(&surface)?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
     client.borrow_mut().combat.mounted = Some(Mounted::Rest(Rc::new(surface)));
     Ok(())
@@ -360,7 +413,10 @@ fn submit(client: &Rc<RefCell<Client>>, selection: &CampfireSelection) {
 
 #[cfg(test)]
 mod tests {
-    use super::{condition, continue_label, dialogue_line};
+    use super::{
+        condition, continue_label, dialogue_line, is_extra_control, own_hit_point_die_roll,
+        short_rest_benefit, short_rest_button_label, short_rest_label,
+    };
     use df_protocol::common as rpc;
 
     #[test]
@@ -425,5 +481,57 @@ mod tests {
             "Move on · the Vestry"
         );
         assert_eq!(continue_label("Move on", ""), "Move on");
+    }
+
+    #[test]
+    fn short_rest_control_says_what_it_gives_srd_p187() {
+        assert_eq!(short_rest_label(), "Short Rest · 1 hour");
+        assert_eq!(
+            short_rest_benefit(),
+            "Spend a Hit Point Die to heal, and get one Second Wind back"
+        );
+        assert_eq!(
+            short_rest_button_label(),
+            format!("{}\n{}", short_rest_label(), short_rest_benefit())
+        );
+    }
+
+    #[test]
+    fn short_rest_die_choices_are_rendered_as_extra_controls_srd_p187() {
+        let offer = rpc::GameplayActionOffer {
+            action_kind: rpc::GameplayActionKind::ShortRest as i32,
+            input_groups: vec![rpc::JourneyGroup {
+                group_id: "hit-point-die".to_owned(),
+                label: "Choose for your hero".to_owned(),
+                options: vec![rpc::JourneyOption {
+                    option_id: "spend".to_owned(),
+                    label: "Spend your Hit Point Die (d10 + 2)".to_owned(),
+                    ..Default::default()
+                }],
+            }],
+            ..Default::default()
+        };
+
+        assert!(is_extra_control(&offer));
+    }
+
+    #[test]
+    fn short_rest_roll_is_shown_from_the_hero_own_sheet_srd_p187() {
+        let journey = rpc::JourneyView {
+            own_character: Some(rpc::CharacterSheet {
+                facts: vec![rpc::SheetFact {
+                    label: "Hit Point Die roll".to_owned(),
+                    value: "d10: 8 + 2; healed 10; HP 13".to_owned(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            own_hit_point_die_roll(&journey),
+            Some("d10: 8 + 2; healed 10; HP 13")
+        );
+        assert_eq!(own_hit_point_die_roll(&rpc::JourneyView::default()), None);
     }
 }

@@ -39,6 +39,9 @@ mod model;
 mod music_assets;
 #[cfg(test)]
 mod new_adventure_tests;
+mod notebook;
+#[cfg(test)]
+mod notebook_tests;
 mod npc_dossier;
 #[cfg(test)]
 mod npc_dossier_live_tests;
@@ -57,8 +60,8 @@ mod public_assets;
 mod qualification;
 #[cfg(test)]
 mod recovery_qualification;
-mod rest_qualification;
 mod refusal_detail;
+mod rest_qualification;
 mod restart_qualification;
 mod room;
 mod room_code;
@@ -1325,6 +1328,50 @@ async fn serve_run(
         }
         _ => social::SocialLedger::none(),
     };
+    let notebook = match &generated_adventure {
+        Some(prepared) => match notebook::NotebookLedger::open(
+            &prepared.record.seed,
+            prepared.record.dossiers.clone(),
+            prepared.record.fact_sheet.clone(),
+            Some(&prepared.directory),
+        ) {
+            Ok(notebook) => notebook,
+            Err(error) => {
+                return startup_failure_after_admission(
+                    io::Error::other(error.to_string()),
+                    close_admitted_startup(&mut repository, &mut issuer, "notebook ledger"),
+                )
+                .await
+                .map_err(Into::into);
+            }
+        },
+        None if interactive => {
+            let run = hex(initial.basis().run.as_bytes());
+            let directory = std::env::current_dir()?
+                .join("development/runs/notebook")
+                .join(&run);
+            if let Err(error) = std::fs::create_dir_all(&directory) {
+                return startup_failure_after_admission(
+                    error,
+                    close_admitted_startup(&mut repository, &mut issuer, "notebook directory"),
+                )
+                .await
+                .map_err(Into::into);
+            }
+            match notebook::NotebookLedger::open(&run, Vec::new(), Vec::new(), Some(&directory)) {
+                Ok(notebook) => notebook,
+                Err(error) => {
+                    return startup_failure_after_admission(
+                        io::Error::other(error.to_string()),
+                        close_admitted_startup(&mut repository, &mut issuer, "notebook ledger"),
+                    )
+                    .await
+                    .map_err(Into::into);
+                }
+            }
+        }
+        None => notebook::NotebookLedger::none(),
+    };
     // DEVCTL-001: back/forward ring shared with the development surface (and the
     // owner's publication hook). Empty and unwired unless the surface is on.
     let dev_history =
@@ -1340,6 +1387,7 @@ async fn serve_run(
         history: dev_history,
         table: table_log.clone(),
         social: social.clone(),
+        notebook: notebook.clone(),
     };
     let dev_on = dev_control::setting_on(settings.listen).unwrap_or(false);
     if dev_on {
@@ -1378,11 +1426,7 @@ async fn serve_run(
         imagery_inputs.credential = Ok("test-credential".to_owned());
     }
     let imagery_settings = if interactive {
-        startup_configuration::imagery_settings(
-            imagery_inputs,
-            &std::env::current_dir()?,
-            rating,
-        )?
+        startup_configuration::imagery_settings(imagery_inputs, &std::env::current_dir()?, rating)?
     } else {
         startup_configuration::ImagerySettings::Off(
             startup_configuration::ImageryOff::Qualification,
@@ -1438,6 +1482,7 @@ async fn serve_run(
         tempo,
         owner,
         table_log: table_log.clone(),
+        notebook: notebook.clone(),
         social: social.clone(),
         // DEVCTL-001: the rewind entry refresh handle, set only when on.
         dev_history: dev_on.then(|| dev_bundle.history.clone()),

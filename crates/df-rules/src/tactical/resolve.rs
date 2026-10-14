@@ -539,10 +539,14 @@ impl Battle {
         Ok((advantage, disadvantage))
     }
     pub fn attack_cover(&self, actor: u32, target: u32) -> Result<Cover, RuleError> {
-        self.map.cover_between(
-            self.actor(actor)?.cell(),
-            self.actor(target)?.cell(),
-            &self.cells(),
+        let attacker = self.actor(actor)?;
+        let target = self.actor(target)?;
+        let creatures = self.cover_cells_for(target);
+        self.map.cover_between_for_size(
+            attacker.cell(),
+            target.cell(),
+            &creatures,
+            target.spec.size,
         )
     }
     /// Dodge saving throw advantage and cover bonus for future save handlers; Unconscious
@@ -553,9 +557,13 @@ impl Battle {
         origin: Cell,
     ) -> Result<(i16, bool, bool), RuleError> {
         let combatant = self.actor(actor)?;
-        let cover = self
-            .map
-            .cover_between(origin, combatant.cell(), &self.cells())?;
+        let creatures = self.cover_cells_for(combatant);
+        let cover = self.map.cover_between_for_size(
+            origin,
+            combatant.cell(),
+            &creatures,
+            combatant.spec.size,
+        )?;
         Ok((
             cover.bonus(),
             combatant.budget.dodging
@@ -564,7 +572,28 @@ impl Battle {
             combatant.health.unconscious,
         ))
     }
+
+    fn cover_cells_for(&self, target: &super::Combatant) -> Vec<Cell> {
+        self.actors
+            .iter()
+            .filter(|creature| {
+                !creature.health.dead
+                    && (!creature.health.prone
+                        || !prone_body_covers_target_size(creature.spec.size, target.spec.size))
+            })
+            .map(super::Combatant::cell)
+            .collect()
+    }
 }
+
+fn prone_body_covers_target_size(coverer: super::Size, target: super::Size) -> bool {
+    match coverer {
+        super::Size::Small => true,
+        super::Size::Medium => matches!(target, super::Size::Medium | super::Size::Large),
+        super::Size::Large => target == super::Size::Large,
+    }
+}
+
 fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Result<(), RuleError> {
     let actor = battle.actor(id)?;
     let target = battle.actor(target)?;
@@ -624,7 +653,12 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
     } else if actor.cell().distance(target.cell()) > 5 {
         return Err(RuleError::OutOfRange);
     }
-    if battle.attack_cover(id, target.id())? == Cover::Total {
+    let cover = battle.attack_cover(id, target.id())?;
+    if !usage.ranged && !battle.map.step_clear(actor.cell(), target.cell()) && cover != Cover::Total
+    {
+        return Err(RuleError::Blocked);
+    }
+    if cover == Cover::Total {
         return Err(RuleError::TotalCover);
     }
     Ok(())
@@ -1214,6 +1248,7 @@ fn continue_move(
                     && !other.budget.reaction_used
                     && other.cell().distance(actor.cell()) <= 5
                     && other.cell().distance(to) > 5
+                    && battle.map.step_clear(other.cell(), actor.cell())
                     && battle.can_see(other.cell(), actor.cell())
                 {
                     movement.eligible.push(id);

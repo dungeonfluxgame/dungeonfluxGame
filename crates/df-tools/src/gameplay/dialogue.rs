@@ -20,6 +20,7 @@ use super::{
 
 const MAXIMUM_MESSAGE_BYTES: usize = 8192;
 const MAXIMUM_TEXT_BYTES: usize = 4096;
+const NOTE_COMMAND_OVERHEAD_BYTES: usize = "write down ".len();
 const MAXIMUM_PENDING_MEMBERS: usize = 32;
 const MAXIMUM_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
@@ -27,6 +28,59 @@ pub(super) enum DialogueRequest {
     Raw(Vec<u8>),
     Confirm(Vec<u8>),
     Cancel(Vec<u8>),
+}
+
+#[cfg(test)]
+mod notebook_command_tests {
+    use super::{DiscourseContext, NotebookCommand, notebook_command};
+
+    // SRD 5.2.1 p. N/A: this test covers the notebook command, not a game rule.
+    #[test]
+    fn about_the_game_note_prefixes_are_saved_without_parsing_other_contexts() {
+        assert!(matches!(
+            notebook_command(DiscourseContext::Meta, "note: Tomas is a mapmaker."),
+            Some(NotebookCommand::Note("Tomas is a mapmaker."))
+        ));
+        assert!(matches!(
+            notebook_command(
+                DiscourseContext::Meta,
+                " Write Down Kelbin wants the letter. "
+            ),
+            Some(NotebookCommand::Note("Kelbin wants the letter."))
+        ));
+        assert!(notebook_command(DiscourseContext::Question, "note: no").is_none());
+        assert!(
+            notebook_command(DiscourseContext::Meta, "we should write down the clues").is_none()
+        );
+    }
+
+    // SRD 5.2.1 p. N/A: this test covers the notebook command, not a game rule.
+    #[test]
+    fn party_share_command_requires_a_bounded_order() {
+        assert!(matches!(
+            notebook_command(DiscourseContext::Meta, "share clue 42"),
+            Some(NotebookCommand::Share(42))
+        ));
+        assert!(notebook_command(DiscourseContext::Meta, "share clue many").is_none());
+    }
+
+    // SRD 5.2.1 p. N/A: this test checks the product text bound, not a game rule.
+    #[test]
+    fn party_note_command_accepts_a_full_spoken_line() {
+        let text = format!("note: {}", "x".repeat(super::MAXIMUM_TEXT_BYTES));
+        assert_eq!(
+            super::dialogue_text_limit(DiscourseContext::Meta, &text),
+            text.len()
+        );
+        assert_eq!(
+            super::dialogue_text_limit(DiscourseContext::Question, &text),
+            super::MAXIMUM_TEXT_BYTES
+        );
+        assert_eq!(
+            super::maximum_request_text_bytes(DiscourseContext::Meta),
+            super::MAXIMUM_TEXT_BYTES + super::NOTE_COMMAND_OVERHEAD_BYTES
+        );
+    }
 }
 
 impl DialogueRequest {
@@ -105,7 +159,9 @@ impl rpc::dialogue_service_server::DialogueService for Service {
     ) -> Result<Response<rpc::DialogueResponse>, Status> {
         let credential = credential(&request)?;
         let request = request.into_inner();
-        if request.text.len() > MAXIMUM_TEXT_BYTES || request.offer_id.len() > 96 {
+        let declared = context(request.context)?;
+        if request.text.len() > maximum_request_text_bytes(declared) || request.offer_id.len() > 96
+        {
             return Err(Status::resource_exhausted(
                 "bounded dialogue fields required",
             ));
@@ -233,6 +289,55 @@ fn disposition(value: IntentDisposition) -> rpc::DialogueDisposition {
     }
 }
 
+enum NotebookCommand<'a> {
+    Note(&'a str),
+    Share(u64),
+}
+
+fn notebook_command(context: DiscourseContext, text: &str) -> Option<NotebookCommand<'_>> {
+    if context != DiscourseContext::Meta {
+        return None;
+    }
+    let text = text.trim();
+    let prefix = |value: &str| {
+        text.get(..value.len())
+            .is_some_and(|found| found.eq_ignore_ascii_case(value))
+    };
+    if prefix("note:") {
+        return Some(NotebookCommand::Note(text.get(5..)?.trim()));
+    }
+    if prefix("write down") && text.as_bytes().get(10).is_none_or(u8::is_ascii_whitespace) {
+        return Some(NotebookCommand::Note(text.get(10..)?.trim()));
+    }
+    if prefix("share clue ") {
+        return text
+            .get(11..)?
+            .trim()
+            .parse()
+            .ok()
+            .map(NotebookCommand::Share);
+    }
+    None
+}
+
+fn maximum_request_text_bytes(context: DiscourseContext) -> usize {
+    if context == DiscourseContext::Meta {
+        MAXIMUM_TEXT_BYTES + NOTE_COMMAND_OVERHEAD_BYTES
+    } else {
+        MAXIMUM_TEXT_BYTES
+    }
+}
+
+fn dialogue_text_limit(context: DiscourseContext, text: &str) -> usize {
+    if text.len() <= maximum_request_text_bytes(context)
+        && matches!(notebook_command(context, text), Some(NotebookCommand::Note(note)) if note.len() <= MAXIMUM_TEXT_BYTES)
+    {
+        text.len()
+    } else {
+        MAXIMUM_TEXT_BYTES
+    }
+}
+
 impl actor::Actor {
     pub(super) fn dialogue_member(&mut self, credential: &[u8; 32]) -> Result<MemberId, Status> {
         if self
@@ -336,12 +441,45 @@ impl actor::Actor {
             current,
             member,
             DialogueLimits {
-                maximum_text_bytes: MAXIMUM_TEXT_BYTES,
+                maximum_text_bytes: dialogue_text_limit(declared, &request.text),
             },
         )
         .map_err(|_| Status::invalid_argument("dialogue input rejected"))?;
         let mut token = Vec::new();
         self.dialogue.pending.remove(&member);
+        if finality == InputFinality::Final
+            && let Some(command) = notebook_command(declared, &request.text)
+        {
+            match command {
+                NotebookCommand::Note(text) => {
+                    if text.is_empty() {
+                        return Err(Status::invalid_argument("party note text required"));
+                    }
+                    self.record_notebook_note(member, text)?;
+                }
+                NotebookCommand::Share(order) => {
+                    let shared = self.notebook.share(member, order).map_err(|error| {
+                        actor::record_unavailable("notebook-save", &error.to_string());
+                        Status::unavailable("notebook state unavailable")
+                    })?;
+                    let Some(entry) = shared else {
+                        return Err(Status::failed_precondition("private clue is not shareable"));
+                    };
+                    self.table_log.push(
+                        "table",
+                        rpc::TableRole::Narrator,
+                        0,
+                        rpc::TableKind::Action,
+                        &format!(
+                            "NOTE shared kind={} title={:?} scene={}",
+                            entry.kind.label(),
+                            entry.title,
+                            entry.scene
+                        ),
+                    );
+                }
+            }
+        }
         if result == IntentDisposition::Clarify
             && finality == InputFinality::Final
             && !request.offer_id.is_empty()
@@ -441,6 +579,44 @@ impl actor::Actor {
             &self.social,
             &format!("{:?}", projection.scene),
         )
+    }
+
+    fn record_notebook_note(&self, member: MemberId, text: &str) -> Result<(), Status> {
+        let current = self.owner.checkpoint();
+        let projection = wire::project_journey(current, LocalDemoRole::Player, member)
+            .map_err(actor::unavailable)?;
+        let Some(rpc::view_message::Audience::Player(player)) = projection.view.audience else {
+            return Err(Status::failed_precondition("player view required"));
+        };
+        let hero = player
+            .journey
+            .and_then(|journey| journey.own_character)
+            .map(|character| character.name)
+            .ok_or_else(|| Status::failed_precondition("hero required for party note"))?;
+        let scene =
+            super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
+        let scene = super::notebook::scene_name(scene.key)
+            .map_err(|_| Status::internal("notebook scene unavailable"))?;
+        self.notebook
+            .add_note(member, &hero, text, &scene)
+            .map_err(|error| match error {
+                super::notebook::NotebookError::Bound("text") => {
+                    Status::resource_exhausted("party note text exceeds its bound")
+                }
+                super::notebook::NotebookError::Io(_) => {
+                    actor::record_unavailable("notebook-save", &error.to_string());
+                    Status::unavailable("notebook state unavailable")
+                }
+                _ => Status::invalid_argument("party note rejected"),
+            })?;
+        self.table_log.push(
+            "table",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            &format!("NOTE added kind=note title=\"Party note\" scene={scene}"),
+        );
+        Ok(())
     }
 
     fn confirm_dialogue(

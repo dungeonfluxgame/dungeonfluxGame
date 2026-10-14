@@ -1589,6 +1589,13 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                         i32::try_from(cell.row).ok()?,
                     ))
                 }),
+                position_sequence: combat
+                    .move_outcomes
+                    .iter()
+                    .filter(|outcome| outcome.actor_name == member.name)
+                    .map(|outcome| outcome.sequence)
+                    .max()
+                    .unwrap_or_default(),
                 // Only what the view already says: bloodied from the hit points, unconscious
                 // from the server's own knockout flag. The conditions wait for the server.
                 statuses: if authoritative {
@@ -1672,6 +1679,8 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
         members,
         active,
         round: combat.round,
+        latest_sequence: combat.latest_sequence,
+        presented_sequence: 0,
         outcomes,
         initiative: initiative.into_iter().map(|(_, entry)| entry).collect(),
         begun_live: false,
@@ -2015,6 +2024,7 @@ fn sync() {
         let feed = &mut live.feed;
         let mut shown = snapshot.clone();
         shown.begun_live = live.begun_live;
+        shown.presented_sequence = live.presented_seq;
         let now = now_ms();
         live.held_moves
             .retain(|(.., at)| now - at < HOLD_PATIENCE_MS);

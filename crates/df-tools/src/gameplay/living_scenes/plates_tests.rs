@@ -63,6 +63,7 @@ fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
             art_key: "bell-chamber".to_owned(),
         }),
         speaker_portrait: String::new(),
+        findings: Vec::new(),
     }
 }
 
@@ -115,7 +116,9 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     timing.roll_quiet = Duration::ZERO;
     let inner = Arc::new(Inner {
         imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated")),
+        references: super::super::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
         social: SocialLedger::none(),
         rating: ContentRating::Restrained,
         timing,
@@ -124,39 +127,97 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         origin: Instant::now(),
     });
     let (jobs, mut queue) = mpsc::channel(16);
-    let shared = Arc::new(Shared { inner, book: Mutex::new(Book::new()), jobs });
-    let plates = Plates { shared: shared.clone(), _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))) };
+    let shared = Arc::new(Shared {
+        inner,
+        book: Mutex::new(Book::new()),
+        jobs,
+    });
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
     let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
     observe(&shared, &current, &[], &[1]);
     let id = fresh_ids(&drain(&mut queue)).remove(0);
     let scene = PlateScene::of(&current).unwrap();
     let spec = scene.stage(&[1]).unwrap();
-    let (request, _) = shared.fresh_request(&scene, &spec, &[1], &[], None).await.unwrap();
+    let (request, _) = shared
+        .fresh_request(&scene, &spec, &[1], &[], None)
+        .await
+        .unwrap();
     let baseline_prompt = request.prompt.as_str().to_owned();
-    let reference_hashes: Vec<_> = request.references.iter().map(|reference| reference.sha256.clone()).collect();
+    let reference_hashes: Vec<_> = request
+        .references
+        .iter()
+        .map(|reference| reference.sha256.clone())
+        .collect();
     let base = fixture.imagery.render(request).await.unwrap();
-    locked(&shared.book).insert(id, Entry::Ready { key: base.clone(), placement: None });
-    let receive = plates.direct("Brakka unsheathes his sword".to_owned(), true).unwrap();
-    let Job::Directed(work) = queue.recv().await.unwrap() else { panic!("directed work") };
-    let (directed, _) = shared.fresh_request(&work.scene, &work.spec, &work.heroes, &work.faces, Some(&work.text)).await.unwrap();
-    assert_eq!(reference_hashes, directed.references.iter().map(|reference| reference.sha256.clone()).collect::<Vec<_>>());
+    locked(&shared.book).insert(
+        id,
+        Entry::Ready {
+            key: base.clone(),
+            placement: None,
+        },
+    );
+    let receive = plates
+        .direct("Brakka unsheathes his sword".to_owned(), true)
+        .unwrap();
+    let Job::Directed(work) = queue.recv().await.unwrap() else {
+        panic!("directed work")
+    };
+    let (directed, _) = shared
+        .fresh_request(
+            &work.scene,
+            &work.spec,
+            &work.heroes,
+            &work.faces,
+            Some(&work.text),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reference_hashes,
+        directed
+            .references
+            .iter()
+            .map(|reference| reference.sha256.clone())
+            .collect::<Vec<_>>()
+    );
     let done = shared.render_directed(*work).await;
     let response = receive.await.unwrap().unwrap();
     assert_eq!(response["state"], "pending");
     shared.finish(done);
-    assert_eq!(plates.direct_status(response["key"].as_str().unwrap()).unwrap()["state"], "ready");
+    assert_eq!(
+        plates
+            .direct_status(response["key"].as_str().unwrap())
+            .unwrap()["state"],
+        "ready"
+    );
     assert_ne!(response["key"], base.as_str());
     assert!(fixture.prompt().starts_with(&baseline_prompt));
     assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
     for mut message in [display_message(&current), player_message(&current)] {
         apply(&shared, &mut message);
-        assert_eq!(shown_scene(&message).live_plate, format!("/gameplay/imagery/{}", response["key"].as_str().unwrap()));
+        assert_eq!(
+            shown_scene(&message).live_plate,
+            format!("/gameplay/imagery/{}", response["key"].as_str().unwrap())
+        );
     }
     // A living-scene face refresh uses the directed base and keeps the same action direction.
-    let angry = Face { expression: Expression::Angry, tier: HealthTier::Healthy };
-    locked(&shared.inner.state).plate_wants.insert("keeper".to_owned(), angry);
+    let angry = Face {
+        expression: Expression::Angry,
+        tier: HealthTier::Healthy,
+    };
+    locked(&shared.inner.state)
+        .plate_wants
+        .insert("keeper".to_owned(), angry);
     shared.poll_face();
-    let Job::Edit { base: edit_base, .. } = queue.recv().await.unwrap() else { panic!("face refresh") };
+    let Job::Edit {
+        base: edit_base, ..
+    } = queue.recv().await.unwrap()
+    else {
+        panic!("face refresh")
+    };
     assert_eq!(edit_base.as_str(), response["key"].as_str().unwrap());
     shared.render_edit(&scene, &edit_base, angry).await.unwrap();
     assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
@@ -166,7 +227,10 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     apply(&shared, &mut message);
     assert_eq!(shown_scene(&message).live_plate, base.path());
     let calls = fixture.calls();
-    let (request, _) = shared.fresh_request(&scene, &spec, &[1], &[], None).await.unwrap();
+    let (request, _) = shared
+        .fresh_request(&scene, &spec, &[1], &[], None)
+        .await
+        .unwrap();
     assert_eq!(fixture.imagery.render(request).await.unwrap(), base);
     assert_eq!(fixture.calls(), calls, "undirected cache is retained");
 }

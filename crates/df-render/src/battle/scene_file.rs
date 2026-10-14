@@ -40,6 +40,7 @@ pub enum SceneFileError {
     Identifier(&'static str),
     Theme(String),
     Grid(GridError),
+    StepHeights,
     Camera(String, PoseError),
     CameraMissing(&'static str),
     CameraUnknown(String),
@@ -71,6 +72,8 @@ struct FileScene {
     /// `public` (default) or `private-test-only`: a scan used for local testing under no licence.
     #[serde(default)]
     distribution: Option<String>,
+    #[serde(default = "default_playable")]
+    playable: bool,
     #[serde(default)]
     attribution: Option<FileAttribution>,
     #[serde(default)]
@@ -205,6 +208,8 @@ struct FileGrid {
     blocked: Vec<[i32; 2]>,
     #[serde(default)]
     blocked_steps: Option<Vec<[[i32; 2]; 2]>>,
+    #[serde(default)]
+    step_heights_dm: Option<Vec<u16>>,
 }
 
 #[derive(Deserialize)]
@@ -388,6 +393,7 @@ pub struct Attribution {
 pub struct BattleScene {
     pub location_id: String,
     pub title: String,
+    pub playable: bool,
     pub theme: Theme,
     pub grade_strength: Option<f32>,
     pub ground: GroundLayer,
@@ -415,6 +421,10 @@ fn stem_ok(stem: &str) -> bool {
 
 fn positive(value: f32, maximum: f32) -> bool {
     value.is_finite() && value > 0.0 && value <= maximum
+}
+
+fn default_playable() -> bool {
+    true
 }
 
 /// Parses and validates one scene file.
@@ -454,6 +464,11 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         || !backdrop.base_m.is_finite()
     {
         return Err(SceneFileError::Layer("backdrop"));
+    }
+    if file.grid.step_heights_dm.as_ref().is_some_and(|heights| {
+        file.grid.blocked_steps.as_ref().map_or(0, Vec::len) != heights.len()
+    }) {
+        return Err(SceneFileError::StepHeights);
     }
     let blocked: Vec<Cell> = file
         .grid
@@ -551,6 +566,7 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
     Ok(BattleScene {
         location_id: file.location_id,
         title: file.title,
+        playable: file.playable,
         theme,
         grade_strength: file.theme.strength,
         ground: GroundLayer {
@@ -856,6 +872,7 @@ pub fn load_embedded(location_id: &str) -> Option<Result<BattleScene, SceneFileE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeSet, VecDeque};
 
     const LOCATIONS: [&str; 8] = [
         "salt-quay",
@@ -1115,6 +1132,24 @@ mod tests {
     }
 
     #[test]
+    fn scan_step_heights_match_blocked_step_order_and_length() {
+        assert!(
+            scan_scene(|v| {
+                v["grid"]["blocked_steps"] = serde_json::json!([[[1, 1], [2, 1]]]);
+                v["grid"]["step_heights_dm"] = serde_json::json!([5]);
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            scan_scene(|v| {
+                v["grid"]["blocked_steps"] = serde_json::json!([[[1, 1], [2, 1]]]);
+                v["grid"]["step_heights_dm"] = serde_json::json!([]);
+            }),
+            Err(SceneFileError::StepHeights)
+        );
+    }
+
+    #[test]
     fn the_embedded_scan_scenes_are_private_test_only_unless_licensed_and_leave_the_rotation() {
         let mut private = std::collections::BTreeSet::new();
         for id in embedded_ids().filter(|id| id.starts_with("scan-")) {
@@ -1175,6 +1210,193 @@ mod tests {
         let table = include_str!("../../../../content/adventure-tables/locations.json");
         assert!(!table.contains("scan-"));
         assert!(!LOCATIONS.iter().any(|id| id.starts_with("scan-")));
+    }
+
+    fn scan_reachable(
+        grid: &Grid,
+        free: &BTreeSet<Cell>,
+        start: Cell,
+        excluded: Option<Cell>,
+    ) -> BTreeSet<Cell> {
+        let mut reached = BTreeSet::new();
+        if !free.contains(&start) || excluded == Some(start) {
+            return reached;
+        }
+        let mut pending = VecDeque::from([start]);
+        reached.insert(start);
+        while let Some(current) = pending.pop_front() {
+            for row_delta in -1..=1 {
+                for col_delta in -1..=1 {
+                    if col_delta == 0 && row_delta == 0 {
+                        continue;
+                    }
+                    let next = Cell::new(current.col + col_delta, current.row + row_delta);
+                    if excluded == Some(next)
+                        || !free.contains(&next)
+                        || !grid.step_clear(current, next)
+                    {
+                        continue;
+                    }
+                    if col_delta != 0
+                        && row_delta != 0
+                        && (!free.contains(&Cell::new(current.col + col_delta, current.row))
+                            || !free.contains(&Cell::new(current.col, current.row + row_delta)))
+                    {
+                        continue;
+                    }
+                    if reached.insert(next) {
+                        pending.push_back(next);
+                    }
+                }
+            }
+        }
+        reached
+    }
+
+    fn scan_distance(grid: &Grid, free: &BTreeSet<Cell>, from: Cell, to: Cell) -> Option<usize> {
+        if !free.contains(&from) || !free.contains(&to) {
+            return None;
+        }
+        let mut reached = BTreeSet::from([from]);
+        let mut pending = VecDeque::from([(from, 0)]);
+        while let Some((current, current_distance)) = pending.pop_front() {
+            for row_delta in -1..=1 {
+                for col_delta in -1..=1 {
+                    if col_delta == 0 && row_delta == 0 {
+                        continue;
+                    }
+                    let next = Cell::new(current.col + col_delta, current.row + row_delta);
+                    if !free.contains(&next) || !grid.step_clear(current, next) {
+                        continue;
+                    }
+                    if col_delta != 0
+                        && row_delta != 0
+                        && (!free.contains(&Cell::new(current.col + col_delta, current.row))
+                            || !free.contains(&Cell::new(current.col, current.row + row_delta)))
+                    {
+                        continue;
+                    }
+                    if next == to {
+                        return Some(current_distance + 1);
+                    }
+                    if reached.insert(next) {
+                        pending.push_back((next, current_distance + 1));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn voxel_scan_spawns_have_two_exits_largest_area_and_three_step_separation() {
+        for id in embedded_ids().filter(|id| id.ends_with("-voxel-v1")) {
+            let scene = load_embedded(id).unwrap().unwrap();
+            if !scene.playable {
+                continue;
+            }
+            for layout in &scene.layouts {
+                let grid = scene.grid.with_layout(layout);
+                let obstacles: BTreeSet<_> = layout
+                    .obstacles
+                    .iter()
+                    .flat_map(|obstacle| obstacle.cells.iter().copied())
+                    .collect();
+                let free: BTreeSet<_> = grid
+                    .walkable_cells()
+                    .filter(|cell| !obstacles.contains(cell))
+                    .collect();
+                let largest = free
+                    .iter()
+                    .map(|cell| scan_reachable(&grid, &free, *cell, None).len())
+                    .max()
+                    .unwrap_or(0);
+                let occupied: BTreeSet<_> = layout
+                    .heroes
+                    .iter()
+                    .chain(&layout.enemies)
+                    .copied()
+                    .collect();
+                for side in [&layout.heroes, &layout.enemies] {
+                    for &spawn in side {
+                        let exits = free
+                            .iter()
+                            .filter(|&&next| {
+                                let col_delta = next.col - spawn.col;
+                                let row_delta = next.row - spawn.row;
+                                !occupied.contains(&next)
+                                    && grid.step_clear(spawn, next)
+                                    && (col_delta == 0
+                                        || row_delta == 0
+                                        || (free.contains(&Cell::new(
+                                            spawn.col + col_delta,
+                                            spawn.row,
+                                        )) && free.contains(&Cell::new(
+                                            spawn.col,
+                                            spawn.row + row_delta,
+                                        ))))
+                            })
+                            .count();
+                        assert!(
+                            exits >= 2,
+                            "{id}/{}: {spawn:?} has fewer than two free exits",
+                            layout.id
+                        );
+                        assert_eq!(
+                            scan_reachable(&grid, &free, spawn, None).len(),
+                            largest,
+                            "{id}/{}: {spawn:?} is outside the largest walkable area",
+                            layout.id
+                        );
+                        for &other in side.iter().filter(|&&other| other != spawn) {
+                            let largest_without = free
+                                .iter()
+                                .filter(|&&cell| cell != other)
+                                .map(|&cell| scan_reachable(&grid, &free, cell, Some(other)).len())
+                                .max()
+                                .unwrap_or(0);
+                            assert_eq!(
+                                scan_reachable(&grid, &free, spawn, Some(other)).len(),
+                                largest_without,
+                                "{id}/{}: removing same-side spawn {other:?} isolates {spawn:?}",
+                                layout.id
+                            );
+                        }
+                    }
+                }
+                for &hero in &layout.heroes {
+                    for &enemy in &layout.enemies {
+                        let steps = scan_distance(&grid, &free, hero, enemy).unwrap_or(0);
+                        assert!(
+                            steps >= 3,
+                            "{id}/{}: starts are only {steps} steps apart",
+                            layout.id
+                        );
+                    }
+                }
+                let north_south = layout.id == "north-south";
+                let opposing_banks = if north_south {
+                    layout.heroes.iter().map(|cell| cell.row).min().unwrap()
+                        > layout.enemies.iter().map(|cell| cell.row).max().unwrap()
+                } else {
+                    layout.enemies.iter().map(|cell| cell.col).min().unwrap()
+                        > layout.heroes.iter().map(|cell| cell.col).max().unwrap()
+                };
+                assert!(
+                    opposing_banks,
+                    "{id}/{}: start squares are not on opposing banks",
+                    layout.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn summit_scan_stays_embedded_but_is_not_playable() {
+        let scene = load_embedded("scan-summit-voxel-v1").unwrap().unwrap();
+
+        assert!(!scene.playable);
+        assert!(embedded_ids().any(|id| id == "scan-summit-voxel-v1"));
     }
 
     #[test]

@@ -37,9 +37,10 @@ pub enum Status {
     Marked,
     Dying,
     Cover,
+    Stable,
 }
 
-pub const STATUS_COUNT: usize = 27;
+pub const STATUS_COUNT: usize = 28;
 
 impl Status {
     pub const ALL: [Self; STATUS_COUNT] = [
@@ -70,6 +71,7 @@ impl Status {
         Self::Marked,
         Self::Dying,
         Self::Cover,
+        Self::Stable,
     ];
 
     /// The stable lowercase id, also the icon stem suffix.
@@ -102,6 +104,7 @@ impl Status {
             Self::Marked => "marked",
             Self::Dying => "dying",
             Self::Cover => "cover",
+            Self::Stable => "stable",
         }
     }
 
@@ -144,6 +147,7 @@ impl Status {
             Self::Marked => "Ma",
             Self::Dying => "Dy",
             Self::Cover => "Cv",
+            Self::Stable => "Sy",
         }
     }
 
@@ -177,6 +181,7 @@ impl Status {
             Self::Marked => "Marked",
             Self::Dying => "Dying",
             Self::Cover => "In cover",
+            Self::Stable => "Stable",
         }
     }
 
@@ -375,7 +380,7 @@ pub fn pose_for(set: StatusSet) -> StatusPose {
     .map(|(_, amount)| amount)
     .fold(0.0, f32::max);
     let rigid = has(Status::Petrified) || has(Status::Paralyzed);
-    let unconscious = has(Status::Unconscious) || has(Status::Dying);
+    let unconscious = has(Status::Unconscious) || has(Status::Dying) || has(Status::Stable);
     let constrained = has(Status::Restrained) || has(Status::Grappled);
     let idle = if rigid || unconscious {
         0.0
@@ -401,7 +406,7 @@ pub fn pose_for(set: StatusSet) -> StatusPose {
             0.0
         },
         alpha: if has(Status::Invisible) { 0.3 } else { 1.0 },
-        heartbeat: has(Status::Dying),
+        heartbeat: has(Status::Dying) && !has(Status::Stable),
         afterimage: has(Status::Dodging),
     }
 }
@@ -423,6 +428,9 @@ pub fn derived_from_view(hit_points: u32, maximum: u32, knocked_out: bool) -> Ve
 
 /// Statuses worth an icon: everything except the ones that read better as a tile marker.
 pub fn icon_statuses(set: StatusSet) -> Vec<Status> {
+    if set.contains(Status::Stable) {
+        return vec![Status::Stable];
+    }
     if set.contains(Status::Unconscious) {
         return vec![Status::Unconscious];
     }
@@ -486,6 +494,7 @@ mod tests {
             "marked",
             "dying",
             "cover",
+            "stable",
         ];
         let ids: Vec<&str> = Status::ALL.iter().map(|status| status.id()).collect();
         assert_eq!(ids, wanted);
@@ -553,6 +562,17 @@ mod tests {
         assert!(unconscious.dim > 0.3);
         let dying = pose_for(StatusSet::of(&[Status::Dying, Status::Unconscious]));
         assert!(dying.heartbeat);
+    }
+
+    #[test]
+    /// SRD 5.2.1 p18: a Stable creature remains Unconscious but no longer makes death saves.
+    fn stable_replaces_the_dying_icon_and_heartbeat() {
+        let set = StatusSet::of(&[Status::Stable, Status::Unconscious, Status::Dying]);
+        assert_eq!(Status::from_id("stable"), Some(Status::Stable));
+        assert_eq!(icon_statuses(set), vec![Status::Stable]);
+        let pose = pose_for(set);
+        assert_eq!((pose.slump, pose.idle), (1.0, 0.0));
+        assert!(!pose.heartbeat);
     }
 
     #[test]
