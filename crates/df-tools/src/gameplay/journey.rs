@@ -645,8 +645,12 @@ pub(super) fn character_sheet(
         facts.push(rpc::SheetFact {
             label: "Hit Point Die roll".to_owned(),
             value: format!(
-                "d{} {hit_point_die_roll} {modifier:+} = {total}",
+                "d{} {hit_point_die_roll} {} {} = {total}, now {} of {}",
                 rules::LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES,
+                if modifier < 0 { "-" } else { "+" },
+                modifier.unsigned_abs(),
+                value(state, who, "hit-points")?,
+                maximum_hit_points(state, who)?,
             ),
         });
     }
@@ -808,6 +812,11 @@ pub(super) fn offered(
             Vec::new()
         });
     }
+    if tactical::present(current.state())
+        && tactical::hero_is_dead(current.state(), player_entity(member, current)?)?
+    {
+        return Ok(Vec::new());
+    }
     if state == session_machine::SessionState::Aftermath
         && short_rest_started(current.state())
         && !short_rest_completed(current.state())
@@ -816,7 +825,7 @@ pub(super) fn offered(
         return Ok(if hit_point_die_offered(current.state(), who)? {
             vec![(
                 rpc::GameplayActionKind::ShortRest,
-                "Choose whether to spend your Hit Point Die".to_owned(),
+                short_rest_offer_label(current.state(), who)?,
             )]
         } else {
             Vec::new()
@@ -898,9 +907,12 @@ fn handler_offered(
                                 || rest_accepted)
                     })
                     .map(|offer| {
-                        script
-                            .label(offer)
-                            .map(|label| (offer.effect.action(), label))
+                        let label = if offer.effect == super::beat_script::BeatEffect::ShortRest {
+                            short_rest_offer_label(current.state(), who)
+                        } else {
+                            script.label(offer)
+                        }?;
+                        Ok((offer.effect.action(), label))
                     })
                     .collect()
             }))
@@ -993,7 +1005,7 @@ fn handler_offered(
             if session_machine::rest_accepted(current)? {
                 result.push((
                     rpc::GameplayActionKind::ShortRest,
-                    pack::offer_label(rpc::GameplayActionKind::ShortRest),
+                    short_rest_offer_label(current.state(), who)?,
                 ));
             }
             if inn_source(current)?.is_some() && value(current.state(), who, "unconscious")? == 0 {
@@ -1099,8 +1111,6 @@ fn inn_source(current: &Checkpoint) -> Result<Option<FactId>, RepositoryError> {
 
 pub(super) fn inn_scene() -> rpc::GameplayScene {
     rpc::GameplayScene {
-        scene_contents_json: String::new(),
-        item: None,
         destination: rpc::HarborDestination::HarborInn as i32,
         title: pack::scene(pack::SceneKey::Inn).title,
         scene_asset: pack::scene(pack::SceneKey::Inn).asset,
@@ -1114,8 +1124,7 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         live_plate: String::new(),
         plate_layout: None,
         plate_state: rpc::PlateState::Unspecified as i32,
-        scene_video_state: rpc::HomeVideoState::None as i32,
-        scene_video_path: String::new(),
+        ..Default::default()
     }
 }
 pub(super) fn accepted(
@@ -2517,13 +2526,22 @@ fn hit_point_die_eligible(state: &GameState, who: EntityId) -> Result<bool, Repo
     let hit_points = value(state, who, "hit-points")?;
     Ok(hit_points > 0
         && hit_points < maximum_hit_points(state, who)?
-        && value(state, who, "hit-point-dice")? > 0
-        && value(state, who, "short-rest-choice")? == 0)
+        && value(state, who, "hit-point-dice")? > 0)
+}
+
+fn short_rest_offer_label(state: &GameState, who: EntityId) -> Result<String, RepositoryError> {
+    let dice = value(state, who, "hit-point-dice")?;
+    let dice_label = match dice {
+        0 => "no Hit Point Dice to spend".to_owned(),
+        1 => "1 Hit Point Die to spend".to_owned(),
+        count => format!("{count} Hit Point Dice to spend"),
+    };
+    Ok(format!("Short Rest · 1 hour · {dice_label}"))
 }
 
 pub(super) fn pending_hit_point_die_choices(state: &GameState) -> Result<bool, RepositoryError> {
     for character in &state.characters {
-        if hit_point_die_eligible(state, character.entity)? {
+        if hit_point_die_offered(state, character.entity)? {
             return Ok(true);
         }
     }
@@ -2534,7 +2552,41 @@ pub(super) fn hit_point_die_offered(
     state: &GameState,
     who: EntityId,
 ) -> Result<bool, RepositoryError> {
-    hit_point_die_eligible(state, who)
+    Ok(hit_point_die_eligible(state, who)?
+        && (!short_rest_started(state) || value(state, who, "short-rest-choice")? != 1))
+}
+
+pub(in crate::gameplay) fn short_rest_choice_groups(
+    current: &Checkpoint,
+    member: MemberId,
+) -> Result<Vec<rpc::JourneyGroup>, RepositoryError> {
+    if session_machine::SessionState::of(current)? != session_machine::SessionState::Aftermath
+        || !short_rest_started(current.state())
+        || short_rest_completed(current.state())
+    {
+        return Ok(Vec::new());
+    }
+    let who = player_entity(member, current)?;
+    if !hit_point_die_offered(current.state(), who)? {
+        return Ok(Vec::new());
+    }
+    let keep_label = if value(current.state(), who, "hit-point-dice")? == 1 {
+        "Keep the remaining Hit Point Die"
+    } else {
+        "Keep the remaining Hit Point Dice"
+    };
+    Ok(vec![rpc::JourneyGroup {
+        group_id: "hit-point-die".to_owned(),
+        label: "Hit Point Die".to_owned(),
+        options: [("spend", "Spend 1 Hit Point Die"), ("keep", keep_label)]
+            .into_iter()
+            .map(|(option_id, label)| rpc::JourneyOption {
+                option_id: option_id.to_owned(),
+                label: label.to_owned(),
+                ..Default::default()
+            })
+            .collect(),
+    }])
 }
 
 fn start_short_rest(
@@ -2571,7 +2623,7 @@ fn choose_short_rest_hit_point_die(
         refusal_detail::note("short-rest-not-started");
         return Err(RepositoryError::InvalidCandidate);
     }
-    if !hit_point_die_eligible(current.state(), who)? {
+    if !hit_point_die_offered(current.state(), who)? {
         refusal_detail::note("short-rest-die-ineligible");
         return Err(RepositoryError::InvalidCandidate);
     }
@@ -2596,8 +2648,14 @@ fn choose_short_rest_hit_point_die(
                 refusal_detail::note("short-rest-hit-die-heal");
                 RepositoryError::InvalidCandidate
             })?;
-            set(state, who, "hit-point-dice", 0)?;
+            let remaining = value(state, who, "hit-point-dice")?
+                .checked_sub(1)
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            set(state, who, "hit-point-dice", remaining)?;
             set(state, who, "hit-points", hit_points)?;
+            if tactical::present(state) {
+                tactical::sync_hero_hit_points(state, who, hit_points)?;
+            }
             set(state, who, "short-rest-choice", 2)?;
             set(state, who, "short-rest-die-roll", die)?;
         }
@@ -3293,8 +3351,6 @@ fn observe_check(
     )?;
     let source_revision = format!("srd521-p6:{scene_name}:{skill}:{detail}");
     Ok(rpc::AbilityCheckResult {
-        faces: Vec::new(),
-        roll_mode: 0,
         die: u32::from(resolved.die),
         ability_modifier: i32::from(resolved.ability_modifier),
         proficiency_bonus: u32::from(resolved.proficiency_bonus),
@@ -3302,6 +3358,8 @@ fn observe_check(
         difficulty_class: u32::from(resolved.difficulty_class),
         succeeded: resolved.succeeded,
         source_revision,
+        faces: vec![u32::from(resolved.die)],
+        roll_mode: 0,
     })
 }
 
@@ -3310,7 +3368,12 @@ fn stage_using(
     input: &GameInput,
     supplier: DiceSource<'_>,
 ) -> Result<Checkpoint, RepositoryError> {
-    super::beat_script::validate_resume(current).map_err(bad)?;
+    super::beat_script::validate_resume(current).map_err(|error| {
+        if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
+            refusal_detail::note("short-rest-resume-validation");
+        }
+        bad(error)
+    })?;
     df_model::commands::validate_client_command(
         input,
         current,
@@ -3326,13 +3389,26 @@ fn stage_using(
             maximum_retained_bytes: 8192,
         },
     )
-    .map_err(bad)?;
-    let command = command(input)?;
+    .map_err(|error| {
+        if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
+            refusal_detail::note("short-rest-command-validation");
+        }
+        bad(error)
+    })?;
+    let command = command(input).map_err(|error| {
+        if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
+            refusal_detail::note("short-rest-command-decode");
+        }
+        error
+    })?;
     if (tactical::present(current.state())
         || !super::beat_script::with_script(|script| script.is_canonical()))
         && (command.basis != current.basis()
             || command.observed_revision != current.basis().revision)
     {
+        if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
+            refusal_detail::note("short-rest-stale-basis");
+        }
         return Err(RepositoryError::InvalidCandidate);
     }
     let GameCommand::ProposeAction {
@@ -3342,12 +3418,20 @@ fn stage_using(
         choices: submitted_choices,
     } = &command.command
     else {
+        if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
+            refusal_detail::note("short-rest-command-shape");
+        }
         return Err(RepositoryError::InvalidCandidate);
     };
     if *who != player_entity(command.member, current)? {
         return Err(RepositoryError::Unauthorized);
     }
-    let kind = wire::action_kind(action.entry.as_str()).ok_or(RepositoryError::InvalidCandidate)?;
+    let kind = wire::action_kind(action.entry.as_str()).ok_or_else(|| {
+        if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
+            refusal_detail::note("short-rest-action-kind");
+        }
+        RepositoryError::InvalidCandidate
+    })?;
     if tactical::combat_action(kind)
         && (command.basis != current.basis()
             || command.observed_revision != current.basis().revision)
@@ -3391,11 +3475,22 @@ fn stage_using(
             },
         );
     }
-    let selected = super::beat_script_runtime::select(current, kind, submitted_choices)?;
+    let selected =
+        super::beat_script_runtime::select(current, kind, submitted_choices).map_err(|error| {
+            if kind == rpc::GameplayActionKind::ShortRest && short_rest_started(current.state()) {
+                refusal_detail::note("short-rest-script-select");
+            }
+            error
+        })?;
     // The forward state machine gates every command before any handler runs:
     // a command that is illegal in the session's current state is refused
     // here, whatever its handler might have allowed.
-    let machine_state = session_machine::SessionState::of(current)?;
+    let machine_state = session_machine::SessionState::of(current).map_err(|error| {
+        if kind == rpc::GameplayActionKind::ShortRest && short_rest_started(current.state()) {
+            refusal_detail::note("short-rest-machine-state");
+        }
+        error
+    })?;
     let machine_event = session_machine::Event::of(selected.effect);
     let machine_transition = match session_machine::next(machine_state, machine_event) {
         Ok(transition) => transition,
@@ -3406,7 +3501,14 @@ fn stage_using(
     };
     // The machine also decides the Aftermath rest rule: once per
     // aftermath, and only while a living hero has something to regain.
-    if machine_event == session_machine::Event::Rest && !session_machine::rest_accepted(current)? {
+    if machine_event == session_machine::Event::Rest
+        && !session_machine::rest_accepted(current).map_err(|error| {
+            if kind == rpc::GameplayActionKind::ShortRest && short_rest_started(current.state()) {
+                refusal_detail::note("short-rest-machine-rule");
+            }
+            error
+        })?
+    {
         refusal_detail::note("session-machine-rest");
         return Err(RepositoryError::InvalidCandidate);
     }
@@ -3418,7 +3520,12 @@ fn stage_using(
     };
     // An authored resolution is the script's own pure step; no handler affordance backs it.
     if selected.effect != super::beat_script::BeatEffect::Resolve {
-        affordance::validate(current, command.member, action, targets).map_err(bad)?;
+        affordance::validate(current, command.member, action, targets).map_err(|error| {
+            if kind == rpc::GameplayActionKind::ShortRest && short_rest_started(current.state()) {
+                refusal_detail::note("short-rest-offer-validation");
+            }
+            bad(error)
+        })?;
     }
     // Target identity is validated against the current source-admitted binding above.
     // The registered handlers consume their existing authored, implicit target form;
@@ -3620,7 +3727,8 @@ fn stage_using(
                     command.operation,
                     &mut draws,
                     supplier,
-                )?;
+                )
+                .inspect_err(|_| refusal_detail::note("short-rest-choice-apply"))?;
             }
             _ => {
                 refusal_detail::note("short-rest-choice-shape");
@@ -3660,7 +3768,8 @@ fn stage_using(
             None
         },
         combat: outcomes,
-        phase: phase_from_state(current, &state, &selected.id)? as i32,
+        phase: phase_from_state(current, &state, &selected.id)
+            .inspect_err(|_| refusal_detail::note("short-rest-phase"))? as i32,
     };
     let semantic = Some(hex(&result.encode_to_vec()));
     // The recorded receipt is the largest text a checkpoint holds; refuse here,
@@ -3716,7 +3825,12 @@ fn stage_using(
                 Some((super::beat_script_runtime::marker(&selected.id)?, *who))
             },
         },
-    )?;
+    )
+    .inspect_err(|_| {
+        if kind == rpc::GameplayActionKind::ShortRest {
+            refusal_detail::note("short-rest-candidate-finish");
+        }
+    })?;
     // The candidate must land where the machine's transition said: no
     // executor may move the session anywhere else, or backwards.
     if !session_machine::outcome_legal(
@@ -3881,20 +3995,26 @@ impl df_rules::RulesCommandHandler for JourneyHandler {
         let mut supplied = input.supplied_draws.iter();
         let mut ordinal = 0;
         let mut consume = |sides| {
-            let draw = supplied.next().ok_or(RepositoryError::InvalidCandidate)?;
+            let draw = supplied.next().ok_or_else(|| {
+                refusal_detail::note("handler-missing-draw");
+                RepositoryError::InvalidCandidate
+            })?;
             if draw.operation != operation
                 || draw.ordinal != ordinal
                 || draw.sides != sides
                 || draw.source != rule()?
                 || !(1..=sides).contains(&draw.value)
             {
+                refusal_detail::note("handler-draw-mismatch");
                 return Err(RepositoryError::InvalidCandidate);
             }
             ordinal += 1;
             Ok(draw.value)
         };
-        let staged = stage_using(current, input.command, &mut consume)?;
+        let staged = stage_using(current, input.command, &mut consume)
+            .inspect_err(|_| refusal_detail::note("handler-stage-replay"))?;
         if supplied.next().is_some() {
+            refusal_detail::note("handler-unused-draw");
             return Err(RepositoryError::InvalidCandidate);
         }
         Ok(staged)
@@ -5545,6 +5665,21 @@ mod tests {
         let second_hero = player_entity(second, &victory).unwrap();
         set(&mut state, first_hero, "hit-points", 9).unwrap();
         set(&mut state, second_hero, "hit-points", 9).unwrap();
+        assert_eq!(
+            short_rest_offer_label(&state, first_hero).unwrap(),
+            "Short Rest · 1 hour · 1 Hit Point Die to spend"
+        );
+        set(&mut state, first_hero, "hit-point-dice", 0).unwrap();
+        assert_eq!(
+            short_rest_offer_label(&state, first_hero).unwrap(),
+            "Short Rest · 1 hour · no Hit Point Dice to spend"
+        );
+        set(&mut state, first_hero, "hit-point-dice", 2).unwrap();
+        assert_eq!(
+            short_rest_offer_label(&state, first_hero).unwrap(),
+            "Short Rest · 1 hour · 2 Hit Point Dice to spend"
+        );
+        set(&mut state, first_hero, "hit-point-dice", 1).unwrap();
         let victory = model::checkpoint(victory.basis(), state).unwrap();
 
         let started = stage_with_supplier(
@@ -5556,6 +5691,36 @@ mod tests {
         assert_eq!(started.state().logical_time, victory.state().logical_time);
         assert_eq!(value(started.state(), first_hero, "hit-point-dice"), Ok(1));
         assert_eq!(value(started.state(), second_hero, "hit-point-dice"), Ok(1));
+        for member in [first, second] {
+            let view = wire::journey_view(
+                &started,
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+                member,
+            )
+            .unwrap();
+            let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+                panic!("player view");
+            };
+            let offer = player
+                .offers
+                .iter()
+                .find(|offer| offer.action_kind == rpc::GameplayActionKind::ShortRest as i32)
+                .expect("eligible hero's Hit Point Die choice");
+            assert_eq!(
+                offer.label,
+                "Short Rest · 1 hour · 1 Hit Point Die to spend"
+            );
+            assert_eq!(offer.input_groups.len(), 1, "{member:?}");
+            assert_eq!(offer.input_groups[0].group_id, "hit-point-die");
+            assert_eq!(
+                offer.input_groups[0]
+                    .options
+                    .iter()
+                    .map(|option| option.option_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["spend", "keep"]
+            );
+        }
 
         let kept = stage_with_supplier(
             &started,
@@ -5624,16 +5789,31 @@ mod tests {
             Ok(10)
         );
         let sheet = character_sheet(spent.state(), second_hero).unwrap();
-        assert!(
-            sheet.facts.iter().any(|fact| {
-                fact.label == "Hit Point Die roll" && fact.value == "d10 10 +2 = 12"
-            })
-        );
+        assert!(sheet.facts.iter().any(|fact| {
+            fact.label == "Hit Point Die roll" && fact.value == "d10 10 + 2 = 12, now 13 of 13"
+        }));
         assert!(!session_machine::rest_accepted(&spent).unwrap());
         assert_eq!(
             spent.state().logical_time.ticks,
             victory.state().logical_time.ticks + 3600
         );
+        for member in [first, second] {
+            let view = wire::journey_view(
+                &spent,
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+                member,
+            )
+            .unwrap();
+            let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+                panic!("player view");
+            };
+            assert!(
+                player.offers.iter().any(|offer| {
+                    offer.action_kind != rpc::GameplayActionKind::ShortRest as i32
+                }),
+                "the story's own choices must return for {member:?}"
+            );
+        }
         assert!(
             stage_with_supplier(
                 &spent,
@@ -6973,6 +7153,7 @@ mod tests {
                         }
                         // The defeat text opens with what the party fought and who fell.
                         assert!(view.narration.ends_with(&expected), "{}", view.narration);
+                        assert!(!view.narration.contains("RULES:"), "{}", view.narration);
                         assert!(view.narration.contains("overwhelmed the party"));
                         assert!(ending.defeat.chars().count() <= 220);
                         assert!(

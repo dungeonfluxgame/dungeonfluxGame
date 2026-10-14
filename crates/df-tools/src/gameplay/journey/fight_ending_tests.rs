@@ -105,6 +105,147 @@ fn kinds(current: &Checkpoint) -> Vec<K> {
         .collect()
 }
 
+fn heroes_at_hit_points(current: &Checkpoint, hit_points: u32) -> Checkpoint {
+    let mut state = current.state().clone();
+    let actors = state.encounters[0]
+        .tactical
+        .as_ref()
+        .expect("tactical fight")
+        .actors
+        .iter()
+        .filter_map(|(actor, entity)| {
+            state
+                .characters
+                .iter()
+                .any(|character| character.entity == *entity)
+                .then_some(*actor)
+        })
+        .collect::<Vec<_>>();
+    for character in &state.characters {
+        let resource = state
+            .resources
+            .iter_mut()
+            .find(|resource| {
+                resource.owner == character.entity && resource.resource.as_str() == "hit-points"
+            })
+            .expect("hero hit-point resource");
+        resource.value = i64::from(hit_points);
+        if let Some(unconscious) = state.resources.iter_mut().find(|resource| {
+            resource.owner == character.entity && resource.resource.as_str() == "unconscious"
+        }) {
+            unconscious.value = 0;
+        }
+        for (resource_name, resource_value) in [("hit-point-dice", 1), ("short-rest-choice", 0)] {
+            if let Some(resource) = state.resources.iter_mut().find(|resource| {
+                resource.owner == character.entity && resource.resource.as_str() == resource_name
+            }) {
+                resource.value = resource_value;
+            }
+        }
+    }
+    let snapshot = state.encounters[0]
+        .tactical
+        .as_mut()
+        .expect("tactical fight");
+    let mut battle: serde_json::Value = serde_json::from_slice(&snapshot.state).unwrap();
+    for actor in actors {
+        let combatant = battle["actors"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|combatant| combatant["spec"]["id"].as_u64() == Some(u64::from(actor)))
+            .expect("hero combatant");
+        combatant["health"]["hit_points"] = serde_json::json!(hit_points);
+        combatant["health"]["unconscious"] = serde_json::json!(false);
+        combatant["health"]["knocked_out"] = serde_json::json!(false);
+        combatant["health"]["dead"] = serde_json::json!(false);
+        combatant["health"]["stable"] = serde_json::json!(false);
+        combatant["health"]["death_successes"] = serde_json::json!(0);
+        combatant["health"]["death_failures"] = serde_json::json!(0);
+    }
+    snapshot.state = serde_json::to_vec(&battle).unwrap();
+    model::checkpoint(current.basis(), state).unwrap()
+}
+
+fn assert_player_offers_are_accepted(current: &Checkpoint, member: MemberId) {
+    let view = wire::journey_view(
+        current,
+        df_persistence::local_demo_scope::LocalDemoRole::Player,
+        member,
+    )
+    .unwrap();
+    let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+        panic!("player view");
+    };
+    for (index, offer) in player.offers.iter().enumerate() {
+        let kind = K::try_from(offer.action_kind).expect("listed action kind");
+        let choices = offer
+            .input_groups
+            .iter()
+            .map(|group| {
+                let selected = group
+                    .options
+                    .iter()
+                    .position(|option| {
+                        matches!(
+                            group.group_id.as_str(),
+                            "weapon-mastery" | "savage-attacker"
+                        ) && option.option_id == "no"
+                    })
+                    .or_else(|| (!group.options.is_empty()).then_some(0))
+                    .expect("listed choice group has options");
+                rpc::JourneyChoice {
+                    group_id: group.group_id.clone(),
+                    option_id: group.options[selected].option_id.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let request = rpc::SubmitActionRequest {
+            offer_id: offer.offer_id.clone(),
+            action_kind: kind as i32,
+            destination: offer
+                .destinations
+                .first()
+                .map_or(rpc::HarborDestination::Unspecified as i32, |destination| {
+                    destination.destination
+                }),
+            action_choices: choices,
+            ..request(
+                current,
+                u8::try_from(index + 100).expect("offer count"),
+                kind,
+                String::new(),
+            )
+        };
+        assert_eq!(
+            wire::action_offer_rejection(
+                current,
+                member,
+                kind,
+                &request.offer_id,
+                &request.action_choices,
+            )
+            .unwrap(),
+            None,
+            "{} ({kind:?}) is listed in {:?}",
+            offer.label,
+            phase(current).unwrap()
+        );
+        let input = wire::journey_input(&request, member, current).unwrap();
+        let staged = stage_with_supplier(current, &input, &mut |sides| {
+            Ok(if sides == 20 { 20 } else { 1 })
+        });
+        assert!(
+            staged.is_ok(),
+            "{} ({kind:?}) was listed in {:?} but refused: {:?} step={}",
+            offer.label,
+            phase(current).unwrap(),
+            staged.err(),
+            crate::gameplay::refusal_detail::step_or_unknown()
+        );
+    }
+}
+
 fn refuses(current: &Checkpoint, member: MemberId, operation: u8, entry: &str) {
     let before = current.clone();
     assert_eq!(
@@ -116,6 +257,7 @@ fn refuses(current: &Checkpoint, member: MemberId, operation: u8, entry: &str) {
         Err(RepositoryError::InvalidCandidate),
         "{entry}"
     );
+    let _ = crate::gameplay::refusal_detail::take();
     assert_eq!(current, &before);
 }
 
@@ -266,22 +408,35 @@ fn a_total_party_defeat_waits_for_the_death_saves_then_ends_without_reviving_any
             if !tactical::dying(current.state()).unwrap() {
                 break;
             }
-            let request = request(
-                &current,
-                operation,
-                K::EndTurn,
-                listed(&current).remove(0).2,
+            let member = [first(), MemberId::from_bytes(&MEMBERS[1]).unwrap()]
+                .into_iter()
+                .find(|member| {
+                    runtime::view_offers(&current, *member).is_ok_and(|offers| !offers.is_empty())
+                })
+                .expect("a living hero can pass time while another hero is dying");
+            let available = runtime::view_offers(&current, member).unwrap();
+            let offer_id = available[0].2.clone();
+            let request = request(&current, operation, K::EndTurn, offer_id);
+            let input = wire::journey_input(&request, member, &current).unwrap();
+            let staged = stage_with_supplier(&current, &input, &mut |_| Ok(1));
+            assert!(
+                staged.is_ok(),
+                "death-save offer at operation {operation} was refused: {:?} step={} member={member:?} offers={available:?} beat={} phase={:?} state={:?}",
+                staged.as_ref().err(),
+                crate::gameplay::refusal_detail::step_or_unknown(),
+                beat_id(&current),
+                phase(&current).unwrap(),
+                session_machine::SessionState::of(&current).unwrap()
             );
-            let input = wire::journey_input(&request, first(), &current).unwrap();
-            current = stage_with_supplier(&current, &input, &mut |_| Ok(1)).unwrap();
+            current = staged.unwrap();
         }
         assert!(!tactical::dying(current.state()).unwrap());
         assert_eq!(
             runtime::fight_outcome(current.state()).unwrap(),
             FightOutcome::LostAll
         );
-        // The settled defeat is drawn as a story scene, not as the fight; while a hero is still
-        // dying it keeps the fight's own screen.
+        // The defeat is drawn as a story scene during its saves; when the last hero dies it
+        // advances directly to the authored terminal beat.
         let story = |current: &Checkpoint| {
             let Some(rpc::view_message::Audience::Player(view)) = wire::journey_view(
                 current,
@@ -296,7 +451,8 @@ fn a_total_party_defeat_waits_for_the_death_saves_then_ends_without_reviving_any
             assert!(view.narration.contains("Two bandits overwhelmed the party"));
             assert!(view.narration.contains("fell."));
             assert!(
-                view.narration.starts_with("Two bandits overwhelmed the party. "),
+                view.narration
+                    .starts_with("Two bandits overwhelmed the party. "),
                 "{}",
                 view.narration
             );
@@ -305,16 +461,13 @@ fn a_total_party_defeat_waits_for_the_death_saves_then_ends_without_reviving_any
                 view.journey.unwrap().combat.is_none(),
             )
         };
-        assert_eq!(story(&current), (true, true));
         assert_eq!(story(&lost_fight()), (false, false));
-        // Nobody is revived: there is no rest to take, only the ending.
+        // Nobody is revived, and with no living hero the defeat goes straight to the end card.
         assert!(!kinds(&current).contains(&K::ShortRest));
-        assert_eq!(kinds(&current), vec![K::ResolveErrand]);
-        let epilogue = ending_step(&current, 61).unwrap();
-        assert_eq!(beat_id(&epilogue), "epilogue");
-        let end = ending_step(&persisted(&epilogue), 62).unwrap();
+        assert_eq!(beat_id(&current), "the-end");
+        assert_end_card(&current);
+        let end = persisted(&current);
         assert_end_card(&end);
-        assert_end_card(&persisted(&end));
         assert!(
             tactical::read(end.state())
                 .unwrap()
@@ -334,12 +487,70 @@ fn a_total_party_defeat_waits_for_the_death_saves_then_ends_without_reviving_any
 }
 
 #[test]
+fn a_dead_hero_is_not_offered_an_aftermath_turn() {
+    live(|| {
+        let defeat = lost_fight();
+        let mut state = defeat.state().clone();
+        let dead = state.characters[0].entity;
+        let dead_member = super::participants(&defeat)
+            .into_iter()
+            .find(|link| link.character == Some(dead))
+            .unwrap()
+            .member;
+        let survivor_member = super::participants(&defeat)
+            .into_iter()
+            .find(|link| link.character != Some(dead))
+            .unwrap()
+            .member;
+        let saved = state.encounters[0].tactical.as_mut().unwrap();
+        let actor = saved.actors.iter().find(|(_, who)| *who == dead).unwrap().0;
+        let mut battle: serde_json::Value = serde_json::from_slice(&saved.state).unwrap();
+        let combatant = battle["actors"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|combatant| combatant["spec"]["id"].as_u64() == Some(u64::from(actor)))
+            .unwrap();
+        combatant["health"]["hit_points"] = serde_json::json!(0);
+        combatant["health"]["unconscious"] = serde_json::json!(true);
+        combatant["health"]["prone"] = serde_json::json!(true);
+        combatant["health"]["dead"] = serde_json::json!(true);
+        combatant["health"]["stable"] = serde_json::json!(false);
+        combatant["health"]["death_failures"] = serde_json::json!(3);
+        saved.state = serde_json::to_vec(&battle).unwrap();
+        for resource in &mut state.resources {
+            if resource.owner == dead {
+                match resource.resource.as_str() {
+                    "hit-points" => resource.value = 0,
+                    "unconscious" | "prone" => resource.value = 1,
+                    _ => {}
+                }
+            }
+        }
+        let current = model::checkpoint(defeat.basis(), state).unwrap();
+        assert_eq!(
+            runtime::view_offers(&current, dead_member).unwrap(),
+            Vec::new()
+        );
+        assert_eq!(
+            runtime::view_offers(&current, survivor_member)
+                .unwrap()
+                .iter()
+                .map(|(kind, _, _)| *kind)
+                .collect::<Vec<_>>(),
+            vec![K::EndTurn]
+        );
+        refuses(&current, dead_member, 151, "end-turn");
+    });
+}
+
+#[test]
 fn a_defeat_with_survivors_may_rest_or_end_and_both_reach_the_card() {
     live(|| {
         let defeat = lost_fight();
-        let request = request(&defeat, 70, K::EndTurn, listed(&defeat).remove(0).2);
-        let input = wire::journey_input(&request, first(), &defeat).unwrap();
-        let revived = stage_with_supplier(&defeat, &input, &mut |_| Ok(20)).unwrap();
+        let request = request(&defeat, 120, K::EndTurn, listed(&defeat).remove(0).2);
+        let game_input = wire::journey_input(&request, first(), &defeat).unwrap();
+        let revived = stage_with_supplier(&defeat, &game_input, &mut |_| Ok(20)).unwrap();
         assert!(!tactical::dying(revived.state()).unwrap());
         assert_eq!(
             runtime::fight_outcome(revived.state()).unwrap(),
@@ -348,17 +559,43 @@ fn a_defeat_with_survivors_may_rest_or_end_and_both_reach_the_card() {
         assert!(kinds(&revived).contains(&K::ShortRest));
         assert!(kinds(&revived).contains(&K::ResolveErrand));
         // The ending is open before and after the rest.
-        let epilogue = ending_step(&revived, 71).unwrap();
-        assert_end_card(&ending_step(&persisted(&epilogue), 72).unwrap());
-        let rested = stage_with_supplier(
+        let epilogue = ending_step(&revived, 121).unwrap();
+        assert_end_card(&ending_step(&persisted(&epilogue), 122).unwrap());
+        let rest_started = stage_with_supplier(
             &revived,
-            &input_for(&revived, 73, "short-rest"),
-            &mut |_| panic!("rest dice"),
+            &input_for(&revived, 123, "short-rest"),
+            &mut |_| panic!("starting a rest does not roll"),
         )
         .unwrap();
+        assert!(kinds(&rest_started).contains(&K::ShortRest));
+        assert!(super::short_rest_started(rest_started.state()));
+        assert!(!super::short_rest_completed(rest_started.state()));
+        assert!(super::pending_hit_point_die_choices(rest_started.state()).unwrap());
+        let _previous_refusal = crate::gameplay::refusal_detail::take();
+        let rest_result = stage_with_supplier(
+            &rest_started,
+            &input(
+                &rest_started,
+                first(),
+                124,
+                "short-rest",
+                vec![(
+                    model::label("hit-point-die").unwrap(),
+                    model::label("spend").unwrap(),
+                )],
+            ),
+            &mut |sides| Ok(sides),
+        );
+        assert!(
+            rest_result.is_ok(),
+            "an eligible survivor's offered Hit Point Die choice was refused: {:?} step={}",
+            rest_result.as_ref().err(),
+            crate::gameplay::refusal_detail::step_or_unknown()
+        );
+        let rested = rest_result.unwrap();
         assert!(kinds(&rested).contains(&K::ResolveErrand));
-        let epilogue = ending_step(&persisted(&rested), 74).unwrap();
-        assert_end_card(&ending_step(&epilogue, 75).unwrap());
+        let epilogue = ending_step(&persisted(&rested), 125).unwrap();
+        assert_end_card(&ending_step(&epilogue, 126).unwrap());
     });
 }
 
@@ -397,18 +634,10 @@ fn a_conversation_cannot_be_entered_from_a_fight_and_a_fight_cannot_be_reentered
 /// state, and every event the machine accepts is offered somewhere on the
 /// path or carries a written internal reason in the table.
 #[test]
-fn every_offer_on_the_played_path_is_an_event_the_machine_accepts() {
+fn every_listed_player_offer_is_accepted_when_taken_across_the_played_path() {
     use session_machine::{Event, SessionState};
     live(|| {
         let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
-        let mut lobby = initial().unwrap();
-        for op in [1, 2] {
-            lobby = stage_join(
-                &lobby,
-                &input(&lobby, bootstrap_member().unwrap(), op, "join-room", vec![]),
-            )
-            .unwrap();
-        }
         let prepared = super::tests::prepared_story();
         let opening = super::tests::opening_story();
         let dialogue = stage_with_supplier(
@@ -419,7 +648,59 @@ fn every_offer_on_the_played_path_is_an_event_the_machine_accepts() {
         .unwrap();
         let combat = tactical::tests::current_combat("escort-courier");
         let victory = tactical::tests::current_victory_with_spent_second_wind("escort-courier");
+        let hurt = heroes_at_hit_points(&victory, 9);
+        let rest_started = stage_with_supplier(
+            &hurt,
+            &input(&hurt, first(), 20, "short-rest", vec![]),
+            &mut |_| panic!("starting a rest does not roll"),
+        )
+        .unwrap();
+        let rest_kept = stage_with_supplier(
+            &rest_started,
+            &input(
+                &rest_started,
+                first(),
+                24,
+                "short-rest",
+                vec![(
+                    model::label("hit-point-die").unwrap(),
+                    model::label("keep").unwrap(),
+                )],
+            ),
+            &mut |_| panic!("keeping a die does not roll"),
+        )
+        .unwrap();
+        let rest_completed = stage_with_supplier(
+            &rest_kept,
+            &input(
+                &rest_kept,
+                second,
+                25,
+                "short-rest",
+                vec![(
+                    model::label("hit-point-die").unwrap(),
+                    model::label("spend").unwrap(),
+                )],
+            ),
+            &mut |_| Ok(10),
+        )
+        .unwrap();
         let defeat = tactical::tests::current_defeat("escort-courier");
+        let survivor_defeat = heroes_at_hit_points(
+            &stage_with_supplier(
+                &defeat,
+                &input(&defeat, first(), 26, "end-turn", vec![]),
+                &mut |_| Ok(20),
+            )
+            .unwrap(),
+            5,
+        );
+        let survivor_rest_started = stage_with_supplier(
+            &survivor_defeat,
+            &input(&survivor_defeat, first(), 27, "short-rest", vec![]),
+            &mut |_| panic!("starting a rest does not roll"),
+        )
+        .unwrap();
         let inn = stage_with_supplier(&victory, &inn_command(&victory, first(), 21), &mut |_| {
             panic!("inn dice")
         })
@@ -427,7 +708,21 @@ fn every_offer_on_the_played_path_is_an_event_the_machine_accepts() {
         let epilogue = ending_step(&inn, 22).unwrap();
         let end = ending_step(&epilogue, 23).unwrap();
         let path = [
-            lobby, prepared, opening, dialogue, combat, victory, defeat, inn, epilogue, end,
+            prepared,
+            opening,
+            dialogue,
+            combat,
+            victory,
+            defeat,
+            inn,
+            epilogue,
+            end,
+            hurt,
+            rest_started,
+            rest_kept,
+            rest_completed,
+            survivor_defeat,
+            survivor_rest_started,
         ];
         let mut covered: Vec<(SessionState, Event)> = Vec::new();
         let mut states_seen: Vec<SessionState> = Vec::new();
@@ -437,6 +732,7 @@ fn every_offer_on_the_played_path_is_an_event_the_machine_accepts() {
                 states_seen.push(state);
             }
             for member in [first(), second] {
+                assert_player_offers_are_accepted(current, member);
                 let mut offered_kinds: Vec<K> = Vec::new();
                 if let Ok(offers) = handler_offered(current, member) {
                     offered_kinds.extend(offers.into_iter().map(|(kind, _)| kind));

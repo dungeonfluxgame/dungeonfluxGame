@@ -634,6 +634,63 @@ pub(super) fn record_audit_line(event: &'static str, line: String) {
     span.finish_unmeasured("recorded");
 }
 
+pub(super) fn record_enemy_turn(
+    actor: &str,
+    operation: &str,
+    run: &str,
+    revision: u64,
+    policy_revision: &str,
+    action: &str,
+    reason: &str,
+    detail: &str,
+) {
+    let line = enemy_turn_line(
+        actor,
+        operation,
+        run,
+        revision,
+        policy_revision,
+        action,
+        reason,
+        detail,
+    );
+    println!("{line}");
+    let context = OperationContext {
+        trace_parent: String::new(),
+        build: crate::BUILD_ID.to_owned(),
+    };
+    let mut span = df_observe::begin(&context, "gameplay.enemy_turn");
+    span.event(
+        "gameplay.enemy_turn",
+        &[
+            ("combat.actor", actor.to_owned()),
+            ("operation.id", operation.to_owned()),
+            ("session.run", run.to_owned()),
+            ("session.revision", revision.to_string()),
+            ("combat.policy_revision", policy_revision.to_owned()),
+            ("combat.action", action.to_owned()),
+            ("combat.reason", reason.to_owned()),
+            ("combat.action_detail", detail.to_owned()),
+        ],
+    );
+    span.finish_unmeasured("recorded");
+}
+
+fn enemy_turn_line(
+    actor: &str,
+    operation: &str,
+    run: &str,
+    revision: u64,
+    policy_revision: &str,
+    action: &str,
+    reason: &str,
+    detail: &str,
+) -> String {
+    format!(
+        "COMBAT turn actor={actor:?} operation={operation} run={run} revision={revision} policy={policy_revision:?} action={action} reason={reason:?} detail={detail:?}"
+    )
+}
+
 fn record_session_machine_refusal(checkpoint: &Checkpoint, request: &rpc::SubmitActionRequest) {
     let Some(step) = refusal_detail::take() else {
         return;
@@ -1933,15 +1990,39 @@ impl Actor {
             Ok(label) => label,
             Err(_) => return,
         };
-        let mut lines = super::table_log::action_lines(
-            kind,
-            &hero,
-            &accepted.combat,
-            &weapon,
-            &destination,
-            &label,
-        )
-        .into_iter();
+        let after = self.owner.checkpoint();
+        let action_lines =
+            if kind == rpc::GameplayActionKind::ShortRest && !request.action_choices.is_empty() {
+                match rest_hit_die_details(before, &after, member) {
+                    Ok(Some(details)) => {
+                        vec![super::table_log::ActionLine {
+                            speaker: hero.clone(),
+                            text: short_rest_die_action_text(
+                                details.die,
+                                details.modifier,
+                                details.rolled,
+                                details.hit_points,
+                                details.maximum,
+                            ),
+                        }]
+                    }
+                    Ok(None) => Vec::new(),
+                    Err(error) => {
+                        record_unavailable("short-rest-table-log", &format!("{error:?}"));
+                        Vec::new()
+                    }
+                }
+            } else {
+                super::table_log::action_lines(
+                    kind,
+                    &hero,
+                    &accepted.combat,
+                    &weapon,
+                    &destination,
+                    &label,
+                )
+            };
+        let mut lines = action_lines.into_iter();
         if let Some(line) = lines.next() {
             let (role, hero_index) = if line.speaker == hero {
                 (rpc::TableRole::Hero, index)
@@ -2116,10 +2197,30 @@ impl Actor {
                         actor,
                     ),
                 ),
-                rpc::GameplayActionKind::ShortRest => record_audit_line(
-                    "gameplay.story_rest",
-                    super::table_log::story_rest_audit_line(actor),
-                ),
+                rpc::GameplayActionKind::ShortRest if request.action_choices.is_empty() => {
+                    record_audit_line(
+                        "gameplay.story_rest",
+                        super::table_log::story_rest_audit_line(actor),
+                    )
+                }
+                rpc::GameplayActionKind::ShortRest => {
+                    match rest_hit_die_details(before, after, member) {
+                        Ok(Some(details)) => record_audit_line(
+                            "gameplay.story_rest_hit_die",
+                            super::table_log::story_rest_hit_die_audit_line(
+                                actor,
+                                details.die,
+                                details.modifier,
+                                details.healed,
+                                details.hit_points,
+                            ),
+                        ),
+                        Ok(None) => {}
+                        Err(error) => {
+                            record_unavailable("short-rest-hit-die-audit", &format!("{error:?}"));
+                        }
+                    }
+                }
                 rpc::GameplayActionKind::GreatswordAttack
                 | rpc::GameplayActionKind::Move
                 | rpc::GameplayActionKind::OpportunityAttack
@@ -2173,31 +2274,25 @@ impl Actor {
             && after_phase == Some(rpc::JourneyPhase::Complete)
         {
             let rounds = before_combat.as_ref().map_or(0, |combat| combat.round);
-            let hero_ids = after
-                .state()
-                .characters
-                .iter()
-                .map(|character| character.entity.as_bytes())
-                .collect::<Vec<_>>();
-            let defeat = accepted.combat.iter().any(|outcome| {
-                let hero_target = hero_ids
+            let result = after.state().encounters.first().and_then(|encounter| {
+                let victory = encounter
+                    .objectives
                     .iter()
-                    .any(|hero_id| *hero_id == outcome.target_id.as_slice());
-                let hero_actor = hero_ids
+                    .any(|objective| objective.entry.as_str() == "combat-victory");
+                let defeat = encounter
+                    .objectives
                     .iter()
-                    .any(|hero_id| *hero_id == outcome.actor_id.as_slice());
-                (outcome.knocked_out && hero_target)
-                    || (hero_actor
-                        && rpc::DeathSaveResult::try_from(outcome.death_save_result)
-                            == Ok(rpc::DeathSaveResult::Died))
+                    .any(|objective| objective.entry.as_str() == "combat-defeat");
+                fight_end_outcome(victory, defeat)
             });
-            record_audit_line(
-                "gameplay.fight_end",
-                super::table_log::fight_end_audit_line(
-                    if defeat { "defeat" } else { "victory" },
-                    rounds,
-                ),
-            );
+            if let Some(result) = result {
+                record_audit_line(
+                    "gameplay.fight_end",
+                    super::table_log::fight_end_audit_line(result, rounds),
+                );
+            } else {
+                record_unavailable("fight-end-audit", "terminal encounter outcome absent");
+            }
         }
     }
     fn view(
@@ -2612,6 +2707,126 @@ impl Reducer<Call> for Actor {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RestHitDieDetails {
+    die: u32,
+    modifier: i32,
+    rolled: u32,
+    healed: u32,
+    hit_points: u32,
+    maximum: u32,
+}
+
+fn rest_hit_die_details(
+    before: &Checkpoint,
+    after: &Checkpoint,
+    member: df_types::MemberId,
+) -> Result<Option<RestHitDieDetails>, RepositoryError> {
+    let Some(who) = after
+        .state()
+        .members
+        .iter()
+        .find(|link| link.member == member)
+        .and_then(|link| link.character)
+    else {
+        refusal_detail::note("short-rest-hit-die-member");
+        return Err(RepositoryError::InvalidCandidate);
+    };
+    let before_dice =
+        super::journey::value(before.state(), who, "hit-point-dice").map_err(|error| {
+            refusal_detail::note("short-rest-hit-die-state");
+            error
+        })?;
+    let after_dice =
+        super::journey::value(after.state(), who, "hit-point-dice").map_err(|error| {
+            refusal_detail::note("short-rest-hit-die-state");
+            error
+        })?;
+    if !hit_point_die_was_spent(before_dice, after_dice) {
+        return Ok(None);
+    }
+    let die =
+        super::journey::value(after.state(), who, "short-rest-die-roll").map_err(|error| {
+            refusal_detail::note("short-rest-hit-die-state");
+            error
+        })?;
+    if die == 0 {
+        return Ok(None);
+    }
+    let before_hit_points =
+        super::journey::value(before.state(), who, "hit-points").map_err(|error| {
+            refusal_detail::note("short-rest-hit-die-state");
+            error
+        })?;
+    let hit_points = super::journey::value(after.state(), who, "hit-points").map_err(|error| {
+        refusal_detail::note("short-rest-hit-die-state");
+        error
+    })?;
+    let maximum = super::journey::maximum_hit_points(after.state(), who).map_err(|error| {
+        refusal_detail::note("short-rest-hit-die-state");
+        error
+    })?;
+    let constitution = u8::try_from(
+        super::journey::value(after.state(), who, "constitution").map_err(|error| {
+            refusal_detail::note("short-rest-hit-die-state");
+            error
+        })?,
+    )
+    .map_err(|_| {
+        refusal_detail::note("short-rest-hit-die-constitution");
+        RepositoryError::InvalidCandidate
+    })?;
+    let modifier = df_rules::local_journey::ability_modifier(constitution);
+    let (expected_hit_points, healed) =
+        df_rules::local_journey::heal_hit_point_die(die, modifier, before_hit_points, maximum)
+            .map_err(|_| {
+                refusal_detail::note("short-rest-hit-die-result");
+                RepositoryError::InvalidCandidate
+            })?;
+    if expected_hit_points != hit_points {
+        refusal_detail::note("short-rest-hit-die-result");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let rolled = u32::try_from((i64::from(die) + i64::from(modifier)).max(1)).map_err(|_| {
+        refusal_detail::note("short-rest-hit-die-total");
+        RepositoryError::InvalidCandidate
+    })?;
+    Ok(Some(RestHitDieDetails {
+        die,
+        modifier,
+        rolled,
+        healed,
+        hit_points,
+        maximum,
+    }))
+}
+
+fn hit_point_die_was_spent(before: u32, after: u32) -> bool {
+    after < before
+}
+
+fn short_rest_die_action_text(
+    die: u32,
+    modifier: i32,
+    rolled: u32,
+    hit_points: u32,
+    maximum: u32,
+) -> String {
+    format!(
+        "spends 1 Hit Point Die: {die} {} {} = {rolled}, now {hit_points} of {maximum}",
+        if modifier < 0 { "-" } else { "+" },
+        modifier.unsigned_abs()
+    )
+}
+
+fn fight_end_outcome(victory: bool, defeat: bool) -> Option<&'static str> {
+    match (victory, defeat) {
+        (true, false) => Some("victory"),
+        (false, true) => Some("defeat"),
+        _ => None,
+    }
+}
+
 fn heartbeat_wake(
     session_lost: bool,
     heartbeat: &super::session_recovery::Heartbeat,
@@ -2623,6 +2838,28 @@ fn heartbeat_wake(
 #[cfg(test)]
 mod qualification_tests {
     use super::*;
+
+    #[test]
+    fn fight_end_audit_uses_the_committed_encounter_outcome() {
+        assert_eq!(fight_end_outcome(true, false), Some("victory"));
+        assert_eq!(fight_end_outcome(false, true), Some("defeat"));
+        assert_eq!(fight_end_outcome(false, false), None);
+        assert_eq!(fight_end_outcome(true, true), None);
+    }
+
+    #[test]
+    fn short_rest_die_log_shows_the_roll_and_result() {
+        assert_eq!(
+            short_rest_die_action_text(7, 2, 9, 12, 13),
+            "spends 1 Hit Point Die: 7 + 2 = 9, now 12 of 13"
+        );
+    }
+
+    #[test]
+    fn keeping_a_hit_point_die_does_not_report_the_previous_roll_again() {
+        assert!(!hit_point_die_was_spent(1, 1));
+        assert!(hit_point_die_was_spent(2, 1));
+    }
 
     #[test]
     fn lost_session_does_not_schedule_an_expired_heartbeat() {
@@ -2864,5 +3101,31 @@ mod qualification_tests {
             },
         );
         assert!(empty.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod enemy_turn_audit_tests {
+    use super::enemy_turn_line;
+
+    #[test]
+    fn enemy_turn_audit_includes_actor_correlation_policy_and_reason() {
+        let line = enemy_turn_line(
+            "Bandit 1",
+            "010203",
+            "aabbcc",
+            42,
+            "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2",
+            "dodge",
+            "no attack target is currently reachable",
+            "Dodge",
+        );
+        assert!(
+            line.starts_with(
+                "COMBAT turn actor=\"Bandit 1\" operation=010203 run=aabbcc revision=42"
+            )
+        );
+        assert!(line.contains("policy=\"SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2\""));
+        assert!(line.contains("action=dodge reason=\"no attack target is currently reachable\""));
     }
 }

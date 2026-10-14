@@ -12,6 +12,8 @@ const ENEMY_ENTITIES: [[u8; 16]; 4] = [[0x65; 16], [0x71; 16], [0x72; 16], [0x73
 const TACTICAL_SOURCE_REVISION_LEGACY_POLICY: &str = tactical_rules::SOURCE_REVISION;
 const TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY: &str =
     "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v1";
+const TACTICAL_SOURCE_REVISION_LATEST_POLICY: &str =
+    "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2";
 const SCENES: &[(&str, &[u8])] = &[
     (
         "salt-quay",
@@ -328,7 +330,9 @@ pub(super) fn read(state: &GameState) -> Result<Battle, RepositoryError> {
     if saved.schema != 1
         || !matches!(
             saved.source_revision.as_str(),
-            TACTICAL_SOURCE_REVISION_LEGACY_POLICY | TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY
+            TACTICAL_SOURCE_REVISION_LEGACY_POLICY
+                | TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY
+                | TACTICAL_SOURCE_REVISION_LATEST_POLICY
         )
         || saved.scene_digest.0 != <[u8; 32]>::from(Sha256::digest(&saved.scene))
         || !SCENES
@@ -638,6 +642,7 @@ fn record_outcomes(
     state: &GameState,
     result: &tactical_rules::Resolution,
     opportunity: bool,
+    savage_attacker: bool,
     outcomes: &mut Vec<rpc::CombatOutcome>,
 ) -> Result<(), RepositoryError> {
     use super::super::fight_lines::{AttackFact, CurrentAttack, FightSoFar};
@@ -719,11 +724,12 @@ fn record_outcomes(
             attack_die: attack.selected,
             attack_modifier: i32::from(attack.modifier),
             attack_total: attack.selected as i32 + i32::from(attack.modifier),
-            // Enemy defense is private mechanical truth, omitted from public outcomes.
-            target_armor_class: 0,
+            target_armor_class: u32::from(attack.armor_class),
             hit: attack.hit,
             critical: attack.critical,
             damage_dice: attack.damage_faces.clone(),
+            damage_rolls: project_damage_rolls(&attack.damage_faces, savage_attacker)?,
+            damage_modifier: i32::from(attack.damage_modifier),
             damage: u32::from(attack.damage),
             target_hit_points: u32::from(
                 result
@@ -857,6 +863,7 @@ fn apply(
         state,
         &result,
         matches!(action, Action::Opportunity { .. }),
+        matches!(action, Action::Attack { weapon, .. } if weapon.savage_attacker),
         outcomes,
     )?;
     store(state, &result.battle)?;
@@ -919,6 +926,7 @@ fn policy(
     let choose = match saved.source_revision.as_str() {
         TACTICAL_SOURCE_REVISION_LEGACY_POLICY => df_combat::tactical::choose_legacy,
         TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY => df_combat::tactical::choose,
+        TACTICAL_SOURCE_REVISION_LATEST_POLICY => df_combat::tactical::choose_latest,
         _ => {
             return noted(
                 "enemy-policy-version",
@@ -1004,6 +1012,17 @@ fn enemy_turns(
             operation,
             u32::try_from(draws.len()).map_err(bad)?,
         )?;
+        let (action_name, reason) = enemy_action_description(&action);
+        super::super::actor::record_enemy_turn(
+            &name(state, canonical(state, actor)?)?,
+            &super::super::journey::hex(operation.as_bytes()),
+            &super::super::journey::hex(current.basis().run.as_bytes()),
+            current.basis().revision.sequence(),
+            snapshot(state)?.source_revision.as_str(),
+            action_name,
+            reason,
+            &format!("{action:?}"),
+        );
         battle = apply(
             state,
             &battle,
@@ -1015,6 +1034,49 @@ fn enemy_turns(
         )?;
     }
     Err(RepositoryError::Capacity)
+}
+
+fn enemy_action_description(action: &Action) -> (&'static str, &'static str) {
+    match action {
+        Action::Move(_) => ("move", "approach a reachable target"),
+        Action::Dash => ("dash", "reach a target beyond current movement"),
+        Action::Attack { .. } => ("attack", "target is in range"),
+        Action::Dodge => ("dodge", "no attack target is currently reachable"),
+        Action::EndTurn => ("end-turn", "no reachable target or available action"),
+        Action::Stand => ("stand", "recover from prone"),
+        Action::DropProne => ("drop-prone", "take cover from ranged attacks"),
+        Action::Disengage => ("disengage", "leave threatened reach"),
+        Action::NimbleDisengage => ("nimble-disengage", "leave threatened reach"),
+        Action::Opportunity { .. } => ("opportunity", "resolve a reaction offer"),
+        Action::SecondWind => ("second-wind", "recover hit points"),
+        Action::DeathSave => ("death-save", "resolve a dying creature's turn"),
+        Action::ShortRest { .. } => ("short-rest", "resolve a rest"),
+        Action::RecoverAmmunition { .. } => ("recover-ammunition", "recover spent ammunition"),
+        Action::StableRecovery => ("stable-recovery", "recover after a stable interval"),
+        Action::DoffShield => ("doff-shield", "change equipment"),
+        Action::PickUpWeapon(_) => ("pick-up-weapon", "recover a dropped weapon"),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn enemy_turn_descriptions_include_actions_and_no_reachable_target() {
+    assert_eq!(
+        enemy_action_description(&Action::Move(Vec::new())),
+        ("move", "approach a reachable target")
+    );
+    assert_eq!(
+        enemy_action_description(&Action::Dash),
+        ("dash", "reach a target beyond current movement")
+    );
+    assert_eq!(
+        enemy_action_description(&Action::Dodge),
+        ("dodge", "no attack target is currently reachable")
+    );
+    assert_eq!(
+        enemy_action_description(&Action::EndTurn),
+        ("end-turn", "no reachable target or available action")
+    );
 }
 pub(super) fn start(
     current: &Checkpoint,
@@ -1270,7 +1332,7 @@ pub(super) fn start(
         combat_policy: model::content("tactical-srd521-cover-policy")?,
         tactical: Some(TacticalSnapshot {
             schema: 1,
-            source_revision: model::label(TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY)?,
+            source_revision: model::label(TACTICAL_SOURCE_REVISION_LATEST_POLICY)?,
             scene_digest: ContentDigest(Sha256::digest(bytes).into()),
             scene: bytes.to_vec(),
             layout: model::label(&layout.id)?,
@@ -1319,6 +1381,8 @@ pub(in crate::gameplay) fn combat_action(kind: rpc::GameplayActionKind) -> bool 
             | rpc::GameplayActionKind::Dodge
             | rpc::GameplayActionKind::Disengage
             | rpc::GameplayActionKind::SecondWind
+            | rpc::GameplayActionKind::StabiliseWithHealersKit
+            | rpc::GameplayActionKind::StabiliseMedicine
             | rpc::GameplayActionKind::EndTurn
             | rpc::GameplayActionKind::OpportunityAttack
             | rpc::GameplayActionKind::DeclineReaction
@@ -1563,6 +1627,8 @@ pub(in crate::gameplay) fn groups(
         kind,
         rpc::GameplayActionKind::Move
             | rpc::GameplayActionKind::GreatswordAttack
+            | rpc::GameplayActionKind::StabiliseWithHealersKit
+            | rpc::GameplayActionKind::StabiliseMedicine
             | rpc::GameplayActionKind::OpportunityAttack
             | rpc::GameplayActionKind::PickUpWeapon
     ) {
@@ -1739,6 +1805,8 @@ pub(super) fn offered(
     for (kind, label) in [
         (K::Move, "Move"),
         (K::GreatswordAttack, "Attack"),
+        (K::StabiliseWithHealersKit, "Stabilize with Healer's Kit"),
+        (K::StabiliseMedicine, "Stabilize with Wisdom (Medicine)"),
         (K::Dash, "Dash"),
         (K::Dodge, "Dodge"),
         (K::Disengage, "Disengage"),
@@ -1777,60 +1845,76 @@ pub(super) fn stage(
     };
     let battle = read(state)?;
     let actor = actor_id(state, *who)?;
+    if battle.actor(actor).map_err(bad)?.health().dead {
+        return noted("dead-hero-action", Err(RepositoryError::InvalidCandidate));
+    }
     if kind == rpc::GameplayActionKind::EndTurn && !choices.is_empty() {
-        return Err(RepositoryError::InvalidCandidate);
+        return noted(
+            "end-turn-choice-shape",
+            Err(RepositoryError::InvalidCandidate),
+        );
     }
     if phase(current)? == rpc::JourneyPhase::Complete {
         if kind != rpc::GameplayActionKind::EndTurn || !choices.is_empty() || !dying(state)? {
-            return Err(RepositoryError::InvalidCandidate);
+            return noted(
+                "aftermath-action-shape",
+                Err(RepositoryError::InvalidCandidate),
+            );
         }
-        return aftermath(state, command.operation, draws, outcomes, supplier);
-    }
-    let candidates = options(state, actor, kind)?;
-    let choices = choices
-        .iter()
-        .map(|(group, id)| (group.as_str(), id.as_str()))
-        .collect::<Vec<_>>();
-    let combatant = battle.actor(actor).map_err(bad)?;
-    let allow_mastery = combatant
-        .spec()
-        .weapons
-        .iter()
-        .any(|weapon| combatant.spec().masteries.contains(weapon));
-    let selected = selected_candidate(
-        &candidates,
-        &choices,
-        allow_mastery,
-        combatant.spec().savage_attacker,
-    )
-    .ok_or(RepositoryError::InvalidCandidate)?;
-    if !targets.is_empty() {
-        let expected = match &selected.1 {
-            Action::Attack { target, .. } => canonical(state, *target)?,
-            _ => return Err(RepositoryError::InvalidCandidate),
-        };
-        if targets.as_slice() != [expected] {
-            return Err(RepositoryError::InvalidCandidate);
+        aftermath(state, command.operation, draws, outcomes, supplier)?;
+    } else {
+        let candidates = options(state, actor, kind)?;
+        let choices = choices
+            .iter()
+            .map(|(group, id)| (group.as_str(), id.as_str()))
+            .collect::<Vec<_>>();
+        let combatant = battle.actor(actor).map_err(bad)?;
+        let allow_mastery = combatant
+            .spec()
+            .weapons
+            .iter()
+            .any(|weapon| combatant.spec().masteries.contains(weapon));
+        let selected = selected_candidate(
+            &candidates,
+            &choices,
+            allow_mastery,
+            combatant.spec().savage_attacker,
+        )
+        .ok_or(RepositoryError::InvalidCandidate)?;
+        if !targets.is_empty() {
+            let expected = match &selected.1 {
+                Action::Attack { target, .. } => canonical(state, *target)?,
+                _ => return Err(RepositoryError::InvalidCandidate),
+            };
+            if targets.as_slice() != [expected] {
+                return Err(RepositoryError::InvalidCandidate);
+            }
         }
+        let next = apply(
+            state,
+            &battle,
+            actor,
+            &selected.1,
+            command.operation,
+            (draws, outcomes),
+            supplier,
+        )?;
+        enemy_turns(
+            current,
+            state,
+            next,
+            command.operation,
+            draws,
+            outcomes,
+            supplier,
+        )?;
     }
-    let next = apply(
-        state,
-        &battle,
-        actor,
-        &selected.1,
-        command.operation,
-        (draws, outcomes),
-        supplier,
-    )?;
-    enemy_turns(
-        current,
-        state,
-        next,
-        command.operation,
-        draws,
-        outcomes,
-        supplier,
-    )
+    if all_heroes_dead(state)? {
+        super::super::beat_script_runtime::end_for_total_party_death(state).inspect_err(|_| {
+            crate::gameplay::refusal_detail::note("total-party-death-transition")
+        })?;
+    }
+    Ok(())
 }
 pub(super) fn validate_input(
     current: &Checkpoint,
@@ -2155,6 +2239,22 @@ pub(in crate::gameplay) fn outcome(state: &GameState) -> Result<FightOutcome, Re
     }
     Ok(FightOutcome::classify(won, down, survivors))
 }
+
+pub(in crate::gameplay) fn all_heroes_dead(state: &GameState) -> Result<bool, RepositoryError> {
+    let battle = read(state)?;
+    let heroes = battle
+        .combatants()
+        .iter()
+        .filter(|actor| actor.side() == Side::Heroes)
+        .collect::<Vec<_>>();
+    Ok(!heroes.is_empty() && heroes.iter().all(|actor| actor.health().dead))
+}
+
+pub(super) fn hero_is_dead(state: &GameState, who: EntityId) -> Result<bool, RepositoryError> {
+    let actor = actor_id(state, who)?;
+    Ok(read(state)?.actor(actor).map_err(bad)?.health().dead)
+}
+
 pub(super) fn aftermath(
     state: &mut GameState,
     operation: OperationId,
@@ -2181,7 +2281,8 @@ pub(super) fn aftermath(
                 operation,
                 (draws, outcomes),
                 supplier,
-            )?;
+            )
+            .inspect_err(|_| crate::gameplay::refusal_detail::note("aftermath-stable-recovery"))?;
             let hours = outcomes[before..]
                 .iter()
                 .map(|outcome| u64::from(outcome.recovery_hours))
@@ -2196,9 +2297,10 @@ pub(super) fn aftermath(
     }
     let count = battle.combatants().len();
     for _ in 0..count {
-        let actor = battle
-            .active_actor()
-            .ok_or(RepositoryError::InvalidCandidate)?;
+        let actor = battle.active_actor().ok_or_else(|| {
+            crate::gameplay::refusal_detail::note("aftermath-active-actor");
+            RepositoryError::InvalidCandidate
+        })?;
         if battle.needs_death_save() {
             battle = apply(
                 state,
@@ -2208,7 +2310,8 @@ pub(super) fn aftermath(
                 operation,
                 (draws, outcomes),
                 supplier,
-            )?;
+            )
+            .inspect_err(|_| crate::gameplay::refusal_detail::note("aftermath-death-save"))?;
         }
         battle = apply(
             state,
@@ -2218,7 +2321,8 @@ pub(super) fn aftermath(
             operation,
             (draws, outcomes),
             supplier,
-        )?;
+        )
+        .inspect_err(|_| crate::gameplay::refusal_detail::note("aftermath-end-turn"))?;
     }
     Ok(())
 }
@@ -2252,6 +2356,26 @@ pub(super) fn rest(state: &mut GameState, operation: OperationId) -> Result<(), 
         .map_err(bad)?
         .battle;
     }
+    store(state, &battle)
+}
+
+pub(super) fn sync_hero_hit_points(
+    state: &mut GameState,
+    who: EntityId,
+    hit_points: u32,
+) -> Result<(), RepositoryError> {
+    let id = actor_id(state, who)?;
+    let battle = read(state)?;
+    let arrows = battle.actor(id).map_err(bad)?.arrows();
+    let second_wind = u8::try_from(value(state, who, "second-wind")?).map_err(bad)?;
+    let battle = battle
+        .with_hero_resources(
+            id,
+            u16::try_from(hit_points).map_err(bad)?,
+            arrows,
+            second_wind,
+        )
+        .map_err(bad)?;
     store(state, &battle)
 }
 
@@ -2610,7 +2734,49 @@ pub(in crate::gameplay) fn project_combat(
             bolts: u32::from(actor.bolts()),
         });
     }
+    project_private_defenses(view, own);
     Ok(())
+}
+
+fn project_private_defenses(view: &mut rpc::CombatView, own: Option<EntityId>) {
+    for outcome in &mut view.outcomes {
+        if own.is_none_or(|who| outcome.actor_id != who.as_bytes()) {
+            outcome.target_armor_class = 0;
+        }
+    }
+}
+
+fn project_damage_rolls(
+    faces: &[u32],
+    savage_attacker: bool,
+) -> Result<Vec<rpc::DamageRoll>, RepositoryError> {
+    if faces.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !savage_attacker {
+        return Ok(vec![rpc::DamageRoll {
+            dice: faces.to_vec(),
+            kept: true,
+        }]);
+    }
+    let split = faces.len() / 2;
+    if split == 0 || split * 2 != faces.len() {
+        crate::gameplay::refusal_detail::note("damage-roll-shape");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let (first, second) = faces.split_at(split);
+    let first_total = first.iter().sum::<u32>();
+    let second_total = second.iter().sum::<u32>();
+    Ok(vec![
+        rpc::DamageRoll {
+            dice: first.to_vec(),
+            kept: first_total >= second_total,
+        },
+        rpc::DamageRoll {
+            dice: second.to_vec(),
+            kept: second_total > first_total,
+        },
+    ])
 }
 
 pub(in crate::gameplay) fn has_turn(
@@ -2684,6 +2850,17 @@ pub(super) mod tests {
     use super::super::offered;
     use super::super::tests::{build, input, opening_story};
     use super::*;
+    fn member_offering(current: &Checkpoint, kind: rpc::GameplayActionKind) -> MemberId {
+        [MEMBERS[0], MEMBERS[1]]
+            .into_iter()
+            .map(|bytes| MemberId::from_bytes(&bytes).unwrap())
+            .find(|member| {
+                offered(current, *member).is_ok_and(|offers| {
+                    offers.iter().any(|(offered_kind, _)| *offered_kind == kind)
+                })
+            })
+            .expect("a living member has the requested offer")
+    }
     /// The active hero spends a Second Wind use, so a later aftermath rest
     /// has something to regain.
     fn spend_second_wind(current: &Checkpoint, operation: u8) -> Checkpoint {
@@ -3110,8 +3287,7 @@ pub(super) mod tests {
             lines: vec![line; 4],
             sequence: u64::MAX,
             stabilization: None,
-            damage_rolls: Vec::new(),
-            damage_modifier: 0,
+            ..Default::default()
         };
         let encoded = outcome.encode_to_vec().len();
         assert!(encoded <= 2048, "one worst-case outcome is {encoded} bytes");
@@ -4576,7 +4752,7 @@ pub(super) mod tests {
                 kind: SettingKind::Quay,
                 exterior: true,
                 art_key: "loc-salt-quay-arrival".into(),
-            model: None,
+                model: None,
             });
             scene.asset = "assets/ui/generated/scene-salt-quay-arrival".into();
         }
@@ -4973,7 +5149,11 @@ pub(super) mod tests {
                 &request.action_choices
             )
             .unwrap(),
-            None
+            None,
+            "{kind:?} offer {} for {member:?} at {:?}; current offers {:?}",
+            request.offer_id,
+            phase(current),
+            offered(current, member)
         );
         let input = wire::journey_input(request, member, current).unwrap();
         stage_with_supplier(current, &input, supplier).unwrap_or_else(|error| {
@@ -5056,7 +5236,7 @@ pub(super) mod tests {
             let current = fight(true);
             assert_eq!(
                 snapshot(current.state()).unwrap().source_revision.as_str(),
-                TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY
+                TACTICAL_SOURCE_REVISION_LATEST_POLICY
             );
             let cell_option = |current: &Checkpoint, cell| {
                 options(current.state(),1,K::Move).unwrap().into_iter().find(|(_,action,_)|matches!(action,Action::Move(path) if path.last()==Some(&cell))).unwrap().0
@@ -5087,6 +5267,25 @@ pub(super) mod tests {
             .unwrap()
             .battle;
             assert!(!pending.reaction_offers().is_empty());
+            let mut v1_state = current.state().clone();
+            v1_state.encounters[0]
+                .tactical
+                .as_mut()
+                .unwrap()
+                .source_revision =
+                model::label(TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY).unwrap();
+            assert!(matches!(
+                policy(
+                    &current,
+                    &v1_state,
+                    &pending,
+                    pending.reaction_offers()[0],
+                    operation,
+                    0,
+                )
+                .unwrap(),
+                Action::Opportunity { attack: Some(_) }
+            ));
             let mut legacy_state = current.state().clone();
             legacy_state.encounters[0]
                 .tactical
@@ -5250,10 +5449,19 @@ pub(super) mod tests {
                     .into_iter()
                     .find(|member| wire::current_combat_turn(&current, *member).unwrap())
                     .unwrap();
+                let kind = if offered(&current, member)
+                    .unwrap()
+                    .iter()
+                    .any(|(kind, _)| *kind == K::DeclineReaction)
+                {
+                    K::DeclineReaction
+                } else {
+                    K::EndTurn
+                };
                 current = submit(
                     &current,
                     member,
-                    &request(&current, operation, K::EndTurn, None),
+                    &request(&current, operation, kind, None),
                     &mut |sides| Ok(if sides == 20 { 20 } else { sides.min(3) }),
                 );
                 saw_dying |= dying(current.state()).unwrap();
@@ -5272,10 +5480,11 @@ pub(super) mod tests {
                 if !dying(current.state()).unwrap() {
                     break;
                 }
+                let member = member_offering(&current, K::EndTurn);
                 let ticks = current.state().logical_time.ticks;
                 current = submit(
                     &current,
-                    first,
+                    member,
                     &request(&current, operation, K::EndTurn, None),
                     &mut |_| Ok(1),
                 );
@@ -5304,9 +5513,10 @@ pub(super) mod tests {
                 ),
                 Err(RepositoryError::InvalidCandidate)
             );
+            let living_member = member_offering(&defeat, K::EndTurn);
             let revived = submit(
                 &defeat,
-                first,
+                living_member,
                 &request(&defeat, 80, K::EndTurn, None),
                 &mut |_| Ok(20),
             );
@@ -5481,9 +5691,10 @@ pub(super) mod tests {
                     if !dying(current.state()).unwrap() {
                         break;
                     }
+                    let member = member_offering(&current, K::EndTurn);
                     let ticks = current.state().logical_time.ticks;
                     let pressed = request(&current, operation, K::EndTurn, None);
-                    if let Ok(input) = wire::journey_input(&pressed, first, &current)
+                    if let Ok(input) = wire::journey_input(&pressed, member, &current)
                         && stage_with_supplier(&current, &input, &mut |sides| {
                             Ok(if sides == 20 { face } else { 3 })
                         })
@@ -5491,10 +5702,10 @@ pub(super) mod tests {
                     {
                         panic!(
                             "aftermath press refused: {}",
-                            diagnose_refused_aftermath(&current, first, &input)
+                            diagnose_refused_aftermath(&current, member, &input)
                         );
                     }
-                    current = submit(&current, first, &pressed, &mut |sides| {
+                    current = submit(&current, member, &pressed, &mut |sides| {
                         Ok(if sides == 20 { face } else { 3 })
                     });
                     assert!(current.state().logical_time.ticks > ticks);
@@ -5565,7 +5776,18 @@ pub(super) mod tests {
                 }
                 assert_eq!(recovery_hours > 0, !dies && !revives, "face {face}");
                 // Not a dead end: the table is offered what the story allows next, and it works.
-                let next = offered(&current, first).unwrap();
+                let offer_member = [MEMBERS[0], MEMBERS[1]]
+                    .into_iter()
+                    .map(|bytes| MemberId::from_bytes(&bytes).unwrap())
+                    .find(|member| {
+                        offered(&current, *member).is_ok_and(|offers| {
+                            offers.iter().any(|(kind, _)| {
+                                matches!(kind, K::ShortRest | K::ChooseHarborScene)
+                            })
+                        })
+                    })
+                    .expect("a living member has an aftermath choice");
+                let next = offered(&current, offer_member).unwrap();
                 assert!(
                     next.iter()
                         .any(|(kind, _)| matches!(kind, K::ShortRest | K::ChooseHarborScene)),
@@ -5574,7 +5796,7 @@ pub(super) mod tests {
                 if !dies {
                     let rested = submit(
                         &current,
-                        first,
+                        member_offering(&current, K::ShortRest),
                         &request(&current, 190, K::ShortRest, None),
                         &mut |_| panic!("rest has no draw"),
                     );
@@ -6054,5 +6276,67 @@ mod shared_scene_tests {
 
         assert!(line.starts_with("COMBAT attack "));
         assert!(line.contains("mode=melee reaction=opportunity "));
+    }
+}
+
+#[cfg(test)]
+mod private_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn savage_attacker_damage_rolls_keep_the_higher_complete_roll() {
+        let rolls = project_damage_rolls(&[6, 4, 6, 5], true).unwrap();
+
+        assert_eq!(
+            rolls,
+            vec![
+                rpc::DamageRoll {
+                    dice: vec![6, 4],
+                    kept: false,
+                },
+                rpc::DamageRoll {
+                    dice: vec![6, 5],
+                    kept: true,
+                },
+            ]
+        );
+        let chosen = rolls
+            .iter()
+            .find(|roll| roll.kept)
+            .map(|roll| roll.dice.iter().sum::<u32>())
+            .unwrap();
+        assert_eq!(chosen + 3, 14);
+    }
+
+    #[test]
+    fn effective_target_armor_class_is_visible_only_to_the_attacking_player() {
+        let attacker = super::entity(ENTITIES[0]).unwrap();
+        let other_attacker = super::entity(BANDIT).unwrap();
+        let mut view = rpc::CombatView {
+            outcomes: vec![
+                rpc::CombatOutcome {
+                    actor_id: attacker.as_bytes().to_vec(),
+                    target_armor_class: 14,
+                    ..Default::default()
+                },
+                rpc::CombatOutcome {
+                    actor_id: other_attacker.as_bytes().to_vec(),
+                    target_armor_class: 18,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        project_private_defenses(&mut view, Some(attacker));
+
+        assert_eq!(view.outcomes[0].target_armor_class, 14);
+        assert_eq!(view.outcomes[1].target_armor_class, 0);
+        project_private_defenses(&mut view, None);
+        assert!(
+            view.outcomes
+                .iter()
+                .all(|outcome| outcome.target_armor_class == 0)
+        );
     }
 }

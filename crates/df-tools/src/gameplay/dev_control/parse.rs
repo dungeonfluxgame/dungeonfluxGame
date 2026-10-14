@@ -68,6 +68,7 @@ pub(super) enum PlayAction {
     ResolveErrand,
     NewAdventure,
     Search,
+    Choose,
 }
 
 /// Maps one explicit action word to its engine kind. There is no free-text
@@ -95,6 +96,7 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "resolve" | "resolve-errand" => PlayAction::ResolveErrand,
         "new-adventure" => PlayAction::NewAdventure,
         "search" => PlayAction::Search,
+        "choose" => PlayAction::Choose,
         _ => return Err(format!("unknown action {text:?}; see dev describe")),
     })
 }
@@ -124,6 +126,7 @@ impl PlayAction {
             Self::ResolveErrand => rpc::GameplayActionKind::ResolveErrand,
             Self::NewAdventure => rpc::GameplayActionKind::StartNewAdventure,
             Self::Search => rpc::GameplayActionKind::ExamineHarborSeal,
+            Self::Choose => rpc::GameplayActionKind::Unspecified,
         }
     }
 
@@ -137,6 +140,7 @@ impl PlayAction {
                 | Self::StabiliseMedicine
                 | Self::PickUpWeapon
                 | Self::Search
+                | Self::Choose
         )
     }
 }
@@ -197,6 +201,8 @@ mod tests {
         assert_eq!(parse_action("move"), Ok(PlayAction::Move));
         assert_eq!(parse_action("Attack"), Ok(PlayAction::Attack));
         assert_eq!(parse_action("begin-story"), Ok(PlayAction::BeginStory));
+        assert_eq!(parse_action("choose"), Ok(PlayAction::Choose));
+        assert!(PlayAction::Choose.needs_option());
         let kit = parse_action("stabilise-kit").unwrap();
         assert_eq!(kit.kind(), rpc::GameplayActionKind::StabiliseWithHealersKit);
         assert!(kit.needs_option());

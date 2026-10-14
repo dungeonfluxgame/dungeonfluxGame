@@ -5,7 +5,7 @@ use df_session::submission::RepositoryError;
 
 use super::{
     BANDIT, ENCOUNTER, PACKET_THREAD, THREAD_POLICY, THREAT_THREAD, accepted, combat_victory,
-    entity, model, objective_outcome, participants, rule,
+    entity, model, objective_outcome, participants, refusal_detail, rule,
 };
 
 fn invalid<T>() -> Result<T, RepositoryError> {
@@ -25,7 +25,9 @@ pub(super) fn classify(state: &GameState) -> Result<rpc::JourneyPhase, Repositor
         "opening" => Ok(rpc::JourneyPhase::Opening),
         "courier-answer-seal" | "courier-answer-escort" => Ok(rpc::JourneyPhase::Dialogue),
         "combat" => Ok(rpc::JourneyPhase::Combat),
-        "complete" | "harbor-inn" | "epilogue" | "the-end" => Ok(rpc::JourneyPhase::Complete),
+        "complete" | "defeat" | "harbor-inn" | "epilogue" | "the-end" => {
+            Ok(rpc::JourneyPhase::Complete)
+        }
         _ => invalid(),
     }
 }
@@ -150,8 +152,10 @@ pub(super) fn courier_encounter_permitted(current: &Checkpoint) -> Result<bool, 
 }
 
 pub(super) fn validate(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
-    let phase = validate_phase(current)?;
-    validate_thread_progress(current, phase)?;
+    let phase =
+        validate_phase(current).inspect_err(|_| refusal_detail::note("narrative-phase-state"))?;
+    validate_thread_progress(current, phase)
+        .inspect_err(|_| refusal_detail::note("narrative-thread-progress"))?;
     Ok(phase)
 }
 
@@ -481,7 +485,11 @@ fn validate_phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryE
         state,
         end,
         if active == "the-end" {
-            2
+            if super::tactical::all_heroes_dead(state)? {
+                0
+            } else {
+                2
+            }
         } else {
             usize::from(ending)
         },

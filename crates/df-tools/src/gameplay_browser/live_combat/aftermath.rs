@@ -26,12 +26,8 @@ fn member_key(index: usize, member: &rpc::PartyMemberView) -> String {
     }
 }
 
-fn short_rest_label() -> &'static str {
-    "Short Rest · 1 hour"
-}
-
 fn short_rest_benefit() -> &'static str {
-    "Spend a Hit Point Die to heal, and get one Second Wind back"
+    "Regain one use of Second Wind"
 }
 
 fn own_hit_point_die_roll(journey: &rpc::JourneyView) -> Option<&str> {
@@ -45,8 +41,8 @@ fn own_hit_point_die_roll(journey: &rpc::JourneyView) -> Option<&str> {
         .filter(|value| !value.trim().is_empty())
 }
 
-fn short_rest_button_label() -> String {
-    format!("{}\n{}", short_rest_label(), short_rest_benefit())
+fn short_rest_button_label(label: &str) -> String {
+    format!("{label}\n{}", short_rest_benefit())
 }
 
 fn preserve_rest_label_layout(surface: &CampfireSurface) -> Result<(), JsValue> {
@@ -293,7 +289,7 @@ pub(super) fn present_rest(
     // The view carries no location name, so the eyebrow is only the outcome.
     let location = outcome_word(view);
     let result_line = dialogue_line(view.journey);
-    let rest_label = short_rest_button_label();
+    let rest_label = rest.map(|offer| short_rest_button_label(&offer.label));
     let roll_notice =
         own_hit_point_die_roll(view.journey).map(|roll| format!("Hit Point Die: {roll}"));
     let choice_notice = result_line.as_ref().map_or_else(
@@ -322,12 +318,14 @@ pub(super) fn present_rest(
         },
         connected,
         members: &members,
-        rest: rest.map(|offer| CampfireOffer {
-            id: &offer.offer_id,
-            label: &rest_label,
-            enabled: !blocked,
-            pending: busy,
-        }),
+        rest: rest
+            .zip(rest_label.as_deref())
+            .map(|(offer, label)| CampfireOffer {
+                id: &offer.offer_id,
+                label,
+                enabled: !blocked,
+                pending: busy,
+            }),
         continue_action: proceed.zip(proceed_label.as_deref()).map(|(offer, label)| {
             CampfireOffer {
                 id: &offer.offer_id,
@@ -415,7 +413,7 @@ fn submit(client: &Rc<RefCell<Client>>, selection: &CampfireSelection) {
 mod tests {
     use super::{
         condition, continue_label, dialogue_line, is_extra_control, own_hit_point_die_roll,
-        short_rest_benefit, short_rest_button_label, short_rest_label,
+        short_rest_benefit, short_rest_button_label,
     };
     use df_protocol::common as rpc;
 
@@ -484,16 +482,12 @@ mod tests {
     }
 
     #[test]
-    fn short_rest_control_says_what_it_gives_srd_p187() {
-        assert_eq!(short_rest_label(), "Short Rest · 1 hour");
+    fn short_rest_button_uses_the_server_count_and_rule_benefit() {
         assert_eq!(
-            short_rest_benefit(),
-            "Spend a Hit Point Die to heal, and get one Second Wind back"
+            short_rest_button_label("Short Rest · 1 hour · 1 Hit Point Die to spend"),
+            "Short Rest · 1 hour · 1 Hit Point Die to spend\nRegain one use of Second Wind"
         );
-        assert_eq!(
-            short_rest_button_label(),
-            format!("{}\n{}", short_rest_label(), short_rest_benefit())
-        );
+        assert_eq!(short_rest_benefit(), "Regain one use of Second Wind");
     }
 
     #[test]

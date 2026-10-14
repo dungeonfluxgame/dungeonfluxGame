@@ -132,6 +132,7 @@ impl Event {
 pub(super) enum Transition {
     To(SessionState),
     FightMayEnd,
+    AftermathMayEnd,
     ResolveMayEnd,
 }
 
@@ -179,6 +180,8 @@ pub(super) fn events_for_kind(kind: rpc::GameplayActionKind) -> &'static [Event]
         K::DefendCourier => &[Event::StartFight],
         K::GreatswordAttack
         | K::SecondWind
+        | K::StabiliseWithHealersKit
+        | K::StabiliseMedicine
         | K::Move
         | K::Dash
         | K::Dodge
@@ -300,7 +303,13 @@ pub(super) fn outcome_legal(
             after == target || matches!(event, Event::StoryChoice | Event::ScriptStep)
         }
         Transition::FightMayEnd => {
-            matches!(after, SessionState::Fight | SessionState::Aftermath)
+            matches!(
+                after,
+                SessionState::Fight | SessionState::Aftermath | SessionState::Ended
+            )
+        }
+        Transition::AftermathMayEnd => {
+            matches!(after, SessionState::Aftermath | SessionState::Ended)
         }
         Transition::ResolveMayEnd => {
             matches!(after, SessionState::Aftermath | SessionState::Ended)
@@ -324,9 +333,8 @@ pub(super) fn next(state: SessionState, event: Event) -> Result<Transition, Mach
         (S::Fight, E::CombatAction | E::EndTurn) => Transition::FightMayEnd,
         // Time passing for a dying hero after the fight (death saves) is the
         // one EndTurn outside a fight.
-        (S::Aftermath, E::EndTurn | E::Rest | E::StoryChoice | E::ScriptStep) => {
-            Transition::To(S::Aftermath)
-        }
+        (S::Aftermath, E::EndTurn) => Transition::AftermathMayEnd,
+        (S::Aftermath, E::Rest | E::StoryChoice | E::ScriptStep) => Transition::To(S::Aftermath),
         (S::Aftermath, E::Resolve) => Transition::ResolveMayEnd,
         (S::Ended, E::NewAdventure) => Transition::To(S::Preparing),
         _ => return Err(MachineRefusal { state, event }),
@@ -395,6 +403,9 @@ mod tests {
                     Ok(Transition::FightMayEnd) => {
                         assert_eq!(state, SessionState::Fight, "{event:?}");
                     }
+                    Ok(Transition::AftermathMayEnd) => {
+                        assert_eq!(state, SessionState::Aftermath, "{event:?}");
+                    }
                     Ok(Transition::ResolveMayEnd) => {
                         assert_eq!(state, SessionState::Aftermath, "{event:?}");
                     }
@@ -430,7 +441,7 @@ mod tests {
     fn outcomes_must_land_where_the_transition_named() {
         use Event as E;
         use SessionState as S;
-        // The fight is entered only into Fight and left only into Aftermath.
+        // The fight is entered only into Fight and leaves through its aftermath or end card.
         assert!(outcome_legal(
             S::Conversation,
             E::StartFight,
@@ -449,11 +460,23 @@ mod tests {
             Transition::FightMayEnd,
             S::Aftermath
         ));
-        assert!(!outcome_legal(
+        assert!(outcome_legal(
             S::Fight,
             E::CombatAction,
             Transition::FightMayEnd,
             S::Ended
+        ));
+        assert!(outcome_legal(
+            S::Aftermath,
+            E::EndTurn,
+            Transition::AftermathMayEnd,
+            S::Ended
+        ));
+        assert!(!outcome_legal(
+            S::Aftermath,
+            E::EndTurn,
+            Transition::AftermathMayEnd,
+            S::Fight
         ));
         assert!(!outcome_legal(
             S::Fight,
@@ -576,6 +599,11 @@ mod tests {
                             state = SessionState::Aftermath;
                         }
                     }
+                    Ok(Transition::AftermathMayEnd) => {
+                        if xorshift(&mut rng) % 2 == 0 {
+                            state = SessionState::Ended;
+                        }
+                    }
                     Ok(Transition::ResolveMayEnd) => state = SessionState::Ended,
                     Err(refusal) => {
                         assert_eq!(refusal.state, state, "seed {seed}");
@@ -598,6 +626,7 @@ mod tests {
                     match next(state, event) {
                         Ok(Transition::To(target)) => state = target,
                         Ok(Transition::FightMayEnd) => state = SessionState::Aftermath,
+                        Ok(Transition::AftermathMayEnd) => state = SessionState::Ended,
                         Ok(Transition::ResolveMayEnd) => state = SessionState::Ended,
                         Err(_) => {}
                     }

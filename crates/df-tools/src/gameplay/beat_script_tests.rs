@@ -453,7 +453,13 @@ fn canonical_script_reproduces_states_receipts_offers_and_scenes_for_harbor_and_
                             df_persistence::local_demo_scope::LocalDemoRole::Player,
                             member,
                         )
-                        .unwrap(),
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "player view failed for {approach}, defeat={defeat}, phase={:?}, error={error:?}, step={}",
+                                phase(before).unwrap(),
+                                crate::gameplay::refusal_detail::step_or_unknown()
+                            )
+                        }),
                     )
                 });
                 let b = pack::with_test_pack(scripted.clone(), || {

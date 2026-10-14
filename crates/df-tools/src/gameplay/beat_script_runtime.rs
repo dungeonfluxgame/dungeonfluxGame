@@ -330,8 +330,6 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
         }
     })?;
     Ok(rpc::GameplayScene {
-        scene_contents_json: String::new(),
-        item: None,
         destination: rpc::HarborDestination::HarborInn as i32,
         title: scene.title,
         scene_asset: scene.asset,
@@ -344,8 +342,7 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
         live_plate: String::new(),
         plate_layout: None,
         plate_state: rpc::PlateState::Unspecified as i32,
-        scene_video_state: rpc::HomeVideoState::None as i32,
-        scene_video_path: String::new(),
+        ..Default::default()
     })
 }
 pub(super) fn pure_target(
@@ -1080,6 +1077,8 @@ pub(super) fn action_label(
             rpc::GameplayActionKind::Dodge => "Dodge",
             rpc::GameplayActionKind::Disengage => "Disengage",
             rpc::GameplayActionKind::SecondWind => "Second Wind",
+            rpc::GameplayActionKind::StabiliseWithHealersKit => "Stabilize with Healer's Kit",
+            rpc::GameplayActionKind::StabiliseMedicine => "Stabilize with Wisdom (Medicine)",
             rpc::GameplayActionKind::EndTurn => "End turn",
             rpc::GameplayActionKind::OpportunityAttack => "Opportunity attack",
             rpc::GameplayActionKind::DeclineReaction => "Decline opportunity attack",
@@ -1130,6 +1129,44 @@ pub(super) fn advance_state(state: &mut GameState, next: &str) -> Result<(), Rep
     state.narrative.active_beats = vec![model::content(next)?];
     Ok(())
 }
+
+/// A party with no living heroes cannot choose the authored steps that close its defeat.
+pub(super) fn end_for_total_party_death(state: &mut GameState) -> Result<(), RepositoryError> {
+    beat_script::with_script(|script| {
+        let mut beat = script.current(state)?;
+        for _ in 0..script.beats.len() {
+            if script.terminal.contains(&beat.id) && beat.offers.is_empty() {
+                return Ok(());
+            }
+            let mut resolutions = beat
+                .offers
+                .iter()
+                .filter(|offer| offer.effect == BeatEffect::Resolve);
+            let Some(resolve) = resolutions.next() else {
+                return invalid();
+            };
+            if resolutions.next().is_some() {
+                return invalid();
+            }
+            let Some(transition) = beat.transitions.iter().find(|transition| {
+                transition.trigger
+                    == (BeatTrigger::Offer {
+                        offer: resolve.id.clone(),
+                    })
+            }) else {
+                return invalid();
+            };
+            let Some(next) = script.find(&transition.target) else {
+                return invalid();
+            };
+            let durable = next.state.durable.clone();
+            advance_state(state, &durable)?;
+            beat = script.current(state)?;
+        }
+        invalid()
+    })
+}
+
 pub(super) fn first_action(
     current: &Checkpoint,
 ) -> Result<Option<(BeatEffect, MemberId)>, RepositoryError> {

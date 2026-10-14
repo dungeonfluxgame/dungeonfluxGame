@@ -312,6 +312,96 @@ fn player_offers(
         .collect())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChoiceTarget {
+    Offer,
+    GroupOption { group: usize, option: usize },
+    Destination(usize),
+}
+
+fn unique_offer_match(offers: &[Offer], query: &str) -> Option<usize> {
+    let matches = |exact: bool| {
+        let mut found = Vec::new();
+        for (index, offer) in offers.iter().enumerate() {
+            let mut names = vec![offer.offer_id.clone(), offer.label.clone()];
+            for group in &offer.groups {
+                for option in &group.options {
+                    names.push(option.option_id.clone());
+                    names.push(option.label.clone());
+                }
+            }
+            for destination in &offer.destinations {
+                names.push(destination.label.clone());
+                names.push(destination.destination.to_string());
+            }
+            if names.iter().any(|name| {
+                if exact {
+                    name.eq_ignore_ascii_case(query)
+                } else {
+                    parse::names_match(name, query)
+                }
+            }) {
+                found.push(index);
+            }
+        }
+        found
+    };
+    let exact = matches(true);
+    let found = if exact.is_empty() {
+        matches(false)
+    } else {
+        exact
+    };
+    match found.as_slice() {
+        [index] => Some(*index),
+        _ => None,
+    }
+}
+
+fn unique_choice_target(offer: &Offer, query: &str) -> Option<ChoiceTarget> {
+    let mut names = vec![
+        (offer.offer_id.as_str(), ChoiceTarget::Offer),
+        (offer.label.as_str(), ChoiceTarget::Offer),
+    ];
+    for (group_index, group) in offer.groups.iter().enumerate() {
+        for (option_index, option) in group.options.iter().enumerate() {
+            let target = ChoiceTarget::GroupOption {
+                group: group_index,
+                option: option_index,
+            };
+            names.push((option.option_id.as_str(), target));
+            names.push((option.label.as_str(), target));
+        }
+    }
+    for (index, destination) in offer.destinations.iter().enumerate() {
+        names.push((destination.label.as_str(), ChoiceTarget::Destination(index)));
+    }
+    let select = |exact: bool| {
+        let mut found = Vec::new();
+        for (name, target) in &names {
+            let matches = if exact {
+                name.eq_ignore_ascii_case(query)
+            } else {
+                parse::names_match(name, query)
+            };
+            if matches && !found.contains(target) {
+                found.push(*target);
+            }
+        }
+        found
+    };
+    let exact = select(true);
+    let found = if exact.is_empty() {
+        select(false)
+    } else {
+        exact
+    };
+    match found.as_slice() {
+        [target] => Some(*target),
+        _ => None,
+    }
+}
+
 /// Reads one seat's offers for name resolution, tolerating the owner's
 /// post-commit projection lag: right after a commit the served player view
 /// can carry no offers for several seconds (observed up to ~10 s on a loaded
@@ -364,23 +454,43 @@ pub(super) async fn act(
             .ok_or_else(|| bad_request(format!("seat{} has not joined yet", index + 1)))?
     };
     let (revision, offers) = seat_offers(&state, index).await?;
-    let offer = offers
-        .iter()
-        .find(|offer| offer.action_kind == action.kind() as i32)
-        .ok_or_else(|| {
-            (
-                axum::http::StatusCode::OK,
-                Json(json!({
-                    "status": "unavailable",
-                    "reason": format!("{action:?} is not offered to this hero right now"),
-                    "offers": offers.iter().map(|offer| offer.label.clone()).collect::<Vec<_>>(),
-                })),
-            )
-        })?;
+    let offer_index = if action == parse::PlayAction::Choose {
+        let option = body
+            .get("option")
+            .and_then(Value::as_str)
+            .filter(|option| !option.trim().is_empty() && option.len() <= 64)
+            .ok_or_else(|| bad_request("choose needs {\"option\": \"<label or id>\"}"))?;
+        unique_offer_match(&offers, option)
+    } else {
+        offers
+            .iter()
+            .position(|offer| offer.action_kind == action.kind() as i32)
+    }
+    .ok_or_else(|| {
+        (
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "status": "unavailable",
+                "reason": if action == parse::PlayAction::Choose {
+                    "the choice matches none or several current offers".to_owned()
+                } else {
+                    format!("{action:?} is not offered to this hero right now")
+                },
+                "offers": offers.iter().map(|offer| offer.label.clone()).collect::<Vec<_>>(),
+            })),
+        )
+    })?;
+    let offer = &offers[offer_index];
+    let action_kind = if action == parse::PlayAction::Choose {
+        rpc::GameplayActionKind::try_from(offer.action_kind)
+            .map_err(|_| failed("offered action kind invalid"))?
+    } else {
+        action.kind()
+    };
     let mut submit = rpc::SubmitActionRequest {
         observed_revision: Some(revision),
         offer_id: offer.offer_id.clone(),
-        action_kind: action.kind() as i32,
+        action_kind: action_kind as i32,
         ..Default::default()
     };
     fill_scope(&state, &mut submit).await?;
@@ -417,6 +527,66 @@ fn fill_action_choices(
     offer: &Offer,
     submit: &mut rpc::SubmitActionRequest,
 ) -> Result<(), (axum::http::StatusCode, Json<Value>)> {
+    if action == parse::PlayAction::Choose {
+        let query = body
+            .get("option")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad_request("choose needs {\"option\": \"<label or id>\"}"))?;
+        let target = unique_choice_target(offer, query).ok_or_else(|| {
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "status": "ambiguous",
+                    "reason": format!("{query:?} matches none or several choices; be specific"),
+                })),
+            )
+        })?;
+        for (group_index, group) in offer.groups.iter().enumerate() {
+            let selected = match target {
+                ChoiceTarget::GroupOption { group, option } if group == group_index => Some(option),
+                _ => group
+                    .options
+                    .iter()
+                    .position(|option| option.option_id == "no")
+                    .or_else(|| (!group.options.is_empty()).then_some(0)),
+            }
+            .ok_or_else(|| {
+                (
+                    axum::http::StatusCode::OK,
+                    Json(json!({"status": "unavailable", "reason": "this offer has an empty choice group"})),
+                )
+            })?;
+            let option = group.options.get(selected).ok_or_else(|| {
+                (
+                    axum::http::StatusCode::OK,
+                    Json(json!({"status": "unavailable", "reason": "this offer's choice is no longer available"})),
+                )
+            })?;
+            submit.action_choices.push(rpc::JourneyChoice {
+                group_id: group.group_id.clone(),
+                option_id: option.option_id.clone(),
+            });
+        }
+        submit.destination = match target {
+            ChoiceTarget::Destination(index) => offer
+                .destinations
+                .get(index)
+                .map(|destination| destination.destination)
+                .ok_or_else(|| {
+                    (
+                        axum::http::StatusCode::OK,
+                        Json(json!({"status": "unavailable", "reason": "this destination is no longer available"})),
+                    )
+                })?,
+            _ => offer
+                .destinations
+                .first()
+                .map_or(rpc::HarborDestination::Unspecified as i32, |destination| {
+                    destination.destination
+                }),
+        };
+        return Ok(());
+    }
     if action == parse::PlayAction::Search {
         let thing = body
             .get("option")
@@ -758,6 +928,51 @@ mod offer_tests {
             )),
         };
         assert!(player_offers(&view).is_err());
+    }
+
+    #[test]
+    fn generic_choose_resolves_offered_choice_ids_and_labels() {
+        let offer = Offer {
+            offer_id: "rest-offer".to_owned(),
+            action_kind: rpc::GameplayActionKind::ShortRest as i32,
+            label: "Short Rest".to_owned(),
+            groups: vec![rpc::JourneyGroup {
+                group_id: "hit-point-die".to_owned(),
+                options: vec![
+                    rpc::JourneyOption {
+                        option_id: "spend".to_owned(),
+                        label: "Spend one Hit Point Die".to_owned(),
+                        ..Default::default()
+                    },
+                    rpc::JourneyOption {
+                        option_id: "keep".to_owned(),
+                        label: "Keep it".to_owned(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            destinations: Vec::new(),
+        };
+        assert_eq!(
+            unique_offer_match(std::slice::from_ref(&offer), "keep"),
+            Some(0)
+        );
+        assert_eq!(
+            unique_offer_match(std::slice::from_ref(&offer), "Spend one Hit Point Die"),
+            Some(0)
+        );
+        let mut submit = rpc::SubmitActionRequest::default();
+        fill_action_choices(
+            &json!({"option": "Keep it"}),
+            parse::PlayAction::Choose,
+            &offer,
+            &mut submit,
+        )
+        .unwrap();
+        assert_eq!(submit.action_choices.len(), 1);
+        assert_eq!(submit.action_choices[0].group_id, "hit-point-die");
+        assert_eq!(submit.action_choices[0].option_id, "keep");
     }
 
     #[test]

@@ -84,6 +84,41 @@ mod notebook_command_tests {
 }
 
 #[cfg(test)]
+mod party_note_scene_title_tests {
+    use super::super::{notebook, pack};
+    use df_types::MemberId;
+
+    #[test]
+    fn party_note_uses_the_human_readable_scene_title() {
+        let member = MemberId::from_bytes(&[1; 16]).unwrap();
+        let scene = pack::Scene {
+            key: pack::SceneKey::DialogueSeal,
+            title: "The Sealed Warning".to_owned(),
+            narration: String::new(),
+            rules_note: String::new(),
+            cast: Vec::new(),
+            narration_rested: None,
+            speaker: String::new(),
+            dialogue: String::new(),
+            asset: String::new(),
+            setting: None,
+            speaker_portrait: String::new(),
+            findings: Vec::new(),
+        };
+        let ledger = notebook::NotebookLedger::none();
+        ledger
+            .add_note(
+                member,
+                "Brakka",
+                "The key is beneath the bell.",
+                super::note_scene_title(&scene),
+            )
+            .unwrap();
+        assert_eq!(ledger.visible_to(member)[0].scene, "The Sealed Warning");
+    }
+}
+
+#[cfg(test)]
 mod observation_label_tests {
     #[test]
     fn observation_target_is_a_valid_srd_5_2_1_search_label_page_187() {
@@ -159,6 +194,10 @@ fn observation_thing_label(thing: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join("-");
     (!label.is_empty()).then_some(label)
+}
+
+fn note_scene_title(scene: &super::pack::Scene) -> &str {
+    &scene.title
 }
 
 fn is_observation_submission(
@@ -988,10 +1027,9 @@ impl actor::Actor {
             .ok_or_else(|| Status::failed_precondition("hero required for party note"))?;
         let scene =
             super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
-        let scene = super::notebook::scene_name(scene.key)
-            .map_err(|_| Status::internal("notebook scene unavailable"))?;
+        let scene_title = note_scene_title(&scene);
         self.notebook
-            .add_note(member, &hero, text, &scene)
+            .add_note(member, &hero, text, scene_title)
             .map_err(|error| match error {
                 super::notebook::NotebookError::Bound("text") => {
                     Status::resource_exhausted("party note text exceeds its bound")
@@ -1007,7 +1045,7 @@ impl actor::Actor {
             rpc::TableRole::Narrator,
             0,
             rpc::TableKind::Action,
-            &format!("NOTE added kind=note title=\"Party note\" scene={scene}"),
+            &format!("NOTE added kind=note title=\"Party note\" scene={scene_title}"),
         );
         Ok(())
     }

@@ -907,6 +907,12 @@ pub(super) fn validate_step(
         let beat = script.current(before.state())?;
         let next = script.current(after.state())?;
         if journey::tactical::present(before.state())
+            && journey::tactical::all_heroes_dead(after.state())?
+            && script.terminal.contains(&next.id)
+        {
+            return Ok(());
+        }
+        if journey::tactical::present(before.state())
             && beat.kind != BeatKind::Fight
             && action == rpc::GameplayActionKind::EndTurn
             && journey::tactical::dying(before.state())?
