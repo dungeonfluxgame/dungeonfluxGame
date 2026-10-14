@@ -111,6 +111,17 @@ impl fmt::Display for RecordError {
     }
 }
 impl std::error::Error for RecordError {}
+/// A pack scene's setting is bound to the record's setting for its key by everything but the
+/// scene model, which the record keeps once per setting and the pack's scene copies leave out
+/// (to stay under the stored pack's size limit).
+fn same_place(scene: &super::setting::SceneSetting, record: &super::setting::SceneSetting) -> bool {
+    scene.place_id == record.place_id
+        && scene.name == record.name
+        && scene.short == record.short
+        && scene.kind == record.kind
+        && scene.exterior == record.exterior
+        && scene.art_key == record.art_key
+}
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -345,7 +356,11 @@ pub(crate) fn reload(
                 .pack
                 .scenes
                 .iter()
-                .any(|s| s.setting.as_ref() != Some(settings.scene(s.key))) =>
+                .any(|s| {
+                    !s.setting
+                        .as_ref()
+                        .is_some_and(|setting| same_place(setting, settings.scene(s.key)))
+                }) =>
         {
             return Err(RecordError::Invalid("record scene settings binding"));
         }
