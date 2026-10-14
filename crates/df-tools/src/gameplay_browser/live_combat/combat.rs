@@ -87,7 +87,7 @@ fn label(value: &str) -> Result<RevisionLabel, JsValue> {
     RevisionLabel::new(Some(value)).map_err(|_| invalid("offer identity invalid"))
 }
 
-fn death_save_summary(save: &rpc::DeathSaveState) -> String {
+pub(super) fn death_save_summary(save: &rpc::DeathSaveState) -> String {
     let state = if save.dead {
         "Dead · "
     } else if save.stable {
@@ -106,12 +106,12 @@ fn death_save_summary(save: &rpc::DeathSaveState) -> String {
         "failures"
     };
     format!(
-        "{state}{} {success} · {} {failure}",
+        "{state}{} {success}, {} {failure}",
         save.successes, save.failures,
     )
 }
 
-fn death_save_for<'a>(
+pub(super) fn death_save_for<'a>(
     participant: &rpc::PartyMemberView,
     saves: &'a [rpc::DeathSaveState],
 ) -> Option<&'a rpc::DeathSaveState> {
@@ -121,6 +121,67 @@ fn death_save_for<'a>(
         } else {
             save.participant_id == participant.participant_id
         }
+    })
+}
+
+pub(super) fn death_save_result(
+    outcome: &rpc::CombatOutcome,
+) -> (&'static str, &'static str, CombatTone) {
+    // SRD 5.2.1 pp. 17-18: a natural 1 adds two failures; a natural 20 restores 1 Hit Point.
+    match rpc::DeathSaveResult::try_from(outcome.death_save_result) {
+        Ok(rpc::DeathSaveResult::Success) => {
+            ("Success", "10 or higher succeeds", CombatTone::Success)
+        }
+        Ok(rpc::DeathSaveResult::Failure) => {
+            ("Failure", "Below 10 adds one failure", CombatTone::Failure)
+        }
+        Ok(rpc::DeathSaveResult::CriticalFailure) => (
+            "Critical failure",
+            "Natural 1 adds two failures",
+            CombatTone::Failure,
+        ),
+        Ok(rpc::DeathSaveResult::Stabilised) => (
+            "Stable",
+            "Three successes: stable at 0 HP",
+            CombatTone::Success,
+        ),
+        Ok(rpc::DeathSaveResult::Died) => ("Dead", "Three failures: dead", CombatTone::Failure),
+        Ok(rpc::DeathSaveResult::Revived) => (
+            "Revived",
+            "Natural 20: regained 1 hit point",
+            CombatTone::Success,
+        ),
+        Ok(rpc::DeathSaveResult::Unspecified) | Err(_) => (
+            "Death save recorded",
+            "The server recorded this Death Saving Throw",
+            CombatTone::Neutral,
+        ),
+    }
+}
+
+fn death_save_roll(outcome: &rpc::CombatOutcome, index: usize) -> Option<RollText> {
+    if outcome.kind != rpc::OutcomeKind::DeathSave as i32 {
+        return None;
+    }
+    let (result, explanation, tone) = death_save_result(outcome);
+    Some(RollText {
+        key: format!("roll-{index}"),
+        label: format!("{} makes a Death Saving Throw", outcome.actor_name),
+        value: outcome.attack_die.to_string(),
+        explanation: format!("d20 {} · {explanation}", outcome.attack_die),
+        source: format!(
+            "{} successes, {} failures",
+            outcome.death_successes, outcome.death_failures
+        ),
+        verdict: (result, tone),
+        die_face: u8::try_from(outcome.attack_die)
+            .ok()
+            .filter(|face| (1..=20).contains(face)),
+        die_rest: crate::gameplay_browser::live_dice::rest_url_for(
+            outcome.attack_die,
+            &outcome.faces,
+            outcome.roll_mode,
+        ),
     })
 }
 
@@ -153,12 +214,66 @@ fn tactical_option_label(label: &str, target: &rpc::LegalCombatTarget) -> String
             .collect::<Vec<_>>()
             .join(", ");
         if reasons.is_empty() {
-            label.push_str(" · disadvantage");
+            label.push_str(" · Disadvantage");
         } else {
-            label.push_str(&format!(" · disadvantage: {reasons}"));
+            // SRD 5.2.1 p. 14: a ranged weapon attack within 5 feet of an enemy has Disadvantage.
+            let reasons = reasons.replace("hostile within 5 ft", "an enemy within 5 ft");
+            label.push_str(&format!(" · Disadvantage: {reasons}"));
         }
     }
     label
+}
+
+fn reaction_status(available: bool) -> &'static str {
+    // SRD 5.2.1 p. 10: a used Reaction returns at the start of the hero's next turn.
+    if available {
+        "Reaction ready"
+    } else {
+        "Reaction used"
+    }
+}
+
+fn initiative_tie_disclosure(combat: &rpc::CombatView) -> Option<&'static str> {
+    let side = |roll: &rpc::InitiativeRoll| {
+        combat
+            .participants
+            .iter()
+            .find(|member| {
+                if roll.participant_id.is_empty() {
+                    member.name == roll.name
+                } else {
+                    member.participant_id == roll.participant_id
+                }
+            })
+            .map(|member| member.side)
+    };
+    let tied = combat.initiative.iter().enumerate().any(|(index, first)| {
+        combat.initiative[index + 1..].iter().any(|second| {
+            first.total == second.total
+                && matches!(
+                    (side(first), side(second)),
+                    (Some(1), Some(2)) | (Some(2), Some(1))
+                )
+        })
+    });
+    // The SRD leaves a character-monster tie to the GM (p. 13); this table's stated ruling gives it to heroes.
+    tied.then_some("Initiative tie: heroes act before enemies")
+}
+
+fn movement_dead_space_disclosure(
+    participants: &[rpc::PartyMemberView],
+    move_available: bool,
+) -> Option<&'static str> {
+    // SRD 5.2.1 p. 13 defines creature spaces; this table allows movement through a dead creature's space.
+    (move_available
+        && participants.iter().any(|member| {
+            member.side == 2
+                && member
+                    .conditions
+                    .iter()
+                    .any(|condition| condition == "dead")
+        }))
+    .then_some("A dead creature's space does not block movement.")
 }
 
 fn action_empty(
@@ -301,30 +416,51 @@ fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Opt
 }
 
 fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollText> {
-    // The server lists outcomes oldest first; the newest is shown first and largest.
-    combat
+    // Attack and death-save outcomes have separate projections; sequence restores their live order.
+    let mut outcomes = combat
         .outcomes
         .iter()
+        .chain(
+            combat
+                .death_save_outcomes
+                .iter()
+                .filter(|outcome| outcome.kind == rpc::OutcomeKind::DeathSave as i32),
+        )
         .filter(|outcome| released_sequence.is_none_or(|sequence| outcome.sequence <= sequence))
-        .rev()
+        .collect::<Vec<_>>();
+    outcomes.sort_by_key(|outcome| outcome.sequence);
+    outcomes.reverse();
+    outcomes
+        .into_iter()
         .enumerate()
-        .map(|(index, outcome)| {
+        .filter_map(|(index, outcome)| {
+            if let Some(roll) = death_save_roll(outcome, index) {
+                return Some(roll);
+            }
             let damage_rolls = outcome
                 .damage_rolls
                 .iter()
                 .map(|roll| (roll.dice.as_slice(), roll.kept))
                 .collect::<Vec<_>>();
-            let damage = crate::combat_text::damage_summary(
-                outcome.damage,
-                &damage_rolls,
-                outcome.damage_modifier,
-            );
+            let damage = if outcome.grazed {
+                crate::combat_text::graze_summary(
+                    &df_render::battle::float_text::attack_name(&outcome.weapon),
+                    outcome.damage,
+                    &outcome.damage_type,
+                )
+            } else {
+                crate::combat_text::damage_summary(
+                    outcome.damage,
+                    &damage_rolls,
+                    outcome.damage_modifier,
+                )
+            };
             let knockout = if outcome.knocked_out {
                 " · Nonlethal knockout: unconscious at 1 HP"
             } else {
                 ""
             };
-            RollText {
+            Some(RollText {
                 key: format!("roll-{index}"),
                 // The card says what kind of attack it was: a shot or a melee strike, and with what.
                 label: if outcome.weapon.is_empty() {
@@ -348,8 +484,6 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
                     ("Critical hit", CombatTone::Success)
                 } else if outcome.hit {
                     ("Hit", CombatTone::Success)
-                } else if outcome.grazed {
-                    ("Graze", CombatTone::Neutral)
                 } else {
                     ("Miss", CombatTone::Failure)
                 },
@@ -361,7 +495,7 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
                     &outcome.faces,
                     outcome.roll_mode,
                 ),
-            }
+            })
         })
         .collect()
 }
@@ -578,6 +712,17 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         .as_deref()
         .and_then(|key| actors.iter().find(|actor| actor.key == key))
         .map(|actor| actor.portrait.clone());
+    let mut turn_label = match (combat.finished, active_name) {
+        _ if waiting_for_view => format!("Round {} · Waiting for current view…", combat.round),
+        _ if resolving && !combat.finished => format!("Round {} · On the TV now…", combat.round),
+        (true, _) | (_, None) => format!("Round {} · Encounter resolved", combat.round),
+        (false, Some(_)) if own_turn => format!("Round {} · Your turn", combat.round),
+        (false, Some(name)) => format!("Round {} · {name}'s turn", combat.round),
+    };
+    if let Some(disclosure) = initiative_tie_disclosure(combat) {
+        turn_label.push_str(" · ");
+        turn_label.push_str(disclosure);
+    }
     Ok(Text {
         keyart,
         title: view.scene.title.clone(),
@@ -597,15 +742,7 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         } else {
             "Shared battle view"
         },
-        turn_label: match (combat.finished, active_name) {
-            _ if waiting_for_view => format!("Round {} · Waiting for current view…", combat.round),
-            _ if resolving && !combat.finished => {
-                format!("Round {} · On the TV now…", combat.round)
-            }
-            (true, _) | (_, None) => format!("Round {} · Encounter resolved", combat.round),
-            (false, Some(_)) if own_turn => format!("Round {} · Your turn", combat.round),
-            (false, Some(name)) => format!("Round {} · {name}'s turn", combat.round),
-        },
+        turn_label,
         active,
         action_empty: action_empty(player, own_turn, active_name, waiting_for_view, resolving),
         busy: state.busy,
@@ -826,10 +963,7 @@ fn publish_tactical_controls(
                     "spent"
                 }
             ),
-            format!(
-                "Reaction {}",
-                if budget.reaction { "ready" } else { "spent" }
-            ),
+            reaction_status(budget.reaction).to_owned(),
         ] {
             node(&document, &strip, "span", "resource-chip", &value)?;
         }
@@ -1063,6 +1197,7 @@ fn publish_fight_map(
     use crate::gameplay_browser::{button, node};
     let movement = offer_list(controls, rpc::GameplayActionKind::Move)?;
     let attack = offer_list(controls, rpc::GameplayActionKind::GreatswordAttack)?;
+    let dead_space_note = movement_dead_space_disclosure(&combat.participants, movement.is_some());
     let move_ids = movement
         .iter()
         .flat_map(|(_, _, listed)| listed.iter().map(|(id, _)| id.clone()))
@@ -1146,6 +1281,9 @@ fn publish_fight_map(
                     "Tap a lit square, then Move. Chosen: {}.",
                     chosen_text(select, listed)
                 ));
+            }
+            if let Some(note) = dead_space_note {
+                lines.push(note.to_owned());
             }
             if let Some((select, listed)) = &attack_list
                 && !listed.is_empty()
@@ -1551,7 +1689,8 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
 mod tests {
     use super::{
         action_empty, attack_roll_explanation, conditions_resource, death_save_for,
-        death_save_summary, ordered_tactical_offers, rolls, tactical_option_label,
+        death_save_summary, initiative_tie_disclosure, movement_dead_space_disclosure,
+        ordered_tactical_offers, reaction_status, rolls, tactical_option_label,
         waiting_for_current_view,
     };
     use df_protocol::common as rpc;
@@ -1753,7 +1892,7 @@ mod tests {
                 failures: 2,
                 ..Default::default()
             }),
-            "1 success · 2 failures"
+            "1 success, 2 failures"
         );
         assert_eq!(
             death_save_summary(&rpc::DeathSaveState {
@@ -1761,14 +1900,14 @@ mod tests {
                 stable: true,
                 ..Default::default()
             }),
-            "Stable at 0 HP · 0 successes · 2 failures"
+            "Stable at 0 HP · 0 successes, 2 failures"
         );
         assert_eq!(
             death_save_summary(&rpc::DeathSaveState {
                 dead: true,
                 ..Default::default()
             }),
-            "Dead · 0 successes · 0 failures"
+            "Dead · 0 successes, 0 failures"
         );
     }
 
@@ -1798,6 +1937,142 @@ mod tests {
             death_save_for(&member, &saves).map(|save| save.failures),
             Some(1)
         );
+    }
+
+    #[test]
+    fn srd_p17_p18_phone_shows_a_released_natural_one_death_save_and_running_tally() {
+        let save = rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::DeathSave as i32,
+            actor_name: "Brakka".to_owned(),
+            attack_die: 1,
+            death_save_result: rpc::DeathSaveResult::CriticalFailure as i32,
+            death_successes: 0,
+            death_failures: 2,
+            sequence: 3,
+            ..Default::default()
+        };
+        let combat = rpc::CombatView {
+            death_save_outcomes: vec![save.clone()],
+            ..Default::default()
+        };
+
+        assert!(rolls(&combat, Some(2)).is_empty());
+        let roll = rolls(&combat, Some(3)).remove(0);
+        assert_eq!(roll.label, "Brakka makes a Death Saving Throw");
+        assert_eq!(roll.value, "1");
+        assert_eq!(roll.explanation, "d20 1 · Natural 1 adds two failures");
+        assert_eq!(roll.verdict.0, "Critical failure");
+        assert_eq!(roll.source, "0 successes, 2 failures");
+    }
+
+    #[test]
+    fn srd_p17_p18_natural_twenty_death_save_says_the_hero_regained_one_hit_point() {
+        let roll = rolls(
+            &rpc::CombatView {
+                death_save_outcomes: vec![rpc::CombatOutcome {
+                    kind: rpc::OutcomeKind::DeathSave as i32,
+                    actor_name: "Sigrun".to_owned(),
+                    attack_die: 20,
+                    death_save_result: rpc::DeathSaveResult::Revived as i32,
+                    sequence: 4,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            None,
+        )
+        .remove(0);
+
+        assert_eq!(roll.verdict.0, "Revived");
+        assert_eq!(
+            roll.explanation,
+            "d20 20 · Natural 20: regained 1 hit point"
+        );
+    }
+
+    #[test]
+    fn srd_p10_phone_names_a_used_reaction_until_it_is_ready_again() {
+        assert_eq!(reaction_status(false), "Reaction used");
+        assert_eq!(reaction_status(true), "Reaction ready");
+    }
+
+    #[test]
+    fn fgt08_phone_discloses_the_hero_first_initiative_tie_ruling_when_sides_tie() {
+        let combat = rpc::CombatView {
+            participants: vec![
+                rpc::PartyMemberView {
+                    participant_id: vec![1],
+                    side: 1,
+                    ..Default::default()
+                },
+                rpc::PartyMemberView {
+                    participant_id: vec![2],
+                    side: 2,
+                    ..Default::default()
+                },
+            ],
+            initiative: vec![
+                rpc::InitiativeRoll {
+                    participant_id: vec![1],
+                    total: 12,
+                    ..Default::default()
+                },
+                rpc::InitiativeRoll {
+                    participant_id: vec![2],
+                    total: 12,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            initiative_tie_disclosure(&combat),
+            Some("Initiative tie: heroes act before enemies")
+        );
+    }
+
+    #[test]
+    fn fgt08_phone_discloses_dead_creature_space_rule_beside_available_movement() {
+        let participants = [rpc::PartyMemberView {
+            side: 2,
+            conditions: vec!["dead".to_owned()],
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            movement_dead_space_disclosure(&participants, true),
+            Some("A dead creature's space does not block movement.")
+        );
+        assert_eq!(movement_dead_space_disclosure(&participants, false), None);
+    }
+
+    #[test]
+    fn fgt03_graze_roll_is_still_a_miss_and_explains_its_damage() {
+        let roll = rolls(
+            &rpc::CombatView {
+                outcomes: vec![rpc::CombatOutcome {
+                    actor_name: "Brakka".to_owned(),
+                    target_name: "Giant Weasel".to_owned(),
+                    weapon: "greatsword".to_owned(),
+                    damage_type: "slashing".to_owned(),
+                    grazed: true,
+                    damage: 3,
+                    target_hit_points: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            None,
+        )
+        .remove(0);
+
+        assert_eq!(roll.verdict.0, "Miss");
+        assert_eq!(
+            roll.source,
+            "Miss, but the greatsword's Graze deals 3 slashing damage · Giant Weasel has 0 HP left"
+        );
+        assert!(!roll.verdict.0.contains("Hit"));
     }
 
     #[test]
@@ -1847,7 +2122,18 @@ mod tests {
 
         assert_eq!(
             tactical_option_label("Longbow at Weasel", &target),
-            "Longbow at Weasel · no cover · normal range: 30 ft · disadvantage: hostile within 5 ft"
+            "Longbow at Weasel · no cover · normal range: 30 ft · Disadvantage: an enemy within 5 ft"
+        );
+        let javelin = rpc::LegalCombatTarget {
+            cover: "none".to_owned(),
+            range_reason: "normal range: 5 ft".to_owned(),
+            disadvantage: true,
+            reasons: vec!["disadvantage: hostile within 5 ft".to_owned()],
+            ..Default::default()
+        };
+        assert_eq!(
+            tactical_option_label("Javelin (throw)", &javelin),
+            "Javelin (throw) · no cover · normal range: 5 ft · Disadvantage: an enemy within 5 ft"
         );
         let covered = rpc::LegalCombatTarget {
             cover: "half (+2 AC)".to_owned(),
@@ -1857,7 +2143,7 @@ mod tests {
         };
         assert_eq!(
             tactical_option_label("Longbow at Weasel", &covered),
-            "Longbow at Weasel · half (+2 AC) cover · normal range: 10 ft · disadvantage"
+            "Longbow at Weasel · half (+2 AC) cover · normal range: 10 ft · Disadvantage"
         );
     }
 

@@ -82,6 +82,19 @@ pub(crate) fn damage_summary(damage: u32, rolls: &[(&[u32], bool)], modifier: i3
     format!("{damage} damage ({rolls}; modifier {modifier:+})")
 }
 
+pub(crate) fn graze_summary(weapon: &str, damage: u32, damage_type: &str) -> String {
+    // SRD 5.2.1 p. 89: Graze deals damage on a missed attack roll; it is still a miss.
+    let damage = if damage_type.is_empty() {
+        format!("{damage} damage")
+    } else {
+        format!("{damage} {damage_type} damage")
+    };
+    format!(
+        "Miss, but the {}'s Graze deals {damage}",
+        weapon.to_lowercase()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +173,18 @@ mod tests {
         assert_eq!(
             damage_summary(14, &rolls, 3),
             "14 damage (6 + 4; kept 6 + 5; modifier +3)"
+        );
+    }
+
+    #[test]
+    fn srd_p89_phone_graze_calls_a_miss_a_miss_and_explains_its_damage() {
+        assert_eq!(
+            graze_summary("Greatsword", 3, "slashing"),
+            "Miss, but the greatsword's Graze deals 3 slashing damage"
+        );
+        assert_eq!(
+            graze_summary("Greatsword", 0, ""),
+            "Miss, but the greatsword's Graze deals 0 damage"
         );
     }
 }
