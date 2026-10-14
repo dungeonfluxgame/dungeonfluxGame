@@ -6,19 +6,22 @@
 //! else, to that player only. The clip goes to ElevenLabs speech-to-text through the shared
 //! speech provider adapter. Audio and transcript are held in memory for the length of the
 //! request: they are never written to disk, cached, logged, or put in a span, which records
-//! only sizes, durations and the outcome label. Only the words are used; nothing is derived
-//! from the voice itself.
+//! only safe actor IDs, sizes, durations and outcome labels. Only the words are used; nothing
+//! is derived from the voice itself.
 //!
 //! The spend is bounded by a per-run budget of audio seconds that is charged before the
 //! provider call and never refunded, and a player has at most one clip in flight.
 use std::{
-    collections::BTreeSet,
+    collections::BTreeMap,
     env::VarError,
     future::Future,
     io,
     pin::Pin,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
-    time::Duration,
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -49,8 +52,9 @@ use tokio::sync::oneshot;
 
 use super::{actor, model};
 use crate::speech_clip::{
-    BINDING_HEADER, CLIP_CONTENT_TYPE, ContainerFault, MAXIMUM_ACCEPTED_CLIP, MAXIMUM_CLIP_BYTES,
-    MINIMUM_CLIP, OUTCOME_HEADER, SPEECH_PATH, STATUS_PATH, SpeechOutcome, pcm_duration, wav_pcm,
+    BINDING_HEADER, CANCEL_PATH, CLIP_CONTENT_TYPE, ContainerFault, MAXIMUM_ACCEPTED_CLIP,
+    MAXIMUM_CLIP_BYTES, MINIMUM_CLIP, OUTCOME_HEADER, SPEECH_PATH, STATUS_PATH, SpeechOutcome,
+    UPLOAD_ID_HEADER, pcm_duration, wav_pcm,
 };
 
 const DEFAULT_BUDGET_SECONDS: u32 = 600;
@@ -176,7 +180,7 @@ struct Active {
     deadline: Duration,
     model: &'static str,
     budget: Mutex<u32>,
-    in_flight: Mutex<BTreeSet<MemberId>>,
+    in_flight: Mutex<BTreeMap<MemberId, Flight>>,
 }
 
 enum Mode {
@@ -196,16 +200,32 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+struct Flight {
+    upload_id: [u8; 16],
+    cancellation: Option<oneshot::Sender<()>>,
+    cancelled: Arc<AtomicBool>,
+}
+
 /// One player's clip in flight; dropping it frees the player's slot.
 struct Admission {
     input: SpeechInput,
     member: MemberId,
+    upload_id: [u8; 16],
+    cancellation: Option<oneshot::Receiver<()>>,
+    cancelled: Arc<AtomicBool>,
+    started: Instant,
 }
 
 impl Drop for Admission {
     fn drop(&mut self) {
         if let Mode::On(active) = &*self.input.mode {
-            locked(&active.in_flight).remove(&self.member);
+            let mut flights = locked(&active.in_flight);
+            if flights
+                .get(&self.member)
+                .is_some_and(|flight| flight.upload_id == self.upload_id)
+            {
+                flights.remove(&self.member);
+            }
         }
     }
 }
@@ -261,7 +281,7 @@ impl SpeechInput {
                 deadline,
                 model,
                 budget: Mutex::new(budget_seconds),
-                in_flight: Mutex::new(BTreeSet::new()),
+                in_flight: Mutex::new(BTreeMap::new()),
             }))),
         }
     }
@@ -287,17 +307,55 @@ impl SpeechInput {
         }
     }
 
-    fn admit(&self, member: MemberId) -> Result<Admission, SpeechOutcome> {
+    fn admit(&self, member: MemberId, upload_id: [u8; 16]) -> Result<Admission, SpeechOutcome> {
         let Mode::On(active) = &*self.mode else {
             return Err(SpeechOutcome::Unavailable);
         };
-        if !locked(&active.in_flight).insert(member) {
+        let mut flights = locked(&active.in_flight);
+        if flights.contains_key(&member) {
             return Err(SpeechOutcome::Busy);
         }
+        let (sender, receiver) = oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        flights.insert(
+            member,
+            Flight {
+                upload_id,
+                cancellation: Some(sender),
+                cancelled: cancelled.clone(),
+            },
+        );
         Ok(Admission {
             input: self.clone(),
             member,
+            upload_id,
+            cancellation: Some(receiver),
+            cancelled,
+            started,
         })
+    }
+
+    fn cancel(&self, member: MemberId, upload_id: [u8; 16]) -> bool {
+        let Mode::On(active) = &*self.mode else {
+            return false;
+        };
+        let mut flights = locked(&active.in_flight);
+        let Some(flight) = flights.get_mut(&member) else {
+            return false;
+        };
+        if flight.upload_id != upload_id || flight.cancelled.load(Ordering::Acquire) {
+            return false;
+        }
+        let Some(sender) = flight.cancellation.take() else {
+            return false;
+        };
+        flight.cancelled.store(true, Ordering::Release);
+        if sender.send(()).is_err() {
+            flight.cancelled.store(false, Ordering::Release);
+            return false;
+        }
+        true
     }
 
     /// Spend is committed before the call and kept whatever the outcome: a call whose result
@@ -314,7 +372,11 @@ impl SpeechInput {
 
 impl Admission {
     /// The words of one clip. The clip and the words live only in this call.
-    async fn hear(&self, body: &[u8], span: &mut OperationSpan) -> Result<String, SpeechOutcome> {
+    async fn hear(
+        &mut self,
+        body: &[u8],
+        span: &mut OperationSpan,
+    ) -> Result<String, SpeechOutcome> {
         let Mode::On(active) = &*self.input.mode else {
             return Err(SpeechOutcome::Unavailable);
         };
@@ -340,7 +402,11 @@ impl Admission {
                 ("gameplay.speech.charged_seconds", seconds.to_string()),
             ],
         );
-        let text = transcribe(active, pcm, duration).await?;
+        let cancellation = self
+            .cancellation
+            .take()
+            .ok_or(SpeechOutcome::ProviderFailed)?;
+        let text = transcribe(active, pcm, duration, cancellation).await?;
         span.event(
             "gameplay.speech.transcript",
             &[("gameplay.speech.transcript_bytes", text.len().to_string())],
@@ -418,6 +484,7 @@ async fn transcribe(
     active: &Active,
     pcm: &[u8],
     duration: Duration,
+    cancellation: oneshot::Receiver<()>,
 ) -> Result<String, SpeechOutcome> {
     let ids = RequestIds::new()?;
     let binding = ids.binding(active.deadline)?;
@@ -445,7 +512,9 @@ async fn transcribe(
     .map_err(failed)?;
     let call = active
         .provider
-        .transcribe(&request, owner(&binding), std::future::pending());
+        .transcribe(&request, owner(&binding), async move {
+            let _cancelled = cancellation.await;
+        });
     let prepared = tokio::time::timeout(active.deadline + Duration::from_secs(1), call)
         .await
         .map_err(|_| SpeechOutcome::TimedOut)?
@@ -522,6 +591,7 @@ pub(super) fn router(
 ) -> Router {
     Router::new()
         .route(SPEECH_PATH, post(upload))
+        .route(CANCEL_PATH, post(cancel_upload))
         .route(STATUS_PATH, get(status))
         .with_state(RouteState {
             input,
@@ -564,12 +634,54 @@ async fn upload(State(state): State<RouteState>, headers: HeaderMap, body: Body)
     state.handle(&headers, body, &mut span).await
 }
 
+async fn cancel_upload(State(state): State<RouteState>, headers: HeaderMap) -> Response {
+    let context = OperationContext {
+        trace_parent: String::new(),
+        build: crate::BUILD_ID.to_owned(),
+    };
+    let mut span = df_observe::begin(&context, "gameplay.speech_cancel");
+    match state.cancel(&headers).await {
+        Ok(true) => span.finish("signalled", 0),
+        Ok(false) => span.finish("not_active", 0),
+        Err(outcome) => {
+            span.finish(outcome.label(), 0);
+            return response(outcome, String::new());
+        }
+    }
+    let mut reply = StatusCode::NO_CONTENT.into_response();
+    reply
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    reply
+}
+
 fn binding_from(headers: &HeaderMap) -> Result<[u8; 32], SpeechOutcome> {
     let value = headers
         .get(BINDING_HEADER)
         .and_then(|value| value.to_str().ok())
         .ok_or(SpeechOutcome::Unauthenticated)?;
     super::parse_binding(value).ok_or(SpeechOutcome::Unauthenticated)
+}
+
+fn upload_id_from(headers: &HeaderMap) -> Result<[u8; 16], SpeechOutcome> {
+    let value = headers
+        .get(UPLOAD_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() == 32)
+        .ok_or(SpeechOutcome::Unauthenticated)?;
+    let mut id = [0; 16];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let digits = std::str::from_utf8(pair).map_err(|_| SpeechOutcome::Unauthenticated)?;
+        id[index] = u8::from_str_radix(digits, 16).map_err(|_| SpeechOutcome::Unauthenticated)?;
+    }
+    Ok(id)
+}
+
+fn origin_known(headers: &HeaderMap, allowed_origins: &[String]) -> bool {
+    headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|origin| allowed_origins.iter().any(|known| known == origin))
 }
 
 fn is_clip_type(headers: &HeaderMap) -> bool {
@@ -589,7 +701,14 @@ impl RouteState {
     /// Answers one upload and finishes its span, which carries sizes and the outcome only.
     async fn handle(&self, headers: &HeaderMap, body: Body, span: &mut OperationSpan) -> Response {
         let mut received = 0;
-        let result = self.process(headers, body, span, &mut received).await;
+        let mut cancelled = false;
+        let result = self
+            .process(headers, body, span, &mut received, &mut cancelled)
+            .await;
+        if cancelled {
+            span.finish("cancelled", received);
+            return response(SpeechOutcome::ProviderFailed, String::new());
+        }
         let outcome = result
             .as_ref()
             .map_or_else(|outcome| *outcome, |_| SpeechOutcome::Heard);
@@ -603,18 +722,16 @@ impl RouteState {
         body: Body,
         span: &mut OperationSpan,
         received: &mut usize,
+        cancelled: &mut bool,
     ) -> Result<String, SpeechOutcome> {
-        let origin_known = headers
-            .get(header::ORIGIN)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|origin| self.allowed_origins.iter().any(|known| known == origin));
-        if !origin_known {
+        if !origin_known(headers, &self.allowed_origins) {
             return Err(SpeechOutcome::Refused);
         }
         if matches!(*self.input.mode, Mode::Off(_)) {
             return Err(SpeechOutcome::Unavailable);
         }
         let credential = binding_from(headers)?;
+        let upload_id = upload_id_from(headers)?;
         if !is_clip_type(headers) {
             return Err(SpeechOutcome::UnsupportedType);
         }
@@ -626,12 +743,38 @@ impl RouteState {
             return Err(SpeechOutcome::TooLarge);
         }
         let member = (self.identify)(credential).await?;
-        let admission = self.input.admit(member)?;
+        let mut admission = self.input.admit(member, upload_id)?;
         let clip = axum::body::to_bytes(body, MAXIMUM_CLIP_BYTES)
             .await
             .map_err(|_| SpeechOutcome::TooLarge)?;
         *received = clip.len();
-        admission.hear(&clip, span).await
+        let result = admission.hear(&clip, span).await;
+        if admission.cancelled.load(Ordering::Acquire) {
+            *cancelled = true;
+            span.event(
+                "STT cancelled",
+                &[
+                    ("actor", format!("{member:?}")),
+                    ("bytes", clip.len().to_string()),
+                    ("ms", admission.started.elapsed().as_millis().to_string()),
+                ],
+            );
+            return Err(SpeechOutcome::ProviderFailed);
+        }
+        result
+    }
+
+    async fn cancel(&self, headers: &HeaderMap) -> Result<bool, SpeechOutcome> {
+        if !origin_known(headers, &self.allowed_origins) {
+            return Err(SpeechOutcome::Refused);
+        }
+        if matches!(*self.input.mode, Mode::Off(_)) {
+            return Err(SpeechOutcome::Unavailable);
+        }
+        let credential = binding_from(headers)?;
+        let upload_id = upload_id_from(headers)?;
+        let member = (self.identify)(credential).await?;
+        Ok(self.input.cancel(member, upload_id))
     }
 }
 
@@ -653,6 +796,7 @@ mod tests {
 
     const ORIGIN: &str = "http://127.0.0.1:63338";
     const SPOKEN: &str = "  Who sent\n you, zebra-crossing-sentinel?  ";
+    static NEXT_UPLOAD_ID: AtomicUsize = AtomicUsize::new(1);
 
     /// What the fake speech-to-text endpoint answers.
     #[derive(Clone, Copy)]
@@ -667,6 +811,7 @@ mod tests {
         address: SocketAddr,
         requests: Arc<AtomicUsize>,
         sent_model: Arc<AtomicBool>,
+        cancelled: Arc<AtomicBool>,
         stop: Arc<AtomicBool>,
     }
 
@@ -677,14 +822,23 @@ mod tests {
             let address = listener.local_addr().unwrap();
             let requests = Arc::new(AtomicUsize::new(0));
             let sent_model = Arc::new(AtomicBool::new(false));
+            let cancelled = Arc::new(AtomicBool::new(false));
             let stop = Arc::new(AtomicBool::new(false));
-            let (seen, model, stopped) = (requests.clone(), sent_model.clone(), stop.clone());
+            let (seen, model, was_cancelled, stopped) = (
+                requests.clone(),
+                sent_model.clone(),
+                cancelled.clone(),
+                stop.clone(),
+            );
             thread::spawn(move || {
                 while !stopped.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((socket, _)) => {
-                            let (seen, model) = (seen.clone(), model.clone());
-                            thread::spawn(move || reply(socket, delay, answer, &seen, &model));
+                            let (seen, model, was_cancelled) =
+                                (seen.clone(), model.clone(), was_cancelled.clone());
+                            thread::spawn(move || {
+                                reply(socket, delay, answer, &seen, &model, &was_cancelled)
+                            });
                         }
                         Err(_) => thread::sleep(Duration::from_millis(2)),
                     }
@@ -694,12 +848,17 @@ mod tests {
                 address,
                 requests,
                 sent_model,
+                cancelled,
                 stop,
             }
         }
 
         fn calls(&self) -> usize {
             self.requests.load(Ordering::SeqCst)
+        }
+
+        fn was_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::SeqCst)
         }
     }
 
@@ -715,6 +874,7 @@ mod tests {
         answer: Answer,
         requests: &AtomicUsize,
         sent_model: &AtomicBool,
+        cancelled: &AtomicBool,
     ) {
         socket.set_nonblocking(false).unwrap();
         socket
@@ -743,7 +903,30 @@ mod tests {
             Ordering::SeqCst,
         );
         requests.fetch_add(1, Ordering::SeqCst);
-        thread::sleep(delay);
+        socket
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
+        let deadline = std::time::Instant::now() + delay;
+        while std::time::Instant::now() < deadline {
+            let mut probe = [0];
+            match socket.peek(&mut probe) {
+                Ok(0) => {
+                    cancelled.store(true, Ordering::SeqCst);
+                    return;
+                }
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(_) => {
+                    cancelled.store(true, Ordering::SeqCst);
+                    return;
+                }
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
         let (status, payload) = match answer {
             Answer::Words => ("200 OK", transcript_json(SPOKEN)),
             Answer::NoWords => ("200 OK", transcript_json("")),
@@ -839,6 +1022,7 @@ mod tests {
         binding: Option<String>,
         content_type: &'static str,
         origin: Option<&'static str>,
+        upload_id: String,
     }
 
     impl Upload {
@@ -848,7 +1032,16 @@ mod tests {
                 binding: Some(binding_hex(player)),
                 content_type: "audio/wav",
                 origin: Some(ORIGIN),
+                upload_id: format!(
+                    "{:032x}",
+                    NEXT_UPLOAD_ID.fetch_add(1, Ordering::SeqCst) as u128
+                ),
             }
+        }
+
+        fn with_upload_id(mut self, upload_id: &str) -> Self {
+            self.upload_id = upload_id.to_owned();
+            self
         }
 
         fn request(self) -> Request<Body> {
@@ -856,7 +1049,8 @@ mod tests {
                 .method(Method::POST)
                 .uri(SPEECH_PATH)
                 .header(header::CONTENT_TYPE, self.content_type)
-                .header(header::CONTENT_LENGTH, self.body.len());
+                .header(header::CONTENT_LENGTH, self.body.len())
+                .header(UPLOAD_ID_HEADER, &self.upload_id);
             if let Some(binding) = &self.binding {
                 request = request.header(BINDING_HEADER, binding);
             }
@@ -898,6 +1092,62 @@ mod tests {
         assert_eq!(text, "Who sent you, zebra-crossing-sentinel?");
         assert_eq!(fake.calls(), 1);
         assert!(fake.sent_model.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_active_upload_stops_the_provider_request() {
+        const UPLOAD_ID: &str = "00112233445566778899aabbccddeeff";
+
+        let fake = FakeScribe::start(Duration::from_secs(10), Answer::Words);
+        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let mut upload_app = app.clone();
+        let upload = Upload::from(1, clip(1_500))
+            .with_upload_id(UPLOAD_ID)
+            .request();
+        let upload_task =
+            tokio::spawn(async move { Service::call(&mut upload_app, upload).await.unwrap() });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fake.calls() == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let stale_cancel = Request::builder()
+            .method(Method::POST)
+            .uri(CANCEL_PATH)
+            .header(BINDING_HEADER, binding_hex(1))
+            .header(UPLOAD_ID_HEADER, "ffffffffffffffffffffffffffffffff")
+            .header(header::ORIGIN, ORIGIN)
+            .body(Body::empty())
+            .unwrap();
+        let stale_reply = Service::call(&mut app, stale_cancel).await.unwrap();
+        assert_eq!(stale_reply.status(), StatusCode::NO_CONTENT);
+        assert!(!fake.was_cancelled());
+
+        let cancel = Request::builder()
+            .method(Method::POST)
+            .uri(CANCEL_PATH)
+            .header(BINDING_HEADER, binding_hex(1))
+            .header(UPLOAD_ID_HEADER, UPLOAD_ID)
+            .header(header::ORIGIN, ORIGIN)
+            .body(Body::empty())
+            .unwrap();
+        let reply = Service::call(&mut app, cancel).await.unwrap();
+        assert_eq!(reply.status(), StatusCode::NO_CONTENT);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !fake.was_cancelled() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let upload_reply = upload_task.await.unwrap();
+        assert_eq!(upload_reply.status(), StatusCode::BAD_GATEWAY);
     }
 
     #[tokio::test]

@@ -8,13 +8,17 @@
 //! speaker is read from it by either side.
 use std::time::Duration;
 
-/// `POST` a clip here; `GET` the status path first to learn whether speech input exists.
+/// `POST` a clip here; `POST` [`CANCEL_PATH`] cancels its matching in-flight upload.
+/// `GET` the status path first to learn whether speech input exists.
 pub(crate) const SPEECH_PATH: &str = "/gameplay/speech";
+pub(crate) const CANCEL_PATH: &str = "/gameplay/speech/cancel";
 pub(crate) const STATUS_PATH: &str = "/gameplay/speech/status";
 /// Response header naming the [`SpeechOutcome`] of an upload or status request.
 pub(crate) const OUTCOME_HEADER: &str = "x-df-speech";
 /// Request header carrying the player's room binding, as for generated RPC calls.
 pub(crate) const BINDING_HEADER: &str = "x-df-local-binding";
+/// A fresh 128-bit lowercase hexadecimal ID associates cancellation with one upload.
+pub(crate) const UPLOAD_ID_HEADER: &str = "x-df-speech-upload";
 pub(crate) const CLIP_CONTENT_TYPE: &str = "audio/wav";
 
 pub(crate) const SAMPLE_RATE: u32 = 16_000;
