@@ -395,6 +395,23 @@ impl TableLog {
         self.push_line(reservation.sequence, speaker, role, hero_index, kind, text);
     }
 
+    /// A check is rules narration; the hero's name and outcome belong in its text.
+    pub(super) fn push_check(
+        &self,
+        reservation: TableLogReservation,
+        roller_index: u32,
+        text: &str,
+    ) {
+        self.push_reserved(
+            reservation,
+            "Roll",
+            rpc::TableRole::Narrator,
+            roller_index,
+            rpc::TableKind::Action,
+            text,
+        );
+    }
+
     fn push_line(
         &self,
         reserved_sequence: Option<u64>,
@@ -1086,11 +1103,16 @@ pub(super) fn action_lines(
                 continue;
             }
             Ok(rpc::OutcomeKind::Recovery) => {
+                let unit = if outcome.recovery_hours == 1 {
+                    "hour"
+                } else {
+                    "hours"
+                };
                 lines.push(ActionLine {
-                    speaker: outcome.actor_name.clone(),
+                    speaker: "Narrator".to_owned(),
                     text: format!(
-                        "has been stable for {} hours and regains 1 hit point",
-                        outcome.recovery_hours
+                        "{} has been stable for {} {unit} and regains 1 hit point",
+                        outcome.actor_name, outcome.recovery_hours
                     ),
                 });
                 continue;
@@ -1834,6 +1856,19 @@ mod tests {
     }
 
     #[test]
+    fn a_check_is_attributed_to_the_roll_and_preserves_its_outcome() {
+        let log = TableLog::new();
+        let text = "Brakka searches behind the counter: Wisdom (Perception) 16 + 3 = 19 — success.";
+        log.push_check(log.reserve(), 0, text);
+        let lines = log.lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].speaker, "Roll");
+        assert_eq!(lines[0].role, rpc::TableRole::Narrator as i32);
+        assert_ne!(lines[0].kind, rpc::TableKind::Speech as i32);
+        assert_eq!(lines[0].text, text);
+    }
+
+    #[test]
     fn a_filled_reservation_sorts_before_a_line_pushed_after_it() {
         let log = TableLog::new();
         let reservation = log.reserve();
@@ -2294,6 +2329,33 @@ mod tests {
         assert_eq!(
             lines[0].text,
             "shoots the longbow \u{2014} hit, 10 piercing damage"
+        );
+    }
+
+    #[test]
+    fn stable_recovery_is_narration_about_the_hero_rather_than_the_heros_speech() {
+        let recovery = rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::Recovery as i32,
+            actor_name: "Sigrun".to_owned(),
+            recovery_hours: 1,
+            ..Default::default()
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::EndTurn,
+            "Brakka",
+            &[recovery],
+            "greatsword",
+            "",
+            "End turn",
+        );
+        let line = lines
+            .iter()
+            .find(|line| line.text.contains("regains 1 hit point"))
+            .unwrap();
+        assert_eq!(line.speaker, "Narrator");
+        assert_eq!(
+            line.text,
+            "Sigrun has been stable for 1 hour and regains 1 hit point"
         );
     }
 

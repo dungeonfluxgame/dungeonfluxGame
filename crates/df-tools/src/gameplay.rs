@@ -31,6 +31,7 @@ mod home_video;
 mod home_video_tests;
 mod imagery;
 mod inn_qualification;
+mod investigation;
 mod join_link;
 mod journey;
 mod line_cleanup;
