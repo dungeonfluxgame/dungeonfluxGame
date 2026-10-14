@@ -717,6 +717,9 @@ The owner: "rebuild and test scene investigation, do a series of tests to check 
 | END-07 | 3 | The end card shows no reward and no experience after a won adventure, and is headed with the first scene's title ("Ilsa Seeks Your Help") instead of the adventure's ("The Fever-Herb Errand"). Better: the card is now one clean composition over the final picture. | RWD-01, END-06 | Open: workers Q03 (the paid reward and XP in the view), B26 (the card shows them and the adventure title) |
 | PIC-16 | 3 | The epilogue picture shows Tobin twice: once painted into the plate and once as a cut-out figure standing in front of it. | PIC-14 | Open: worker T01 (a figure baked into the plate is not also drawn as a cut-out) |
 | TVX-15 | 4 | Aftermath choices still differ: the phone reads "Follow Ilsa to the bindery · the Binding Workshop", the TV "Follow Ilsa to the bindery". | TVX-06 | Open: worker B26 |
+| TVX-16 | 2 | The TV and the phone disagree on hit points: the TV's health bars showed the heroes at 11/11 while the phone and the victory card showed 13/13 (a level 1 Dwarf Fighter with Constitution 14 has 10 + 2 + 1 = 13 with Dwarven Toughness). Seen by the independent reviewer in the market scene's screenshot. | TVX-14 | Open: worker B21 (the TV's health cards) with Q03 (the view's maximum) |
+| FGT-15 | 4 | "Javelin (throw) · normal range: 20 ft" reads as the weapon's range (a javelin is 30/120 ft); it means the target is 20 ft away. | FGT-06 | Open: worker B28 |
+| RUL-26 | 3 | After a won fight the TV says "The party decides: rest or move on" but offers no Short Rest when the heroes are unhurt; a party may take a Short Rest whenever it wants (SRD 5.2.1 Short Rest). | RUL-23, RUL-25 | Open: worker Q03 |
 
 ## State of the forward state machine
 
