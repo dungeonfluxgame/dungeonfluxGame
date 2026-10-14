@@ -509,6 +509,13 @@ pub(crate) fn decode_current_row(
         // build than this server admits: print both sides of each pin that differs.
         if let Ok(stored) = crate::checkpoint_codec::decode_checkpoint_pins(&document, codec_limits)
         {
+            if let Some(message) = development_rules_pin_recovery_message(
+                stored.rules != pins.rules,
+                cfg!(debug_assertions),
+                std::env::var_os("DF_GAMEPLAY_DEMO_DATABASE").is_some(),
+            ) {
+                eprintln!("CHECKPOINT development recovery: {message}");
+            }
             // One line per rules pin that differs, so the cause can be read at a glance
             // (a digest that differs means that part of the rules source changed between
             // the build that wrote the document and this one).
@@ -561,4 +568,45 @@ pub(crate) fn decode_current_row(
         }
         RepositoryError::InvalidCandidate
     })
+}
+
+fn development_rules_pin_recovery_message(
+    rules_pins_differ: bool,
+    development_build: bool,
+    demo_database_configured: bool,
+) -> Option<&'static str> {
+    if rules_pins_differ && development_build && demo_database_configured {
+        Some(
+            "this game was started by an older build of the rules; start a new game with DF_GAMEPLAY_DEMO_DATABASE=<new name> or run development/run-gameplay.sh --new-game",
+        )
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod recovery_message_tests {
+    use super::development_rules_pin_recovery_message;
+
+    const MESSAGE: &str = "this game was started by an older build of the rules; start a new game with DF_GAMEPLAY_DEMO_DATABASE=<new name> or run development/run-gameplay.sh --new-game";
+
+    #[test]
+    fn development_rules_pin_mismatch_explains_fresh_game_recovery() {
+        assert_eq!(
+            development_rules_pin_recovery_message(true, true, true),
+            Some(MESSAGE),
+        );
+        assert_eq!(
+            development_rules_pin_recovery_message(false, true, true),
+            None,
+        );
+        assert_eq!(
+            development_rules_pin_recovery_message(true, false, true),
+            None,
+        );
+        assert_eq!(
+            development_rules_pin_recovery_message(true, true, false),
+            None,
+        );
+    }
 }

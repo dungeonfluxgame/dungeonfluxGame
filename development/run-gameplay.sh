@@ -43,6 +43,7 @@ fi
 export DF_GAMEPLAY_TEXT_CACHE=${DF_GAMEPLAY_TEXT_CACHE:-$PLAY/text-cache}
 DATABASE=
 NO_BUILD=0
+NEW_GAME=0
 CAMPAIGN=
 CAMPAIGN_SEED=
 CAMPAIGN_STATUS=0
@@ -52,7 +53,7 @@ ADVENTURE_SEED_REQUESTED=0
 LAN=0
 
 usage() {
-  echo 'usage: run-gameplay.sh [--no-build] [--lan] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status] [--test-fight <1-4>] [--test-foe <creature id>]'
+  echo 'usage: run-gameplay.sh [--no-build] [--lan] [--new-game] [--database <name>] [--seed <decimal-or-hex-u64>] [--harbor] [--campaign <id>] [--campaign-seed <n>] [--status] [--test-fight <1-4>] [--test-foe <creature id>]'
 }
 
 while test "$#" -gt 0; do
@@ -71,6 +72,7 @@ while test "$#" -gt 0; do
       if test "$#" -lt 2; then usage >&2; exit 2; fi
       export DF_GAMEPLAY_TEST_FOE=$2; shift 2 ;;
     --no-build) NO_BUILD=1; shift ;;
+    --new-game) NEW_GAME=1; shift ;;
     --lan) LAN=1; shift ;;
     --harbor) HARBOR_REQUESTED=1; export DF_GAMEPLAY_ADVENTURE=harbor; shift ;;
     --seed)
@@ -94,6 +96,7 @@ if test -z "$CAMPAIGN" && { test "$CAMPAIGN_STATUS" -eq 1 || test -n "$CAMPAIGN_
   echo '--status and --campaign-seed require --campaign' >&2; exit 2
 fi
 if test -n "$CAMPAIGN"; then
+  if test "$NEW_GAME" -eq 1; then echo '--new-game cannot combine with --campaign' >&2; exit 2; fi
   if test "$HARBOR_REQUESTED" -eq 1 || test "$ADVENTURE_SEED_REQUESTED" -eq 1; then echo '--campaign cannot combine with --harbor or --seed; use --campaign-seed' >&2; exit 2; fi
   if test -n "$DATABASE"; then echo '--campaign chooses its database; omit --database' >&2; exit 2; fi
   mkdir -p "$TMPDIR"
@@ -113,7 +116,11 @@ if test -n "$CAMPAIGN"; then
 fi
 
 if test -z "$DATABASE"; then
-  DATABASE="df_gameplay_demo_play_$(date -u +%Y%m%d%H%M%S)"
+  if test "$NEW_GAME" -eq 1; then
+    DATABASE="df_gameplay_demo_play_$(date -u +%Y%m%d%H%M%S)_$$"
+  else
+    DATABASE="df_gameplay_demo_play_$(date -u +%Y%m%d%H%M%S)"
+  fi
 fi
 case "$DATABASE" in
   df_gameplay_demo_*) ;;
@@ -297,12 +304,17 @@ if test "$PG_ALREADY_RUNNING" -eq 0; then
   PG_STARTED=1
 fi
 
-if test -z "$("$PG/psql" -h 127.0.0.1 -p 55517 -U df_gameplay_demo_admin_20261004 -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='$DATABASE'")"; then
+DATABASE_EXISTS=$("$PG/psql" -h 127.0.0.1 -p 55517 -U df_gameplay_demo_admin_20261004 -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='$DATABASE'")
+if test -n "$DATABASE_EXISTS"; then
+  if test "$NEW_GAME" -eq 1; then echo "new game database already exists: $DATABASE" >&2; exit 1; fi
+else
   "$PG/createdb" -h 127.0.0.1 -p 55517 -U df_gameplay_demo_admin_20261004 -T template0 "$DATABASE"
 fi
 
 echo "Playing with database: $DATABASE"
-if test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
+if test "$NEW_GAME" -eq 1; then
+  echo 'A new game will start in a fresh database.'
+elif test "$DF_GAMEPLAY_ADVENTURE" = harbor; then
   echo "Edit content/harbor-journey/tuning.json (or pack.json), then re-run without --database for a new game with the new values."
 else
   echo "A fresh database rolls a new adventure; --seed reproduces the chapter. Existing databases resume their stored chapter."
