@@ -711,7 +711,7 @@ The owner: "rebuild and test scene investigation, do a series of tests to check 
 | TVX-13 | 3 | A TV that joins or reloads during a scene shows only the picture and the choices: the opening narration and the current speaker's line are missing, so the table has no context. | TVX-07 | Open: worker B26 (settled lines shown at once on join) |
 | SCN-04 | 3 | A purchase works (4 cp paid for ale) but reads like a log line: "Brakka pays 4 CP for ale (mug). a mug of ale"; nobody pours it or reacts, and no close-up is asked for. | ENV-07 | Open: worker Q03 (the Dungeon Master tells it and the seller acts; the item card) |
 | TVX-14 | 4 | The heroes' health bars on the TV are yellow at full hit points (13/13). | | Open: worker B21 |
-| ENV-12 | 1 | Better (good news, recorded): Ilsa now names the woman with the tray ("That is Nella, the serving woman by the bar on the left."); the scene lists its people (Ilsa, Tessa, Bram, Nella) and wares; the picture shows them where the model puts them; the background stayed the same through three turns. | ENV-10, PIC-14 | Seen on Q01 and Q02's uncommitted work: commit pending |
+| ENV-12 | 4 | Better (good news, recorded): Ilsa now names the woman with the tray ("That is Nella, the serving woman by the bar on the left."); the scene lists its people (Ilsa, Tessa, Bram, Nella) and wares; the picture shows them where the model puts them; the background stayed the same through three turns. | ENV-10, PIC-14 | Seen on Q01 and Q02's uncommitted work: commit pending |
 
 ## State of the forward state machine
 
