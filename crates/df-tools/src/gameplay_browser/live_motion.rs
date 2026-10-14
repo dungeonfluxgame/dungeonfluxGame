@@ -544,6 +544,20 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         return redraw(client);
     };
     let snapshot = presentation::snapshot(journey, scene);
+    let stale_combat_view = journey.combat.as_ref().is_some_and(|combat| {
+        with_motion(|motion| {
+            let restart = motion.previous.is_none() || motion.generation != generation || hidden;
+            let entered =
+                presentation::transitions(motion.previous.as_ref(), &snapshot).entered_combat;
+            !restart
+                && !entered
+                && presentation::is_stale_combat_sequence(motion.latest_seq, combat.latest_sequence)
+        })
+        .unwrap_or(false)
+    });
+    if stale_combat_view {
+        return Ok(());
+    }
     let fighting = snapshot.stage == CombatStage::Fighting;
     let lines = presentation::table_lines(&view);
     let cast = presentation::scene_cast(&view);
@@ -919,12 +933,13 @@ fn effective_presented(motion: &Motion) -> u64 {
 
 /// The battlefield's impact event confirms that the strike result is visible now.
 pub(super) fn strike_landed(sequence: u64) {
-    let presented = with_motion(|motion| {
+    let observed = with_motion(|motion| {
         motion.conductor.observe_presented(sequence);
-        motion.conductor.presented_sequence()
     });
-    if let Some(presented) = presented {
-        super::live_battlefield::set_presented(presented, "impact");
+    if observed.is_some() {
+        // The impact event is the battlefield's exact visible sequence. The conductor cursor
+        // can still wait on an earlier cue, so it cannot decide which health change this card shows.
+        super::live_battlefield::set_presented(sequence, "impact");
     }
     ensure_frame();
 }

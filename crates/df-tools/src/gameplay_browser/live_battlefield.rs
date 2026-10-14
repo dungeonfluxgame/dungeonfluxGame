@@ -1701,6 +1701,19 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     let Some(snapshot) = snapshot_of(view) else {
         return;
     };
+    let stale = view.journey.combat.as_ref().is_some_and(|combat| {
+        LIVE.with(|live| {
+            let live = live.borrow();
+            live.latest.is_some()
+                && crate::presentation::is_stale_combat_sequence(
+                    live.latest_seq,
+                    combat.latest_sequence,
+                )
+        })
+    });
+    if stale {
+        return;
+    }
     let choice = scene_choice(view);
     let backdrop = backdrop_stem(view);
     let key = layout_key(view, &snapshot);
@@ -2120,8 +2133,7 @@ fn sync(writer: &str) {
                     .filter(|_| live.pending_cues == 0)
                     .map(|(_, reactor)| format!("{reactor}: Opportunity Attack?"));
                 if prompt != live.shown_prompt {
-                    stage.set_prompt(prompt.clone());
-                    if let (Some(_), Some((mover, reactor))) = (&prompt, &live.reaction) {
+                    if let (Some(prompt), Some((mover, reactor))) = (&prompt, &live.reaction) {
                         let id_of = |name: &str| {
                             stage
                                 .tokens()
@@ -2129,10 +2141,21 @@ fn sync(writer: &str) {
                                 .map(|token| token.id.clone())
                         };
                         if let (Some(attacker), Some(target)) = (id_of(mover), id_of(reactor)) {
-                            let _ = stage.stage(Beat::Approach { attacker, target });
+                            if stage.stage(Beat::Approach { attacker, target }).is_ok() {
+                                stage.set_prompt_after_camera_settles(Some(prompt.clone()));
+                                live.shown_prompt = Some(prompt.clone());
+                            } else {
+                                stage.set_prompt(None);
+                                live.shown_prompt = None;
+                            }
+                        } else {
+                            stage.set_prompt(None);
+                            live.shown_prompt = None;
                         }
+                    } else {
+                        stage.set_prompt(None);
+                        live.shown_prompt = None;
                     }
-                    live.shown_prompt = prompt;
                 }
                 stage.set_tactical_highlights(live.reachable.clone(), live.targets.clone());
                 let report = feed.apply(stage, &shown)?;

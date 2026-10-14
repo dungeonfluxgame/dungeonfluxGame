@@ -280,20 +280,17 @@ async fn fetch_decode(cue: Cue) -> Result<AudioBuffer, JsValue> {
 /// Plays `cue` after `delay`, unless sound is locked or muted or the tab is hidden, in which
 /// case the cue is dropped. Failure to schedule is silence by design.
 pub(super) fn play(cue: Cue, delay: Duration) {
-    play_shaped(cue, delay, 1.0, 1.0);
+    play_shaped(
+        cue,
+        delay,
+        1.0,
+        1.0,
+        matches!(cue, Cue::VictoryFanfare | Cue::DefeatToll),
+    );
 }
 
 /// As [`play`] with a level and a playback speed (above 1 raises the pitch).
-fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
-    // One ending, one sting: the banner and the battlefield's finishing shot race, and
-    // whichever plays first latches so the other stays quiet. The latch resets when the
-    // next fight is entered.
-    if matches!(cue, Cue::VictoryFanfare | Cue::DefeatToll) {
-        if ENDING_STING_PLAYED.get() {
-            return;
-        }
-        ENDING_STING_PLAYED.set(true);
-    }
+fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32, ending: bool) {
     if matches!(cue, Cue::Hit | Cue::Miss) && BATTLEFIELD_OWNS_COMBAT.with(std::cell::Cell::get) {
         return;
     }
@@ -305,7 +302,10 @@ fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
         let Some(engine) = slot.as_mut() else {
             return;
         };
-        if engine.document.hidden() {
+        if engine.document.hidden()
+            || !matches!(engine.buffers.get(&cue), Some(Loaded::Ready(_)))
+            || (ending && !claim_ending_sting())
+        {
             return;
         }
         let _scheduled = engine.schedule(cue, delay, gate.narrating, gain, rate);
@@ -316,17 +316,10 @@ fn play_shaped(cue: Cue, delay: Duration, gain: f32, rate: f32) {
 /// the last, at the event's level and pitch. Gated exactly like every other effect (silent
 /// before the unlock, when muted or hidden, and quieter under narration).
 pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
-    // A stale finishing shot (played after the banner already stung, past the exit cap) stays
-    // quiet: one ending, one sting.
-    if matches!(
+    let ending = matches!(
         event.kind,
         df_render::battle::SoundKind::VictorySting | df_render::battle::SoundKind::DefeatSting
-    ) {
-        if ENDING_STING_PLAYED.get() {
-            return;
-        }
-        ENDING_STING_PLAYED.set(true);
-    }
+    );
     let Some(clip) = PICKER.with(|picker| picker.borrow_mut().pick(event.clips(rating))) else {
         return;
     };
@@ -335,7 +328,17 @@ pub(super) fn play_event(event: &SoundEvent, rating: ContentRating) {
         Duration::ZERO,
         event.kind.gain(),
         event.rate,
+        ending,
     );
+}
+
+/// Claims the one audible ending sting shared by the effects and music buses.
+pub(super) fn claim_ending_sting() -> bool {
+    if ENDING_STING_PLAYED.get() {
+        return false;
+    }
+    ENDING_STING_PLAYED.set(true);
+    true
 }
 
 /// A fight was entered: the next ending may sting once.
@@ -350,6 +353,21 @@ pub(super) fn set_battlefield_owns_combat(owns: bool) {
         ENDING_STING_PLAYED.set(false);
     }
     BATTLEFIELD_OWNS_COMBAT.with(|flag| flag.set(owns));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{claim_ending_sting, reset_ending_sting};
+
+    #[test]
+    fn ending_sting_is_shared_across_buses_and_resets_for_the_next_fight() {
+        reset_ending_sting();
+        assert!(claim_ending_sting());
+        assert!(!claim_ending_sting());
+        reset_ending_sting();
+        assert!(claim_ending_sting());
+        reset_ending_sting();
+    }
 }
 
 /// Drops every cue of earlier views that has not started yet.

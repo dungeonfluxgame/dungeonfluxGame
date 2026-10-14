@@ -156,6 +156,12 @@ pub(crate) fn new_outcomes<'a>(
 /// A grid cell as (column, row).
 pub(crate) type GridCell = (u32, u32);
 
+/// A combat view cannot replace a newer accepted combat sequence. The caller handles fight
+/// restarts and reconnects, which establish a new sequence scope.
+pub(crate) const fn is_stale_combat_sequence(current: u64, incoming: u64) -> bool {
+    incoming < current
+}
+
 /// Merge move-only turns with attacks in server order. An attack already carries its walk:
 /// queuing that move separately would delay its dice behind the very walk they introduce.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -1050,6 +1056,59 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    #[test]
+    fn stale_combat_views_replayed_at_the_recorded_times_keep_health_and_turn() {
+        use df_render::battle::{HitPointChange, hit_points_at_sequence};
+
+        let changes = [
+            HitPointChange {
+                sequence: 1,
+                before: 11,
+                after: 2,
+            },
+            HitPointChange {
+                sequence: 2,
+                before: 2,
+                after: 0,
+            },
+        ];
+        let mut latest_sequence = 0;
+        let mut presented_sequence = 0;
+        let mut current_hit_points = 11;
+        let mut active = "Brakka";
+        let views = [
+            (11_600, 1, 2, "Sigrun", Some(1)),
+            (12_500, 0, 11, "Bandit 1", None),
+            (20_400, 1, 2, "Sigrun", None),
+            (27_300, 2, 0, "Sigrun", Some(2)),
+            (29_400, 1, 2, "Bandit 2", None),
+        ];
+
+        for (at_ms, sequence, hit_points, next_active, impact) in views {
+            if let Some(impact) = impact {
+                presented_sequence = presented_sequence.max(impact);
+            }
+            if !is_stale_combat_sequence(latest_sequence, sequence) {
+                latest_sequence = sequence;
+                current_hit_points = hit_points;
+                active = next_active;
+            }
+
+            let projected =
+                hit_points_at_sequence(current_hit_points, presented_sequence, &changes);
+            match at_ms {
+                11_600 | 12_500 | 20_400 => {
+                    assert_eq!(projected, 2, "health at {at_ms} ms");
+                }
+                27_300 | 29_400 => {
+                    assert_eq!(projected, 0, "health at {at_ms} ms");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(active, "Sigrun", "active heading at {at_ms} ms");
+        }
+    }
+
     fn battle_token(name: &str, side: df_render::battle::Side) -> df_render::battle::Token {
         use df_render::battle::{AttackStyle, Cell, HitPoints, Token, TokenId};
         Token {
@@ -1439,10 +1498,10 @@ mod tests {
             ["Weasel 1", "Weasel 2", "Weasel 3", "Brakka"]
         );
         assert!(
-            shares_ms.iter().all(|share| *share <= 4_000),
+            shares_ms.iter().all(|share| *share <= 3_500),
             "{shares_ms:?}"
         );
-        assert!(now_ms <= 12_000, "whole enemy phase took {now_ms} ms");
+        assert!(now_ms <= 10_500, "whole enemy phase took {now_ms} ms");
         assert!(
             roll_starts
                 .iter()

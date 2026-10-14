@@ -978,6 +978,11 @@ impl Director {
         let Some(buffer) = self.buffers.get(track) else {
             return Ok(());
         };
+        if matches!(stinger, Stinger::Victory | Stinger::Defeat)
+            && !super::live_sfx::claim_ending_sting()
+        {
+            return Ok(());
+        }
         let when = next_beat(graph.context.current_time(), graph.started_at);
         let gain = graph.context.create_gain()?;
         gain.gain().set_value(STINGER_LEVEL);

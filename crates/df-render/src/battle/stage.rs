@@ -453,6 +453,8 @@ pub struct Stage {
     /// The attack names waiting for their blow's result: who struck, and with what.
     attack_labels: Vec<(TokenId, String, String)>,
     hud: HudState,
+    /// An opportunity prompt held until its paired framing has arrived.
+    pending_prompt: Option<String>,
     server_round: u32,
     /// The newest outcome sequence whose hit points have reached the cards.
     presented_sequence: u64,
@@ -532,6 +534,7 @@ impl Stage {
             server_active: None,
             active_held: false,
             hud: HudState::default(),
+            pending_prompt: None,
             server_round: 0,
             presented_sequence: 0,
             protected_sequence: 0,
@@ -770,7 +773,14 @@ impl Stage {
 
     /// A question the server is waiting on, shown where the turn label is; `None` clears it.
     pub fn set_prompt(&mut self, prompt: Option<String>) {
+        self.pending_prompt = None;
         self.hud.prompt = prompt;
+    }
+
+    /// Hides an opportunity prompt until the camera has arrived on the two figures.
+    pub fn set_prompt_after_camera_settles(&mut self, prompt: Option<String>) {
+        self.hud.prompt = None;
+        self.pending_prompt = prompt;
     }
 
     /// Keeps the label and marker on the combatant whose beat is playing, even between beats,
@@ -1082,6 +1092,7 @@ impl Stage {
         self.playing_move = false;
         self.celebration = None;
         self.pending_roll_card = None;
+        self.pending_prompt = None;
         self.hud.roll_card = None;
         self.floats.clear();
         self.projectiles.clear();
@@ -1352,6 +1363,13 @@ impl Stage {
             self.roll_card_left_s -= dt;
             if self.roll_card_left_s <= 0.0 {
                 self.hud.roll_card = None;
+            }
+        }
+        if let Some(prompt) = self.pending_prompt.take() {
+            if self.rig.is_panning() || self.camera_move_ahead() || self.move_ahead() {
+                self.pending_prompt = Some(prompt);
+            } else {
+                self.hud.prompt = Some(prompt);
             }
         }
         for text in &mut self.floats {
@@ -1638,7 +1656,7 @@ impl Stage {
                 .map(|pose| pose.yaw_deg);
             let shot = self.scene.occupancy.as_ref().map_or_else(
                 || {
-                    Some(framing::action_shot_from(
+                    Some(framing::action_shot_from_with_dolly(
                         &base,
                         &self.rig.pose(),
                         &actor_body,
@@ -1647,6 +1665,7 @@ impl Stage {
                         &bystanders,
                         framing::FRAMED_ASPECT,
                         home_yaw,
+                        command.dolly,
                     ))
                 },
                 |occupancy| {
@@ -2877,6 +2896,70 @@ mod tests {
 
         assert_eq!(stage.camera_pose_for(&command), Some((tactical, false)));
         assert_eq!(stage.party_pose(Ending::Victory), Some(tactical));
+    }
+
+    #[test]
+    fn action_shot_keeps_the_ranged_shooter_and_target_in_frame_after_the_push_in() {
+        let mut stage = stage();
+        let shooter = TokenId::new("hero");
+        let target = TokenId::new("enemy");
+        let shooter_index = stage.token_index(&shooter).unwrap();
+        let target_index = stage.token_index(&target).unwrap();
+        stage.tokens[shooter_index].position = Vec3::new(-7.0, 0.0, 0.0);
+        stage.tokens[target_index].position = Vec3::new(7.0, 0.0, 0.0);
+        let command = CameraCommand {
+            shot: ShotName::TurnFocus,
+            focus: CameraFocus::Action {
+                actor: shooter.clone(),
+                target: Some(target.clone()),
+                stand: None,
+            },
+            dolly: 0.8,
+        };
+
+        let (pose, _) = stage.camera_pose_for(&command).unwrap();
+        for id in [shooter, target] {
+            let body = stage.body_of(&id).unwrap();
+            assert!(
+                framing::in_safe_area(&pose, framing::FRAMED_ASPECT, &body),
+                "the pushed-in action shot crops {id:?}: {pose:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn opportunity_prompt_waits_until_the_mover_and_reactor_are_framed() {
+        let mut stage = stage();
+        let mover = TokenId::new("enemy");
+        let reactor = TokenId::new("hero");
+        stage
+            .stage(Beat::Approach {
+                attacker: mover.clone(),
+                target: reactor.clone(),
+            })
+            .unwrap();
+        stage.set_prompt_after_camera_settles(Some("hero: Opportunity Attack?".to_owned()));
+        assert!(stage.hud().prompt.is_none());
+
+        for _ in 0..120 {
+            stage.update(Duration::from_millis(50));
+            if stage.rig.is_panning() || stage.camera_move_ahead() || stage.move_ahead() {
+                assert!(stage.hud().prompt.is_none());
+            }
+            if stage.hud().prompt.is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            stage.hud().prompt.as_deref(),
+            Some("hero: Opportunity Attack?")
+        );
+        let pose = stage.rig.pose();
+        for id in [mover, reactor] {
+            let body = stage.body_of(&id).unwrap();
+            assert!(framing::in_safe_area(&pose, framing::FRAMED_ASPECT, &body));
+        }
     }
 
     #[test]

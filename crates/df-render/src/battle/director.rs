@@ -22,7 +22,7 @@ use super::{
 /// The camera settles on a turn's shot over this long, then holds a beat before anything moves.
 /// (`pub(crate)` durations in this block are read by `stage::beat_timing`, the one nominal
 /// beat-duration table the server's pacing bound and this stage share.)
-pub(crate) const FOCUS_PAN: Duration = Duration::from_millis(650);
+pub(crate) const FOCUS_PAN: Duration = Duration::from_millis(400);
 pub(crate) const FOCUS_HOLD: Duration = Duration::from_millis(50);
 /// A turn begins with the wide shot leaning toward its figure and out again: in, a beat, out.
 const LEAN_IN: Duration = Duration::from_millis(300);
