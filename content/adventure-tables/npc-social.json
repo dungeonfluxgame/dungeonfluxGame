@@ -70,8 +70,7 @@
     "attitudes": {
       "patron": {"die": 20, "entries": [
         {"faces": [1, 13], "attitude": "friendly"},
-        {"faces": [14, 19], "attitude": "indifferent"},
-        {"faces": [20, 20], "attitude": "hostile"}
+        {"faces": [14, 20], "attitude": "indifferent"}
       ]},
       "contact": {"die": 20, "entries": [
         {"faces": [1, 10], "attitude": "friendly"},

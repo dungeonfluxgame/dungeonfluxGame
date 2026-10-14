@@ -29,7 +29,7 @@ use super::{
     pack::{Age, PackFile, SceneKey, SpeakerProfile},
     social::{
         Appraisal, Approach, EmotionLevel, EmotionReaction, InfluenceWillingness, Shift,
-        SocialLedger, classify_keywords_reading, shift_line,
+        SocialLedger, shift_line,
     },
     speech_text::{coverage, sentences},
     startup_configuration::content_rating,
@@ -907,26 +907,21 @@ impl NpcVoice {
         {
             return None;
         }
+        let dossier = &context.turn.as_ref()?.dossier;
         let reading = self
             .approach_model
-            .classify(
+            .classify_for_dossier(
                 &context.typed_words,
                 &context.speaker,
                 &context.public_scene,
+                dossier,
             )
             .await
-            .unwrap_or_else(|| classify_keywords_reading(&context.typed_words));
+            .unwrap_or_else(|| {
+                super::social::classify_keywords_reading_for_dossier(&context.typed_words, dossier)
+            });
         let approach = reading.approach;
-        let influence_request = reading.subject != super::adventure::dossier::AnswerSubject::Other
-            || matches!(
-                approach,
-                Approach::Question
-                    | Approach::Persuasion
-                    | Approach::Intimidation
-                    | Approach::Deception
-                    | Approach::Bribe
-                    | Approach::Bargain
-            );
+        let influence_request = approach.is_influence_attempt();
         context.facts["player"]["approach"] = json!(approach.label());
         context.facts["player"]["subject"] = json!(reading.subject.label());
         let mut appraised_reaction = None;

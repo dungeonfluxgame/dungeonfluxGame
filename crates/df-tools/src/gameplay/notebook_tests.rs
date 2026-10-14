@@ -83,6 +83,47 @@ fn missing_notebook_file_starts_empty_and_party_notes_are_shared() {
     fs::remove_dir_all(directory).unwrap();
 }
 
+#[test]
+fn permanent_grievance_is_private_idempotent_and_persistent() {
+    let directory = test_directory();
+    fs::create_dir_all(&directory).unwrap();
+    let notebook = NotebookLedger::open("seed", Vec::new(), Vec::new(), Some(&directory)).unwrap();
+
+    let order = notebook
+        .record_never_forgives(
+            member(1),
+            "Brakka",
+            "Ulric",
+            "Brakka threatened to break his shield.",
+            "opening",
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        notebook
+            .record_never_forgives(
+                member(1),
+                "Brakka",
+                "Ulric",
+                "Brakka threatened to break his shield.",
+                "opening",
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(notebook.visible_to(member(2)).is_empty());
+    assert!(notebook.public_entries().is_empty());
+
+    let resumed = NotebookLedger::open("seed", Vec::new(), Vec::new(), Some(&directory)).unwrap();
+    let visible = resumed.visible_to(member(1));
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].kind, Kind::Note);
+    assert_eq!(visible[0].order, order);
+    assert_eq!(visible[0].author.as_deref(), Some("Brakka"));
+    assert!(visible[0].text.contains("will never forgive"));
+    fs::remove_dir_all(directory).unwrap();
+}
+
 // SRD 5.2.1 p. N/A: the text bound is a product contract, not a game rule.
 #[test]
 fn notes_enforce_spoken_line_bytes_and_per_player_count() {

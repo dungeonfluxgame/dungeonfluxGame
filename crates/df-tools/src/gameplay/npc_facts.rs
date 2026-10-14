@@ -467,8 +467,7 @@ fn world_question(typed: &str) -> bool {
 }
 
 /// How well a line answers the hero's words; a line that cannot answer them scores zero or less.
-fn score(line: &Line, ask: &Ask, typed: &str) -> i32 {
-    let talk = small_talk(ask);
+fn score(line: &Line, ask: &Ask, typed: &str, talk: bool) -> i32 {
     // Small talk asks nothing topical, so shared words are incidental ("seen", "ever") and
     // must not let a biography line outrank an opinion.
     let shared = if talk {
@@ -628,16 +627,8 @@ struct Selection<'a> {
 
 fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a> {
     let fresh: Vec<&Line> = lines.iter().filter(|line| !line.said).collect();
-    let mut ranked: Vec<(i32, usize, &Line)> = fresh
-        .iter()
-        .enumerate()
-        .map(|(order, line)| (score(line, ask, inputs.words), order, *line))
-        .filter(|(points, _, _)| *points > 0)
-        .collect();
-    ranked.sort_by_key(|(points, order, _)| (std::cmp::Reverse(*points), *order));
-    // Small talk draws on the speaker's own life and opinions only: an errand line that
-    // happens to share a word never answers it. A question grounded in the errand's own
-    // things, or asking after the world, is never small talk.
+    // Score with the same small-talk decision used for eligibility. Otherwise a question
+    // grounded in an errand can score a matching biography word ("letter" / "letters").
     let grounded = question_parts(inputs.words)
         .into_iter()
         .filter(|part| asks(part))
@@ -647,6 +638,16 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
             })
         });
     let talk = small_talk(ask) && !grounded && !world_question(inputs.words);
+    let mut ranked: Vec<(i32, usize, &Line)> = fresh
+        .iter()
+        .enumerate()
+        .map(|(order, line)| (score(line, ask, inputs.words, talk), order, *line))
+        .filter(|(points, _, _)| *points > 0)
+        .collect();
+    ranked.sort_by_key(|(points, order, _)| (std::cmp::Reverse(*points), *order));
+    // Small talk draws on the speaker's own life and opinions only: an errand line that
+    // happens to share a word never answers it. A question grounded in the errand's own
+    // things, or asking after the world, is never small talk.
     let eligible = |line: &Line| !talk || matches!(line.kind, Kind::Yourself);
     // A question with no topic and no shared words is an open one ("what now?"): the best lines
     // answer it. Otherwise every line chosen must itself touch the question.
@@ -833,6 +834,7 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
         "scene": {"title": kept(inputs.scene_title)},
         "player": {
             "hero_name": inputs.hero,
+            "addressing": "Address the hero by name. No honorific or pronouns are established.",
             "exact_words": withheld.redact(inputs.words),
             // The hero's questions, up to three, in order: the reply answers each in turn.
             // Part of the player's own speech, redacted like it, so untrusted words live
@@ -949,6 +951,51 @@ fn stage_of(exchange: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reply_facts_offer_the_npcs_real_role_and_do_not_guess_hero_addressing() {
+        let dossier = crate::gameplay::npc_dossier_tests::adventure(1)
+            .dossiers
+            .into_iter()
+            .next()
+            .unwrap();
+        let withheld = Withheld::secrets_only(Vec::new());
+        let conversation = Conversation::default();
+        let inputs = Inputs {
+            dossier: &dossier,
+            name: &dossier.name,
+            hero: "Brakka",
+            standing: Standing {
+                attitude: super::super::adventure::dossier::Attitude::Indifferent,
+                trust: 0,
+            },
+            recent: &[],
+            scene_title: "At the ferry desk",
+            scripted_line: "",
+            words: "Who are you?",
+            withheld: &withheld,
+            conversation: &conversation,
+            later_lines: &[],
+            clue: Clue::Absent,
+        };
+
+        let (facts, _, _) = super::facts(&inputs);
+
+        assert_eq!(facts["npc"]["role"], dossier.role_label);
+        assert_ne!(facts["npc"]["role"], dossier.role.label());
+        assert!(
+            facts["player"]["addressing"]
+                .as_str()
+                .unwrap()
+                .contains("by name")
+        );
+        assert!(
+            !facts["player"]["addressing"]
+                .as_str()
+                .unwrap()
+                .contains("miss")
+        );
+    }
 
     #[test]
     fn current_scene_facts_include_display_narration_and_present_cast() {

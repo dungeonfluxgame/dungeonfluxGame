@@ -69,6 +69,9 @@ pub(super) fn influence_check_plan(
             Approach::Flattery | Approach::Flirting => InfluenceSkill::Performance,
             Approach::Question
             | Approach::Kindness
+            | Approach::Apology
+            | Approach::Introduction
+            | Approach::Refusal
             | Approach::Persuasion
             | Approach::Bribe
             | Approach::Bargain

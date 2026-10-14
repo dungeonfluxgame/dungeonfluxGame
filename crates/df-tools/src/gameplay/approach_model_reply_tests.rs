@@ -64,7 +64,7 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
                 .iter()
                 .any(|line| line.text == "cools toward Brannoch")
         );
-        assert_eq!(decision.connections(), 2);
+        assert_eq!(decision.connections(), 3);
         assert_eq!(
             decision.bodies()[0]["state"]["public_scene"],
             "The party meets Perrin in a tavern."

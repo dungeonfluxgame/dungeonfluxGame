@@ -754,9 +754,9 @@ fn no_speaker_is_ignorant_of_a_line_the_scenes_authored_for_them_across_200_seed
     assert!(checked > 200, "only {checked} authored lines were checked");
 }
 
-/// The saved 2026-10-12 run's adventure (Kestrel asks the party to warn Jorun before dawn).
+/// The fixed-seed Kestrel adventure ties its urgent warning to the named contact.
 #[test]
-fn kestrel_of_the_saved_run_knows_who_jorun_is_and_why_dawn_matters() {
+fn kestrel_of_the_fixed_seed_adventure_knows_the_contact_and_why_the_warning_is_urgent() {
     let chapter = chapter_tables();
     let tables = dossier_tables();
     let generated = adventure(&chapter, 0xf4ec_5005_1a50_89bf);
@@ -773,9 +773,10 @@ fn kestrel_of_the_saved_run_knows_who_jorun_is_and_why_dawn_matters() {
         .map(|item| item.text.as_str())
         .collect();
     assert!(
-        freely
-            .iter()
-            .any(|text| text.contains("warn Jorun before dawn")),
+        freely.iter().any(|text| {
+            let text = text.to_lowercase();
+            text.contains("warn jorun") && text.contains("cannot reach them in time")
+        }),
         "{freely:?}"
     );
     assert!(
@@ -893,10 +894,7 @@ fn every_dossier_holds_a_personal_life_with_stable_ids() {
         for dossier in roll_dossiers(&tables, &facts, generated.seed).unwrap() {
             let freely = &dossier.knowledge.says_freely;
             for (source, count) in PERSONAL_SOURCES {
-                let lines: Vec<_> = freely
-                    .iter()
-                    .filter(|item| item.source == source)
-                    .collect();
+                let lines: Vec<_> = freely.iter().filter(|item| item.source == source).collect();
                 assert_eq!(
                     lines.len(),
                     count,
@@ -984,11 +982,7 @@ fn a_fighting_label_gets_a_service_history_and_a_trade_gets_a_trade() {
             .iter()
             .find(|item| item.source == "service_line")
             .unwrap();
-        assert!(
-            service.id.contains("martial-"),
-            "{label}: {}",
-            service.text
-        );
+        assert!(service.id.contains("martial-"), "{label}: {}", service.text);
         assert!(
             !service.text.starts_with("I never wore a uniform"),
             "{label}: {}",

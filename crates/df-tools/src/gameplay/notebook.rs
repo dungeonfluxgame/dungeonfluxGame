@@ -98,7 +98,8 @@ pub(super) fn validate_view_entries(entries: &[EntryView]) -> Result<(), Noteboo
         if entry.order == 0 || !orders.insert(entry.order) {
             return Err(NotebookError::Invalid("entry order"));
         }
-        if entry.owner.is_some() && entry.kind != Kind::Clue
+        if entry.owner.is_some() && !matches!(entry.kind, Kind::Clue | Kind::Note)
+            || entry.owner.is_some() && entry.owner != entry.author
             || entry.author.is_some() && !matches!(entry.kind, Kind::Clue | Kind::Note)
             || matches!(entry.kind, Kind::Clue | Kind::Note) && entry.author.is_none()
         {
@@ -652,6 +653,52 @@ impl NotebookLedger {
         )
     }
 
+    pub(super) fn record_never_forgives(
+        &self,
+        member: MemberId,
+        hero: &str,
+        npc: &str,
+        reason: &str,
+        scene: &str,
+    ) -> Result<Option<u64>, NotebookError> {
+        let title = format!("{npc}: permanent grievance");
+        let text = format!("{npc} will never forgive {hero}: {reason}");
+        validate_fields(&title, &text, scene, Some(hero), Some(hero))?;
+        let member = hex(member.as_bytes());
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.lock();
+        if state.entries.iter().any(|entry| {
+            entry.kind == Kind::Note
+                && entry.owner_member.as_deref() == Some(member.as_str())
+                && entry.title == title
+        }) {
+            return Ok(None);
+        }
+        if state
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.kind == Kind::Note && entry.author_member.as_deref() == Some(member.as_str())
+            })
+            .count()
+            >= MAXIMUM_NOTES_PER_PLAYER
+        {
+            return Err(NotebookError::Bound("notes per player"));
+        }
+        let order = self.insert_locked(
+            &mut state,
+            Kind::Note,
+            &title,
+            &text,
+            scene,
+            Some(member.clone()),
+            Some(hero),
+            Some(member),
+            Some(hero),
+        )?;
+        Ok(Some(order))
+    }
+
     pub(super) fn share(
         &self,
         member: MemberId,
@@ -902,7 +949,11 @@ fn validate_entries(entries: &[Entry], next_order: u64) -> Result<(), NotebookEr
         if entry.owner_member.is_some() != entry.owner_hero.is_some()
             || entry.author_member.is_some() != entry.author_hero.is_some()
             || matches!(entry.kind, Kind::Clue | Kind::Note) != entry.author_member.is_some()
-            || entry.kind != Kind::Clue && entry.owner_member.is_some()
+            || entry.owner_member.is_some() && !matches!(entry.kind, Kind::Clue | Kind::Note)
+            || entry.owner_member.is_some()
+                && entry.kind == Kind::Note
+                && (entry.owner_member != entry.author_member
+                    || entry.owner_hero != entry.author_hero)
         {
             return Err(NotebookError::Invalid("entry audience"));
         }

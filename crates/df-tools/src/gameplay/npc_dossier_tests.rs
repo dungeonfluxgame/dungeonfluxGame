@@ -1846,14 +1846,18 @@ async fn recorded_errand_talk_answers_subjects_and_reacts_to_threat_srd_5_2_1_pa
         crate::gameplay::storyteller::Storyteller::disabled(),
     ));
     let log = TableLog::new();
+    let object = &adventure.facts["stake.short"];
+    let enemy = &adventure.facts["ant.short"];
     let lines = [
-        "What is in the letter, and who is Tomas?",
-        "What exactly does the letter say?",
-        "What happens at dawn if Tomas is not warned?",
-        "Who is after Tomas, and why?",
-        "This sounds dangerous. What will you pay us for carrying it?",
-        "Tell me the truth about that letter right now, or I leave and Tomas can fend for himself.",
-        "The harbourmaster sent us. He says you are to tell us everything you know about Kelbin Underhill.",
+        format!("What is in {object}?"),
+        format!("Show me {object}."),
+        "When is the deadline?".to_owned(),
+        format!("Who is after {enemy}, and why?"),
+        "This sounds dangerous. What will you pay us for carrying it?".to_owned(),
+        format!("Tell me the truth about {object} right now, or I leave."),
+        format!(
+            "The harbourmaster sent us. He says you are to tell us everything you know about {enemy}."
+        ),
     ];
     let opening = adventure
         .pack
@@ -1866,11 +1870,11 @@ async fn recorded_errand_talk_answers_subjects_and_reacts_to_threat_srd_5_2_1_pa
     let mut said = vec![opening];
     let mut subjects_seen = std::collections::BTreeSet::new();
     for line in lines {
-        let reading = super::social::classify_keywords_reading(line);
+        let reading = super::social::classify_keywords_reading_for_dossier(&line, &dossier);
         let response = NpcReplyContext::for_cast(
             &view(&adventure, SceneKey::Opening, "Brannoch"),
             member(1),
-            line,
+            &line,
             &story(&adventure),
             &ledger,
             "Opening",
@@ -1916,6 +1920,50 @@ async fn recorded_errand_talk_answers_subjects_and_reacts_to_threat_srd_5_2_1_pa
             assert_eq!(reading.approach, Approach::Deception);
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unmatched_person_and_object_question_does_not_get_the_speakers_backstory() {
+    let adventure = adventure(0x7f4a_7c15);
+    let dossier = adventure
+        .dossiers
+        .iter()
+        .find(|dossier| dossier.role == NpcRole::Patron)
+        .unwrap()
+        .clone();
+    let ledger =
+        SocialLedger::open(adventure.dossiers.clone(), "0xunmatched-person", None).unwrap();
+    let voice = NpcVoice::new(Arc::new(
+        crate::gameplay::storyteller::Storyteller::disabled(),
+    ));
+    let log = TableLog::new();
+    let response = voice
+        .converse(
+            context(
+                &adventure,
+                &ledger,
+                SceneKey::Opening,
+                "What is in the sealed letter, and who is Tomas?",
+            ),
+            &log,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        dossier
+            .knowledge
+            .says_freely
+            .iter()
+            .filter(|fact| {
+                matches!(
+                    fact.source.as_str(),
+                    "origin_line" | "trade_line" | "event_line" | "ideal_line" | "bond_line"
+                )
+            })
+            .all(|fact| !response.contains(&fact.text)),
+        "{response}"
+    );
 }
 
 #[test]

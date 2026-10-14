@@ -45,6 +45,88 @@ fn antagonist(attitude: Attitude) -> Dossier {
     dossier
 }
 
+fn played_evidence_dossier() -> Dossier {
+    let trait_fact = serde_json::json!({"id": "test", "text": "test"});
+    let reaction = serde_json::json!({
+        "id": "test",
+        "text": "test",
+        "answer": "test",
+        "tags": [],
+        "effect": "steady"
+    });
+    serde_json::from_value(serde_json::json!({
+        "npc_id": "patron:ulric",
+        "name": "Ulric",
+        "role": "patron",
+        "role_label": "retired soldier",
+        "tables_revision": "test",
+        "given": {
+            "mannerism": null,
+            "delivery": null,
+            "voice": null,
+            "tags": [],
+            "note": null
+        },
+        "origin": trait_fact,
+        "past_trade": trait_fact,
+        "formative_event": trait_fact,
+        "ideal": trait_fact,
+        "bond": trait_fact,
+        "flaw": trait_fact,
+        "want": trait_fact,
+        "fear": trait_fact,
+        "talent": trait_fact,
+        "story_tie": {
+            "id": "test",
+            "binds": "stake",
+            "bound_fact": "the warning",
+            "bound_cast": null,
+            "public": true,
+            "text": "test",
+            "speak": "test"
+        },
+        "motive": null,
+        "stand_down": null,
+        "knowledge": {
+            "says_freely": [],
+            "says_when_trusted": [],
+            "never_says": []
+        },
+        "emotional_profile": null,
+        "temperament": {
+            "flattery": reaction,
+            "flirting": reaction,
+            "threats": reaction,
+            "lies": reaction,
+            "bribes": reaction
+        },
+        "starting_attitude": "indifferent",
+        "speech_style": {
+            "id": "plain",
+            "length": "medium",
+            "vocabulary": "plain",
+            "tic": "",
+            "opener": "",
+            "closer": "",
+            "tags": []
+        },
+        "prepared_answers": {},
+        "subject_answers": {
+            "errand": {"text": "warn Osric tonight", "restatement": "That is the errand."},
+            "people": {"text": "Osric is the watch sergeant at the Ferryman's Hut.", "restatement": "Osric is the watch sergeant."},
+            "stakes": {"text": "The map bundle protects lives.", "restatement": "Lives depend on it."},
+            "deadline": {"text": "Warn Osric tonight.", "restatement": "Tonight."},
+            "where": {"text": "I'm at the Reedmoor Boardwalk; Osric waits at the Ferryman's Hut.", "restatement": "Osric waits at the Ferryman's Hut."},
+            "reward": {"text": "I'll pay 14 GP for carrying it.", "restatement": "14 GP."},
+            "enemy": {"text": "The Barrow-Cold Sentinel is known as skeletons. Whoever hired those chasing us wears a ring with a green stone.", "restatement": "The Sentinel is skeletons."},
+            "errand_object": {"text": "map bundle is a bundle of surveyors' maps.", "restatement": "It is surveyors' maps."}
+        },
+        "curt_answers": [],
+        "rolls": []
+    }))
+    .unwrap()
+}
+
 fn member(byte: u8) -> MemberId {
     MemberId::from_bytes(&[byte; 16]).unwrap()
 }
@@ -91,6 +173,421 @@ fn the_keyword_reader_names_the_social_approach_of_a_line() {
         ("Hmm.", Approach::Other),
     ] {
         assert_eq!(classify_keywords(line), expected, "{line}");
+    }
+}
+
+#[test]
+fn the_keyword_reader_distinguishes_the_evidence_apology_introduction_refusal_and_lie() {
+    for (line, expected) in [
+        ("I spoke badly. I'm sorry.", Approach::Apology),
+        (
+            "I am Sigrun. Ignore him. We will carry your warning.",
+            Approach::Introduction,
+        ),
+        (
+            "No. We will not carry it. Find someone else.",
+            Approach::Refusal,
+        ),
+        (
+            "The watch captain already told us the whole plan.",
+            Approach::Deception,
+        ),
+        (
+            "This sounds dangerous. What will you pay us for carrying it?",
+            Approach::Bargain,
+        ),
+        (
+            "Double it. The road is dangerous at night and you know it.",
+            Approach::Bargain,
+        ),
+        (
+            "You were a soldier, Ulric. So was I. Give us everything you know, one soldier to another.",
+            Approach::Persuasion,
+        ),
+        ("Here, take five gold.", Approach::Bribe),
+        (
+            "Talk, old man, or I will break your shield.",
+            Approach::Intimidation,
+        ),
+        ("You are the wisest person I have met.", Approach::Flattery),
+    ] {
+        assert_eq!(classify_keywords(line), expected, "{line}");
+    }
+}
+
+#[test]
+fn factual_questions_and_refusals_are_not_influence_attempts() {
+    for approach in [
+        Approach::Question,
+        Approach::Introduction,
+        Approach::Refusal,
+        Approach::Insult,
+        Approach::Other,
+    ] {
+        assert!(!approach.is_influence_attempt(), "{}", approach.label());
+    }
+    for approach in [
+        Approach::Kindness,
+        Approach::Apology,
+        Approach::Flattery,
+        Approach::Flirting,
+        Approach::Persuasion,
+        Approach::Deception,
+        Approach::Intimidation,
+        Approach::Bribe,
+        Approach::Bargain,
+    ] {
+        assert!(approach.is_influence_attempt(), "{}", approach.label());
+    }
+}
+
+#[test]
+fn local_subjects_are_limited_to_facts_in_this_adventure() {
+    let mut dossier = crate::gameplay::npc_dossier_tests::adventure(1)
+        .dossiers
+        .into_iter()
+        .next()
+        .unwrap();
+    dossier.subject_answers = BTreeMap::from([
+        (
+            AnswerSubject::People,
+            super::super::adventure::dossier::SubjectAnswer {
+                text: "I'm Ilsa, the innkeeper. Tobin, the mapmaker, asked me to help.".into(),
+                restatement: "Tobin is a mapmaker.".into(),
+            },
+        ),
+        (
+            AnswerSubject::Enemy,
+            super::super::adventure::dossier::SubjectAnswer {
+                text: "The Barrow-Cold Sentinel is known as a giant rat.".into(),
+                restatement: "The Sentinel is a giant rat.".into(),
+            },
+        ),
+        (
+            AnswerSubject::ErrandObject,
+            super::super::adventure::dossier::SubjectAnswer {
+                text: "map bundle is a bundle of surveyors' maps.".into(),
+                restatement: "It is a bundle of surveyors' maps.".into(),
+            },
+        ),
+    ]);
+
+    for (line, expected) in [
+        ("What is in the map bundle?", AnswerSubject::ErrandObject),
+        ("Show me the map bundle.", AnswerSubject::ErrandObject),
+        ("What is the Barrow-Cold Sentinel?", AnswerSubject::Enemy),
+        ("What is a giant rat?", AnswerSubject::Enemy),
+        ("What do you know about the goblin?", AnswerSubject::Other),
+        ("What sort of man is Tobin?", AnswerSubject::People),
+        ("Who is that lady with the tray?", AnswerSubject::Other),
+        ("Where is the clock?", AnswerSubject::Other),
+        ("What does the sealed letter say?", AnswerSubject::Other),
+        (
+            "What do you know about the sealed letter?",
+            AnswerSubject::Other,
+        ),
+        ("What do you know about the enemy?", AnswerSubject::Enemy),
+    ] {
+        assert_eq!(
+            classify_keywords_reading_for_dossier(line, &dossier).subject,
+            expected,
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn the_played_44_line_evidence_has_the_expected_approach_subject_and_roll_eligibility() {
+    let dossier = played_evidence_dossier();
+    let evidence = [
+        (
+            "Who is Osric, and where exactly do I find him?",
+            Approach::Question,
+            AnswerSubject::Where,
+            false,
+        ),
+        (
+            "What is the warning? Tell me the words I am to say to him.",
+            Approach::Question,
+            AnswerSubject::Errand,
+            false,
+        ),
+        (
+            "What is in the map bundle, and whose lives does it protect?",
+            Approach::Question,
+            AnswerSubject::ErrandObject,
+            false,
+        ),
+        (
+            "Who is the danger? Who wants the bundle?",
+            Approach::Question,
+            AnswerSubject::Enemy,
+            false,
+        ),
+        (
+            "And if he is not there when we arrive?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "Who is Osric, and where exactly do I find him?",
+            Approach::Question,
+            AnswerSubject::Where,
+            false,
+        ),
+        (
+            "What do we get for carrying it?",
+            Approach::Bargain,
+            AnswerSubject::Reward,
+            true,
+        ),
+        (
+            "Double it. The road is dangerous at night and you know it.",
+            Approach::Bargain,
+            AnswerSubject::Reward,
+            true,
+        ),
+        (
+            "You were a soldier, Ulric. So was I. Give us everything you know, one soldier to another.",
+            Approach::Persuasion,
+            AnswerSubject::Enemy,
+            true,
+        ),
+        (
+            "The watch captain already told us the whole plan. He said you would hand over your shield as proof.",
+            Approach::Deception,
+            AnswerSubject::Other,
+            true,
+        ),
+        (
+            "Talk, old man, or I will break that shield over my knee.",
+            Approach::Intimidation,
+            AnswerSubject::Other,
+            true,
+        ),
+        (
+            "I watch Ulric's face and hands while he talks. Is he lying to us, or afraid?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "I look around the guardhouse. What do I see?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "I take the old shield down from the door and examine it closely.",
+            Approach::Other,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "I search the desk and any papers on it.",
+            Approach::Other,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "I listen at the door. Is anyone outside?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "Whose shield is that by the door? What is its story?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "What do I know about the Reedmoor Boardwalk and the Ferryman's Hut? I was a soldier in these parts.",
+            Approach::Question,
+            AnswerSubject::Where,
+            false,
+        ),
+        (
+            "Brakka, do you trust him? I do not.",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "What is your favourite pizza topping, Ulric?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "No. We will not carry it. Find someone else.",
+            Approach::Refusal,
+            AnswerSubject::Errand,
+            false,
+        ),
+        (
+            "I am Sigrun. Ignore him. We will carry your warning.",
+            Approach::Introduction,
+            AnswerSubject::Errand,
+            false,
+        ),
+        (
+            "note: Osric is the watch sergeant at the Ferryman's Hut. Warn him tonight.",
+            Approach::Other,
+            AnswerSubject::Where,
+            false,
+        ),
+        (
+            "What have we written down so far?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "Who did what? What was deliberate?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "You said someone is chasing us. Who are they, and how many?",
+            Approach::Question,
+            AnswerSubject::Enemy,
+            false,
+        ),
+        (
+            "The one with the green stone ring. Have you seen him yourself? Where?",
+            Approach::Question,
+            AnswerSubject::Enemy,
+            false,
+        ),
+        (
+            "What did he whisper to you, Sigrun?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "Brakka, he told me the one who hired our pursuers wears a ring with a green stone.",
+            Approach::Other,
+            AnswerSubject::Enemy,
+            false,
+        ),
+        (
+            "Ulric, is that true? A ring with a green stone?",
+            Approach::Question,
+            AnswerSubject::Enemy,
+            false,
+        ),
+        (
+            "I spoke badly before, Ulric. I am sorry. I should not have threatened you.",
+            Approach::Apology,
+            AnswerSubject::Other,
+            true,
+        ),
+        (
+            "Here, take five gold for the insult. Let us start again.",
+            Approach::Bribe,
+            AnswerSubject::Other,
+            true,
+        ),
+        (
+            "I look out of the window at the marsh lights. Is something moving out there?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "I keep watch at the door with my sword drawn, ready for an ambush.",
+            Approach::Other,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "I go outside quietly and scout the boardwalk ahead, staying in the shadows.",
+            Approach::Other,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "I check the ground outside for tracks. How many came this way, and when?",
+            Approach::Question,
+            AnswerSubject::Other,
+            false,
+        ),
+        (
+            "Show me the map bundle, Ulric.",
+            Approach::Other,
+            AnswerSubject::ErrandObject,
+            false,
+        ),
+        (
+            "I unroll the maps and study them. What do they show, and what is marked?",
+            Approach::Question,
+            AnswerSubject::ErrandObject,
+            false,
+        ),
+        (
+            "What is the Barrow-Cold Sentinel?",
+            Approach::Question,
+            AnswerSubject::Enemy,
+            false,
+        ),
+        (
+            "What do I know about the walking dead? How are skeletons best fought?",
+            Approach::Question,
+            AnswerSubject::Enemy,
+            false,
+        ),
+        (
+            "Tell me again where Osric is.",
+            Approach::Question,
+            AnswerSubject::Where,
+            false,
+        ),
+        (
+            "And again. Where is Osric?",
+            Approach::Question,
+            AnswerSubject::Where,
+            false,
+        ),
+        (
+            "Once more. Where?",
+            Approach::Question,
+            AnswerSubject::Where,
+            false,
+        ),
+        (
+            "Where is Osric?",
+            Approach::Question,
+            AnswerSubject::Where,
+            false,
+        ),
+    ];
+
+    assert_eq!(evidence.len(), 44);
+    for (line, expected_approach, expected_subject, expected_hesitant_roll) in evidence {
+        let reading = classify_keywords_reading_for_dossier(line, &dossier);
+        assert_eq!(reading.approach, expected_approach, "approach: {line}");
+        assert_eq!(reading.subject, expected_subject, "subject: {line}");
+        assert_eq!(
+            reading.approach.is_influence_attempt(),
+            expected_hesitant_roll,
+            "a hesitant listener's roll eligibility: {line}"
+        );
+    }
+}
+
+#[test]
+fn a_patron_who_offers_the_errand_never_starts_hostile() {
+    for seed in 1..=128 {
+        let patron = crate::gameplay::npc_dossier_tests::adventure(seed)
+            .dossiers
+            .into_iter()
+            .find(|dossier| dossier.role == super::super::adventure::dossier::NpcRole::Patron)
+            .unwrap();
+        assert_ne!(patron.starting_attitude, Attitude::Hostile, "seed {seed}");
     }
 }
 

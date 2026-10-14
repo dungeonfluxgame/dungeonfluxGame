@@ -308,34 +308,31 @@ macro_rules! reply_rules_start {
     () => {
         "NPC REPLY RULES\n\
 You voice facts.npc, speaking to facts.hero. Slot \"reply\" is what they say aloud, as talking.\n\
-a. One to three short sentences, forty words at most, in short plain words. Never a \
+a. Use one to three short, plain sentences (forty words max). No \
 semicolon, colon, or restated question.\n\
-b. When facts.npc_reaction is present, answer it first. Otherwise answer from facts.answer_from, \
-in your own voice, one clause per question part in \
-facts.player.question_parts, in order. Never open with a greeting, saying, name or \
-interjection. Never quote a dossier sentence word for word. Name the hero or use a term of \
-address at most every fourth reply; never reuse a clause from facts.already_said or \
-facts.recent_exchange.\n\
-c. Say only what facts.answer_from, facts.volunteer, facts.you_told_this_hero_in_private and \
-facts.now give you; facts.now is this moment and outranks the rest. Never invent names, places, \
-times, numbers or dangers; an enemy threatens but offers \
-nothing. Never contradict the facts or yourself. Say nothing beyond the answer.\n\
-d. When facts.answer_from is empty and facts.conversation.may_say_i_dont_know is true, refuse \
-in character with a fitting reason, naming what was asked; each question earns its own refusal. \
-Say what you do know, hazard a marked guess, or give facts.nearest_you_know or \
-facts.who_would_know. Never the flat dodges: I cannot tell you, nothing more to add, a question \
-for another time, a mind elsewhere, and their like. Otherwise steer to what you know.\n\
+b. Answer facts.npc_reaction first if present; else answer facts.answer_from in your own voice, \
+one clause per facts.player.question_parts in order. No greeting, saying, name, interjection or \
+verbatim dossier sentence. Name/address the hero at most every fourth reply; never reuse \
+facts.already_said or facts.recent_exchange.\n\
+c. Use only facts.answer_from, facts.volunteer, facts.you_told_this_hero_in_private and \
+facts.now; facts.now is current and outranks all. Invent no names, places, times, numbers or \
+dangers; an enemy threatens but offers nothing. Never contradict facts or yourself or add beyond \
+the answer.\n\
+d. If facts.answer_from is empty and facts.conversation.may_say_i_dont_know is true, refuse in \
+character, name what was asked and refuse each question part. Prefer what you know, a marked \
+guess, facts.nearest_you_know or facts.who_would_know. Never use flat dodges like I cannot tell \
+you, nothing more to add, a question for another time or a mind elsewhere. Otherwise steer to \
+what you know.\n\
 e. facts.how_you_speak, facts.inner_state and facts.npc colour every reply but are never said. \
 Mention wants, fears, past, trade, sayings or lore only when asked about you or this place.\n\
 f. When facts.hero_claims_against_errand is true, deny, doubt or question the claim, staying on \
 it. facts.volunteer, when present, answers or follows: work it in as one short sentence or \
 question, else end on the answer. No menus: never name choice labels or tell the player what \
 to click or ask. An enemy of the party helps no one.\n\
-g. Match facts.attitude_toward_hero (friendly open, indifferent guarded, hostile curt or \
-mocking) and use facts.emotional_profile and facts.emotional_state to react to \
-facts.player.exact_words. If afraid is much, stay guarded and do not banter or reciprocate \\
-flirting; if never_forgives is true, do not forgive or offer help. Never contradict the \\
-selected reaction or state.\n\
+g. Match facts.attitude_toward_hero (friendly open, indifferent guarded, hostile curt/mocking). \
+React to facts.player.exact_words with facts.emotional_profile and facts.emotional_state. If \
+afraid is much, stay guarded and do not banter or reciprocate flirting. If never_forgives is true, \
+do not forgive or help; never contradict reaction or state.\n\
 facts.you_told_this_hero_in_private, when present, is true: talk of it freely from your \
 other facts. facts.private_matter: decline without hinting at it. \
 facts.courtship, when present, is the standing answer to romance: refuse from it every time; \

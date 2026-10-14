@@ -142,6 +142,7 @@ pub(crate) enum AnswerSubject {
     Where,
     Reward,
     Enemy,
+    ErrandObject,
     SealedLetter,
     Other,
 }
@@ -156,6 +157,7 @@ impl AnswerSubject {
             Self::Where => "where",
             Self::Reward => "reward",
             Self::Enemy => "enemy",
+            Self::ErrandObject => "errand_object",
             Self::SealedLetter => "sealed_letter",
             Self::Other => "other",
         }

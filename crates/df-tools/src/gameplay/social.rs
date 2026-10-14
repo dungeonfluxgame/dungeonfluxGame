@@ -57,6 +57,9 @@ const FILE_NAME: &str = "social.json";
 pub(super) enum Approach {
     Question,
     Kindness,
+    Apology,
+    Introduction,
+    Refusal,
     Flattery,
     Flirting,
     Persuasion,
@@ -73,6 +76,9 @@ impl Approach {
         match self {
             Self::Question => "question",
             Self::Kindness => "kindness",
+            Self::Apology => "apology",
+            Self::Introduction => "introduction",
+            Self::Refusal => "refusal",
             Self::Flattery => "flattery",
             Self::Flirting => "flirting",
             Self::Persuasion => "persuasion",
@@ -85,12 +91,30 @@ impl Approach {
         }
     }
 
+    pub(super) fn is_influence_attempt(self) -> bool {
+        matches!(
+            self,
+            Self::Kindness
+                | Self::Apology
+                | Self::Flattery
+                | Self::Flirting
+                | Self::Persuasion
+                | Self::Deception
+                | Self::Intimidation
+                | Self::Bribe
+                | Self::Bargain
+        )
+    }
+
     /// The model's one-word answer; anything else is not an approach.
     pub(super) fn parse(word: &str) -> Option<Self> {
         let word = word.trim().trim_matches(|c: char| !c.is_alphabetic());
         [
             Self::Question,
             Self::Kindness,
+            Self::Apology,
+            Self::Introduction,
+            Self::Refusal,
             Self::Flattery,
             Self::Flirting,
             Self::Persuasion,
@@ -313,6 +337,7 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "i will hurt",
         "i'll hurt",
         "hurt you",
+        "break that shield",
         "kill you",
         "i will kill",
         "i'll kill",
@@ -337,6 +362,38 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
     ]) {
         Approach::Intimidation
     } else if has(&[
+        "i'm sorry this",
+        "i am sorry this",
+        "i'm sorry to hear",
+        "i am sorry to hear",
+        "i'm sorry for your loss",
+        "i am sorry for your loss",
+    ]) {
+        Approach::Kindness
+    } else if has(&[
+        "i'm sorry",
+        "i am sorry",
+        "i apologize",
+        "i apologise",
+        "forgive me",
+        "i spoke badly",
+    ]) {
+        Approach::Apology
+    } else if has(&[
+        "we will not",
+        "we won't",
+        "i will not",
+        "i won't",
+        "we refuse",
+        "i refuse",
+        "find someone else",
+        "not carry it",
+        "not take it",
+    ]) {
+        Approach::Refusal
+    } else if is_introduction(typed) {
+        Approach::Introduction
+    } else if has(&[
         "what do we get",
         "what will you pay us",
         "what will you pay me",
@@ -357,6 +414,11 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "reward can we expect",
         "what can we expect",
         "is there a payment",
+        "double it",
+        "double the reward",
+        "raise the pay",
+        "increase the pay",
+        "pay us more",
     ]) {
         Approach::Bargain
     } else if has(&[
@@ -459,6 +521,8 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "he says you",
         "she says you",
         "the captain told us",
+        "the watch captain already told us",
+        "already told us the whole plan",
         "the harbourmaster sent",
         "the magistrate says",
         "official order",
@@ -483,17 +547,39 @@ pub(super) fn classify_keywords(typed: &str) -> Approach {
         "best way to",
         "will help us",
         "give everyone a chance",
+        "one soldier to another",
     ]) {
         Approach::Persuasion
     } else if typed.contains('?')
-        || has(&[
-            "who", "what", "why", "where", "how", "when", "tell me", "explain",
-        ])
+        || ["who ", "what ", "why ", "where ", "how ", "when "]
+            .iter()
+            .any(|question| lowered.trim_start().starts_with(question))
+        || has(&["tell me", "explain"])
     {
         Approach::Question
     } else {
         Approach::Other
     }
+}
+
+fn is_introduction(typed: &str) -> bool {
+    let trimmed = typed.trim();
+    let lowered = trimmed.to_lowercase();
+    if lowered.starts_with("my name is ") || lowered.starts_with("call me ") {
+        return true;
+    }
+    let prefix_length = if lowered.starts_with("i am ") {
+        5
+    } else if lowered.starts_with("i'm ") {
+        4
+    } else {
+        return false;
+    };
+    trimmed
+        .get(prefix_length..)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|name| name.chars().next())
+        .is_some_and(char::is_uppercase)
 }
 
 /// The factual subject of a typed line. It never changes a game rule or outcome.
@@ -507,11 +593,11 @@ pub(super) fn subject_keywords(typed: &str) -> AnswerSubject {
         "who's behind",
         "who is after",
         "who's after",
-        "bandit",
-        "goblin",
-        "kobold",
-        "kelbin",
-        "what do you know about",
+        "danger",
+        "who wants",
+        "who are they",
+        "who hired",
+        "pursuers",
     ]) {
         AnswerSubject::Enemy
     } else if has(&[
@@ -536,7 +622,10 @@ pub(super) fn subject_keywords(typed: &str) -> AnswerSubject {
     } else if has(&["what happens", "why", "matter", "fail", "lose", "at stake"]) {
         AnswerSubject::Stakes
     } else if has(&[
-        "when",
+        "when is the deadline",
+        "when must",
+        "when do you need",
+        "when does it need",
         "deadline",
         "before dawn",
         "before morning",
@@ -553,14 +642,6 @@ pub(super) fn subject_keywords(typed: &str) -> AnswerSubject {
         "which place",
     ]) {
         AnswerSubject::Where
-    } else if has(&[
-        "letter",
-        "sealed",
-        "what does it say",
-        "what is written",
-        "words inside",
-    ]) {
-        AnswerSubject::SealedLetter
     } else if !has(&["who are you", "who am i"])
         && has(&[
             "who is", "who are", "who was", "who sent", "tomas", "contact", "mapmaker",
@@ -586,6 +667,203 @@ pub(super) fn classify_keywords_reading(typed: &str) -> ApproachReading {
         approach: classify_keywords(typed),
         subject: subject_keywords(typed),
     }
+}
+
+pub(super) fn classify_keywords_reading_for_dossier(
+    typed: &str,
+    dossier: &Dossier,
+) -> ApproachReading {
+    let approach = classify_keywords(typed);
+    let subject = if approach == Approach::Bargain
+        && dossier.subject_answers.contains_key(&AnswerSubject::Reward)
+    {
+        AnswerSubject::Reward
+    } else if approach == Approach::Refusal
+        && dossier.subject_answers.contains_key(&AnswerSubject::Errand)
+    {
+        AnswerSubject::Errand
+    } else {
+        subject_keywords_for_dossier(typed, dossier)
+    };
+    ApproachReading { approach, subject }
+}
+
+fn subject_keywords_for_dossier(typed: &str, dossier: &Dossier) -> AnswerSubject {
+    let lowered = typed.to_lowercase();
+    let generic = subject_keywords(typed);
+    if generic == AnswerSubject::Enemy
+        && dossier.subject_answers.contains_key(&AnswerSubject::Enemy)
+    {
+        return AnswerSubject::Enemy;
+    }
+    if let Some(answer) = dossier.subject_answers.get(&AnswerSubject::ErrandObject)
+        && let Some((object, _)) = answer.text.split_once(" is ")
+        && object_tokens_match(&lowered, object)
+    {
+        return AnswerSubject::ErrandObject;
+    }
+    if lowered.contains("warning")
+        && dossier
+            .subject_answers
+            .get(&AnswerSubject::Errand)
+            .is_some_and(|answer| answer.text.to_lowercase().contains("warn"))
+    {
+        return AnswerSubject::Errand;
+    }
+    if dossier.role == super::adventure::dossier::NpcRole::Antagonist
+        && lowered.contains(&dossier.name.to_lowercase())
+    {
+        return AnswerSubject::Enemy;
+    }
+    if dossier.subject_answers.contains_key(&AnswerSubject::Enemy)
+        && mentions_any(
+            &lowered,
+            &[
+                "everything you know",
+                "all you know about",
+                "have you seen him",
+            ],
+        )
+    {
+        return AnswerSubject::Enemy;
+    }
+    if let Some(answer) = dossier.subject_answers.get(&AnswerSubject::Enemy)
+        && let Some((enemy, kind)) = answer.text.split_once(" is known as ")
+    {
+        if lowered.contains(&enemy.to_lowercase()) {
+            return AnswerSubject::Enemy;
+        }
+        let kind = kind
+            .split(['.', '?', '!'])
+            .next()
+            .unwrap_or(kind)
+            .trim_start_matches("a ")
+            .trim_start_matches("an ")
+            .trim_start_matches("the ");
+        if !kind.is_empty() && lowered.contains(&kind.to_lowercase()) {
+            return AnswerSubject::Enemy;
+        }
+    }
+    if let Some(answer) = dossier.subject_answers.get(&AnswerSubject::Enemy)
+        && shares_three_fact_terms(&lowered, &answer.text)
+    {
+        return AnswerSubject::Enemy;
+    }
+    if named_place_in_line(typed, dossier) {
+        return AnswerSubject::Where;
+    }
+    let known_person = dossier
+        .subject_answers
+        .get(&AnswerSubject::People)
+        .is_some_and(|answer| named_person_in_line(typed, &answer.text));
+    if generic == AnswerSubject::Where {
+        if known_person || !mentions_any(&lowered, &["where is", "where's", "where are"]) {
+            return AnswerSubject::Where;
+        }
+        return AnswerSubject::Other;
+    }
+    if known_person {
+        return AnswerSubject::People;
+    }
+    if generic == AnswerSubject::Enemy
+        && !mentions_any(
+            &lowered,
+            &[
+                "enemy",
+                "villain",
+                "who is behind",
+                "who's behind",
+                "who is after",
+                "who's after",
+            ],
+        )
+    {
+        return AnswerSubject::Other;
+    }
+    if generic == AnswerSubject::People || generic == AnswerSubject::SealedLetter {
+        AnswerSubject::Other
+    } else {
+        generic
+    }
+}
+
+fn object_tokens_match(typed: &str, object: &str) -> bool {
+    let words = |text: &str| {
+        text.split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(|word| word.to_lowercase())
+            .collect::<Vec<_>>()
+    };
+    let object_words = words(object);
+    if typed.contains(&object.to_lowercase()) {
+        return true;
+    }
+    let typed_words = words(typed);
+    object_words.iter().any(|object_word| {
+        let object_root = object_word.trim_end_matches('s');
+        object_root.len() >= 3
+            && typed_words
+                .iter()
+                .any(|typed_word| typed_word.trim_end_matches('s') == object_root)
+    })
+}
+
+fn shares_three_fact_terms(typed: &str, fact: &str) -> bool {
+    let words = |text: &str| {
+        text.split(|character: char| !character.is_alphanumeric())
+            .filter(|word| word.len() >= 4)
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>()
+    };
+    let typed_words = words(typed);
+    let fact_words = words(fact);
+    let mut shared = Vec::new();
+    for word in typed_words {
+        if fact_words.contains(&word) && !shared.contains(&word) {
+            shared.push(word);
+        }
+    }
+    shared.len() >= 3
+}
+
+fn named_place_in_line(typed: &str, dossier: &Dossier) -> bool {
+    let Some(answer) = dossier.subject_answers.get(&AnswerSubject::Where) else {
+        return false;
+    };
+    let mut places = Vec::new();
+    if let Some(place) = answer
+        .text
+        .strip_prefix("I'm at ")
+        .and_then(|rest| rest.split_once(';').map(|(place, _)| place))
+    {
+        places.push(place.trim());
+    }
+    if let Some(place) = answer
+        .text
+        .split_once(" waits at ")
+        .map(|(_, rest)| rest.trim_end_matches('.').trim())
+    {
+        places.push(place);
+    }
+    let lowered = typed.to_lowercase();
+    places
+        .into_iter()
+        .any(|place| !place.is_empty() && lowered.contains(&place.to_lowercase()))
+}
+
+fn named_person_in_line(typed: &str, people: &str) -> bool {
+    let typed_words: Vec<&str> = typed
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    people.split_whitespace().any(|word| {
+        let name = word.trim_matches(|character: char| !character.is_alphabetic());
+        name.chars().next().is_some_and(char::is_uppercase)
+            && !["I", "I'm", "The", "At", "He", "She", "They"].contains(&name)
+            && typed_words
+                .iter()
+                .any(|typed_word| typed_word.eq_ignore_ascii_case(name))
+    })
 }
 
 /// The fixed topic a typed line is closest to, for the prepared answer. The approach takes
@@ -1491,6 +1769,8 @@ pub(super) fn effect_of(dossier: &Dossier, approach: Approach) -> Effect {
     match approach {
         Approach::Flattery => temperament.flattery.effect,
         Approach::Flirting => temperament.flirting.effect,
+        Approach::Apology => Effect::Warm,
+        Approach::Introduction | Approach::Refusal => Effect::Steady,
         Approach::Intimidation => temperament.threats.effect,
         Approach::Deception => temperament.lies.effect,
         Approach::Bribe => temperament.bribes.effect,

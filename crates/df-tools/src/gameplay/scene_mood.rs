@@ -484,7 +484,7 @@ pub(super) fn exchange_reading(signal: &ExchangeSignal, recent: &[Approach]) -> 
             Effect::Steady => (Mood::Playful, Expression::Amused),
             Effect::Cool => (Mood::Tense, Expression::Contemptuous),
         },
-        Approach::Kindness => (
+        Approach::Kindness | Approach::Apology => (
             Mood::Warm,
             if signal.attitude == Attitude::Hostile {
                 Expression::Neutral
@@ -501,7 +501,12 @@ pub(super) fn exchange_reading(signal: &ExchangeSignal, recent: &[Approach]) -> 
             Effect::Cool => (Mood::Tense, Expression::Contemptuous),
             Effect::Warm | Effect::Steady => (Mood::Tense, Expression::Neutral),
         },
-        Approach::Question | Approach::Persuasion | Approach::Bargain | Approach::Other => (
+        Approach::Question
+        | Approach::Introduction
+        | Approach::Refusal
+        | Approach::Persuasion
+        | Approach::Bargain
+        | Approach::Other => (
             Mood::Calm,
             match signal.attitude {
                 Attitude::Friendly => Expression::Smiling,

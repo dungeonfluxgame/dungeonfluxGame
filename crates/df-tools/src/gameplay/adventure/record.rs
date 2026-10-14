@@ -215,8 +215,9 @@ fn notebook_reads(key: &str) -> bool {
             | "dest.name"
             | "reward.line"
     ) || ["patron.", "contact.", "ant."].iter().any(|prefix| {
-        key.strip_prefix(prefix)
-            .is_some_and(|rest| matches!(rest, "full" | "first" | "short" | "role" | "the"))
+        key.strip_prefix(prefix).is_some_and(|rest| {
+            matches!(rest, "full" | "first" | "short" | "role" | "the" | "group")
+        })
     })
 }
 fn notebook_fact_sheets(sheets: &[super::FactSheet]) -> Vec<super::FactSheet> {
@@ -622,6 +623,81 @@ mod emotional_profile_tests {
         assert!(bytes.len() <= df_persistence::local_demo_scope::ADVENTURE_DOCUMENT_BYTES);
     }
 }
+
+#[cfg(test)]
+mod notebook_group_tests {
+    use super::notebook_fact_sheets;
+    use crate::gameplay::{
+        adventure::FactSheet,
+        notebook::{Kind, NotebookLedger},
+        pack::{CastRole, SceneKey},
+    };
+    use df_types::MemberId;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn compacted_and_reloaded_beast_group_keeps_the_antagonist_out_of_people() {
+        let facts = BTreeMap::from([
+            ("ant.full".to_owned(), "The Barrow-Cold Sentinel".to_owned()),
+            ("ant.first".to_owned(), "Barrow-Cold".to_owned()),
+            (
+                "ant.short".to_owned(),
+                "The Barrow-Cold Sentinel".to_owned(),
+            ),
+            ("ant.role".to_owned(), "giant rat".to_owned()),
+            ("ant.the".to_owned(), "a giant rat".to_owned()),
+            ("ant.group".to_owned(), "beast".to_owned()),
+        ]);
+        let sheet = FactSheet {
+            scene: Some("opening".to_owned()),
+            beat: String::new(),
+            slot: String::new(),
+            speaker: String::new(),
+            voice: String::new(),
+            delivery: String::new(),
+            must_mention: facts.values().cloned().collect(),
+            facts,
+            forbidden: Vec::new(),
+            bounds: 0,
+            baseline: String::new(),
+            tone: String::new(),
+        };
+        let compacted = notebook_fact_sheets(&[sheet]);
+        let bytes = serde_json::to_vec(&compacted).unwrap();
+        let reloaded: Vec<FactSheet> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            reloaded[0].facts.get("ant.group").map(String::as_str),
+            Some("beast")
+        );
+
+        let generated = crate::gameplay::npc_dossier_tests::adventure(1);
+        let mut scene = generated
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == SceneKey::Opening)
+            .unwrap()
+            .clone();
+        let mut beast = scene.cast[0].clone();
+        beast.id = "ant:beast".to_owned();
+        beast.name = "The Barrow-Cold Sentinel".to_owned();
+        beast.role = CastRole::Antagonist;
+        scene.cast.push(beast);
+        let member = MemberId::from_bytes(&[1; 16]).unwrap();
+        let notebook = NotebookLedger::open("seed", Vec::new(), reloaded, None).unwrap();
+
+        notebook
+            .observe_scene(member, "Brakka", &scene, "", false)
+            .unwrap();
+
+        assert!(
+            !notebook.visible_to(member).iter().any(
+                |entry| entry.kind == Kind::Person && entry.title == "The Barrow-Cold Sentinel"
+            )
+        );
+    }
+}
+
 /// Creates the run cache once before bootstrap. Existing staging is never overwritten.
 pub(crate) fn create_cache(directory: &Path, data: &DemoAdventure) -> Result<(), RecordError> {
     let parent = directory

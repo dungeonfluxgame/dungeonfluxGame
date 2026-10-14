@@ -222,11 +222,13 @@ fn subject_answers(
             .map(|scene| scene.dialogue.as_str())
             .ok_or_else(|| GenerateError::Pattern(format!("dossier answer {key:?}")))
     };
-    let (stake, full_stake, patron, contact, destination, location) = (
+    let (stake, full_stake, patron, contact, patron_role, contact_role, destination, location) = (
         fact("stake.short")?,
         fact("stake.full")?,
         fact("patron.first")?,
         fact("contact.first")?,
+        fact("patron.role")?,
+        fact("contact.role")?,
         fact("dest.name")?,
         fact("loc.name")?,
     );
@@ -258,6 +260,11 @@ fn subject_answers(
     };
     let reward_gp = u16::from(reward_face.saturating_sub(1)) + 5;
     let enemy_name = fact("ant.short")?;
+    let enemy_kind = fact("ant.the")?;
+    let enemy_appearance = adventure
+        .facts
+        .get("arrival")
+        .ok_or_else(|| GenerateError::Pattern("dossier answer arrival".into()))?;
     let enemy_known = !dossier
         .knowledge
         .never_says
@@ -265,23 +272,43 @@ fn subject_answers(
         .flat_map(|item| &item.terms)
         .any(|term| super::dossier::mentions_term(enemy_name, term));
     let enemy = if enemy_known {
-        format!("The enemy is {enemy_name}, and they want to stop this errand.")
+        let mut facts = vec![
+            format!("{enemy_name} is known as {enemy_kind}."),
+            enemy_appearance.clone(),
+        ];
+        facts.extend(
+            dossier
+                .knowledge
+                .says_freely
+                .iter()
+                .filter(|knowledge| knowledge.about.as_deref() == Some("antagonist"))
+                .map(|knowledge| knowledge.text.clone()),
+        );
+        if let Some(rumour) = dossier
+            .knowledge
+            .says_freely
+            .iter()
+            .find(|knowledge| knowledge.source == "rumour_line")
+        {
+            facts.push(rumour.text.clone());
+        }
+        facts.join(" ")
     } else {
         "I do not know who is behind the trouble.".to_owned()
     };
     let people = if dossier.role == NpcRole::Contact {
         format!(
-            "I'm {} the contact at {destination}. {patron} is the patron at {location}.",
+            "I'm {}, the {contact_role} at {destination}. {patron}, the {patron_role}, asked me to help.",
             dossier.name
         )
     } else if dossier.role == NpcRole::Patron {
         format!(
-            "I'm {} the patron at {location}. {contact} is the contact at {destination}.",
+            "I'm {}, the {patron_role} at {location}. I asked {contact}, the {contact_role}, to meet you at {destination}.",
             dossier.name
         )
     } else {
         format!(
-            "I'm {} the {} at {location}. {patron} is the patron; {contact} is the contact at {destination}.",
+            "I'm {}, a {} at {location}. {patron}, the {patron_role}, asked {contact}, the {contact_role}, to meet you at {destination}.",
             dossier.name, dossier.role_label
         )
     };
@@ -338,17 +365,20 @@ fn subject_answers(
             SubjectAnswer {
                 text: enemy,
                 restatement: if enemy_known {
-                    format!("{enemy_name} threatens it.")
+                    format!("It is {enemy_kind}.")
                 } else {
                     "I still do not know who is behind the trouble.".to_owned()
                 },
             },
         ),
         (
-            AnswerSubject::SealedLetter,
+            AnswerSubject::ErrandObject,
             SubjectAnswer {
-                text: "I do not know the sealed letter's words; I have not opened it.".to_owned(),
-                restatement: "I still do not know what it says.".to_owned(),
+                text: format!(
+                    "{} is {full_stake}.",
+                    stake.strip_prefix("the ").unwrap_or(stake)
+                ),
+                restatement: format!("It is {full_stake}."),
             },
         ),
     ]);
@@ -375,6 +405,7 @@ fn subject_answers(
 fn private_answer(subject: AnswerSubject) -> SubjectAnswer {
     let (text, restatement) = match subject {
         AnswerSubject::Errand
+        | AnswerSubject::ErrandObject
         | AnswerSubject::People
         | AnswerSubject::Stakes
         | AnswerSubject::Deadline
@@ -405,4 +436,67 @@ fn deadline_from(opening: &str, why: &str) -> String {
     .find(|deadline| words.contains(deadline))
     .map(str::to_owned)
     .unwrap_or_else(|| "as soon as possible; no exact time is stated".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::dossier::{AnswerSubject, NpcRole};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn every_errand_kind_answers_about_its_own_object() {
+        let mut kinds = BTreeSet::new();
+        for seed in 1..=40 {
+            let adventure = crate::gameplay::npc_dossier_tests::adventure(seed);
+            kinds.insert(adventure.facts["hook.kind"].clone());
+            let object = &adventure.facts["stake.full"];
+            let expected = format!(
+                "{} is {object}.",
+                adventure.facts["stake.short"]
+                    .strip_prefix("the ")
+                    .unwrap_or(&adventure.facts["stake.short"])
+            );
+            for dossier in adventure.dossiers {
+                assert_eq!(
+                    dossier.subject_answers[&AnswerSubject::ErrandObject].text,
+                    expected
+                );
+            }
+        }
+        assert_eq!(
+            kinds,
+            BTreeSet::from([
+                "deliver".to_owned(),
+                "escort".to_owned(),
+                "retrieve".to_owned(),
+                "warn".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn enemy_answer_uses_this_adventures_appearance_knowledge_and_rumour() {
+        for seed in 1..=40 {
+            let adventure = crate::gameplay::npc_dossier_tests::adventure(seed);
+            let Some(dossier) = adventure
+                .dossiers
+                .iter()
+                .find(|dossier| dossier.role == NpcRole::Patron)
+            else {
+                continue;
+            };
+            let answer = &dossier.subject_answers[&AnswerSubject::Enemy].text;
+            if !answer.contains(" is known as ") {
+                continue;
+            }
+            assert!(answer.contains(&adventure.facts["arrival"]));
+            for fact in dossier.knowledge.says_freely.iter().filter(|fact| {
+                fact.about.as_deref() == Some("antagonist") || fact.source == "rumour_line"
+            }) {
+                assert!(answer.contains(&fact.text), "{}", fact.source);
+            }
+            return;
+        }
+        panic!("no generated patron has public facts about the current enemy");
+    }
 }
