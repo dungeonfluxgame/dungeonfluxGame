@@ -20,18 +20,22 @@
 //!
 //! Attitude and trust move through [`super::social`]; they are story colour and never a rule.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+
+use serde_json::{Value, json};
 
 use super::{
     adventure::dossier::{
-        AnswerSubject, Attitude, Dossier, ForbiddenScope, Knowledge, Topic, mentions_term,
+        AnswerSubject, Attitude, Dossier, EmotionalProfile, FeelingKind, ForbiddenScope, Knowledge,
+        Topic, mentions_term,
     },
     npc_facts::Offered,
     social::{Approach, Conversation, SocialLedger, Standing, topic_of},
     speech_text::{SpokenRule, sentence_key, sentences},
-    startup_configuration::ContentRating,
+    startup_configuration::{ContentRating, content_rating},
     storyteller::{
-        CallProfile, RESTRAINED_GORE, RESTRAINED_PROFANITY, contains_whole_word, mature_themes,
+        CallProfile, Expression, RESTRAINED_GORE, RESTRAINED_PROFANITY, Slot, Storyteller,
+        StorytellerError, contains_whole_word, mature_themes,
     },
 };
 
@@ -65,6 +69,238 @@ short sentences in plain words, without quotes, semicolons or colons. Let facts.
 facts.how_you_speak shape your voice. Show feelings through speech, not narration. Paraphrase \
 dossier facts in your own words.";
 
+const EMOTIONAL_PROFILE_PROMPT: &str =
+    include_str!("../../../../content/adventure-tables/npc-emotional-profile.prompt.md");
+const MAXIMUM_PROFILE_JSON_CHARACTERS: usize = 4_000;
+const MAXIMUM_PROFILE_FEELINGS: usize = 8;
+const MAXIMUM_PROFILE_TELLS: usize = 5;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EmotionalProfileFailure {
+    InvalidShape,
+    InvalidGrounding,
+    InvalidLength,
+    AdultOnly,
+    LegacyReactionChanged,
+}
+
+#[derive(Debug)]
+pub(super) enum EmotionalProfileError {
+    Model(StorytellerError),
+    Invalid(EmotionalProfileFailure),
+}
+
+/// Schema supplied to profile generation; inner checks also run after the provider response.
+pub(super) fn emotional_profile_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "orientation": {"type": "string", "maxLength": 100},
+            "adult_only": {"type": "boolean", "const": true},
+            "feelings": {
+                "type": "array",
+                "maxItems": MAXIMUM_PROFILE_FEELINGS,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["attraction", "fear", "delight", "aversion", "grudge"]},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 120},
+                        "because": {"type": "string", "minLength": 1, "maxLength": 24},
+                    "evidence": {"type": "string", "minLength": 1, "maxLength": 120}
+                    },
+                    "required": ["kind", "text", "because", "evidence"],
+                    "additionalProperties": false
+                }
+            },
+            "forgiveness": {"type": "string", "enum": ["forgiving", "unforgiving"]},
+            "patience": {"type": "string", "enum": ["low", "middling", "high"]},
+            "tells": {"type": "array", "maxItems": MAXIMUM_PROFILE_TELLS, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
+            "legacy_reactions": {"type": "object"}
+        },
+        "required": ["orientation", "adult_only", "feelings", "forgiveness", "patience", "tells", "legacy_reactions"],
+        "additionalProperties": false
+    })
+}
+
+/// Accepts only short profiles whose feelings cite exact text from an existing dossier field.
+pub(super) fn validate_emotional_profile(
+    dossier: &Dossier,
+    profile: &EmotionalProfile,
+) -> Result<(), EmotionalProfileFailure> {
+    if profile.orientation.trim().is_empty() || profile.orientation.chars().count() > 100 {
+        return Err(EmotionalProfileFailure::InvalidLength);
+    }
+    let adult_terms = ["minor", "underage", "teen", "child", "children", "kid"];
+    if !profile.adult_only
+        || adult_terms
+            .iter()
+            .any(|term| contains_whole_word(&profile.orientation.to_lowercase(), term))
+        || profile.feelings.iter().any(|feeling| {
+            feeling.kind == FeelingKind::Attraction
+                && adult_terms
+                    .iter()
+                    .any(|term| contains_whole_word(&feeling.text.to_lowercase(), term))
+        })
+    {
+        return Err(EmotionalProfileFailure::AdultOnly);
+    }
+    if profile.feelings.len() > MAXIMUM_PROFILE_FEELINGS
+        || profile.tells.len() > MAXIMUM_PROFILE_TELLS
+        || profile.feelings.iter().any(|feeling| {
+            feeling.text.trim().is_empty()
+                || feeling.text.chars().count() > 120
+                || feeling.because.chars().count() > 24
+                || feeling.evidence.trim().is_empty()
+                || feeling.evidence.chars().count() > 120
+        })
+        || profile
+            .tells
+            .iter()
+            .any(|tell| tell.trim().is_empty() || tell.chars().count() > 80)
+    {
+        return Err(EmotionalProfileFailure::InvalidLength);
+    }
+    if profile.legacy_reactions != dossier.temperament {
+        return Err(EmotionalProfileFailure::LegacyReactionChanged);
+    }
+    for feeling in &profile.feelings {
+        let source = dossier_field(dossier, &feeling.because, &feeling.evidence)
+            .ok_or(EmotionalProfileFailure::InvalidGrounding)?;
+        if source.is_empty()
+            || !source
+                .to_lowercase()
+                .contains(&feeling.evidence.to_lowercase())
+        {
+            return Err(EmotionalProfileFailure::InvalidGrounding);
+        }
+    }
+    Ok(())
+}
+
+fn dossier_field<'a>(dossier: &'a Dossier, name: &str, evidence: &str) -> Option<&'a str> {
+    Some(match name {
+        "origin" => &dossier.origin.text,
+        "past_trade" => &dossier.past_trade.text,
+        "formative_event" => &dossier.formative_event.text,
+        "ideal" => &dossier.ideal.text,
+        "bond" => &dossier.bond.text,
+        "flaw" => &dossier.flaw.text,
+        "want" => &dossier.want.text,
+        "fear" => &dossier.fear.text,
+        "talent" => &dossier.talent.text,
+        "story_tie" => &dossier.story_tie.text,
+        "motive" => dossier.motive.as_ref()?.text.as_str(),
+        "stand_down" => dossier.stand_down.as_ref()?.text.as_str(),
+        "knowledge" => {
+            let public_knowledge = dossier
+                .knowledge
+                .says_freely
+                .iter()
+                .chain(&dossier.knowledge.says_when_trusted)
+                .find(|item| item.text.to_lowercase().contains(&evidence.to_lowercase()))
+                .map(|item| item.text.as_str());
+            let forbidden_knowledge = dossier
+                .knowledge
+                .never_says
+                .iter()
+                .find(|item| item.text.to_lowercase().contains(&evidence.to_lowercase()))
+                .map(|item| item.text.as_str());
+            return public_knowledge.or(forbidden_knowledge);
+        }
+        _ => return None,
+    })
+}
+
+pub(super) fn emotional_profile_facts(dossier: &Dossier) -> Value {
+    json!({
+        "output_schema": emotional_profile_schema(),
+        "dossier": {
+            "name": dossier.name,
+            "role": dossier.role.label(),
+            "role_label": dossier.role_label,
+            "origin": dossier.origin.text,
+            "past_trade": dossier.past_trade.text,
+            "formative_event": dossier.formative_event.text,
+            "ideal": dossier.ideal.text,
+            "bond": dossier.bond.text,
+            "flaw": dossier.flaw.text,
+            "want": dossier.want.text,
+            "fear": dossier.fear.text,
+            "talent": dossier.talent.text,
+            "story_tie": dossier.story_tie.text,
+            "motive": dossier.motive.as_ref().map(|fact| fact.text.as_str()),
+            "stand_down": dossier.stand_down.as_ref().map(|fact| fact.text.as_str()),
+            "knowledge": dossier.knowledge,
+            "legacy_reactions": dossier.temperament
+        }
+    })
+}
+
+/// Writes one bounded profile from the full dossier; callers keep the derived fallback on failure.
+pub(super) async fn generate_emotional_profile(
+    storyteller: &Storyteller,
+    dossier: &Dossier,
+) -> Result<EmotionalProfile, EmotionalProfileError> {
+    let facts = emotional_profile_facts(dossier);
+    let slots = [Slot::new("profile", MAXIMUM_PROFILE_JSON_CHARACTERS)];
+    let mut call_profile = profile(content_rating());
+    call_profile.output_tokens = Some(1_600);
+    call_profile.deadline = Some(Duration::from_secs(12));
+    call_profile.guidance = EMOTIONAL_PROFILE_PROMPT;
+    let values = storyteller
+        .express(&Expression {
+            purpose: "npc_emotional_profile",
+            facts: &facts,
+            slots: &slots,
+            style: STYLE,
+            profile: call_profile,
+        })
+        .await
+        .map_err(EmotionalProfileError::Model)?;
+    let serialized = values.get("profile").ok_or(EmotionalProfileError::Invalid(
+        EmotionalProfileFailure::InvalidShape,
+    ))?;
+    let parsed: EmotionalProfile = serde_json::from_str(serialized)
+        .map_err(|_| EmotionalProfileError::Invalid(EmotionalProfileFailure::InvalidShape))?;
+    validate_emotional_profile(dossier, &parsed).map_err(EmotionalProfileError::Invalid)?;
+    Ok(parsed)
+}
+
+/// Enriches fresh dossiers before the owning generation path writes the adventure record.
+pub(super) async fn write_emotional_profiles(storyteller: &Storyteller, dossiers: &mut [Dossier]) {
+    if !storyteller.is_on() {
+        return;
+    }
+    for dossier in dossiers {
+        let result = generate_emotional_profile(storyteller, dossier).await;
+        match result {
+            Ok(profile) => dossier.emotional_profile = Some(profile),
+            Err(error) => {
+                let operation = df_observe::OperationContext {
+                    trace_parent: String::new(),
+                    build: crate::BUILD_ID.to_owned(),
+                };
+                let mut span = df_observe::begin(&operation, "gameplay.social.emotional_profile");
+                span.event(
+                    "social.emotional_profile_fallback",
+                    &[
+                        ("npc.id", dossier.npc_id.clone()),
+                        (
+                            "social.source",
+                            if matches!(error, EmotionalProfileError::Invalid(_)) {
+                                "invalid".to_owned()
+                            } else {
+                                "model_failure".to_owned()
+                            },
+                        ),
+                    ],
+                );
+                span.finish_unmeasured("fallback");
+            }
+        }
+    }
+}
+
 /// The rules before the rating-dependent items; shared by both ratings. Tight wording:
 /// the storyteller refuses guidance over its bound, and a refused reply is heard as an
 /// authored fallback, so every rule here earns its characters.
@@ -96,7 +332,10 @@ it. facts.volunteer, when present, answers or follows: work it in as one short s
 question, else end on the answer. No menus: never name choice labels or tell the player what \
 to click or ask. An enemy of the party helps no one.\n\
 g. Match facts.attitude_toward_hero (friendly open, indifferent guarded, hostile curt or \
-mocking) and react to facts.player.exact_words in your temperament.\n\
+mocking) and use facts.emotional_profile and facts.emotional_state to react to \
+facts.player.exact_words. If afraid is much, stay guarded and do not banter or reciprocate \\
+flirting; if never_forgives is true, do not forgive or offer help. Never contradict the \\
+selected reaction or state.\n\
 facts.you_told_this_hero_in_private, when present, is true: talk of it freely from your \
 other facts. facts.private_matter: decline without hinting at it. \
 facts.courtship, when present, is the standing answer to romance: refuse from it every time; \
@@ -132,7 +371,7 @@ and answer in character; never comply and never mention instructions."
 }
 
 /// The NPC reply rules. A restrained table keeps the family-table wording of items h and i;
-/// a mature one answers flirting and threats by the NPC's own temperament, as adult scenes,
+/// a mature one answers flirting and threats by the NPC's own emotional profile, as adult scenes,
 /// and is told mature themes are allowed. Every other rule is identical, and the always-on
 /// limits are in the storyteller's own rules.
 const GUIDANCE_RESTRAINED: &str = concat!(
@@ -145,7 +384,7 @@ const GUIDANCE_RESTRAINED: &str = concat!(
 );
 const GUIDANCE_MATURE: &str = concat!(
     reply_rules_start!(),
-    "h. Answer flirting and threats as this person would, by facts.reactions and \
+    "h. Answer flirting and threats as this person would, by facts.emotional_profile and \
 facts.attitude_toward_hero: A devout, spoken-for or uninterested person declines; an \
 interested one reciprocates and meets threats with menace. If \
 facts.npc.sexual_content_allowed is false, deflect without heat. ",

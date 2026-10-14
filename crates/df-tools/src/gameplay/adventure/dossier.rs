@@ -389,6 +389,51 @@ pub(crate) struct Temperament {
     pub(crate) lies: Reaction,
     pub(crate) bribes: Reaction,
 }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FeelingKind {
+    Attraction,
+    Fear,
+    Delight,
+    Aversion,
+    Grudge,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GroundedFeeling {
+    pub(crate) kind: FeelingKind,
+    pub(crate) text: String,
+    /// A field on this dossier that supports this feeling.
+    pub(crate) because: String,
+    /// Exact supporting text from the cited dossier field.
+    pub(crate) evidence: String,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Forgiveness {
+    Forgiving,
+    Unforgiving,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Patience {
+    Low,
+    Middling,
+    High,
+}
+/// One character's grounded emotional profile, stored as part of its dossier.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EmotionalProfile {
+    pub(crate) orientation: String,
+    pub(crate) adult_only: bool,
+    pub(crate) feelings: Vec<GroundedFeeling>,
+    pub(crate) forgiveness: Forgiveness,
+    pub(crate) patience: Patience,
+    pub(crate) tells: Vec<String>,
+    /// Compatibility projection of the five fixed reactions in records written before EMO-01.
+    pub(crate) legacy_reactions: Temperament,
+}
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SpeechStyle {
@@ -425,6 +470,9 @@ pub(crate) struct Dossier {
     /// Antagonist-side roles only: what would make them back off or bargain.
     pub(crate) stand_down: Option<Trait>,
     pub(crate) knowledge: KnowledgeTiers,
+    /// Missing in adventures stored before EMO-01; `emotional_profile()` maps legacy reactions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) emotional_profile: Option<EmotionalProfile>,
     pub(crate) temperament: Temperament,
     pub(crate) starting_attitude: Attitude,
     pub(crate) speech_style: SpeechStyle,
@@ -1189,6 +1237,7 @@ fn roll_one(
             .map(|entry| render_trait(entry, "stand_down"))
             .transpose()?,
         knowledge,
+        emotional_profile: None,
         temperament,
         starting_attitude: attitude,
         speech_style: SpeechStyle {
@@ -1945,6 +1994,38 @@ fn with_tic(topic: Topic, body: String, style: &StyleEntry, context: &Context<'_
 }
 
 impl Dossier {
+    /// The generated profile, or a short profile projected from an older dossier's temperament.
+    pub(crate) fn emotional_profile(&self) -> EmotionalProfile {
+        self.emotional_profile.clone().unwrap_or_else(|| {
+            let mut feelings = Vec::new();
+            if !self.fear.text.trim().is_empty() {
+                feelings.push(GroundedFeeling {
+                    kind: FeelingKind::Fear,
+                    text: self.fear.text.clone(),
+                    because: "fear".to_owned(),
+                    evidence: self.fear.text.clone(),
+                });
+            }
+            if !self.bond.text.trim().is_empty() {
+                feelings.push(GroundedFeeling {
+                    kind: FeelingKind::Delight,
+                    text: self.bond.text.clone(),
+                    because: "bond".to_owned(),
+                    evidence: self.bond.text.clone(),
+                });
+            }
+            EmotionalProfile {
+                orientation: "unspecified".to_owned(),
+                adult_only: true,
+                feelings,
+                forgiveness: Forgiveness::Forgiving,
+                patience: Patience::Middling,
+                tells: Vec::new(),
+                legacy_reactions: self.temperament.clone(),
+            }
+        })
+    }
+
     /// Forbidden phrases that appear where they must not: shame anywhere spoken, secret terms
     /// in any public text.
     pub(crate) fn leak(&self) -> Option<Leak> {

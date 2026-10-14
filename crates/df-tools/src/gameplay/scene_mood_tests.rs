@@ -20,6 +20,7 @@ fn signal(
         effect,
         attitude,
         opposes,
+        emotional_state: EmotionalState::default(),
     }
 }
 
@@ -77,6 +78,29 @@ fn an_insult_makes_the_speaker_angry_and_a_friend_pained() {
     assert_eq!(mood, Mood::Tense);
     let (mood, _) = reading(Approach::Insult, Effect::Cool, Attitude::Hostile, true);
     assert_eq!(mood, Mood::Menacing);
+}
+
+#[test]
+fn the_characters_persistent_emotion_drives_the_expression_before_the_line_approach() {
+    let mut signal = signal(
+        1,
+        Approach::Question,
+        Effect::Steady,
+        Attitude::Friendly,
+        false,
+    );
+    signal.emotional_state.afraid = EmotionLevel::Much;
+    assert_eq!(
+        exchange_reading(&signal, &[]),
+        (Mood::Fearful, Expression::Afraid)
+    );
+
+    signal.emotional_state.afraid = EmotionLevel::None;
+    signal.emotional_state.drawn_to = EmotionLevel::ALittle;
+    assert_eq!(
+        exchange_reading(&signal, &[]),
+        (Mood::Flirtatious, Expression::Flirtatious)
+    );
 }
 
 #[test]

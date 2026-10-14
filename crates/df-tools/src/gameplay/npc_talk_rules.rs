@@ -12,11 +12,98 @@ use super::speech_text::{
     REPEAT_MIN_WORDS, REPEATED_CLAUSE_WORDS, content_sequence, content_words, coverage, is_denial,
     is_flat_dodge, normalised, sentence_key, sentences, words,
 };
+use super::{
+    adventure::dossier::Attitude,
+    social::{Approach, InfluenceWillingness},
+};
 
 /// The most sentences a spoken reply may have.
 pub(super) const MAXIMUM_SENTENCES: usize = 3;
 /// The longest reply, in characters, that fits a speech bubble and a few seconds of speech.
 pub(super) const MAXIMUM_REPLY_CHARACTERS: usize = 300;
+pub(super) const INFLUENCE_FAILURE_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InfluenceSkill {
+    Deception,
+    Intimidation,
+    Performance,
+    Persuasion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InfluenceRollMode {
+    Normal,
+    Advantage,
+    Disadvantage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InfluenceCheckPlan {
+    pub(super) skill: InfluenceSkill,
+    pub(super) difficulty_class: u8,
+    pub(super) roll_mode: InfluenceRollMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InfluenceRoll {
+    pub(super) result: df_rules::ability_check::AbilityCheckResult,
+    pub(super) faces: [u8; 2],
+}
+
+/// Plans the unchanged 2024 Influence check only for a hesitant request.
+pub(super) fn influence_check_plan(
+    willingness: InfluenceWillingness,
+    attitude: Attitude,
+    npc_intelligence: u8,
+    approach: Approach,
+) -> Option<InfluenceCheckPlan> {
+    if willingness != InfluenceWillingness::Hesitant {
+        return None;
+    }
+    Some(InfluenceCheckPlan {
+        skill: match approach {
+            Approach::Deception => InfluenceSkill::Deception,
+            Approach::Intimidation => InfluenceSkill::Intimidation,
+            Approach::Flattery | Approach::Flirting => InfluenceSkill::Performance,
+            Approach::Question
+            | Approach::Kindness
+            | Approach::Persuasion
+            | Approach::Bribe
+            | Approach::Bargain
+            | Approach::Insult
+            | Approach::Other => InfluenceSkill::Persuasion,
+        },
+        difficulty_class: 15_u8.max(npc_intelligence),
+        roll_mode: match attitude {
+            Attitude::Friendly => InfluenceRollMode::Advantage,
+            Attitude::Indifferent => InfluenceRollMode::Normal,
+            Attitude::Hostile => InfluenceRollMode::Disadvantage,
+        },
+    })
+}
+
+/// Resolves the authority-supplied die faces and modifiers; the selected face follows attitude.
+pub(super) fn resolve_influence_check(
+    plan: InfluenceCheckPlan,
+    faces: [u8; 2],
+    ability_modifier: i8,
+    proficiency_bonus: u8,
+) -> Result<InfluenceRoll, df_rules::ability_check::AbilityCheckError> {
+    let die = match plan.roll_mode {
+        InfluenceRollMode::Normal => faces[0],
+        InfluenceRollMode::Advantage => faces[0].max(faces[1]),
+        InfluenceRollMode::Disadvantage => faces[0].min(faces[1]),
+    };
+    let result = df_rules::ability_check::resolve(df_rules::ability_check::AbilityCheckInput {
+        die,
+        ability_modifier,
+        proficiency_bonus,
+        difficulty_class: plan.difficulty_class,
+    })?;
+    Ok(InfluenceRoll { result, faces })
+}
 
 /// What one rule found wrong with one exchange (or, for a whole conversation, `exchange` 0).
 #[derive(Clone, Debug, Eq, PartialEq)]

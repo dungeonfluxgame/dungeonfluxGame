@@ -595,6 +595,283 @@ fn state_saved_for_another_adventure_or_out_of_bounds_is_refused_not_ignored() {
 }
 
 #[test]
+fn each_jev_reaction_maps_to_its_named_relationship_state() {
+    for (reaction, expected) in [
+        (
+            EmotionReaction::Warmed,
+            (
+                EmotionLevel::Much,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::Charmed,
+            (
+                EmotionLevel::Much,
+                EmotionLevel::None,
+                EmotionLevel::Much,
+                EmotionLevel::None,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::Amused,
+            (
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::Unmoved,
+            (
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::Uneasy,
+            (
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::Frightened,
+            (
+                EmotionLevel::None,
+                EmotionLevel::Much,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::Offended,
+            (
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::Much,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::Disgusted,
+            (
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::Much,
+                PatienceState::Plenty,
+            ),
+        ),
+        (
+            EmotionReaction::LosingPatience,
+            (
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                PatienceState::Short,
+            ),
+        ),
+        (
+            EmotionReaction::Done,
+            (
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                EmotionLevel::None,
+                PatienceState::Done,
+            ),
+        ),
+    ] {
+        let mut state = EmotionalState::default();
+        let mapped = state.apply(
+            Appraisal {
+                reaction,
+                strength: EmotionLevel::Much,
+                willingness: None,
+                effect: Effect::Steady,
+            },
+            Forgiveness::Forgiving,
+            "the offense",
+        );
+        assert_eq!(mapped, reaction);
+        assert_eq!(
+            (
+                state.fond,
+                state.afraid,
+                state.drawn_to,
+                state.resentful,
+                state.patience
+            ),
+            expected,
+            "{reaction:?}"
+        );
+        if reaction == EmotionReaction::Uneasy {
+            assert_eq!(state.wary, EmotionLevel::Much);
+        }
+    }
+
+    let mut forgiving = EmotionalState::default();
+    assert_eq!(
+        forgiving.apply(
+            Appraisal {
+                reaction: EmotionReaction::NeverForgive,
+                strength: EmotionLevel::Much,
+                willingness: None,
+                effect: Effect::Cool,
+            },
+            Forgiveness::Forgiving,
+            "the offense",
+        ),
+        EmotionReaction::Offended
+    );
+    assert!(forgiving.never_forgives.is_none());
+    let mut unforgiving = EmotionalState::default();
+    assert_eq!(
+        unforgiving.apply(
+            Appraisal {
+                reaction: EmotionReaction::NeverForgive,
+                strength: EmotionLevel::Much,
+                willingness: None,
+                effect: Effect::Cool,
+            },
+            Forgiveness::Unforgiving,
+            "the offense",
+        ),
+        EmotionReaction::NeverForgive
+    );
+    assert_eq!(unforgiving.never_forgives.as_deref(), Some("the offense"));
+}
+
+#[test]
+fn patience_done_is_said_once_and_a_never_forgive_grudge_survives_reload() {
+    let directory = directory("emotional-state");
+    let mut dossier = patron(Attitude::Indifferent);
+    let mut profile = dossier.emotional_profile();
+    profile.forgiveness = Forgiveness::Unforgiving;
+    dossier.emotional_profile = Some(profile);
+    let ledger = SocialLedger::open(
+        vec![dossier.clone()],
+        "emotional-state",
+        Some(directory.clone()),
+    )
+    .unwrap();
+    let hero = member(16);
+
+    assert_eq!(
+        ledger.note_subject(hero, &dossier, "opening", AnswerSubject::Errand),
+        0
+    );
+    assert_eq!(
+        ledger.note_subject(hero, &dossier, "opening", AnswerSubject::Errand),
+        1
+    );
+    assert_eq!(
+        ledger.note_subject(hero, &dossier, "opening", AnswerSubject::Errand),
+        2
+    );
+    ledger.apply_appraisal(
+        hero,
+        &dossier,
+        "opening",
+        Appraisal {
+            reaction: EmotionReaction::Done,
+            strength: EmotionLevel::Much,
+            willingness: Some(InfluenceWillingness::Unwilling),
+            effect: Effect::Steady,
+        },
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Question,
+        "Again?",
+        "I cannot answer more this scene.",
+    );
+    assert!(ledger.done_for(hero, &dossier, "opening"));
+    assert!(!ledger.done_for(hero, &dossier, "next-scene"));
+
+    ledger.apply_appraisal(
+        hero,
+        &dossier,
+        "next-scene",
+        Appraisal {
+            reaction: EmotionReaction::NeverForgive,
+            strength: EmotionLevel::Much,
+            willingness: Some(InfluenceWillingness::Unwilling),
+            effect: Effect::Cool,
+        },
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "next-scene",
+        Approach::Insult,
+        "I joined the bandits.",
+        "I will never forgive you.",
+    );
+    ledger.save().unwrap();
+    let reloaded = SocialLedger::open(
+        vec![dossier.clone()],
+        "emotional-state",
+        Some(directory.clone()),
+    )
+    .unwrap();
+    let state = reloaded.emotional_state(hero, &dossier, "next-scene");
+    assert_eq!(state.never_forgives.as_deref(), Some("that offense"));
+    assert_eq!(
+        reloaded.standing(hero, &dossier).attitude,
+        Attitude::Hostile
+    );
+    reloaded.apply_appraisal(
+        hero,
+        &dossier,
+        "next-scene",
+        Appraisal {
+            reaction: EmotionReaction::Warmed,
+            strength: EmotionLevel::Much,
+            willingness: Some(InfluenceWillingness::Willing),
+            effect: Effect::Warm,
+        },
+    );
+    reloaded.record_exchange(
+        hero,
+        &dossier,
+        "next-scene",
+        Approach::Kindness,
+        "I brought a gift.",
+        "Thank you, but I have not forgotten.",
+    );
+    assert_eq!(
+        reloaded.standing(hero, &dossier).attitude,
+        Attitude::Hostile
+    );
+    assert!(
+        reloaded
+            .emotional_state(hero, &dossier, "next-scene")
+            .never_forgives
+            .is_some()
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn a_ledger_without_dossiers_is_inactive_and_saves_nothing() {
     let ledger = SocialLedger::none();
 

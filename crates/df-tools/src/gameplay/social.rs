@@ -36,7 +36,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use super::{
-    adventure::dossier::{AnswerSubject, Attitude, Dossier, Effect, Topic},
+    adventure::dossier::{
+        AnswerSubject, Attitude, Dossier, Effect, EmotionalProfile, Forgiveness, Topic,
+    },
     storyteller::contains_whole_word,
 };
 
@@ -108,6 +110,187 @@ impl Approach {
 pub(super) struct ApproachReading {
     pub(super) approach: Approach,
     pub(super) subject: AnswerSubject,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum EmotionLevel {
+    #[default]
+    None,
+    ALittle,
+    Much,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PatienceState {
+    #[default]
+    Plenty,
+    Short,
+    Done,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum EmotionReaction {
+    Warmed,
+    Charmed,
+    Amused,
+    Unmoved,
+    Uneasy,
+    Frightened,
+    Offended,
+    Disgusted,
+    LosingPatience,
+    Done,
+    NeverForgive,
+}
+
+impl EmotionReaction {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Warmed => "warmed",
+            Self::Charmed => "charmed",
+            Self::Amused => "amused",
+            Self::Unmoved => "unmoved",
+            Self::Uneasy => "uneasy",
+            Self::Frightened => "frightened",
+            Self::Offended => "offended",
+            Self::Disgusted => "disgusted",
+            Self::LosingPatience => "losing_patience",
+            Self::Done => "done_with_this_hero",
+            Self::NeverForgive => "will_never_forgive_this",
+        }
+    }
+}
+
+impl EmotionLevel {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ALittle => "a_little",
+            Self::Much => "much",
+        }
+    }
+}
+
+impl PatienceState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Plenty => "plenty",
+            Self::Short => "short",
+            Self::Done => "done",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum InfluenceWillingness {
+    Willing,
+    Hesitant,
+    Unwilling,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct Appraisal {
+    pub(super) reaction: EmotionReaction,
+    pub(super) strength: EmotionLevel,
+    pub(super) willingness: Option<InfluenceWillingness>,
+    pub(super) effect: Effect,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EmotionalState {
+    pub(super) fond: EmotionLevel,
+    pub(super) afraid: EmotionLevel,
+    pub(super) drawn_to: EmotionLevel,
+    pub(super) resentful: EmotionLevel,
+    pub(super) wary: EmotionLevel,
+    pub(super) patience: PatienceState,
+    #[serde(default)]
+    pub(super) never_forgives: Option<String>,
+    #[serde(default)]
+    pub(super) last_reaction: Option<EmotionReaction>,
+    #[serde(default)]
+    done_said: bool,
+}
+
+impl EmotionalState {
+    fn apply(
+        &mut self,
+        appraisal: Appraisal,
+        forgiveness: Forgiveness,
+        grudge_reason: &str,
+    ) -> EmotionReaction {
+        let level = appraisal.strength;
+        let reaction = if appraisal.reaction == EmotionReaction::NeverForgive
+            && forgiveness != Forgiveness::Unforgiving
+        {
+            EmotionReaction::Offended
+        } else {
+            appraisal.reaction
+        };
+        match reaction {
+            EmotionReaction::Warmed => self.fond = level,
+            EmotionReaction::Charmed => {
+                self.fond = level;
+                self.drawn_to = level;
+            }
+            EmotionReaction::Amused | EmotionReaction::Unmoved => {}
+            EmotionReaction::Uneasy => self.wary = level,
+            EmotionReaction::Frightened => {
+                self.afraid = level;
+                self.wary = level;
+            }
+            EmotionReaction::Offended | EmotionReaction::Disgusted => {
+                self.resentful = level;
+            }
+            EmotionReaction::LosingPatience => self.patience = PatienceState::Short,
+            EmotionReaction::Done => {
+                self.patience = PatienceState::Done;
+                self.done_said = false;
+            }
+            EmotionReaction::NeverForgive => {
+                self.resentful = EmotionLevel::Much;
+                self.never_forgives = Some(grudge_reason.to_owned());
+            }
+        }
+        self.last_reaction = Some(reaction);
+        reaction
+    }
+
+    pub(super) fn summary(&self) -> String {
+        format!(
+            "fond={} afraid={} drawn_to={} resentful={} wary={} patience={} never_forgives={}",
+            self.fond.label(),
+            self.afraid.label(),
+            self.drawn_to.label(),
+            self.resentful.label(),
+            self.wary.label(),
+            self.patience.label(),
+            self.never_forgives.is_some(),
+        )
+        .to_lowercase()
+    }
+
+    pub(super) fn perceived_line(&self, npc: &str, hero: &str) -> String {
+        if self.never_forgives.is_some() || self.resentful == EmotionLevel::Much {
+            format!("{npc} seems resentful of {hero}.")
+        } else if self.afraid != EmotionLevel::None {
+            format!("{npc} seems afraid of {hero}.")
+        } else if self.drawn_to != EmotionLevel::None {
+            format!("{npc} seems drawn to {hero}.")
+        } else if self.fond != EmotionLevel::None {
+            format!("{npc} seems fond of {hero}.")
+        } else if self.wary != EmotionLevel::None {
+            format!("{npc} seems wary of {hero}.")
+        } else {
+            format!("{npc} seems {} toward {hero}.", "guarded")
+        }
+    }
 }
 
 fn mentions_any(lowered: &str, phrases: &[&str]) -> bool {
@@ -545,10 +728,20 @@ struct Relationship {
     /// Whether her last reply ended with a question, so the next should end another way.
     #[serde(default)]
     last_asked: bool,
+    #[serde(default)]
+    emotional: EmotionalState,
+    #[serde(default)]
+    last_subject: String,
+    #[serde(default)]
+    same_subject_count: u32,
     /// Set when a threat has already moved the attitude for the exchange now being answered, so
     /// recording that exchange does not move it again. Never stored.
     #[serde(skip)]
     threat_applied: bool,
+    #[serde(skip)]
+    appraised: bool,
+    #[serde(skip)]
+    pending_shift: Option<Shift>,
 }
 
 impl Relationship {
@@ -564,20 +757,34 @@ impl Relationship {
             exchanges: 0,
             admitted_ignorance: false,
             last_asked: false,
+            emotional: EmotionalState::default(),
+            last_subject: String::new(),
+            same_subject_count: 0,
             threat_applied: false,
+            appraised: false,
+            pending_shift: None,
         }
+    }
+
+    fn begin_scene(&mut self, scene: &str) {
+        if self.scene == scene {
+            return;
+        }
+        self.scene = scene.to_owned();
+        self.scene_start = self.attitude;
+        self.exchanges = 0;
+        self.scene_said.clear();
+        self.admitted_ignorance = false;
+        self.last_asked = false;
+        self.emotional.patience = PatienceState::Plenty;
+        self.emotional.done_said = false;
+        self.last_subject.clear();
+        self.same_subject_count = 0;
     }
 
     /// Applies one exchange's effect inside the bounds in the module documentation.
     fn apply(&mut self, scene: &str, effect: Effect, opposing: bool) -> Option<Shift> {
-        if self.scene != scene {
-            self.scene = scene.to_owned();
-            self.scene_start = self.attitude;
-            self.exchanges = 0;
-            self.scene_said.clear();
-            self.admitted_ignorance = false;
-            self.last_asked = false;
-        }
+        self.begin_scene(scene);
         let direction: i8 = match effect {
             Effect::Warm => 1,
             Effect::Cool => -1,
@@ -608,14 +815,7 @@ impl Relationship {
     }
 
     fn threaten(&mut self, scene: &str) -> Option<Shift> {
-        if self.scene != scene {
-            self.scene = scene.to_owned();
-            self.scene_start = self.attitude;
-            self.exchanges = 0;
-            self.scene_said.clear();
-            self.admitted_ignorance = false;
-            self.last_asked = false;
-        }
+        self.begin_scene(scene);
         self.threat_applied = true;
         let before = self.attitude;
         let target = from_rank(rank(before) - 1);
@@ -737,6 +937,8 @@ pub(super) struct ExchangeRecord {
     pub(super) effect: Effect,
     pub(super) attitude: Attitude,
     pub(super) opposes: bool,
+    pub(super) reaction: Option<EmotionReaction>,
+    pub(super) emotional_state: EmotionalState,
 }
 
 /// The standings and conversations of one saved moment, carried by the
@@ -823,6 +1025,16 @@ impl SocialLedger {
                         let relationship = entry.relationship;
                         if relationship.trust.abs() >= TRUST_STEP
                             || relationship.recent.len() > RECENT_LINES
+                            || relationship.last_subject.len() > 24
+                            || relationship.same_subject_count > 100
+                            || relationship.emotional.never_forgives.as_ref().is_some_and(
+                                |reason| {
+                                    reason.is_empty()
+                                        || reason.chars().count() > 280
+                                        || dossier.emotional_profile().forgiveness
+                                            != Forgiveness::Unforgiving
+                                },
+                            )
                             || (dossier.role.opposes_party()
                                 && relationship.attitude == Attitude::Friendly
                                 && dossier.starting_attitude != Attitude::Friendly)
@@ -917,6 +1129,150 @@ impl SocialLedger {
         )
     }
 
+    /// The bounded relationship feelings for this hero; changing scenes resets only patience.
+    pub(super) fn emotional_state(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+    ) -> EmotionalState {
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        relationship.emotional.clone()
+    }
+
+    /// Tracks the already-classified subject so Jev can see repeated asks without Rust inferring
+    /// emotional meaning from the line.
+    pub(super) fn note_subject(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+        subject: AnswerSubject,
+    ) -> u32 {
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        if relationship.last_subject == subject.label() {
+            relationship.same_subject_count = relationship.same_subject_count.saturating_add(1);
+        } else {
+            relationship.last_subject = subject.label().to_owned();
+            relationship.same_subject_count = 1;
+        }
+        relationship.same_subject_count.saturating_sub(1)
+    }
+
+    /// Whether this hero has already heard the character say it will not answer again this scene.
+    pub(super) fn done_for(&self, member: MemberId, dossier: &Dossier, scene: &str) -> bool {
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        relationship.emotional.patience == PatienceState::Done && relationship.emotional.done_said
+    }
+
+    /// Commits Jev's selected reaction before the reply is formed.
+    pub(super) fn apply_appraisal(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+        appraisal: Appraisal,
+    ) -> (EmotionReaction, Option<Shift>) {
+        let profile = dossier.emotional_profile();
+        let grudge_reason = profile
+            .feelings
+            .iter()
+            .find(|feeling| feeling.kind == super::adventure::dossier::FeelingKind::Grudge)
+            .map_or("that offense".to_owned(), |feeling| feeling.text.clone());
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        let reaction = relationship
+            .emotional
+            .apply(appraisal, profile.forgiveness, &grudge_reason);
+        let shift = if reaction == EmotionReaction::NeverForgive
+            || relationship.emotional.never_forgives.is_some()
+        {
+            let before = relationship.attitude;
+            relationship.attitude = Attitude::Hostile;
+            relationship.trust = 0;
+            (before != Attitude::Hostile).then_some(Shift::Level {
+                from: before,
+                to: Attitude::Hostile,
+            })
+        } else {
+            relationship.apply(scene, appraisal.effect, dossier.role.opposes_party())
+        };
+        relationship.appraised = true;
+        relationship.pending_shift = shift;
+        (reaction, shift)
+    }
+
+    /// Preserves the existing threat rule while recording its old temperament reaction.
+    pub(super) fn apply_legacy_threat_emotion(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+    ) -> EmotionReaction {
+        let effect = effect_of(dossier, Approach::Intimidation);
+        let reaction = match effect {
+            Effect::Warm => EmotionReaction::Warmed,
+            Effect::Cool => EmotionReaction::Offended,
+            Effect::Steady => EmotionReaction::Unmoved,
+        };
+        let profile = dossier.emotional_profile();
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        relationship.emotional.apply(
+            Appraisal {
+                reaction,
+                strength: EmotionLevel::ALittle,
+                willingness: None,
+                effect,
+            },
+            profile.forgiveness,
+            "that threat",
+        )
+    }
+
+    /// Development-only state keyed by opaque member ids; the caller resolves ids to hero names.
+    pub(super) fn development_feelings(
+        &self,
+        npc_id: &str,
+    ) -> Option<(EmotionalProfile, Vec<(String, Attitude, EmotionalState)>)> {
+        let dossier = self
+            .dossiers
+            .iter()
+            .find(|dossier| dossier.npc_id == npc_id)?;
+        let relationships = self.lock();
+        let mut states: Vec<_> = relationships
+            .iter()
+            .filter(|((_, npc), _)| npc == npc_id)
+            .map(|((member, _), relationship)| {
+                (
+                    hex(member.as_bytes()),
+                    relationship.attitude,
+                    relationship.emotional.clone(),
+                )
+            })
+            .collect();
+        states.sort_by(|left, right| left.0.cmp(&right.0));
+        Some((dossier.emotional_profile(), states))
+    }
+
     /// The last lines between this hero and this NPC, oldest first, as `(is_hero, text)`.
     pub(super) fn recent(&self, member: MemberId, npc_id: &str) -> Vec<(bool, String)> {
         self.lock()
@@ -992,7 +1348,9 @@ impl SocialLedger {
         let relationship = relationships
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier));
-        let shift = if std::mem::take(&mut relationship.threat_applied) {
+        let shift = if std::mem::take(&mut relationship.appraised) {
+            relationship.pending_shift.take()
+        } else if std::mem::take(&mut relationship.threat_applied) {
             None
         } else {
             relationship.apply(
@@ -1002,6 +1360,9 @@ impl SocialLedger {
             )
         };
         relationship.exchanges = relationship.exchanges.saturating_add(1);
+        if relationship.emotional.patience == PatienceState::Done {
+            relationship.emotional.done_said = true;
+        }
         relationship.admitted_ignorance |= admits_not_knowing(npc_line);
         relationship.last_asked = npc_line.trim_end().ends_with('?');
         relationship
@@ -1016,6 +1377,8 @@ impl SocialLedger {
         let excess = relationship.recent.len().saturating_sub(RECENT_LINES);
         relationship.recent.drain(..excess);
         let attitude = relationship.attitude;
+        let reaction = relationship.emotional.last_reaction;
+        let emotional_state = relationship.emotional.clone();
         drop(relationships);
         let sequence = self.exchanges.borrow().saturating_add(1);
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(ExchangeRecord {
@@ -1025,6 +1388,8 @@ impl SocialLedger {
             effect: effect_of(dossier, approach),
             attitude,
             opposes: dossier.role.opposes_party(),
+            reaction,
+            emotional_state,
         });
         self.exchanges.send_replace(sequence);
         Recorded { shift }
@@ -1119,8 +1484,9 @@ pub(super) fn attitude_code(attitude: Attitude) -> u32 {
     }
 }
 
-fn effect_of(dossier: &Dossier, approach: Approach) -> Effect {
-    let temperament = &dossier.temperament;
+pub(super) fn effect_of(dossier: &Dossier, approach: Approach) -> Effect {
+    let profile = dossier.emotional_profile();
+    let temperament = &profile.legacy_reactions;
     match approach {
         Approach::Flattery => temperament.flattery.effect,
         Approach::Flirting => temperament.flirting.effect,

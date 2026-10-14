@@ -10,10 +10,13 @@ use serde_json::{Value, json};
 use super::{
     adventure::{
         ForcedEntries, GenerateOptions, GeneratedAdventure, Tables,
-        dossier::{Attitude, Dossier, Effect, NpcRole, Topic, mentions_term},
+        dossier::{Attitude, Dossier, Effect, EmotionalProfile, NpcRole, Topic, mentions_term},
         generate,
     },
-    npc_dossier::{self, Inputs, Withheld, facts, fallback},
+    npc_dossier::{
+        self, EmotionalProfileFailure, Inputs, Withheld, facts, fallback,
+        generate_emotional_profile, validate_emotional_profile,
+    },
     npc_facts,
     npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
     pack::SceneKey,
@@ -860,6 +863,8 @@ fn the_heros_own_view_lists_each_present_npcs_attitude_and_the_display_gets_none
                 scene_asset: String::new(),
                 scene: seen.scene.clone(),
                 journey: Some(rpc::JourneyView::default()),
+                scene_graph: None,
+                live_plate_graph_revision: 0,
             },
         )),
     };
@@ -2167,4 +2172,100 @@ fn an_ordinary_question_is_not_flagged_as_breaking_the_errand() {
         "Who was the old friend you swore to?",
     );
     assert!(ask.facts.get("hero_claims_against_errand").is_none());
+}
+
+#[test]
+fn reply_context_contains_the_unified_emotional_profile() {
+    let adventure = adventure(1);
+    let dossier = adventure
+        .dossiers
+        .iter()
+        .find(|dossier| dossier.role == NpcRole::Patron)
+        .unwrap();
+    let facts = facts_for(
+        &adventure,
+        dossier,
+        Standing {
+            attitude: dossier.starting_attitude,
+            trust: 0,
+        },
+        "Hello.",
+    );
+
+    assert!(facts["emotional_profile"].is_object());
+    assert!(facts["emotional_profile"]["forgiveness"].is_string());
+    assert!(facts["emotional_profile"]["legacy_reactions"].is_object());
+}
+
+#[test]
+fn a_stored_adventure_without_a_profile_keeps_its_temperament_and_attitude() {
+    let dossier = adventure(4).dossiers.remove(0);
+    let mut old_record = serde_json::to_value(&dossier).unwrap();
+    old_record
+        .as_object_mut()
+        .unwrap()
+        .remove("emotional_profile");
+
+    let loaded: Dossier = serde_json::from_value(old_record).unwrap();
+
+    assert_eq!(loaded.starting_attitude, dossier.starting_attitude);
+    assert_eq!(
+        loaded.emotional_profile().legacy_reactions,
+        dossier.temperament
+    );
+    assert!(loaded.emotional_profile.is_none());
+}
+
+#[test]
+fn emotional_profile_validation_rejects_minors_ungrounded_items_missing_fields_and_long_text() {
+    let dossier = adventure(2).dossiers.remove(0);
+    let valid = dossier.emotional_profile();
+    assert_eq!(validate_emotional_profile(&dossier, &valid), Ok(()));
+
+    let mut minor = valid.clone();
+    minor.feelings[0].kind = super::adventure::dossier::FeelingKind::Attraction;
+    minor.feelings[0].text = "Attracted to a minor".to_owned();
+    assert_eq!(
+        validate_emotional_profile(&dossier, &minor),
+        Err(EmotionalProfileFailure::AdultOnly)
+    );
+
+    let mut ungrounded = valid.clone();
+    ungrounded.feelings[0].because = "unknown_entry".to_owned();
+    assert_eq!(
+        validate_emotional_profile(&dossier, &ungrounded),
+        Err(EmotionalProfileFailure::InvalidGrounding)
+    );
+
+    let mut missing = serde_json::to_value(&valid).unwrap();
+    missing.as_object_mut().unwrap().remove("tells");
+    assert!(serde_json::from_value::<EmotionalProfile>(missing).is_err());
+
+    let mut overlong = valid;
+    overlong.feelings[0].text = "x".repeat(281);
+    assert_eq!(
+        validate_emotional_profile(&dossier, &overlong),
+        Err(EmotionalProfileFailure::InvalidLength)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn emotional_profile_prompt_receives_the_dossier_and_attraction_instruction() {
+    let dossier = adventure(3).dossiers.remove(0);
+    let answer = serde_json::to_string(&dossier.emotional_profile()).unwrap();
+    let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"profile": answer}))]);
+    let cache = cache_directory("emotional-profile-prompt");
+    let storyteller = teller(endpoint.address, 200_000, Duration::from_secs(5), &cache);
+
+    let profile = generate_emotional_profile(&storyteller, &dossier)
+        .await
+        .unwrap();
+
+    assert_eq!(profile, dossier.emotional_profile());
+    let request = &endpoint.bodies()[0];
+    let request_text = request.to_string();
+    assert!(request_text.contains(&dossier.name));
+    assert!(request_text.contains(&dossier.origin.text));
+    assert!(request_text.contains("output_schema"));
+    assert!(request_text.contains("attraction"));
 }

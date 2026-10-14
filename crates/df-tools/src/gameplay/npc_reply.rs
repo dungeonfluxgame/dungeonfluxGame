@@ -27,7 +27,10 @@ use super::{
     approach_model::ApproachModel,
     npc_dossier::{self, Clue, Inputs, Turn, Withheld, released_terms},
     pack::{Age, PackFile, SceneKey, SpeakerProfile},
-    social::{Approach, Shift, SocialLedger, classify_keywords_reading, shift_line},
+    social::{
+        Appraisal, Approach, EmotionLevel, EmotionReaction, InfluenceWillingness, Shift,
+        SocialLedger, classify_keywords_reading, shift_line,
+    },
     speech_text::{coverage, sentences},
     startup_configuration::content_rating,
     storyteller::{
@@ -187,6 +190,8 @@ pub(super) struct NpcReplyContext {
     /// Names present in the scene (heroes, cast, places): the only names a cleaned-up line may
     /// be corrected to.
     known_names: Vec<String>,
+    /// The public appearance facts the hero's own sheet lets another character perceive.
+    hero_visible: Value,
     /// Set when the addressed NPC has a backstory: the reply then draws on it and moves the
     /// NPC's attitude toward this hero.
     pub(super) turn: Option<Box<Turn>>,
@@ -439,6 +444,7 @@ impl NpcReplyContext {
             typed_words: words,
             public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
+            hero_visible: visible_hero(hero),
             turn: Some(Box::new(Turn {
                 ledger: social.clone(),
                 dossier: dossier.clone(),
@@ -541,6 +547,7 @@ impl NpcReplyContext {
             typed_words: words,
             public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
+            hero_visible: visible_hero(hero),
             turn: None,
         })
     }
@@ -561,6 +568,31 @@ impl NpcReplyContext {
             &spoken,
         );
     }
+}
+
+fn visible_hero(hero: &rpc::CharacterSheet) -> Value {
+    let visible: Vec<String> = hero
+        .facts
+        .iter()
+        .filter(|fact| {
+            [
+                "sex",
+                "gender",
+                "presentation",
+                "species",
+                "ancestry",
+                "build",
+                "dress",
+                "clothing",
+                "appearance",
+                "scars",
+            ]
+            .iter()
+            .any(|label| fact.label.eq_ignore_ascii_case(label))
+        })
+        .map(|fact| format!("{}: {}", fact.label, fact.value))
+        .collect();
+    json!(visible)
 }
 
 /// The names a scene shows: its heroes, cast, speaker and the capitalised words of its title.
@@ -868,6 +900,13 @@ impl NpcVoice {
         mut context: NpcReplyContext,
         log: &TableLog,
     ) -> Option<Exchange> {
+        if let Some(turn) = context.turn.as_ref()
+            && turn
+                .ledger
+                .done_for(context.member, &turn.dossier, &turn.scene)
+        {
+            return None;
+        }
         let reading = self
             .approach_model
             .classify(
@@ -878,8 +917,129 @@ impl NpcVoice {
             .await
             .unwrap_or_else(|| classify_keywords_reading(&context.typed_words));
         let approach = reading.approach;
+        let influence_request = reading.subject != super::adventure::dossier::AnswerSubject::Other
+            || matches!(
+                approach,
+                Approach::Question
+                    | Approach::Persuasion
+                    | Approach::Intimidation
+                    | Approach::Deception
+                    | Approach::Bribe
+                    | Approach::Bargain
+            );
         context.facts["player"]["approach"] = json!(approach.label());
         context.facts["player"]["subject"] = json!(reading.subject.label());
+        let mut appraised_reaction = None;
+        let mut influence_willingness = None;
+        if let Some(turn) = context.turn.as_mut() {
+            let similar_asks = if approach == Approach::Question {
+                turn.ledger.note_subject(
+                    context.member,
+                    &turn.dossier,
+                    &turn.scene,
+                    reading.subject,
+                )
+            } else {
+                0
+            };
+            let current = turn
+                .ledger
+                .emotional_state(context.member, &turn.dossier, &turn.scene);
+            let appraisal = self
+                .approach_model
+                .appraise(
+                    &turn.dossier,
+                    &current,
+                    turn.standing.attitude,
+                    approach,
+                    reading.subject,
+                    &context.typed_words,
+                    &context.hero_visible,
+                    similar_asks,
+                )
+                .await;
+            let (appraisal, source) = match appraisal {
+                Some(appraisal) => (Some(appraisal), "jev"),
+                None if approach != Approach::Intimidation => {
+                    let effect = super::social::effect_of(&turn.dossier, approach);
+                    let reaction = match effect {
+                        super::adventure::dossier::Effect::Warm => EmotionReaction::Warmed,
+                        super::adventure::dossier::Effect::Cool => EmotionReaction::Offended,
+                        super::adventure::dossier::Effect::Steady => EmotionReaction::Unmoved,
+                    };
+                    (
+                        Some(Appraisal {
+                            reaction,
+                            strength: EmotionLevel::ALittle,
+                            willingness: None,
+                            effect,
+                        }),
+                        "fallback",
+                    )
+                }
+                None => (None, "fallback"),
+            };
+            if let Some(appraisal) = appraisal {
+                influence_willingness =
+                    influence_request.then_some(appraisal.willingness).flatten();
+                let (reaction, shift) = turn.ledger.apply_appraisal(
+                    context.member,
+                    &turn.dossier,
+                    &turn.scene,
+                    appraisal,
+                );
+                appraised_reaction = Some(reaction);
+                turn.standing = turn.ledger.standing(context.member, &turn.dossier);
+                let current =
+                    turn.ledger
+                        .emotional_state(context.member, &turn.dossier, &turn.scene);
+                context.facts["attitude_toward_hero"] = json!(turn.standing.attitude.label());
+                context.facts["emotional_state"] = json!(current);
+                context.facts["npc_reaction"] = json!(format!(
+                    "You feel {} toward this hero after this moment. Your current relationship is: {}.",
+                    reaction.label(),
+                    current.summary(),
+                ));
+                if current.never_forgives.is_some() {
+                    influence_willingness = Some(InfluenceWillingness::Unwilling);
+                }
+                let summary = current.summary();
+                let patience = summary
+                    .split_whitespace()
+                    .find_map(|part| part.strip_prefix("patience="))
+                    .unwrap_or("plenty");
+                super::actor::record_audit_line(
+                    "gameplay.social.emotion",
+                    format!(
+                        "EMOTION npc={} hero={} cause={} reaction={} source={} attitude={} patience={} feelings={}",
+                        turn.dossier.npc_id,
+                        context.hero_name,
+                        approach.label(),
+                        reaction.label(),
+                        source,
+                        turn.standing.attitude.label(),
+                        patience,
+                        summary,
+                    ),
+                );
+                log.push(
+                    &context.speaker,
+                    rpc::TableRole::Npc,
+                    context.hero_index,
+                    rpc::TableKind::Action,
+                    &current.perceived_line(&context.speaker, &context.hero_name),
+                );
+                if let Some(shift) = shift {
+                    log.push(
+                        &context.speaker,
+                        rpc::TableRole::Npc,
+                        context.hero_index,
+                        rpc::TableKind::Action,
+                        &shift_line(shift, &context.hero_name),
+                    );
+                }
+            }
+        }
         let private_clue_withheld = context.facts.get("private_matter").is_some()
             && asks_about_private_clue(&context.typed_words);
         if private_clue_withheld {
@@ -891,7 +1051,7 @@ impl NpcVoice {
                 facts.remove("volunteer");
             }
         }
-        let threat_shift = if approach == Approach::Intimidation {
+        let threat_shift = if approach == Approach::Intimidation && appraised_reaction.is_none() {
             let turn = context.turn.as_mut()?;
             let shift = turn
                 .ledger
@@ -928,7 +1088,54 @@ impl NpcVoice {
                 &shift_line(shift, &context.hero_name),
             );
         }
-        let subject_answer = if approach == Approach::Intimidation || private_clue_withheld {
+        if approach == Approach::Intimidation && appraised_reaction.is_none() {
+            let turn = context.turn.as_mut()?;
+            let reaction =
+                turn.ledger
+                    .apply_legacy_threat_emotion(context.member, &turn.dossier, &turn.scene);
+            appraised_reaction = Some(reaction);
+            let current = turn
+                .ledger
+                .emotional_state(context.member, &turn.dossier, &turn.scene);
+            turn.standing = turn.ledger.standing(context.member, &turn.dossier);
+            context.facts["emotional_state"] = json!(current);
+            context.facts["npc_reaction"] = json!(format!(
+                "You feel {} toward this hero after the threat. Your current relationship is: {}.",
+                reaction.label(),
+                current.summary(),
+            ));
+            let summary = current.summary();
+            let patience = summary
+                .split_whitespace()
+                .find_map(|part| part.strip_prefix("patience="))
+                .unwrap_or("plenty");
+            super::actor::record_audit_line(
+                "gameplay.social.emotion",
+                format!(
+                    "EMOTION npc={} hero={} cause=intimidation reaction={} source=fallback attitude={} patience={} feelings={}",
+                    turn.dossier.npc_id,
+                    context.hero_name,
+                    reaction.label(),
+                    turn.standing.attitude.label(),
+                    patience,
+                    summary,
+                ),
+            );
+            log.push(
+                &context.speaker,
+                rpc::TableRole::Npc,
+                context.hero_index,
+                rpc::TableKind::Action,
+                &current.perceived_line(&context.speaker, &context.hero_name),
+            );
+        }
+        let subject_answer = if approach == Approach::Intimidation
+            || private_clue_withheld
+            || (influence_request
+                && matches!(
+                    influence_willingness,
+                    Some(InfluenceWillingness::Unwilling | InfluenceWillingness::Hesitant)
+                )) {
             None
         } else {
             let turn = context.turn.as_ref()?;
@@ -958,7 +1165,34 @@ impl NpcVoice {
                     .collect::<Vec<_>>()
             );
         }
-        let modeled = self.model_dialogue(&context).await;
+        let already_unforgiving = context.turn.as_ref().is_some_and(|turn| {
+            turn.ledger
+                .emotional_state(context.member, &turn.dossier, &turn.scene)
+                .never_forgives
+                .is_some()
+        });
+        let done_now = appraised_reaction == Some(EmotionReaction::Done);
+        let never_forgive_now = appraised_reaction == Some(EmotionReaction::NeverForgive);
+        let unwilling_now = influence_request
+            && (influence_willingness == Some(InfluenceWillingness::Unwilling)
+                || already_unforgiving);
+        let hesitant_now =
+            influence_request && influence_willingness == Some(InfluenceWillingness::Hesitant);
+        if hesitant_now {
+            super::actor::record_audit_line(
+                "gameplay.social.influence_pending",
+                format!(
+                    "INFLUENCE npc={} hero={} cause=hesitant result=pending",
+                    context.turn.as_ref()?.dossier.npc_id,
+                    context.hero_name,
+                ),
+            );
+        }
+        let modeled = if done_now || never_forgive_now || unwilling_now || hesitant_now {
+            Err(FallbackReason::ReplyRejected)
+        } else {
+            self.model_dialogue(&context).await
+        };
         let turn = context.turn.as_ref()?;
         let (text, fallback) = match modeled {
             // Jev (or the keyword fallback) decided before the reaction and reply.
@@ -976,7 +1210,21 @@ impl NpcVoice {
                     reason.label(),
                     turn.dossier.npc_id,
                 );
-                let (answer, answer_key): (String, Option<String>) = if private_clue_withheld {
+                let (answer, answer_key): (String, Option<String>) = if done_now {
+                    (
+                        "I cannot answer more of your questions this scene.".to_owned(),
+                        None,
+                    )
+                } else if never_forgive_now {
+                    ("I will never forgive you for that.".to_owned(), None)
+                } else if unwilling_now {
+                    ("I will not help you with that.".to_owned(), None)
+                } else if hesitant_now {
+                    (
+                        "I need a moment before I can give you an answer.".to_owned(),
+                        None,
+                    )
+                } else if private_clue_withheld {
                     let (answer, key) = private_clue_refusal(turn);
                     (answer, Some(key))
                 } else if let Some((answer, key)) = subject_answer.clone() {

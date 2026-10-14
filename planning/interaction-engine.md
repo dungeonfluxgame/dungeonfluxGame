@@ -120,3 +120,80 @@ flows, refusals and clear uncertainty instead of treating prompt quality as proo
 `RulingRequest` binds pending resolution, actor, rules/source versions, source question, understandable reason, safe explanation, permitted typed responses, cost/timing basis and designated adjudicator capability. For representable supported cases, reviewed source-grounded automatic adjudication resolves without human involvement; source discretionary choices remain explicit rather than a universal AI-created DC. `RulingResponse` is permitted choice/explanation, decline, await or unsupported; no unrestricted rule injection. The player may choose a supported alternative or cancel the uncommitted continuation, preserving already committed compound steps/resources. Host cannot force another player's response or operator-only dice.
 
 An absent/disconnected/unready host produces AwaitingAdjudicator and a clear phone/TV notice with permitted alternatives. Logical-time pause is explicit existing authorized campaign policy, never a model timeout. No timeout spends resources, rolls new dice or invents a ruling. Authorized adjudicator transfer follows campaign host permissions/current binding and pending ID; recovery resumes once via operation lookup and retained source basis. A novice-host acceptance flow observes explanation, decline/wait/cancel/alternative, reacquisition and source-correct resume with actual audio and private contexts. Track discretionary interventions/session and minutes; autonomous-GM product copy must disclose remaining human judgment until qualified pilots show real frequency. Full2024 catalog support is still required and does not by itself eliminate tabletop discretion.
+
+## Character emotional profile and relationship state (EMO-01)
+
+An NPC's emotional profile is stored inside the adventure dossier, beside the origin, formative
+event, bonds, flaws, fears, motives and knowledge that ground it. The storyteller writes one
+bounded profile per dossier from the complete dossier in one structured-output call. Each
+attraction, fear, delight, aversion and grudge names the dossier field that supports it. The
+server rejects malformed or overlong profiles, a missing or unknown source field, an adult-only
+failure, or a value that fails the dossier's bounded profile contract. The prompt forbids claims
+that contradict or outrun their cited source. The existing five temperament reactions migrate
+into the profile as legacy reactions; renderers and reply prompts show only the unified profile.
+An adventure written before EMO-01 has no profile field, so load maps its five stored reactions
+into the same runtime profile without changing its attitude or its bytes.
+
+The profile fields are short grounded feeling items (`text`, `because`), an adult-only attraction
+scope and orientation, forgiveness (`forgiving` or `unforgiving`), patience (`low`, `middling` or
+`high`), brief observable tells, and the five legacy approach reactions. Each feeling cites one
+of `origin`, `past_trade`, `formative_event`, `ideal`, `bond`, `flaw`, `want`, `fear`, `talent`,
+`story_tie`, `motive`, `stand_down` or `knowledge`; optional dossier fields are valid only when
+present. The legacy reactions are compatibility data, not a second personality description.
+
+`social.json` keeps one compact relationship per hero and character: the book's attitude, the
+feelings `fond`, `afraid`, `drawn_to`, `resentful` and `wary` at `none`, `a_little` or `much`,
+patience (`plenty`, `short`, `done`), the current scene's done marker and an optional permanent
+never-forgives reason. Missing emotional state fields load as empty state so older saves retain
+their exact attitudes. No state is projected raw. The server speaks a short perceived standing
+line; a listening hero can read only that character's visible reaction. Insight may use the
+profile's observable tells. A new scene resets `done` and may let the storyteller soften a
+forgiving resentment by one level; a never-forgives reason survives every scene and restart.
+
+For each perceived spoken moment, Jev receives the full dossier and profile, the current
+relationship in words, the classified approach and subject, the hero's visible description, the
+current line/action and the count of similar asks in this scene. One fixed-choice call selects a
+reaction and strength; an optional willingness result is part of that same choice when the line
+urges an NPC to disclose a held fact or act. Rust maps the choice to the compact state. A profile
+that is unforgiving may produce `never_forgives`; otherwise that choice is rejected and becomes
+`offended`. The first `done` reaction gets one in-character refusal and subsequent lines from
+that hero receive no answer until the scene changes. A permanent grudge makes later Influence
+requests unwilling, which the 2024 rules resolve without a check.
+
+The SRD 5.2.1 Influence action remains unchanged: willing requests need no check; unwilling
+requests are refused without a check; hesitant requests use the applicable Charisma skill or
+Wisdom (Animal Handling) against the higher of DC 15 or the creature's Intelligence score, with
+Advantage when Friendly and Disadvantage when Hostile. The server owns the roll and records the
+result through the existing check presentation. Emotion decides willingness and attitude only;
+it never supplies a bonus, changes the target DC, or grants success. A failed check observes the
+book's 24-hour same-urging restriction.
+
+The reply prompt receives the character's unified profile, the state toward this hero, the
+latest reaction and only the tells this hero can read. Reply validation rejects banter that
+contradicts fear, a reply after `done`, or a refusal/forgiveness claim inconsistent with the
+state. Story narration and next-beat offers may use these states; at most one added offer is
+allowed, and its kind must already be accepted by the beat script. Expression follows the latest
+perceived state. Enemy dossiers use the same profile; combat may consult a versioned Jev choice
+only for a legal flee action or surrender offer, leaving attack, movement, timing and outcomes to
+the existing combat rules.
+
+When a model is disabled, late or invalid, the already-classified approach uses the dossier's
+legacy reaction (warm, cool or steady); it does not invent an orientation, grudge or model-only
+reading. The dossier fallback is short and derives from existing traits and those five reactions.
+Provider failures are logged as fallback sources and never withhold required rules outcomes.
+
+The profile prompt is `content/adventure-tables/npc-emotional-profile.prompt.md`; the appraisal
+prompt is `content/adventure-tables/npc-emotional-appraisal.prompt.md`. Each instruction has a
+one-line reason comment. The profile costs one storyteller call per character per adventure;
+appraisal costs one Jev call per perceived moment; a scene transition costs at most one storyteller
+call per character, and only when a forgiving character has resentment to soften. Calls use the
+existing storyteller and Jev deadlines. Combat adds at most one Jev choice at an enemy turn's
+start, with the legacy legal-policy fallback.
+
+Tests use the existing structured-text and Jev fakes, not live providers. They cover accepted and
+rejected profile fields and grounding, prompt contents, every reaction mapping, patience and
+one-time refusal, the permanent-grudge gate, the SRD Influence DC/advantage rules, reply and
+narrative state context, accepted offer kinds, enemy policy version/replay, old saves/restarts,
+and the adventure-record byte limit. A passing unit suite checks contracts; a running server
+playtest must still observe the phone standings, dialogue, notebook note and combat surrender or
+flight with keyless fallbacks and again with models enabled.

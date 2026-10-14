@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use super::{
     adventure::dossier::{Attitude, Effect},
-    social::Approach,
+    social::{Approach, EmotionLevel, EmotionalState},
 };
 
 /// How the room feels as a whole.
@@ -331,6 +331,7 @@ pub(super) struct ExchangeSignal {
     /// The NPC's attitude toward the hero after the exchange.
     pub(super) attitude: Attitude,
     pub(super) opposes: bool,
+    pub(super) emotional_state: EmotionalState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -408,6 +409,23 @@ pub(super) fn ambient_mood(inputs: &MoodInputs<'_>) -> Mood {
 /// The scene mood and the speaker's expression one exchange gives. `recent` holds the approaches
 /// of earlier exchanges (not this one), oldest first.
 pub(super) fn exchange_reading(signal: &ExchangeSignal, recent: &[Approach]) -> (Mood, Expression) {
+    if signal.emotional_state.afraid != EmotionLevel::None {
+        return (Mood::Fearful, Expression::Afraid);
+    }
+    if signal.emotional_state.never_forgives.is_some()
+        || signal.emotional_state.resentful == EmotionLevel::Much
+    {
+        return (Mood::Menacing, Expression::Angry);
+    }
+    if signal.emotional_state.drawn_to != EmotionLevel::None {
+        return (Mood::Flirtatious, Expression::Flirtatious);
+    }
+    if signal.emotional_state.fond != EmotionLevel::None {
+        return (Mood::Warm, Expression::Smiling);
+    }
+    if signal.emotional_state.wary != EmotionLevel::None {
+        return (Mood::Tense, Expression::Neutral);
+    }
     let again = recent
         .iter()
         .filter(|earlier| **earlier == signal.approach)

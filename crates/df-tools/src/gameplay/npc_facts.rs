@@ -244,11 +244,44 @@ fn read_ask(typed: &str) -> Ask {
     // they are. Without this the generic mapping sends family questions to the bond and
     // want lines, which outrank the family lines they resemble.
     let personal = has(&[
-        "family", "children", "child", " kid", "kids", " son", "sons", "daughter", "wife",
-        "husband", "married", "marry", "partner", "sweetheart", "wedding", "parents", "mother",
-        "father", "brother", "sister", " home", "where do you live", "where you live", "house",
-        " lodg", " live", " living", "grew up", "where are you from", "how did you end up",
-        "your service", " serve", " served", " soldier", " war", " army", " unit", " rank",
+        "family",
+        "children",
+        "child",
+        " kid",
+        "kids",
+        " son",
+        "sons",
+        "daughter",
+        "wife",
+        "husband",
+        "married",
+        "marry",
+        "partner",
+        "sweetheart",
+        "wedding",
+        "parents",
+        "mother",
+        "father",
+        "brother",
+        "sister",
+        " home",
+        "where do you live",
+        "where you live",
+        "house",
+        " lodg",
+        " live",
+        " living",
+        "grew up",
+        "where are you from",
+        "how did you end up",
+        "your service",
+        " serve",
+        " served",
+        " soldier",
+        " war",
+        " army",
+        " unit",
+        " rank",
         "opinion",
     ]);
     let knowing = has(&[
@@ -655,9 +688,7 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
             continue;
         }
         if let Some((_, _, line)) = ranked.iter().find(|(_, _, line)| {
-            !taken(&answer, line)
-                && eligible(line)
-                && shared_words(&part, &line.text) > 0
+            !taken(&answer, line) && eligible(line) && shared_words(&part, &line.text) > 0
         }) {
             answer.push(line);
         }
@@ -754,18 +785,7 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
     let lines = candidate_lines(inputs);
     let selection = select(&lines, inputs, &ask);
 
-    let temperament = &dossier.temperament;
-    let reactions: serde_json::Map<String, Value> = [
-        ("flattery", &temperament.flattery.text),
-        ("flirting", &temperament.flirting.text),
-        ("threat", &temperament.threats.text),
-        ("lie", &temperament.lies.text),
-        ("bribe", &temperament.bribes.text),
-    ]
-    .into_iter()
-    .filter(|(_, text)| !withheld.leaks_secret(text))
-    .map(|(name, text)| (name.to_owned(), json!(text)))
-    .collect();
+    let emotional_profile = dossier.emotional_profile();
     let recent: Vec<Value> = inputs
         .recent
         .iter()
@@ -808,7 +828,7 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
         "attitude_toward_hero": inputs.standing.attitude.label(),
         "hero": inputs.hero,
         "answer_from": selection.answer.iter().map(|line| line.text.clone()).collect::<Vec<_>>(),
-        "reactions": reactions,
+        "emotional_profile": emotional_profile,
         "recent_exchange": recent,
         "scene": {"title": kept(inputs.scene_title)},
         "player": {

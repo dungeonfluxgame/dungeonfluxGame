@@ -6,6 +6,83 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[test]
+fn influence_uses_the_srd_dc_and_attitude_roll_mode() {
+    assert_eq!(
+        influence_check_plan(
+            InfluenceWillingness::Willing,
+            Attitude::Friendly,
+            18,
+            Approach::Persuasion,
+        ),
+        None
+    );
+    assert_eq!(
+        influence_check_plan(
+            InfluenceWillingness::Unwilling,
+            Attitude::Hostile,
+            18,
+            Approach::Intimidation,
+        ),
+        None
+    );
+    assert_eq!(
+        influence_check_plan(
+            InfluenceWillingness::Hesitant,
+            Attitude::Friendly,
+            18,
+            Approach::Deception,
+        ),
+        Some(InfluenceCheckPlan {
+            skill: InfluenceSkill::Deception,
+            difficulty_class: 18,
+            roll_mode: InfluenceRollMode::Advantage,
+        })
+    );
+    assert_eq!(
+        influence_check_plan(
+            InfluenceWillingness::Hesitant,
+            Attitude::Indifferent,
+            10,
+            Approach::Flirting,
+        ),
+        Some(InfluenceCheckPlan {
+            skill: InfluenceSkill::Performance,
+            difficulty_class: 15,
+            roll_mode: InfluenceRollMode::Normal,
+        })
+    );
+    assert_eq!(
+        influence_check_plan(
+            InfluenceWillingness::Hesitant,
+            Attitude::Hostile,
+            15,
+            Approach::Persuasion,
+        )
+        .unwrap()
+        .roll_mode,
+        InfluenceRollMode::Disadvantage
+    );
+    assert_eq!(
+        INFLUENCE_FAILURE_WAIT,
+        std::time::Duration::from_secs(86_400)
+    );
+}
+
+#[test]
+fn influence_advantage_and_disadvantage_select_the_correct_d20_face() {
+    let plan = |roll_mode| InfluenceCheckPlan {
+        skill: InfluenceSkill::Persuasion,
+        difficulty_class: 15,
+        roll_mode,
+    };
+    let resolve = |roll_mode| resolve_influence_check(plan(roll_mode), [5, 17], 2, 0).unwrap();
+
+    assert_eq!(resolve(InfluenceRollMode::Advantage).result.die, 17);
+    assert_eq!(resolve(InfluenceRollMode::Normal).result.die, 5);
+    assert_eq!(resolve(InfluenceRollMode::Disadvantage).result.die, 5);
+}
+
 fn exchange(hero_words: &str, reply: &str, facts: Value) -> Exchange {
     Exchange {
         hero_words: hero_words.to_owned(),
@@ -159,7 +236,10 @@ fn a_sentence_said_twice_in_one_conversation_is_found() {
     ]);
     let findings = check(&repeated);
     // A repeated sentence repeats its clauses too: both findings fire.
-    assert_eq!(checks_of(&findings), ["repeated_clause", "repeated_sentence"]);
+    assert_eq!(
+        checks_of(&findings),
+        ["repeated_clause", "repeated_sentence"]
+    );
     assert_eq!(findings[0].exchange, 2);
 }
 

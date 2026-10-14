@@ -355,10 +355,13 @@ pub(crate) fn reload(
     // refuses the record like any other tampered document.
     let mut npc_ids = BTreeSet::new();
     if record.dossiers.len() > 20
-        || record
-            .dossiers
-            .iter()
-            .any(|dossier| !npc_ids.insert(dossier.npc_id.as_str()) || dossier.leak().is_some())
+        || record.dossiers.iter().any(|dossier| {
+            !npc_ids.insert(dossier.npc_id.as_str())
+                || dossier.leak().is_some()
+                || dossier.emotional_profile.as_ref().is_some_and(|profile| {
+                    super::super::npc_dossier::validate_emotional_profile(dossier, profile).is_err()
+                })
+        })
     {
         return Err(RecordError::Invalid("dossiers"));
     }
@@ -459,6 +462,154 @@ fn documents(data: &DemoAdventure) -> [(&'static str, &[u8]); 3] {
         ("tuning.json", &data.tuning),
         ("adventure.json", &data.record),
     ]
+}
+
+#[cfg(test)]
+mod emotional_profile_tests {
+    use super::super::{
+        FactSheet, RulesMode,
+        dossier::{
+            Attitude, Binding, Dossier, Effect, FeelingKind, GivenTraits, GroundedFeeling,
+            KnowledgeTiers, Length, NpcRole, Reaction, SpeechStyle, StoryTie, Temperament, Trait,
+        },
+    };
+    use super::{AdventureRecord, Expression, GENERATOR_VERSION, RECORD_SCHEMA};
+
+    fn dossier() -> Dossier {
+        let reaction = Reaction {
+            id: "steady".to_owned(),
+            text: "keeps their composure".to_owned(),
+            answer: "I hear you.".to_owned(),
+            tags: Vec::new(),
+            effect: Effect::Steady,
+        };
+        Dossier {
+            npc_id: "patron:test".to_owned(),
+            name: "Ari".to_owned(),
+            role: NpcRole::Patron,
+            role_label: "patron".to_owned(),
+            tables_revision: "revision".to_owned(),
+            given: GivenTraits {
+                mannerism: None,
+                delivery: None,
+                voice: None,
+                tags: Vec::new(),
+                note: None,
+            },
+            origin: trait_value("origin", "grew up in a mill town"),
+            past_trade: trait_value("trade", "worked as a baker"),
+            formative_event: trait_value("event", "lost a friend in a fire"),
+            ideal: trait_value("ideal", "protects the vulnerable"),
+            bond: trait_value("bond", "keeps a sibling safe"),
+            flaw: trait_value("flaw", "acts too quickly"),
+            want: trait_value("want", "finds a new home"),
+            fear: trait_value("fear", "fears the open sea"),
+            talent: trait_value("talent", "reads old maps"),
+            story_tie: StoryTie {
+                id: "stake".to_owned(),
+                binds: Binding::Stake,
+                bound_fact: "a brass key".to_owned(),
+                bound_cast: None,
+                public: true,
+                text: "wants the brass key found".to_owned(),
+                speak: "I need the brass key found.".to_owned(),
+            },
+            motive: None,
+            stand_down: None,
+            knowledge: KnowledgeTiers {
+                says_freely: Vec::new(),
+                says_when_trusted: Vec::new(),
+                never_says: Vec::new(),
+            },
+            emotional_profile: None,
+            temperament: Temperament {
+                flattery: reaction.clone(),
+                flirting: reaction.clone(),
+                threats: reaction.clone(),
+                lies: reaction.clone(),
+                bribes: reaction,
+            },
+            starting_attitude: Attitude::Indifferent,
+            speech_style: SpeechStyle {
+                id: "plain".to_owned(),
+                length: Length::Medium,
+                vocabulary: "plain".to_owned(),
+                tic: String::new(),
+                opener: String::new(),
+                closer: String::new(),
+                tags: Vec::new(),
+            },
+            prepared_answers: Default::default(),
+            subject_answers: Default::default(),
+            curt_answers: Vec::new(),
+            rolls: Vec::new(),
+        }
+    }
+
+    fn trait_value(id: &str, text: &str) -> Trait {
+        Trait {
+            id: id.to_owned(),
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_bounded_emotional_profile_fits_the_existing_record_document_limit() {
+        let mut dossier = dossier();
+        let mut profile = dossier.emotional_profile();
+        let evidence: String = dossier.fear.text.chars().take(280).collect();
+        profile.feelings = (0..8)
+            .map(|_| GroundedFeeling {
+                kind: FeelingKind::Fear,
+                text: "x".repeat(120),
+                because: "fear".to_owned(),
+                evidence: evidence.chars().take(120).collect(),
+            })
+            .collect();
+        profile.tells = (0..5).map(|_| "t".repeat(80)).collect();
+        dossier.emotional_profile = Some(profile);
+        let record = AdventureRecord {
+            schema: RECORD_SCHEMA.to_owned(),
+            seed: "17".to_owned(),
+            tables_revision: "0".repeat(64),
+            generator_version: GENERATOR_VERSION.to_owned(),
+            rules_mode: RulesMode::Standard,
+            rolls: Vec::new(),
+            expression: Expression {
+                source: "patterns".to_owned(),
+                fact_sheet_sha256: String::new(),
+                output_sha256: "0".repeat(64),
+                model: None,
+            },
+            pack_sha256: "0".repeat(64),
+            tuning_sha256: "0".repeat(64),
+            seeded_dice: false,
+            campaign: None,
+            settings: None,
+            secret_terms: Vec::new(),
+            speakers: Vec::new(),
+            scene_cast: Vec::new(),
+            dossiers: vec![dossier],
+            fact_sheet: (0..50)
+                .map(|_| FactSheet {
+                    scene: None,
+                    beat: "b".to_owned(),
+                    slot: "s".to_owned(),
+                    speaker: "n".to_owned(),
+                    voice: String::new(),
+                    delivery: String::new(),
+                    facts: Default::default(),
+                    must_mention: Vec::new(),
+                    forbidden: Vec::new(),
+                    bounds: 0,
+                    baseline: "b".repeat(4096),
+                    tone: String::new(),
+                })
+                .collect(),
+        };
+        let bytes = serde_json::to_vec(&record).unwrap();
+        assert!(bytes.len() <= 256 * 1024);
+    }
 }
 /// Creates the run cache once before bootstrap. Existing staging is never overwritten.
 pub(crate) fn create_cache(directory: &Path, data: &DemoAdventure) -> Result<(), RecordError> {

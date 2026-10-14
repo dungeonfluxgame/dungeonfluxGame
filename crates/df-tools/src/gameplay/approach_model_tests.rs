@@ -2,6 +2,46 @@ use super::*;
 use crate::gameplay::social::classify_keywords;
 use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
 
+#[tokio::test(flavor = "current_thread")]
+async fn jev_appraisal_receives_the_full_character_and_state_and_returns_the_selected_reaction() {
+    let endpoint = FakeEndpoint::start(vec![answer("o11")]);
+    let dossier = crate::gameplay::npc_dossier_tests::adventure(1)
+        .dossiers
+        .into_iter()
+        .find(|dossier| dossier.role == crate::gameplay::adventure::dossier::NpcRole::Patron)
+        .unwrap();
+    let state = EmotionalState::default();
+
+    let appraisal = model(&endpoint)
+        .appraise(
+            &dossier,
+            &state,
+            crate::gameplay::adventure::dossier::Attitude::Indifferent,
+            Approach::Flirting,
+            AnswerSubject::Other,
+            "I like your smile.",
+            &json!(["Species: Human", "Presentation: feminine"]),
+            2,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(appraisal.reaction, EmotionReaction::Charmed);
+    assert_eq!(appraisal.strength, EmotionLevel::Much);
+    assert_eq!(appraisal.willingness, Some(InfluenceWillingness::Hesitant));
+    let sent = &endpoint.bodies()[0];
+    assert!(sent["state"]["character"]["emotional_profile"].is_object());
+    assert_eq!(sent["state"]["relationship"]["attitude"], "indifferent");
+    assert_eq!(sent["state"]["relationship"]["similar_asks_this_scene"], 2);
+    assert_eq!(sent["state"]["event"]["hero_visible"][0], "Species: Human");
+    assert!(
+        sent["questions"]["q1"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("profile")
+    );
+}
+
 #[test]
 fn thirteen_observation_lines_and_plain_speech_are_classified_by_srd_5_2_1_pages_187_189() {
     // SRD 5.2.1 pp. 187, 189: Search is a Wisdom check; Study is an Intelligence check.

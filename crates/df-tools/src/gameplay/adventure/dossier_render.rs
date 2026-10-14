@@ -113,16 +113,45 @@ pub(crate) fn render_dossier(dossier: &Dossier) -> String {
         };
         let _ = writeln!(out, "  - ({scope}) {}", item.text);
     }
+    let profile = dossier.emotional_profile();
     let _ = writeln!(
         out,
-        "\nTEMPERAMENT (colour only; never a mechanical benefit):"
+        "\nEMOTIONAL PROFILE (story colour, not a mechanical benefit):"
     );
-    let temperament = &dossier.temperament;
-    reaction_line(&mut out, "Flattery", &temperament.flattery);
-    reaction_line(&mut out, "Flirting", &temperament.flirting);
-    reaction_line(&mut out, "Threats", &temperament.threats);
-    reaction_line(&mut out, "Lies", &temperament.lies);
-    reaction_line(&mut out, "Bribes", &temperament.bribes);
+    let _ = writeln!(out, "  Orientation: {}", profile.orientation);
+    let _ = writeln!(
+        out,
+        "  Forgiveness: {}",
+        match profile.forgiveness {
+            super::dossier::Forgiveness::Forgiving => "forgiving",
+            super::dossier::Forgiveness::Unforgiving => "unforgiving",
+        }
+    );
+    let _ = writeln!(
+        out,
+        "  Patience: {}",
+        match profile.patience {
+            super::dossier::Patience::Low => "low",
+            super::dossier::Patience::Middling => "middling",
+            super::dossier::Patience::High => "high",
+        }
+    );
+    for feeling in &profile.feelings {
+        let _ = writeln!(
+            out,
+            "  {:?}: {} (because: {})",
+            feeling.kind, feeling.text, feeling.because
+        );
+    }
+    for tell in &profile.tells {
+        let _ = writeln!(out, "  Tell: {tell}");
+    }
+    let _ = writeln!(out, "  Legacy approach reactions:");
+    reaction_line(&mut out, "Flattery", &profile.legacy_reactions.flattery);
+    reaction_line(&mut out, "Flirting", &profile.legacy_reactions.flirting);
+    reaction_line(&mut out, "Threats", &profile.legacy_reactions.threats);
+    reaction_line(&mut out, "Lies", &profile.legacy_reactions.lies);
+    reaction_line(&mut out, "Bribes", &profile.legacy_reactions.bribes);
     let _ = writeln!(
         out,
         "\nPREPARED ANSWERS (fallback when no text model is on):"
