@@ -16,8 +16,8 @@ use crate::speech_capture::{
     Capture, Command, Environment, Interruption, MicrophoneFault, Notice, Phase,
 };
 use crate::speech_clip::{
-    BINDING_HEADER, CLIP_CONTENT_TYPE, MAXIMUM_RECORDING, OUTCOME_HEADER, SAMPLE_RATE, SPEECH_PATH,
-    STATUS_PATH, SpeechOutcome, encode_wav,
+    BINDING_HEADER, CANCEL_PATH, CLIP_CONTENT_TYPE, MAXIMUM_RECORDING, OUTCOME_HEADER, SAMPLE_RATE,
+    SPEECH_PATH, STATUS_PATH, SpeechOutcome, UPLOAD_ID_HEADER, encode_wav,
 };
 use gloo_timers::callback::{Interval, Timeout};
 use js_sys::{ArrayBuffer, Uint8Array};
@@ -63,12 +63,66 @@ enum Held {
 struct UploadCancellation {
     task: AbortHandle,
     fetch: AbortController,
+    identity: UploadIdentity,
 }
 
 impl UploadCancellation {
     fn abort(self) {
+        self.abort_with(|request| {
+            spawn_local(async move {
+                // The browser fetch is already aborted; notifying the server is best effort if
+                // the page is closing or the connection is gone.
+                let _sent = send_cancel(request).await;
+            });
+        });
+    }
+
+    fn abort_with(self, send_cancel: impl FnOnce(CancelRequest)) {
         self.fetch.abort();
         self.task.abort();
+        send_cancel(self.identity.cancel_request());
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UploadIdentity {
+    credential: String,
+    upload_id: String,
+}
+
+impl UploadIdentity {
+    fn speech_headers(&self) -> Result<Headers, JsValue> {
+        let headers = Headers::new()?;
+        headers.set("content-type", CLIP_CONTENT_TYPE)?;
+        headers.set(BINDING_HEADER, &self.credential)?;
+        headers.set(UPLOAD_ID_HEADER, &self.upload_id)?;
+        Ok(headers)
+    }
+
+    fn cancel_request(&self) -> CancelRequest {
+        CancelRequest {
+            path: CANCEL_PATH,
+            method: "POST",
+            credential: self.credential.clone(),
+            upload_id: self.upload_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CancelRequest {
+    path: &'static str,
+    method: &'static str,
+    credential: String,
+    upload_id: String,
+}
+
+impl CancelRequest {
+    fn headers(&self) -> Result<Headers, JsValue> {
+        let headers = Headers::new()?;
+        headers.set(BINDING_HEADER, &self.credential)?;
+        headers.set(UPLOAD_ID_HEADER, &self.upload_id)?;
+        Ok(headers)
     }
 }
 
@@ -277,7 +331,7 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let status = node(&document, &root, "p", "talk-status", "")?;
     status.set_attribute("role", "status")?;
     let actions = node(&document, &root, "div", "talk-actions", "")?;
-    let send_button = button(client, &actions, "Send", send)?;
+    let send_button = button(client, &actions, "Say it", send)?;
     send_button.set_attribute("data-talk", "send")?;
     let clear_button = button(client, &actions, "Clear", clear)?;
     clear_button.set_attribute("data-talk", "clear")?;
@@ -838,14 +892,27 @@ fn recorded(client: &Rc<RefCell<Client>>) {
             return;
         }
     };
+    let upload_id = match new_upload_id() {
+        Ok(upload_id) => upload_id,
+        Err(_) => {
+            client.borrow_mut().dialogue.talk.capture.upload_failed();
+            show(client);
+            return;
+        }
+    };
+    let identity = UploadIdentity {
+        credential: client.borrow().credential.clone(),
+        upload_id,
+    };
     let (task, registration) = AbortHandle::new_pair();
     client.borrow_mut().dialogue.talk.upload = Some(UploadCancellation {
         task,
         fetch: controller.clone(),
+        identity: identity.clone(),
     });
     let weak = Rc::downgrade(client);
     spawn_local(async move {
-        let _finished = Abortable::new(hear(weak, blob, controller), registration).await;
+        let _finished = Abortable::new(hear(weak, blob, controller, identity), registration).await;
     });
 }
 
@@ -873,7 +940,7 @@ async fn decode(blob: &Blob) -> Result<Vec<f32>, JsValue> {
     Ok(samples)
 }
 
-async fn hear(weak: WeakClient, blob: Blob, controller: AbortController) {
+async fn hear(weak: WeakClient, blob: Blob, controller: AbortController, identity: UploadIdentity) {
     let decoded = decode(&blob).await;
     drop(blob);
     let Some(client) = weak.upgrade() else {
@@ -902,8 +969,7 @@ async fn hear(weak: WeakClient, blob: Blob, controller: AbortController) {
         show(&client);
         return;
     }
-    let credential = client.borrow().credential.clone();
-    let answer = upload(&credential, &clip, &controller).await;
+    let answer = upload(&identity, &clip, &controller).await;
     drop(clip);
     let Some(client) = weak.upgrade() else {
         return;
@@ -947,16 +1013,14 @@ fn focus_editor(client: &Rc<RefCell<Client>>) {
 
 /// Sends the clip and returns the server's outcome label and the transcript text.
 async fn upload(
-    credential: &str,
+    identity: &UploadIdentity,
     clip: &[u8],
     controller: &AbortController,
 ) -> Result<(SpeechOutcome, String), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
     let aborting = controller.clone();
     let _deadline = Timeout::new(UPLOAD_DEADLINE_MILLISECONDS, move || aborting.abort());
-    let headers = Headers::new()?;
-    headers.set("content-type", CLIP_CONTENT_TYPE)?;
-    headers.set(BINDING_HEADER, credential)?;
+    let headers = identity.speech_headers()?;
     let options = RequestInit::new();
     options.set_method("POST");
     options.set_mode(RequestMode::SameOrigin);
@@ -979,6 +1043,34 @@ async fn upload(
         .as_string()
         .unwrap_or_default();
     Ok((outcome, words))
+}
+
+/// Notifies the server independently of the aborted speech request.
+async fn send_cancel(request: CancelRequest) -> Result<(), JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
+    let headers = request.headers()?;
+    let options = RequestInit::new();
+    options.set_method(request.method);
+    options.set_mode(RequestMode::SameOrigin);
+    options.set_credentials(RequestCredentials::Omit);
+    options.set_cache(RequestCache::NoStore);
+    options.set_headers(&headers);
+    let _response = JsFuture::from(window.fetch_with_str_and_init(request.path, &options)).await?;
+    Ok(())
+}
+
+fn new_upload_id() -> Result<String, JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
+    let crypto = window.crypto()?;
+    let mut bytes = [0_u8; 16];
+    crypto.get_random_values_with_u8_array(&mut bytes)?;
+    let digits = b"0123456789abcdef";
+    let mut upload_id = String::with_capacity(32);
+    for byte in bytes {
+        upload_id.push(char::from(digits[usize::from(byte >> 4)]));
+        upload_id.push(char::from(digits[usize::from(byte & 0x0f)]));
+    }
+    Ok(upload_id)
 }
 
 /// Brings the control's text, state and buttons in line with the machine.
@@ -1098,6 +1190,8 @@ fn clear(client: Rc<RefCell<Client>>) {
 #[cfg(test)]
 mod tests {
     use super::scope_matches;
+    #[cfg(target_arch = "wasm32")]
+    use super::{CancelRequest, UploadIdentity};
     use crate::gameplay_browser::rpc;
 
     fn revision(sequence: u64) -> rpc::SessionRevision {
@@ -1115,5 +1209,189 @@ mod tests {
         assert!(!scope_matches(Some(origin), Some(revision(5))));
         assert!(!scope_matches(Some(origin), None));
         assert!(!scope_matches(None, Some(origin)));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn upload_ids_are_fresh_128_bit_lowercase_hex_values() {
+        let first = super::new_upload_id().expect("browser crypto should provide an upload id");
+        let second = super::new_upload_id().expect("browser crypto should provide an upload id");
+
+        assert_eq!(first.len(), 32);
+        assert_eq!(second.len(), 32);
+        assert!(first.bytes().all(is_lowercase_hex));
+        assert!(second.bytes().all(is_lowercase_hex));
+        assert_ne!(first, second);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn cancelling_observed_upload_aborts_it_and_posts_one_matching_cancel() {
+        use super::{SPEECH_PATH, UploadCancellation};
+        use web_sys::AbortController;
+
+        let identity = UploadIdentity {
+            credential: "member-binding".to_owned(),
+            upload_id: "0123456789abcdef0123456789abcdef".to_owned(),
+        };
+        let controller = AbortController::new().expect("browser should support abort controllers");
+        let signal = controller.signal();
+        let mut endpoint = FakeSpeechEndpoint::default();
+        endpoint.observe_speech_post(
+            SPEECH_PATH,
+            "POST",
+            &identity
+                .speech_headers()
+                .expect("speech headers should be valid"),
+            signal.clone(),
+        );
+        let (task, _registration) = futures::future::AbortHandle::new_pair();
+
+        UploadCancellation {
+            task,
+            fetch: controller,
+            identity: identity.clone(),
+        }
+        .abort_with(|request| endpoint.receive_cancel_post(request));
+
+        assert!(signal.aborted());
+        assert_eq!(endpoint.cancel_posts.len(), 1);
+        assert_eq!(endpoint.cancel_posts[0], identity.cancel_request());
+        assert!(!endpoint.uploads[&identity.upload_id].active);
+        assert!(endpoint.uploads[&identity.upload_id].signal.aborted());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn stale_completed_upload_cancel_does_not_cancel_a_later_upload() {
+        use super::{CANCEL_PATH, SPEECH_PATH};
+        use web_sys::AbortController;
+
+        let completed = UploadIdentity {
+            credential: "member-binding".to_owned(),
+            upload_id: "0123456789abcdef0123456789abcdef".to_owned(),
+        };
+        let completed_controller =
+            AbortController::new().expect("browser should support abort controllers");
+        let later = UploadIdentity {
+            credential: "member-binding".to_owned(),
+            upload_id: "fedcba9876543210fedcba9876543210".to_owned(),
+        };
+        let later_controller =
+            AbortController::new().expect("browser should support abort controllers");
+        let later_signal = later_controller.signal();
+        let mut endpoint = FakeSpeechEndpoint::default();
+        endpoint.observe_speech_post(
+            SPEECH_PATH,
+            "POST",
+            &completed
+                .speech_headers()
+                .expect("speech headers should be valid"),
+            completed_controller.signal(),
+        );
+        endpoint.complete(&completed.upload_id);
+        endpoint.observe_speech_post(
+            SPEECH_PATH,
+            "POST",
+            &later
+                .speech_headers()
+                .expect("speech headers should be valid"),
+            later_signal.clone(),
+        );
+
+        endpoint.receive_cancel_post(completed.cancel_request());
+
+        assert_eq!(endpoint.cancel_posts.len(), 1);
+        assert_eq!(endpoint.cancel_posts[0].path, CANCEL_PATH);
+        assert_eq!(endpoint.cancel_posts[0].method, "POST");
+        assert!(endpoint.uploads[&later.upload_id].active);
+        assert!(!later_signal.aborted());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn is_lowercase_hex(byte: u8) -> bool {
+        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[derive(Default)]
+    struct FakeSpeechEndpoint {
+        uploads: std::collections::HashMap<String, FakeUpload>,
+        cancel_posts: Vec<CancelRequest>,
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    struct FakeUpload {
+        credential: String,
+        signal: web_sys::AbortSignal,
+        active: bool,
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    impl FakeSpeechEndpoint {
+        fn observe_speech_post(
+            &mut self,
+            path: &str,
+            method: &str,
+            headers: &web_sys::Headers,
+            signal: web_sys::AbortSignal,
+        ) {
+            assert_eq!(path, super::SPEECH_PATH);
+            assert_eq!(method, "POST");
+            let credential = headers
+                .get(super::BINDING_HEADER)
+                .expect("binding header should be readable")
+                .expect("speech request should carry its binding");
+            let upload_id = headers
+                .get(super::UPLOAD_ID_HEADER)
+                .expect("upload id header should be readable")
+                .expect("speech request should carry its upload id");
+            assert_eq!(
+                headers
+                    .get("content-type")
+                    .expect("content type should be readable")
+                    .as_deref(),
+                Some(super::CLIP_CONTENT_TYPE)
+            );
+            self.uploads.insert(
+                upload_id,
+                FakeUpload {
+                    credential,
+                    signal,
+                    active: true,
+                },
+            );
+        }
+
+        fn receive_cancel_post(&mut self, request: CancelRequest) {
+            assert_eq!(request.path, super::CANCEL_PATH);
+            assert_eq!(request.method, "POST");
+            let headers = request
+                .headers()
+                .expect("cancel request headers should be valid");
+            let credential = headers
+                .get(super::BINDING_HEADER)
+                .expect("binding header should be readable")
+                .expect("cancel request should carry its binding");
+            let upload_id = headers
+                .get(super::UPLOAD_ID_HEADER)
+                .expect("upload id header should be readable")
+                .expect("cancel request should carry its upload id");
+            assert_eq!(credential, request.credential);
+            assert_eq!(upload_id, request.upload_id);
+            if let Some(upload) = self.uploads.get_mut(&upload_id)
+                && upload.credential == credential
+                && upload.signal.aborted()
+            {
+                upload.active = false;
+            }
+            self.cancel_posts.push(request);
+        }
+
+        fn complete(&mut self, upload_id: &str) {
+            if let Some(upload) = self.uploads.get_mut(upload_id) {
+                upload.active = false;
+            }
+        }
     }
 }
