@@ -342,6 +342,8 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
         live_plate: String::new(),
         plate_layout: None,
         plate_state: rpc::PlateState::Unspecified as i32,
+        scene_video_state: rpc::HomeVideoState::None as i32,
+        scene_video_path: String::new(),
     })
 }
 pub(super) fn pure_target(

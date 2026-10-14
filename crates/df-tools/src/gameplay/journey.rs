@@ -1112,6 +1112,8 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
         live_plate: String::new(),
         plate_layout: None,
         plate_state: rpc::PlateState::Unspecified as i32,
+        scene_video_state: rpc::HomeVideoState::None as i32,
+        scene_video_path: String::new(),
     }
 }
 pub(super) fn accepted(
