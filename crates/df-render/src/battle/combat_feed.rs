@@ -152,14 +152,19 @@ fn active_was_presented(snapshot: &CombatSnapshot) -> bool {
     let Some(active) = snapshot.active.as_deref() else {
         return false;
     };
-    sequence_was_presented(snapshot.latest_sequence, snapshot.presented_sequence)
-        && snapshot
-            .members
-            .iter()
-            .find(|member| member.id == active)
-            .is_some_and(|member| {
-                sequence_was_presented(member.position_sequence, snapshot.presented_sequence)
-            })
+    if snapshot.latest_sequence == 0 || snapshot.latest_sequence > snapshot.presented_sequence {
+        return false;
+    }
+    let Some(member) = snapshot.members.iter().find(|member| member.id == active) else {
+        return false;
+    };
+    if snapshot.latest_sequence < snapshot.presented_sequence {
+        return sequence_was_presented(member.position_sequence, snapshot.presented_sequence);
+    }
+    if let Some(outcome) = snapshot.outcomes.last() {
+        return outcome.actor == active;
+    }
+    member.position_sequence != 0 && member.position_sequence < snapshot.presented_sequence
 }
 
 impl CombatFeed {
@@ -214,7 +219,7 @@ impl CombatFeed {
 
         if !self.started || roster_changed {
             // A new fight (or a changed roster): set the scene without replaying anything.
-            stage.set_tokens(tokens);
+            stage.set_tokens_at_sequence(tokens, snapshot.presented_sequence);
             stage.establish();
             self.started = true;
             self.roster = roster;
@@ -292,7 +297,7 @@ impl CombatFeed {
                     .map(|(member, _)| TokenId::new(member.id.clone())),
             );
             stage.hold_hit_points(&targets);
-            stage.set_tokens(tokens);
+            stage.set_tokens_at_sequence(tokens, snapshot.presented_sequence);
             if self.mode == FeedMode::StageOutcomes {
                 for (outcome, round) in fresh.iter().zip(beat_rounds.iter().skip(fresh_start)) {
                     if let Some(label) = outcome.attack_label() {
@@ -457,6 +462,83 @@ mod tests {
 
     fn stage() -> Stage {
         Stage::new(load_embedded("salt-quay").unwrap().unwrap())
+    }
+
+    #[test]
+    fn an_equal_presented_sequence_accepts_the_server_next_actor() {
+        let mut stage = stage();
+        let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+        feed.apply(&mut stage, &snapshot(Vec::new(), [12, 12, 12]))
+            .unwrap();
+
+        let mut completed = snapshot(vec![strike(true, 1, 11, false)], [12, 12, 11]);
+        completed.latest_sequence = 6;
+        completed.presented_sequence = 6;
+        completed.active = Some("b".to_owned());
+        completed.members[1].position_sequence = 6;
+        feed.apply(&mut stage, &completed).unwrap();
+
+        assert_eq!(
+            stage.hud().active.as_ref().map(|active| active.0.as_str()),
+            Some("b"),
+            "the view at the presented sequence already names the next actor"
+        );
+    }
+
+    #[test]
+    fn a_stale_view_queued_during_a_strike_cannot_restore_the_old_hit_points() {
+        use crate::battle::{AttackResult, Beat, TokenId};
+        use std::time::Duration;
+
+        let mut stage = stage();
+        let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+        feed.apply(&mut stage, &snapshot(Vec::new(), [12, 12, 11]))
+            .unwrap();
+        stage
+            .stage(Beat::Strike {
+                attacker: TokenId::new("a"),
+                target: TokenId::new("e"),
+                result: AttackResult::Hit {
+                    damage: 9,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(2),
+            })
+            .unwrap();
+
+        let stale = snapshot(Vec::new(), [12, 12, 11]);
+        stage.protect_hit_points_through(1);
+        feed.apply(&mut stage, &stale).unwrap();
+        let mut samples = vec![
+            stage
+                .frame()
+                .figures
+                .iter()
+                .find(|figure| figure.id.0 == "e")
+                .and_then(|figure| figure.hit_points)
+                .unwrap()
+                .current,
+        ];
+        for _ in 0..150 {
+            stage.update(Duration::from_millis(100));
+            samples.push(
+                stage
+                    .frame()
+                    .figures
+                    .iter()
+                    .find(|figure| figure.id.0 == "e")
+                    .and_then(|figure| figure.hit_points)
+                    .unwrap()
+                    .current,
+            );
+            if !stage.is_busy() {
+                break;
+            }
+        }
+
+        assert!(samples.contains(&2), "the strike must land: {samples:?}");
+        assert_eq!(samples.last(), Some(&2), "hit points rewound: {samples:?}");
     }
 
     fn strike(hit: bool, damage: u32, after: u32, downed: bool) -> Outcome {

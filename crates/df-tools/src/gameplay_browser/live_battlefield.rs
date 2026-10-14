@@ -33,6 +33,7 @@ const DEFAULT_PREVIEW_ENEMIES: usize = 1;
 /// The most figures per side the preview stands without a layout to seat them.
 const PREVIEW_MAX_PER_SIDE: usize = 6;
 const BATTLEFIELD_BEAT_LOG_CAP: usize = 32;
+const CARD_LOG_CAP: usize = 40;
 
 thread_local! {
     static PREVIEW: RefCell<Option<BattleStage>> = const { RefCell::new(None) };
@@ -1385,6 +1386,8 @@ struct Live {
     active_strike: Option<(u64, String, String)>,
     /// Nominal stages and budgets for the recent battlefield cues, oldest first.
     battlefield_beat_log: VecDeque<String>,
+    card_values: std::collections::HashMap<String, u32>,
+    card_log: VecDeque<String>,
 }
 
 thread_local! {
@@ -1412,6 +1415,8 @@ thread_local! {
         beat_hp: Vec::new(),
         active_strike: None,
         battlefield_beat_log: VecDeque::new(),
+        card_values: std::collections::HashMap::new(),
+        card_log: VecDeque::new(),
     });
 }
 
@@ -1830,7 +1835,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
             &view.scene.location_id,
         );
     } else {
-        sync();
+        sync("view");
     }
 }
 
@@ -1997,13 +2002,13 @@ fn start_mount(
             available
         });
         if keep {
-            sync();
+            sync("view");
         }
     });
 }
 
 /// Applies the latest snapshot; notices a stage that went unavailable (device lost).
-fn sync() {
+fn sync(writer: &str) {
     LIVE.with(|live| {
         let mut guard = live.borrow_mut();
         let live = &mut *guard;
@@ -2099,8 +2104,9 @@ fn sync() {
             shown.round = 1;
             shown.active = shown.initiative.first().map(|entry| entry.id.clone());
         }
-        let fits = stage
+        let applied = stage
             .with_stage(|stage| {
+                stage.observe_presented_sequence(live.presented_seq);
                 stage.hold_active(battle::hold_server_turn(
                     live.pending_cues > 0,
                     live.latest_seq,
@@ -2129,15 +2135,29 @@ fn sync() {
                     live.shown_prompt = prompt;
                 }
                 stage.set_tactical_highlights(live.reachable.clone(), live.targets.clone());
-                feed.apply(stage, &shown)
+                let report = feed.apply(stage, &shown)?;
+                let cards = stage
+                    .frame()
+                    .figures
+                    .iter()
+                    .filter_map(|figure| {
+                        figure
+                            .hit_points
+                            .map(|hit_points| (figure.name.clone(), hit_points.current))
+                    })
+                    .collect::<Vec<_>>();
+                Some((report, cards))
             })
             .flatten();
-        if live.begun_live && fits.is_some() && !shown.initiative.is_empty() {
+        if let Some((_, cards)) = &applied {
+            record_card_values(live, cards.iter().cloned(), writer);
+        }
+        if live.begun_live && applied.is_some() && !shown.initiative.is_empty() {
             live.initiative_pending = true;
             live.initiative_seen = false;
         }
         live.begun_live = false;
-        if fits.is_none() {
+        if applied.is_none() {
             // No room on the grid for this roster: leave the flat view.
             live.phase = Phase::Unavailable;
             live.stage = None;
@@ -2174,6 +2194,13 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
             "impact" => live.active_strike = None,
             "rolling" | "turn" | "skipped" => live.active_strike = None,
             _ => {}
+        }
+        if state == "impact"
+            && roll.sequence != 0
+            && let Some(stage) = &live.stage
+        {
+            let _protected =
+                stage.with_stage(|stage| stage.protect_hit_points_through(roll.sequence));
         }
         if matches!(state, "rolling" | "turn" | "skipped") {
             live.held_moves.retain(|(name, ..)| *name != roll.attacker);
@@ -2352,7 +2379,7 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     }
 
     if drained {
-        sync();
+        sync("director");
     }
 }
 
@@ -2367,7 +2394,7 @@ pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
         matches!(live.phase, Phase::Active) && live.begun_live && !splat_streaming(&live)
     });
     if stage_initiative {
-        sync();
+        sync("director");
     }
     LIVE.with(|live| {
         let mut live = live.borrow_mut();
@@ -2456,7 +2483,7 @@ fn splat_streaming(live: &Live) -> bool {
 
 /// The strike result for `sequence` landed on screen: the feed may show its health change.
 /// A change re-syncs once (at most once per beat), so cards land with the strike.
-pub(super) fn set_presented(sequence: u64) {
+pub(super) fn set_presented(sequence: u64, writer: &str) {
     let changed = LIVE.with(|live| {
         let mut live = live.borrow_mut();
         let presented = battle::advance_presented_sequence(live.presented_seq, sequence);
@@ -2467,7 +2494,7 @@ pub(super) fn set_presented(sequence: u64) {
         true
     });
     if changed {
-        sync();
+        sync(writer);
     }
 }
 
@@ -2502,7 +2529,7 @@ pub(super) fn jump_to_latest() {
             let _cut = stage.with_stage(|stage| stage.skip_to_idle());
         }
     });
-    sync();
+    sync("skip");
 }
 
 /// Whether the battlefield is still showing beats (or its effects): the next blow's dice wait.
@@ -2553,7 +2580,7 @@ pub(super) fn drop_pending() {
         live.held_moves.clear();
         live.pending_cues = 0;
     });
-    sync();
+    sync("director");
 }
 
 /// How long a hold or an expectation may outlive the cues that should release it.
@@ -2604,7 +2631,61 @@ mod tests {
 /// Applies the latest accepted snapshot again: called when a turn's beats are over so the turn
 /// label and marker follow the server's active combatant.
 pub(super) fn resync() {
-    sync();
+    sync("director");
+}
+
+fn record_card_values(
+    live: &mut Live,
+    cards: impl IntoIterator<Item = (String, u32)>,
+    writer: &str,
+) {
+    for (name, value) in cards {
+        if live.card_values.get(&name) == Some(&value) {
+            continue;
+        }
+        let sequence = live
+            .beat_hp
+            .iter()
+            .filter(|(sequence, target, ..)| target == &name && *sequence <= live.presented_seq)
+            .map(|(sequence, ..)| *sequence)
+            .max()
+            .unwrap_or(0);
+        if live.card_log.len() >= CARD_LOG_CAP {
+            live.card_log.pop_front();
+        }
+        live.card_log.push_back(format!(
+            "{name}:{value}:{sequence}:{writer}:{:.0}",
+            now_ms()
+        ));
+        live.card_values.insert(name, value);
+    }
+}
+
+/// Records and returns the most recent actual hit-point card writes.
+pub(super) fn card_log() -> String {
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        let cards = live
+            .stage
+            .as_ref()
+            .and_then(|stage| {
+                stage.with_stage(|stage| {
+                    stage
+                        .frame()
+                        .figures
+                        .iter()
+                        .filter_map(|figure| {
+                            figure
+                                .hit_points
+                                .map(|hit_points| (figure.name.clone(), hit_points.current))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        record_card_values(&mut live, cards, "stage");
+        live.card_log.iter().cloned().collect::<Vec<_>>().join(",")
+    })
 }
 
 /// The fight's exit has begun (its finishing blow has been shown out): the battlefield fades out

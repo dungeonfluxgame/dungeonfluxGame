@@ -445,7 +445,7 @@ pub struct Stage {
     rig: CameraRig,
     playing: Option<Playback>,
     queue: VecDeque<QueuedBeat>,
-    pending_tokens: Option<Vec<Token>>,
+    pending_tokens: Option<(Vec<Token>, u64)>,
     highlight: Option<Highlight>,
     tactical_highlights: Vec<Highlight>,
     speech: Option<Speech>,
@@ -454,6 +454,10 @@ pub struct Stage {
     attack_labels: Vec<(TokenId, String, String)>,
     hud: HudState,
     server_round: u32,
+    /// The newest outcome sequence whose hit points have reached the cards.
+    presented_sequence: u64,
+    /// The newest strike scheduled to write an exact hit-point result at impact.
+    protected_sequence: u64,
     /// The server's active combatant, which the label and marker show once no beat is playing.
     server_active: Option<TokenId>,
     /// While set, the label and marker follow the beats being played, not the server's active
@@ -529,6 +533,8 @@ impl Stage {
             active_held: false,
             hud: HudState::default(),
             server_round: 0,
+            presented_sequence: 0,
+            protected_sequence: 0,
             floats: Vec::new(),
             flash: None,
             clock_s: 0.0,
@@ -954,8 +960,18 @@ impl Stage {
     }
 
     pub fn set_tokens(&mut self, tokens: Vec<Token>) {
+        self.set_tokens_at_sequence(tokens, self.presented_sequence);
+    }
+
+    /// Applies combatant data from the view at this presented sequence. Older queued views may
+    /// still update positions, but cannot replace hit points already shown for a later outcome.
+    pub fn set_tokens_at_sequence(&mut self, tokens: Vec<Token>, sequence: u64) {
+        let stale_sequence = sequence < self.presented_sequence.max(self.protected_sequence);
+        if !stale_sequence {
+            self.presented_sequence = sequence;
+        }
         if self.is_busy() {
-            self.pending_tokens = Some(tokens);
+            self.pending_tokens = Some((tokens, sequence));
             return;
         }
         self.pending_tokens = None;
@@ -965,7 +981,15 @@ impl Stage {
         // Figures the server moved since the last view: they walk there, they are not teleported.
         let mut moves: Vec<(TokenId, Cell, Cell)> = Vec::new();
         let had_figures = !self.tokens.is_empty();
-        for incoming in tokens {
+        for mut incoming in tokens {
+            if stale_sequence
+                && let Some(runtime) = self
+                    .tokens
+                    .iter()
+                    .find(|runtime| runtime.token.id == incoming.id)
+            {
+                incoming.hit_points = runtime.shown_hp;
+            }
             let centre = self.grid.cell_centre(incoming.cell);
             match self
                 .tokens
@@ -983,13 +1007,15 @@ impl Stage {
                             runtime.position = centre;
                         }
                     }
-                    if runtime.hp_hold_s.is_some() {
-                        runtime.pending_hp = incoming.hit_points;
-                        runtime.pending_status = Some(StatusSet::of(&incoming.statuses));
-                    } else {
-                        runtime.show_hp(incoming.hit_points);
-                        runtime.downed = incoming.hit_points.is_some_and(|hp| hp.current == 0);
-                        runtime.server_status = StatusSet::of(&incoming.statuses);
+                    if !stale_sequence {
+                        if runtime.hp_hold_s.is_some() {
+                            runtime.pending_hp = incoming.hit_points;
+                            runtime.pending_status = Some(StatusSet::of(&incoming.statuses));
+                        } else {
+                            runtime.show_hp(incoming.hit_points);
+                            runtime.downed = incoming.hit_points.is_some_and(|hp| hp.current == 0);
+                            runtime.server_status = StatusSet::of(&incoming.statuses);
+                        }
                     }
                     runtime.token = incoming;
                 }
@@ -1033,6 +1059,16 @@ impl Stage {
                 self.tokens[index].hp_hold_s = Some(HP_HOLD_SECONDS);
             }
         }
+    }
+
+    /// Advances the card projection's sequence when a strike lands on screen.
+    pub fn observe_presented_sequence(&mut self, sequence: u64) {
+        self.presented_sequence = self.presented_sequence.max(sequence);
+    }
+
+    /// Keeps an older queued view from overwriting hit points before this strike lands.
+    pub fn protect_hit_points_through(&mut self, sequence: u64) {
+        self.protected_sequence = self.protected_sequence.max(sequence);
     }
 
     /// Cuts every playing and queued beat and lands on the newest token state at once:
@@ -1335,9 +1371,9 @@ impl Stage {
             }
         }
         if !self.is_busy()
-            && let Some(tokens) = self.pending_tokens.take()
+            && let Some((tokens, sequence)) = self.pending_tokens.take()
         {
-            self.set_tokens(tokens);
+            self.set_tokens_at_sequence(tokens, sequence);
         }
         let idle = !self.is_busy();
         if idle && !self.was_idle {

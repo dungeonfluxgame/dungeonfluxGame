@@ -1042,6 +1042,10 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
 }
 
 #[cfg(test)]
+#[path = "stage_director.rs"]
+mod s08_stage_director;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
@@ -1449,6 +1453,398 @@ mod tests {
                 }),
             "the next roll starts within 1.5 seconds of the prior readable result"
         );
+    }
+
+    #[test]
+    fn live_round_card_values_follow_each_presented_blow_heal_and_next_heading() {
+        use super::s08_stage_director::{Command, StageDirector, StageState, ViewDiff};
+        use df_render::battle::{
+            AttackResult, AttackStyle, Beat, CombatFeed, CombatSnapshot, FeedMode, Member, Outcome,
+            Side, Stage, TokenId, hit_points_at_sequence, load_embedded,
+        };
+        use std::time::Duration;
+
+        #[derive(Clone, Copy)]
+        struct Blow {
+            sequence: u64,
+            actor: &'static str,
+            target: &'static str,
+            damage: u32,
+            after: u32,
+            downed: bool,
+        }
+
+        fn member(id: &str, side: Side, hp: u32) -> Member {
+            Member {
+                id: id.to_owned(),
+                name: id.to_owned(),
+                side,
+                hit_points: hp,
+                maximum_hit_points: if id.starts_with("Bandit") { 11 } else { 13 },
+                height_m: 1.5,
+                figure: None,
+                portrait: None,
+                attack: AttackStyle::Melee,
+                voice: None,
+                cell: None,
+                position_sequence: 0,
+                statuses: Vec::new(),
+            }
+        }
+
+        fn outcome(blow: Blow) -> Outcome {
+            Outcome {
+                actor: blow.actor.to_owned(),
+                target: blow.target.to_owned(),
+                hit: true,
+                critical: false,
+                damage: blow.damage,
+                target_hit_points_after: blow.after,
+                downed: blow.downed,
+                weapon: "shortsword".to_owned(),
+                grazed: false,
+                damage_type: "piercing".to_owned(),
+            }
+        }
+
+        fn snapshot(cursor: u64, healed: bool, outcomes: &[Outcome]) -> CombatSnapshot {
+            let bandit_changes = [
+                df_render::battle::HitPointChange {
+                    sequence: 1,
+                    before: 11,
+                    after: 2,
+                },
+                df_render::battle::HitPointChange {
+                    sequence: 2,
+                    before: 2,
+                    after: 0,
+                },
+            ];
+            let brakka_changes = [df_render::battle::HitPointChange {
+                sequence: 3,
+                before: 13,
+                after: 4,
+            }];
+            let sigrun_changes = [df_render::battle::HitPointChange {
+                sequence: 4,
+                before: 12,
+                after: 10,
+            }];
+            let mut members = vec![
+                member("Brakka", Side::Hero, if healed { 8 } else { 4 }),
+                member("Sigrun", Side::Hero, 10),
+                member("Bandit 1", Side::Enemy, 0),
+                member("Bandit 2", Side::Enemy, 11),
+                member("Bandit 3", Side::Enemy, 11),
+            ];
+            members[0].hit_points = if healed && cursor >= 4 {
+                8
+            } else {
+                hit_points_at_sequence(members[0].hit_points, cursor, &brakka_changes)
+            };
+            members[2].hit_points = hit_points_at_sequence(0, cursor, &bandit_changes);
+            members[1].hit_points =
+                hit_points_at_sequence(members[1].hit_points, cursor, &sigrun_changes);
+            CombatSnapshot {
+                members,
+                active: Some("Brakka".to_owned()),
+                round: 1,
+                latest_sequence: 4,
+                presented_sequence: cursor,
+                outcomes: outcomes.to_vec(),
+                initiative: Vec::new(),
+                begun_live: false,
+            }
+        }
+
+        fn hp(stage: &Stage, name: &str) -> u32 {
+            stage
+                .frame()
+                .figures
+                .iter()
+                .find(|figure| figure.name == name)
+                .and_then(|figure| figure.hit_points)
+                .unwrap_or_else(|| panic!("missing health card for {name}"))
+                .current
+        }
+
+        fn apply_commands(
+            commands: Vec<Command<Blow>>,
+            stage: &mut Stage,
+            headings: &mut Vec<(u64, String)>,
+            now: u64,
+        ) {
+            for command in commands {
+                let Command::Enter {
+                    state,
+                    detail: Some(blow),
+                    ..
+                } = command
+                else {
+                    continue;
+                };
+                match state {
+                    StageState::Rolling => {
+                        let actor = TokenId::new(blow.actor);
+                        stage.hold_active(true);
+                        stage.show_turn_now(Some(actor));
+                        headings.push((now, blow.actor.to_owned()));
+                    }
+                    StageState::Impact => {
+                        stage.protect_hit_points_through(blow.sequence);
+                        stage
+                            .stage(Beat::Strike {
+                                attacker: TokenId::new(blow.actor),
+                                target: TokenId::new(blow.target),
+                                result: AttackResult::Hit {
+                                    damage: blow.damage,
+                                    critical: false,
+                                    downed: blow.downed,
+                                },
+                                target_hit_points_after: Some(blow.after),
+                            })
+                            .unwrap();
+                    }
+                    StageState::Turn => {
+                        stage.hold_active(false);
+                        stage.show_turn_now(Some(TokenId::new(blow.actor)));
+                        headings.push((now, blow.actor.to_owned()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        const TICK: Duration = Duration::from_millis(100);
+        let blows = [
+            Blow {
+                sequence: 1,
+                actor: "Brakka",
+                target: "Bandit 1",
+                damage: 9,
+                after: 2,
+                downed: false,
+            },
+            Blow {
+                sequence: 2,
+                actor: "Sigrun",
+                target: "Bandit 1",
+                damage: 2,
+                after: 0,
+                downed: true,
+            },
+            Blow {
+                sequence: 3,
+                actor: "Bandit 2",
+                target: "Brakka",
+                damage: 9,
+                after: 4,
+                downed: false,
+            },
+            Blow {
+                sequence: 4,
+                actor: "Bandit 3",
+                target: "Sigrun",
+                damage: 2,
+                after: 10,
+                downed: false,
+            },
+        ];
+        let outcomes: Vec<Outcome> = blows.iter().copied().map(outcome).collect();
+        let mut stage = Stage::new(load_embedded("salt-quay").unwrap().unwrap());
+        let mut feed = CombatFeed::new(FeedMode::HoldForCues);
+        feed.apply(
+            &mut stage,
+            &CombatSnapshot {
+                members: vec![
+                    member("Brakka", Side::Hero, 13),
+                    member("Sigrun", Side::Hero, 12),
+                    member("Bandit 1", Side::Enemy, 11),
+                    member("Bandit 2", Side::Enemy, 11),
+                    member("Bandit 3", Side::Enemy, 11),
+                ],
+                active: Some("Brakka".to_owned()),
+                round: 1,
+                ..CombatSnapshot::default()
+            },
+        )
+        .unwrap();
+        let mut director = StageDirector::new();
+        let mut headings = Vec::new();
+        for blow in blows {
+            let commands = director.on_view(
+                0,
+                ViewDiff {
+                    roll: Some(blow),
+                    impact: Some(blow),
+                    blow_only: true,
+                    sequence: blow.sequence,
+                    ..ViewDiff::default()
+                },
+            );
+            apply_commands(commands, &mut stage, &mut headings, 0);
+        }
+        let next_hero = Blow {
+            sequence: 0,
+            actor: "Brakka",
+            target: "Brakka",
+            damage: 0,
+            after: 4,
+            downed: false,
+        };
+        let commands = director.on_view(
+            0,
+            ViewDiff {
+                turn_changed: true,
+                turn: Some(next_hero),
+                ..ViewDiff::default()
+            },
+        );
+        apply_commands(commands, &mut stage, &mut headings, 0);
+
+        let mut cursor = director.presented_sequence();
+        feed.apply(&mut stage, &snapshot(cursor, false, &outcomes))
+            .unwrap();
+        let mut last_bandit = hp(&stage, "Bandit 1");
+        let mut last_brakka = hp(&stage, "Brakka");
+        let mut last_sigrun = hp(&stage, "Sigrun");
+        let mut bandit_changes = vec![(last_bandit, cursor, 0)];
+        let mut brakka_changes = vec![(last_brakka, cursor, 0)];
+        let mut sigrun_changes = vec![(last_sigrun, cursor, 0)];
+        let mut impact_times = std::collections::HashMap::new();
+        let mut now = 0_u64;
+        while now < 30_000
+            && !(director.is_idle()
+                && !stage.is_busy()
+                && headings.last().is_some_and(|(_, actor)| actor == "Brakka"))
+        {
+            feed.apply(&mut stage, &snapshot(cursor, false, &outcomes))
+                .unwrap();
+            director.set_battlefield_busy(stage.is_busy());
+            let commands = director.on_tick(now);
+            apply_commands(commands, &mut stage, &mut headings, now);
+            stage.update(TICK);
+            for impact in stage.take_impacts() {
+                let blow = blows
+                    .iter()
+                    .find(|blow| blow.actor == impact.attacker.0 && blow.target == impact.target.0)
+                    .unwrap();
+                director.observe_presented(blow.sequence);
+                stage.observe_presented_sequence(blow.sequence);
+                cursor = director.presented_sequence();
+                impact_times.insert(blow.sequence, now + 100);
+            }
+            feed.apply(&mut stage, &snapshot(cursor, false, &outcomes))
+                .unwrap();
+            let bandit = hp(&stage, "Bandit 1");
+            let brakka = hp(&stage, "Brakka");
+            assert_eq!(
+                bandit,
+                if cursor >= 2 {
+                    0
+                } else if cursor >= 1 {
+                    2
+                } else {
+                    11
+                },
+                "Bandit 1 at {now} ms, sequence {cursor}"
+            );
+            assert_eq!(
+                brakka,
+                if cursor >= 3 { 4 } else { 13 },
+                "Brakka at {now} ms, sequence {cursor}"
+            );
+            let sigrun = hp(&stage, "Sigrun");
+            assert_eq!(
+                sigrun,
+                if cursor >= 4 { 10 } else { 12 },
+                "Sigrun at {now} ms, sequence {cursor}"
+            );
+            assert_eq!(hp(&stage, "Bandit 2"), 11);
+            assert_eq!(hp(&stage, "Bandit 3"), 11);
+            if bandit != last_bandit {
+                assert!(bandit < last_bandit, "Bandit 1 health went backwards");
+                bandit_changes.push((bandit, cursor, now + 100));
+                last_bandit = bandit;
+            }
+            if brakka != last_brakka {
+                assert!(brakka < last_brakka, "Brakka health went backwards");
+                brakka_changes.push((brakka, cursor, now + 100));
+                last_brakka = brakka;
+            }
+            if sigrun != last_sigrun {
+                assert!(sigrun < last_sigrun, "Sigrun health went backwards");
+                sigrun_changes.push((sigrun, cursor, now + 100));
+                last_sigrun = sigrun;
+            }
+            now += 100;
+        }
+        assert!(
+            director.is_idle() && !stage.is_busy(),
+            "fight cues did not drain"
+        );
+        assert_eq!(
+            headings
+                .iter()
+                .map(|(_, actor)| actor.as_str())
+                .collect::<Vec<_>>(),
+            ["Brakka", "Sigrun", "Bandit 2", "Bandit 3", "Brakka"]
+        );
+        assert_eq!(
+            bandit_changes,
+            [
+                (11, 0, 0),
+                (2, 1, impact_times[&1]),
+                (0, 2, impact_times[&2])
+            ]
+        );
+        assert_eq!(brakka_changes, [(13, 0, 0), (4, 3, impact_times[&3])]);
+        assert_eq!(sigrun_changes, [(12, 0, 0), (10, 4, impact_times[&4])]);
+        let final_blow_at = impact_times[&4];
+        let next_hero_at = headings.last().unwrap().0;
+        assert!(
+            next_hero_at >= final_blow_at && next_hero_at - final_blow_at <= 1_500,
+            "next active hero heading at {next_hero_at} ms after blow at {final_blow_at} ms"
+        );
+
+        feed.apply(&mut stage, &snapshot(cursor, true, &outcomes))
+            .unwrap();
+        let mut healed_at = None;
+        for heal_tick in 0_u64..100 {
+            stage.update(TICK);
+            let brakka = stage
+                .frame()
+                .figures
+                .into_iter()
+                .find(|figure| figure.name == "Brakka")
+                .unwrap();
+            if brakka.hit_points.unwrap().current != last_brakka {
+                assert_eq!(brakka.hit_points.unwrap().current, 8);
+                assert!(
+                    brakka.heal_glow > 0.0,
+                    "the HP rise must land with the heal"
+                );
+                healed_at = Some(now + (heal_tick + 1) * 100);
+                last_brakka = 8;
+            }
+            assert_eq!(
+                brakka.hit_points.unwrap().current,
+                if healed_at.is_some() { 8 } else { 4 },
+                "Brakka's healing card at {} ms",
+                now + (heal_tick + 1) * 100
+            );
+            feed.apply(&mut stage, &snapshot(cursor, true, &outcomes))
+                .unwrap();
+            if healed_at.is_some() && !stage.is_busy() {
+                break;
+            }
+        }
+        assert!(
+            healed_at.is_some(),
+            "Second Wind never changed Brakka's card"
+        );
+        assert_eq!(last_brakka, 8);
+        assert_eq!(hp(&stage, "Bandit 1"), 0, "the kill remains on the card");
     }
 
     #[test]

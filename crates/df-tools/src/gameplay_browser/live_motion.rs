@@ -919,7 +919,13 @@ fn effective_presented(motion: &Motion) -> u64 {
 
 /// The battlefield's impact event confirms that the strike result is visible now.
 pub(super) fn strike_landed(sequence: u64) {
-    let _observed = with_motion(|motion| motion.conductor.observe_presented(sequence));
+    let presented = with_motion(|motion| {
+        motion.conductor.observe_presented(sequence);
+        motion.conductor.presented_sequence()
+    });
+    if let Some(presented) = presented {
+        super::live_battlefield::set_presented(presented, "impact");
+    }
     ensure_frame();
 }
 
@@ -1053,7 +1059,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     )) = with_motion(|motion| {
         let presented = effective_presented(motion);
         motion.conductor.observe_presented(presented);
-        super::live_battlefield::set_presented(presented);
+        super::live_battlefield::set_presented(presented, "director");
         let beat_log = motion
             .conductor
             .beat_log()
@@ -1089,6 +1095,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     };
     report_presented(client);
     let battlefield_beat_log = super::live_battlefield::beat_log();
+    let card_log = super::live_battlefield::card_log();
     let beat_log = merge_battlefield_beat_log(&beat_log, &battlefield_beat_log);
     {
         let state = client.borrow();
@@ -1113,6 +1120,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             root.set_attribute("data-latest-seq", &latest.to_string())?;
             root.set_attribute("data-beat-log", &beat_log)?;
             root.set_attribute("data-battlefield-beat-log", &battlefield_beat_log)?;
+            root.set_attribute("data-card-log", &card_log)?;
             root.set_attribute(
                 "data-battlefield-live",
                 if battlefield_live() { "true" } else { "false" },
