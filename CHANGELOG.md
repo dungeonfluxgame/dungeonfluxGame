@@ -24,6 +24,48 @@ Integration history from 2026-10-13T06:51:46-04:00 through 2026-10-13T10:55:22-0
 
 Integration history from 2026-10-13T10:55:42-04:00 through 2026-10-13T14:04:49-04:00 on `main`, generated from Git by revision range `cefa2864f788..493477ca31cc`: six-hour blocks by first-parent commit time, 14 commits, each listed once in integration order.
 
+Integration history from 2026-10-13T14:16:31-04:00 through 2026-10-13T21:24:24-04:00 on `main`, generated from Git by revision range `493477ca31cc..06e7a7e4a618`: six-hour blocks by first-parent commit time, 24 commits, each listed once in integration order.
+
+## 2026-10-13T20:19:48-04:00 to 2026-10-13T21:24:24-04:00
+
+Range: 2d2504f7252f5a2c898b5f8ec37d33f53423d660..06e7a7e4a618890ec6677566fee5c64db5a2718b
+
+- f3f65bb01620bec869d362976f601d2256968f43 — Triage: dialogue and investigation in depth, and the owner's questions
+- 4b4c8dcd6e54f41e78ca512e6b08fd1e6209a16d — TVX-09: a drawn screen while a new adventure is prepared
+- 83ea51fd5b230a6f379bcdd463cf69465ccb6557 — Say why a stored game will not load
+- bc7461e040fa48d2e7781aeeedeec36aa9196dbd — Triage: the preparing screen is fixed; the TV's end screen, creatures as people, rebuilds ending games
+- 801358ba605d9f0a14738e6334be67f0ffbe96c5 — Triage: the TV does show replies as spoken; an attitude change is shown as speech
+- 30cbf3599fca466fa5b541b0befb0e61f1f2d485 — Integrate nine workers' changes: notebook, dialogue answers, scan start squares, enemy rules, and the unfinished rest and stabilise flows
+- 06e7a7e4a618890ec6677566fee5c64db5a2718b — Triage: the phone sends an attempt as speech (PHN-11); the Short Rest now dead-ends; notebook statuses
+
+Next block baseline: `06e7a7e4a618890ec6677566fee5c64db5a2718b`.
+
+The commit writing this block remains pending for capture in the next block. This block is still open: the work session had not ended when it was written, and it is shorter than six hours.
+
+## 2026-10-13T14:16:31-04:00 to 2026-10-13T19:29:55-04:00
+
+Range: 493477ca31cc41a14d0ac0a32c59787ee9817cfd..2d2504f7252f5a2c898b5f8ec37d33f53423d660
+
+- 6d6b5d29359cc1da0fd344b883ce5385f01f7359 — Triage list, roadmap and changelog: the scanned battlefields looked at with the owner, and the day's other fixes
+- 94ba35ab5b0a4154906f3bb8d4158cf15995a710 — Triage list: play checked against the rule book (SRD 5.2.1), first twelve rows
+- 7fc89b5056088ff80e204ec3fb5600ec50793608 — Triage list: seven more rows from play checked against the rule book (stabilising, enemies that only Dodge, a pocket start square, hidden dice, the goblin's shield)
+- 45ea9a22aa89eee01ab2fa8ac154e906c5474b95 — SYN-01, RUN-03, SYN-07: the TV shows every blow of an enemy phase in order, each under its own heading, with no stall
+- 147a995e06303d0a83b712b740596e4a4ee2bca8 — END-02, OBS-53: after "The End" a seated player can start a new adventure
+- 0086ff8ecc1e81210d008ed624452244224e5941 — RUL-01: a wolf's and a mastiff's bite knock a Medium or smaller target prone on a hit, with no saving throw
+- b5117626a5391fc1dfd94e41071f3edecdeb2e75 — Triage list: a new adventure after The End seen working; the enemy phase shows every blow but takes 49 seconds
+- b9beccc0a3d554d882f8447d10a01a0ab7d36dc1 — Triage list: what agreed with the rule book in ten creature test fights and an archer's game
+- c775d7b29e3e99d27587ad1fd2b02a1d4881a587 — Triage list: the Influence action, Search and the unoffered actions, checked against the rule book
+- e5a7f734ee563e667001bca6a95dd0f9f61bbe9a — RUL-08 (rule only): the Short Rest's Hit Point Die healing rule
+- 455cd56e1d9b6392fc5e49bfabce1bba9ce44977 — Triage list: dialogue, investigation and notes played with the story model on (ten rows)
+- 60a76918ee1ee7cef9af1901a0a6758ef0129644 — RUL-02, OBS-37: enemies take opportunity attacks; a stored fight replays under the policy it began with
+- 91f5f24c23e006763b2e1b24025fffa6b5dfb2b4 — Triage list: a lost fight played to its end (death saves, a dead hero's player, a raw rules label); opportunity attacks fixed
+- 4a03f813f0422f62a42a0596e964434d2b29e58f — Triage list: characters are not told what happened in the game; the villain has no stable identity
+- ca629d0007201827df4bd5d714d7ad87d93278a5 — SYN-01 (second pass): an enemy's turn on the TV takes about four seconds, and nothing replays after the last blow
+- 0d95857b3ebf78ccb192153078edd09745016fc7 — RUL-05, RUL-10, RUL-03 (layout): Second Wind warns at full hit points, the TV's floating result stays in frame, the phone sheet is grouped
+- 2d2504f7252f5a2c898b5f8ec37d33f53423d660 — Triage: second play round on the combined build
+
+Next block baseline: `2d2504f7252f5a2c898b5f8ec37d33f53423d660`.
+
 ## 2026-10-13T10:55:42-04:00 to 2026-10-13T14:04:49-04:00
 
 Range: cefa2864f7887557351490c88279a4112ca52c1e..493477ca31cc41a14d0ac0a32c59787ee9817cfd
