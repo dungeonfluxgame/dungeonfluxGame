@@ -3110,6 +3110,8 @@ pub(super) mod tests {
             lines: vec![line; 4],
             sequence: u64::MAX,
             stabilization: None,
+            damage_rolls: Vec::new(),
+            damage_modifier: 0,
         };
         let encoded = outcome.encode_to_vec().len();
         assert!(encoded <= 2048, "one worst-case outcome is {encoded} bytes");
@@ -4574,6 +4576,7 @@ pub(super) mod tests {
                 kind: SettingKind::Quay,
                 exterior: true,
                 art_key: "loc-salt-quay-arrival".into(),
+            model: None,
             });
             scene.asset = "assets/ui/generated/scene-salt-quay-arrival".into();
         }
@@ -4604,6 +4607,7 @@ pub(super) mod tests {
             kind: SettingKind::ForestTrail,
             exterior: true,
             art_key: "loc-pinewood-trail-arrival".into(),
+            model: None,
         });
         scene.asset = "assets/ui/generated/scene-pinewood-trail-arrival".into();
         script.scenes.insert("forest-fight".into(), scene);
