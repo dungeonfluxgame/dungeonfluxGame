@@ -364,14 +364,14 @@ fn parse_key(text: &str) -> [u8; 3] {
     }
 }
 
-/// Shows this roll's dice over the fight, replacing any previous roll's dice: one clip,
-/// or two different clips for advantage/disadvantage with the counted one marked. Returns
-/// the kept clip's rest time in milliseconds for the land cue and the card reveal, or 0
-/// when no clip played and only the roll card shows (the beat is never delayed).
+/// Shows this roll's dice over the fight: one clip, or two different clips for
+/// advantage/disadvantage with the counted one marked. Earlier dice remain until their
+/// result has had its read window. Returns the kept clip's rest time in milliseconds for
+/// the land cue and card reveal, or 0 when only the roll card shows.
 pub(super) fn show_roll(
     client: &Rc<RefCell<Client>>,
     play: DicePlay,
-    _short: bool,
+    short: bool,
 ) -> Result<u64, JsValue> {
     preload();
     let (document, host, panel, reduced) = {
@@ -423,7 +423,7 @@ pub(super) fn show_roll(
     let rest_ms = LIBRARY.with(|library| library.borrow().clips[first].clip.rest_ms);
     overlay.set_attribute("style", &format!("--dice-rest:{}ms", rest_ms.min(2_500)))?;
     mark_rest_band(client, rest_ms);
-    let still = should_show_still(reduced, path);
+    let still = should_show_still(short, reduced, path);
     die(
         &document,
         &overlay,
@@ -436,13 +436,89 @@ pub(super) fn show_roll(
     if let (Some(other), Some(second)) = (play.other, second) {
         die(&document, &overlay, second, other, false, None, still)?;
     }
+    schedule_clear(&overlay, crate::dice_roll::d20_timing(rest_ms).clear_ms)?;
     Ok(rest_ms)
 }
 
 /// A roll shown while the display catches up still tumbles (FPX-01: nearly every roll arrives
 /// that way); only reduced motion or a missing clip leaves the still frame.
-fn should_show_still(reduced: bool, path: DicePath) -> bool {
+fn should_show_still(_short: bool, reduced: bool, path: DicePath) -> bool {
     reduced || path == DicePath::CardOnly
+}
+
+/// Shows the server's damage faces after a hit, in the same roll card as its d20.
+pub(super) fn show_damage(client: &Rc<RefCell<Client>>, faces: &[u32]) -> Result<(), JsValue> {
+    let Some(play) = crate::dice_roll::damage_play_of(faces) else {
+        return Ok(());
+    };
+    let (document, host, kind) = {
+        let state = client.borrow();
+        let Some((host, kind)) = dice_host(&state) else {
+            return Ok(());
+        };
+        (state.document.clone(), host, kind)
+    };
+    let timing = crate::dice_roll::damage_timing();
+    let overlay = document.create_element("div")?;
+    overlay.set_class_name("tv-damage-dice");
+    overlay.set_attribute(
+        "data-host",
+        match kind {
+            crate::dice_roll::DiceHost::Battlefield => "battlefield",
+            crate::dice_roll::DiceHost::Panel => "panel",
+            crate::dice_roll::DiceHost::Stage => "stage",
+        },
+    )?;
+    overlay.set_attribute("style", &format!("--damage-roll-ms:{}ms", timing.land_ms))?;
+    match kind {
+        crate::dice_roll::DiceHost::Battlefield => {
+            if let Some(words) = host.query_selector(".bf-roll-words")? {
+                host.insert_before(&overlay, Some(&words))?;
+            } else {
+                host.append_child(&overlay)?;
+            }
+        }
+        crate::dice_roll::DiceHost::Panel => {
+            host.insert_before(&overlay, host.first_element_child().as_deref())?;
+        }
+        crate::dice_roll::DiceHost::Stage => {
+            host.append_child(&overlay)?;
+        }
+    }
+    for face in &play.faces {
+        let die = document.create_element("div")?;
+        die.set_class_name("tv-damage-die");
+        die.set_text_content(Some(&face.to_string()));
+        overlay.append_child(&die)?;
+    }
+    schedule_clear(&overlay, timing.clear_ms)
+}
+
+fn schedule_clear(overlay: &Element, clear_ms: u64) -> Result<(), JsValue> {
+    let Some(window) = web_sys::window() else {
+        overlay.set_attribute("data-clear-ready", "true")?;
+        return Ok(());
+    };
+    let target = overlay.clone();
+    let callback = Closure::wrap(Box::new(move || {
+        let _ready = target.set_attribute("data-clear-ready", "true");
+        if target.has_attribute("data-clear-pending")
+            && let Some(parent) = target.parent_node()
+            && let Ok(parent) = parent.dyn_into::<Element>()
+        {
+            let _removed = parent.remove_child(&target);
+        }
+    }) as Box<dyn FnMut()>);
+    let id = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        callback.as_ref().unchecked_ref(),
+        clear_ms.min(i32::MAX as u64) as i32,
+    )?;
+    LIBRARY.with(|library| {
+        let mut library = library.borrow_mut();
+        library.timeouts.push(id);
+        library.held.push(callback);
+    });
+    Ok(())
 }
 
 /// Reduced motion without a media-query binding (no such web-sys feature on this
@@ -474,6 +550,7 @@ fn fallback_stills(
 ) -> Result<(), JsValue> {
     let overlay = document.create_element("div")?;
     overlay.set_class_name("tv-dice");
+    overlay.set_attribute("style", "--dice-rest:0ms")?;
     if panel {
         host.insert_before(&overlay, host.first_element_child().as_deref())?;
     } else {
@@ -485,6 +562,7 @@ fn fallback_stills(
         let second = crate::dice_roll::pair_clip(first, crate::dice_roll::FALLBACK_CLIP_COUNT);
         fallback_still(document, &overlay, other, None, false, second)?;
     }
+    schedule_clear(&overlay, crate::dice_roll::d20_timing(0).clear_ms)?;
     Ok(())
 }
 
@@ -497,9 +575,7 @@ fn fallback_still(
     clip: usize,
 ) -> Result<(), JsValue> {
     let die = node(document, overlay, "div", "tv-die", "")?;
-    if !kept {
-        die.set_attribute("data-kept", "false")?;
-    }
+    die.set_attribute("data-kept", kept_attribute(kept))?;
     die.set_attribute("style", "outline:none")?;
     let image = node(document, &die, "img", "tv-die-rest", "")?;
     image.set_attribute("src", &crate::dice_roll::fallback_rest_url(clip))?;
@@ -523,10 +599,30 @@ fn fallback_still(
     Ok(())
 }
 
-/// Takes the dice down: the roll card resolves from here. Both hosts sit under the page
-/// root, so one pass takes down any shown dice wherever they were hosted. Pending number
-/// timers are cancelled with their dice, so no old number can surface late.
+/// Takes dice down after their result read window: both hosts sit under the page root, so
+/// one pass handles every shown die wherever it was hosted.
 pub(super) fn clear(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    let root = client.borrow().root.clone();
+    let previous = root.query_selector_all(".tv-dice, .tv-damage-dice")?;
+    let mut waiting_for_roll = false;
+    for index in 0..previous.length() {
+        if let Some(shown) = previous.item(index) {
+            let shown: Element = shown.dyn_into().map_err(JsValue::from)?;
+            if shown.has_attribute("data-clear-ready") {
+                if let Some(parent) = shown.parent_node()
+                    && let Ok(parent) = parent.dyn_into::<Element>()
+                {
+                    parent.remove_child(&shown)?;
+                }
+            } else {
+                shown.set_attribute("data-clear-pending", "true")?;
+                waiting_for_roll = true;
+            }
+        }
+    }
+    if waiting_for_roll {
+        return Ok(());
+    }
     if let Some(window) = web_sys::window() {
         LIBRARY.with(|library| {
             for id in library.borrow_mut().timeouts.drain(..) {
@@ -540,16 +636,6 @@ pub(super) fn clear(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         library.listeners.clear();
         library.painters.clear();
     });
-    let root = client.borrow().root.clone();
-    let previous = root.query_selector_all(".tv-dice")?;
-    for index in 0..previous.length() {
-        if let Some(shown) = previous.item(index)
-            && let Some(parent) = shown.parent_node()
-            && let Ok(parent) = parent.dyn_into::<Element>()
-        {
-            parent.remove_child(&shown)?;
-        }
-    }
     Ok(())
 }
 
@@ -623,9 +709,7 @@ fn die(
 ) -> Result<(), JsValue> {
     let settled_now = still;
     let die = node(document, parent, "div", "tv-die", "")?;
-    if !kept {
-        die.set_attribute("data-kept", "false")?;
-    }
+    die.set_attribute("data-kept", kept_attribute(kept))?;
     die.set_attribute("style", "outline:none")?;
     if let Some(natural) = natural {
         die.set_attribute(
@@ -654,6 +738,10 @@ fn die(
     stall_watch(&die, video.as_ref())?;
     number(document, &die, clip, face, natural, settled_now, video)?;
     Ok(())
+}
+
+fn kept_attribute(kept: bool) -> &'static str {
+    if kept { "true" } else { "false" }
 }
 
 /// A clip that errors hands over to the resting frame at once instead of standing black.
@@ -968,13 +1056,25 @@ fn call(context: &JsValue, name: &str, args: &[JsValue]) -> Result<JsValue, JsVa
 
 #[cfg(test)]
 mod tests {
-    use super::{DicePath, should_show_still};
+    use super::{DicePath, kept_attribute, should_show_still};
 
     #[test]
     fn reduced_motion_uses_a_still_frame_for_playable_clips() {
-        assert!(should_show_still(true, DicePath::WebM));
-        assert!(should_show_still(true, DicePath::Key));
-        assert!(!should_show_still(false, DicePath::WebM));
-        assert!(should_show_still(false, DicePath::CardOnly));
+        assert!(should_show_still(false, true, DicePath::WebM));
+        assert!(should_show_still(false, true, DicePath::Key));
+        assert!(!should_show_still(false, false, DicePath::WebM));
+        assert!(should_show_still(false, false, DicePath::CardOnly));
+    }
+
+    #[test]
+    fn shortened_catch_up_rolls_keep_the_video_path() {
+        assert!(!should_show_still(true, false, DicePath::WebM));
+        assert!(!should_show_still(true, false, DicePath::Key));
+    }
+
+    #[test]
+    fn only_the_server_selected_die_gets_the_kept_marker() {
+        assert_eq!(kept_attribute(true), "true");
+        assert_eq!(kept_attribute(false), "false");
     }
 }

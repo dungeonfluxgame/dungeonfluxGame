@@ -337,6 +337,12 @@ pub(crate) enum RollMode {
     Disadvantage,
 }
 
+/// The individual server-rolled damage faces, in their authoritative order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DamagePlay {
+    pub(crate) faces: Vec<u32>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Natural {
     Twenty,
@@ -351,6 +357,38 @@ pub(crate) struct DicePlay {
     pub(crate) other: Option<u8>,
     pub(crate) mode: RollMode,
     pub(crate) natural: Option<Natural>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DiceTiming {
+    pub(crate) land_ms: u64,
+    pub(crate) clear_ms: u64,
+}
+
+const RESULT_READ_MS: u64 = 800;
+const DICE_FADE_MS: u64 = 320;
+const DAMAGE_ROLL_MS: u64 = 1_000;
+
+pub(crate) fn d20_timing(rest_ms: u64) -> DiceTiming {
+    let land_ms = rest_ms;
+    DiceTiming {
+        land_ms,
+        clear_ms: land_ms + RESULT_READ_MS + DICE_FADE_MS,
+    }
+}
+
+pub(crate) fn damage_timing() -> DiceTiming {
+    let land_ms = DAMAGE_ROLL_MS;
+    DiceTiming {
+        land_ms,
+        clear_ms: land_ms + RESULT_READ_MS + DICE_FADE_MS,
+    }
+}
+
+pub(crate) fn damage_play_of(faces: &[u32]) -> Option<DamagePlay> {
+    (!faces.is_empty()).then(|| DamagePlay {
+        faces: faces.to_vec(),
+    })
 }
 
 /// Where the visible dice are hosted: the 3D battlefield paints over the whole stage, so
@@ -421,6 +459,9 @@ fn face(value: u32) -> Option<u8> {
 /// The display plan for the outcome's three carried numbers, or `None` when they carry no
 /// d20 test (a move, a rest, a recovery). Faces come only from what the server sent: the
 /// kept face is `attack_die` and the discarded one is the server's other draw.
+///
+/// SRD 5.2.1 pp. 6-7 (D20 Tests, Advantage/Disadvantage): “roll two d20s, but you use the
+/// number from only one of them.” The browser marks the server-selected face as kept.
 pub(crate) fn play_of(attack_die: u32, faces: &[u32], roll_mode: i32) -> Option<DicePlay> {
     let kept = face(attack_die)?;
     let mode = match roll_mode {
@@ -522,6 +563,34 @@ mod tests {
     fn outcomes_without_a_d20_have_no_die() {
         assert_eq!(plan(0, 0, &[]), None);
         assert_eq!(plan(27, 0, &[]), None);
+    }
+
+    #[test]
+    fn damage_plan_keeps_the_server_faces_in_order() {
+        let play = damage_play_of(&[6, 5, 1, 4]).expect("hit damage carries dice");
+
+        assert_eq!(play.faces, [6, 5, 1, 4]);
+        assert_eq!(damage_play_of(&[]), None);
+    }
+
+    #[test]
+    fn d20_result_holds_after_the_server_face_lands() {
+        let timing = d20_timing(1_200);
+
+        assert_eq!(timing.land_ms, 1_200);
+        assert_eq!(timing.clear_ms, 2_320);
+
+        let resting_still = d20_timing(0);
+        assert_eq!(resting_still.land_ms, 0);
+        assert_eq!(resting_still.clear_ms, 1_120);
+    }
+
+    #[test]
+    fn damage_dice_roll_for_a_second_then_hold_the_result() {
+        let timing = damage_timing();
+
+        assert_eq!(timing.land_ms, 1_000);
+        assert_eq!(timing.clear_ms, 2_120);
     }
 
     #[test]

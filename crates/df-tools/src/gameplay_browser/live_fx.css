@@ -176,3 +176,13 @@
 
 /* ---------- reduced motion: fades and colour only ---------- */
 
+/* Damage faces use the server's roll, then settle beside the attack card. */
+.tv-damage-dice{display:grid;grid-template-columns:repeat(4,calc(var(--u)*3));align-content:center;gap:calc(var(--u)*.25);pointer-events:none;animation:df-damage-clear 320ms ease forwards;animation-delay:calc(var(--damage-roll-ms,1000ms) + 800ms)}
+.tv-damage-dice[data-host=battlefield],.tv-damage-dice[data-host=panel]{position:static;transform:none;z-index:auto}
+.tv-damage-dice[data-host=stage]{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);z-index:3}
+.tv-damage-die{display:grid;place-items:center;width:calc(var(--u)*3);height:calc(var(--u)*3);border:1px solid #c9a35f;border-radius:22%;background:linear-gradient(145deg,#263341,#0b1118);box-shadow:inset 0 1px 2px #f5e5c466,0 2px 8px #000a;color:#ffe0a2;font:700 calc(var(--u)*1.6)/1 system-ui,sans-serif;animation:df-damage-tumble var(--damage-roll-ms,1000ms) cubic-bezier(.25,.7,.3,1) both}
+@keyframes df-damage-tumble{0%{opacity:0;transform:translateY(-70%) rotate(-240deg) scale(.55);color:transparent}70%{opacity:1;transform:translateY(10%) rotate(580deg) scale(1.1);color:transparent}100%{opacity:1;transform:none;color:#ffe0a2}}
+@keyframes df-damage-clear{to{opacity:0}}
+.live-screen .combat-roll-panel>.tv-damage-dice{position:static;transform:none;z-index:auto;margin:0 auto calc(var(--u)*1)}
+@media (prefers-reduced-motion:reduce){.tv-damage-dice{animation:none}.tv-damage-die{animation:none;color:#ffe0a2}}
+
