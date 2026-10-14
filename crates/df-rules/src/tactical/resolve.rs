@@ -606,13 +606,18 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
     if usage.weapon != Weapon::UnarmedStrike && actor.weapon_count(usage.weapon) == 0 {
         return Err(RuleError::WeaponMissing);
     }
+    // SRD 5.2.1 p. 290 lists "Shield, Shortbow" in Goblin Warrior Gear and
+    // "Shortbow. Ranged Attack Roll: +4, range 80/320 ft." as an Action.
+    let listed_creature_attack = actor.spec.kind != CreatureKind::Hero
+        && usage.weapon.two_handed()
+        && actor.spec.weapons.contains(&usage.weapon);
     if (usage.hands == 0
         && !matches!(
             usage.weapon,
             Weapon::UnarmedStrike | Weapon::Bite | Weapon::Slam
         ))
         || usage.hands > 2
-        || (actor.shield_equipped && usage.hands > 1)
+        || (actor.shield_equipped && usage.hands > 1 && !listed_creature_attack)
         || (usage.weapon.two_handed() && usage.hands != 2)
         || (usage.hands == 2 && !usage.weapon.two_handed() && usage.weapon != Weapon::Spear)
     {
@@ -1012,6 +1017,8 @@ fn attack(
     if hit && damage + necrotic_damage > 0 {
         match mastery {
             Some(Mastery::Slow) => {
+                // SRD 5.2.1 p. 90: Slow can "reduce its Speed by 10 feet until the start of your
+                // next turn"; p. 91 lists Slow as the Javelin's mastery.
                 let target = battle.actor_mut(target)?;
                 if !target.slow.contains(&effect) {
                     target.slow.push(effect);

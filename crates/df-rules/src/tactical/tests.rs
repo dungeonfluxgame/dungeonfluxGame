@@ -773,6 +773,66 @@ fn attack_summary_retains_recorded_damage_faces_and_modifier() {
     );
 }
 #[test]
+fn goblin_shortbow_resolves_with_its_shield_equipped() {
+    let mut state = battle(vec![
+        melee(1, Cell(7, 1)),
+        CombatantSpec::creature(3, "goblin-warrior", Cell(2, 1), 20).unwrap(),
+    ]);
+    state.active = 1;
+
+    let result = step(
+        &state,
+        3,
+        strike(1, Weapon::Shortbow, true),
+        &[(20, 13), (6, 1)],
+    );
+
+    assert_eq!(result.attacks[0].weapon, Weapon::Shortbow);
+    assert!(result.attacks[0].hit);
+    assert!(result.battle.actor(3).unwrap().shield_equipped());
+    assert_eq!(result.battle.actor(3).unwrap().spec().armor_class, 15);
+}
+#[test]
+fn hero_shield_still_prevents_two_handed_shortbow_attack() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 20).unwrap(),
+    ]);
+    let hero = state.actor_mut(1).unwrap();
+    hero.shield_equipped = true;
+    hero.spec.shield = true;
+    hero.spec.armor_class = 19;
+
+    rejects(
+        &state,
+        1,
+        strike(3, Weapon::Shortbow, true),
+        RuleError::InvalidHands,
+    );
+}
+#[test]
+fn thrown_javelin_slow_reduces_speed_until_attacker_next_turn() {
+    // SRD 5.2.1 pp. 90-91: the Javelin's mastery is Slow.
+    let state = battle(vec![
+        melee(1, Cell(1, 1)),
+        melee(2, Cell(1, 7)),
+        CombatantSpec::creature(3, "wolf", Cell(6, 1), 0).unwrap(),
+    ]);
+    let result = step(
+        &state,
+        1,
+        strike(3, Weapon::Javelin, true),
+        &[(20, 10), (6, 1)],
+    );
+
+    assert_eq!(result.attacks[0].mastery, Some(Mastery::Slow));
+    assert_eq!(result.battle.actor(3).unwrap().speed_ft(), 30);
+    let next = next_turn(result.battle, 2);
+    assert_eq!(next.actor(3).unwrap().speed_ft(), 30);
+    let next = next_turn(next, 1);
+    assert_eq!(next.actor(3).unwrap().speed_ft(), 40);
+}
+#[test]
 fn slow_does_not_stack_and_expires_at_source_next_turn() {
     let state = battle(vec![
         archer(1, Cell(1, 1)),

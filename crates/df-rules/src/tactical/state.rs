@@ -51,7 +51,8 @@ pub struct CombatantSpec {
     pub archery: bool,
     pub savage_attacker: bool,
     pub second_wind_uses: u8,
-    /// An occupied shield hand makes a two-handed attack illegal; caller tracks equipment.
+    /// An equipped shield bars a hero's two-handed attacks; creature attacks follow
+    /// their stat blocks.
     pub shield: bool,
 }
 impl CreatureKind {
