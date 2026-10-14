@@ -119,3 +119,9 @@
 @keyframes df-firelight{0%{opacity:.75}9%{opacity:1}17%{opacity:.6}26%{opacity:.92}38%{opacity:.7}47%{opacity:1}58%{opacity:.66}69%{opacity:.88}81%{opacity:.62}90%{opacity:.95}}
 @keyframes df-lanterns{0%{opacity:.55}35%{opacity:.85}60%{opacity:.6}100%{opacity:1}}
 @media (prefers-reduced-motion:reduce){.tv-stage[data-shot=plate] .tv-plate-img,.tv-plate-vignette::before,.tv-plate-vignette::after{animation:none}.tv-plate-zoom{transition:none}}
+.live-scene-item{padding:1rem;margin:1rem 0;background:#201c18;color:#eee2ca;border:1px solid #927650;border-radius:.6rem}
+.live-scene-item-name{margin:0 0 .6rem;font-size:1.2rem}
+.live-scene-item-image{display:block;width:100%;max-height:22rem;object-fit:contain;border-radius:.4rem}
+.live-scene-item-detail{white-space:pre-line;line-height:1.5}
+.live-scene-item[data-display=true]{position:absolute;z-index:35;right:3%;top:18%;width:26%;max-height:62%;overflow:hidden;animation:df-item-share 8s both;pointer-events:none}
+@keyframes df-item-share{0%{opacity:0;transform:translateY(.5rem)}8%,90%{opacity:1;transform:none}100%{opacity:0;visibility:hidden}}

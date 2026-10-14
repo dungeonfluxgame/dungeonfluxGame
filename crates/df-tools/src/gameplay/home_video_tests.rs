@@ -580,6 +580,7 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
                 scene: None,
                 scene_graph: None,
                 live_plate_graph_revision: 0,
+                check: None,
                 journey: Some(rpc::JourneyView {
                     phase: rpc::JourneyPhase::Room as i32,
                     ..Default::default()

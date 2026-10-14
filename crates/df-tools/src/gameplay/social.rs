@@ -1469,6 +1469,7 @@ impl SocialLedger {
                     npc_id: dossier.npc_id.clone(),
                     name: actor.name.clone(),
                     attitude: attitude_code(self.standing(member, dossier).attitude),
+                    perceived_reaction: String::new(),
                 })
             })
             .collect();

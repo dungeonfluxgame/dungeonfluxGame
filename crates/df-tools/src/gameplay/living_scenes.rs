@@ -549,8 +549,10 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
             .or_else(|| state.and_then(|state| state.sprites.get(&actor.id)))
             .filter(|overlay| overlay.source_sprite == actor.sprite);
         let live_art = overlay.map(|overlay| overlay.key.path());
-        let expression = overlay
-            .map(|overlay| overlay.expression)
+        let expression = state
+            .and_then(|state| state.plate_wants.get(&actor.id))
+            .map(|face| face.expression)
+            .or_else(|| overlay.map(|overlay| overlay.expression))
             .or(Some(Expression::Neutral));
         owned.push((
             actor.id.clone(),
@@ -576,7 +578,7 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
             },
         )
         .collect();
-    scene_graph::build(&SceneGraphInput {
+    let graph = scene_graph::build(&SceneGraphInput {
         scene_key: scene.key,
         place_id,
         place_name,
@@ -596,7 +598,11 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
         narrator_speaks: stage.speaker_id.is_none(),
         line_length: stage.line_length,
     })
-    .ok()
+    .ok()?;
+    match super::adventure::scene_model::current_scene(scene) {
+        Some(current) => scene_graph::with_model(graph, &current.model).ok(),
+        None => Some(graph),
+    }
 }
 
 fn graph_to_wire(graph: &SceneGraph) -> rpc::DisplaySceneGraph {
@@ -1086,9 +1092,6 @@ impl LivingScenes {
         timing: Timing,
         plates_on: bool,
     ) -> Self {
-        if !imagery.is_on() {
-            return Self::disabled();
-        }
         let origin = Instant::now();
         let inner = Arc::new(Inner {
             imagery,
@@ -1142,6 +1145,19 @@ impl LivingScenes {
 
     pub(super) fn direct_status(&self, key: &str) -> Option<serde_json::Value> {
         self.plates.as_ref()?.direct_status(key)
+    }
+
+    pub(super) fn request_item(
+        &self,
+        hero: &str,
+        thing_id: &str,
+        detail: Option<String>,
+        shared: bool,
+    ) -> Result<(), &'static str> {
+        self.plates
+            .as_ref()
+            .ok_or("scene pictures are unavailable")?
+            .request_item(hero, thing_id, detail, shared)
     }
 
     /// Notes a display view the server is sending: its scene, cast, tempo, revision and the

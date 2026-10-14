@@ -2,6 +2,28 @@ use super::super::shot::{HeroSlot, ShotSpec, SpeakerSlot};
 
 const MAXIMUM_CHARACTERS: usize = 1500;
 
+pub(in crate::gameplay) fn model_staging(
+    model: &crate::gameplay::adventure::scene_model::SceneModel,
+) -> String {
+    let people = model
+        .people
+        .iter()
+        .map(|person| format!("{} at {}", person.name, person.position))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let things = model
+        .things
+        .iter()
+        .filter(|thing| thing.in_scene || thing.holder_id.is_some())
+        .map(|thing| thing.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{}; {}; {people}. Existing objects: {things}. Continue only the activities visible in the still",
+        model.time_of_day, model.weather
+    )
+}
+
 const INSTRUCTIONS: [(&str, &str); 7] = [
     (
         "Keep the camera completely still: no pan, zoom, reframing, or cuts.",

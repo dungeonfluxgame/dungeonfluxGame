@@ -1099,6 +1099,8 @@ fn inn_source(current: &Checkpoint) -> Result<Option<FactId>, RepositoryError> {
 
 pub(super) fn inn_scene() -> rpc::GameplayScene {
     rpc::GameplayScene {
+        scene_contents_json: String::new(),
+        item: None,
         destination: rpc::HarborDestination::HarborInn as i32,
         title: pack::scene(pack::SceneKey::Inn).title,
         scene_asset: pack::scene(pack::SceneKey::Inn).asset,
@@ -3291,6 +3293,8 @@ fn observe_check(
     )?;
     let source_revision = format!("srd521-p6:{scene_name}:{skill}:{detail}");
     Ok(rpc::AbilityCheckResult {
+        faces: Vec::new(),
+        roll_mode: 0,
         die: u32::from(resolved.die),
         ability_modifier: i32::from(resolved.ability_modifier),
         proficiency_bonus: u32::from(resolved.proficiency_bonus),

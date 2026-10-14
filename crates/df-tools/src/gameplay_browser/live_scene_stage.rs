@@ -311,6 +311,9 @@ impl StageLayer {
             )?;
         }
         for actor in &graph.actors {
+            if actor.art.is_empty() && actor.fallback_art.is_empty() {
+                continue;
+            }
             let index = actor_layers.iter().position(|layer| {
                 layer.root.get_attribute("data-actor-id").as_deref() == Some(&actor.id)
             });
@@ -395,8 +398,6 @@ fn validate(graph: &SceneGraphView) -> Result<(), JsValue> {
     for (index, actor) in graph.actors.iter().enumerate() {
         if actor.id.is_empty()
             || actor.name.is_empty()
-            || actor.art.is_empty()
-            || actor.fallback_art.is_empty()
             || actor.anchor_x_permille > 1000
             || actor.anchor_y_permille > 1000
             || actor.depth_permille > 1000

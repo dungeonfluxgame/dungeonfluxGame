@@ -335,6 +335,7 @@
 .tv-scene-atmosphere[data-weather=fog]{background:linear-gradient(180deg,transparent 38%,#cbd8df45 72%,transparent 100%);animation:df-scene-fog 17s ease-in-out infinite alternate}
 .tv-scene-atmosphere[data-weather=rain]{background:repeating-linear-gradient(108deg,transparent 0 8px,#dcecff18 9px 10px);animation:df-scene-rain .4s linear infinite}
 .tv-scene-atmosphere[data-weather=snow]{background:radial-gradient(circle,#fff9 0 1px,transparent 2px);background-size:calc(var(--u)*7) calc(var(--u)*8);animation:df-dust-rise 18s linear infinite}
+.tv-scene-graph[data-exterior=false] .tv-scene-atmosphere[data-weather=rain],.tv-scene-graph[data-exterior=false] .tv-scene-atmosphere[data-weather=snow]{background:none;animation:none}
 @keyframes df-scene-fog{from{transform:translateX(-2%);opacity:.12}to{transform:translateX(2%);opacity:.42}}
 @keyframes df-scene-rain{from{background-position:0 0}to{background-position:-8px 14px}}
 @media (prefers-reduced-motion:reduce){.tv-scene-camera,.tv-scene-actor,.tv-scene-actor-art,.tv-scene-atmosphere{animation:none!important;transition:none!important;translate:none!important}}

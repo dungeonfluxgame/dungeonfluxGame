@@ -253,6 +253,7 @@ impl Shared {
                 "key": key.as_str(), "state": state, "reason": reason}),
             );
             if current && let Ok(shown) = result {
+                book.state_images.shown = None;
                 book.direct.shown = Some(shown);
                 book.edit = Edit::Idle;
             }

@@ -54,6 +54,7 @@ pub(in crate::gameplay) struct SceneGraph {
     pub(in crate::gameplay) set: SceneSet,
     pub(in crate::gameplay) camera: CameraFraming,
     pub(in crate::gameplay) actors: Vec<SceneActor>,
+    pub(in crate::gameplay) visible_state: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -262,7 +263,141 @@ pub(in crate::gameplay) fn build(
         set,
         camera,
         actors,
+        visible_state: String::new(),
     })
+}
+
+/// Replaces decorative staging with positions and activities from the accepted scene model.
+pub(in crate::gameplay) fn with_model(
+    mut graph: SceneGraph,
+    model: &crate::gameplay::adventure::scene_model::SceneModel,
+) -> Result<SceneGraph, SceneGraphError> {
+    graph.set.time_of_day = model.time_of_day.clone();
+    let weather = model.weather.to_lowercase();
+    graph.set.weather = if weather.contains("snow") {
+        Some(Weather::Snow)
+    } else if weather.contains("rain") {
+        Some(Weather::Rain)
+    } else if weather.contains("mist") || weather.contains("fog") {
+        Some(Weather::Fog)
+    } else if weather.contains("wind") {
+        Some(Weather::Wind)
+    } else if weather.contains("clear") {
+        Some(Weather::Clear)
+    } else {
+        None
+    };
+    graph.set.lights = model
+        .things
+        .iter()
+        .filter(|thing| thing.lit)
+        .map(|thing| thing.name.clone())
+        .collect();
+    graph.visible_state = model
+        .picture_state()
+        .map_err(|_| SceneGraphError::Serialization)?;
+    graph.actors.retain(|actor| {
+        actor.id.starts_with("hero-") || model.people.iter().any(|person| person.name == actor.name)
+    });
+    for (person_index, person) in model.people.iter().enumerate() {
+        let index = graph
+            .actors
+            .iter()
+            .position(|actor| actor.name == person.name);
+        let index = match index {
+            Some(index) => index,
+            None => {
+                graph.actors.push(SceneActor {
+                    id: person.id.clone(),
+                    name: person.name.clone(),
+                    art: String::new(),
+                    fallback_art: String::new(),
+                    spot: String::new(),
+                    anchor_x_permille: 500,
+                    anchor_y_permille: 650,
+                    depth_permille: 350,
+                    pose: String::new(),
+                    expression: "neutral".into(),
+                    look_at: None,
+                    speaking: false,
+                });
+                graph.actors.len() - 1
+            }
+        };
+        let actor = &mut graph.actors[index];
+        actor.spot = person.position.clone();
+        let (x, y, depth) = model_anchor(&person.position);
+        let neighbors = model.people[..person_index]
+            .iter()
+            .filter(|other| other.position == person.position)
+            .count() as u32;
+        actor.anchor_x_permille = (x + neighbors * 60).min(950);
+        actor.anchor_y_permille = y;
+        actor.depth_permille = depth;
+        actor.pose = person.description.clone();
+    }
+    for actor in &mut graph.actors {
+        let held = model
+            .things
+            .iter()
+            .filter(|thing| {
+                thing
+                    .holder_id
+                    .as_deref()
+                    .is_some_and(|holder| holder == actor.id || holder == actor.name)
+            })
+            .map(|thing| thing.name.as_str())
+            .collect::<Vec<_>>();
+        if !held.is_empty() {
+            actor.pose = format!("holding {}", held.join(" and "));
+        }
+    }
+    graph.actors.sort_by_key(|actor| actor.depth_permille);
+    // Camera and speech are ephemeral; only visible composition participates in the bake revision.
+    let material = (
+        &graph.scene_key,
+        &graph.set,
+        &graph.visible_state,
+        graph
+            .actors
+            .iter()
+            .map(|actor| {
+                (
+                    &actor.id,
+                    &actor.art,
+                    &actor.spot,
+                    &actor.pose,
+                    &actor.expression,
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+    let bytes = serde_json::to_vec(&material).map_err(|_| SceneGraphError::Serialization)?;
+    let digest = Sha256::digest(bytes);
+    let first: [u8; 8] = digest[..8]
+        .try_into()
+        .map_err(|_| SceneGraphError::Serialization)?;
+    graph.revision = u64::from_be_bytes(first);
+    Ok(graph)
+}
+
+fn model_anchor(position: &str) -> (u32, u32, u32) {
+    let position = position.to_lowercase();
+    let x = if position.contains("left") {
+        250
+    } else if position.contains("right") {
+        750
+    } else {
+        500
+    };
+    let (y, depth) = if position.contains("back") || position.contains("far") {
+        (640, 350)
+    } else if position.contains("front") || position.contains("foreground") {
+        (850, 900)
+    } else {
+        (740, 620)
+    };
+    (x, y, depth)
 }
 
 /// Makes the transparent standing hero cut-out request from that hero's party-sheet reference.
@@ -359,6 +494,51 @@ pub(in crate::gameplay) fn change_log(graph: &SceneGraph) -> [(&'static str, Str
 mod tests {
     use super::*;
     use crate::gameplay::shot::{self, ShotInput, SpeakerInput};
+
+    #[test]
+    fn model_people_positions_and_held_objects_drive_the_graph_and_its_revision() {
+        let generated = crate::gameplay::npc_dossier_tests::adventure(43);
+        let scene = generated
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == SceneKey::Opening)
+            .unwrap()
+            .clone();
+        let model = generated
+            .settings
+            .meeting
+            .model
+            .as_ref()
+            .unwrap()
+            .for_scene(SceneKey::Opening);
+        let (base, _, _) = graph_for(scene, None, None, 0);
+        let graph = with_model(base.clone(), &model).unwrap();
+        for person in &model.people {
+            let actor = graph
+                .actors
+                .iter()
+                .find(|actor| actor.name == person.name)
+                .unwrap();
+            assert_eq!(actor.spot, person.position);
+        }
+        let mut current = model;
+        current.weather = "a light rain outside".into();
+        current.things[0].holder_id = Some("Brakka".into());
+        current.things[0].position = "held by Brakka".into();
+        let changed = with_model(base, &current).unwrap();
+        assert_eq!(changed.set.weather, Some(Weather::Rain));
+        assert_ne!(changed.revision, graph.revision);
+        assert!(
+            changed
+                .actors
+                .iter()
+                .find(|actor| actor.name == "Brakka")
+                .unwrap()
+                .pose
+                .contains(&current.things[0].name)
+        );
+    }
 
     struct TestActor {
         id: String,

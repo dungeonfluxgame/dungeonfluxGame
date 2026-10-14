@@ -663,6 +663,8 @@ pub(super) fn render(
         for offer in input.offers.iter().filter(|offer| !is_simple_offer(offer)) {
             action_button(client, &actions, offer.clone())?;
         }
+        render_item_card(&document, &dock, input.scene.item.as_ref(), false)?;
+        render_scene_contents(&document, &dock, &input.scene.scene_contents_json)?;
     }
     recovery(client, &dock)
 }
@@ -696,9 +698,120 @@ fn render_display(
             return Err(JsValue::from_str("display stage absent"));
         };
         stage.update(&model)?;
+        let (graph, baked_revision) = state
+            .views
+            .as_ref()
+            .and_then(|views| views.current())
+            .and_then(|view| match view.audience.as_ref() {
+                Some(rpc::view_message::Audience::Display(display)) => Some((
+                    display.scene_graph.as_ref(),
+                    display.live_plate_graph_revision,
+                )),
+                _ => None,
+            })
+            .unwrap_or((None, 0));
+        stage.update_scene_graph_wire(graph, baked_revision)?;
+        stage.update_scene_video_wire(
+            input.scene.scene_video_state,
+            &input.scene.scene_video_path,
+        )?;
+        render_item_card(
+            &state.document,
+            stage.root(),
+            input.scene.item.as_ref(),
+            true,
+        )?;
         stage.dock().clone()
     };
     recovery(client, &dock)
+}
+
+fn render_item_card(
+    document: &Document,
+    parent: &Element,
+    item: Option<&rpc::SceneItemCard>,
+    display: bool,
+) -> Result<(), JsValue> {
+    if let Some(previous) = parent.query_selector(".live-scene-item")? {
+        let same = item.is_some_and(|item| {
+            previous.get_attribute("data-item-state")
+                == Some(format!(
+                    "{}:{}:{}",
+                    item.thing_id, item.state_revision, item.image_path
+                ))
+        });
+        if same {
+            return Ok(());
+        }
+        previous.remove();
+    }
+    let Some(item) = item else {
+        return Ok(());
+    };
+    let card = node(document, parent, "article", "live-scene-item", "")?;
+    card.set_attribute(
+        "data-item-state",
+        &format!(
+            "{}:{}:{}",
+            item.thing_id, item.state_revision, item.image_path
+        ),
+    )?;
+    card.set_attribute("data-display", if display { "true" } else { "false" })?;
+    node(document, &card, "h3", "live-scene-item-name", &item.name)?;
+    if let Some(path) = crate::presentation::imagery_url(&item.image_path) {
+        let image = node(document, &card, "img", "live-scene-item-image", "")?;
+        image.set_attribute("src", &path)?;
+        image.set_attribute("alt", &item.name)?;
+    }
+    node(document, &card, "p", "live-scene-item-detail", &item.detail)?;
+    Ok(())
+}
+
+fn render_scene_contents(
+    document: &Document,
+    parent: &Element,
+    contents: &str,
+) -> Result<(), JsValue> {
+    if let Some(previous) = parent.query_selector(".live-scene-contents")? {
+        previous.remove();
+    }
+    if contents.is_empty() {
+        return Ok(());
+    }
+    let model = js_sys::JSON::parse(contents)?;
+    let get = |entity: &JsValue, key: &str| js_sys::Reflect::get(entity, &JsValue::from_str(key));
+    let panel = node(document, parent, "details", "live-scene-contents", "")?;
+    node(document, &panel, "summary", "", "In this scene")?;
+    for group in ["people", "things", "ways_out"] {
+        let entities = get(&model, group)?;
+        if js_sys::Array::is_array(&entities) {
+            for entity in js_sys::Array::from(&entities).iter() {
+                let Some(name) = get(&entity, "name")?.as_string() else {
+                    continue;
+                };
+                let position = get(&entity, "position")?.as_string().unwrap_or_default();
+                let row = node(
+                    document,
+                    &panel,
+                    "p",
+                    "live-scene-entity",
+                    &format!("{name} · {position}"),
+                )?;
+                if let Some(id) = get(&entity, "id")?.as_string() {
+                    row.set_attribute("data-scene-target", &id)?;
+                }
+                let actions = get(&entity, "actions")?;
+                if js_sys::Array::is_array(&actions) {
+                    let labels = js_sys::Array::from(&actions)
+                        .iter()
+                        .filter_map(|action| action.as_string())
+                        .collect::<Vec<_>>();
+                    node(document, &row, "small", "", &labels.join(" · "))?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

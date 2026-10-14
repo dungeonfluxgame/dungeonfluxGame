@@ -11,6 +11,58 @@ const SCHEMA: &str =
 const PROMPT: &str = include_str!("../../../../../content/adventure-tables/scene-model.prompt.md");
 const MAXIMUM_CHANGES: usize = 64;
 
+/// Detached presentation copies published by the session owner after loading or committing state.
+/// These copies never resolve an action or replace the durable scene-change ledger.
+static PRESENTATION: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, SceneNow>>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn publish_scene(place_id: &str, snapshot: SceneNow) {
+    let mut scenes = PRESENTATION
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    scenes.insert(place_id.to_owned(), snapshot);
+}
+
+pub(crate) fn install_scenes(settings: &super::setting::ChapterSettings) {
+    let mut scenes = PRESENTATION
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    scenes.clear();
+    for setting in [
+        &settings.meeting,
+        &settings.confrontation,
+        &settings.destination,
+    ] {
+        if let Some(model) = &setting.model {
+            scenes.insert(
+                setting.place_id.clone(),
+                SceneNow {
+                    model: model.clone(),
+                    changes: Vec::new(),
+                },
+            );
+        }
+    }
+}
+
+pub(crate) fn current_scene(scene: &super::super::pack::Scene) -> Option<SceneNow> {
+    let setting = scene.setting.as_ref()?;
+    let scenes = PRESENTATION
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut current = scenes.get(&setting.place_id).cloned().or_else(|| {
+        setting.model.clone().map(|model| SceneNow {
+            model,
+            changes: Vec::new(),
+        })
+    })?;
+    current.model = current.model.for_scene(scene.key);
+    Some(current)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ScenePlace {
     Meeting,
@@ -213,6 +265,65 @@ impl std::fmt::Display for SceneModelError {
 impl std::error::Error for SceneModelError {}
 
 impl SceneModel {
+    pub(crate) fn public_contents(&self) -> Result<String, SceneModelError> {
+        let mut contents: Value = serde_json::from_str(&self.picture_state()?)
+            .map_err(|_| SceneModelError::Serialization)?;
+        if let Some(things) = contents.get_mut("things").and_then(Value::as_array_mut) {
+            for (view, thing) in things.iter_mut().zip(&self.things) {
+                view["short"] = Value::String(thing.short.clone());
+                view["actions"] = serde_json::json!(if thing.portable {
+                    vec!["look", "take", "use"]
+                } else {
+                    vec!["look", "use"]
+                });
+                view["owner"] = serde_json::json!(thing.owner_id);
+            }
+        }
+        contents["offers"] = serde_json::json!(self.offers);
+        serde_json::to_string(&contents).map_err(|_| SceneModelError::Serialization)
+    }
+
+    /// Visible material only: private knowledge, undiscovered clues and searches never reach art.
+    pub(crate) fn picture_state(&self) -> Result<String, SceneModelError> {
+        let people = self
+            .people
+            .iter()
+            .map(|person| {
+                serde_json::json!({
+                    "id": person.id, "name": person.name, "look_and_doing": person.description,
+                    "position": person.position,
+                })
+            })
+            .collect::<Vec<_>>();
+        let things = self
+            .things
+            .iter()
+            .map(|thing| {
+                serde_json::json!({
+                    "id": thing.id, "name": thing.name, "look": thing.picture_description,
+                    "position": thing.position, "in_scene": thing.in_scene,
+                    "holder": thing.holder_id, "open": thing.open, "lit": thing.lit,
+                    "broken": thing.broken,
+                })
+            })
+            .collect::<Vec<_>>();
+        let ways_out = self
+            .ways_out
+            .iter()
+            .map(|way| {
+                serde_json::json!({
+                    "id": way.id, "name": way.name, "position": way.position,
+                    "open": way.open, "beyond": way.beyond,
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string(&serde_json::json!({
+            "time_of_day": self.time_of_day, "weather": self.weather,
+            "people": people, "things": things, "ways_out": ways_out,
+        }))
+        .map_err(|_| SceneModelError::Serialization)
+    }
+
     /// Table fallback is generated before prose so the same room facts guide narration and art.
     pub(crate) fn fallback(
         setting: &SceneSetting,

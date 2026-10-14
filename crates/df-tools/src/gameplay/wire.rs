@@ -1332,6 +1332,8 @@ pub(super) fn project_journey(
             plate_state: rpc::PlateState::Unspecified as i32,
             scene_video_state: rpc::HomeVideoState::None as i32,
             scene_video_path: String::new(),
+            scene_contents_json: String::new(),
+            item: None,
         }
     };
     scene.cast = scene_cast(&authored);
@@ -1364,6 +1366,7 @@ pub(super) fn project_journey(
             journey: Some(journey),
             scene_graph: None,
             live_plate_graph_revision: 0,
+            check: None,
         }),
         LocalDemoRole::Player => rpc::view_message::Audience::Player(rpc::PlayerGameplayView {
             offer_id: String::new(),

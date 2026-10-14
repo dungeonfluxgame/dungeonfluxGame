@@ -865,6 +865,7 @@ fn the_heros_own_view_lists_each_present_npcs_attitude_and_the_display_gets_none
                 journey: Some(rpc::JourneyView::default()),
                 scene_graph: None,
                 live_plate_graph_revision: 0,
+                check: None,
             },
         )),
     };

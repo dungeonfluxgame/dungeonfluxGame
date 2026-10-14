@@ -42,6 +42,21 @@ fn taproom() -> SceneModel {
 }
 
 #[test]
+fn picture_state_changes_for_visible_actions_but_not_a_search_or_private_knowledge() {
+    let model = taproom();
+    let initial = model.picture_state().unwrap();
+    let mut searched = model.clone();
+    searched.things[0].searched_by.push("Brakka".into());
+    searched.people[0].knowledge.clear();
+    assert_eq!(initial, searched.picture_state().unwrap());
+    searched.things[0].holder_id = Some("Brakka".into());
+    searched.things[0].position = "held by Brakka".into();
+    assert_ne!(initial, searched.picture_state().unwrap());
+    assert!(!initial.contains("clue_fact_id"));
+    assert!(!initial.contains("closer_look"));
+}
+
+#[test]
 fn fallback_in_scene_has_people_things_exits_and_srd_521_prices_p101() {
     let model = taproom();
 

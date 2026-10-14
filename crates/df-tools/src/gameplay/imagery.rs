@@ -20,6 +20,8 @@ mod party_sheet;
 mod plate_prompt;
 mod prompt;
 mod references;
+mod scene_prompt;
+pub(super) use scene_prompt::{graph_edit, item_picture, model_plate, state_edit};
 
 use std::{
     collections::{HashMap, VecDeque},

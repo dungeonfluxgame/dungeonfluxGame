@@ -80,6 +80,7 @@ const ROUTE: &str = "/gameplay/home-video";
 
 #[path = "scene_video_prompt.rs"]
 mod scene_video_prompt;
+pub(super) use scene_video_prompt::model_staging;
 
 /// The raw `DF_GAMEPLAY_HOME_VIDEO*`, `DF_GAMEPLAY_SCENE_VIDEO` and `FAL_KEY` inputs.
 pub(crate) struct HomeVideoInputs {

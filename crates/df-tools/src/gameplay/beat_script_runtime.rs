@@ -330,6 +330,8 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
         }
     })?;
     Ok(rpc::GameplayScene {
+        scene_contents_json: String::new(),
+        item: None,
         destination: rpc::HarborDestination::HarborInn as i32,
         title: scene.title,
         scene_asset: scene.asset,

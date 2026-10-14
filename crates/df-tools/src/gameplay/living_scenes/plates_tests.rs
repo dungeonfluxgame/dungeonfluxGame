@@ -295,7 +295,7 @@ fn fresh_ids(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Fresh { id, .. } => Some(id.clone()),
-            Job::Directed(_) | Job::Edit { .. } | Job::Locate { .. } => None,
+            Job::State(_) | Job::Directed(_) | Job::Edit { .. } | Job::Locate { .. } => None,
         })
         .collect()
 }
@@ -340,6 +340,278 @@ fn shown_scene(message: &rpc::ViewMessage) -> &rpc::GameplayScene {
         rpc::view_message::Audience::Display(display) => display.scene.as_ref().unwrap(),
         rpc::view_message::Audience::Player(player) => player.scene.as_ref().unwrap(),
     }
+}
+
+#[test]
+fn visible_changes_settle_into_one_pending_edit_and_searches_make_none() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(37);
+    let mut scene = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    scene.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let mut plated = PlateScene::of(&scene).unwrap();
+    let view = view(&scene, &[1], false);
+    let mut book = Book::new();
+    state_images::observe(&mut book, &view, &plated, Duration::ZERO);
+    plated.snapshot.as_mut().unwrap().model.things[0]
+        .searched_by
+        .push("Brakka".into());
+    state_images::observe(&mut book, &view, &plated, Duration::from_secs(1));
+    assert!(book.state_images.pending.is_none());
+    plated
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Brakka pockets a coin".into());
+    state_images::observe(&mut book, &view, &plated, Duration::from_secs(1));
+    assert!(
+        book.state_images.pending.is_none(),
+        "an invisible inventory change is not a bake"
+    );
+    plated.snapshot.as_mut().unwrap().model.things[0].open = true;
+    plated
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Brakka opens the door".into());
+    state_images::observe(&mut book, &view, &plated, Duration::from_secs(2));
+    plated.snapshot.as_mut().unwrap().model.things[0].lit = true;
+    plated
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Sigrun lights the candle".into());
+    state_images::observe(&mut book, &view, &plated, Duration::from_secs(3));
+    assert!(book.state_images.pending.is_some());
+}
+
+#[tokio::test]
+async fn settled_changes_edit_once_keep_the_old_plate_and_drop_an_outdated_completion() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(41);
+    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    let base = locked(&shared.book).shown().unwrap().0;
+    let mut plated = PlateScene::of(&current).unwrap();
+    let mut changed_view = view(&current, &[1], false);
+    changed_view.graph_revision = 2;
+    plated.snapshot.as_mut().unwrap().model.things[0].open = true;
+    plated
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Brakka opens the door".into());
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed_view,
+        &plated,
+        Duration::from_secs(1),
+    );
+    plated.snapshot.as_mut().unwrap().model.things[0].lit = true;
+    plated
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Sigrun lights the candle".into());
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed_view,
+        &plated,
+        Duration::from_secs(2),
+    );
+    shared.poll_state_images_at(Duration::from_secs(4));
+    assert!(drain(&mut queue).is_empty());
+    shared.poll_state_images_at(Duration::from_secs(5));
+    let jobs = drain(&mut queue);
+    assert_eq!(jobs.len(), 1);
+    assert!(matches!(jobs[0], Job::State(_)));
+    assert_eq!(locked(&shared.book).shown().unwrap().0, base);
+    shared.poll_state_images_at(Duration::from_secs(6));
+    assert!(drain(&mut queue).is_empty());
+    // Another visible change supersedes the flight before its image arrives.
+    plated.snapshot.as_mut().unwrap().model.things[0].broken = true;
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed_view,
+        &plated,
+        Duration::from_secs(6),
+    );
+    let obsolete = "earlier state".into();
+    shared.finish_state_image(state_images::Done::Bake {
+        scene: changed_view.scene_key,
+        state: obsolete,
+        revision: 2,
+        result: Ok(key('b')),
+    });
+    assert_eq!(locked(&shared.book).shown().unwrap().0, base);
+}
+
+#[tokio::test]
+async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(38);
+    let mut scene = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    scene.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &scene, &[], &[1]);
+    drain(&mut queue);
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    let id = locked(&shared.book)
+        .current
+        .as_ref()
+        .unwrap()
+        .scene
+        .as_ref()
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .model
+        .things[0]
+        .id
+        .clone();
+    plates.request_item("Brakka", &id, None, false).unwrap();
+    plates.request_item("Brakka", &id, None, false).unwrap();
+    assert_eq!(drain(&mut queue).len(), 1);
+    let mut private = rpc::GameplayScene {
+        title: scene.title.clone(),
+        scene_asset: scene.asset.clone(),
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut private, Some("Brakka"));
+    assert_eq!(private.item.as_ref().unwrap().thing_id, id);
+    let mut public = rpc::GameplayScene {
+        title: scene.title.clone(),
+        scene_asset: scene.asset.clone(),
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut public, None);
+    assert!(public.item.is_none());
+    plates.request_item("Brakka", &id, None, true).unwrap();
+    assert!(drain(&mut queue).is_empty());
+    shared.project_scene_contents(&mut public, None);
+    assert_eq!(public.item.as_ref().unwrap().thing_id, id);
+}
+
+#[tokio::test]
+async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/campaign/luna6/K03/state-image-fixture-{}",
+        std::process::id()
+    ));
+    let fixture = DirectionFixture::new(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: super::super::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
+        social: SocialLedger::none(),
+        rating: ContentRating::Mature,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    let (jobs, mut queue) = mpsc::channel(16);
+    let shared = Arc::new(Shared {
+        inner,
+        book: Mutex::new(Book::new()),
+        jobs,
+    });
+    let generated = crate::gameplay::npc_dossier_tests::adventure(42);
+    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    observe(&shared, &current, &[], &[1]);
+    let Job::Fresh {
+        id,
+        scene,
+        spec,
+        heroes,
+        faces,
+        ..
+    } = drain(&mut queue).remove(0)
+    else {
+        panic!("fresh plate");
+    };
+    let (base, placement, _) = shared
+        .render_fresh(&scene, &spec, &heroes, &faces)
+        .await
+        .unwrap();
+    locked(&shared.book).insert(
+        id,
+        Entry::Ready {
+            key: base.clone(),
+            placement,
+        },
+    );
+    let mut changed = scene.clone();
+    let mut changed_view = view(&current, &[1], false);
+    changed_view.graph_revision = 2;
+    changed.snapshot.as_mut().unwrap().model.things[0].open = true;
+    changed
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Brakka opens the door".into());
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed_view,
+        &changed,
+        Duration::from_secs(1),
+    );
+    changed.snapshot.as_mut().unwrap().model.things[0].lit = true;
+    changed
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Sigrun lights the candle".into());
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed_view,
+        &changed,
+        Duration::from_secs(2),
+    );
+    shared.poll_state_images_at(Duration::from_secs(5));
+    let Job::State(job) = drain(&mut queue).remove(0) else {
+        panic!("state edit");
+    };
+    let done = shared.render_state_image(job).await;
+    shared.finish_state_image(done);
+    assert_eq!(
+        fixture.calls(),
+        2,
+        "one initial still and one edit for the entire batch"
+    );
+    assert_ne!(locked(&shared.book).shown().unwrap().0, base);
+    assert!(
+        fixture
+            .prompt()
+            .contains("Brakka opens the door; Sigrun lights the candle")
+    );
+    changed.snapshot.as_mut().unwrap().model.things[0]
+        .searched_by
+        .push("Brakka".into());
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed_view,
+        &changed,
+        Duration::from_secs(6),
+    );
+    shared.poll_state_images_at(Duration::from_secs(20));
+    assert!(drain(&mut queue).is_empty());
+    assert_eq!(fixture.calls(), 2);
 }
 
 fn apply(shared: &Shared, message: &mut rpc::ViewMessage) {

@@ -84,6 +84,23 @@ struct OldGameplayScene {
     live_plate: String,
 }
 
+#[test]
+fn appended_item_card_and_scene_contents_are_ignored_by_an_old_scene_peer() {
+    let current = rpc::GameplayScene {
+        title: "A room with intent".into(),
+        scene_contents_json: r#"{"people":[],"things":[]}"#.into(),
+        item: Some(rpc::SceneItemCard {
+            name: "Pewter tankard".into(),
+            detail: "A dented tankard with green wax on its rim.".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let old = OldGameplayScene::decode(current.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(old.title, current.title);
+    assert!(old.live_plate.is_empty());
+}
+
 #[derive(Clone, PartialEq, Message)]
 struct OldCombatOutcome {
     #[prost(string, tag = "1")]

@@ -29,6 +29,75 @@ const SIZE: (u32, u32) = (1024, 640);
 /// What a successful fake call reports: 100 text, 900 image and 300 output tokens.
 const FAKE_MICRO_DOLLARS: u64 = 100 * 5 + 900 * 8 + 300 * 30;
 
+#[test]
+fn scene_prompts_follow_the_narration_snapshot_and_item_card_detail() {
+    let generated = adventure(39);
+    let model = generated.settings.meeting.model.as_ref().unwrap();
+    let mut current = model.clone();
+    current.things[0].holder_id = Some("Brakka".into());
+    current.things[0].position = "held by Brakka".into();
+    current.ways_out[0].open = true;
+    let narration = current.as_it_is_now(pack::SceneKey::Opening, &[]).unwrap();
+    let narrative: serde_json::Value = serde_json::from_str(&narration).unwrap();
+    let image_model = current.for_scene(pack::SceneKey::Opening);
+    let edit = state_edit(
+        ContentRating::Mature,
+        &image_model,
+        "Brakka takes the tankard, opens the door and shows the seal to the patron",
+    )
+    .unwrap();
+    let picture = image_model.picture_state().unwrap();
+    assert!(edit.as_str().contains(&picture));
+    assert_eq!(
+        narrative["model"]["things"][0]["position"],
+        "held by Brakka"
+    );
+    for person in &image_model.people {
+        assert!(edit.as_str().contains(&person.name));
+    }
+    let thing = &image_model.things[0];
+    let item = item_picture(
+        ContentRating::Mature,
+        thing,
+        Some("green wax and grave dirt"),
+    )
+    .unwrap();
+    assert!(item.as_str().contains(&thing.detail));
+    assert!(item.as_str().contains(&thing.picture_description));
+    assert!(item.as_str().contains("green wax and grave dirt"));
+    assert!(item.as_str().contains("Show no people"));
+}
+
+#[tokio::test]
+async fn item_image_cache_precedes_the_existing_run_budget() {
+    let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
+    let (imagery, _) = imagery(&fake, "K03-item-cache-budget", 1);
+    let generated = adventure(40);
+    let thing = &generated.settings.meeting.model.as_ref().unwrap().things[0];
+    let request = || ImageRequest {
+        kind: ImageKind::ArtifactCloseUp,
+        references: vec![backdrop_reference()],
+        prompt: item_picture(ContentRating::Mature, thing, None).unwrap(),
+        output: spec(false),
+    };
+    let first = imagery.render(request()).await.unwrap();
+    assert_eq!(imagery.render(request()).await.unwrap(), first);
+    assert_eq!(fake.calls(), 1);
+    let mut changed = thing.clone();
+    changed.broken = !changed.broken;
+    let changed = ImageRequest {
+        kind: ImageKind::ArtifactCloseUp,
+        references: vec![backdrop_reference()],
+        prompt: item_picture(ContentRating::Mature, &changed, None).unwrap(),
+        output: spec(false),
+    };
+    assert_eq!(
+        imagery.render(changed).await,
+        Err(ImageFailure::BudgetExhausted)
+    );
+    assert_eq!(fake.calls(), 1);
+}
+
 // ---------------------------------------------------------------------------------------------
 // A loopback stand-in for the OpenAI image-edit endpoint.
 
@@ -402,7 +471,14 @@ pub(in crate::gameplay) struct DirectionFixture {
 impl DirectionFixture {
     pub(in crate::gameplay) fn new(cache: &Path) -> Self {
         let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-        let imagery = imagery_in(&fake, cache, None, 20, Duration::from_secs(5), ContentRating::Restrained);
+        let imagery = imagery_in(
+            &fake,
+            cache,
+            None,
+            20,
+            Duration::from_secs(5),
+            ContentRating::Restrained,
+        );
         Self { imagery, fake }
     }
 
@@ -423,7 +499,9 @@ async fn development_direction_changes_the_key_and_preserves_the_undirected_cach
     let original_prompt = baseline.prompt.as_str().to_owned();
     let original = imagery.render(baseline).await.unwrap();
     let mut directed = refresh(Mood::Calm);
-    directed.prompt = directed.prompt.with_development_direction("Brakka unsheathes his sword");
+    directed.prompt = directed
+        .prompt
+        .with_development_direction("Brakka unsheathes his sword");
     let key = imagery.render(directed).await.unwrap();
     assert_ne!(key, original);
     let sent = fake.last_fields().0;
@@ -438,14 +516,21 @@ async fn development_direction_changes_the_key_and_preserves_the_undirected_cach
 #[test]
 #[ignore = "operator-run local fake server; ends at its stop file or after 15 minutes"]
 fn devctl_image_fixture_server() {
-    let address = std::env::var("DF_DEVCTL_FAKE_LISTEN").unwrap().parse().unwrap();
+    let address = std::env::var("DF_DEVCTL_FAKE_LISTEN")
+        .unwrap()
+        .parse()
+        .unwrap();
     let output = PathBuf::from(std::env::var("DF_DEVCTL_FAKE_OUTPUT").unwrap());
     let fake = FakeOpenAi::start_at(address, Duration::from_millis(50), Reply::Image);
     println!("FIXTURE READY address={}", fake.address);
     let deadline = std::time::Instant::now() + Duration::from_secs(900);
     while std::time::Instant::now() < deadline && !output.join("stop").exists() {
         let seen = fake.seen.lock().unwrap().clone();
-        std::fs::write(output.join("requests.json"), serde_json::to_vec_pretty(&seen).unwrap()).unwrap();
+        std::fs::write(
+            output.join("requests.json"),
+            serde_json::to_vec_pretty(&seen).unwrap(),
+        )
+        .unwrap();
         thread::sleep(Duration::from_millis(100));
     }
 }
