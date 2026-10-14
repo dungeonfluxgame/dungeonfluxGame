@@ -910,7 +910,7 @@ fn handler_offered(
     }) {
         return offers;
     }
-    let result = match state {
+    let mut result = match state {
         State::Lobby
             if current.state().characters.len() == 2
                 && narrative_transition::story_permitted(current, member)? =>
@@ -1007,6 +1007,24 @@ fn handler_offered(
         // The end card accepts nothing, so it offers nothing.
         State::Ended | State::Preparing => vec![],
     };
+    if matches!(state, State::Lobby | State::Story | State::Conversation)
+        && session_machine::kind_accepted(state, rpc::GameplayActionKind::ExamineHarborSeal)
+        && super::beat_script::with_script(|script| {
+            script.current(current.state()).map(|beat| {
+                beat.offers
+                    .iter()
+                    .any(|offer| offer.effect == super::beat_script::BeatEffect::Observe)
+            })
+        })?
+    {
+        let scene = super::beat_script_runtime::scene(current.state())?;
+        if !scene.findings.is_empty() || !scene.cast.is_empty() {
+            result.push((
+                rpc::GameplayActionKind::ExamineHarborSeal,
+                "Look around".to_owned(),
+            ));
+        }
+    }
     Ok(result)
 }
 // The authored invitation follows the accepted victory, including after an admitted rest.
@@ -3098,6 +3116,189 @@ fn enter_conversation(
     Ok(kind == rpc::GameplayActionKind::AskCourier)
 }
 
+fn observe_check(
+    current: &Checkpoint,
+    actor: EntityId,
+    member: MemberId,
+    choices: &[(df_types::RevisionLabel, df_types::RevisionLabel)],
+    offered_target: &str,
+    operation: OperationId,
+    draws: &mut Vec<ActualDraw>,
+    supplier: DiceSource<'_>,
+) -> Result<rpc::AbilityCheckResult, RepositoryError> {
+    let selected_finding = choices
+        .iter()
+        .find(|(group, _)| group.as_str() == "finding")
+        .map(|(_, option)| option.as_str());
+    let skill_choice = choices
+        .iter()
+        .find(|(group, _)| group.as_str() == "attempt-skill")
+        .map(|(_, option)| option.as_str());
+    let thing_choice = choices
+        .iter()
+        .find(|(group, _)| group.as_str() == "attempt-thing")
+        .map(|(_, option)| option.as_str());
+    if choices
+        .iter()
+        .filter(|(group, _)| group.as_str() == "finding")
+        .count()
+        > 1
+        || choices
+            .iter()
+            .filter(|(group, _)| group.as_str() == "attempt-skill")
+            .count()
+            > 1
+        || choices
+            .iter()
+            .filter(|(group, _)| group.as_str() == "attempt-thing")
+            .count()
+            > 1
+        || choices
+            .iter()
+            .filter(|(group, _)| group.as_str() == super::beat_script_runtime::CHOICE_GROUP)
+            .count()
+            > 1
+        || choices.iter().any(|(group, _)| {
+            !matches!(
+                group.as_str(),
+                "finding"
+                    | "attempt-skill"
+                    | "attempt-thing"
+                    | super::beat_script_runtime::CHOICE_GROUP
+            )
+        })
+    {
+        refusal_detail::note("search-choice-shape");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let scene = super::beat_script_runtime::scene(current.state())?;
+    let watch_person = selected_finding.and_then(|id| id.strip_prefix("watch-"));
+    if watch_person.is_some_and(|id| !scene.cast.iter().any(|actor| actor.id == id)) {
+        refusal_detail::note("search-watch-target");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let finding = selected_finding
+        .filter(|id| watch_person.is_none() && *id != "look-around")
+        .and_then(|id| scene.findings.iter().find(|finding| finding.id == id));
+    if selected_finding.is_some()
+        && watch_person.is_none()
+        && selected_finding != Some("look-around")
+        && finding.is_none()
+    {
+        refusal_detail::note("search-finding");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    let finding_skill = |finding: &pack::Finding| match finding.skill {
+        pack::FindingSkill::Perception => "perception",
+        pack::FindingSkill::Investigation => "investigation",
+        pack::FindingSkill::Insight => "insight",
+        pack::FindingSkill::Survival => "survival",
+        pack::FindingSkill::Medicine => "medicine",
+        pack::FindingSkill::Arcana => "arcana",
+        pack::FindingSkill::History => "history",
+        pack::FindingSkill::Nature => "nature",
+        pack::FindingSkill::Religion => "religion",
+    };
+    let matching_finding = finding.or_else(|| {
+        if watch_person.is_some() {
+            return None;
+        }
+        let requested = match skill_choice.unwrap_or("perception") {
+            "perception" => pack::FindingSkill::Perception,
+            "investigation" => pack::FindingSkill::Investigation,
+            "insight" => pack::FindingSkill::Insight,
+            "survival" => pack::FindingSkill::Survival,
+            "medicine" => pack::FindingSkill::Medicine,
+            "arcana" => pack::FindingSkill::Arcana,
+            "history" => pack::FindingSkill::History,
+            "nature" => pack::FindingSkill::Nature,
+            "religion" => pack::FindingSkill::Religion,
+            _ => return None,
+        };
+        scene
+            .findings
+            .iter()
+            .find(|finding| finding.skill == requested)
+    });
+    let skill = match (skill_choice, matching_finding, watch_person) {
+        (None, None, Some(_)) => "insight",
+        (Some("insight"), None, Some(_)) => "insight",
+        (Some(_), None, Some(_)) => {
+            refusal_detail::note("search-watch-skill");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        (Some(skill), Some(finding), None) if skill == finding_skill(finding) => skill,
+        (_, Some(_), Some(_)) => {
+            refusal_detail::note("search-watch-finding");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        (Some(_), Some(_), None) => {
+            refusal_detail::note("search-skill-finding");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        (Some(skill), None, None) => skill,
+        (None, Some(finding), None) => finding_skill(finding),
+        (None, None, None) => "perception",
+    };
+    let scene_name = super::beat_script_runtime::scene_scope(current.state())?;
+    let detail = if let Some(person) = watch_person {
+        format!("watch-{person}")
+    } else if let Some(finding) = finding {
+        format!("finding-{}", finding.id)
+    } else if let Some(thing) = thing_choice {
+        thing.to_owned()
+    } else {
+        offered_target.to_owned()
+    };
+    for decision in &current.state().decisions {
+        let belongs_to_member = super::beat_script_runtime::choice(current.state(), decision)?
+            .is_some_and(|(_, _, found_member)| found_member == member);
+        let same_target_check = belongs_to_member
+            && accepted(decision)?.check.is_some_and(|check| {
+                let parts = check.source_revision.splitn(4, ':').collect::<Vec<_>>();
+                parts.len() == 4
+                    && parts[0] == "srd521-p6"
+                    && parts[1] == scene_name
+                    && parts[2] == skill
+                    && parts[3] == detail
+            });
+        if same_target_check {
+            refusal_detail::note("search-already-tried");
+            return Err(RepositoryError::InvalidCandidate);
+        }
+    }
+    // SRD 5.2.1 p. 183: "you must succeed on a DC 15 Dexterity (Stealth) check" to Hide.
+    // SRD 5.2.1 p. 6: the GM sets check DCs; the table lists "Easy 10" and "Medium 15."
+    let difficulty_class = if skill == "stealth" {
+        15
+    } else {
+        matching_finding.map_or(10, |finding| finding.dc)
+    };
+    let die = draw(operation, 20, draws, supplier)?;
+    // SRD 5.2.1 p. 6: "Add these modifiers to the number rolled on the d20" and
+    // "equals or exceeds the target number, the D20 Test succeeds."
+    let resolved = super::beat_script_runtime::resolve_skill_check(
+        current.state(),
+        actor,
+        skill,
+        u8::try_from(die).map_err(|_| {
+            refusal_detail::note("search-die-range");
+            RepositoryError::InvalidCandidate
+        })?,
+        difficulty_class,
+    )?;
+    let source_revision = format!("srd521-p6:{scene_name}:{skill}:{detail}");
+    Ok(rpc::AbilityCheckResult {
+        die: u32::from(resolved.die),
+        ability_modifier: i32::from(resolved.ability_modifier),
+        proficiency_bonus: u32::from(resolved.proficiency_bonus),
+        total: i32::from(resolved.total),
+        difficulty_class: u32::from(resolved.difficulty_class),
+        succeeded: resolved.succeeded,
+        source_revision,
+    })
+}
+
 fn stage_using(
     current: &Checkpoint,
     input: &GameInput,
@@ -3252,6 +3453,7 @@ fn stage_using(
     let mut draws = Vec::new();
     let mut outcomes = Vec::new();
     let mut private = false;
+    let mut check = None;
     let pure_target = super::beat_script_runtime::pure_target(current, &selected)?;
     // Time passing for a hero at 0 hit points after the fight belongs to the story beat that
     // follows the fight, not to a choice of that beat's own offers: it records no script choice,
@@ -3283,7 +3485,18 @@ fn stage_using(
             if tactical::present(&state) && tactical::dying(&state)? {
                 return Err(RepositoryError::InvalidCandidate);
             }
-            if selected.effect == super::beat_script::BeatEffect::ChooseHarborScene {
+            if selected.effect == super::beat_script::BeatEffect::Observe {
+                check = Some(observe_check(
+                    current,
+                    *who,
+                    command.member,
+                    choices,
+                    &selected.id,
+                    command.operation,
+                    &mut draws,
+                    supplier,
+                )?);
+            } else if selected.effect == super::beat_script::BeatEffect::ChooseHarborScene {
                 if choices.as_slice()
                     != [(
                         model::label("harbor-destination")?,
@@ -3425,7 +3638,7 @@ fn stage_using(
         _ => return Err(RepositoryError::InvalidCandidate),
     }
     let result = rpc::AcceptedAction {
-        check: None,
+        check,
         scene: if kind == rpc::GameplayActionKind::ChooseHarborScene {
             if let Some(target) = &pure_target {
                 Some(super::beat_script_runtime::destination_scene(target)?)
@@ -3487,7 +3700,8 @@ fn stage_using(
             reaction,
             escort_target: (kind == rpc::GameplayActionKind::EscortCourier).then_some(*who),
             objective_command: Some(command),
-            script_choice: if super::beat_script::with_script(|script| script.is_canonical())
+            script_choice: if (super::beat_script::with_script(|script| script.is_canonical())
+                && selected.effect != super::beat_script::BeatEffect::Observe)
                 || original_kind == rpc::GameplayActionKind::CreateCharacter
                 || aftermath
             {

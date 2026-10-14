@@ -118,6 +118,8 @@ struct Service {
     npc_voice: Arc<npc_reply::NpcVoice>,
     /// The public feed of who said and did what; a new line publishes a fresh view.
     table_log: Arc<table_log::TableLog>,
+    /// The current, server-owned standing and dossiers for each hero and character.
+    social: Arc<social::SocialLedger>,
     /// Follows the story's mood with generated scene art; presentation only.
     living: living_scenes::LivingScenes,
 }
@@ -1605,6 +1607,7 @@ async fn serve_run(
         ),
         // DEVCTL-001: cloned, not moved: the control surface takes one below.
         table_log: table_log.clone(),
+        social: social.clone(),
         living,
     };
     // DEVCTL-001: the agent control surface. Off by default: with the setting

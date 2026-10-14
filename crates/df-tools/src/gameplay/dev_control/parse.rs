@@ -67,6 +67,7 @@ pub(super) enum PlayAction {
     ChooseInn,
     ResolveErrand,
     NewAdventure,
+    Search,
 }
 
 /// Maps one explicit action word to its engine kind. There is no free-text
@@ -93,6 +94,7 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "inn" | "choose-inn" => PlayAction::ChooseInn,
         "resolve" | "resolve-errand" => PlayAction::ResolveErrand,
         "new-adventure" => PlayAction::NewAdventure,
+        "search" => PlayAction::Search,
         _ => return Err(format!("unknown action {text:?}; see dev describe")),
     })
 }
@@ -121,6 +123,7 @@ impl PlayAction {
             Self::ChooseInn => rpc::GameplayActionKind::ChooseHarborScene,
             Self::ResolveErrand => rpc::GameplayActionKind::ResolveErrand,
             Self::NewAdventure => rpc::GameplayActionKind::StartNewAdventure,
+            Self::Search => rpc::GameplayActionKind::ExamineHarborSeal,
         }
     }
 
@@ -133,6 +136,7 @@ impl PlayAction {
                 | Self::StabiliseWithHealersKit
                 | Self::StabiliseMedicine
                 | Self::PickUpWeapon
+                | Self::Search
         )
     }
 }
@@ -201,6 +205,14 @@ mod tests {
         assert!(medicine.needs_option());
         assert!(parse_action("do something brave").is_err());
         assert!(parse_action("").is_err());
+    }
+
+    #[test]
+    fn search_action_maps_to_server_observation_srd_521_p187() {
+        // SRD 5.2.1 p. 187: Search is a Wisdom check, including Perception for concealed objects.
+        let search = parse_action("search").unwrap();
+        assert_eq!(search.kind(), rpc::GameplayActionKind::ExamineHarborSeal);
+        assert!(search.needs_option());
     }
 
     #[test]

@@ -1239,29 +1239,30 @@ fn sha256(bytes: &[u8]) -> String {
 /// so the dossier tables revision and the record hashes moved; pack and tuning are unchanged.
 /// NTE-01 adds the compact scene facts used to populate the durable notebook, changing records
 /// while leaving the pack and tuning bytes unchanged.
+// INV-03 adds a Look around offer to generated pre-fight story beats; the pack and record pins move.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "575733f0349983b147b0cbc9511a3aa0b9cf7ed9244076dded9f97afae2f4bef",
+            "807f57eaf77176797791a120af23f5f46f035cdf8022b8d0eee493fe1903399d",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "045ebeaffc7ddf4a9c7f4e1135016ef618a2a3bd01b69cc2c4f83f1e6833bb90",
+            "f727a76bae633d053f18ff863571932616de9dd5a4030730d333013bc223797d",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "94829369c00648864f8c968fb01b5f9736b8504197404813bae399c2b34e44c8",
+            "d0b2c27c34c43ed801645a3d18ffeb77c350b4c6f4a72b52303da9906549277e",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "4415262dfc417c9e2a92189524163bc4fb9d1e40727b020299c41fd81ffa4dea",
+            "e800d8111b41eddd9c489a7780b15e91c5828d2d32710c950ead2d16ed718083",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "f281627efc12c4dd8fccdc14cadd747ffdf77bbf1ee17ddb06d0cb14ef728674",
+            "8285912ff0a7325f6e0e126d10c22ca2196c47bfeb354a03735b3d583e86dc42",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "74c832ffba3a593ac8dd8f5671e198feacee536eb92f767799c42a2f9187e093",
+            "3cc9083a56bb036d47d5f6d83d38cbd5feea2c630752476b4f2d99f415ffcabb",
         ],
     ),
 ];
@@ -1279,9 +1280,15 @@ fn restrained_generation_matches_current_tactical_document_pins() {
         .unwrap()
         .documents(true)
         .unwrap();
-        assert_eq!(sha256(&documents.pack), pack, "{seed:#x} pack");
-        assert_eq!(sha256(&documents.tuning), tuning, "{seed:#x} tuning");
-        assert_eq!(sha256(&documents.record), record, "{seed:#x} record");
+        assert_eq!(
+            [
+                sha256(&documents.pack),
+                sha256(&documents.tuning),
+                sha256(&documents.record),
+            ],
+            [pack.to_owned(), tuning.to_owned(), record.to_owned()],
+            "{seed:#x} documents"
+        );
         assert!(super::record::reload(&documents).is_ok());
     }
 }

@@ -107,6 +107,147 @@ fn opening_story() -> Checkpoint {
     .expect("registered opening")
 }
 
+#[test]
+fn canonical_skill_modifiers_and_passive_perception_follow_srd_5_2_1_pages_6_22_183_187_189_for_both_heroes()
+ {
+    // SRD 5.2.1 p. 6: add the relevant ability modifier and the Proficiency Bonus when proficient.
+    // p. 22: "Passive Perception = 10 + Wisdom (Perception) check modifier." Search is p. 187,
+    // Study p. 189, and Hide's Dexterity (Stealth) check is p. 183.
+    let current = prepared_story();
+    let skills = [
+        ("perception", "wisdom", true),
+        ("investigation", "intelligence", false),
+        ("insight", "wisdom", false),
+        ("survival", "wisdom", true),
+        ("medicine", "wisdom", false),
+        ("arcana", "intelligence", false),
+        ("history", "intelligence", false),
+        ("nature", "intelligence", false),
+        ("religion", "intelligence", false),
+        ("stealth", "dexterity", false),
+    ];
+    let proficiency_bonus = pack::with_creation(|creation| creation.proficiency_bonus);
+    for member_bytes in MEMBERS {
+        let member = MemberId::from_bytes(&member_bytes).unwrap();
+        let actor = player_entity(member, &current).unwrap();
+        for (skill, ability, proficient) in skills {
+            let score = u8::try_from(value(current.state(), actor, ability).unwrap()).unwrap();
+            let expected = (
+                i8::try_from(df_rules::local_journey::ability_modifier(score)).unwrap(),
+                if proficient { proficiency_bonus } else { 0 },
+            );
+            assert_eq!(
+                super::beat_script_runtime::skill_check_modifiers(current.state(), actor, skill)
+                    .unwrap(),
+                expected,
+                "{member_bytes:?} {skill}"
+            );
+        }
+        let (wisdom_modifier, perception_proficiency) =
+            super::beat_script_runtime::skill_check_modifiers(current.state(), actor, "perception")
+                .unwrap();
+        assert_eq!(
+            super::beat_script_runtime::passive_perception(current.state(), actor).unwrap(),
+            10 + i16::from(wisdom_modifier) + i16::from(perception_proficiency)
+        );
+    }
+}
+
+#[test]
+fn canonical_phone_offers_look_around_with_scene_findings_srd_521_pages_187_189() {
+    let mut content: pack::PackFile = serde_json::from_slice(PACK).unwrap();
+    content
+        .scenes
+        .iter_mut()
+        .find(|scene| scene.key == pack::SceneKey::Opening)
+        .unwrap()
+        .findings = vec![
+        pack::Finding {
+            id: "errand-truth".into(),
+            sentence: "The warning concerns the sealed map bundle.".into(),
+            skill: pack::FindingSkill::Investigation,
+            dc: 15,
+            private: false,
+            consequence: None,
+        },
+        pack::Finding {
+            id: "enemy-position".into(),
+            sentence: "The pursuers wait beyond the boardwalk.".into(),
+            skill: pack::FindingSkill::Perception,
+            dc: 15,
+            private: false,
+            consequence: None,
+        },
+    ];
+    let loaded = pack::load_from_bytes(&serde_json::to_vec(&content).unwrap(), TUNING).unwrap();
+    pack::with_test_pack(loaded, || {
+        let current = opening_story();
+        assert_eq!(
+            super::beat_script_runtime::action_label(
+                &super::journey::offer_id(&current, rpc::GameplayActionKind::ExamineHarborSeal),
+                rpc::GameplayActionKind::ExamineHarborSeal,
+            )
+            .unwrap(),
+            "Look around"
+        );
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let view = wire::journey_view(
+            &current,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap();
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+            panic!("player view")
+        };
+        let offer = player
+            .offers
+            .into_iter()
+            .find(|offer| offer.action_kind == rpc::GameplayActionKind::ExamineHarborSeal as i32)
+            .expect("story scenes offer look around");
+        assert_eq!(offer.label, "Look around");
+        assert_eq!(offer.input_groups.len(), 1);
+        assert_eq!(offer.input_groups[0].label, "Look around");
+        assert_eq!(
+            offer.input_groups[0]
+                .options
+                .iter()
+                .map(|option| option.option_id.as_str())
+                .collect::<Vec<_>>(),
+            ["errand-truth", "enemy-position", "watch-courier"]
+        );
+        let checked = stage_with_supplier(
+            &current,
+            &input(
+                &current,
+                member,
+                0x63,
+                "script-choice",
+                vec![
+                    (
+                        model::label("finding").unwrap(),
+                        model::label("errand-truth").unwrap(),
+                    ),
+                    (
+                        model::label("attempt-skill").unwrap(),
+                        model::label("investigation").unwrap(),
+                    ),
+                ],
+            ),
+            &mut |_| Ok(20),
+        )
+        .unwrap();
+        let receipt = super::journey::accepted(checked.state().decisions.last().unwrap()).unwrap();
+        let check = receipt.check.expect("Look around rolls on the server");
+        assert_eq!(check.die, 20);
+        assert_eq!(
+            check.source_revision,
+            "srd521-p6:opening:investigation:finding-errand-truth"
+        );
+        assert_eq!(receipt.phase, rpc::JourneyPhase::Opening as i32);
+    });
+}
+
 fn snapshots(approach: &str, defeat: bool) -> Vec<Checkpoint> {
     let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
     let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();

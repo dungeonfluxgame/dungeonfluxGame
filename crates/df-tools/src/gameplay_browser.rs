@@ -1348,7 +1348,7 @@ fn complete_action_response(
                         if receipt.replayed { "true" } else { "false" },
                     );
                     match receipt.outcome {
-                        Some(rpc::decision_receipt::Outcome::Accepted(_)) => {
+                        Some(rpc::decision_receipt::Outcome::Accepted(accepted)) => {
                             if body.action_kind == rpc::GameplayActionKind::GreatswordAttack as i32
                                 && state.first_attack.is_none()
                             {
@@ -1361,6 +1361,16 @@ fn complete_action_response(
                                 == rpc::GameplayActionKind::SetTableSetting as i32
                             {
                                 "Table setting saved.".to_owned()
+                            } else if body.action_kind
+                                == rpc::GameplayActionKind::ExamineHarborSeal as i32
+                            {
+                                accepted.check.as_ref().map_or_else(
+                                    || {
+                                        "The observation was saved without a check receipt."
+                                            .to_owned()
+                                    },
+                                    |check| observation_roll_line(check),
+                                )
                             } else if receipt.replayed {
                                 "Original saved outcome confirmed. No rolls or damage were repeated.".to_owned()
                             } else {
@@ -1390,6 +1400,34 @@ fn complete_action_response(
             error.to_owned()
         }
     }
+}
+
+fn observation_roll_line(check: &rpc::AbilityCheckResult) -> String {
+    let parts = check.source_revision.splitn(4, ':').collect::<Vec<_>>();
+    let Some(skill) = parts.get(2).copied() else {
+        return "The observation roll could not be displayed.".to_owned();
+    };
+    let (ability, title) = match skill {
+        "perception" => ("Wisdom", "Perception"),
+        "insight" => ("Wisdom", "Insight"),
+        "survival" => ("Wisdom", "Survival"),
+        "medicine" => ("Wisdom", "Medicine"),
+        "investigation" => ("Intelligence", "Investigation"),
+        "arcana" => ("Intelligence", "Arcana"),
+        "history" => ("Intelligence", "History"),
+        "nature" => ("Intelligence", "Nature"),
+        "religion" => ("Intelligence", "Religion"),
+        "stealth" => ("Dexterity", "Stealth"),
+        _ => return "The observation roll could not be displayed.".to_owned(),
+    };
+    let Ok(proficiency) = i32::try_from(check.proficiency_bonus) else {
+        return "The observation roll could not be displayed.".to_owned();
+    };
+    let modifier = check.ability_modifier + proficiency;
+    format!(
+        "{ability} ({title}) {} + {modifier} = {}.",
+        check.die, check.total
+    )
 }
 /// A choice whose outcome was unknown is confirmed by the page itself once the game answers
 /// again (the first view after a failure), a few times at most. Confirming repeats the same
@@ -1798,6 +1836,25 @@ fn activate_action_offer(
                     && group.options.iter().any(|option| option.option_id == value)
             }) {
                 feedback(&client.borrow(), "Choose an offered option.");
+                return;
+            }
+            action_choices.push(rpc::JourneyChoice {
+                group_id: key.clone(),
+                option_id: value,
+            });
+            continue;
+        }
+        if key == "finding"
+            && offered.action_kind == rpc::GameplayActionKind::ExamineHarborSeal as i32
+        {
+            if !offered.input_groups.iter().any(|group| {
+                group.group_id == *key
+                    && group.options.iter().any(|option| option.option_id == value)
+            }) {
+                feedback(
+                    &client.borrow(),
+                    "Choose something the scene offers to examine.",
+                );
                 return;
             }
             action_choices.push(rpc::JourneyChoice {

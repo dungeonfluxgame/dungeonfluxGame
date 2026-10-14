@@ -101,6 +101,7 @@ impl Event {
             BeatEffect::CreateCharacter => Self::CreateHero,
             BeatEffect::BeginStory => Self::Begin,
             BeatEffect::Continue => Self::ScriptStep,
+            BeatEffect::Observe => Self::ScriptStep,
             BeatEffect::Resolve => Self::Resolve,
             BeatEffect::DefendCourier => Self::StartFight,
             BeatEffect::ShortRest => Self::Rest,
@@ -108,7 +109,6 @@ impl Event {
             BeatEffect::AskCourier
             | BeatEffect::EscortCourier
             | BeatEffect::ThirdApproach
-            | BeatEffect::Observe
             | BeatEffect::ChooseHarborScene => Self::StoryChoice,
             BeatEffect::GreatswordAttack | BeatEffect::SecondWind => Self::CombatAction,
         }
@@ -174,9 +174,8 @@ pub(super) fn events_for_kind(kind: rpc::GameplayActionKind) -> &'static [Event]
         K::CreateCharacter => &[Event::CreateHero],
         // A pure authored Continue step is also submitted as BeginStory.
         K::BeginStory => &[Event::Begin, Event::ScriptStep],
-        K::AskCourier | K::EscortCourier | K::ExamineHarborSeal | K::ChooseHarborScene => {
-            &[Event::StoryChoice]
-        }
+        K::ExamineHarborSeal => &[Event::ScriptStep, Event::StoryChoice],
+        K::AskCourier | K::EscortCourier | K::ChooseHarborScene => &[Event::StoryChoice],
         K::DefendCourier => &[Event::StartFight],
         K::GreatswordAttack
         | K::SecondWind

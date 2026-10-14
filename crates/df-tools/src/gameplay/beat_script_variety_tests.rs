@@ -230,6 +230,25 @@ pub(super) fn act(current: &Checkpoint, member: MemberId, operation: u8, id: &st
     journey::stage_with_supplier(current, &input, &mut |sides| Ok(sides))
         .unwrap_or_else(|error| panic!("action {id} operation {operation}: {error:?}"))
 }
+fn act_with_choices(
+    current: &Checkpoint,
+    member: MemberId,
+    operation: u8,
+    id: &str,
+    choices: &[(&str, &str)],
+) -> Checkpoint {
+    let mut raw = request(current, member, operation, id);
+    raw.action_choices = choices
+        .iter()
+        .map(|(group_id, option_id)| rpc::JourneyChoice {
+            group_id: (*group_id).to_owned(),
+            option_id: (*option_id).to_owned(),
+        })
+        .collect();
+    let input = wire::journey_input(&raw, member, current).unwrap();
+    journey::stage_with_supplier(current, &input, &mut |sides| Ok(sides))
+        .unwrap_or_else(|error| panic!("action {id} operation {operation}: {error:?}"))
+}
 pub(super) fn prepared() -> Checkpoint {
     let mut current = journey::initial().unwrap();
     for operation in [1, 2] {
@@ -354,16 +373,12 @@ fn repeated_look_choices_share_a_proto_kind_but_keep_exact_ids_replay_and_member
             assert_ne!(looks[0].2, looks[1].2);
             let stale = request(&current, first(), 6, "look-crates");
             let proposed = wire::journey_input(&stale, first(), &current).unwrap();
-            let replay = journey::stage_with_supplier(&current, &proposed, &mut |_| {
-                panic!("observation never draws")
-            })
-            .unwrap();
+            // SRD 5.2.1 p. 6: "Roll 1d20." Each ability check starts with this roll.
+            let replay =
+                journey::stage_with_supplier(&current, &proposed, &mut |_| Ok(14)).unwrap();
             assert_eq!(
                 replay,
-                journey::stage_with_supplier(&current, &proposed, &mut |_| panic!(
-                    "replay never draws"
-                ))
-                .unwrap()
+                journey::stage_with_supplier(&current, &proposed, &mut |_| Ok(14)).unwrap()
             );
             current = replay;
             assert!(
@@ -500,12 +515,26 @@ fn player_choice_cycle_revisits_two_durable_beats_and_resumes_without_duplicate_
             (6, "escort-courier"),
             (7, "continue-conversation"),
             (8, "look-around"),
-            (9, "look-around"),
-            (10, "look-around"),
         ] {
             current = act(&current, first(), operation, id);
             current = persisted(&current);
         }
+        current = act_with_choices(
+            &current,
+            first(),
+            9,
+            "look-around",
+            &[("attempt-skill", "investigation")],
+        );
+        current = persisted(&current);
+        current = act_with_choices(
+            &current,
+            first(),
+            10,
+            "look-around",
+            &[("attempt-skill", "history")],
+        );
+        current = persisted(&current);
         let completed = &current.state().narrative.completed_beats;
         assert_eq!(
             completed.len(),
@@ -638,7 +667,7 @@ mod session {
             input: &GameInput,
         ) -> Result<Checkpoint, RepositoryError> {
             self.0.borrow_mut().decisions += 1;
-            journey::stage_with_supplier(current, input, &mut |_| panic!("observation cannot draw"))
+            journey::stage_with_supplier(current, input, &mut |sides| Ok(sides))
         }
         fn validate_recovery(&mut self, checkpoint: &Checkpoint) -> Result<(), RepositoryError> {
             journey::phase(checkpoint).map(|_| ())

@@ -223,6 +223,7 @@ impl RunningActor {
             ),
             npc_voice: Arc::new(super::npc_reply::NpcVoice::silent()),
             table_log,
+            social: super::social::SocialLedger::none(),
             living: super::living_scenes::LivingScenes::disabled(),
         };
         Ok(Self {

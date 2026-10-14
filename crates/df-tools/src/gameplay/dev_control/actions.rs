@@ -4,7 +4,6 @@
 
 use axum::{extract::State, http::HeaderMap, response::Json};
 use df_protocol::common as rpc;
-use prost::Message;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -418,6 +417,18 @@ fn fill_action_choices(
     offer: &Offer,
     submit: &mut rpc::SubmitActionRequest,
 ) -> Result<(), (axum::http::StatusCode, Json<Value>)> {
+    if action == parse::PlayAction::Search {
+        let thing = body
+            .get("option")
+            .and_then(Value::as_str)
+            .filter(|thing| !thing.trim().is_empty() && thing.len() <= 64)
+            .ok_or_else(|| bad_request("search needs {\"option\": \"<thing>\"}"))?;
+        submit.action_choices = vec![rpc::JourneyChoice {
+            group_id: "finding".to_owned(),
+            option_id: thing.to_owned(),
+        }];
+        return Ok(());
+    }
     if action == parse::PlayAction::ChooseInn {
         let destination = offer
             .destinations
@@ -641,24 +652,10 @@ pub(super) async fn say(
         finality: rpc::DialogueFinality::Final as i32,
         offer_id: String::new(),
     };
-    let mut bytes = Vec::new();
-    request
-        .encode(&mut bytes)
-        .map_err(|_| failed("dialogue encoding invalid"))?;
-    let (reply, wait) = oneshot::channel();
-    state
+    let answer = state
         .service
-        .actor
-        .try_submit(super::super::actor::Call::Dialogue {
-            credential,
-            request: super::super::dialogue::DialogueRequest::Raw(bytes),
-            reply,
-        })
-        .map_err(|_| failed("dialogue actor queue full"))?;
-    let answer = tokio::time::timeout(super::super::timing::active().reply, wait)
+        .submit_line(credential, request)
         .await
-        .map_err(|_| failed("dialogue deadline"))?
-        .map_err(|_| failed("dialogue actor stopped"))?
         .map_err(|status| failed(status.message()))?;
     match answer {
         super::super::dialogue::DialogueReply::Raw(response, npc) => {
@@ -761,6 +758,44 @@ mod offer_tests {
             )),
         };
         assert!(player_offers(&view).is_err());
+    }
+
+    #[test]
+    fn search_option_selects_the_offered_finding_srd_521_page_189() {
+        // SRD 5.2.1 p. 189: Study uses an Intelligence check; the server derives the
+        // finding's listed skill from the selected scene option.
+        let offer = Offer {
+            offer_id: "look-around".to_owned(),
+            action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
+            label: "Look around".to_owned(),
+            groups: vec![rpc::JourneyGroup {
+                group_id: "finding".to_owned(),
+                label: "Look around".to_owned(),
+                options: vec![rpc::JourneyOption {
+                    option_id: "errand-truth".to_owned(),
+                    label: "Errand Truth".to_owned(),
+                    ..Default::default()
+                }],
+            }],
+            destinations: Vec::new(),
+        };
+        let mut submit = rpc::SubmitActionRequest::default();
+
+        fill_action_choices(
+            &json!({"option": "errand-truth"}),
+            parse::PlayAction::Search,
+            &offer,
+            &mut submit,
+        )
+        .unwrap();
+
+        assert_eq!(
+            submit.action_choices,
+            [rpc::JourneyChoice {
+                group_id: "finding".to_owned(),
+                option_id: "errand-truth".to_owned(),
+            }]
+        );
     }
 
     #[test]

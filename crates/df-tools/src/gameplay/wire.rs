@@ -147,8 +147,12 @@ pub(super) fn journey_input(
     }
     // A fight action carries at most its choice from the list and the two attack variants
     // (weapon mastery, Savage Attacker).
+    let observation_offer = kind == rpc::GameplayActionKind::ExamineHarborSeal
+        && super::beat_script_runtime::is_observation_offer(current, &request.offer_id)
+            .map_err(|_| invalid())?;
     if request.action_choices.len() > 3
         || (!super::journey::tactical::present(current.state())
+            && !observation_offer
             && !request.action_choices.is_empty())
     {
         return Err(invalid());
@@ -941,12 +945,21 @@ pub(super) fn project_journey(
         } else {
             creation = Some(stage("view-creation-offer", creation_offer())?);
         }
+        let mut observation_added = false;
         for (kind, label, offer_id) in stage(
             "view-offers",
             super::beat_script_runtime::view_offers(current, principal),
         )? {
+            if kind == rpc::GameplayActionKind::ExamineHarborSeal
+                && super::beat_script_runtime::is_observation_offer(current, &offer_id)?
+            {
+                if observation_added {
+                    continue;
+                }
+                observation_added = true;
+            }
             offers.push(rpc::GameplayActionOffer {
-                offer_id,
+                offer_id: offer_id.clone(),
                 action_kind: kind as i32,
                 label: label.to_owned(),
                 destinations: if kind == rpc::GameplayActionKind::ChooseHarborScene {
@@ -975,6 +988,16 @@ pub(super) fn project_journey(
                             "On a miss, apply your Strength modifier as damage",
                         ),
                     ]
+                } else if kind == rpc::GameplayActionKind::ExamineHarborSeal
+                    && stage(
+                        "view-observation-offer",
+                        super::beat_script_runtime::is_observation_offer(current, &offer_id),
+                    )?
+                {
+                    vec![stage(
+                        "view-observation-options",
+                        observation_group(current),
+                    )?]
                 } else {
                     Vec::new()
                 },
@@ -1168,7 +1191,7 @@ pub(super) fn project_journey(
         }
         narration
     });
-    let narration = if key == SceneKey::Defeat {
+    let mut narration = if key == SceneKey::Defeat {
         combat
             .as_ref()
             .and_then(|view| defeat_context(&view.participants))
@@ -1178,6 +1201,27 @@ pub(super) fn project_journey(
     } else {
         narration
     };
+    if role == LocalDemoRole::Player
+        && phase == rpc::JourneyPhase::Dialogue
+        && !authored.findings.is_empty()
+    {
+        let actor = stage(
+            "view-player-entity",
+            journey::player_entity(principal, current),
+        )?;
+        // SRD 5.2.1 p. 22: "Passive Perception = 10 + Wisdom (Perception) check modifier."
+        let passive = stage(
+            "view-passive-perception",
+            super::beat_script_runtime::passive_perception(state, actor),
+        )?;
+        let visible = passive_findings(&authored, passive)
+            .into_iter()
+            .map(|finding| finding.sentence.as_str())
+            .collect::<Vec<_>>();
+        if !visible.is_empty() {
+            narration = format!("{narration} You notice: {}", visible.join(" "));
+        }
+    }
     // A rested scene and an epilogue replace the story text whole, and the rules wording
     // belonged to the text they replace.
     let epilogue_replaces =
@@ -1314,6 +1358,67 @@ pub(super) fn project_journey(
     })
 }
 
+fn observation_group(current: &Checkpoint) -> Result<rpc::JourneyGroup, RepositoryError> {
+    let scene = stage(
+        "view-observation-scene",
+        super::beat_script_runtime::scene(current.state()),
+    )?;
+    let mut options = scene
+        .findings
+        .iter()
+        .map(|finding| {
+            let label = finding
+                .id
+                .split('-')
+                .map(|word| {
+                    let mut characters = word.chars();
+                    characters.next().map_or_else(String::new, |first| {
+                        first.to_uppercase().chain(characters).collect()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            rpc::JourneyOption {
+                option_id: finding.id.clone(),
+                label,
+                description: format!("Examine the {}.", finding.id.replace('-', " ")),
+                requires_group: String::new(),
+                requires_options: Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+    options.extend(scene.cast.iter().map(|actor| rpc::JourneyOption {
+        option_id: format!("watch-{}", actor.id),
+        label: format!("Watch {}", actor.name),
+        description: format!("Watch {} for a change in expression or manner.", actor.name),
+        requires_group: String::new(),
+        requires_options: Vec::new(),
+    }));
+    if options.is_empty() || options.len() > 8 {
+        crate::gameplay::refusal_detail::note("view-observation-options");
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    Ok(rpc::JourneyGroup {
+        group_id: "finding".to_owned(),
+        label: "Look around".to_owned(),
+        options,
+    })
+}
+
+fn passive_findings(
+    scene: &super::pack::Scene,
+    passive_perception: i16,
+) -> Vec<&super::pack::Finding> {
+    scene
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding.skill == super::pack::FindingSkill::Perception
+                && i16::from(finding.dc) <= passive_perception
+        })
+        .collect()
+}
+
 fn add_scan_barrier_reach_note(rules_note: &mut String) {
     rules_note.push_str(" The 2024 rules do not say whether melee reach crosses a barrier below half the target's height; this game refuses melee reach across every blocked step.");
 }
@@ -1332,6 +1437,45 @@ mod tests {
         add_scan_barrier_reach_note(&mut rules_note);
         assert!(rules_note.contains("do not say whether melee reach crosses a barrier below half"));
         assert!(rules_note.contains("refuses melee reach across every blocked step"));
+    }
+
+    #[test]
+    fn passive_perception_reveals_only_perception_findings_at_or_below_its_score_srd_521_p22() {
+        // SRD 5.2.1 p. 22: "Passive Perception = 10 + Wisdom (Perception) check modifier."
+        let mut scene = super::super::pack::scene(super::super::pack::SceneKey::Opening);
+        scene.findings = vec![
+            super::super::pack::Finding {
+                id: "nearby".to_owned(),
+                sentence: "A footprint crosses the dust.".to_owned(),
+                skill: super::super::pack::FindingSkill::Perception,
+                dc: 12,
+                private: false,
+                consequence: None,
+            },
+            super::super::pack::Finding {
+                id: "hidden".to_owned(),
+                sentence: "A map is hidden under the desk.".to_owned(),
+                skill: super::super::pack::FindingSkill::Perception,
+                dc: 15,
+                private: false,
+                consequence: None,
+            },
+            super::super::pack::Finding {
+                id: "study".to_owned(),
+                sentence: "The map is marked with a route.".to_owned(),
+                skill: super::super::pack::FindingSkill::Investigation,
+                dc: 10,
+                private: false,
+                consequence: None,
+            },
+        ];
+        assert_eq!(
+            passive_findings(&scene, 12)
+                .iter()
+                .map(|finding| finding.id.as_str())
+                .collect::<Vec<_>>(),
+            ["nearby"]
+        );
     }
 
     #[test]

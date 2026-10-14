@@ -307,6 +307,29 @@ impl BeatTemplate {
             scene.narration_rested = None;
             script.scenes.insert(id.clone(), scene);
         }
+        for beat in &mut script.beats {
+            if !matches!(
+                beat.kind,
+                super::super::beat_script::BeatKind::Converse
+                    | super::super::beat_script::BeatKind::Investigate
+                    | super::super::beat_script::BeatKind::Narrate
+            ) {
+                continue;
+            }
+            if let Some(scene) = beat
+                .scene_variant
+                .as_ref()
+                .and_then(|variant| script.scenes.get(variant))
+                .or_else(|| content.scenes.iter().find(|scene| scene.key == beat.scene))
+                && (!scene.findings.is_empty() || !scene.cast.is_empty())
+                && !beat
+                    .offers
+                    .iter()
+                    .any(|offer| offer.effect == super::super::beat_script::BeatEffect::Observe)
+            {
+                BeatScript::add_look_around_offer(beat);
+            }
+        }
         script
             .validate(content)
             .map_err(|error| GenerateError::Pack(pack::PackError::Script(error)))?;

@@ -908,6 +908,40 @@ pub(crate) fn generate_with_prose(
             )?);
         }
     }
+    let errand_truth = format!("The errand's hidden detail is: {}", pack.courier_clue);
+    let enemy_position = format!(
+        "{} has {} waiting at {}.",
+        pack.bandit.name, encounter.creatures, settings.confrontation.name
+    );
+    // SRD 5.2.1 p. 6 lists "Medium 15" among typical ability-check DCs.
+    let findings = || {
+        vec![
+            pack::Finding {
+                id: "errand-truth".into(),
+                sentence: errand_truth.clone(),
+                skill: pack::FindingSkill::Investigation,
+                dc: 15,
+                private: false,
+                consequence: None,
+            },
+            pack::Finding {
+                id: "enemy-position".into(),
+                sentence: enemy_position.clone(),
+                skill: pack::FindingSkill::Perception,
+                dc: 15,
+                private: false,
+                consequence: None,
+            },
+        ]
+    };
+    for scene in &mut pack.scenes {
+        if matches!(
+            scene.key,
+            SceneKey::Room | SceneKey::Opening | SceneKey::DialogueSeal | SceneKey::DialogueEscort
+        ) {
+            scene.findings = findings();
+        }
+    }
     pack.beat_script = Some(beat_template.assemble(&pack, &mut expression)?);
     for key in forced.keys() {
         if !roller.used.contains(key) {

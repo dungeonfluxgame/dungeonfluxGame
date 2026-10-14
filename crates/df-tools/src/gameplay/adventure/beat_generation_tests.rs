@@ -66,7 +66,7 @@ fn two_hundred_seeds_cover_all_sixteen_data_defined_scripts_settings_slots_and_d
             !["mystery", "parley"].contains(&kind.as_str())
         );
         if !["mystery", "parley"].contains(&kind.as_str()) {
-            assert!(script.is_canonical());
+            assert!(script.is_canonical(), "{kind}");
         }
         if kind == "mystery" {
             assert!(
@@ -94,6 +94,39 @@ fn two_hundred_seeds_cover_all_sixteen_data_defined_scripts_settings_slots_and_d
             assert!(scene.rules_note.is_empty() && scene.narration_rested.is_none());
             assert!(scene.narration.chars().count() <= 220);
             assert!(!scene.narration.contains(&first.facts["secret.fact"]));
+        }
+        // SRD 5.2.1 pp. 187, 189: Search and Study are actions resolved by checks.
+        for beat in &script.beats {
+            let Some(variant) = &beat.scene_variant else {
+                continue;
+            };
+            let scene = &script.scenes[variant];
+            if !scene.findings.is_empty()
+                && matches!(
+                    beat.kind,
+                    beat_script::BeatKind::Converse
+                        | beat_script::BeatKind::Investigate
+                        | beat_script::BeatKind::Narrate
+                )
+            {
+                let observation = beat
+                    .offers
+                    .iter()
+                    .find(|offer| offer.effect == beat_script::BeatEffect::Observe);
+                assert!(
+                    observation.is_some_and(|offer| beat.transitions.iter().any(|transition| {
+                        transition.trigger
+                            == beat_script::BeatTrigger::Offer {
+                                offer: offer.id.clone(),
+                            }
+                            && script
+                                .find(&transition.target)
+                                .is_some_and(|target| target.state.durable == beat.state.durable)
+                    })),
+                    "finding scene {} has no Look around offer",
+                    beat.id
+                );
+            }
         }
         let sheets = first
             .fact_sheet
@@ -239,6 +272,73 @@ fn old_generated_adventure_and_actual_opening_resume_without_current_table_reint
         (frozen.pack, frozen.tuning, frozen.record)
     );
 }
+
+#[test]
+fn generated_story_scenes_have_two_valid_findings_for_every_location_and_antagonist_within_record_limit_srd_521_pages_187_189()
+ {
+    // SRD 5.2.1 pp. 187, 189: the generated scene checks use Search and Study skills.
+    let tables = tables();
+    let generated_for = |location: &str, antagonist: &str| {
+        generate(
+            &tables.chapter,
+            0x521,
+            GenerateOptions {
+                rules_mode: RulesMode::CustomAllowed,
+                ..GenerateOptions::default()
+            },
+            &ForcedEntries::from([
+                ("location".to_owned(), location.to_owned()),
+                ("antagonist".to_owned(), antagonist.to_owned()),
+            ]),
+        )
+        .unwrap()
+    };
+    let check = |adventure: &GeneratedAdventure| {
+        let script = adventure.pack.beat_script.as_ref().unwrap();
+        script.validate(&adventure.pack).unwrap();
+        let scene_keys = script
+            .beats
+            .iter()
+            .take_while(|beat| beat.kind != super::super::beat_script::BeatKind::Fight)
+            .map(|beat| beat.scene)
+            .collect::<Vec<_>>();
+        assert!(!scene_keys.is_empty());
+        for scene_key in scene_keys {
+            let scene = adventure
+                .pack
+                .scenes
+                .iter()
+                .find(|scene| scene.key == scene_key)
+                .unwrap();
+            assert!(scene.findings.len() >= 2, "{:?}", scene.key);
+            assert!(
+                scene
+                    .findings
+                    .iter()
+                    .any(|finding| { finding.skill == pack::FindingSkill::Perception })
+            );
+            assert!(
+                scene
+                    .findings
+                    .iter()
+                    .any(|finding| { finding.skill == pack::FindingSkill::Investigation })
+            );
+        }
+        let documents = adventure.documents(true).unwrap();
+        for document in [&documents.pack, &documents.tuning, &documents.record] {
+            assert!(!document.is_empty());
+            assert!(document.len() <= 256 * 1024);
+        }
+        pack::load_from_bytes(&documents.pack, &documents.tuning).unwrap();
+    };
+    for location in &tables.chapter.locations.entries {
+        for antagonist in &tables.chapter.antagonists.entries {
+            if super::tables::intersects(&antagonist.fits, &location.tags) {
+                check(&generated_for(&location.id, &antagonist.id));
+            }
+        }
+    }
+}
 /// The shared display's choice labels are the phones' authored labels, at every step.
 fn assert_labels_agree(current: &df_model::checkpoint::Checkpoint, kind: &str, step: &str) {
     let view = super::super::wire::journey_view(
@@ -251,12 +351,13 @@ fn assert_labels_agree(current: &df_model::checkpoint::Checkpoint, kind: &str, s
         panic!("display")
     };
     let display = view.journey.unwrap().table_choices;
-    let phone: Vec<String> =
+    let mut phone: Vec<String> =
         super::super::beat_script_runtime::view_offers(current, native::first())
             .unwrap()
             .into_iter()
             .map(|(_, label, _)| label)
             .collect();
+    phone.dedup();
     assert_eq!(display, phone, "{kind} {step}");
 }
 /// A peaceful chapter ends through submitted actions only: one resolution, one epilogue, then an
@@ -452,7 +553,11 @@ fn generated_canonical_investigation_and_parley_use_registered_native_actions_an
                     .unwrap();
                 assert_eq!(outcome.result, super::campaign::ChapterResult::Completed);
                 assert_eq!(outcome.member, journey::hex(native::second().as_bytes()));
-                assert!(current.state().encounters.is_empty() && current.state().draws.is_empty());
+                assert!(current.state().encounters.is_empty());
+                assert_eq!(
+                    current.state().draws.len(),
+                    usize::from(kind == "mystery") * 2
+                );
                 assert_eq!(current.state().logical_time.ticks, 0);
                 assert!(!outcome.rested && !outcome.antagonist_spared);
             }
@@ -619,7 +724,11 @@ fn actual_generated_peaceful_campaign_paths_project_delivered_leads_and_commit_h
                 if asked {
                     assert_eq!(outcome.member, journey::hex(native::second().as_bytes()));
                 }
-                assert!(current.state().encounters.is_empty() && current.state().draws.is_empty());
+                assert!(current.state().encounters.is_empty());
+                assert_eq!(
+                    current.state().draws.len(),
+                    if kind == "mystery" { 2 } else { 0 }
+                );
                 assert!(!public.contains(&generated.pack.courier_clue));
                 assert!(
                     !public.contains(

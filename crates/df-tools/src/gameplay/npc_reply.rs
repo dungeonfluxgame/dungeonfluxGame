@@ -775,6 +775,17 @@ impl NpcVoice {
         self
     }
 
+    pub(super) async fn classify_input(
+        &self,
+        words: &str,
+        public_scene: &str,
+        available_things: &[String],
+    ) -> super::approach_model::LineReading {
+        self.approach_model
+            .classify_input(words, public_scene, available_things)
+            .await
+    }
+
     /// A voice that never answers.
     #[cfg(test)]
     pub(super) fn silent() -> Self {

@@ -4788,7 +4788,10 @@ pub(super) mod tests {
                     );
                 } else {
                     assert_eq!(phase(&current).unwrap(), rpc::JourneyPhase::Complete);
-                    assert!(current.state().draws.is_empty());
+                    assert_eq!(
+                        current.state().draws.len(),
+                        usize::from(actions.contains(&"look-crates"))
+                    );
                 }
             });
         }

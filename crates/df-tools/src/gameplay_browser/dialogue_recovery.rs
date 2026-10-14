@@ -7,8 +7,6 @@ use web_sys::HtmlTextAreaElement;
 pub(super) struct DialogueRecovery {
     channel: Option<rpc::dialogue_service_client::DialogueServiceClient<BrowserChannel>>,
     editor: Option<HtmlTextAreaElement>,
-    context: Option<HtmlSelectElement>,
-    offer: Option<HtmlSelectElement>,
     offers: Vec<rpc::GameplayActionOffer>,
     ticket: Option<(rpc::RawDialogueRequest, rpc::DialogueResponse)>,
     confirmation: Option<rpc::ConfirmDialogueRequest>,
@@ -21,7 +19,7 @@ pub(super) struct DialogueRecovery {
     awaiting: Option<String>,
     /// Tap-to-talk speech input for this text box.
     pub(super) talk: super::talk_control::Talk,
-    /// The editor's and the context control's listeners for the speech-intent signal.
+    /// The editor's listeners for the speech-intent signal.
     intent_listeners: Vec<Closure<dyn FnMut(web_sys::Event)>>,
 }
 
@@ -99,11 +97,6 @@ impl DialogueRecovery {
         self.editor.as_ref()
     }
 
-    /// The chosen input context (a `DialogueContext` number), if the control exists.
-    pub(super) fn context_value(&self) -> Option<i32> {
-        self.context.as_ref()?.value().parse().ok()
-    }
-
     pub(super) fn channel_clone(
         &self,
     ) -> Option<rpc::dialogue_service_client::DialogueServiceClient<BrowserChannel>> {
@@ -152,9 +145,7 @@ impl DialogueRecovery {
         self.talk.interrupt_now(Interruption::SceneChanged);
         self.retire_transport();
         self.confirmation = None;
-        self.message =
-            "The input scope changed. Your text remains editable; choose a current offer."
-                .to_owned();
+        self.message = "The input scope changed. Your text remains editable.".to_owned();
     }
 
     pub(super) fn has_confirmation(&self) -> bool {
@@ -205,7 +196,7 @@ pub(super) fn mount(
         }
         return Ok(());
     }
-    let (document, editor, context, selector, focused, selection) = {
+    let (document, editor, focused, selection) = {
         let mut state = client.borrow_mut();
         let document = state.document.clone();
         let recovery = &mut state.dialogue;
@@ -223,60 +214,24 @@ pub(super) fn mount(
                 editor
             }
         };
-        let context = match recovery.context.as_ref() {
-            Some(context) => context.clone(),
-            None => {
-                let context = document
-                    .create_element("select")?
-                    .dyn_into::<HtmlSelectElement>()?;
-                context.set_attribute("aria-label", "How are you saying it?")?;
-                for (kind, label) in [
-                    (rpc::DialogueContext::Unspecified, "Just saying it"),
-                    (rpc::DialogueContext::Question, "As a question"),
-                    (rpc::DialogueContext::Social, "In conversation"),
-                    (rpc::DialogueContext::PlanOnly, "As a plan"),
-                    (rpc::DialogueContext::Meta, "About the game"),
-                    (rpc::DialogueContext::Joke, "Joke"),
-                ] {
-                    let option = node(&document, context.as_ref(), "option", "", label)?;
-                    option.set_attribute("value", &(kind as i32).to_string())?;
-                }
-                recovery.context = Some(context.clone());
-                context
-            }
-        };
-        let selector = match recovery.offer.as_ref() {
-            Some(selector) => selector.clone(),
-            None => {
-                let selector = document
-                    .create_element("select")?
-                    .dyn_into::<HtmlSelectElement>()?;
-                selector.set_attribute("aria-label", "Separate offered choice")?;
-                recovery.offer = Some(selector.clone());
-                selector
-            }
-        };
         let focused = recovery.restore_focus;
         let selection = recovery.selection;
-        (document, editor, context, selector, focused, selection)
+        (document, editor, focused, selection)
     };
     if client.borrow().dialogue.intent_listeners.is_empty() {
-        listen_for_intent(client, &editor, &context)?;
+        listen_for_intent(client, &editor)?;
     }
     if let Some(previous) = parent.query_selector(".dialogue-recovery")? {
         previous.remove();
     }
     let panel = node(&document, parent, "section", "dialogue-recovery", "")?;
     node(&document, &panel, "h3", "", "Say what you mean")?;
-    // Technical meaning behind the player-facing line: typed text is only a draft, never an
-    // automatic action or check. A source-grounded ruling is unavailable here, so the player
-    // can only decline or explicitly confirm a supported offered action.
     node(
         &document,
         &panel,
         "p",
         "scope",
-        "Say it sends your words right away. Choose “About the game” and start with “note:” or “write down” to save a party note. Offered actions still need confirmation.",
+        "Speak to someone in the scene, ask about what you see, or describe what your hero does.",
     )?;
     let revision = client.borrow().revision;
     {
@@ -307,17 +262,6 @@ pub(super) fn mount(
     thinking_row(client, &document, &panel)?;
     panel.append_child(&editor)?;
     super::talk_control::mount(client, &panel)?;
-    panel.append_child(&context)?;
-    let previous = selector.value();
-    selector.set_text_content(None);
-    let none = node(
-        &document,
-        selector.as_ref(),
-        "option",
-        "",
-        "Choose an offered action (optional)",
-    )?;
-    none.set_attribute("value", "")?;
     let mut current = Vec::new();
     for offer in offers {
         if offer.offer_id.len() > 96 || offer.label.len() > 256 {
@@ -334,19 +278,7 @@ pub(super) fn mount(
         {
             continue;
         }
-        let option = node(&document, selector.as_ref(), "option", "", &offer.label)?;
-        option.set_attribute("value", &offer.offer_id)?;
         current.push(offer.clone());
-    }
-    if current.iter().any(|offer| offer.offer_id == previous) {
-        selector.set_value(&previous);
-    }
-    selector.set_attribute("aria-label", "Choose an offered action (optional)")?;
-    if current.is_empty() {
-        selector.set_attribute("hidden", "")?;
-    } else {
-        selector.remove_attribute("hidden")?;
-        panel.append_child(&selector)?;
     }
     {
         let mut state = client.borrow_mut();
@@ -423,10 +355,6 @@ pub(super) fn mount(
             element.set_attribute("disabled", "")?;
         }
     }
-    context
-        .set_disabled(state.busy || recovery.ticket.is_some() || recovery.confirmation.is_some());
-    selector
-        .set_disabled(state.busy || recovery.ticket.is_some() || recovery.confirmation.is_some());
     let message = node(
         &document,
         &panel,
@@ -513,7 +441,6 @@ fn draft_intent(client: &Rc<RefCell<Client>>) -> live_presence::Intent {
 fn listen_for_intent(
     client: &Rc<RefCell<Client>>,
     editor: &HtmlTextAreaElement,
-    context: &HtmlSelectElement,
 ) -> Result<(), JsValue> {
     let mut listeners = Vec::new();
     let mut attach =
@@ -579,9 +506,6 @@ fn listen_for_intent(
         });
         None
     })?;
-    attach(context.as_ref(), "change", |client, _| {
-        Some(draft_intent(client))
-    })?;
     client.borrow_mut().dialogue.intent_listeners = listeners;
     Ok(())
 }
@@ -603,40 +527,15 @@ pub(super) fn submit(client: Rc<RefCell<Client>>) {
         if text.trim().is_empty() || text.len() > 4096 {
             return Err("Enter between 1 and 4096 UTF-8 bytes.".to_owned());
         }
-        let context = state
-            .dialogue
-            .context
-            .as_ref()
-            .ok_or("Input context absent")?
-            .value()
-            .parse::<i32>()
-            .map_err(|_| "Input context invalid")?;
-        let context =
-            rpc::DialogueContext::try_from(context).map_err(|_| "Input context invalid")?;
-        let offer = state
-            .dialogue
-            .offer
-            .as_ref()
-            .ok_or("Offer control absent")?
-            .value();
-        if !offer.is_empty()
-            && !state
-                .dialogue
-                .offers
-                .iter()
-                .any(|item| item.offer_id == offer)
-        {
-            return Err("Choose a current offered action.".to_owned());
-        }
         Ok(rpc::RawDialogueRequest {
             session_id: state.session.clone(),
             run_id: state.run.clone(),
             observed_revision: state.revision,
             input_id: Some(operation()?),
             text,
-            context: context as i32,
+            context: rpc::DialogueContext::Unspecified as i32,
             finality: rpc::DialogueFinality::Final as i32,
-            offer_id: offer,
+            offer_id: String::new(),
         })
     })();
     match prepared {
@@ -868,6 +767,29 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                 Ok(Ok((Some(reply), None))) => match &call {
                     Call::Raw(input)
                         if reply.input_id == input.input_id
+                            && reply.revision.is_some()
+                            && reply.revision != input.observed_revision
+                            && reply.disposition == rpc::DialogueDisposition::Action as i32
+                            && !reply.confirmation_required
+                            && reply.confirmation_token.is_empty()
+                            && !reply.npc_reply.is_empty()
+                            && reply.npc_reply.len() <= MAXIMUM_REPLY_BYTES =>
+                    {
+                        state.dialogue.ticket = None;
+                        state.dialogue.exchange = Some(Exchange {
+                            revision: reply.revision.clone(),
+                            you: input.text.clone(),
+                            speaker: "Narrator".to_owned(),
+                            portrait: portrait_url("Narrator").to_owned(),
+                            reply: reply.npc_reply.clone(),
+                        });
+                        if let Some(editor) = &state.dialogue.editor {
+                            editor.set_value("");
+                        }
+                        reply.npc_reply.clone()
+                    }
+                    Call::Raw(input)
+                        if reply.input_id == input.input_id
                             && reply.revision == input.observed_revision
                             && state.revision == input.observed_revision =>
                     {
@@ -902,13 +824,37 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                                     if let Some(editor) = &state.dialogue.editor {
                                         editor.set_value("");
                                     }
+                                } else {
+                                    state.dialogue.exchange = None;
                                 }
+                                if let Some(editor) = &state.dialogue.editor {
+                                    editor.set_value("");
+                                }
+                                let speaker = current_speaker(&state);
                                 match kind {
-                                    _ if state.dialogue.exchange.is_some() => "Only spoken words: no action or check was made.",
-                                    rpc::DialogueDisposition::Clarify => "Clarification required. Choose a supported offer or edit your draft.",
-                                    rpc::DialogueDisposition::Rejected => "The native owner declined this input. Your draft remains editable.",
-                                    _ => "The native owner classified this as conversation, not an action.",
-                                }.to_owned()
+                                    rpc::DialogueDisposition::Meta
+                                        if !reply.npc_reply.is_empty() =>
+                                    {
+                                        reply.npc_reply.clone()
+                                    }
+                                    rpc::DialogueDisposition::Meta => "Noted.".to_owned(),
+                                    rpc::DialogueDisposition::PlanOnly => {
+                                        "You say to the party.".to_owned()
+                                    }
+                                    rpc::DialogueDisposition::Question
+                                    | rpc::DialogueDisposition::Social
+                                        if !speaker.is_empty() =>
+                                    {
+                                        format!("You say to {speaker}.")
+                                    }
+                                    rpc::DialogueDisposition::Clarify => {
+                                        "Please rephrase that.".to_owned()
+                                    }
+                                    rpc::DialogueDisposition::Rejected => {
+                                        "That line could not be taken.".to_owned()
+                                    }
+                                    _ => "You say that to the table.".to_owned(),
+                                }
                             }
                             _ => {
                                 "The dialogue response is invalid. Retain your draft and reconnect."

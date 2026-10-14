@@ -53,24 +53,13 @@ fn now_ms() -> f64 {
         .map_or(0.0, |performance| performance.now())
 }
 
-/// Whether the dialogue context is table talk: no bubble is shown for it.
-fn table_talk(client: &Client) -> bool {
-    client.dialogue.context_value().is_some_and(|value| {
-        value == rpc::DialogueContext::Meta as i32 || value == rpc::DialogueContext::PlanOnly as i32
-    })
-}
-
 /// Tells the table what this player is doing. Sends on a change, refreshes an unchanged intent
 /// at most every [`REFRESH_MS`], and sends a stop only when something was shown.
 pub(super) fn signal(client: &Rc<RefCell<Client>>, requested: Intent) {
     if client.borrow().role != "player" {
         return;
     }
-    let intent = if table_talk(&client.borrow()) {
-        Intent::Stopped
-    } else {
-        requested
-    };
+    let intent = requested;
     let now = now_ms();
     let send = LAST.with(|last| {
         let mut last = last.borrow_mut();
@@ -101,9 +90,6 @@ pub(super) fn signal(client: &Rc<RefCell<Client>>, requested: Intent) {
 /// listening.
 fn still(client: &Rc<RefCell<Client>>, intent: Intent) -> bool {
     let state = client.borrow();
-    if table_talk(&state) {
-        return false;
-    }
     match intent {
         Intent::Speaking => state.dialogue.talk.is_listening(),
         Intent::Typing => state.dialogue.editor().is_some_and(|editor| {

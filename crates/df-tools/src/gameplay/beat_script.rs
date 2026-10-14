@@ -11,6 +11,7 @@ use std::{
 
 /// The label of an ending step in a script that authors none (the compiled demo pack).
 const DEFAULT_RESOLVE_LABEL: &str = "Settle the errand";
+pub(super) const LOOK_AROUND_OFFER_ID: &str = "look-around";
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BeatScript {
@@ -192,6 +193,9 @@ impl BeatScript {
             })
     }
     pub(super) fn label(&self, offer: &BeatOffer) -> Result<String, RepositoryError> {
+        if offer.id == LOOK_AROUND_OFFER_ID && offer.effect == BeatEffect::Observe {
+            return Ok("Look around".into());
+        }
         if let Some(label) = self.labels.get(&offer.label_slot) {
             return Ok(label.clone());
         }
@@ -205,6 +209,28 @@ impl BeatScript {
     }
     pub(super) fn find(&self, id: &str) -> Option<&Beat> {
         self.beats.iter().find(|beat| beat.id == id)
+    }
+    // SRD 5.2.1 p. 187 calls Search an "[Action]" and says to "make a Wisdom check";
+    // p. 189 gives Study as an "[Action]" with an Intelligence check.
+    pub(super) fn add_look_around_offer(beat: &mut Beat) {
+        if beat
+            .offers
+            .iter()
+            .any(|offer| offer.id == LOOK_AROUND_OFFER_ID)
+        {
+            return;
+        }
+        beat.offers.push(BeatOffer {
+            id: LOOK_AROUND_OFFER_ID.into(),
+            label_slot: LOOK_AROUND_OFFER_ID.into(),
+            effect: BeatEffect::Observe,
+        });
+        beat.transitions.push(BeatTransition {
+            trigger: BeatTrigger::Offer {
+                offer: LOOK_AROUND_OFFER_ID.into(),
+            },
+            target: beat.id.clone(),
+        });
     }
     pub(super) fn validate(&self, content: &pack::PackFile) -> Result<(), ScriptError> {
         use ScriptErrorReason as E;
@@ -448,6 +474,7 @@ impl BeatScript {
                 }
                 if !self.labels.contains_key(&offer.label_slot)
                     && offer.effect != BeatEffect::Resolve
+                    && offer.effect != BeatEffect::Observe
                     && super::wire::action_kind(&offer.label_slot)
                         .is_none_or(|kind| kind == rpc::GameplayActionKind::ExamineHarborSeal)
                 {
@@ -458,7 +485,9 @@ impl BeatScript {
                         offer.effect,
                         BeatEffect::CreateCharacter | BeatEffect::BeginStory
                     ),
-                    BeatKind::Narrate if !uses_encounter => offer.effect == BeatEffect::Continue,
+                    BeatKind::Narrate if !uses_encounter => {
+                        matches!(offer.effect, BeatEffect::Continue | BeatEffect::Observe)
+                    }
                     BeatKind::Investigate if !uses_encounter => matches!(
                         offer.effect,
                         BeatEffect::Observe
@@ -473,12 +502,18 @@ impl BeatScript {
                     BeatKind::Ending => {
                         matches!(offer.effect, BeatEffect::Resolve | BeatEffect::Continue)
                     }
-                    BeatKind::Narrate => offer.effect == BeatEffect::DefendCourier,
+                    BeatKind::Narrate => {
+                        matches!(
+                            offer.effect,
+                            BeatEffect::DefendCourier | BeatEffect::Observe
+                        )
+                    }
                     BeatKind::Converse => matches!(
                         offer.effect,
                         BeatEffect::AskCourier
                             | BeatEffect::EscortCourier
                             | BeatEffect::ThirdApproach
+                            | BeatEffect::Observe
                     ),
                     BeatKind::Fight => matches!(
                         offer.effect,
@@ -494,7 +529,7 @@ impl BeatScript {
                     BeatKind::Conclude => {
                         matches!(offer.effect, BeatEffect::ShortRest | BeatEffect::Resolve)
                     }
-                    BeatKind::Investigate => false,
+                    BeatKind::Investigate => offer.effect == BeatEffect::Observe,
                 };
                 if !allowed {
                     return Err(refuse(&beat.id, E::UnsupportedEffect));
@@ -564,9 +599,10 @@ impl BeatScript {
                             BeatEffect::ChooseHarborScene if !uses_encounter => {
                                 target.state.durable.as_str()
                             }
-                            BeatEffect::Observe | BeatEffect::Continue | BeatEffect::Resolve
-                                if !uses_encounter =>
-                            {
+                            BeatEffect::Observe if beat.kind != BeatKind::Fight => {
+                                target.state.durable.as_str()
+                            }
+                            BeatEffect::Continue | BeatEffect::Resolve if !uses_encounter => {
                                 target.state.durable.as_str()
                             }
                             BeatEffect::ChooseHarborScene => "harbor-inn",
@@ -829,8 +865,15 @@ pub(super) fn with_script<T>(run: impl FnOnce(&BeatScript) -> T) -> T {
 pub(super) fn canonical() -> &'static BeatScript {
     static SCRIPT: std::sync::OnceLock<BeatScript> = std::sync::OnceLock::new();
     SCRIPT.get_or_init(|| {
-        serde_json::from_slice(include_bytes!("fixtures/canonical-beat-script.json"))
-            .expect("compiled canonical beat script is validated by tests")
+        let mut script: BeatScript =
+            serde_json::from_slice(include_bytes!("fixtures/canonical-beat-script.json"))
+                .expect("compiled canonical beat script is validated by tests");
+        for beat in &mut script.beats {
+            if matches!(beat.kind, BeatKind::Converse | BeatKind::Narrate) {
+                BeatScript::add_look_around_offer(beat);
+            }
+        }
+        script
     })
 }
 /// Handler eligibility supplies mechanics/source constraints. The script is the sole

@@ -147,7 +147,11 @@ pub(super) fn phase_of(beat: &Beat) -> rpc::JourneyPhase {
     }
 }
 
-/// Ability and proficiency components for the local SRD Search and Study skills.
+/// SRD 5.2.1 p. 6: "Add your Proficiency Bonus to an ability check when the GM determines that a
+/// skill or tool proficiency is relevant to the check and you have that proficiency." Search
+/// (p. 187) says "you make a Wisdom check"; Study (p. 189) says "you make an Intelligence check";
+/// Hide (p. 183) requires a "DC 15 Dexterity (Stealth) check."
+/// Ability and proficiency components for the local SRD Search, Study and Hide skills.
 pub(super) fn skill_check_modifiers(
     state: &GameState,
     actor: EntityId,
@@ -156,6 +160,7 @@ pub(super) fn skill_check_modifiers(
     let ability_name = match skill {
         "perception" | "insight" | "survival" | "medicine" => "wisdom",
         "investigation" | "arcana" | "history" | "nature" | "religion" => "intelligence",
+        "stealth" => "dexterity",
         "athletics" => "strength",
         "intimidation" => "charisma",
         _ => {
@@ -256,6 +261,14 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
         Ok(scene)
     })
 }
+
+pub(super) fn scene_scope(state: &GameState) -> Result<String, RepositoryError> {
+    beat_script::with_script(|script| {
+        let beat = script.current(state)?;
+        Ok(shown_variant(script, beat, state)?
+            .unwrap_or_else(|| format!("{:?}", beat.scene).to_lowercase()))
+    })
+}
 /// How the heroes' fight ended, from the tactical snapshot (or, in a legacy knock-out fight, from
 /// which heroes are down).
 pub(super) fn fight_outcome(
@@ -339,7 +352,7 @@ pub(super) fn pure_target(
         // A fight's native handlers own everything up to its ending; only the ending's own
         // steps are pure.
         let pure = if script.uses_encounter() {
-            selected.effect == BeatEffect::Resolve
+            matches!(selected.effect, BeatEffect::Observe | BeatEffect::Resolve)
         } else {
             matches!(
                 selected.effect,
@@ -370,7 +383,16 @@ pub(super) const ENDING_ENTRIES: &[&str] = &[STEP, RESOLVE_ACTION, "epilogue", "
 pub(super) fn contents() -> Vec<String> {
     beat_script::with_script(|script| {
         if script.is_canonical() {
-            return Vec::new();
+            let mut entries = vec![CHOICE_ACTION.into()];
+            for offer in script.beats.iter().flat_map(|beat| &beat.offers) {
+                if offer.effect == BeatEffect::Observe {
+                    let entry = format!("{OFFER_PREFIX}{}", offer.id);
+                    if !entries.contains(&entry) {
+                        entries.push(entry);
+                    }
+                }
+            }
+            return entries;
         }
         let mut entries = vec![STEP.into(), CHOICE_ACTION.into(), RESOLVE_ACTION.into()];
         for beat in &script.beats {
@@ -430,7 +452,6 @@ pub(super) fn validate(
     if script.uses_encounter()
         || state.narrative.definition != model::content("room")?
         || !state.encounters.is_empty()
-        || !state.draws.is_empty()
         || !state.schedules.is_empty()
         || state.logical_time.ticks != 0
         || state.narrative.remaining_budget != pack::narrative_budget()
@@ -446,6 +467,7 @@ pub(super) fn validate(
     let mut native_durable = "room";
     let mut creations = 0usize;
     let mut restart_seen = false;
+    let mut observation_draws = 0usize;
     for decision in &state.decisions {
         if decision.source_policy.as_str() != journey::THREAD_POLICY {
             continue;
@@ -506,9 +528,33 @@ pub(super) fn validate(
             .ok_or(RepositoryError::InvalidCandidate)?;
         if receipt.phase != phase_of(next) as i32
             || !receipt.combat.is_empty()
-            || receipt.check.is_some()
             || receipt.character.is_some()
         {
+            return invalid();
+        }
+        if selected.effect == BeatEffect::Observe {
+            let source_scene = beat
+                .scene_variant
+                .as_ref()
+                .and_then(|id| script.scenes.get(id))
+                .cloned()
+                .unwrap_or_else(|| pack::scene(beat.scene));
+            let source_scope = beat
+                .scene_variant
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", beat.scene).to_lowercase());
+            if let Some(check) = receipt.check.as_ref() {
+                validate_observation_check(
+                    state,
+                    decision,
+                    member,
+                    &source_scene,
+                    &source_scope,
+                    Some(check),
+                )?;
+                observation_draws += 1;
+            }
+        } else if receipt.check.is_some() {
             return invalid();
         }
         let native = match selected.effect {
@@ -573,6 +619,9 @@ pub(super) fn validate(
         }
         beat = next;
     }
+    if state.draws.len() != observation_draws {
+        return invalid();
+    }
     if creations != state.characters.len()
         || script.current(state)?.id != beat.id
         || state.narrative.completed_beats != completed
@@ -599,6 +648,156 @@ pub(super) fn validate(
         return invalid();
     }
     Ok(phase_of(beat))
+}
+
+fn finding_skill_name(skill: pack::FindingSkill) -> &'static str {
+    match skill {
+        pack::FindingSkill::Perception => "perception",
+        pack::FindingSkill::Investigation => "investigation",
+        pack::FindingSkill::Insight => "insight",
+        pack::FindingSkill::Survival => "survival",
+        pack::FindingSkill::Medicine => "medicine",
+        pack::FindingSkill::Arcana => "arcana",
+        pack::FindingSkill::History => "history",
+        pack::FindingSkill::Nature => "nature",
+        pack::FindingSkill::Religion => "religion",
+    }
+}
+
+pub(super) fn observation_finding<'a>(
+    scene: &'a pack::Scene,
+    check: &rpc::AbilityCheckResult,
+) -> Option<&'a pack::Finding> {
+    if !check.succeeded {
+        return None;
+    }
+    let parts = check.source_revision.splitn(4, ':').collect::<Vec<_>>();
+    let [_, _, skill, detail] = parts.as_slice() else {
+        return None;
+    };
+    if let Some(id) = detail.strip_prefix("finding-") {
+        return scene.findings.iter().find(|finding| finding.id == id);
+    }
+    if detail.starts_with("watch-") {
+        return None;
+    }
+    let skill = match *skill {
+        "perception" => Some(pack::FindingSkill::Perception),
+        "investigation" => Some(pack::FindingSkill::Investigation),
+        "insight" => Some(pack::FindingSkill::Insight),
+        "survival" => Some(pack::FindingSkill::Survival),
+        "medicine" => Some(pack::FindingSkill::Medicine),
+        "arcana" => Some(pack::FindingSkill::Arcana),
+        "history" => Some(pack::FindingSkill::History),
+        "nature" => Some(pack::FindingSkill::Nature),
+        "religion" => Some(pack::FindingSkill::Religion),
+        "stealth" => None,
+        _ => return None,
+    }?;
+    scene.findings.iter().find(|finding| finding.skill == skill)
+}
+
+fn validate_observation_check(
+    state: &GameState,
+    decision: &AcceptedDecision,
+    member: MemberId,
+    scene: &pack::Scene,
+    scene_scope: &str,
+    check: Option<&rpc::AbilityCheckResult>,
+) -> Result<(), RepositoryError> {
+    let invalid = || {
+        refusal_detail::note("search-replay-check");
+        RepositoryError::InvalidCandidate
+    };
+    let check = check.ok_or_else(invalid)?;
+    let parts = check.source_revision.splitn(4, ':').collect::<Vec<_>>();
+    if parts.len() != 4 || parts[0] != "srd521-p6" || parts[1] != scene_scope {
+        return Err(invalid());
+    }
+    let skill = parts[2];
+    let detail = parts[3];
+    if !matches!(
+        skill,
+        "perception"
+            | "investigation"
+            | "insight"
+            | "survival"
+            | "medicine"
+            | "arcana"
+            | "history"
+            | "nature"
+            | "religion"
+            | "stealth"
+    ) {
+        return Err(invalid());
+    }
+    let selected_id = detail.strip_prefix("finding-");
+    let selected =
+        selected_id.and_then(|id| scene.findings.iter().find(|finding| finding.id == id));
+    if selected_id.is_some() && selected.is_none() {
+        return Err(invalid());
+    }
+    if let Some(finding) = selected
+        && finding_skill_name(finding.skill) != skill
+    {
+        return Err(invalid());
+    }
+    if detail.starts_with("watch-")
+        && (skill != "insight"
+            || !scene
+                .cast
+                .iter()
+                .any(|person| format!("watch-{}", person.id) == detail))
+    {
+        return Err(invalid());
+    }
+    let matching = selected.or_else(|| {
+        if detail.starts_with("watch-") {
+            return None;
+        }
+        scene
+            .findings
+            .iter()
+            .find(|finding| finding_skill_name(finding.skill) == skill)
+    });
+    if decision.draws.len() != 1 {
+        return Err(invalid());
+    }
+    let ordinal = decision.draws[0];
+    let die = state
+        .draws
+        .iter()
+        .find(|draw| draw.operation == decision.operation && draw.ordinal == ordinal)
+        .filter(|draw| draw.sides == 20 && draw.value == check.die)
+        .ok_or_else(invalid)?;
+    let _ = die;
+    let actor = state
+        .members
+        .iter()
+        .find(|link| link.member == member)
+        .and_then(|link| link.character)
+        .ok_or_else(invalid)?;
+    let (ability_modifier, proficiency_bonus) =
+        skill_check_modifiers(state, actor, skill).map_err(|_| invalid())?;
+    let total = i32::try_from(check.die).map_err(|_| invalid())?
+        + i32::from(ability_modifier)
+        + i32::from(proficiency_bonus);
+    // SRD 5.2.1 p. 183: "you must succeed on a DC 15 Dexterity (Stealth) check" to Hide.
+    let difficulty_class = if skill == "stealth" {
+        15
+    } else {
+        matching.map_or(10, |finding| finding.dc)
+    };
+    if !(1..=20).contains(&check.die)
+        || check.ability_modifier != i32::from(ability_modifier)
+        || check.proficiency_bonus != u32::from(proficiency_bonus)
+        || check.total != total
+        || check.difficulty_class != u32::from(difficulty_class)
+        || check.succeeded != (total >= i32::from(difficulty_class))
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 pub(super) const CHOICE_GROUP: &str = "beat-script-offer";
 const RESOLVE_ID_PREFIX: &str = "journey-resolve-";
@@ -757,7 +956,10 @@ pub(super) fn view_offers(
         let mut result = Vec::new();
         for offer in &script.current(current.state())?.offers {
             // Authored pure steps are the script's own; no handler affordance backs them.
-            let pure = matches!(offer.effect, BeatEffect::Resolve | BeatEffect::Continue);
+            let pure = matches!(
+                offer.effect,
+                BeatEffect::Observe | BeatEffect::Resolve | BeatEffect::Continue
+            );
             if pure
                 || available
                     .iter()
@@ -765,12 +967,40 @@ pub(super) fn view_offers(
             {
                 result.push((
                     offer.effect.action(),
-                    script.label(offer)?,
+                    if offer.effect == BeatEffect::Observe {
+                        "Look around".to_owned()
+                    } else {
+                        script.label(offer)?
+                    },
                     id_for(current, offer),
                 ));
             }
         }
         Ok(result)
+    })
+}
+pub(super) fn is_observation_offer(
+    current: &Checkpoint,
+    id: &str,
+) -> Result<bool, RepositoryError> {
+    beat_script::with_script(|script| {
+        if script.is_canonical() {
+            return Ok(id
+                == journey::offer_id(current, rpc::GameplayActionKind::ExamineHarborSeal)
+                && script
+                    .current(current.state())?
+                    .offers
+                    .iter()
+                    .any(|offer| offer.effect == BeatEffect::Observe));
+        }
+        let Some(submitted) = submitted_id(id) else {
+            return Ok(false);
+        };
+        Ok(script
+            .current(current.state())?
+            .offers
+            .iter()
+            .any(|offer| offer.id == submitted && offer.effect == BeatEffect::Observe))
     })
 }
 /// The shared display's labels for a conversation: the current beat's own authored offers, which
@@ -871,6 +1101,9 @@ pub(super) fn action_label(
                     .ok_or(RepositoryError::InvalidCandidate)?;
                 return script.label(offer);
             }
+            if kind == rpc::GameplayActionKind::ExamineHarborSeal {
+                return Ok("Look around".to_owned());
+            }
             return Ok(pack::offer_label(kind));
         }
         let submitted = submitted_id(id).ok_or(RepositoryError::InvalidCandidate)?;
@@ -949,7 +1182,7 @@ pub(super) fn validate_encounter_choices(
         .find(&script.entry)
         .ok_or(RepositoryError::InvalidCandidate)?;
     for decision in &current.state().decisions {
-        let Some((_, id, _)) = choice(current.state(), decision)? else {
+        let Some((_, id, member)) = choice(current.state(), decision)? else {
             continue;
         };
         let offer = beat
@@ -965,6 +1198,30 @@ pub(super) fn validate_encounter_choices(
             })
         {
             continue;
+        }
+        let receipt = journey::accepted(decision)?;
+        if offer.effect == BeatEffect::Observe && receipt.check.is_some() {
+            let source_scene = beat
+                .scene_variant
+                .as_ref()
+                .and_then(|id| script.scenes.get(id))
+                .cloned()
+                .unwrap_or_else(|| pack::scene(beat.scene));
+            let source_scope = beat
+                .scene_variant
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", beat.scene).to_lowercase());
+            validate_observation_check(
+                current.state(),
+                decision,
+                member,
+                &source_scene,
+                &source_scope,
+                receipt.check.as_ref(),
+            )?;
+        } else if receipt.check.is_some() {
+            refusal_detail::note("search-unexpected-check");
+            return Err(RepositoryError::InvalidCandidate);
         }
         let trigger = if offer.effect == BeatEffect::ShortRest {
             BeatTrigger::RestComplete

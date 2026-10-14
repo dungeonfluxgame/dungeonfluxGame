@@ -72,6 +72,67 @@ fn accepted_now(result: &Result<rpc::SubmitActionResponse, tonic::Status>) -> bo
     )
 }
 
+fn observation_table_line(
+    hero: &str,
+    scene: &super::pack::Scene,
+    check: &rpc::AbilityCheckResult,
+    choices: &[rpc::JourneyChoice],
+) -> Option<String> {
+    let parts = check.source_revision.splitn(4, ':').collect::<Vec<_>>();
+    let [_, _, skill, detail] = parts.as_slice() else {
+        return None;
+    };
+    let (ability, skill_name) = match *skill {
+        "perception" => ("Wisdom", "Perception"),
+        "insight" => ("Wisdom", "Insight"),
+        "survival" => ("Wisdom", "Survival"),
+        "medicine" => ("Wisdom", "Medicine"),
+        "investigation" => ("Intelligence", "Investigation"),
+        "arcana" => ("Intelligence", "Arcana"),
+        "history" => ("Intelligence", "History"),
+        "nature" => ("Intelligence", "Nature"),
+        "religion" => ("Intelligence", "Religion"),
+        "stealth" => ("Dexterity", "Stealth"),
+        _ => return None,
+    };
+    let subject = if let Some(id) = detail.strip_prefix("watch-") {
+        scene
+            .cast
+            .iter()
+            .find(|person| person.id == id)?
+            .name
+            .clone()
+    } else if let Some(thing) = choices
+        .iter()
+        .find(|choice| choice.group_id == "attempt-thing")
+        .map(|choice| choice.option_id.trim())
+        .filter(|thing| !thing.is_empty())
+    {
+        thing.replace('-', " ")
+    } else {
+        let label = detail
+            .strip_prefix("finding-")
+            .unwrap_or(if *detail == "visible" {
+                "the area"
+            } else {
+                detail
+            });
+        label.replace('-', " ")
+    };
+    let modifier = check.ability_modifier + i32::try_from(check.proficiency_bonus).ok()?;
+    let verb = match *skill {
+        "insight" => "watches",
+        "survival" => "tracks",
+        "arcana" | "history" | "investigation" | "nature" | "religion" => "studies",
+        "stealth" => "scouts",
+        _ => "searches",
+    };
+    Some(format!(
+        "{hero} {verb} {subject}: {ability} ({skill_name}) {} + {modifier} = {}.",
+        check.die, check.total
+    ))
+}
+
 pub(super) enum Call {
     PublicSceneAsset {
         reply: oneshot::Sender<Result<String, tonic::Status>>,
@@ -1763,15 +1824,99 @@ impl Actor {
         let Some(hero) = journey.own_character.map(|character| character.name) else {
             return;
         };
-        let index = journey
+        let Ok(kind) = rpc::GameplayActionKind::try_from(request.action_kind) else {
+            return;
+        };
+        let Some(index) = journey
             .party
             .iter()
             .position(|party_member| party_member.name == hero)
             .and_then(|position| u32::try_from(position).ok())
-            .unwrap_or(0);
-        let Ok(kind) = rpc::GameplayActionKind::try_from(request.action_kind) else {
+        else {
             return;
         };
+        if kind == rpc::GameplayActionKind::ExamineHarborSeal
+            && let Some(check) = accepted.check.as_ref()
+        {
+            let Ok(scene) = super::beat_script_runtime::scene(before.state()) else {
+                return;
+            };
+            let Some(table_line) =
+                observation_table_line(&hero, &scene, check, &request.action_choices)
+            else {
+                record_unavailable("search-audit", "check result cannot be displayed");
+                return;
+            };
+            self.table_log.push_reserved(
+                reservation,
+                &hero,
+                rpc::TableRole::Hero,
+                index,
+                rpc::TableKind::Action,
+                &table_line,
+            );
+            if let Some(finding) = super::beat_script_runtime::observation_finding(&scene, check) {
+                let Ok(scene_name) = notebook::scene_name(scene.key) else {
+                    record_unavailable("notebook-save", "finding scene invalid");
+                    return;
+                };
+                let text = format!("{} (found by {hero})", finding.sentence);
+                match self
+                    .notebook
+                    .add_clue(member, &hero, &finding.id, &text, &scene_name)
+                {
+                    Ok(Some(order)) if finding.private => {
+                        self.log_notebook_entry(&notebook::EntryView {
+                            kind: notebook::Kind::Clue,
+                            title: finding.id.clone(),
+                            text,
+                            scene: scene_name,
+                            order,
+                            owner: Some(hero.clone()),
+                            author: Some(hero.clone()),
+                        });
+                    }
+                    Ok(Some(order)) => match self.notebook.share(member, order) {
+                        Ok(Some(entry)) => self.log_notebook_entry(&entry),
+                        Ok(None) => {
+                            record_unavailable("notebook-share", "new clue was not shareable")
+                        }
+                        Err(error) => record_unavailable("notebook-share", &error.to_string()),
+                    },
+                    Ok(None) => {}
+                    Err(error) => record_unavailable("notebook-save", &error.to_string()),
+                }
+                if !finding.private {
+                    self.table_log.push(
+                        "Narrator",
+                        rpc::TableRole::Narrator,
+                        0,
+                        rpc::TableKind::Action,
+                        &finding.sentence,
+                    );
+                }
+            } else if check.succeeded {
+                self.table_log.push(
+                    "Narrator",
+                    rpc::TableRole::Narrator,
+                    0,
+                    rpc::TableKind::Action,
+                    &format!(
+                        "You see {}: {} Nothing is out of place.",
+                        scene.title, scene.narration
+                    ),
+                );
+            } else {
+                self.table_log.push(
+                    "Narrator",
+                    rpc::TableRole::Narrator,
+                    0,
+                    rpc::TableKind::Action,
+                    "You find nothing unusual.",
+                );
+            }
+            return;
+        }
         let task_status = match kind {
             rpc::GameplayActionKind::EscortCourier => Some("accepted"),
             rpc::GameplayActionKind::ResolveErrand => Some("done"),
@@ -1872,6 +2017,47 @@ impl Actor {
         let after_combat = audit_combat_view(after, member);
         let hero = audit_hero(after, member);
         if let Some(actor) = hero.as_deref() {
+            if kind == rpc::GameplayActionKind::ExamineHarborSeal
+                && let Some(check) = accepted.check.as_ref()
+            {
+                let parts = check.source_revision.splitn(4, ':').collect::<Vec<_>>();
+                if parts.len() != 4 {
+                    record_unavailable("search-audit", "check source invalid");
+                    return;
+                }
+                let Ok(scene) = super::beat_script_runtime::scene(before.state()) else {
+                    record_unavailable("search-audit", "check scene invalid");
+                    return;
+                };
+                let finding = super::beat_script_runtime::observation_finding(&scene, check);
+                let skill = parts[2];
+                let Ok(proficiency) = i32::try_from(check.proficiency_bonus) else {
+                    record_unavailable("search-audit", "proficiency overflow");
+                    return;
+                };
+                record_audit_line(
+                    "gameplay.search_check",
+                    format!(
+                        "CHECK actor={actor:?} skill={skill} die={} modifier={} total={} dc={} outcome={} finding={}",
+                        check.die,
+                        check.ability_modifier + proficiency,
+                        check.total,
+                        check.difficulty_class,
+                        if check.succeeded {
+                            "success"
+                        } else {
+                            "failure"
+                        },
+                        finding.map_or("none", |finding| finding.id.as_str()),
+                    ),
+                );
+                if let Some(finding) = finding {
+                    record_audit_line(
+                        "gameplay.finding_revealed",
+                        format!("FINDING actor={actor:?} id={}", finding.id),
+                    );
+                }
+            }
             let state_audit = if let (Ok(state_before), Ok(state_after)) = (
                 super::journey::session_machine::SessionState::of(before),
                 super::journey::session_machine::SessionState::of(after),
