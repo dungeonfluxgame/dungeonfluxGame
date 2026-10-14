@@ -4,7 +4,10 @@ use crate::local_journey::{self, LegalCharacter};
 /// Creation-group/array data for the follow-up loader; current pack.rs cannot yet accept it.
 pub const ARCHER_CREATION_JSON: &str =
     include_str!("../../../../content/hero-builds/dwarf-archer.json");
-/// Selected level-one Dwarf Fighter/Soldier, Fighter B + Soldier B; source pp19–22,47–48,83–84.
+/// SRD 5.2.1 p. 47 Fighter starting equipment:
+/// A "Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack, and 4 GP";
+/// B "Studded Leather Armor, Scimitar, Shortsword, Longbow, 20 Arrows, Quiver, Dungeoneer's Pack, and 11 GP";
+/// C "155 GP". P. 83 Soldier: "Athletics and Intimidation"; equipment A "Spear, Shortbow, 20 Arrows, Gaming Set, Healer's Kit, Quiver, Traveler's Clothes, 14 GP" or B "50 GP".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArcherBuild {
     character: LegalCharacter,

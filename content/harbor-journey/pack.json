@@ -4,7 +4,7 @@
   "locale": "en",
   "room_code": "LANTERN",
   "creation": {
-    "description": "Supported adventure builds: Level 1 Dwarf Fighter / Soldier, as a Greatsword and Defense build or a Longbow and Archery build. Choose one option in each group. Other classes and species remain in development; every submitted build is validated on the server.",
+    "description": "Start as a level 1 Dwarf Fighter with the Soldier background. Choose your ability scores, starting gear, and look.",
     "groups": [
       {
         "id": "species",
@@ -13,7 +13,7 @@
           {
             "id": "dwarf",
             "label": "Dwarf",
-            "description": "Dwarven Toughness, Darkvision, Dwarven Resilience and Stonecunning retained."
+            "description": "Dwarves are hardy, resilient, and can see in the dark."
           }
         ]
       },
@@ -24,7 +24,7 @@
           {
             "id": "fighter-1",
             "label": "Fighter · level 1",
-            "description": "Weapon training, Fighting Style, Second Wind, three masteries."
+            "description": "Choose a Fighting Style, call on Second Wind, and master three weapons."
           }
         ]
       },
@@ -35,13 +35,13 @@
           {
             "id": "soldier",
             "label": "Soldier",
-            "description": "Athletics, Intimidation, gaming set and Savage Attacker."
+            "description": "Athletics, Intimidation, a gaming set, and the Savage Attacker feat."
           }
         ]
       },
       {
         "id": "array",
-        "label": "Ability training",
+        "label": "Ability scores",
         "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} · Soldier +{bonus_str}STR/+{bonus_con}CON",
         "options": [
           {
@@ -60,30 +60,30 @@
         "options": [
           {
             "id": "fighter-a-soldier-a",
-            "label": "Fighter A + Soldier A",
-            "description": "Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack; Spear, Shortbow, 20 arrows, gaming set, Healer's Kit, Quiver, Traveler's Clothes; 18 GP."
+            "label": "Chain mail, greatsword, flail, 8 javelins",
+            "description": "Also includes a dungeoneer's pack, spear, shortbow, 20 arrows, a gaming set, healer's kit, quiver, traveler's clothes, and 18 gp to spend."
           }
         ]
       },
       {
         "id": "style-masteries",
-        "label": "Fighting Style and masteries",
+        "label": "Fighting style and weapon masteries",
         "options": [
           {
             "id": "defense-greatsword-flail-javelin",
-            "label": "Defense · Greatsword / Flail / Javelin",
-            "description": "Defense +1 armored AC. Graze / Sap / Slow masteries. This encounter offers Greatsword only."
+            "label": "Defense",
+            "description": "Defense raises your AC by 1 while you wear armor. Your greatsword, flail, and javelin use Graze, Sap, and Slow."
           }
         ]
       },
       {
         "id": "allied-ties",
-        "label": "Initiative tie agreement",
+        "label": "When turns are tied",
         "options": [
           {
             "id": "join-order",
-            "label": "Party agrees: earlier join acts first",
-            "description": "Party ties use join order; the GM chooses allies before the Bandit when tied."
+            "label": "Party goes first",
+            "description": "On a tie, heroes act before enemies. Tied heroes go in the order they joined."
           }
         ]
       }

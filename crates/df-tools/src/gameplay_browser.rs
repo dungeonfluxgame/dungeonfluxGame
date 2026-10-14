@@ -1502,12 +1502,12 @@ fn creation(
         .ok_or_else(|| JsValue::from_str("character owner absent"))?;
     let editable = true;
     let view=CharacterPhaseView {generation:state.revision.and_then(|revision|revision.epoch).and_then(|epoch|epoch.value).ok_or_else(||JsValue::from_str("creation epoch absent"))?,owner_key:owner,revision:state.revision.and_then(|revision|revision.sequence).ok_or_else(||JsValue::from_str("creation revision absent"))?,
-        chapter:"Your hero".to_owned(),title:"Make your hero".to_owned(),description:"Pick one option in each group, then confirm.".to_owned(),
+        chapter:"Your hero".to_owned(),title:"Make your hero".to_owned(),description:offer.description.clone(),
         connection:"Connected to your shared room".to_owned(),status:CharacterStatus::Editing,
         status_message:"Choose your options and confirm. Names may use letters, dashes, or underscores (up to 24 characters).".to_owned(),
         editable,name:String::new(),flavor:String::new(),appearance:None,portrait:None,
         groups:offer.groups.iter().map(|group|CharacterGroup {id:group.group_id.clone(),label:creation_group_label(&group.group_id, &group.label),
-            description:(if group.options.len() == 1 { "Every hero in this adventure has this." } else { "Pick one." }).to_owned(),selected:(group.options.len() == 1).then(|| group.options[0].option_id.clone()),options:group.options.iter().map(|option|CharacterOption {
+            description:creation_group_description(group),selected:(group.options.len() == 1).then(|| group.options[0].option_id.clone()),options:group.options.iter().map(|option|CharacterOption {
                 id:option.option_id.clone(),label:creation_option_label(&group.group_id, &option.label),description:creation_option_description(&group.group_id, &option.description),
                 enabled:true,availability:"Available in this room".to_owned(),portrait:None,
             }).collect()}).collect(),
@@ -1576,6 +1576,18 @@ fn creation(
     Ok(())
 }
 
+fn creation_group_description(group: &rpc::JourneyGroup) -> String {
+    let [option] = group.options.as_slice() else {
+        return "Choose one.".to_owned();
+    };
+    let label = creation_option_label(&group.group_id, &option.label);
+    let description = creation_option_description(&group.group_id, &option.description);
+    if description.is_empty() {
+        label
+    } else {
+        format!("{label} · {description}")
+    }
+}
 fn creation_group_label(group_id: &str, label: &str) -> String {
     if group_id == "allied-ties" {
         return "When turns are tied".to_owned();
@@ -1586,17 +1598,18 @@ fn creation_group_label(group_id: &str, label: &str) -> String {
 fn creation_option_label(group_id: &str, label: &str) -> String {
     if group_id == "build-package" {
         if label.starts_with("Stalwart ·") {
-            return "Stalwart · Greatsword and chain mail · Defense style".to_owned();
+            return "Stalwart · Chain mail, greatsword, flail, 8 javelins".to_owned();
         }
         if label.starts_with("Vanguard ·") {
-            return "Vanguard · Greatsword and chain mail · Defense style".to_owned();
+            return "Vanguard · Chain mail, greatsword, flail, 8 javelins".to_owned();
         }
-        if label.contains("Fighter A") {
-            return "Greatsword and Defense".to_owned();
+        if label.contains("Fighter B") || label.starts_with("Longbow and Archery") {
+            return "Archer · Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
+                .to_owned();
         }
-        if label.contains("Fighter B") {
-            return "Longbow and Archery".to_owned();
-        }
+    }
+    if group_id == "equipment" && label == "Fighter A + Soldier A" {
+        return "Chain mail, greatsword, flail, 8 javelins".to_owned();
     }
     if group_id == "allied-ties" {
         return live_combat::display_label(&label.replace("the Bandit", "the enemy"));
@@ -1613,9 +1626,7 @@ fn creation_option_label(group_id: &str, label: &str) -> String {
 }
 
 fn creation_option_description(group_id: &str, description: &str) -> String {
-    if matches!(group_id, "species" | "class") {
-        String::new()
-    } else if group_id == "allied-ties" {
+    if group_id == "allied-ties" {
         // The pack's wording names one adventure's enemy; the rule is the same for any.
         description.replace("the Bandit", "the enemy")
     } else {
@@ -2710,8 +2721,9 @@ pub mod fixture {
 mod tests {
     use super::{
         ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, SubmitFailure,
-        action_identity, classify_submit_failure, creation_option_description,
-        creation_option_label, record_join_retry, should_replace_feedback, tactical_action_choice,
+        action_identity, classify_submit_failure, creation_group_description,
+        creation_option_description, creation_option_label, record_join_retry,
+        should_replace_feedback, tactical_action_choice,
     };
 
     #[test]
@@ -2756,7 +2768,7 @@ mod tests {
     fn melee_creation_packages_keep_their_names_and_show_the_scores_they_are_sent() {
         assert_eq!(
             creation_option_label("build-package", "Stalwart · Greatsword and Defense"),
-            "Stalwart · Greatsword and chain mail · Defense style"
+            "Stalwart · Chain mail, greatsword, flail, 8 javelins"
         );
         // The scores come from the server, which owns them; the page shows them as sent.
         assert_eq!(
@@ -2765,19 +2777,100 @@ mod tests {
         );
         assert_eq!(
             creation_option_label("build-package", "Vanguard · Greatsword and Defense"),
-            "Vanguard · Greatsword and chain mail · Defense style"
+            "Vanguard · Chain mail, greatsword, flail, 8 javelins"
         );
         assert_eq!(
             creation_option_label(
                 "build-package",
                 "Longbow and Archery · Fighter B + Soldier B"
             ),
-            "Longbow and Archery"
+            "Archer · Studded leather armor, scimitar, shortsword, longbow, 20 arrows"
         );
         assert_eq!(
             creation_option_label("portrait", "Second hero"),
             "Braided hair, greatsword"
         );
+    }
+
+    #[test]
+    fn creation_copy_uses_player_language_and_names_starting_gear() {
+        let pack = include_str!("../../../content/harbor-journey/pack.json");
+        let mut wording = include_str!("gameplay/fixtures/creation-wording.txt").lines();
+        let creation_description = wording.next().expect("creation description fixture");
+        let equipment_label = wording.next().expect("equipment label fixture");
+        let equipment_description = wording.next().expect("equipment description fixture");
+        let tied_turns_label = wording.next().expect("tied turns label fixture");
+        let tied_turns_description = wording.next().expect("tied turns description fixture");
+        let stalwart_package = wording.next().expect("Stalwart package fixture");
+        let vanguard_package = wording.next().expect("Vanguard package fixture");
+        let archer_package = wording.next().expect("archer package fixture");
+        assert!(wording.next().is_none(), "fixture has no extra lines");
+
+        assert!(pack.contains(&format!("\"description\": \"{creation_description}\"")));
+        assert!(pack.contains(&format!("\"label\": \"{equipment_label}\"")));
+        assert!(pack.contains(&format!("\"description\": \"{equipment_description}\"")));
+        assert!(pack.contains(&format!("\"label\": \"{tied_turns_label}\"")));
+        assert!(pack.contains(&format!("\"description\": \"{tied_turns_description}\"")));
+        assert_eq!(
+            creation_option_label("equipment", "Fighter A + Soldier A"),
+            equipment_label
+        );
+        assert_eq!(
+            creation_option_label("build-package", "Stalwart · Greatsword and Defense"),
+            stalwart_package
+        );
+        assert_eq!(
+            creation_option_label("build-package", "Vanguard · Greatsword and Defense"),
+            vanguard_package
+        );
+        assert_eq!(
+            creation_option_label(
+                "build-package",
+                "Longbow and Archery · Fighter B + Soldier B"
+            ),
+            archer_package
+        );
+        for developer_copy in [
+            "validated on the server",
+            "Other lawful SRD combinations remain unsupported",
+            "three masteries",
+            "Initiative tie agreement",
+            "Fighter A + Soldier A",
+        ] {
+            assert!(!pack.contains(developer_copy), "found {developer_copy:?}");
+        }
+    }
+    #[test]
+    fn single_creation_options_render_as_facts_and_real_choices_keep_a_prompt() {
+        let single = super::rpc::JourneyGroup {
+            group_id: "class".to_owned(),
+            options: vec![super::rpc::JourneyOption {
+                label: "Fighter · level 1".to_owned(),
+                description: "Choose a Fighting Style and call on Second Wind.".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            creation_group_description(&single),
+            "Fighter · level 1 · Choose a Fighting Style and call on Second Wind."
+        );
+
+        let no_description = super::rpc::JourneyGroup {
+            group_id: "background".to_owned(),
+            options: vec![super::rpc::JourneyOption {
+                label: "Soldier".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(creation_group_description(&no_description), "Soldier");
+
+        let choice = super::rpc::JourneyGroup {
+            options: vec![super::rpc::JourneyOption::default(); 2],
+            ..Default::default()
+        };
+        assert_eq!(creation_group_description(&choice), "Choose one.");
     }
 
     #[test]

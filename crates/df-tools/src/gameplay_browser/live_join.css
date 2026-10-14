@@ -6,3 +6,18 @@
 .tv-qr{margin:0;flex:none;padding:calc(var(--u)*.5);background:#ffffff;line-height:0}
 .tv-qr-image{display:block}
 .tv-join[data-local-only] .tv-qr{display:none}
+/* CRE-01: fixed choices read as facts; compact option grids keep the creation page usable on phones. */
+.df-character .character-choice-group[data-choice-group=false]{display:grid;grid-template-columns:minmax(95px,1fr) minmax(0,2fr);align-items:start;column-gap:12px;padding:8px 0;border:0;border-bottom:1px solid #d9b77a24;border-radius:0;background:transparent;box-shadow:none}
+.df-character .character-choice-group[data-choice-group=false] h2{margin:0;font-size:14px}
+.df-character .character-choice-group[data-choice-group=false] .character-group-description{grid-column:2;margin:0;color:#e5d6b8;font:13px/1.45 system-ui,sans-serif}
+.df-character .character-choice-group[data-choice-group=false] .character-options{display:none}
+.df-character .character-option .option-availability{display:none}
+@media(max-width:700px){
+.df-character .character-workshop .character-groups{gap:8px}
+.df-character .character-choice-group[data-choice-group=true]{padding:12px}
+.df-character .character-choice-group[data-choice-group=true] .character-group-description{margin-bottom:6px}
+.df-character .character-choice-group[data-choice-group=true] .character-options{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.df-character .character-choice-group[data-choice-group=true] .character-option{grid-template-columns:minmax(0,1fr);padding:0;border:0;background:transparent;box-shadow:none}
+.df-character .character-choice-group[data-choice-group=true] .character-option button{min-height:42px;padding:6px 8px;font:600 14px/1.2 var(--serif,Georgia,serif);text-align:center}
+.df-character .character-choice-group[data-choice-group=true] .character-option .option-description:not(:empty){grid-column:1;grid-row:2;margin:0;padding:0 4px 5px;font:11px/1.35 system-ui,sans-serif;text-align:center}
+}
