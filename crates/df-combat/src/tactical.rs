@@ -180,6 +180,14 @@ fn choose_with_policy(
 /// Rules must re-admit this staged proposal. Source stat blocks supply weapons; no rolls,
 /// combat resources, damage, conditions or positions are applied by the policy itself.
 pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
+    propose_with_shield_policy(battle, id, true)
+}
+
+fn propose_with_shield_policy(
+    battle: &Battle,
+    id: u32,
+    doff_shield_for_ranged: bool,
+) -> Result<Option<Action>, RuleError> {
     let actor = battle.actor(id)?;
     if battle.reaction_offers().first().copied() == Some(id) {
         let weapon = opportunity_weapon(&actor.spec().weapons, actor.held_weapons());
@@ -229,7 +237,11 @@ pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
         .filter(|_| actor.spec().kind != CreatureKind::Hero || actor.spec().archery)
         .find(|weapon| weapon.ranged_weapon() && actor.weapon_count(**weapon) > 0)
     {
-        if actor.shield_equipped() && !actor.budget().action_used && actor.arrows() > 0 {
+        if doff_shield_for_ranged
+            && actor.shield_equipped()
+            && !actor.budget().action_used
+            && actor.arrows() > 0
+        {
             return Ok(Some(Action::DoffShield));
         }
         let usage = weapon_use(weapon, true);
@@ -394,46 +406,114 @@ pub fn propose(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
 
 /// Current enemy action policy; `propose` remains the RUL-02 policy for stored fights.
 pub fn propose_latest(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
-    let action = propose(battle, id)?;
     let actor = battle.actor(id)?;
+    let action = propose_with_shield_policy(battle, id, actor.side() == Side::Heroes)?;
     if matches!(&action, Some(Action::Dash)) && actor.speed_ft() == 0 {
         return Ok(Some(Action::Dodge));
     }
-    if actor.side() != Side::Enemies
-        || actor.budget().action_used
-        || matches!(&action, Some(Action::Attack { .. } | Action::Move(_)))
-        || !attacks_unconscious_target(actor.spec().kind)?
-    {
+    if actor.side() != Side::Enemies {
         return Ok(action);
     }
-    let mut dying_heroes: Vec<_> = battle
-        .combatants()
-        .iter()
-        .filter(|target| {
-            target.side() == Side::Heroes
-                && target.health().hit_points == 0
-                && target.health().unconscious
-                && !target.health().dead
-                && actor.cell().distance(target.cell()) <= 5
-        })
-        .collect();
-    dying_heroes.sort_by_key(|target| (actor.cell().distance(target.cell()), target.id()));
-    for target in dying_heroes {
-        for &weapon in &actor.spec().weapons {
-            if weapon.ranged_weapon() {
-                continue;
-            }
-            let use_ = weapon_use(weapon, false);
-            if battle.legal_targets(id, use_)?.contains(&target.id()) {
-                return Ok(Some(Action::Attack {
-                    target: target.id(),
-                    weapon: use_,
-                    spend: AttackSpend::Action,
-                }));
+
+    if !actor.budget().action_used
+        && !matches!(&action, Some(Action::Attack { .. } | Action::Move(_)))
+        && attacks_unconscious_target(actor.spec().kind)?
+    {
+        let mut dying_heroes: Vec<_> = battle
+            .combatants()
+            .iter()
+            .filter(|target| {
+                target.side() == Side::Heroes
+                    && target.health().hit_points == 0
+                    && target.health().unconscious
+                    && !target.health().dead
+                    && actor.cell().distance(target.cell()) <= 5
+            })
+            .collect();
+        dying_heroes.sort_by_key(|target| (actor.cell().distance(target.cell()), target.id()));
+        for target in dying_heroes {
+            for &weapon in &actor.spec().weapons {
+                if weapon.ranged_weapon() {
+                    continue;
+                }
+                let use_ = weapon_use(weapon, false);
+                if battle.legal_targets(id, use_)?.contains(&target.id()) {
+                    return Ok(Some(Action::Attack {
+                        target: target.id(),
+                        weapon: use_,
+                        spend: AttackSpend::Action,
+                    }));
+                }
             }
         }
     }
+
+    if matches!(&action, Some(Action::Dodge | Action::EndTurn))
+        && let Some(approach) = approach_target(battle, id)?
+    {
+        return Ok(Some(approach));
+    }
     Ok(action)
+}
+
+fn approach_target(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
+    let actor = battle.actor(id)?;
+    let mut targets: Vec<_> = battle
+        .combatants()
+        .iter()
+        .filter(|target| target.side() != actor.side() && !target.health().incapacitated())
+        .collect();
+    targets.sort_by_key(|target| (actor.cell().distance(target.cell()), target.id()));
+    if targets.is_empty() {
+        return Ok(None);
+    }
+
+    let (cols, rows) = battle.map().dimensions();
+    let mut paths = Vec::new();
+    for target in targets {
+        let current_distance = actor.cell().distance(target.cell());
+        for col in 0..cols {
+            for row in 0..rows {
+                let cell = Cell(col, row);
+                if cell == actor.cell() || cell.distance(target.cell()) >= current_distance {
+                    continue;
+                }
+                let Ok(path) = battle.shortest_path(id, cell, None) else {
+                    continue;
+                };
+                let cost = battle.path_cost(id, &path)?;
+                paths.push((cell.distance(target.cell()), cost, target.id(), path));
+            }
+        }
+    }
+    paths.sort();
+    let Some((_, full_cost, _, path)) = paths.first() else {
+        return Ok(None);
+    };
+    if *full_cost > u32::from(actor.movement_remaining_ft()) && !actor.budget().action_used {
+        return Ok(Some(Action::Dash));
+    }
+
+    let mut prefix = Vec::new();
+    for &step in path {
+        let mut candidate = prefix.clone();
+        candidate.push(step);
+        if battle.path_cost(id, &candidate)? > u32::from(actor.movement_remaining_ft()) {
+            break;
+        }
+        prefix = candidate;
+    }
+    while !prefix.is_empty() && battle.validate_path(id, &prefix).is_err() {
+        prefix.pop();
+    }
+    if !prefix.is_empty() {
+        return Ok(Some(Action::Move(prefix)));
+    }
+    if !actor.budget().action_used {
+        Ok(Some(Action::Dash))
+    } else {
+        Ok(None)
+    }
 }
 
 fn attacks_unconscious_target(kind: CreatureKind) -> Result<bool, RuleError> {

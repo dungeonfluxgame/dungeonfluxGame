@@ -2,15 +2,14 @@
 //!
 //! Every creature in the compiled table, one to four enemies, every authored battle layout
 //! (the scan layouts included) and the three df-rules fixture layouts, heroes at random legal
-//! cells. Enemy turns come from the server's own planner (`df_combat::tactical::propose`, the
-//! function `choose` and the journey's `enemy_turns` call); hero turns are random mixtures of
+//! cells. Enemy turns come from the latest staged planner; hero turns are random mixtures of
 //! legal and illegal inputs. Every accepted step is audited against the SRD by
 //! `support/rules_audit.rs`, and every rejection of a path or attack the auditor considers
 //! legal is a violation too.
 #[path = "support/rules_audit.rs"]
 mod rules_audit;
 
-use df_combat::tactical::propose;
+use df_combat::tactical::propose_latest as propose;
 use df_model::checkpoint::{ActualDraw, ResolutionId, RuleReference, WindowId};
 use df_rules::tactical::{
     Action, AttackSpend, AttackUse, Battle, BattleMap, Cell, CombatantSpec, Cover, CreatureKind,
@@ -1445,6 +1444,90 @@ fn bandit_approaches_a_standing_hero_instead_of_attacking_a_dying_hero() {
         .unwrap()
         .battle;
     assert_eq!(moved.actor(11).unwrap().cell().distance(Cell(0, 1)), 5);
+}
+
+/// SRD 5.2.1 p. 18: if a dying hero is not an allowed target, move toward the standing target.
+#[test]
+fn wolf_moves_toward_the_standing_hero_when_no_attack_square_is_reachable() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":16,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[15,2]],"enemies":[[0,2],[14,1],[14,2],[15,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(15, 2), false),
+        CombatantSpec::creature(10, "wolf", Cell(0, 2), 0).unwrap(),
+        CombatantSpec::creature(11, "wolf", Cell(14, 1), 0).unwrap(),
+        CombatantSpec::creature(12, "wolf", Cell(14, 2), 0).unwrap(),
+        CombatantSpec::creature(13, "wolf", Cell(15, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(43);
+    let mut initiative = Vec::new();
+    for (ordinal, face) in [1, 20].into_iter().enumerate() {
+        let mut draw = record(&mut rng, 20, ordinal as u32, &source);
+        draw.value = face;
+        initiative.push(draw);
+    }
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    assert_eq!(battle.active_actor(), Some(10));
+
+    assert_eq!(
+        df_combat::tactical::propose(&battle, 10).unwrap(),
+        Some(Action::Dodge)
+    );
+    assert_eq!(
+        df_combat::tactical::propose_latest(&battle, 10).unwrap(),
+        Some(Action::Dash)
+    );
+    let dashed = resolve_dice(&battle, 10, &Action::Dash, &mut rng)
+        .unwrap()
+        .battle;
+    let Action::Move(path) = df_combat::tactical::propose_latest(&dashed, 10)
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("after Dashing, the wolf should move toward the standing hero");
+    };
+    let moved = resolve_dice(&dashed, 10, &Action::Move(path), &mut rng)
+        .unwrap()
+        .battle;
+    assert!(moved.actor(10).unwrap().cell().distance(Cell(15, 2)) < 75);
+}
+
+/// SRD 5.2.1 p. 290: the Goblin Warrior has AC 15 and lists both Scimitar and Shortbow actions.
+#[test]
+fn goblin_latest_policy_keeps_its_stat_block_shield_equipped() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":8,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[7,1]],"enemies":[[0,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(7, 1), false),
+        CombatantSpec::creature(10, "goblin-warrior", Cell(0, 1), 20).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(47);
+    let mut initiative = [
+        record(&mut rng, 20, 0, &source),
+        record(&mut rng, 20, 1, &source),
+    ];
+    initiative[0].value = 1;
+    initiative[1].value = 20;
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    assert_eq!(battle.active_actor(), Some(10));
+    assert!(battle.actor(10).unwrap().shield_equipped());
+    assert_eq!(battle.actor(10).unwrap().spec().armor_class, 15);
+
+    assert_eq!(
+        df_combat::tactical::propose(&battle, 10).unwrap(),
+        Some(Action::DoffShield)
+    );
+    assert!(!matches!(
+        df_combat::tactical::propose_latest(&battle, 10).unwrap(),
+        Some(Action::DoffShield)
+    ));
+    assert!(battle.actor(10).unwrap().shield_equipped());
+    assert_eq!(battle.actor(10).unwrap().spec().armor_class, 15);
 }
 
 /// SRD 5.2.1 p. 14: a visible creature leaving reach provokes an attack made as a Reaction.

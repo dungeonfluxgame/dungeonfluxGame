@@ -1,7 +1,7 @@
 use df_combat::{
     candidates::CandidateContext,
     ranking::{KnowledgeObserver, RankingObservation, TacticalKnowledge, UtilityPolicy},
-    tactical::{TacticContext, choose, propose},
+    tactical::{TacticContext, choose, propose_latest as propose},
 };
 use df_model::checkpoint::{
     ActualDraw, Basis, CheckpointPins, ContentDigest, ContentPins, ContentReference, EntityId,

@@ -86,7 +86,9 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 290. Single melee attack taken as written. Nimble Escape (a movement option) and the Advantage rider have no effect because the encounter has no movement and no Advantage.
+    // SRD 5.2.1 p. 290: "AC 15" and "Gear Chain Shirt, Scimitar, Shield, Shortbow";
+    // "Shortbow. Ranged Attack Roll: +4, range 80/320 ft." is an action alongside Scimitar.
+    // Nimble Escape and the Advantage rider have no effect in encounters without movement or Advantage.
     SrdCreature {
         id: "goblin-warrior",
         name: "Goblin Warrior",

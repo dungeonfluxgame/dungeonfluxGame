@@ -961,7 +961,20 @@ impl<'g> FightAudit<'g> {
                         });
                 }
             }
-            Action::Dash | Action::Disengage | Action::Dodge | Action::DoffShield => {
+            Action::Dash | Action::Disengage | Action::Dodge => {
+                self.audit_action_flag(before, actor, action, after)
+            }
+            Action::DoffShield => {
+                if let Ok(combatant) = before.actor(actor) {
+                    self.audit.expect(
+                        combatant.side() != Side::Enemies
+                            || combatant.spec().kind != CreatureKind::Goblin,
+                        "P-GOBLIN-SHIELD-DOFF",
+                        || {
+                            "Goblin Warrior doffed its shield instead of using a listed action: SRD 5.2.1 p. 290 gives AC 15, lists a Shield in Gear, and lists Shortbow as an Action".into()
+                        },
+                    );
+                }
                 self.audit_action_flag(before, actor, action, after)
             }
             Action::NimbleDisengage => {
