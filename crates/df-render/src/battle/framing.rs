@@ -272,8 +272,26 @@ pub fn action_shot_from(
     aspect: f32,
     home_yaw: Option<f32>,
 ) -> ActionShot {
+    action_shot_from_with_dolly(
+        style, current, actor, target, also, bystanders, aspect, home_yaw, 1.0,
+    )
+}
+
+/// As [`action_shot_from`], fitting the view after the requested dolly is applied.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn action_shot_from_with_dolly(
+    style: &CameraPose,
+    current: &CameraPose,
+    actor: &Body,
+    target: Option<&Body>,
+    also: &[Body],
+    bystanders: &[Body],
+    aspect: f32,
+    home_yaw: Option<f32>,
+    dolly: f32,
+) -> ActionShot {
     action_shot_from_inner(
-        style, current, actor, target, also, bystanders, aspect, home_yaw, None, 1.0,
+        style, current, actor, target, also, bystanders, aspect, home_yaw, None, dolly,
     )
     .expect("unfiltered action candidates always include a pose")
 }
@@ -527,6 +545,29 @@ mod tests {
             assert!(
                 in_safe_area(&shot.pose, FRAMED_ASPECT, &target),
                 "gap {gap}"
+            );
+        }
+    }
+
+    #[test]
+    fn both_fighters_stay_in_frame_after_the_finishing_shot_pushes_in() {
+        let (attacker, target) = (body(-7.0, 0.0), body(7.0, 0.0));
+        let shot = action_shot_from_with_dolly(
+            &style(),
+            &current(0.0),
+            &attacker,
+            Some(&target),
+            &[],
+            &[],
+            FRAMED_ASPECT,
+            None,
+            0.8,
+        );
+        let pushed = shot.pose.dollied(0.8);
+        for fighter in [attacker, target] {
+            assert!(
+                in_safe_area(&pushed, FRAMED_ASPECT, &fighter),
+                "the finishing push crops a fighter: {pushed:?}"
             );
         }
     }

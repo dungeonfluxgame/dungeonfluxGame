@@ -338,10 +338,14 @@ pub fn resolve(set: StatusSet) -> Resolved {
     if invisible {
         edge = edge.with(Status::Invisible);
     }
+    let mut overlay = set.only(&OVERLAY);
+    if set.contains(Status::Unconscious) {
+        overlay = overlay.without(Status::Stunned);
+    }
     Resolved {
         body,
         edge,
-        overlay: set.only(&OVERLAY),
+        overlay,
         invisible,
     }
 }
@@ -628,6 +632,24 @@ mod tests {
         for status in derived_from_view(2, 12, true) {
             assert!(matches!(status, Status::Bloodied | Status::Unconscious));
         }
+    }
+
+    #[test]
+    fn every_status_has_a_short_visible_icon_label() {
+        for status in Status::ALL {
+            assert_eq!(status.initials().chars().count(), 2, "{}", status.id());
+            assert!(!status.label().is_empty(), "{}", status.id());
+        }
+    }
+
+    #[test]
+    fn unconscious_suppresses_the_stunned_stars_over_a_fallen_figure() {
+        let set = StatusSet::of(&[Status::Unconscious, Status::Stunned]);
+        assert!(set.contains(Status::Stunned));
+        assert!(
+            !resolve(set).overlay.contains(Status::Stunned),
+            "the sharp stun stars should not float over a downed body"
+        );
     }
 
     #[test]

@@ -105,6 +105,11 @@ struct PipRow {
     signature: String,
 }
 
+struct InitiativeDie {
+    root: Element,
+    value: Element,
+}
+
 /// Most icons shown over a figure's head before the rest collapse into "+N".
 const MAX_PIPS: usize = 4;
 
@@ -182,7 +187,7 @@ pub struct Hud {
     overlays: Element,
     target_tag: Element,
     pip_rows: BTreeMap<TokenId, PipRow>,
-    dice: BTreeMap<TokenId, Element>,
+    dice: BTreeMap<TokenId, InitiativeDie>,
     badges: BTreeMap<TokenId, Element>,
 }
 
@@ -213,6 +218,7 @@ fn initial(name: &str) -> String {
 fn pip(document: &Document, parent: &Element, status: Status) -> Result<(), JsValue> {
     let node = element(document, parent, "span", "bf-pip", "")?;
     node.set_attribute("data-status", status.id())?;
+    node.set_attribute("aria-label", status.label())?;
     node.set_attribute("title", status.label())?;
     node.set_attribute("style", &format!("--chip:{}", status.chip_colour()))?;
     let image = document.create_element("img")?;
@@ -220,6 +226,7 @@ fn pip(document: &Document, parent: &Element, status: Status) -> Result<(), JsVa
     image.set_attribute("alt", status.initials())?;
     image.set_attribute("draggable", "false")?;
     node.append_child(&image)?;
+    element(document, &node, "span", "bf-pip-label", status.initials())?;
     Ok(())
 }
 
@@ -761,7 +768,7 @@ impl Hud {
         self.dice.retain(|id, node| {
             let keep = live_dice.contains(id);
             if !keep {
-                node.remove();
+                node.root.remove();
             }
             keep
         });
@@ -770,10 +777,12 @@ impl Hud {
                 continue;
             };
             if !self.dice.contains_key(&die.token) {
-                let node = element(&self.document, &self.overlays, "div", "bf-die", "")?;
-                self.dice.insert(die.token.clone(), node);
+                let root = element(&self.document, &self.overlays, "div", "bf-die", "")?;
+                let value = element(&self.document, &root, "span", "bf-die-value", "")?;
+                self.dice
+                    .insert(die.token.clone(), InitiativeDie { root, value });
             }
-            let Some(node) = self.dice.get(&die.token) else {
+            let Some(die_node) = self.dice.get(&die.token) else {
                 continue;
             };
             let text = if die.landed {
@@ -790,11 +799,13 @@ impl Hud {
                 // The faces flicker by while it tumbles.
                 (((die.age_s * 38.0) as u32 * 7 + die.face * 3) % 20 + 1).to_string()
             };
-            if node.text_content().as_deref() != Some(text.as_str()) {
-                node.set_text_content(Some(&text));
+            if die_node.value.text_content().as_deref() != Some(text.as_str()) {
+                die_node.value.set_text_content(Some(&text));
             }
-            node.set_attribute("data-landed", if die.landed { "true" } else { "false" })?;
-            node.set_attribute(
+            die_node
+                .root
+                .set_attribute("data-landed", if die.landed { "true" } else { "false" })?;
+            die_node.root.set_attribute(
                 "data-side",
                 if figure.side == Side::Hero {
                     "hero"
@@ -808,7 +819,7 @@ impl Hud {
                 (die.age_s / die.tumble_s.max(0.01)).clamp(0.0, 1.0)
             };
             match anchor(figure, 0.55 + 0.35 * (1.0 - tumble) * (1.0 - tumble)) {
-                Some((x, y)) => node.set_attribute(
+                Some((x, y)) => die_node.root.set_attribute(
                     "style",
                     &format!(
                         "left:{:.2}%;top:{:.2}%;--spin:{:.0}deg",
@@ -817,7 +828,7 @@ impl Hud {
                         tumble * 720.0
                     ),
                 )?,
-                None => node.set_attribute("style", "display:none")?,
+                None => die_node.root.set_attribute("style", "display:none")?,
             }
         }
         let live_badges: BTreeSet<&TokenId> =
