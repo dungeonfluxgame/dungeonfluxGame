@@ -154,18 +154,9 @@ impl Service {
         credential: [u8; 32],
         request: rpc::WatchViewRequest,
     ) -> Result<(LocalDemoRole, rpc::ViewMessage), Status> {
-        let (reply, wait) = oneshot::channel();
-        self.actor
-            .try_submit(actor::Call::View {
-                credential,
-                request,
-                reply,
-            })
-            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
-        let viewed = tokio::time::timeout(timing::active().reply, wait)
-            .await
-            .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
-            .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
+        // A full queue is waited out within the reply deadline, so a burst of watchers (a new
+        // adventure starting) does not close every stream with ResourceExhausted (DEV-09).
+        let viewed = room::actor_view(&self.actor, credential, request).await;
         // Every view leaves the server through here, so this is where spoken lines are
         // registered; only the display audience is voiced.
         if let Ok((_, message)) = &viewed {

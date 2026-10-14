@@ -2,7 +2,7 @@
 use df_model::checkpoint::{CommandInput, GameCommand, GameInput};
 use df_persistence::local_demo_scope::{LocalRejectedLookup, PLAYER};
 use df_protocol::common as rpc;
-use df_session::inbox::{AdmissionSequence, Reducer};
+use df_session::inbox::{AdmissionRefusal, AdmissionSequence, Reducer};
 use df_session::submission::{
     DurableOwner, OwnedInput, PublicationOwner, RepositoryError, SessionEngine, SessionRepository,
     SubmissionOutcome,
@@ -12,6 +12,75 @@ use sha2::{Digest, Sha256};
 use tonic::{Request, Response, Status};
 
 use super::{Service, actor, journey, model, wire};
+
+pub(super) async fn actor_view(
+    actor: &super::InboxHandle<actor::Call>,
+    credential: [u8; 32],
+    request: rpc::WatchViewRequest,
+) -> Result<(super::LocalDemoRole, rpc::ViewMessage), Status> {
+    let (reply, wait) = tokio::sync::oneshot::channel();
+    let reply_deadline = tokio::time::Instant::now() + super::timing::active().reply;
+    let mut pending = actor::Call::View {
+        credential,
+        request,
+        reply,
+    };
+    let wait = loop {
+        match actor.try_submit(pending) {
+            Ok(_) => break wait,
+            Err(refused)
+                if matches!(
+                    refused.reason,
+                    AdmissionRefusal::ItemCapacity | AdmissionRefusal::ByteCapacity
+                ) =>
+            {
+                pending = refused.input;
+                let now = tokio::time::Instant::now();
+                if now >= reply_deadline {
+                    return Err(Status::resource_exhausted(
+                        "gameplay actor queue remained full",
+                    ));
+                }
+                tokio::time::sleep_until(
+                    reply_deadline.min(now + std::time::Duration::from_millis(10)),
+                )
+                .await;
+                if tokio::time::Instant::now() >= reply_deadline {
+                    return Err(Status::resource_exhausted(
+                        "gameplay actor queue remained full",
+                    ));
+                }
+            }
+            Err(refused) => {
+                return Err(match refused.reason {
+                    AdmissionRefusal::Closed => Status::unavailable("gameplay actor stopped"),
+                    AdmissionRefusal::ItemCapacity | AdmissionRefusal::ByteCapacity => {
+                        Status::resource_exhausted("gameplay actor queue remained full")
+                    }
+                    AdmissionRefusal::Oversize => {
+                        Status::resource_exhausted("gameplay view exceeds actor queue capacity")
+                    }
+                    AdmissionRefusal::RetainedBytesOverflow => {
+                        Status::resource_exhausted("gameplay view admission size overflow")
+                    }
+                    AdmissionRefusal::SequenceExhausted => {
+                        Status::resource_exhausted("gameplay actor sequence exhausted")
+                    }
+                    AdmissionRefusal::AllocationUnavailable => {
+                        Status::resource_exhausted("gameplay actor queue allocation unavailable")
+                    }
+                    AdmissionRefusal::Poisoned => Status::internal("gameplay actor queue poisoned"),
+                });
+            }
+        }
+    };
+    let viewed = tokio::time::timeout_at(reply_deadline, wait)
+        .await
+        .map_err(|_| Status::deadline_exceeded("gameplay view deadline"))?
+        .map_err(|_| Status::unavailable("gameplay actor stopped"))?;
+    viewed
+}
+
 mod reclaim;
 pub(in crate::gameplay) use reclaim::{AwayHero, ReclaimRefusal, ReclaimRequest, SeatClock};
 fn refused(code: rpc::RejectionCode) -> rpc::JoinRoomResponse {
@@ -163,6 +232,8 @@ mod player_page_tests {
 
 #[cfg(test)]
 mod admission_tests;
+#[cfg(test)]
+mod view_retry_tests;
 
 impl actor::Actor {
     pub(super) fn join(
