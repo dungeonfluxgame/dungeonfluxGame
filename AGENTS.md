@@ -254,6 +254,13 @@ capacity promises; selected bounds and payment/usage models require verified gat
   checks use faithful fakes/local fixtures; live calls require a scoped task with
   deadlines and spend limits. Do not weaken an assertion without verifying the
   approved behavior changed.
+- Scene and interaction timing is part of correctness. Play and judge it as a person at the
+  table would, at human pace: a line must stay up long enough to read across a room and must
+  not be cut off by its voice or the next line; backgrounds and figures must not flicker,
+  swap or vanish while a scene lasts; nothing may change faster than a person can follow.
+  Measure it from the logs (when each line, plate, clip, figure and scene change starts and
+  ends, and why). If a timing you need is not in the logs, add it to the logs through the
+  shared instrumentation path as part of your task, and report the measured values.
 - Browser changes need browser-target checks and a real browser smoke test.
   Verify same-phase updates, reconnect, asset failure, and audio playback when
   relevant. CLI success, coverage totals, and critic scores are not substitutes
