@@ -720,6 +720,9 @@ The owner: "rebuild and test scene investigation, do a series of tests to check 
 | TVX-16 | 2 | The TV and the phone disagree on hit points: the TV's health bars showed the heroes at 11/11 while the phone and the victory card showed 13/13 (a level 1 Dwarf Fighter with Constitution 14 has 10 + 2 + 1 = 13 with Dwarven Toughness). Seen by the independent reviewer in the market scene's screenshot. | TVX-14 | Open: worker B21 (the TV's health cards) with Q03 (the view's maximum) |
 | FGT-15 | 4 | "Javelin (throw) · normal range: 20 ft" reads as the weapon's range (a javelin is 30/120 ft); it means the target is 20 ft away. | FGT-06 | Open: worker B28 |
 | RUL-26 | 3 | After a won fight the TV says "The party decides: rest or move on" but offers no Short Rest when the heroes are unhurt; a party may take a Short Rest whenever it wants (SRD 5.2.1 Short Rest). | RUL-23, RUL-25 | Open: worker Q03 |
+| NTE-07 | 3 | The notebook's errand reads "Reward: There is talk of trouble farther along. Come and hear it when you can.": a story hook in the reward's place; the promised payment is nowhere. | RWD-01, END-07 | Open: workers Q03 (the reward paid and recorded), B20 (the generated reward) |
+| NTE-08 | 4 | One place is listed twice in the notebook: "the bindery" and "the Binding Workshop". | NTE-03 | Open: worker Q02 (the notebook) |
+| PHN-14 | 3 | The phone's notebook and menu open as sheets over the tab bar: switching from the notebook to the menu needs Close first; tapping another tab does nothing. The menu has no sound, voice or text-size setting. The hero sheet's heading says "Abilities and saves" but lists no saving throws. | PHN-13 | Open: worker B18 (sheets and tabs), C-lane after B18 (the sheet's saves) |
 
 ## State of the forward state machine
 
