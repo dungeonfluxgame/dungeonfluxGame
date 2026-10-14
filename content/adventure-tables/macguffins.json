@@ -13,6 +13,7 @@
           ],
           "id": "surveyors-maps",
           "full": "a bundle of surveyors' maps",
+          "failure": "travelers will be led onto unsafe ground",
           "short": "the map bundle",
           "title": "Surveyors' Maps",
           "tags": [
@@ -27,6 +28,7 @@
           ],
           "id": "brass-key",
           "full": "a brass key wrapped in blue cloth",
+          "failure": "the locked family room will stay sealed",
           "short": "the brass key",
           "title": "The Brass Key",
           "tags": [
@@ -41,6 +43,7 @@
           ],
           "id": "healers-salve",
           "full": "a clay jar of healer's salve",
+          "failure": "the injured will go without treatment",
           "short": "the salve jar",
           "title": "Healer's Salve",
           "tags": [
@@ -55,6 +58,7 @@
           ],
           "id": "steady-lantern",
           "full": "a lantern whose flame never gutters",
+          "failure": "its owner will face the dark without a light",
           "short": "the steady lantern",
           "title": "The Steady Lantern",
           "tags": [
@@ -69,6 +73,7 @@
           ],
           "id": "lullaby-book",
           "full": "a hand-bound book of lullabies",
+          "failure": "a child will lose the last song they remember",
           "short": "the lullaby book",
           "title": "The Lullaby Book",
           "tags": [
@@ -83,6 +88,7 @@
           ],
           "id": "iron-coffer",
           "full": "a small iron-bound coffer",
+          "failure": "the family will lose its last proof of the debt",
           "short": "the iron coffer",
           "title": "The Iron Coffer",
           "tags": [
@@ -97,6 +103,7 @@
           ],
           "id": "seed-grain",
           "full": "a sack of precious seed-grain",
+          "failure": "the fields will go unplanted this season",
           "short": "the seed sack",
           "title": "The Seed Grain",
           "tags": [
@@ -110,6 +117,7 @@
           ],
           "id": "heavy-whistle",
           "full": "a strangely heavy carved whistle",
+          "failure": "the watch will miss its only warning signal",
           "short": "the old whistle",
           "title": "The Heavy Whistle",
           "tags": [
@@ -124,6 +132,7 @@
           ],
           "id": "wax-letter",
           "full": "a wax-sealed letter",
+          "failure": "the warning inside will arrive too late",
           "short": "the letter",
           "title": "The Sealed Letter",
           "tags": [
@@ -138,6 +147,7 @@
           ],
           "id": "knotted-cord",
           "full": "a knotted warning-cord",
+          "failure": "the village will miss its danger sign",
           "short": "the knotted cord",
           "title": "The Knotted Cord",
           "tags": [
@@ -151,6 +161,7 @@
           ],
           "id": "signet-ring",
           "full": "a signet ring and a hurried note",
+          "failure": "the forged order will go unchallenged",
           "short": "the signet ring",
           "title": "The Signet Ring",
           "tags": [
@@ -165,6 +176,7 @@
           ],
           "id": "petition",
           "full": "a rolled petition of forty names",
+          "failure": "forty families will lose their plea for relief",
           "short": "the petition",
           "title": "The Petition",
           "tags": [
@@ -178,6 +190,7 @@
           ],
           "id": "fever-herb",
           "full": "a rare white fever-herb",
+          "failure": "the healer will lack the only remedy",
           "short": "the fever-herb",
           "title": "The Fever-Herb",
           "tags": [
@@ -191,6 +204,7 @@
           ],
           "id": "bitter-tonic",
           "full": "a bottle of bitter-root tonic",
+          "failure": "the patient will be left without medicine",
           "short": "the tonic",
           "title": "The Bitter Tonic",
           "tags": [
@@ -205,6 +219,7 @@
           ],
           "id": "silent-clock",
           "full": "a silent heirloom clock",
+          "failure": "the family heirloom will be lost for good",
           "short": "the old clock",
           "title": "The Silent Clock",
           "tags": [
@@ -218,6 +233,7 @@
           ],
           "id": "chapel-bell",
           "full": "a small silver chapel bell",
+          "failure": "the chapel will lose its call to shelter",
           "short": "the silver bell",
           "title": "The Silver Bell",
           "tags": [
@@ -232,6 +248,7 @@
           ],
           "id": "debt-ledger",
           "full": "a ledger of an old debt",
+          "failure": "the debt will remain unproved and the wrong person blamed",
           "short": "the ledger",
           "title": "The Old Ledger",
           "tags": [
@@ -246,6 +263,7 @@
           ],
           "id": "cradle-blanket",
           "full": "a crest-stitched cradle-blanket",
+          "failure": "a newborn will be left without warmth",
           "short": "the blanket",
           "title": "The Crest Blanket",
           "tags": [
@@ -259,6 +277,7 @@
           ],
           "id": "ward-stone",
           "full": "a ward-stone, warm to the touch",
+          "failure": "the failing ward will leave the market exposed",
           "short": "the ward-stone",
           "title": "The Ward-Stone",
           "tags": [
@@ -273,6 +292,7 @@
           ],
           "id": "red-star-chart",
           "full": "a star-chart marked in red ink",
+          "failure": "sailors will lose the only safe route across the shoals",
           "short": "the star-chart",
           "title": "The Star-Chart",
           "tags": [

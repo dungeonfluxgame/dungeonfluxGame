@@ -1243,30 +1243,31 @@ fn sha256(bytes: &[u8]) -> String {
 /// so the dossier tables revision and the record hashes moved; pack and tuning are unchanged.
 /// NTE-01 adds the compact scene facts used to populate the durable notebook, changing records
 /// while leaving the pack and tuning bytes unchanged.
-// INV-03 adds a Look around offer to generated pre-fight story beats; the pack and record pins move.
+/// STO-01/02 add a coherent job, failure stake and exact gold reward to the opening, and name the
+/// foreshadowed threat in the pre-fight offer; those story-facing changes move pack and record pins.
 const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "807f57eaf77176797791a120af23f5f46f035cdf8022b8d0eee493fe1903399d",
+            "35597663b0b53680085997ace1beb84031f028ac6d76a1cbcc2a63ff3fc1d482",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "f727a76bae633d053f18ff863571932616de9dd5a4030730d333013bc223797d",
+            "e6f3105f28d9b5e9ed66a6a1b1a378b3b7a0864d657bf98ad8cbfb31f3088860",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "d0b2c27c34c43ed801645a3d18ffeb77c350b4c6f4a72b52303da9906549277e",
+            "05c6db51e18680a4580e0c5d04afcf4bd77aec344c85198fdd90e8a5cb45a16d",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "e800d8111b41eddd9c489a7780b15e91c5828d2d32710c950ead2d16ed718083",
+            "3c1d3296987ee7584d12c6891f6630fae6eeca6b8492ac38c432cb4a96fac1a5",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "8285912ff0a7325f6e0e126d10c22ca2196c47bfeb354a03735b3d583e86dc42",
+            "84fec187fd66b235e3e8d6ec74b85ea67175ada87d02a1b359172c11584a099e",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "3cc9083a56bb036d47d5f6d83d38cbd5feea2c630752476b4f2d99f415ffcabb",
+            "7de96e697b10f839f824b539f66462b51acf32c116a86586720896d2e1d1d372",
         ],
     ),
 ];
@@ -1293,7 +1294,9 @@ fn restrained_generation_matches_current_tactical_document_pins() {
             [pack.to_owned(), tuning.to_owned(), record.to_owned()],
             "{seed:#x} documents"
         );
-        assert!(super::record::reload(&documents).is_ok());
+        if let Err(error) = super::record::reload(&documents) {
+            panic!("{seed:#x}: {error}");
+        }
     }
 }
 
@@ -1401,4 +1404,292 @@ fn the_fight_and_its_aftermath_are_darker_when_mature_and_still_nonlethal() {
     for word in ["dies", "die", "slain", "killed", "kills", "dead", "corpse"] {
         assert!(!words.contains(word), "{word}");
     }
+}
+
+fn assert_no_story_rule_failures(rule: &str, failed_seeds: &[u64]) {
+    assert!(
+        failed_seeds.is_empty(),
+        "{rule}: {} of 200 seeds failed; first failures: {:?}",
+        failed_seeds.len(),
+        &failed_seeds[..failed_seeds.len().min(8)]
+    );
+}
+
+fn generated_story_seed(tables: &Tables, seed: u64) -> GeneratedAdventure {
+    generate(
+        tables,
+        seed,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap_or_else(|error| panic!("seed {seed}: {error}"))
+}
+
+#[test]
+fn opening_gives_the_job_stake_failure_and_reward_for_two_hundred_seeds() {
+    let tables = tables();
+    let mut failed_seeds = Vec::new();
+    for seed in 0..200 {
+        let adventure = generated_story_seed(&tables, seed);
+        let opening = adventure
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == crate::gameplay::pack::SceneKey::Opening)
+            .unwrap();
+        let opening_line = adventure
+            .fact_sheet
+            .iter()
+            .find(|sheet| sheet.scene.as_deref() == Some("opening") && sheet.slot == "line");
+        let stake = adventure.facts.get("stake.short");
+        let consequence = adventure.facts.get("stake.failure");
+        let reward = adventure
+            .facts
+            .get("reward.gold")
+            .and_then(|amount| amount.parse::<u8>().ok());
+        let reward_matches_table =
+            reward.is_some_and(|amount| {
+                adventure.facts.get("reward.line").is_some_and(|line| {
+                    tables.rewards.entries.iter().any(|entry| {
+                        entry.gold == Some(amount) && entry.text.as_str() == line.as_str()
+                    })
+                })
+            });
+        let reward_words = adventure.facts.get("reward.words");
+        let includes_reward = reward_words.is_some_and(|words| {
+            opening
+                .dialogue
+                .to_lowercase()
+                .contains(&words.to_lowercase())
+                && opening.dialogue.to_lowercase().contains("gold")
+        });
+        let job = adventure.facts.get("hook.job");
+        let full_stake = adventure.facts.get("stake.full");
+        let names_stake = stake.is_some_and(|value| opening.dialogue.contains(value))
+            || full_stake.is_some_and(|value| opening.dialogue.contains(value));
+        let meeting = &adventure.settings.meeting;
+        let names_meeting = opening.narration.contains(&meeting.name)
+            && opening.narration.contains(&meeting.short)
+            && opening
+                .narration
+                .split('.')
+                .next()
+                .is_some_and(|sentence| sentence.contains(&meeting.name));
+        let valid = opening_line.is_some_and(|sheet| {
+            !sheet.baseline.trim().is_empty() && opening.dialogue.contains(&sheet.baseline)
+        }) && job.is_some_and(|value| opening.narration.contains(value))
+            && names_stake
+            && names_meeting
+            && consequence.is_some_and(|value| opening.narration.contains(value))
+            && reward_matches_table
+            && includes_reward;
+        if !valid {
+            failed_seeds.push(seed);
+        }
+    }
+    assert_no_story_rule_failures("opening job, stake, failure and reward", &failed_seeds);
+}
+
+#[test]
+fn the_foreshadowed_threat_matches_the_fight_choice_for_two_hundred_seeds() {
+    let tables = tables();
+    let mut failed_seeds = Vec::new();
+    for seed in 0..200 {
+        let adventure = generated_story_seed(&tables, seed);
+        let script = adventure.pack.beat_script.as_ref().unwrap();
+        let opening = script.find("opening").unwrap();
+        let threat = adventure.facts.get("ant.full").unwrap().to_lowercase();
+        let branches_name_threat = opening
+            .offers
+            .iter()
+            .filter(|offer| {
+                matches!(
+                    offer.effect,
+                    crate::gameplay::beat_script::BeatEffect::AskCourier
+                        | crate::gameplay::beat_script::BeatEffect::EscortCourier
+                )
+            })
+            .all(|offer| {
+                opening
+                    .transitions
+                    .iter()
+                    .find(|transition| {
+                        transition.trigger
+                            == (crate::gameplay::beat_script::BeatTrigger::Offer {
+                                offer: offer.id.clone(),
+                            })
+                    })
+                    .and_then(|transition| script.find(&transition.target))
+                    .and_then(|beat| {
+                        adventure
+                            .pack
+                            .scenes
+                            .iter()
+                            .find(|scene| scene.key == beat.scene)
+                    })
+                    .is_some_and(|scene| {
+                        format!("{} {}", scene.narration, scene.dialogue)
+                            .to_lowercase()
+                            .contains(&threat)
+                    })
+            });
+        let choice_names_threat = adventure
+            .pack
+            .offer_labels
+            .defend_courier
+            .to_lowercase()
+            .contains(&threat);
+        let threat_appears = adventure
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == crate::gameplay::pack::SceneKey::Combat)
+            .is_some_and(|scene| {
+                scene
+                    .cast
+                    .iter()
+                    .any(|member| member.name == adventure.pack.bandit.name)
+            });
+        if !(branches_name_threat && choice_names_threat && threat_appears) {
+            failed_seeds.push(seed);
+        }
+    }
+    assert_no_story_rule_failures("foreshadowed and present fight threat", &failed_seeds);
+}
+
+#[test]
+fn every_private_secret_has_a_clue_and_resolution_payoff_for_two_hundred_seeds() {
+    let tables = tables();
+    let mut failed_seeds = Vec::new();
+    for seed in 0..200 {
+        let adventure = generated_story_seed(&tables, seed);
+        let secret = adventure.facts.get("secret.fact").unwrap();
+        let confirmation = adventure.facts.get("secret.confirm").unwrap();
+        let resolution = adventure
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == crate::gameplay::pack::SceneKey::Inn)
+            .unwrap();
+        if !adventure.pack.courier_clue.contains(secret)
+            || !resolution.dialogue.contains(confirmation)
+        {
+            failed_seeds.push(seed);
+        }
+    }
+    assert_no_story_rule_failures("secret clue and payoff", &failed_seeds);
+}
+
+#[test]
+fn a_retrieval_holder_does_not_take_the_recovered_stake_for_two_hundred_seeds() {
+    let tables = tables();
+    let mut failed_seeds = Vec::new();
+    let mut retrievals_checked = 0;
+    for seed in 0..200 {
+        let adventure = generated_story_seed(&tables, seed);
+        if adventure.facts.get("hook.kind").map(String::as_str) != Some("retrieve") {
+            continue;
+        }
+        retrievals_checked += 1;
+        let contact = adventure.facts.get("contact.first").unwrap().to_lowercase();
+        let stake = adventure.facts.get("stake.short").unwrap().to_lowercase();
+        let patron = adventure.facts.get("patron.first").unwrap().to_lowercase();
+        let returned_to_patron = adventure
+            .pack
+            .beat_script
+            .as_ref()
+            .unwrap()
+            .scenes
+            .values()
+            .any(|scene| {
+                format!("{} {}", scene.narration, scene.dialogue)
+                    .to_lowercase()
+                    .contains(&format!("{contact} returns {stake} to {patron}"))
+            });
+        let holder_takes_stake = adventure
+            .pack
+            .beat_script
+            .as_ref()
+            .unwrap()
+            .scenes
+            .values()
+            .any(|scene| {
+                format!("{} {}", scene.narration, scene.dialogue)
+                    .to_lowercase()
+                    .contains(&format!("{contact} takes {stake}"))
+            });
+        if holder_takes_stake || !returned_to_patron {
+            failed_seeds.push(seed);
+        }
+    }
+    assert!(
+        retrievals_checked > 0,
+        "seed range must cover retrieval hooks"
+    );
+    assert_no_story_rule_failures("retrieval holder takes the stake", &failed_seeds);
+}
+
+#[test]
+fn the_single_pre_fight_scene_offers_observation_or_a_named_threat_for_two_hundred_seeds() {
+    let tables = tables();
+    let mut failed_seeds = Vec::new();
+    for seed in 0..200 {
+        let adventure = generated_story_seed(&tables, seed);
+        let script = adventure.pack.beat_script.as_ref().unwrap();
+        let opening = script.find("opening").unwrap();
+        let has_single_multi_option_branch = opening
+            .offers
+            .iter()
+            .filter(|offer| {
+                matches!(
+                    offer.effect,
+                    crate::gameplay::beat_script::BeatEffect::AskCourier
+                        | crate::gameplay::beat_script::BeatEffect::EscortCourier
+                )
+            })
+            .all(|offer| {
+                let branch = opening
+                    .transitions
+                    .iter()
+                    .find(|transition| {
+                        transition.trigger
+                            == (crate::gameplay::beat_script::BeatTrigger::Offer {
+                                offer: offer.id.clone(),
+                            })
+                    })
+                    .and_then(|transition| script.find(&transition.target));
+                branch.is_some_and(|branch| {
+                    branch.kind == crate::gameplay::beat_script::BeatKind::Narrate
+                        && branch.offers.iter().any(|offer| {
+                            offer.effect == crate::gameplay::beat_script::BeatEffect::Observe
+                                && script.label(offer).ok().as_deref() == Some("Look around")
+                                && branch.transitions.iter().any(|transition| {
+                                    transition.trigger
+                                        == (crate::gameplay::beat_script::BeatTrigger::Offer {
+                                            offer: offer.id.clone(),
+                                        })
+                                        && transition.target == branch.id
+                                })
+                        })
+                        && branch.offers.iter().any(|offer| {
+                            offer.effect == crate::gameplay::beat_script::BeatEffect::DefendCourier
+                                && offer.id == "defend-courier"
+                                && branch.transitions.iter().any(|transition| {
+                                    transition.trigger
+                                        == (crate::gameplay::beat_script::BeatTrigger::Offer {
+                                            offer: offer.id.clone(),
+                                        })
+                                        && script.find(&transition.target).is_some_and(|next| {
+                                            next.kind
+                                                == crate::gameplay::beat_script::BeatKind::Fight
+                                        })
+                                })
+                        })
+                })
+            });
+        if !has_single_multi_option_branch {
+            failed_seeds.push(seed);
+        }
+    }
+    assert_no_story_rule_failures("single multi-option pre-fight scene", &failed_seeds);
 }

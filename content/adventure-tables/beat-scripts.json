@@ -419,13 +419,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -443,13 +443,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -883,13 +883,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -907,13 +907,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -1347,13 +1347,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -1371,13 +1371,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -1811,13 +1811,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -1835,13 +1835,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -2676,13 +2676,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -2700,13 +2700,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -3140,13 +3140,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -3164,13 +3164,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -3604,13 +3604,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -3628,13 +3628,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -4068,13 +4068,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -4092,13 +4092,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -4800,13 +4800,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -4824,13 +4824,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -5264,13 +5264,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -5288,13 +5288,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -5728,13 +5728,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -5752,13 +5752,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -6192,13 +6192,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -6216,13 +6216,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -6656,13 +6656,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -6680,13 +6680,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {
@@ -7120,13 +7120,13 @@
         "epilogue-won": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and counts the cost of the road in silence. Every hero stands, and {patron.first} lets out a long breath.",
+          "narration": "At {dest.name}, {stake.resolution}. Every hero stands, and {patron.first} lets out a long breath.",
           "line": "You came through on your own feet. That is worth more than I can say."
         },
         "epilogue-won-costly": {
           "scene": "inn",
           "title": "Epilogue",
-          "narration": "At {dest.name}, {contact.first} takes {stake.short} and sees how hard the road was. The fight was won, but not every hero arrives whole.",
+          "narration": "At {dest.name}, {stake.resolution}. The fight was won, but not every hero arrives whole.",
           "line": "It is done, and it cost you. I will not forget what you paid."
         },
         "epilogue-lost": {
@@ -7144,13 +7144,13 @@
         "the-end-won": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The road is quiet behind you. With {stake.short} delivered, the party goes on together.",
+          "narration": "The road is quiet behind you. {stake.resolution}. The party goes on together.",
           "line": "Rest well. The next road can wait for morning."
         },
         "the-end-won-costly": {
           "scene": "inn",
           "title": "The End",
-          "narration": "The price of the road is plain on every face, but {stake.short} is safe. {patron.first} promises it will not be forgotten.",
+          "narration": "The price of the road is plain on every face. {stake.resolution}. {patron.first} promises it will not be forgotten.",
           "line": "What you saved was worth saving. Remember those it cost."
         },
         "the-end-lost": {

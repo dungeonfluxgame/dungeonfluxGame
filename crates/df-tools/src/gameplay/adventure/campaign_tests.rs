@@ -69,13 +69,11 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
             };
             let generated = generate_chapter(&t, &frame, &mut plan)
                 .unwrap_or_else(|e| panic!("seed {seed} chapter {}: {e}", plan.number));
-            assert!(
-                generated
-                    .pack
-                    .scenes
-                    .iter()
-                    .all(|s| s.setting.as_ref() == Some(generated.settings.scene(s.key)))
-            );
+            assert!(generated.pack.scenes.iter().all(|scene| {
+                let mut expected_setting = generated.settings.scene(scene.key).clone();
+                expected_setting.model = None;
+                scene.setting.as_ref() == Some(&expected_setting)
+            }));
             let victory_setting = generated
                 .pack
                 .scenes

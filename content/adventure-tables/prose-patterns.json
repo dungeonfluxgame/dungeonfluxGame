@@ -126,28 +126,28 @@
             1,
             1
           ],
-          "text": "You meet {patron.first} in {place}. {place_detail}"
+          "text": "You meet {patron.first} at {place}."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "In {place}, {patron.first} awaits you. {place_detail}"
+          "text": "{patron.first} waits at {place}."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "You find {patron.first} in {place}. {place_detail}"
+          "text": "At {place}, you meet {patron.first}."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "In {place}, {patron.first} beckons you closer. {place_detail}"
+          "text": "You find {patron.first} at {place}."
         }
       ]
     },
@@ -159,28 +159,28 @@
             1,
             1
           ],
-          "text": "Behind {patron.obj}, a footstep scuffs the dark."
+          "text": "A witness says {ant.short} has been asking for you."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "Out in the dark, a second set of footsteps stops."
+          "text": "Someone heard {ant.short} asking where you went."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "A shadow detaches itself from the dark behind {patron.obj}."
+          "text": "A passerby warns that {ant.short} is close behind."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "You hear a boot scrape just beyond the lantern light."
+          "text": "You hear {ant.short} named in a whispered warning."
         }
       ]
     },
@@ -192,28 +192,28 @@
             1,
             1
           ],
-          "text": "Out past the light, something low and quick shifts."
+          "text": "Fresh tracks show {ant.short} is circling close."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "A faint scrabbling stirs just beyond the lantern light."
+          "text": "Broken brush marks the path {ant.short} took."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "Eyes glint once in the dark, then vanish."
+          "text": "Pawprints lead toward you; {ant.short} is nearby."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "Something unseen moves along behind {patron.obj}."
+          "text": "A low growl from the dark answers to {ant.short}'s name."
         }
       ]
     },
@@ -225,28 +225,28 @@
             1,
             1
           ],
-          "text": "A dry clatter drifts out of the dark, patient and slow."
+          "text": "A dry rattle marks where {ant.short} passed."
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "Nearby, something dry rattles and goes quiet."
+          "text": "Cold ash traces {ant.short}'s path nearby."
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "The lanterns gutter, as though the dark were listening."
+          "text": "A low voice warns that {ant.short} is close."
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "Slow, measured footsteps echo from out of the dark."
+          "text": "Measured footsteps stop when someone names {ant.short}."
         }
       ]
     },
@@ -324,28 +324,28 @@
             1,
             1
           ],
-          "text": "Stand your ground"
+          "text": "Face {ant.short}"
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "Face down {ant.the}"
+          "text": "Stop {ant.short}"
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "Block the path of {ant.the}"
+          "text": "Confront {ant.short}"
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "Shield {patron.first} from {ant.the}"
+          "text": "Challenge {ant.short}"
         }
       ]
     },

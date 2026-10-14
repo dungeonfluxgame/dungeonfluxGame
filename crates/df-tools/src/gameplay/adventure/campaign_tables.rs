@@ -1,7 +1,7 @@
 //! Typed campaign authoring inputs; adventure-generator §§13–18 govern validation.
 use super::{
     Tables, TablesError,
-    schema::{Table, TextEntry},
+    schema::{RewardEntry, Table, TextEntry},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -256,7 +256,7 @@ pub(super) struct ClueTables {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RewardTables {
-    pub(super) chapter_lines: Table<TextEntry>,
+    pub(super) chapter_lines: Table<RewardEntry>,
     pub(super) milestones: Table<TextEntry>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]

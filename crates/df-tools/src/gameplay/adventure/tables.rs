@@ -145,7 +145,7 @@ pub(crate) struct Tables {
     pub(super) secrets: Table<Secret>,
     pub(super) destinations: BTreeMap<String, Table<Destination>>,
     pub(super) contacts: Table<NpcArchetype>,
-    pub(super) rewards: Table<TextEntry>,
+    pub(super) rewards: Table<RewardEntry>,
     pub(super) names: BTreeMap<String, Table<TextEntry>>,
     pub(super) traits: BTreeMap<String, Table<TextEntry>>,
     pub(super) prose: BTreeMap<String, PatternTable>,
@@ -402,6 +402,18 @@ impl Tables {
             dossiers: super::dossier_tables::DossierTables::load_variant(directory, overlay)?,
             mature: None,
         };
+        if result
+            .rewards
+            .entries
+            .iter()
+            .any(|entry| entry.gold.is_none())
+        {
+            return Err(invalid(
+                "rewards.json",
+                "chapter_lines.gold",
+                "chapter rewards require a gold payment amount",
+            ));
+        }
         lint_tree(
             "places.json",
             ".",
@@ -948,6 +960,8 @@ fn lint_tree(file: &str, path: &str, value: &serde_json::Value) -> Result<(), Ta
                 "ant.self",
                 "stake.short",
                 "stake.full",
+                "stake.failure",
+                "stake.resolution",
                 "stake.title",
                 "dest.name",
                 "dest.short",
@@ -955,6 +969,9 @@ fn lint_tree(file: &str, path: &str, value: &serde_json::Value) -> Result<(), Ta
                 "secret.fact",
                 "secret.confirm",
                 "reward.line",
+                "reward.gold",
+                "reward.words",
+                "hook.job",
                 "entrance",
                 "foreshadow",
                 "arrival",

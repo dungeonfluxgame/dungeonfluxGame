@@ -26,6 +26,14 @@ identified!(
     Secret,
     Destination
 );
+impl Entry for RewardEntry {
+    fn faces(&self) -> [u8; 2] {
+        self.faces
+    }
+    fn id(&self) -> &str {
+        &self.text
+    }
+}
 impl Entry for TextEntry {
     fn faces(&self) -> [u8; 2] {
         self.faces
@@ -298,7 +306,17 @@ pub(crate) fn generate_with_prose(
         &tables.contacts.entries,
         |e| intersects(&e.fits, &loc.tags) && tables.places.contact_fits(&e.id, &dest.id),
     )?;
-    let reward = roller.text("reward", &tables.rewards, |_| true)?;
+    let reward = roller.select(
+        "reward",
+        tables.rewards.die,
+        &tables.rewards.entries,
+        |_| true,
+    )?;
+    let reward_gold_value = reward
+        .gold
+        .ok_or_else(|| GenerateError::Pattern("reward.gold".into()))?;
+    let reward_gold = reward_gold_value.to_string();
+    let reward_words = number_word(u16::from(reward_gold_value));
     let patron_first = roller.text(
         "name.patron.given",
         named(&tables.names, &patron.gender)?,
@@ -400,6 +418,7 @@ pub(crate) fn generate_with_prose(
         &[
             ("short", &stake.short),
             ("full", &stake.full),
+            ("failure", &stake.failure),
             ("title", &stake.title),
             ("id", &stake.id),
         ],
@@ -414,6 +433,23 @@ pub(crate) fn generate_with_prose(
             ("id", &dest.id),
         ],
     );
+    let job_pattern = match hook.kind.as_str() {
+        "deliver" => "take {stake.short} to {contact.first} at {dest.name}",
+        "escort" => "escort {patron.first} to {contact.first} at {dest.name}",
+        "warn" => "warn {contact.first} about {stake.short} at {dest.name}",
+        "retrieve" => "collect {stake.short} from {contact.first} at {dest.name}",
+        _ => return Err(GenerateError::Pattern("hook.kind".into())),
+    };
+    let job = render::render(job_pattern, &context)?;
+    context.insert("hook.job".into(), job);
+    let resolution = match hook.kind.as_str() {
+        "deliver" => format!("{contact_first} receives {}", stake.short),
+        "escort" => format!("{contact_first} welcomes {patron_first}"),
+        "warn" => format!("{contact_first} hears the warning about {}", stake.short),
+        "retrieve" => format!("{contact_first} returns {} to {patron_first}", stake.short),
+        _ => return Err(GenerateError::Pattern("hook.kind".into())),
+    };
+    context.insert("stake.resolution".into(), resolution);
     put(
         &mut context,
         "ant",
@@ -499,7 +535,15 @@ pub(crate) fn generate_with_prose(
             ("id", &secret.id),
         ],
     );
-    put(&mut context, "reward", &[("line", &reward)]);
+    put(
+        &mut context,
+        "reward",
+        &[
+            ("line", &reward.text),
+            ("gold", &reward_gold),
+            ("words", &reward_words),
+        ],
+    );
     let complication_text = render::render(&complication.text, &context)?;
     context.insert("complication".into(), complication_text.clone());
     context.insert("complication.id".into(), complication.id.clone());
@@ -627,8 +671,14 @@ pub(crate) fn generate_with_prose(
             "contact.first",
             "contact.full",
             "stake.short",
+            "stake.full",
             "dest.name",
             "ant.short",
+            "ant.full",
+            "hook.job",
+            "stake.failure",
+            "stake.resolution",
+            "reward.words",
         ] {
             if let Some(value) = scene_context.get(key)
                 && baseline.to_lowercase().contains(&value.to_lowercase())
@@ -686,6 +736,18 @@ pub(crate) fn generate_with_prose(
     };
     let template =
         |key: &str| -> Result<&str, GenerateError> { Ok(named(&patterns, key)?.as_str()) };
+    let job = context
+        .get("hook.job")
+        .ok_or_else(|| GenerateError::Pattern("hook.job".into()))?;
+    let opening_brief = format!(
+        "{} The job is to {job}. If it fails, {}.",
+        template("opening_narration")?,
+        stake.failure
+    );
+    let opening_line = format!("{} I'll pay you {reward_words} gold.", hook.pitch);
+    let foreshadow = context
+        .get("foreshadow")
+        .ok_or_else(|| GenerateError::Pattern("foreshadow".into()))?;
     let mut pack: pack::PackFile = serde_json::from_slice(include_bytes!(
         "../fixtures/harbor-journey-pack-baseline.json"
     ))
@@ -799,15 +861,15 @@ pub(crate) fn generate_with_prose(
             SceneKey::Opening => (
                 "hook",
                 hook.title.clone(),
-                template("opening_narration")?.to_owned(),
+                opening_brief.clone(),
                 "patron",
-                hook.pitch.clone(),
+                opening_line.clone(),
                 tables.asset(&patron.art)?,
             ),
             SceneKey::DialogueSeal => (
                 "roleplay",
                 template("ask_title")?.to_owned(),
-                template("ask_narration")?.to_owned(),
+                format!("{} {foreshadow}", template("ask_narration")?),
                 "patron",
                 hook.answer.clone(),
                 tables.asset(&patron.art)?,
@@ -815,7 +877,7 @@ pub(crate) fn generate_with_prose(
             SceneKey::DialogueEscort => (
                 "roleplay",
                 template("help_title")?.to_owned(),
-                template("help_narration")?.to_owned(),
+                format!("{} {foreshadow}", template("help_narration")?),
                 "patron",
                 hook.accept.clone(),
                 tables.asset(&patron.art)?,
@@ -1065,6 +1127,18 @@ fn number_word(number: u16) -> String {
         2 => "two".into(),
         3 => "three".into(),
         4 => "four".into(),
+        5 => "five".into(),
+        6 => "six".into(),
+        7 => "seven".into(),
+        8 => "eight".into(),
+        9 => "nine".into(),
+        10 => "ten".into(),
+        11 => "eleven".into(),
+        12 => "twelve".into(),
+        13 => "thirteen".into(),
+        14 => "fourteen".into(),
+        15 => "fifteen".into(),
+        16 => "sixteen".into(),
         _ => number.to_string(),
     }
 }

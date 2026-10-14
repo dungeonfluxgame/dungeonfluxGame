@@ -77,10 +77,9 @@ fn two_hundred_seeds_cover_all_sixteen_data_defined_scripts_settings_slots_and_d
             );
         }
         for scene in script.scenes.values() {
-            assert_eq!(
-                scene.setting.as_ref(),
-                Some(first.settings.scene(scene.key))
-            );
+            let mut expected_setting = first.settings.scene(scene.key).clone();
+            expected_setting.model = None;
+            assert_eq!(scene.setting.as_ref(), Some(&expected_setting));
             let base = first
                 .pack
                 .scenes

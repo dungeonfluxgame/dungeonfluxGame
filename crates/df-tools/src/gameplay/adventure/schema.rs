@@ -15,6 +15,14 @@ pub(super) struct TextEntry {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct RewardEntry {
+    pub(super) faces: [u8; 2],
+    pub(super) text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gold: Option<u8>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct PatternTable {
     pub(super) die: Option<u8>,
     pub(super) variants: Vec<TextEntry>,
@@ -104,6 +112,7 @@ pub(super) struct Stake {
     pub(super) faces: [u8; 2],
     pub(super) id: String,
     pub(super) full: String,
+    pub(super) failure: String,
     pub(super) short: String,
     pub(super) title: String,
     pub(super) tags: Vec<String>,

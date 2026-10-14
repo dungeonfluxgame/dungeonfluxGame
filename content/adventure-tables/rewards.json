@@ -1,7 +1,7 @@
 {
   "schema": "df-adventure-tables/1",
   "file": "rewards",
-  "description": "chapter_lines: story-only thanks spoken by the contact. milestones: story rewards granted after each act. Neither promises item, gold, XP or levels in v1.",
+  "description": "chapter_lines: story-only thanks spoken by the contact, with the errand's 5–16 GP payment. milestones: story rewards granted after each act.",
   "tables": {
     "chapter_lines": {
       "die": 12,
@@ -11,84 +11,96 @@
             1,
             1
           ],
-          "text": "There will always be a place for you by my fire."
+          "text": "There will always be a place for you by my fire.",
+          "gold": 5
         },
         {
           "faces": [
             2,
             2
           ],
-          "text": "Ask for me by name in any town along this route, and doors will open."
+          "text": "Ask for me by name in any town along this route, and doors will open.",
+          "gold": 6
         },
         {
           "faces": [
             3,
             3
           ],
-          "text": "Your names will be spoken kindly in every tavern from here to the coast."
+          "text": "Your names will be spoken kindly in every tavern from here to the coast.",
+          "gold": 7
         },
         {
           "faces": [
             4,
             4
           ],
-          "text": "I owe you a favor now, and I keep my debts."
+          "text": "I owe you a favor now, and I keep my debts.",
+          "gold": 8
         },
         {
           "faces": [
             5,
             5
           ],
-          "text": "I know a sealed cellar nobody has opened in years. Ask me when you are rested."
+          "text": "I know a sealed cellar nobody has opened in years. Ask me when you are rested.",
+          "gold": 9
         },
         {
           "faces": [
             6,
             6
           ],
-          "text": "Come back at winter's end. I may have work worth your steel."
+          "text": "Come back at winter's end. I may have work worth your steel.",
+          "gold": 10
         },
         {
           "faces": [
             7,
             7
           ],
-          "text": "I will vouch for you to anyone who matters in this region."
+          "text": "I will vouch for you to anyone who matters in this region.",
+          "gold": 11
         },
         {
           "faces": [
             8,
             8
           ],
-          "text": "On your next journey, I will send word ahead that you are friends."
+          "text": "On your next journey, I will send word ahead that you are friends.",
+          "gold": 12
         },
         {
           "faces": [
             9,
             9
           ],
-          "text": "Rest here as long as you like. There is stew, and there are beds."
+          "text": "Rest here as long as you like. There is stew, and there are beds.",
+          "gold": 13
         },
         {
           "faces": [
             10,
             10
           ],
-          "text": "There is talk of trouble farther along. Come and hear it when you can."
+          "text": "There is talk of trouble farther along. Come and hear it when you can.",
+          "gold": 14
         },
         {
           "faces": [
             11,
             11
           ],
-          "text": "You have friends here now, whether you wanted them or not."
+          "text": "You have friends here now, whether you wanted them or not.",
+          "gold": 15
         },
         {
           "faces": [
             12,
             12
           ],
-          "text": "When the old story is told, I will make sure your part is not forgotten."
+          "text": "When the old story is told, I will make sure your part is not forgotten.",
+          "gold": 16
         }
       ]
     },

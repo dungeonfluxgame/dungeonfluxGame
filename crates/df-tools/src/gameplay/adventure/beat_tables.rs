@@ -341,6 +341,7 @@ fn pattern(text: &str, maximum: usize) -> Result<String, String> {
         "patron.first",
         "contact.first",
         "stake.short",
+        "stake.resolution",
         "dest.name",
         "place_short",
         "place_detail",

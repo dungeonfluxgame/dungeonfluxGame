@@ -109,7 +109,7 @@
           ],
           "title": "A Dangerous Journey",
           "entrance": "hurries toward your lantern, pale and out of breath",
-          "pitch": "I must reach {contact.first} before morning, and the way behind me isn't safe. Will you walk with me?",
+          "pitch": "Please escort me to {contact.first} before dawn. I'm carrying {stake.short}, and someone follows.",
           "answer": "I'm carrying {stake.short} for {contact.first}, and whoever is behind me knows it.",
           "accept": "{contact.first} will be at {dest.name}. Stay close, and I'll see that you're thanked."
         },
@@ -134,7 +134,7 @@
           ],
           "title": "What {patron.first} Saw",
           "entrance": "pushes through the dark toward you, eyes wide and glancing back",
-          "pitch": "I saw something I shouldn't have, and I need a safe way to {contact.first}. Please, will you help me?",
+          "pitch": "I saw what happened to {stake.short}. Escort me safely to {contact.first}, and I'll tell you.",
           "answer": "I can't say it aloud, not here. But it concerns {stake.short}, and it can't wait.",
           "accept": "{contact.first} is waiting at {dest.name}. Once I'm there, I can finally tell it all."
         },
@@ -186,7 +186,7 @@
           ],
           "title": "Word Before Dawn",
           "entrance": "runs up to you, one hand raised and breathing hard",
-          "pitch": "Someone has to warn {contact.first} before dawn, and I'm too slow to get there. Will you carry the word?",
+          "pitch": "Warn {contact.first}: {stake.short} is proof of danger, and I cannot reach them in time.",
           "answer": "The warning is about {stake.short}. If {contact.first} doesn't hear it in time, there won't be a second chance.",
           "accept": "Go to {dest.name}. Tell {contact.first} that {patron.first} sent you, and that the warning was true."
         },
@@ -211,7 +211,7 @@
           ],
           "title": "A Light Going Out",
           "entrance": "hurries toward you, shielding a small flame with {pos} hand",
-          "pitch": "The old wards are failing, and {contact.first} must be told before they fail completely. Please, help me reach {contact.obj}.",
+          "pitch": "Warn {contact.first}: the wards are failing, and {stake.short} proves it.",
           "answer": "Nobody listens to me. But {stake.short} proves it, and {contact.first} will know what it means.",
           "accept": "{dest.name|cap} is the place. Walk with me, and if anyone stops us, let them see you're ready."
         },
@@ -233,7 +233,7 @@
           ],
           "title": "The Missed Signal",
           "entrance": "waves to catch your attention, anxious and apologetic",
-          "pitch": "A signal meant for {contact.first} never arrived. Someone cut it off, and I need to put it right tonight.",
+          "pitch": "Warn {contact.first} tonight: {stake.short} proves someone cut off the signal.",
           "answer": "I don't know who, but I know it was deliberate. And {stake.short} is the only proof I have.",
           "accept": "Then we go to {dest.name}. {contact.first} will know how to read {stake.short}, if we arrive in time."
         },
@@ -257,7 +257,7 @@
           ],
           "title": "A Remedy Promised",
           "entrance": "hurries toward you, twisting a worn cloth in {pos} hands",
-          "pitch": "A child I know is ill, and only {stake.full} will help. {contact.first} holds it, but I daren't go alone.",
+          "pitch": "A sick child needs {stake.full}. {contact.first} holds it; help me ask for it back.",
           "answer": "I was told {contact.first} would give it freely, if I can only reach {contact.obj} in one piece.",
           "accept": "{dest.name|cap}. Hurry, if you can. Every hour counts, and I will not forget your kindness."
         },
@@ -280,7 +280,7 @@
           ],
           "title": "What Was Taken",
           "entrance": "approaches in a rush, anger and hope mingled on {pos} face",
-          "pitch": "Thieves took {stake.full} from my family, and {contact.first} has traced it. I need honest witnesses when I ask for it back.",
+          "pitch": "Thieves took {stake.full}. {contact.first} has it; help me ask for it back with witnesses.",
           "answer": "I could go alone, but they would call me a liar. With you beside me, they can't.",
           "accept": "Come to {dest.name}. {contact.first} said to ask there, and to bring friends."
         },
