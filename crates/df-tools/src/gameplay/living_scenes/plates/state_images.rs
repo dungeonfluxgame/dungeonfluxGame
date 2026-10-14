@@ -17,6 +17,7 @@ pub(super) struct Book {
     pub(super) pending: Option<Pending>,
     pub(super) flying: bool,
     last_started: Option<Duration>,
+    last_shown: Option<Duration>,
     pub(super) shown: Option<(ImageKey, Option<PlatePlacement>)>,
     pub(super) baked_revision: Option<u64>,
     ready: Option<(ImageKey, u64)>,
@@ -91,9 +92,12 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
         images.flying = false;
         images.baked_revision = None;
         images.ready = None;
+        images.last_started = None;
+        images.last_shown = None;
         return;
     }
-    if images.observed == state && images.observed_graph == view.graph_revision {
+    // Who speaks and their expression change the graph, not the room's visible state.
+    if images.observed == state {
         return;
     }
     images.observed = state.clone();
@@ -193,11 +197,16 @@ impl Shared {
             return;
         }
         let scene = current.scene_key.clone();
-        if let Some((key, revision)) = book.state_images.ready.take() {
+        let can_show = book
+            .state_images
+            .last_shown
+            .is_none_or(|last| now.saturating_sub(last) >= BAKE_INTERVAL);
+        if can_show && let Some((key, revision)) = book.state_images.ready.take() {
             let layout = book.shown().and_then(|shown| shown.1);
             book.edit = Edit::Idle;
             book.state_images.shown = Some((key, layout));
             book.state_images.baked_revision = Some(revision);
+            book.state_images.last_shown = Some(now);
             self.wake();
         }
         let Some(pending) = &book.state_images.pending else {
@@ -211,7 +220,11 @@ impl Shared {
         {
             return;
         }
-        let base = book.shown().map(|shown| shown.0);
+        // Keep the settled change pending until the original plate is ready to edit.
+        // Re-requesting a fresh plate here used to restage the room and lose the pending edit.
+        let Some(base) = book.shown().map(|shown| shown.0) else {
+            return;
+        };
         let Some(pending) = book.state_images.pending.take() else {
             return;
         };
@@ -221,37 +234,9 @@ impl Shared {
             .clone()
             .filter(|graph| graph.revision == pending.revision);
         let request_line = format!(
-            "IMAGERY request kind=scene_plate_edit reason={} state={}{}",
-            pending.reason,
-            pending.revision,
-            if base.is_none() {
-                " unavailable=current-still"
-            } else {
-                ""
-            },
+            "IMAGERY request kind=scene_plate_edit reason={} state={}",
+            pending.reason, pending.revision,
         );
-        let Some(base) = base else {
-            crate::gameplay::actor::record_audit_line("gameplay.imagery.request", request_line);
-            // A visible change before the first still landed needs a fresh current-state plate.
-            if self.inner.imagery.is_on() {
-                let fresh = book.current.as_ref().and_then(|current| {
-                    Some((
-                        current.scene.clone()?,
-                        current.heroes.clone(),
-                        current.faces.clone(),
-                        current.graph_revision,
-                    ))
-                });
-                if let Some((scene, heroes, faces, revision)) = fresh {
-                    let id = scene.plate_id(&heroes, &faces, revision);
-                    if let Some(current) = book.current.as_mut() {
-                        current.id = Some(id);
-                    }
-                    self.ensure(&mut book, &scene, &heroes, &faces, revision, false);
-                }
-            }
-            return;
-        };
         let job = super::Job::State(Job::Bake {
             scene,
             pending,
@@ -346,6 +331,10 @@ impl Shared {
     }
 
     pub(super) fn finish_state_image(&self, done: Done) {
+        self.finish_state_image_at(done, self.inner.now());
+    }
+
+    pub(super) fn finish_state_image_at(&self, done: Done, now: Duration) {
         let mut book = locked(&self.book);
         match done {
             Done::Bake {
@@ -370,6 +359,9 @@ impl Shared {
                                     .current
                                     .as_ref()
                                     .is_some_and(|current| current.in_combat || current.in_roll)
+                                    || book.state_images.last_shown.is_some_and(|last| {
+                                        now.saturating_sub(last) < BAKE_INTERVAL
+                                    })
                                 {
                                     book.state_images.ready = Some((key, revision));
                                 } else {
@@ -377,6 +369,7 @@ impl Shared {
                                     book.edit = Edit::Idle;
                                     book.state_images.shown = Some((key, layout));
                                     book.state_images.baked_revision = Some(revision);
+                                    book.state_images.last_shown = Some(now);
                                 }
                             }
                             Err(failure) => record(

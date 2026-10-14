@@ -386,6 +386,90 @@ fn visible_changes_settle_into_one_pending_edit_and_searches_make_none() {
     assert!(book.state_images.pending.is_some());
 }
 
+#[test]
+fn speech_graph_revisions_do_not_edit_an_unchanged_modelled_room() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(37);
+    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let plated = PlateScene::of(&current).unwrap();
+    let mut talk = view(&current, &[1], false);
+    let mut book = Book::new();
+    state_images::observe(&mut book, &talk, &plated, Duration::ZERO);
+    for revision in 2..=10 {
+        talk.graph_revision = revision;
+        state_images::observe(&mut book, &talk, &plated, Duration::from_secs(revision));
+    }
+    assert!(book.state_images.pending.is_none());
+}
+
+#[tokio::test]
+async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_fast() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(41);
+    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    let mut plated = PlateScene::of(&current).unwrap();
+    let mut changed = view(&current, &[1], false);
+    changed.graph_revision = 2;
+    plated.snapshot.as_mut().unwrap().model.things[0].open = true;
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed,
+        &plated,
+        Duration::from_secs(15),
+    );
+    // A ready edit is held during a roll, then the roll ends.
+    locked(&shared.book).current.as_mut().unwrap().in_roll = true;
+    shared.finish_state_image_at(
+        state_images::Done::Bake {
+            scene: changed.scene_key.clone(),
+            state: plated
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .model
+                .picture_state()
+                .unwrap(),
+            revision: 2,
+            result: Ok(key('b')),
+        },
+        Duration::from_secs(19),
+    );
+    locked(&shared.book).current.as_mut().unwrap().in_roll = false;
+    shared.poll_state_images_at(Duration::from_secs(20));
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
+    changed.graph_revision = 3;
+    plated.snapshot.as_mut().unwrap().model.things[0].lit = true;
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed,
+        &plated,
+        Duration::from_secs(20),
+    );
+    shared.finish_state_image_at(
+        state_images::Done::Bake {
+            scene: changed.scene_key,
+            state: plated
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .model
+                .picture_state()
+                .unwrap(),
+            revision: 3,
+            result: Ok(key('c')),
+        },
+        Duration::from_secs(21),
+    );
+    shared.poll_state_images_at(Duration::from_secs(21));
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
+    shared.poll_state_images_at(Duration::from_secs(30));
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('c'));
+}
+
 #[tokio::test]
 async fn settled_changes_edit_once_keep_the_old_plate_and_drop_an_outdated_completion() {
     let generated = crate::gameplay::npc_dossier_tests::adventure(41);
@@ -647,7 +731,7 @@ fn ready(shared: &Shared, id: &str, plate: char) {
 }
 
 #[tokio::test]
-async fn late_plate_for_an_older_graph_revision_is_dropped() {
+async fn late_plate_survives_speech_graph_revisions_in_the_same_scene() {
     let (shared, mut queue) = shared(8);
     let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
     let first_graph = view(&current, &[1], false);
@@ -657,18 +741,116 @@ async fn late_plate_for_an_older_graph_revision_is_dropped() {
     let mut next_graph = view(&current, &[1], false);
     next_graph.graph_revision = 2;
     shared.observe_with(&next_graph, Some(current.clone()), Vec::new());
-    let new_id = fresh_ids(&drain(&mut queue)).remove(0);
-    assert_ne!(old_id, new_id);
+    assert!(drain(&mut queue).is_empty());
 
     ready(&shared, &old_id, 'c');
-    assert!(!locked(&shared.book).entries.contains_key(&old_id));
+    assert!(matches!(
+        locked(&shared.book).entries.get(&old_id),
+        Some(Entry::Ready { .. })
+    ));
     let mut message = display_message(&current);
     apply(&shared, &mut message);
     assert_eq!(
         shown_scene(&message).plate_state,
-        rpc::PlateState::Pending as i32
+        rpc::PlateState::Ready as i32
     );
-    assert!(shown_scene(&message).live_plate.is_empty());
+    assert_eq!(shown_scene(&message).live_plate, key('c').path());
+}
+
+#[tokio::test]
+async fn ten_lines_in_one_scene_request_only_one_plate_for_the_party() {
+    let (shared, mut queue) = shared(16);
+    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    for revision in 1..=10 {
+        let mut talk = view(&current, &[1, 2], false);
+        talk.graph_revision = revision;
+        shared.observe_with(&talk, Some(current.clone()), Vec::new());
+    }
+    assert_eq!(fresh_ids(&drain(&mut queue)).len(), 1);
+}
+
+#[tokio::test]
+async fn a_modelled_room_keeps_its_plate_when_only_the_speakers_expression_changes() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(41);
+    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    locked(&shared.inner.state).plate_wants.insert(
+        "keeper".into(),
+        Face {
+            expression: Expression::Angry,
+            tier: HealthTier::Healthy,
+        },
+    );
+    shared.poll_face();
+    assert!(drain(&mut queue).is_empty());
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('a'));
+}
+
+#[tokio::test]
+async fn a_prefetched_plate_is_reused_when_its_scene_arrives_on_a_later_graph_revision() {
+    let (shared, mut queue) = shared(16);
+    let opening = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    let next = scene(SceneKey::Inn, "At the Door", Some("Kestrel"));
+    observe(&shared, &opening, &[next.clone()], &[1, 2]);
+    let jobs = drain(&mut queue);
+    let ahead_id = jobs
+        .iter()
+        .find_map(|job| match job {
+            Job::Fresh {
+                id, ahead: true, ..
+            } => Some(id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    // Ahead completions remain cached even before their scene is current.
+    {
+        let mut book = locked(&shared.book);
+        assert!(matches!(book.entries.get(&ahead_id), Some(Entry::Pending)));
+        book.entries.insert(
+            ahead_id.clone(),
+            Entry::Ready {
+                key: key('b'),
+                placement: None,
+            },
+        );
+    }
+    let mut arrived = view(&next, &[1, 2], false);
+    arrived.graph_revision = 10;
+    shared.observe_with(&arrived, Some(next), Vec::new());
+    assert!(drain(&mut queue).is_empty());
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
+}
+
+#[tokio::test]
+async fn a_visible_change_before_the_first_plate_stays_pending_until_that_plate_is_ready() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(41);
+    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    current
+        .setting
+        .as_mut()
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .things[0]
+        .open = true;
+    let mut changed = view(&current, &[1], false);
+    changed.graph_revision = 2;
+    shared.observe_with(&changed, Some(current), Vec::new());
+    shared.poll_state_images_at(Duration::from_secs(5));
+    assert!(locked(&shared.book).state_images.pending.is_some());
+    assert!(drain(&mut queue).is_empty());
+    ready(&shared, &id, 'a');
+    shared.poll_state_images_at(Duration::from_secs(6));
+    assert!(matches!(drain(&mut queue).as_slice(), [Job::State(_)]));
 }
 
 fn layout() -> PlateLayout {

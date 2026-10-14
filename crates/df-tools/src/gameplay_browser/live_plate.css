@@ -19,15 +19,15 @@
 .tv-plate[data-push=b] .tv-plate-zoom{animation:df-plate-push-b 150s cubic-bezier(.12,.55,.3,1) forwards}
 @keyframes df-plate-push-a{from{transform:scale(1)}to{transform:scale(1.036)}}
 @keyframes df-plate-push-b{from{transform:scale(1)}to{transform:scale(1.036)}}
-.tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:opacity 1s ease,filter 1s ease}
+.tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:opacity 1.2s ease,filter 1.2s ease}
 .tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;filter:blur(0)}
 .tv-plate-frame>.tv-plate-video.tv-loop{z-index:2}
 /* the picture that shows is on top and fades in over the one it replaces, which stays fully drawn
    until the new one is opaque and then goes: the plate never has a thin moment */
-.tv-plate[data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-active="1"] .tv-plate-frame[data-i="1"]{z-index:2;opacity:1;transition:opacity 1s ease,filter 1s ease}
+.tv-plate[data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-active="1"] .tv-plate-frame[data-i="1"]{z-index:2;opacity:1;transition:opacity 1.2s ease,filter 1.2s ease}
 /* a mood edit of the shown plate: the new picture comes in from a blur, the old one blurs out under it */
-.tv-plate[data-pull=focus] .tv-plate-frame{filter:blur(22px);transition:opacity .75s ease,filter .6s ease}
-.tv-plate[data-pull=focus][data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-frame[data-i="1"]{filter:blur(0);transition:opacity .6s ease .15s,filter .6s ease .15s}
+.tv-plate[data-pull=focus] .tv-plate-frame{filter:blur(0);transition:opacity 1.2s ease}
+.tv-plate[data-pull=focus][data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-frame[data-i="1"]{filter:blur(0);transition:opacity 1.2s ease}
 /* drifting dust motes or embers, added to the light (additive), always on */
 .tv-plate-dust{position:absolute;inset:0;mix-blend-mode:screen;opacity:.6;overflow:hidden}
 .tv-plate-dust::before,.tv-plate-dust::after{content:'';position:absolute;inset:-8% 0;background-repeat:repeat}
@@ -41,9 +41,11 @@
 
 /* the scrim keeps the title and the chips readable without dimming the picture */
 .tv-stage[data-shot=plate][data-tv-mode=scene]>.tv-scrim{background:linear-gradient(0deg,#03060ecc 0%,#03060e66 14%,#03060e00 30%),linear-gradient(180deg,#03060e8c 0%,#03060e00 22%)}
-/* PLAY-V12: the cut-outs are never drawn while a plate is on its way or ready; speech bubbles
-   stand in the plate's own layer beside the speaker's head once it is shown */
-.tv-stage:is([data-shot=establishing],[data-shot=plate]) .tv-fig-body{opacity:0;visibility:hidden;transition:none}
+/* The initial establishing shot may wait for cut-outs; a later plate never removes live figures. */
+.tv-stage[data-shot=establishing]:not([data-stage-graph]) .tv-fig-body{opacity:0;visibility:hidden;transition:none}
+/* A plate swaps only the room layer. The live cast and camera stay above it throughout. */
+.tv-stage[data-tv-mode=scene][data-stage-graph][data-shot=plate][data-battle-state=absent] .tv-scene-graph{z-index:4;opacity:1;visibility:visible;transition:none}
+.tv-stage[data-stage-graph][data-shot=plate] .tv-scene-set{visibility:hidden}
 .tv-stage:is([data-shot=establishing],[data-shot=plate]) .tv-mist{display:none}
 .tv-plate-bubbles{position:absolute;inset:0;z-index:9;pointer-events:none}
 .tv-plate-bubbles>.tv-fig-bubbles{position:absolute;top:0;left:0;right:auto}

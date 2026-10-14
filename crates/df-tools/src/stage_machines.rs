@@ -17,8 +17,10 @@
 
 /// A line's bubble or narrator box animates in over this long (Opening).
 pub(crate) const LINE_OPEN_MS: u32 = 250;
-/// A line stays after its speech ends before the next line may open (Lingering).
-pub(crate) const LINE_LINGER_MS: u32 = 700;
+/// A line stays after its speech ends before the next line may open (Lingering): long enough to
+/// finish reading a bubble across a room (the owner, 2026-10-14: "the bubbles don't stay up long
+/// enough for a player to read them"; 700 ms was not).
+pub(crate) const LINE_LINGER_MS: u32 = 2_500;
 /// A line's bubble or box animates out over this long (Closing).
 pub(crate) const LINE_CLOSE_MS: u32 = 400;
 /// The last line of a scene stays on screen while the table decides; it still closes after
@@ -35,18 +37,16 @@ pub(crate) const CLIP_START_WAIT_MS: u32 = 2_500;
 /// Past the clip's own length (or, unknown, the line's reading time) a missing end signal
 /// ends the clip.
 pub(crate) const CLIP_END_GRACE_MS: u32 = 3_000;
-/// Reading time of a line without sound: `READ_BASE_MS + READ_PER_CHARACTER_MS` per character,
-/// kept between the two bounds, so pacing without audio matches pacing with it.
-pub(crate) const READ_BASE_MS: u32 = 1_800;
-pub(crate) const READ_PER_CHARACTER_MS: u32 = 35;
-pub(crate) const READ_MINIMUM_MS: u32 = 2_500;
-pub(crate) const READ_MAXIMUM_MS: u32 = 7_000;
-/// The longest a waiting successor scene waits for the lines of the scene on screen (a scene is
-/// a narration and a character line, each up to a clip long); then the line in progress is
-/// closed so the display catches up.
+/// Minimum reading time: `READ_BASE_MS + READ_PER_CHARACTER_MS` per character,
+/// kept between the two bounds. 65 ms a character is about 180 words a minute, a comfortable pace
+/// for text read off a TV; 35 ms with a 7 s cap cut a two-sentence reply off mid-read.
+pub(crate) const READ_BASE_MS: u32 = 2_500;
+pub(crate) const READ_PER_CHARACTER_MS: u32 = 65;
+pub(crate) const READ_MINIMUM_MS: u32 = 4_000;
+pub(crate) const READ_MAXIMUM_MS: u32 = 14_000;
+/// Past this wait, queued lines of the old scene go to the log without flashing on screen.
+/// The line already being read or heard still finishes before the successor opens.
 pub(crate) const SCENE_WAIT_CAP_MS: u64 = 30_000;
-/// A line skipped by catch-up is shown as text this long.
-pub(crate) const CATCH_UP_TEXT_MS: u32 = 700;
 /// A fight that starts while a line plays fades that line within this bound; the fight's
 /// entrance then runs, so dice outcomes are never held behind story speech.
 pub(crate) const FIGHT_LINE_FADE_MS: u32 = 500;
@@ -73,7 +73,7 @@ pub(crate) const BATTLE_FINISH_CAP_MS: u64 = 16_000;
 /// newest view still draws the truth).
 pub(crate) const HELD_OUTCOMES_CAP: usize = 16;
 
-/// The time a line is read in when no sound plays.
+/// The minimum time a line stays readable, independently of its voice duration.
 pub(crate) fn reading_time_ms(text: &str) -> u32 {
     let characters = u32::try_from(text.chars().count()).unwrap_or(u32::MAX);
     READ_BASE_MS

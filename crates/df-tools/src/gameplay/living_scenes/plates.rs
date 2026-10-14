@@ -129,7 +129,7 @@ impl PlateScene {
     }
 
     /// The plate of this scene for this party: the same scene and party always have one name.
-    fn plate_id(&self, heroes: &[u8], faces: &[(u8, ImageKey)], graph_revision: u64) -> String {
+    fn plate_id(&self, heroes: &[u8], faces: &[(u8, ImageKey)], _graph_revision: u64) -> String {
         let party: String = heroes.iter().map(|art| art.to_string()).collect();
         // A hurt hero's health variant makes another picture, so it is part of the name.
         let hurt: String = faces
@@ -137,7 +137,7 @@ impl PlateScene {
             .map(|(art, key)| format!("{art}{}", &key.as_str()[..8]))
             .collect();
         format!(
-            "{}|{}|{:?}|{party}|{hurt}|graph-{graph_revision}",
+            "{}|{}|{:?}|{party}|{hurt}",
             self.title, self.place_id, self.key,
         )
     }
@@ -829,16 +829,12 @@ impl Shared {
             .as_ref()
             .is_some_and(|current| current.in_roll != view.in_roll);
         let mut woke = false;
-        let modelled = located
-            .as_ref()
-            .and_then(PlateScene::of)
-            .or_else(|| {
-                book.current
-                    .as_ref()
-                    .and_then(|current| current.scene.clone())
-            })
-            .is_some_and(|scene| scene.snapshot.is_some());
-        if scene_changed || party_changed || (graph_changed && !modelled) {
+        // A scene keeps its plate while it lasts: who speaks and their expressions are drawn on
+        // the character layers, never by a new plate. A plate per graph change replaced the whole
+        // background every line, with a new composition and the figures gone (the owner,
+        // 2026-10-14: "changes background too often where all the characters disappear").
+        // Visible changes to a modelled scene's state are settled edits (state_images).
+        if scene_changed || party_changed {
             let mut scene = located.as_ref().and_then(PlateScene::of).or_else(|| {
                 (!scene_changed && !party_changed)
                     .then(|| {
@@ -1520,12 +1516,12 @@ impl Shared {
                     Ok((key, placement)) => Entry::Ready { key, placement },
                     Err(_) => Entry::Failed,
                 };
-                let current_graph = book.current.as_ref().is_some_and(|current| {
-                    current.graph_revision == graph_revision
-                        && current.id.as_deref() == Some(id.as_str())
-                });
-                // Current plates from an older graph are dropped. Ahead plates remain cached
-                // until that scene becomes current and its graph revision is known.
+                let current_graph = book
+                    .current
+                    .as_ref()
+                    .is_some_and(|current| current.id.as_deref() == Some(id.as_str()));
+                // Speech changes the graph revision while the room's plate is still loading.
+                // Only scene/party identity supersedes that plate, never a speaker's expression.
                 if (current_graph || ahead) && book.entries.contains_key(&id) {
                     book.entries.insert(id, entry);
                     if current_graph {
@@ -1579,6 +1575,11 @@ impl Shared {
         let (Some(scene), false) = (current.scene.clone(), current.in_combat) else {
             return;
         };
+        // Modelled rooms change only through settled visible-state edits. Expressions belong
+        // to the live actor layers; editing the whole plate here restaged an unchanged room.
+        if scene.snapshot.is_some() {
+            return;
+        }
         let Some(speaker) = scene.speaker.clone() else {
             return;
         };

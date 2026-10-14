@@ -11,8 +11,8 @@
 //!   clip starts; a line without sound opens at its turn and is read for a length-based time,
 //!   so pacing matches. A lost media event takes the normal exit when its bound passes.
 //! - A newer view never cuts speech: the clip in progress finishes. When more than one scene
-//!   change waits, the remaining lines of the scene on screen are shown briefly as text and the
-//!   display converges on the newest scene; no wait exceeds [`SCENE_WAIT_CAP_MS`].
+//!   change waits, remaining queued lines go to the log without a flash. The current line still
+//!   finishes its voice and reading time before the display converges on the newest scene.
 //! - Outcomes (dice, a defeat, a fight's start or end) are never held behind story speech: the
 //!   line in progress fades within [`FIGHT_LINE_FADE_MS`] and the director plays the outcome.
 //!
@@ -23,12 +23,11 @@ use crate::{
     stage_director::{Command as DirectorCommand, StageDirector, StageState, ViewDiff},
     stage_machines::{
         ACTOR_ENTER_MS, ACTOR_EXIT_MS, ActorEvent, ActorState, BATTLE_ENTER_CAP_MS,
-        BATTLE_FINISH_CAP_MS, BattleEvent, BattleState, CATCH_UP_TEXT_MS, CLIP_END_GRACE_MS,
-        CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS, ClipEvent, ClipState, FIGHT_LINE_FADE_MS,
-        FINAL_LINGER_CAP_MS, HELD_OUTCOMES_CAP, INTENT_EXPIRY_MS, LINE_CLOSE_MS, LINE_LINGER_MS,
-        LINE_OPEN_MS, LineEvent, LineState, SCENE_ENTER_CAP_MS, SCENE_EXIT_CAP_MS,
-        SCENE_WAIT_CAP_MS, SceneEvent, SceneState, actor_next, battle_next, clip_next, line_next,
-        scene_next,
+        BATTLE_FINISH_CAP_MS, BattleEvent, BattleState, CLIP_END_GRACE_MS, CLIP_READY_WAIT_MS,
+        CLIP_START_WAIT_MS, ClipEvent, ClipState, FIGHT_LINE_FADE_MS, FINAL_LINGER_CAP_MS,
+        HELD_OUTCOMES_CAP, INTENT_EXPIRY_MS, LINE_CLOSE_MS, LINE_LINGER_MS, LINE_OPEN_MS,
+        LineEvent, LineState, SCENE_ENTER_CAP_MS, SCENE_EXIT_CAP_MS, SCENE_WAIT_CAP_MS, SceneEvent,
+        SceneState, actor_next, battle_next, clip_next, line_next, scene_next,
     },
 };
 
@@ -44,7 +43,7 @@ pub(crate) struct ScriptLine<D> {
     /// A clip can be played for it (narration and non-player speech); a hero's typed line and
     /// an action call-out are silent.
     pub(crate) voiceable: bool,
-    /// How long it is read when it has no sound.
+    /// Minimum readable time, whether or not sound plays.
     pub(crate) read_ms: u32,
     /// The actor slot whose figure carries the bubble; `None` for the narrator's box.
     pub(crate) slot: Option<usize>,
@@ -165,8 +164,8 @@ struct LineRun<D> {
     /// The longest the playing clip may run before its missing end signal is assumed.
     clip_limit_ms: u32,
     play_sent: bool,
-    /// Shown briefly as text because the display is catching up.
-    catch_up: bool,
+    /// Reading starts when the bubble opens, independently of the clip's end time.
+    opened_ms: Option<u64>,
     close_ms: u32,
     /// The line began with its clip playing.
     voiced: bool,
@@ -888,7 +887,7 @@ impl<D: Clone> Conductor<D> {
             clip_since_ms: now_ms,
             clip_limit_ms: 0,
             play_sent: false,
-            catch_up: false,
+            opened_ms: (state == LineState::Lingering).then_some(now_ms),
             close_ms: LINE_CLOSE_MS,
             voiced: false,
             reported_clip: ClipState::Silent,
@@ -1153,6 +1152,9 @@ impl<D: Clone> Conductor<D> {
         let (before, slot) = (run.state, run.line.slot);
         run.state = next;
         run.since_ms = now_ms;
+        if next == LineState::Opening {
+            run.opened_ms = Some(now_ms);
+        }
         let run = run.clone();
         // A queued line closed before it showed never reaches the screen.
         if !(before == LineState::Queued && next == LineState::Done) {
@@ -1207,14 +1209,10 @@ impl<D: Clone> Conductor<D> {
         self.watch_scene(now_ms, out);
         self.advance_actors(now_ms, out);
         self.expire_intents(now_ms, out);
-        // Several quick changes, or a wait past the cap, close the line in progress.
+        // Catch-up skips queued lines, never the line being read or heard.
         let catching_up = self.catching_up(now_ms);
-        let overdue = self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| now_ms.saturating_sub(pending.since_ms) > SCENE_WAIT_CAP_MS);
         for index in 0..self.lines.len() {
-            self.advance_line(index, now_ms, catching_up, overdue, out);
+            self.advance_line(index, now_ms, catching_up, out);
         }
         self.start_next_line(now_ms, catching_up, out);
         self.prefetch(out);
@@ -1311,7 +1309,6 @@ impl<D: Clone> Conductor<D> {
         index: usize,
         now_ms: u64,
         catching_up: bool,
-        overdue: bool,
         out: &mut Vec<Command<D>>,
     ) {
         let Some(run) = self.lines.get(index) else {
@@ -1330,7 +1327,7 @@ impl<D: Clone> Conductor<D> {
                 if state == LineState::Opening && in_state >= u64::from(LINE_OPEN_MS) {
                     self.set_line(index, LineEvent::OpenDone, now_ms, out);
                 }
-                self.watch_speech(index, now_ms, overdue, out);
+                self.watch_speech(index, now_ms, out);
             }
             LineState::Lingering => {
                 let due = if has_next {
@@ -1354,15 +1351,8 @@ impl<D: Clone> Conductor<D> {
         }
     }
 
-    /// Ends the speech of an Opening or Speaking line when its clip is over, its reading time
-    /// has passed, or its clip's end signal is overdue; a scene waiting too long closes it.
-    fn watch_speech(
-        &mut self,
-        index: usize,
-        now_ms: u64,
-        overdue: bool,
-        out: &mut Vec<Command<D>>,
-    ) {
+    /// A line finishes only when its voice is over and its full reading time has passed.
+    fn watch_speech(&mut self, index: usize, now_ms: u64, out: &mut Vec<Command<D>>) {
         let Some(run) = self.lines.get_mut(index) else {
             return;
         };
@@ -1375,27 +1365,11 @@ impl<D: Clone> Conductor<D> {
         {
             run.clip = next;
         }
-        let spoken = if run.voiced {
-            run.clip.is_over()
-        } else {
-            let hold = if run.catch_up {
-                CATCH_UP_TEXT_MS
-            } else {
-                run.line.read_ms
-            };
-            run.state == LineState::Speaking
-                && now_ms.saturating_sub(run.since_ms) >= u64::from(hold)
-        };
-        if overdue {
-            let snapshot = run.clone();
-            self.cancel_clip(&snapshot, out);
-            if let Some(run) = self.lines.get_mut(index)
-                && let Some(next) = clip_next(run.clip, ClipEvent::Cancel)
-            {
-                run.clip = next;
-            }
-            self.set_line(index, LineEvent::Close, now_ms, out);
-        } else if spoken {
+        let read = run.opened_ms.is_some_and(|opened| {
+            now_ms.saturating_sub(opened.saturating_add(u64::from(LINE_OPEN_MS)))
+                >= u64::from(run.line.read_ms)
+        });
+        if read && (!run.voiced || run.clip.is_over()) {
             self.set_line(index, LineEvent::SpeechDone, now_ms, out);
         }
     }
@@ -1416,13 +1390,24 @@ impl<D: Clone> Conductor<D> {
         else {
             return;
         };
+        if catching_up {
+            let Some(snapshot) = self.lines.get(index).cloned() else {
+                return;
+            };
+            self.cancel_clip(&snapshot, out);
+            self.set_line(index, LineEvent::Close, now_ms, out);
+            out.push(Command::Skip {
+                detail: Some(snapshot.line.detail),
+            });
+            return;
+        }
         if self.scene == SceneState::AwaitingChoice {
             self.move_scene(now_ms, SceneEvent::LinesResumed, out);
         }
         let Some(run) = self.lines.get_mut(index) else {
             return;
         };
-        let wants_sound = run.line.voiceable && self.sound_on && !catching_up;
+        let wants_sound = run.line.voiceable && self.sound_on;
         if wants_sound {
             match run.clip {
                 ClipState::Silent => {
@@ -1476,7 +1461,6 @@ impl<D: Clone> Conductor<D> {
         let Some(run) = self.lines.get_mut(index) else {
             return;
         };
-        run.catch_up = catching_up;
         let snapshot = run.clone();
         if !snapshot.voiced {
             // Not voiced after all: drop a clip that was still on its way.
@@ -1570,8 +1554,8 @@ impl<D: Clone> Conductor<D> {
 mod tests {
     use super::*;
     use crate::stage_machines::{
-        BATTLE_ENTER_CAP_MS, BATTLE_FINISH_CAP_MS, CATCH_UP_TEXT_MS, CLIP_READY_WAIT_MS,
-        CLIP_START_WAIT_MS, LINE_CLOSE_MS,
+        BATTLE_ENTER_CAP_MS, BATTLE_FINISH_CAP_MS, CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS,
+        LINE_CLOSE_MS,
     };
 
     type TestConductor = Conductor<&'static str>;
@@ -2214,6 +2198,41 @@ mod tests {
     }
 
     #[test]
+    fn short_voice_waits_for_the_whole_reading_time_before_lingering() {
+        let mut spoken = line("a reply read from across the table", true, Some(2));
+        spoken.read_ms = 12_000;
+        let mut harness = Harness::new(Voice::working(1_000), true, vec![spoken], vec![0, 2]);
+        harness.run_to(2_000);
+        let opened = harness
+            .opened("a reply read from across the table")
+            .unwrap();
+        assert_eq!(harness.focus(), Some(LineState::Speaking));
+        harness.run_to(15_000);
+        let lingered = harness
+            .line_at("a reply read from across the table", LineState::Lingering)
+            .unwrap();
+        assert!(lingered >= opened + 12_000);
+    }
+
+    #[test]
+    fn an_overdue_successor_does_not_cut_a_long_voice_in_progress() {
+        let mut harness = Harness::new(
+            Voice::working(40_000),
+            true,
+            vec![line("long voice", true, None)],
+            vec![0],
+        );
+        harness.run_to(1_000);
+        harness.view(scene(None, vec![line("successor", false, None)], vec![0]));
+        harness.run_to(35_000);
+        assert!(harness.line_at("long voice", LineState::Closing).is_none());
+        assert!(harness.opened("successor").is_none());
+        harness.run_to(50_000);
+        assert!(harness.line_at("long voice", LineState::Closing).unwrap() >= 40_000);
+        assert!(harness.opened("successor").is_some());
+    }
+
+    #[test]
     fn three_quick_actions_converge_on_the_newest_scene_within_the_bound() {
         let mut harness = Harness::new(
             Voice::working(6_000),
@@ -2249,8 +2268,7 @@ mod tests {
         let third = harness
             .opened("third narration")
             .expect("the newest scene speaks");
-        // The old narration finished (its clip was never cut), the old reply was shown
-        // briefly as text only, and the newest scene opens within the stated bound.
+        // The old narration finishes; the queued reply goes to the log without flashing.
         let narration_end = harness
             .line_at("old narration", LineState::Lingering)
             .expect("old narration ends");
@@ -2258,13 +2276,15 @@ mod tests {
             narration_end >= 6_000,
             "the old clip is not cut: {narration_end}"
         );
-        let reply_open = harness.opened("old reply").expect("shown briefly");
-        let reply_over = harness
-            .line_at("old reply", LineState::Lingering)
-            .expect("old reply ends");
-        assert!(
-            reply_over - reply_open <= u64::from(CATCH_UP_TEXT_MS) + u64::from(LINE_OPEN_MS) + 100
-        );
+        assert!(harness.opened("old reply").is_none());
+        assert!(harness.log.iter().any(|(_, command)| {
+            matches!(
+                command,
+                Command::Skip {
+                    detail: Some("old reply")
+                }
+            )
+        }));
         assert!(harness.play_at("old reply").is_none());
         assert!(third <= narration_end + 12_000, "converged at {third}");
         assert_eq!(
@@ -2475,7 +2495,7 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_scene_never_waits_longer_than_the_cap() {
+    fn a_missing_voice_end_uses_its_clip_bound_instead_of_cutting_at_the_scene_cap() {
         let voice = Voice {
             length_ms: None,
             reported_length_ms: Some(300_000),
@@ -2486,9 +2506,37 @@ mod tests {
         harness.view(scene(None, vec![line("new", true, None)], vec![0]));
         let waiting_since = harness.now;
         harness.run_to(waiting_since + SCENE_WAIT_CAP_MS + 3_000);
-        let swap = harness.rendered()[1];
-        assert!(swap >= waiting_since + SCENE_WAIT_CAP_MS);
-        assert!(swap <= waiting_since + SCENE_WAIT_CAP_MS + 1_500, "{swap}");
+        assert_eq!(harness.rendered().len(), 1);
+        assert!(harness.line_at("old", LineState::Closing).is_none());
+        let opened = harness.opened("old").unwrap();
+        harness.run_to(opened + 300_000 + u64::from(CLIP_END_GRACE_MS) + 3_000);
+        let swap = *harness
+            .rendered()
+            .get(1)
+            .expect("voice watchdog releases scene");
+        assert!(swap >= opened + 300_000 + u64::from(CLIP_END_GRACE_MS));
+        assert!(swap <= opened + 300_000 + u64::from(CLIP_END_GRACE_MS) + 2_000);
+    }
+
+    #[test]
+    fn two_heroes_speaking_two_seconds_apart_queue_for_full_reading_turns() {
+        let mut first = line("Brakka asks", false, Some(0));
+        first.read_ms = 6_000;
+        let mut second = line("Sigrun asks", false, Some(1));
+        second.read_ms = 4_000;
+        let mut harness = Harness::new(Voice::working(1_000), false, vec![first], vec![0, 1]);
+        harness.run_to(2_000);
+        harness.view(plain(vec![second], vec![0, 1]));
+        harness.run_to(20_000);
+        let first_open = harness.opened("Brakka asks").unwrap();
+        let first_close = harness.line_at("Brakka asks", LineState::Closing).unwrap();
+        let second_open = harness.opened("Sigrun asks").unwrap();
+        let second_read = harness
+            .line_at("Sigrun asks", LineState::Lingering)
+            .unwrap();
+        assert!(first_close >= first_open + 6_000);
+        assert!(second_open >= first_close);
+        assert!(second_read >= second_open + 4_000);
     }
 
     #[test]
@@ -2540,9 +2588,13 @@ mod tests {
         ));
         harness.run_to(300);
         assert_eq!(harness.conductor.actor_state(2), ActorState::Idle);
-        harness.run_to(4_500);
+        // The narration opens and speaks for 2 s, lingers and closes; the courier then opens.
+        let courier_opens = u64::from(LINE_OPEN_MS + 2_000 + LINE_LINGER_MS + LINE_CLOSE_MS);
+        harness.run_to(courier_opens + u64::from(LINE_OPEN_MS) + 1_000);
         assert_eq!(harness.conductor.actor_state(2), ActorState::Speaking);
-        harness.run_to(9_000);
+        harness.run_to(
+            courier_opens + 2 * u64::from(LINE_OPEN_MS) + 2_000 + u64::from(LINE_LINGER_MS) + 2_000,
+        );
         assert_eq!(harness.conductor.actor_state(2), ActorState::Idle);
     }
 

@@ -143,7 +143,7 @@ pub(super) struct StageLayer {
     actors: RefCell<Vec<ActorLayer>>,
     changes: RefCell<VecDeque<LayerChange>>,
     revision: Cell<Option<u64>>,
-    rejected_frame: Cell<Option<(u64, u64)>>,
+    last_graph: RefCell<Option<SceneGraphView>>,
     scene_key: RefCell<String>,
 }
 
@@ -165,7 +165,7 @@ impl StageLayer {
             actors: RefCell::new(Vec::new()),
             changes: RefCell::new(VecDeque::with_capacity(30)),
             revision: Cell::new(None),
-            rejected_frame: Cell::new(None),
+            last_graph: RefCell::new(None),
             scene_key: RefCell::new(String::new()),
         })
     }
@@ -182,6 +182,7 @@ impl StageLayer {
             tv_root.remove_attribute("data-stage-graph")?;
             tv_root.remove_attribute("data-stage-frame-revision")?;
             if self.revision.replace(None).is_some() {
+                self.last_graph.borrow_mut().take();
                 self.scene_key.borrow_mut().clear();
                 self.record_change(tv_root, "graph", "scene graph removed from display")?;
             }
@@ -190,6 +191,18 @@ impl StageLayer {
         validate(graph)?;
         let previous_revision = self.revision.get();
         let previous_scene = self.scene_key.borrow().clone();
+        if self.last_graph.borrow().as_ref() == Some(graph) {
+            let revision = baked_revision.map(|revision| revision.to_string());
+            if tv_root.get_attribute("data-stage-frame-revision") != revision {
+                match revision {
+                    Some(revision) => {
+                        tv_root.set_attribute("data-stage-frame-revision", &revision)?
+                    }
+                    None => tv_root.remove_attribute("data-stage-frame-revision")?,
+                }
+            }
+            return Ok(());
+        }
         self.root.remove_attribute("data-inactive")?;
         self.root
             .set_attribute("data-revision", &graph.revision.to_string())?;
@@ -261,23 +274,12 @@ impl StageLayer {
             };
             self.root.set_attribute("data-live-camera", tick)?;
         }
-        if baked_revision == Some(graph.revision) {
-            tv_root.set_attribute("data-stage-frame-revision", &graph.revision.to_string())?;
-            self.rejected_frame.set(None);
+        // A plate belongs to the scene, not to its latest speaker/expression revision.
+        // Keep the current plate while a settled visible-state edit loads off screen.
+        if let Some(revision) = baked_revision {
+            tv_root.set_attribute("data-stage-frame-revision", &revision.to_string())?;
         } else {
             tv_root.remove_attribute("data-stage-frame-revision")?;
-            tv_root.remove_attribute("data-plate-loaded")?;
-            if let Some(plate) = tv_root.query_selector(".tv-plate")? {
-                plate.remove_attribute("data-want")?;
-            }
-            if let Some(plate_revision) = baked_revision
-                && self
-                    .rejected_frame
-                    .replace(Some((graph.revision, plate_revision)))
-                    != Some((graph.revision, plate_revision))
-            {
-                self.record_change(tv_root, "baked-frame", "plate revision is stale")?;
-            }
         }
 
         let mut actor_layers = self.actors.borrow_mut();
@@ -302,7 +304,7 @@ impl StageLayer {
             old_layer.root.remove();
             self.record_change(
                 tv_root,
-                &format!("actor:{actor_name}"),
+                &format!("figure:{actor_name}:present=false"),
                 if scene_changed {
                     "new scene replaces actor"
                 } else {
@@ -328,6 +330,11 @@ impl StageLayer {
                         &self.actors_root,
                         actor,
                     )?);
+                    self.record_change(
+                        tv_root,
+                        &format!("figure:{}:present=true", actor.name),
+                        "actor entered scene",
+                    )?;
                     actor_layers.last_mut().ok_or("scene actor layer absent")?
                 }
             };
@@ -357,6 +364,7 @@ impl StageLayer {
                 )?;
             }
         }
+        *self.last_graph.borrow_mut() = Some(graph.clone());
         Ok(())
     }
 
@@ -491,7 +499,7 @@ fn mount_actor(
                 if image.get_attribute("data-source").as_deref() != Some(fallback.as_str()) {
                     let _ = image.set_attribute("data-source", &fallback);
                     let _ = image.set_attribute("src", &fallback);
-                } else {
+                } else if !root.has_attribute("data-active") {
                     let _ = root.set_attribute("data-art-unready", "");
                 }
             }) as Box<dyn FnMut(Event)>)
@@ -594,10 +602,7 @@ fn update_actor(
         };
         root.set_attribute("data-cut", tick)?;
     }
-    if previous_art.as_deref() != Some(actor.art.as_str())
-        || previous_expression.as_deref() != Some(actor.expression.as_str())
-        || previous_pose.as_deref() != Some(actor.pose.as_str())
-    {
+    if previous_art.as_deref() != Some(actor.art.as_str()) {
         root.set_attribute("data-art-want", &actor.art)?;
         let inactive = if root.get_attribute("data-active").as_deref() == Some("0") {
             1
@@ -612,7 +617,9 @@ fn update_actor(
         image.set_attribute("data-graph-art", &actor.art)?;
         image.set_attribute("data-source", &actor.art)?;
         image.set_attribute("src", &actor.art)?;
-        root.set_attribute("data-art-unready", "")?;
+        if !root.has_attribute("data-active") {
+            root.set_attribute("data-art-unready", "")?;
+        }
     }
     Ok(())
 }
@@ -641,4 +648,100 @@ fn json_string(value: &str) -> String {
         }
     }
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph() -> SceneGraphView {
+        let image =
+            "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        SceneGraphView {
+            revision: 1,
+            scene_key: "taproom".into(),
+            set: SceneSetView {
+                place_name: "Taproom".into(),
+                asset: image.into(),
+                fallback_asset: image.into(),
+                exterior: false,
+                time_of_day: "day".into(),
+                weather: None,
+                lights: vec![],
+            },
+            camera: Camera::Wide,
+            actors: vec![SceneActorView {
+                id: "ilsa".into(),
+                name: "Ilsa".into(),
+                art: image.into(),
+                fallback_art: image.into(),
+                spot: "bar".into(),
+                anchor_x_permille: 500,
+                anchor_y_permille: 700,
+                depth_permille: 500,
+                pose: "standing".into(),
+                expression: "neutral".into(),
+                look_at: None,
+                speaking: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn speech_revision_retains_the_loaded_plate_and_the_same_figure_node() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("div").unwrap();
+        let layer = StageLayer::mount(&document, &root).unwrap();
+        let mut graph = graph();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        root.set_attribute("data-plate-loaded", "").unwrap();
+        let actor = root.query_selector(".tv-scene-actor").unwrap().unwrap();
+        graph.revision = 2;
+        graph.actors[0].speaking = true;
+        graph.actors[0].expression = "fond".into();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        let retained = root.query_selector(".tv-scene-actor").unwrap().unwrap();
+        assert!(actor.is_same_node(Some(&retained)));
+        assert!(root.has_attribute("data-plate-loaded"));
+        assert_eq!(
+            root.get_attribute("data-stage-frame-revision").as_deref(),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn speaking_and_camera_updates_apply_even_when_the_bake_revision_is_unchanged() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("div").unwrap();
+        let layer = StageLayer::mount(&document, &root).unwrap();
+        let mut graph = graph();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        graph.camera = Camera::Speaker;
+        graph.actors[0].speaking = true;
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert_eq!(
+            layer.root.get_attribute("data-camera").as_deref(),
+            Some("speaker")
+        );
+        let actor = root.query_selector(".tv-scene-actor").unwrap().unwrap();
+        assert_eq!(
+            actor.get_attribute("data-speaking").as_deref(),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn a_repeated_graph_does_not_replace_its_change_log_or_reload_actor_art() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("div").unwrap();
+        let layer = StageLayer::mount(&document, &root).unwrap();
+        let graph = graph();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        let changes = root.get_attribute("data-stage-log");
+        let actor = root.query_selector(".tv-scene-actor").unwrap().unwrap();
+        actor.set_attribute("data-active", "0").unwrap();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert_eq!(root.get_attribute("data-stage-log"), changes);
+        assert_eq!(actor.get_attribute("data-active").as_deref(), Some("0"));
+    }
 }
