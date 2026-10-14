@@ -101,6 +101,9 @@ fn a_plate_prompt_is_built_from_fixed_phrases_and_two_kinds_of_fact_only_within_
                             let prompt =
                                 scene_plate(rating, &spec, Some(&place()), references_for(&spec))
                                     .unwrap();
+                            assert!(prompt.as_str().contains("named film grade"));
+                            assert!(prompt.as_str().contains("fine film grain"));
+                            assert!(!prompt.as_str().contains("repaint"));
                             for part in prompt.parts() {
                                 match part {
                                     Part::Fixed(phrase) => assert!(
@@ -201,7 +204,7 @@ fn the_references_are_numbered_in_the_order_they_are_sent() {
     let text = all.as_str();
     assert!(text.contains("Image 1 is the party sheet"));
     assert!(text.contains("Image 2 shows this person"));
-    assert!(text.contains("Image 3 is a painting of this place"));
+    assert!(text.contains("Image 3 is the place reference"));
     let without_place = scene_plate(
         ContentRating::Mature,
         &spec,
@@ -217,7 +220,7 @@ fn the_references_are_numbered_in_the_order_they_are_sent() {
     assert!(
         without_place
             .as_str()
-            .contains("Image 2 is a painting of this place")
+            .contains("Image 2 is the place reference")
     );
     assert!(!without_place.as_str().contains("shows this person"));
 }
@@ -275,6 +278,9 @@ fn a_mood_edit_names_the_previous_plate_the_change_and_what_stays_in_both_rating
             for tier in HealthTier::ALL {
                 let prompt = plate_moment(rating, expression, tier, true).unwrap();
                 let text = prompt.as_str();
+                assert!(text.contains("named film grade"));
+                assert!(text.contains("fine film grain"));
+                assert!(!text.contains("repaint"));
                 assert!(text.starts_with("Image 1 is the previous film still"));
                 assert!(text.contains("poses and small actions move on naturally"));
                 assert!(text.contains(
@@ -311,7 +317,7 @@ fn the_speakers_figure_and_face_both_lead_the_references_and_the_place_moves_up(
         "Image 1 is the party sheet",
         "Image 2 shows this person",
         "Image 3 is a close portrait of their face",
-        "Image 4 is a painting of this place",
+        "Image 4 is the place reference",
     ] {
         assert!(text.contains(needle), "{needle}");
     }

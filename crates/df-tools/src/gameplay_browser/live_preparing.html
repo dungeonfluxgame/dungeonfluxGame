@@ -49,6 +49,18 @@ animation:prep-twinkle 5s ease-in-out infinite alternate}
 @keyframes prep-sweep{0%{transform:translateX(-110%)}100%{transform:translateX(290%)}}
 @media (prefers-reduced-motion:reduce){.prep *,.prep-stars{animation:none!important}.prep-lines span:first-child{opacity:1}.prep-bar::after{width:100%;opacity:.5}.prep-embers{display:none}}
 @media (orientation:portrait){.prep{--u:2.4vw}.prep-moon{left:72%;top:4%;width:calc(var(--u)*6);height:calc(var(--u)*6)}.prep-card{margin-top:-16vh}.prep-land{height:40%}}
+/* A neutral, graded hold card while the live scene is being prepared. */
+.prep{background:linear-gradient(180deg,#101519,#090c0f 58%,#050708);color:#f1eee6}
+.prep::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;opacity:.12;mix-blend-mode:soft-light;background-image:repeating-radial-gradient(circle at 20% 30%,#fff2 0 .35px,transparent .6px 2px)}
+.prep-stars,.prep-moon,.prep-land,.prep-embers,.prep-emblem,.prep-rule{display:none}
+.prep-card{z-index:2;gap:calc(var(--u)*1.2)}
+.prep-brand{font-weight:400;letter-spacing:.16em;text-transform:uppercase;text-shadow:0 2px 16px #000}
+.prep-brand b{font-weight:400;background:none;color:#d5cbb7}
+.prep-title{font-weight:400;letter-spacing:.025em;text-shadow:0 2px 18px #000}
+.prep-lines{font-style:normal;color:#c9c3b7}
+.prep-bar{height:2px;border-radius:0;background:#d2c9b622}
+.prep-bar::after{background:#d2c9b7}
+@media (prefers-reduced-motion:reduce){.prep-bar::after{width:100%;opacity:.5}}
 </style>
 <div class="prep" data-df-preparing>
 <div class="prep-stars"></div>

@@ -177,6 +177,37 @@
   color: #f0c0b2;
 }
 
+/* The ending holds like a closing film frame: quiet grade, clean title, and no parchment panel. */
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath {
+  position:relative;
+  transition:opacity .7s cubic-bezier(.2,.65,.3,1);
+}
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath::after {
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:1;
+  pointer-events:none;
+  opacity:.1;
+  mix-blend-mode:soft-light;
+  background-image:repeating-radial-gradient(circle at 20% 30%,#fff2 0 .35px,transparent .6px 2px);
+}
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath > * {
+  position:relative;
+  z-index:2;
+}
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath h1,
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-chapter {
+  font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  font-weight:400;
+  letter-spacing:.035em;
+  text-shadow:0 2px 18px #000;
+}
+.tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath .aftermath-story {
+  color:#f1eee6;
+  text-shadow:0 1px 10px #000;
+}
+
 /* ---------- the end card: one title, no scene chrome beneath it ----------
  * The scene's opening title (.tv-establish) never shows behind the end card's
  * own title; the thinking mark (.tv-intent), the scene title (.tv-headline)

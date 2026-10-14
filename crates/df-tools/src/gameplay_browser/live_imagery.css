@@ -2,3 +2,6 @@
    new one and fades out. The element is removed when the animation ends (live_stage). */
 .tv-fig-ghost{pointer-events:none;animation:df-sprite-ghost .9s ease forwards!important}
 @keyframes df-sprite-ghost{from{opacity:1}to{opacity:0}}
+
+/* Keep rendered phone stills inside the same restrained photographic grade. */
+.client.player .scene-art{filter:saturate(.88) contrast(1.04) brightness(.96)}

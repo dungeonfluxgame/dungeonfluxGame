@@ -57,6 +57,12 @@
 /* The sound control is small and sits in the top right corner, above the join card. */
 body:has(.tv-stage[data-tv-mode=lobby]) .tv-voice-control{right:5vw!important;top:calc(min(1vw,1.7778vh)*.3)!important;font-size:max(12px,calc(min(1vw,1.7778vh)*.95))!important;padding:.3em .8em!important;min-height:0!important}
 
+/* Lobby stills use a quiet film grade; join and roster information stays legible without menu chrome. */
+.tv-stage[data-tv-mode=lobby] .tv-art,.tv-stage[data-tv-mode=lobby] .tv-art-previous{filter:brightness(var(--home-brightness)) contrast(1.04) saturate(.88)}
+.tv-stage[data-tv-mode=lobby] .tv-title,.tv-stage[data-tv-mode=lobby] .tv-wordmark-text{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-weight:400;letter-spacing:.015em;text-shadow:0 2px 18px #000}
+.tv-stage[data-tv-mode=lobby] .tv-join,.tv-stage[data-tv-mode=lobby] .tv-card,.tv-stage[data-tv-mode=lobby] .tv-roster .tv-card{border-color:#d8d2c333;border-radius:2px;background:#080b0ed9;-webkit-backdrop-filter:none;backdrop-filter:none;box-shadow:0 2px 18px #0007}
+.tv-stage[data-tv-mode=lobby] .tv-atmosphere::after{content:"";position:absolute;inset:0;z-index:20;pointer-events:none;opacity:.09;mix-blend-mode:soft-light;background-image:repeating-radial-gradient(circle at 20% 30%,#fff2 0 .35px,transparent .6px 2px)}
+
 /* The nine effects. Each is one slow, light layer; none is a sprite or a script. */
 .tv-fx{position:absolute;inset:0;display:block;pointer-events:none;will-change:transform,opacity}
 .tv-fx-mist{background:radial-gradient(ellipse 46% 16% at 22% 78%,rgb(186 202 224/.2),rgb(186 202 224/0) 70%),radial-gradient(ellipse 40% 14% at 78% 66%,rgb(186 202 224/.16),rgb(186 202 224/0) 70%);animation:tv-fx-mist 40s ease-in-out infinite alternate}

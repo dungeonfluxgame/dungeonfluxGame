@@ -1,4 +1,4 @@
-//! The artifact close-up: an illustration of one object as it would appear in this place.
+//! The artifact close-up: a photograph of one object as it would appear in this place.
 //!
 //! This is the call the investigation scene will make for any object the players examine
 //! (nothing is pre-generated; anything in a scene can be an artifact). Nothing calls it yet, so
@@ -18,7 +18,7 @@ use crate::gameplay::startup_configuration::ContentRating;
 
 const MAXIMUM_SUBJECT_WORDS: usize = 5;
 const MAXIMUM_SUBJECT_CHARACTERS: usize = 40;
-const CLOSE_UP: &str = "A close-up illustration of a single object, centered, filling most of \
+const CLOSE_UP: &str = "A cinematic close-up photograph of a single object, centered, filling most of \
     the frame, in sharp detail with a shallow depth of field.";
 const IN_PLACE: &str = "It is shown as it would look in this place, lit by the same light and \
     made of the same materials as the reference photograph.";
@@ -428,7 +428,7 @@ pub(in crate::gameplay) fn close_up_request(
     }
 }
 
-/// The prompt for a close-up illustration of one object as it would appear in this place.
+/// The prompt for a close-up photograph of one object as it would appear in this place.
 pub(in crate::gameplay) fn artifact_close_up(
     rating: ContentRating,
     place: &PlaceFacts,

@@ -48,6 +48,7 @@ use df_types::{
 use sha2::{Digest, Sha256};
 
 use super::home_theme;
+use super::imagery::FILM_LOOK;
 use super::living_scenes::LivingScenes;
 use super::rpc;
 use crate::BUILD_ID;
@@ -55,12 +56,12 @@ use crate::BUILD_ID;
 /// The endpoint the server requests. Only endpoints the adapter has a body and checks for are
 /// accepted as the setting.
 pub(crate) const MODEL: &str = df_providers::KLING_O1_IMAGE_TO_VIDEO;
-/// The ambient-motion prompt from the PLAY-V04 spike. It names no film, franchise, studio or person.
-const PROMPT: &str = "Locked-off camera with an almost imperceptible push-in. Ambient motion only: lantern and window light flicker, drifting mist over the water, slow clouds across the moon, water glints, leaves or banners stirring. No new people, creatures, objects, text or logos. Nothing enters or leaves the frame. The composition stays exactly as in the reference image.";
+/// Ambient motion only; the shared film look comes from the image prompt vocabulary.
+const HOME_MOTION: &str = "Locked camera with a slow, almost imperceptible optical push-in. Ambient motion only: lantern and window light flicker, drifting mist over the water, slow clouds across the moon, water glints, leaves or banners stirring. No new people, creatures, objects, text or logos. Nothing enters or leaves the frame. The composition stays exactly as in the reference image.";
 const DURATION_SECONDS: u32 = 5;
 /// Changing how a clip is requested or cached changes this, so old loops are not reused for it.
-const RECIPE: &str = "df-home-video/1";
-const SCENE_RECIPE: &str = "df-scene-video/1";
+const RECIPE: &str = "df-home-video/2";
+const SCENE_RECIPE: &str = "df-scene-video/2";
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STILL_QUALITY: u8 = 95;
@@ -81,6 +82,10 @@ const ROUTE: &str = "/gameplay/home-video";
 #[path = "scene_video_prompt.rs"]
 mod scene_video_prompt;
 pub(super) use scene_video_prompt::model_staging;
+
+fn home_video_prompt() -> String {
+    format!("{FILM_LOOK} {HOME_MOTION}")
+}
 
 /// The raw `DF_GAMEPLAY_HOME_VIDEO*`, `DF_GAMEPLAY_SCENE_VIDEO` and `FAL_KEY` inputs.
 pub(crate) struct HomeVideoInputs {
@@ -1028,7 +1033,8 @@ fn request_refused<E>(_: E) -> Failure {
 /// The request for one still: the still as both frames, five seconds, the adapter's own profile
 /// for the endpoint.
 fn video_basis(still: &[u8], key: &str) -> Result<RequestBinding<FalVideoBasis>, Failure> {
-    video_basis_with(still, key, PROMPT, "home-still", "home-video", RECIPE)
+    let prompt = home_video_prompt();
+    video_basis_with(still, key, &prompt, "home-still", "home-video", RECIPE)
 }
 
 fn video_basis_with(
@@ -1234,7 +1240,7 @@ pub(crate) async fn prepare_still_for_test(
 
 /// The cache key: SHA-256 over the still, the model, the prompt, the duration and the recipe.
 pub(crate) fn clip_key(still: &[u8]) -> String {
-    clip_key_with(still, MODEL, PROMPT, DURATION_SECONDS, RECIPE)
+    clip_key_with(still, MODEL, &home_video_prompt(), DURATION_SECONDS, RECIPE)
 }
 
 pub(crate) fn clip_key_with(
@@ -1650,4 +1656,27 @@ impl Engine {
 #[cfg(test)]
 pub(crate) async fn prepare_scene_still_for_test(still: Vec<u8>) -> Result<Vec<u8>, Failure> {
     prepare_scene_still(still).await
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::home_video_prompt;
+
+    #[test]
+    fn home_video_prompt_uses_the_shared_film_look() {
+        let prompt = home_video_prompt().to_ascii_lowercase();
+        for marker in [
+            "real camera",
+            "prime lens",
+            "practical light",
+            "named film grade",
+            "skin pores",
+            "woven fabric",
+            "natural depth of field",
+            "fine film grain",
+            "no painting, illustration, concept art, cgi or game art",
+        ] {
+            assert!(prompt.contains(marker), "missing {marker:?} in {prompt}");
+        }
+    }
 }

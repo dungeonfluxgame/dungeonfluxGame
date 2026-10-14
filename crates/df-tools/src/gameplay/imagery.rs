@@ -59,8 +59,8 @@ use tokio::sync::{Semaphore, watch};
 )]
 pub(super) use artifact::{ArtifactSubject, SubjectRefusal, close_up_request};
 pub(super) use prompt::{
-    AssembledPrompt, CharacterFacts, CharacterRole, LifeStage, PlaceFacts, cast_expression,
-    scene_refresh,
+    AssembledPrompt, CharacterFacts, CharacterRole, FILM_LOOK, LifeStage, PlaceFacts,
+    cast_expression, scene_refresh,
 };
 #[allow(
     unused_imports,
@@ -96,7 +96,7 @@ pub(super) enum ImageKind {
     SceneRefresh,
     /// One character's cut-out with another expression; transparent.
     CastExpression,
-    /// A close-up illustration of one object in this place.
+    /// A close-up photograph of one object in this place.
     ArtifactCloseUp,
     /// PLAY-V09: one composed film still of a story scene, heroes and speaker in the place.
     ScenePlate,
@@ -143,7 +143,7 @@ impl OutputSpec {
         height: 1440,
         transparent: false,
     };
-    /// A 4:3 close-up illustration.
+    /// A 4:3 photographic close-up.
     pub(super) const CLOSE_UP: Self = Self {
         width: 1024,
         height: 768,

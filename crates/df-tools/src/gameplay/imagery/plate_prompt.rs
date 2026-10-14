@@ -21,8 +21,8 @@ use super::{
         startup_configuration::ContentRating,
     },
     prompt::{
-        AssembledPrompt, LifeStage, Part, PlaceFacts, expression_phrase, health_face_phrase,
-        health_look_phrase,
+        AssembledPrompt, FILM_LOOK, LifeStage, Part, PlaceFacts, expression_phrase,
+        health_face_phrase, health_look_phrase,
     },
 };
 
@@ -41,7 +41,7 @@ pub(in crate::gameplay) enum PlatePromptRefusal {
 }
 
 /// Which references the request carries, in this order: the party sheet, the speaker's art, the
-/// place painting. A reference that is absent is simply left out and the next one moves up.
+/// place still. A reference that is absent is simply left out and the next one moves up.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) struct PlateReferences {
     pub(in crate::gameplay) party_sheet: bool,
@@ -79,12 +79,6 @@ enum Which {
     Place,
 }
 
-const PHOTO: &str = "A single frame from a live-action film set, shot on a real camera with a fast prime lens \
-    at about f/2.8, focus on the speaker's face. Real people in practical costume: sewn, \
-    mended, stained wool and linen, creased leather, dull dirty mail. Real skin, pores, \
-    stubble, no retouching. Motivated, uneven light with deep shadows, no studio fill. Light \
-    even grain, halation only around flames and lantern glass. Muted colour grade with deep \
-    blacks.";
 const CAMERA: &str = "A wide shot on a 28mm lens from far back among the party: the heroes are small figures \
     at the edges of the picture, each no wider than a quarter of the frame, and the room \
     itself is the subject, its beams, floor and far walls all in view.";
@@ -93,14 +87,14 @@ const INTERIOR: &str = "Indoors, under a ceiling.";
 const EXTERIOR: &str = "Outdoors.";
 const PLACE_REFERENCE: [&str; 5] = [
     "",
-    "Image 1 is a painting of this place: keep its architecture, props and palette, but \
-     repaint it as a lived-in working room from the new camera position.",
-    "Image 2 is a painting of this place: keep its architecture, props and palette, but \
-     repaint it as a lived-in working room from the new camera position.",
-    "Image 3 is a painting of this place: keep its architecture, props and palette, but \
-     repaint it as a lived-in working room from the new camera position.",
-    "Image 4 is a painting of this place: keep its architecture, props and palette, but \
-     repaint it as a lived-in working room from the new camera position.",
+    "Image 1 is the place reference: preserve its architecture, props and palette; make it a \
+     lived-in working set seen from the new camera position.",
+    "Image 2 is the place reference: preserve its architecture, props and palette; make it a \
+     lived-in working set seen from the new camera position.",
+    "Image 3 is the place reference: preserve its architecture, props and palette; make it a \
+     lived-in working set seen from the new camera position.",
+    "Image 4 is the place reference: preserve its architecture, props and palette; make it a \
+     lived-in working set seen from the new camera position.",
 ];
 const HEROES_INTRO: [&str; 4] = [
     "",
@@ -161,8 +155,7 @@ const CALM_LEFT: &str = "Directly left of the head: a calm area of dark, soft, o
     head-widths wide, no faces, no bright details, for a speech bubble.";
 const CALM_RIGHT: &str = "Directly right of the head: a calm area of dark, soft, out-of-focus background about two \
     head-widths wide, no faces, no bright details, for a speech bubble.";
-const NEGATIVE: &str = "Not a painting, illustration, concept art, 3D render, game art, CGI or HDR. No outlines \
-    or cut-out look, no floating figures, no plastic or waxy skin, no glossy metal, no \
+const NEGATIVE: &str = "No outlines or cut-out look, no floating figures, no plastic or waxy skin, no glossy metal, no \
     speckle on mail or cloth. No text, letters, numbers, signs, logos, borders, frames, \
     interface or speech bubbles. No real people or celebrities. Every person is clearly an \
     adult.";
@@ -171,9 +164,8 @@ const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire 
 const RESTRAINED_LIMITS: &str = "No gore, no nudity, no sexual content.";
 const MOMENT_FIRST: &str = "Image 1 is the previous film still of this exact scene. Keep the \
     same place, cast, faces, hair, clothing, weapons and photographic art style. Keep the \
-    camera and framing roughly the same, but let poses and small actions move on naturally \
-    from what was just said or done: a gesture, a turn of the head, a step, or hands busy with \
-    the scene's activity. Change the expression and this small action to match what just happened.";
+    camera and framing roughly the same; poses and small actions move on naturally from \
+    what was just said or done. Change the expression and small action to match.";
 const MOMENT_SPEAKER_WITH_REFERENCE: &str =
     "The speaker (image 2 shows their face and clothes) now shows";
 const MOMENT_SPEAKER: &str = "The speaker now shows";
@@ -342,7 +334,7 @@ fn scene_plate_with(
         return Err(PlatePromptRefusal::References);
     }
     let mut parts = vec![
-        Part::Fixed(PHOTO),
+        Part::Fixed(FILM_LOOK),
         Part::Fixed(CAMERA),
         Part::Fixed(PLACE_IS),
     ];
@@ -468,6 +460,7 @@ pub(in crate::gameplay) fn plate_moment(
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
     let mut parts = vec![
         Part::Fixed(MOMENT_FIRST),
+        Part::Fixed(FILM_LOOK),
         Part::Fixed(if speaker_reference {
             MOMENT_SPEAKER_WITH_REFERENCE
         } else {
@@ -500,7 +493,7 @@ pub(in crate::gameplay) fn plate_moment(
 pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'static str> {
     use super::super::shot::{TimeOfDay as Time, vocabulary_lights};
     let mut phrases = vec![
-        PHOTO,
+        FILM_LOOK,
         CAMERA,
         PLACE_IS,
         INTERIOR,

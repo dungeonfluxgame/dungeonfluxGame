@@ -1,3 +1,4 @@
+use super::super::imagery::FILM_LOOK;
 use super::super::shot::{HeroSlot, ShotSpec, SpeakerSlot};
 
 const MAXIMUM_CHARACTERS: usize = 1500;
@@ -71,7 +72,7 @@ pub(super) fn ambient(description: &str) -> Result<String, Refusal> {
         return Err(Refusal::InvalidDescription);
     }
 
-    let mut prompt = format!("The plate shows: {description}. ");
+    let mut prompt = format!("The plate shows: {description}. {FILM_LOOK} ");
     for (instruction, _reason) in INSTRUCTIONS {
         prompt.push_str(instruction);
         prompt.push(' ');
@@ -137,6 +138,9 @@ mod tests {
             .expect("a bounded scene description");
         assert!(prompt.contains("the patron stands mid-left, rolling dice beside the hearth"));
         assert!(prompt.contains("camera completely still"));
+        assert!(prompt.contains("named film grade"));
+        assert!(prompt.contains("fine film grain"));
+        assert!(prompt.contains("no painting, illustration, concept art, CGI or game art"));
         assert!(prompt.contains("face, hair, clothing"));
         assert!(prompt.contains("No one enters or leaves"));
         assert!(prompt.contains("breathe, blink, and shift their weight"));

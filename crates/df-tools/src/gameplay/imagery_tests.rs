@@ -18,6 +18,7 @@ use super::{
         npc_dossier_tests::adventure,
         pack,
         scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
+        shot::scene_graph::{CameraFraming, SceneGraph, SceneSet},
         startup_configuration::{ImageryCredential, ImageryOff},
     },
     artifact::artifact_close_up,
@@ -66,6 +67,93 @@ fn scene_prompts_follow_the_narration_snapshot_and_item_card_detail() {
     assert!(item.as_str().contains(&thing.picture_description));
     assert!(item.as_str().contains("green wax and grave dirt"));
     assert!(item.as_str().contains("Show no people"));
+}
+
+#[test]
+fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration() {
+    let location = place();
+    let generated = adventure(41);
+    let model = generated
+        .settings
+        .meeting
+        .model
+        .as_ref()
+        .expect("the generated scene model")
+        .for_scene(pack::SceneKey::Opening);
+    let subject = ArtifactSubject::vet("tankard", &location).expect("a scene object");
+    let graph = SceneGraph {
+        revision: 1,
+        scene_key: "opening".to_owned(),
+        set: SceneSet {
+            place_id: "place-test".to_owned(),
+            place_name: "Heron Shrine".to_owned(),
+            asset: "scene-test".to_owned(),
+            fallback_asset: "scene-test-fallback".to_owned(),
+            exterior: false,
+            time_of_day: "evening".to_owned(),
+            weather: None,
+            lights: vec!["lantern".to_owned()],
+        },
+        camera: CameraFraming::Wide,
+        actors: Vec::new(),
+        visible_state: "{}".to_owned(),
+    };
+    let expression = cast_expression(
+        ContentRating::Mature,
+        CharacterFacts {
+            role: CharacterRole::Patron,
+            life_stage: LifeStage::Adult,
+        },
+        Expression::Neutral,
+        HealthTier::Healthy,
+        false,
+    )
+    .expect("a portrait prompt");
+    let thing = model.things.first().expect("a scene object");
+    let prompts = [
+        scene_refresh(ContentRating::Mature, &location, Look::of(Mood::Calm)),
+        expression,
+        artifact_close_up(ContentRating::Mature, &location, &subject),
+        model_plate(
+            ContentRating::Mature,
+            &model,
+            "The Heron Shrine",
+            &["Brakka".into()],
+        )
+        .expect("a scene plate prompt"),
+        state_edit(
+            ContentRating::Mature,
+            &model,
+            "the tankard moves beside the ledger",
+        )
+        .expect("a scene edit prompt"),
+        graph_edit(
+            ContentRating::Mature,
+            &graph,
+            "the tankard moves beside the ledger",
+        )
+        .expect("a graph edit prompt"),
+        item_picture(ContentRating::Mature, thing, None).expect("an item prompt"),
+    ];
+
+    for prompt in prompts {
+        let text = prompt.as_str().to_ascii_lowercase();
+        for marker in [
+            "real camera",
+            "prime lens",
+            "practical light",
+            "named film grade",
+            "skin pores",
+            "woven fabric",
+            "natural depth of field",
+            "fine film grain",
+        ] {
+            assert!(text.contains(marker), "missing {marker:?} in {text}");
+        }
+        assert!(!text.contains("illustration of"), "{text}");
+        assert!(!text.contains("painting of"), "{text}");
+        assert!(!text.contains("repaint"), "{text}");
+    }
 }
 
 #[tokio::test]

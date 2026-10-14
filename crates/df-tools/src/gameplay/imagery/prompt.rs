@@ -19,10 +19,11 @@ use super::super::{
 
 const MAXIMUM_FACT_CHARACTERS: usize = 80;
 
-const HOUSE_STYLE: &str = "Photographic realism, matching the reference: a frame from a \
-    big-budget live-action epic fantasy film with real materials, real skin and fabric, a \
-    believable lens and natural depth of field, motivated practical light, a restrained colour \
-    grade and fine film grain.";
+pub(in crate::gameplay) const FILM_LOOK: &str = "Live-action fantasy film; real camera, one consistent \
+    prime lens per scene; natural depth of field. Practical light sources visible in scene. Skin \
+    pores, worn woven fabric and seams. One named film grade for each place and time of day \
+    (Lantern Night, Overcast Day, Hearth Amber): cool shadows, warm practical highlights, fine \
+    film grain. Photographic only; no painting, illustration, concept art, CGI or game art.";
 const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
 const NO_REAL_PEOPLE: &str = "No real people, celebrities or likenesses of real persons.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";
@@ -440,7 +441,7 @@ pub(super) fn health_look_phrase(tier: HealthTier, rating: ContentRating) -> Opt
 
 /// The rating's stance and limits, appended to every prompt.
 pub(super) fn rating_parts(rating: ContentRating) -> Vec<Part> {
-    let mut parts = vec![Part::Fixed(HOUSE_STYLE), Part::Fixed(NO_TEXT)];
+    let mut parts = vec![Part::Fixed(FILM_LOOK), Part::Fixed(NO_TEXT)];
     parts.push(Part::Fixed(NO_REAL_PEOPLE));
     parts.push(Part::Fixed(ADULTS_ONLY));
     parts.push(Part::Fixed(match rating {
@@ -532,7 +533,7 @@ pub(in crate::gameplay) fn cast_expression(
 pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'static str> {
     let mut phrases = super::artifact::FIXED_PHRASES.to_vec();
     phrases.extend([
-        HOUSE_STYLE,
+        FILM_LOOK,
         NO_TEXT,
         NO_REAL_PEOPLE,
         ADULTS_ONLY,

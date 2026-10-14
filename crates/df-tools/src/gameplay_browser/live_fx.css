@@ -186,3 +186,8 @@
 .live-screen .combat-roll-panel>.tv-damage-dice{position:static;transform:none;z-index:auto;margin:0 auto calc(var(--u)*1)}
 @media (prefers-reduced-motion:reduce){.tv-damage-dice{animation:none}.tv-damage-die{animation:none;color:#ffe0a2}}
 
+/* Phone page changes ease as a cut or camera settle, without a spring-like slide. */
+.client.player .view[data-swap=a],.client.player .view[data-swap=b]{animation-duration:.32s;animation-timing-function:cubic-bezier(.2,.65,.3,1)}
+@keyframes df-phone-in-a{from{opacity:0}to{opacity:1}}
+@keyframes df-phone-in-b{from{opacity:0}to{opacity:1}}
+

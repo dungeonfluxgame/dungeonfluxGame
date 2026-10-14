@@ -122,3 +122,32 @@ main .client.display{background:transparent}
 .client.player .live-notebook-composer{display:grid;gap:7px;min-width:0}
 .client.player .live-notebook-composer label{color:#d7ddd1;font:14px/1.35 var(--serif)}
 .client.player .live-notebook-composer input{box-sizing:border-box;width:100%;max-width:100%;min-height:44px;padding:8px 10px;border:1px solid #c9a35f88;border-radius:6px;background:#05090f;color:#f3e2bd;font:16px var(--serif)}
+
+/* Film language for the phone: quiet controls, readable subtitles and a restrained image grade. */
+:root{--df-film-ivory:#f1eee6;--df-film-muted:#c9c3b7;--df-film-shadow:#050709;--df-film-accent:#c9bca0}
+.client.player{isolation:isolate;background:linear-gradient(180deg,#080d11,#0a0d10 48%,#050709)}
+.client.player::after{content:'';position:fixed;inset:0;z-index:20;pointer-events:none;opacity:.13;mix-blend-mode:soft-light;background-image:repeating-radial-gradient(circle at 20% 30%,#fff2 0 .35px,transparent .6px 2px)}
+.client.player .df-campaign h1,.client.player .df-exploration h1{font-family:var(--serif);font-weight:400;letter-spacing:.015em;color:var(--df-film-ivory);text-shadow:0 2px 14px #000c}
+.client.player .df-exploration .exploration-heading{color:var(--df-film-accent);letter-spacing:.12em}
+.client.player .df-exploration .exploration-choice button,.client.player .df-campaign[data-join-phase] .join-panel button,.client.player .live-dock summary,.client.player .live-sheet-body button,.client.player .live-credits{background:#0a0e12;border:1px solid #555c61;border-radius:3px;color:var(--df-film-ivory);box-shadow:none;text-shadow:0 1px 5px #000}
+.client.player .df-exploration .exploration-choice button:hover:enabled,.client.player .df-campaign[data-join-phase] .join-panel button:hover:enabled{background:#171d22;color:#fff}
+.client.player .df-exploration .exploration-choice button::before,.client.player .df-campaign[data-join-phase] .join-lobby button::before,.client.player .live-dock summary .say-more-icon{display:none}
+.client.player .df-exploration .exploration-npc,.client.player .df-exploration .narration{background:transparent;border:0;border-radius:0;box-shadow:none}
+.client.player .df-exploration .exploration-portrait{border:0;border-radius:2px;filter:saturate(.86) contrast(1.04)}
+.client.player .df-exploration .exploration-dialogue{font-style:normal;color:var(--df-film-ivory);text-shadow:0 1px 8px #000}
+.client.player .live-dock .npc-you{color:var(--df-film-muted);text-shadow:0 1px 5px #000}
+.client.player .live-dock .npc-bubble{gap:10px;padding:10px 0 0;background:linear-gradient(180deg,transparent,#050709b8);border:0;border-radius:0;box-shadow:none}
+.client.player .live-dock .npc-bubble-portrait{width:44px;height:56px;border:0;border-radius:2px;filter:saturate(.86) contrast(1.04)}
+.client.player .live-dock .npc-bubble-name{margin-bottom:5px;color:var(--df-film-accent);font:600 12px/1.2 system-ui,sans-serif;letter-spacing:.1em;text-transform:uppercase}
+.client.player .live-dock .npc-bubble-reply{font:400 18px/1.48 var(--serif);color:var(--df-film-ivory);text-shadow:0 1px 8px #000}
+.client.player .df-campaign[data-join-phase] .join-panel{background:#080c10dc;border:1px solid #6a6d6d88;border-radius:3px;box-shadow:none}
+.client.player .live-tabs{background:linear-gradient(180deg,#090d11,#050709);border-top:1px solid #4b5054}
+.client.player .live-tab{color:var(--df-film-muted);letter-spacing:.06em}
+.client.player .live-tab[aria-current=page]{color:var(--df-film-ivory);background:#151a1e;border-radius:2px}
+.client.player .live-sheet-panel{background:linear-gradient(#0e1317,#070a0d);border:0;border-radius:4px 4px 0 0}
+.client.player .live-sheet-panel h2,.client.player .live-notebook-section h3{color:var(--df-film-accent)}
+.client.player .live-sheet-close,.client.player .live-notebook-entry button,.client.player .live-notebook-composer button{border:1px solid #555c61;border-radius:3px;background:#0a0e12;color:var(--df-film-ivory)}
+.client.player .live-notebook-entry{border-color:#51565a66;border-radius:3px;background:#080c10}
+.client.player .live-toast{border-color:#5b6064;border-radius:3px;background:#080c10f5}
+.client.player .df-exploration .stage>.narration blockquote{color:var(--df-film-ivory);text-shadow:0 1px 8px #000}
+.client.player .df-campaign[data-join-phase] .topbar{background:linear-gradient(#06090dcc,#06090f00)}
