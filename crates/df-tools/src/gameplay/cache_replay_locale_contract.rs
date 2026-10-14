@@ -1236,7 +1236,9 @@ fn retain_wire(case: &str, role: &str, side: &str, bytes: &[u8], status: &str) {
     let root = std::env::var_os("TMPDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let build = option_env!("DF_FIXTURE_BUILD").unwrap_or("unregistered-build");
+    let build = option_env!("DF_FIXTURE_BUILD")
+        .map(String::from)
+        .unwrap_or_else(|| format!("unregistered-build-{}", std::process::id()));
     let dir = root.join(format!("ai-d04-full-wire-{build}"));
     std::fs::create_dir_all(&dir).unwrap();
     let contract_hash = Sha256::digest(include_bytes!("cache_replay_locale_contract.json"))
