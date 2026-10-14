@@ -216,7 +216,7 @@
 .tv-bigcard[data-kind=end] .tv-bigcard-kicker{grid-row:1}
 .tv-bigcard[data-kind=end] .tv-bigcard-title{grid-row:2;font-size:calc(var(--u)*4.4)}
 .tv-bigcard[data-kind=end] .tv-bigcard-rule{grid-row:3}
-.tv-bigcard[data-kind=end] .tv-bigcard-line{grid-column:1;grid-row:4;align-self:end;max-width:100%;max-height:27vh;overflow:auto;overflow-wrap:anywhere;font-size:calc(var(--u)*1.8)}
+.tv-bigcard[data-kind=end] .tv-bigcard-line{grid-column:1;grid-row:4;align-self:end;max-width:100%;max-height:27vh;overflow:hidden;overflow-wrap:anywhere;font-size:calc(var(--u)*1.8)}
 .tv-bigcard[data-kind=end] .tv-bigcard-place{grid-column:1;grid-row:5}
 .tv-bigcard[data-kind=end] .tv-bigcard-heroes{grid-column:1;grid-row:6;gap:calc(var(--u)*2)}
 .tv-bigcard[data-kind=end] .tv-bigcard-next{grid-row:7}
