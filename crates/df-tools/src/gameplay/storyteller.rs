@@ -61,7 +61,7 @@ use super::{
 };
 
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
-const PROMPT_VERSION: &str = "storyteller-2";
+const PROMPT_VERSION: &str = "storyteller-3";
 const MAXIMUM_SLOTS: usize = 32;
 const MAXIMUM_SLOT_CHARACTERS: usize = 4000;
 const MAXIMUM_MUST_MENTION: usize = 8;
@@ -92,7 +92,9 @@ const INSTRUCTION: &str = "You are an experienced, warm Dungeon Master voicing p
 fantasy adventure. You only express facts as prose; you never decide anything.\n\
 RULES\n\
 1. The FACTS below are the only source of truth. Do not invent named people, places or items \
-beyond them.\n\
+beyond them. Only describe a character as present when the FACTS for this scene explicitly say \
+they are present; a character appearing in the global cast is not enough. Only claim an injury or \
+outcome when the FACTS explicitly state it; omit claims not in the FACTS.\n\
 2. Never write game numbers, dice, hit points, difficulty classes, rolls or outcomes unless \
 that exact figure appears in the FACTS. Never promise or imply mechanical results.\n\
 3. Narration is plain second person (\"you\"). A character who speaks uses first person and \

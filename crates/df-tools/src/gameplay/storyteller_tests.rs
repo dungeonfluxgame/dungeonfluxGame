@@ -954,6 +954,48 @@ fn the_prompt_carries_the_fixed_rules_slots_and_facts_but_never_the_credential()
     assert!(!prompt.contains(CREDENTIAL));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn scene_narration_grounds_presence_and_injuries_in_scene_facts() {
+    let facts = json!({
+        "cast": {"Perrin": {"name": "Perrin"}},
+        "scene": {
+            "place": "the apothecary",
+            "present_characters": ["Brakka", "Sigrun"],
+            "appearance": "Perrin calmly tends the counter",
+        },
+        "resolved_events": {"outcome": "victory", "injuries": []},
+    });
+    let slots = [Slot::new("narration", 120)];
+    let endpoint = FakeEndpoint::start(vec![Reply::Compute(Arc::new(|prompt| {
+        if prompt.contains("Only describe a character as present when the FACTS for this scene")
+            && prompt.contains("Only claim an injury or outcome when the FACTS explicitly state it")
+        {
+            json!({"narration": "The apothecary waits in a still hush."})
+        } else {
+            json!({"narration": "Perrin steadies herself behind you, her bruised arm aching."})
+        }
+    }))]);
+    let cache = cache_directory("scene-grounding");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let request = Expression {
+        purpose: "scene_narration",
+        facts: &facts,
+        slots: &slots,
+        style: "A brief scene narration.",
+        profile: CallProfile::default(),
+    };
+
+    let values = storyteller.express(&request).await.unwrap();
+
+    assert_eq!(values["narration"], "The apothecary waits in a still hush.");
+    let prompt = sent_input(&endpoint.bodies()[0]);
+    assert!(prompt.contains("\"present_characters\":[\"Brakka\",\"Sigrun\"]"));
+    assert!(prompt.contains("\"injuries\":[]"));
+    assert!(prompt.contains("Only describe a character as present when the FACTS for this scene"));
+    assert!(prompt.contains("Only claim an injury or outcome when the FACTS explicitly state it"));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
 #[test]
 fn every_prompt_carries_the_always_on_limits_and_only_a_mature_call_is_told_themes_are_allowed() {
     for rating in [ContentRating::Mature, ContentRating::Restrained] {
