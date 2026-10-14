@@ -751,6 +751,38 @@ fn refused(step: &'static str) -> RepositoryError {
     RepositoryError::InvalidCandidate
 }
 
+fn rested_text(
+    authored: &super::pack::Scene,
+    rested: bool,
+) -> Result<(String, Option<String>), RepositoryError> {
+    if rested {
+        let (story, rules) = super::pack::rested_story_and_rules(authored)
+            .map_err(|_| refused("rested-story-shape"))?;
+        Ok((story, Some(rules)))
+    } else {
+        Ok((authored.narration.clone(), None))
+    }
+}
+
+fn project_scene_rules_note(
+    authored: &str,
+    rested_note: Option<&str>,
+    epilogue_replaces: bool,
+) -> String {
+    if epilogue_replaces && rested_note.is_none() {
+        String::new()
+    } else {
+        let mut note = authored.to_owned();
+        if let Some(rested_note) = rested_note {
+            if !note.is_empty() {
+                note.push(' ');
+            }
+            note.push_str(rested_note);
+        }
+        note
+    }
+}
+
 pub(super) fn journey_view(
     current: &Checkpoint,
     role: df_persistence::local_demo_scope::LocalDemoRole,
@@ -1149,14 +1181,7 @@ pub(super) fn project_journey(
         .narrative
         .completed_beats
         .contains(&model::content("short-rest-complete")?);
-    let narration = if rested {
-        authored
-            .narration_rested
-            .as_deref()
-            .unwrap_or(&authored.narration)
-    } else {
-        &authored.narration
-    };
+    let (narration, rested_rules_note) = rested_text(&authored, rested)?;
     // The story text and the rules wording are separate strings in the pack and stay separate
     // on the wire: the story is narrated and spoken, the rules note is only read.
     let narration = match stage(
@@ -1169,7 +1194,7 @@ pub(super) fn project_journey(
                 content.escort_support_suffix.replace("{name}", &name)
             )
         }),
-        None => narration.to_owned(),
+        None => narration,
     };
     let narration = if super::pack::active()
         .is_some_and(|loaded| !loaded.departures.is_empty() && loaded.tuning.tactical.is_none())
@@ -1222,15 +1247,14 @@ pub(super) fn project_journey(
             narration = format!("{narration} You notice: {}", visible.join(" "));
         }
     }
-    // A rested scene and an epilogue replace the story text whole, and the rules wording
-    // belonged to the text they replace.
+    // An epilogue replaces the authored story and rules; a rested scene carries its rules note.
     let epilogue_replaces =
         key == SceneKey::Inn && pack::with_content(|content| content.campaign_epilogue.is_some());
-    let mut rules_note = if rested || epilogue_replaces {
-        String::new()
-    } else {
-        authored.rules_note.clone()
-    };
+    let mut rules_note = project_scene_rules_note(
+        &authored.rules_note,
+        rested_rules_note.as_deref(),
+        epilogue_replaces,
+    );
     if key == SceneKey::Combat && super::journey::tactical::present(current.state()) {
         rules_note.push_str(" Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres.");
         add_scan_barrier_reach_note(&mut rules_note);
@@ -1306,6 +1330,8 @@ pub(super) fn project_journey(
             live_plate: String::new(),
             plate_layout: None,
             plate_state: rpc::PlateState::Unspecified as i32,
+            scene_video_state: rpc::HomeVideoState::None as i32,
+            scene_video_path: String::new(),
         }
     };
     scene.cast = scene_cast(&authored);
@@ -1336,6 +1362,8 @@ pub(super) fn project_journey(
             scene_asset: scene.scene_asset.clone(),
             scene: Some(scene),
             journey: Some(journey),
+            scene_graph: None,
+            live_plate_graph_revision: 0,
         }),
         LocalDemoRole::Player => rpc::view_message::Audience::Player(rpc::PlayerGameplayView {
             offer_id: String::new(),
@@ -1430,6 +1458,26 @@ mod perception_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rested_scene_keeps_story_and_rules_in_their_own_fields() {
+        let mut authored = super::super::pack::scene(super::super::pack::SceneKey::Opening);
+        authored.narration_rested = Some(
+            "Calla sets out tea. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. Rain moves past the window.".to_owned(),
+        );
+        authored.rules_note = "The authored rules note remains.".to_owned();
+
+        let (story, rest_rules) = rested_text(&authored, true).unwrap();
+        assert!(story.contains("The party spends an hour catching its breath."));
+        assert!(!story.contains("Hit Point Dice"));
+        assert!(!story.contains("Second Wind"));
+        assert!(!story.contains("stable 0-HP"));
+        let rules = project_scene_rules_note(&authored.rules_note, rest_rules.as_deref(), false);
+        assert!(rules.starts_with("The authored rules note remains."));
+        assert!(rules.contains("Hit Point Dice"));
+        assert!(rules.contains("Second Wind"));
+        assert!(rules.contains("stable creature"));
+    }
 
     #[test]
     fn scan_barrier_melee_reach_note_discloses_the_table_ruling_srd_p15() {

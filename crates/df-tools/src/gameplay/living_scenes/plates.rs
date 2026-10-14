@@ -124,7 +124,7 @@ impl PlateScene {
     }
 
     /// The plate of this scene for this party: the same scene and party always have one name.
-    fn plate_id(&self, heroes: &[u8], faces: &[(u8, ImageKey)]) -> String {
+    fn plate_id(&self, heroes: &[u8], faces: &[(u8, ImageKey)], graph_revision: u64) -> String {
         let party: String = heroes.iter().map(|art| art.to_string()).collect();
         // A hurt hero's health variant makes another picture, so it is part of the name.
         let hurt: String = faces
@@ -132,8 +132,8 @@ impl PlateScene {
             .map(|(art, key)| format!("{art}{}", &key.as_str()[..8]))
             .collect();
         format!(
-            "{}|{}|{:?}|{party}|{hurt}",
-            self.title, self.place_id, self.key
+            "{}|{}|{:?}|{party}|{hurt}|graph-{graph_revision}",
+            self.title, self.place_id, self.key,
         )
     }
 
@@ -159,7 +159,7 @@ impl PlateScene {
 
 /// The pack scene a display view shows: matched by its painting and title, the way living scenes
 /// match it.
-fn locate(title: &str, asset: &str) -> Option<pack::Scene> {
+pub(super) fn locate(title: &str, asset: &str) -> Option<pack::Scene> {
     pack::with_content(|content| {
         let wanted = asset.trim_start_matches('/');
         let matches = |scene: &pack::Scene, asset: &str| {
@@ -276,6 +276,8 @@ struct View {
     title: String,
     asset: String,
     in_combat: bool,
+    in_roll: bool,
+    graph_revision: u64,
     /// The art numbers of the heroes present, in party order.
     heroes: Vec<u8>,
     /// Their names, to find a hero's health variant.
@@ -291,7 +293,7 @@ fn scene_identity(display_asset: &str, scene: &rpc::GameplayScene) -> (String, S
     (format!("{}|{}", scene.title, asset), asset)
 }
 
-fn view_of(message: &rpc::ViewMessage) -> Option<View> {
+fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
     let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
         return None;
     };
@@ -299,6 +301,11 @@ fn view_of(message: &rpc::ViewMessage) -> Option<View> {
     let journey = display.journey.as_ref();
     let in_combat = journey.and_then(|journey| rpc::JourneyPhase::try_from(journey.phase).ok())
         == Some(rpc::JourneyPhase::Combat);
+    let in_roll = journey.is_some_and(|journey| {
+        journey.table_log.last().is_some_and(|line| {
+            rpc::TableKind::try_from(line.kind).ok() == Some(rpc::TableKind::Action)
+        })
+    });
     let hero_names: Vec<(u8, String)> = journey
         .map(|journey| {
             journey
@@ -320,6 +327,8 @@ fn view_of(message: &rpc::ViewMessage) -> Option<View> {
         title: scene.title.clone(),
         asset,
         in_combat,
+        in_roll,
+        graph_revision,
         heroes,
         hero_names,
     })
@@ -358,6 +367,8 @@ struct Current {
     /// establishing picture instead of drawing cut-outs.
     unplated: bool,
     in_combat: bool,
+    in_roll: bool,
+    graph_revision: u64,
 }
 
 struct Book {
@@ -425,7 +436,8 @@ impl Book {
         self.current
             .as_ref()
             .is_some_and(|current| !current.in_combat)
-            && (self.direct.shown.is_some() || matches!(self.current_entry(), Some(Entry::Ready { .. })))
+            && (self.direct.shown.is_some()
+                || matches!(self.current_entry(), Some(Entry::Ready { .. })))
     }
 }
 
@@ -434,6 +446,7 @@ enum Job {
     Directed(Box<direct::Work>),
     Fresh {
         id: String,
+        graph_revision: u64,
         scene: PlateScene,
         spec: Box<ShotSpec>,
         heroes: Vec<u8>,
@@ -449,7 +462,10 @@ enum Job {
         face: Face,
     },
     /// Finds the heads in a plate that is already shown with its predicted layout.
-    Locate { id: String, work: Box<Locate> },
+    Locate {
+        id: String,
+        work: Box<Locate>,
+    },
 }
 
 /// What finding the heads in a finished plate needs.
@@ -475,6 +491,8 @@ enum Done {
     },
     Fresh {
         id: String,
+        graph_revision: u64,
+        ahead: bool,
         elapsed: Duration,
         result: Result<(ImageKey, Option<PlatePlacement>), ImageFailure>,
     },
@@ -517,8 +535,8 @@ impl Plates {
     }
 
     /// Notes a display view: a new scene gets its plate and its successors' plates requested.
-    pub(super) fn observe(&self, message: &rpc::ViewMessage) {
-        let Some(view) = view_of(message) else {
+    pub(super) fn observe(&self, message: &rpc::ViewMessage, graph_revision: u64) {
+        let Some(view) = view_of(message, graph_revision) else {
             return;
         };
         self.shared.observe(&view);
@@ -526,20 +544,27 @@ impl Plates {
 
     /// Adds the plate to the scene of a view about to be sent (to the display or a phone).
     pub(super) fn apply_to_message(&self, message: &mut rpc::ViewMessage) {
-        let (scene, display_asset) = match message.audience.as_mut() {
+        match message.audience.as_mut() {
             Some(rpc::view_message::Audience::Display(display)) => {
-                (display.scene.as_mut(), display.scene_asset.clone())
+                let Some(scene) = display.scene.as_mut() else {
+                    return;
+                };
+                let (scene_key, _) = scene_identity(&display.scene_asset, scene);
+                display.live_plate_graph_revision =
+                    self.shared.apply(&scene_key, scene).unwrap_or_default();
+                self.shared.project_scene_clip(&scene_key, scene);
             }
             Some(rpc::view_message::Audience::Player(player)) => {
-                (player.scene.as_mut(), String::new())
+                let Some(scene) = player.scene.as_mut() else {
+                    return;
+                };
+                let (scene_key, _) = scene_identity("", scene);
+                let _revision = self.shared.apply(&scene_key, scene);
+                scene.scene_video_state = rpc::HomeVideoState::None as i32;
+                scene.scene_video_path.clear();
             }
-            None => return,
-        };
-        let Some(scene) = scene else {
-            return;
-        };
-        let (scene_key, _) = scene_identity(&display_asset, scene);
-        self.shared.apply(&scene_key, scene);
+            None => {}
+        }
     }
 }
 
@@ -655,6 +680,85 @@ impl StoredPlacement {
 }
 
 impl Shared {
+    fn current_clip_context(
+        &self,
+        scene_key: &str,
+        plate_key: &str,
+    ) -> Option<(String, &'static str, bool)> {
+        let book = locked(&self.book);
+        let current = book.current.as_ref()?;
+        if current.scene_key != scene_key
+            || book
+                .shown()
+                .as_ref()
+                .is_none_or(|(key, _)| key.as_str() != plate_key)
+        {
+            return None;
+        }
+        let directed = book.direct.shown.is_some();
+        let (description, reason) =
+            if directed && let Some(description) = book.direct.description.clone() {
+                (description, "directed-plate")
+            } else {
+                let scene = current.scene.as_ref()?;
+                let spec = scene.stage(&current.heroes).ok()?;
+                (
+                    super::super::home_video::scene_description(&spec),
+                    if matches!(&book.edit, Edit::Ready { key, .. } if key.as_str() == plate_key) {
+                        "plate-edit"
+                    } else {
+                        "scene-plate"
+                    },
+                )
+            };
+        Some((description, reason, current.in_combat || current.in_roll))
+    }
+
+    fn project_scene_clip(&self, scene_key: &str, scene: &mut rpc::GameplayScene) {
+        scene.scene_video_state = rpc::HomeVideoState::None as i32;
+        scene.scene_video_path.clear();
+        let Some(plate_key) = scene
+            .live_plate
+            .strip_prefix("/gameplay/imagery/")
+            .filter(|key| key.len() == 64)
+        else {
+            return;
+        };
+        let Some((description, reason, blocked)) = self.current_clip_context(scene_key, plate_key)
+        else {
+            return;
+        };
+        if blocked {
+            super::super::home_video::request_scene_clip(
+                plate_key,
+                Vec::new(),
+                &description,
+                reason,
+                true,
+            );
+            return;
+        }
+        let view = super::super::home_video::scene_clip_view(plate_key);
+        scene.scene_video_state = view.proto_state() as i32;
+        scene.scene_video_path = view.path();
+        if view.proto_state() != rpc::HomeVideoState::None {
+            return;
+        }
+        let imagery = self.inner.imagery.clone();
+        let plate_key = plate_key.to_owned();
+        tokio::spawn(async move {
+            if let Lookup::Image { bytes, .. } = imagery.image(&plate_key).await {
+                super::super::home_video::request_scene_clip(
+                    &plate_key,
+                    bytes.to_vec(),
+                    &description,
+                    reason,
+                    false,
+                );
+            }
+        });
+    }
+
     fn wake(&self) {
         self.inner.wake.send_modify(|count| *count += 1);
     }
@@ -684,18 +788,44 @@ impl Shared {
             .current
             .as_ref()
             .is_some_and(|current| current.heroes != view.heroes);
+        let graph_changed = book
+            .current
+            .as_ref()
+            .is_some_and(|current| current.graph_revision != view.graph_revision);
         let combat_changed = book
             .current
             .as_ref()
             .is_some_and(|current| current.in_combat != view.in_combat);
+        let roll_changed = book
+            .current
+            .as_ref()
+            .is_some_and(|current| current.in_roll != view.in_roll);
         let mut woke = false;
-        if scene_changed || party_changed {
-            let scene = located.as_ref().and_then(PlateScene::of);
+        if scene_changed || party_changed || graph_changed {
+            let scene = located.as_ref().and_then(PlateScene::of).or_else(|| {
+                (!scene_changed && !party_changed)
+                    .then(|| {
+                        book.current
+                            .as_ref()
+                            .and_then(|current| current.scene.clone())
+                    })
+                    .flatten()
+            });
             let faces = self.inner.hero_face_keys(&view.hero_names);
             let id = scene
                 .as_ref()
-                .map(|scene| scene.plate_id(&view.heroes, &faces));
-            if scene_changed {
+                .map(|scene| scene.plate_id(&view.heroes, &faces, view.graph_revision));
+            let old_id = graph_changed
+                .then(|| book.current.as_ref().and_then(|current| current.id.clone()))
+                .flatten();
+            if let Some(old_id) = old_id
+                && id.as_ref() != Some(&old_id)
+                && matches!(book.entries.get(&old_id), Some(Entry::Pending))
+            {
+                book.entries.remove(&old_id);
+                book.order.retain(|known| known != &old_id);
+            }
+            if scene_changed || graph_changed {
                 book.edit = Edit::Idle;
                 book.direct.reset();
                 // A plate that failed is asked for again once when its scene comes back.
@@ -718,34 +848,59 @@ impl Shared {
                 faces: faces.clone(),
                 unplated,
                 in_combat: view.in_combat,
+                in_roll: view.in_roll,
+                graph_revision: view.graph_revision,
             });
             // The lobby has no plate; the opening plate is requested when that scene becomes current.
             if !view.in_combat {
                 if let Some(scene) = &scene {
-                    self.ensure(&mut book, scene, &view.heroes, &faces, false);
+                    self.ensure(
+                        &mut book,
+                        scene,
+                        &view.heroes,
+                        &faces,
+                        view.graph_revision,
+                        false,
+                    );
                 }
-                if scene.is_some() {
+                if scene.is_some() && (scene_changed || party_changed) {
                     for next in next
                         .iter()
                         .take(MAXIMUM_SUCCESSORS)
                         .filter_map(PlateScene::of)
                     {
-                        self.ensure(&mut book, &next, &view.heroes, &faces, scene.is_some());
+                        self.ensure(
+                            &mut book,
+                            &next,
+                            &view.heroes,
+                            &faces,
+                            view.graph_revision,
+                            scene.is_some(),
+                        );
                     }
                 }
             }
             woke = true;
-        } else if combat_changed && let Some(current) = book.current.as_mut() {
-            current.in_combat = view.in_combat;
-            woke = true;
-        } else if !view.in_combat
-            && book.current_entry().is_none()
-            && let Some(current) = book.current.as_ref()
-            && let Some(scene) = current.scene.clone()
+        } else if (combat_changed || roll_changed)
+            && let Some(current) = book.current.as_mut()
         {
+            current.in_combat = view.in_combat;
+            current.in_roll = view.in_roll;
+            woke = true;
+        }
+        if !woke && !view.in_combat && book.current_entry().is_none() {
             // The scene's request was dropped (a full queue): it is made again by this view.
-            let (heroes, faces) = (current.heroes.clone(), current.faces.clone());
-            self.ensure(&mut book, &scene, &heroes, &faces, false);
+            let retry = book.current.as_ref().and_then(|current| {
+                Some((
+                    current.scene.clone()?,
+                    current.heroes.clone(),
+                    current.faces.clone(),
+                    current.graph_revision,
+                ))
+            });
+            if let Some((scene, heroes, faces, graph_revision)) = retry {
+                self.ensure(&mut book, &scene, &heroes, &faces, graph_revision, false);
+            }
         }
         let covers = book.covers();
         drop(book);
@@ -762,9 +917,10 @@ impl Shared {
         scene: &PlateScene,
         heroes: &[u8],
         faces: &[(u8, ImageKey)],
+        graph_revision: u64,
         ahead: bool,
     ) {
-        let id = scene.plate_id(heroes, faces);
+        let id = scene.plate_id(heroes, faces, graph_revision);
         if book.entries.contains_key(&id) {
             return;
         }
@@ -777,6 +933,7 @@ impl Shared {
         };
         let job = Job::Fresh {
             id: id.clone(),
+            graph_revision,
             scene: scene.clone(),
             spec: Box::new(spec),
             heroes: heroes.to_vec(),
@@ -794,19 +951,21 @@ impl Shared {
         }
     }
 
-    fn apply(&self, scene_key: &str, scene: &mut rpc::GameplayScene) {
+    fn apply(&self, scene_key: &str, scene: &mut rpc::GameplayScene) -> Option<u64> {
         let book = locked(&self.book);
         let Some(current) = &book.current else {
-            return;
+            return None;
         };
         if current.scene_key != scene_key || current.in_combat {
-            return;
+            return None;
         }
-        if book.direct.shown.is_some() && let Some((key, placement)) = book.shown() {
+        if book.direct.shown.is_some()
+            && let Some((key, placement)) = book.shown()
+        {
             scene.live_plate = key.path();
             scene.plate_layout = placement.as_ref().map(wire_layout);
             scene.plate_state = rpc::PlateState::Ready as i32;
-            return;
+            return Some(current.graph_revision);
         }
         match book.current_entry() {
             Some(Entry::Ready { .. }) => {
@@ -814,6 +973,7 @@ impl Shared {
                     scene.live_plate = key.path();
                     scene.plate_layout = placement.as_ref().map(wire_layout);
                     scene.plate_state = rpc::PlateState::Ready as i32;
+                    return Some(current.graph_revision);
                 }
             }
             Some(Entry::Failed) => {
@@ -832,6 +992,7 @@ impl Shared {
                 }
             }
         }
+        None
     }
 
     /// The worker: takes requests, owns every render task, and every tick looks for a lasting face
@@ -862,6 +1023,7 @@ impl Shared {
             }
             Job::Fresh {
                 id,
+                graph_revision,
                 scene,
                 spec,
                 heroes,
@@ -887,6 +1049,8 @@ impl Shared {
                     });
                     Done::Fresh {
                         id,
+                        graph_revision,
+                        ahead,
                         elapsed: started.elapsed(),
                         result,
                     }
@@ -1021,12 +1185,15 @@ impl Shared {
             Some(direction) => prompt.with_development_direction(direction),
             None => prompt,
         };
-        Ok((ImageRequest {
+        Ok((
+            ImageRequest {
                 kind: ImageKind::ScenePlate,
                 references,
                 prompt,
                 output: OutputSpec::PLATE,
-            }, locator_face))
+            },
+            locator_face,
+        ))
     }
 
     async fn render_fresh(
@@ -1189,7 +1356,13 @@ impl Shared {
     /// Records a finished render. Every generation is logged with its time; the run manifest
     /// holds its cost.
     fn finish(&self, done: Done) {
-        if let Done::Directed { generation, scene_key, key, result } = done {
+        if let Done::Directed {
+            generation,
+            scene_key,
+            key,
+            result,
+        } = done
+        {
             self.finish_directed(generation, &scene_key, key, result);
             return;
         }
@@ -1232,13 +1405,24 @@ impl Shared {
                     *kept = Some(placement);
                 }
             }
-            Done::Fresh { id, result, .. } => {
+            Done::Fresh {
+                id,
+                graph_revision,
+                ahead,
+                result,
+                ..
+            } => {
                 let entry = match result {
                     Ok((key, placement)) => Entry::Ready { key, placement },
                     Err(_) => Entry::Failed,
                 };
-                // A plate for a scene the book has already forgotten is not remembered.
-                if book.entries.contains_key(&id) {
+                let current_graph = book.current.as_ref().is_some_and(|current| {
+                    current.graph_revision == graph_revision
+                        && current.id.as_deref() == Some(id.as_str())
+                });
+                // Current plates from an older graph are dropped. Ahead plates remain cached
+                // until that scene becomes current and its graph revision is known.
+                if (current_graph || ahead) && book.entries.contains_key(&id) {
                     book.entries.insert(id, entry);
                 }
             }
@@ -1292,7 +1476,8 @@ impl Shared {
             book.direct.shown.as_ref().map(|shown| shown.0.clone())
         } else {
             None
-        }.or_else(|| match book.current_entry() {
+        }
+        .or_else(|| match book.current_entry() {
             Some(Entry::Ready { key, .. }) => Some(key.clone()),
             _ => None,
         });

@@ -32,16 +32,19 @@ use super::{
     imagery::{
         CharacterFacts, CharacterRole, ImageFailure, ImageKey, ImageKind, ImageRequest, Imagery,
         LifeStage, OutputSpec, PlaceFacts, ReferenceImage, ReferenceStore, cast_expression,
-        scene_refresh,
+        party_sheet, scene_refresh,
     },
     pack::{self, SceneKey},
     scene_mood::{
         Beat, CastState, ExchangeSignal, Expression, Face, HealthTier, Hysteresis, Look,
         MoodInputs, MoodTracker, SceneTone, TableKind, Tempo, TempoLevel,
     },
+    shot::{self, ShotInput, SpeakerInput, scene_graph},
     social::SocialLedger,
     startup_configuration::ContentRating,
 };
+
+use super::shot::scene_graph::{ActorInput, SceneGraph, SceneGraphInput};
 
 /// The authored cut-out of the party's hero at this position; the health variants are made from
 /// it.
@@ -240,11 +243,17 @@ struct Stage {
     scene_asset: String,
     revision: Option<(u64, u64)>,
     in_combat: bool,
+    in_roll: bool,
     tempo: Option<Tempo>,
     speaking_ids: BTreeSet<String>,
     recent_kinds: Vec<TableKind>,
     title: String,
+    story_scene: Option<pack::Scene>,
     cast: Vec<StageCast>,
+    speaker_id: Option<String>,
+    listener_id: Option<String>,
+    line_length: usize,
+    measured_speaker_layout: Option<shot::PlateLayout>,
     /// What the view says about the health of the named combatants it still carries.
     vitals: Vec<(String, Vitals)>,
     /// The party's ready heroes, in party order.
@@ -271,6 +280,7 @@ fn vitals_of(member: &rpc::PartyMemberView) -> Vitals {
 #[derive(Clone, Debug)]
 struct StageCast {
     id: String,
+    name: String,
     sprite: String,
 }
 
@@ -317,6 +327,60 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
     } else {
         scene.scene_asset.clone()
     };
+    let story_scene = plates::locate(&scene.title, &asset);
+    let hero_names: Vec<(String, String)> = journey
+        .map(|journey| {
+            journey
+                .party
+                .iter()
+                .enumerate()
+                .take(shot::MAXIMUM_HEROES)
+                .filter(|(_, member)| member.character_ready)
+                .map(|(index, member)| (format!("hero-{}", index + 1), member.name.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let last_speaker = journey.and_then(|journey| {
+        journey.table_log.iter().rev().find_map(|line| {
+            (rpc::TableKind::try_from(line.kind).ok() == Some(rpc::TableKind::Speech))
+                .then_some(line.speaker.as_str())
+        })
+    });
+    let cast_speaker = scene.cast.iter().find(|actor| actor.speaking);
+    let speaker_id = last_speaker
+        .and_then(|name| {
+            hero_names
+                .iter()
+                .find(|(_, hero_name)| hero_name == name)
+                .map(|(id, _)| id.clone())
+                .or_else(|| {
+                    scene
+                        .cast
+                        .iter()
+                        .find(|actor| actor.name == name)
+                        .map(|actor| actor.id.clone())
+                })
+        })
+        .or_else(|| cast_speaker.map(|actor| actor.id.clone()));
+    let listener_id = speaker_id.as_ref().and_then(|speaker| {
+        if speaker.starts_with("hero-") {
+            cast_speaker.map(|actor| actor.id.clone())
+        } else {
+            hero_names.first().map(|(id, _)| id.clone())
+        }
+    });
+    let line_length = journey
+        .and_then(|journey| journey.table_log.last())
+        .map(|line| line.text.chars().count())
+        .filter(|length| *length > 0)
+        .or_else(|| journey.map(|journey| journey.dialogue.chars().count()))
+        .unwrap_or_default();
+    let measured_speaker_layout = scene.plate_layout.as_ref().and_then(shot_layout_from_wire);
+    let in_roll = journey
+        .and_then(|journey| journey.table_log.last())
+        .is_some_and(|line| {
+            rpc::TableKind::try_from(line.kind).ok() == Some(rpc::TableKind::Action)
+        });
     Some(Stage {
         scene_key: format!("{}|{}", scene.title, asset),
         scene_asset: asset,
@@ -325,6 +389,7 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
             .as_ref()
             .and_then(|revision| Some((revision.epoch.as_ref()?.value?, revision.sequence?))),
         in_combat,
+        in_roll,
         tempo,
         speaking_ids: scene
             .cast
@@ -334,14 +399,20 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
             .collect(),
         recent_kinds,
         title: scene.title.clone(),
+        story_scene,
         cast: scene
             .cast
             .iter()
             .map(|actor| StageCast {
                 id: actor.id.clone(),
+                name: actor.name.clone(),
                 sprite: actor.sprite.clone(),
             })
             .collect(),
+        speaker_id,
+        listener_id,
+        line_length,
+        measured_speaker_layout,
         vitals: journey
             .and_then(|journey| journey.combat.as_ref())
             .map(|combat| {
@@ -369,6 +440,212 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
             })
             .unwrap_or_default(),
     })
+}
+
+fn shot_layout_from_wire(layout: &rpc::PlateLayout) -> Option<shot::PlateLayout> {
+    Some(shot::PlateLayout {
+        bubble_side: match rpc::PlateSide::try_from(layout.bubble_side).ok()? {
+            rpc::PlateSide::Left => shot::Side::Left,
+            rpc::PlateSide::Right => shot::Side::Right,
+            rpc::PlateSide::Unspecified => return None,
+        },
+        head_x_permille: u16::try_from(layout.head_x_permille).ok()?,
+        head_y_permille: u16::try_from(layout.head_y_permille).ok()?,
+        head_width_permille: u16::try_from(layout.head_width_permille).ok()?,
+        head_height_permille: u16::try_from(layout.head_height_permille).ok()?,
+    })
+}
+
+fn stage_asset(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    }
+}
+
+fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
+    if stage.in_combat || stage.in_roll {
+        return None;
+    }
+    let scene = stage.story_scene.as_ref()?;
+    let (place_id, place_name, place_kind, exterior): (&str, &str, String, bool) =
+        if let Some(setting) = scene.setting.as_ref() {
+            let place_kind = serde_json::to_value(setting.kind)
+                .ok()?
+                .as_str()?
+                .to_owned();
+            (
+                &setting.place_id,
+                &setting.name,
+                place_kind,
+                setting.exterior,
+            )
+        } else {
+            let (place_id, place_name, place_kind, exterior) = match scene.asset.as_str() {
+                "assets/ui/scenes/mara-harbor-v4.png" => {
+                    ("lantern-wharf", "Lantern Wharf", "quay", true)
+                }
+                "assets/concept-art/scene-tavern-barkeep-talk-rain.webp" => {
+                    ("harbor-inn", "Harbor Inn", "inn", false)
+                }
+                _ => return None,
+            };
+            (place_id, place_name, place_kind.to_owned(), exterior)
+        };
+    let speaker = scene
+        .cast
+        .iter()
+        .find(|actor| Some(actor.id.as_str()) == stage.speaker_id.as_deref());
+    let other_sprites: Vec<&str> = scene
+        .cast
+        .iter()
+        .filter(|actor| Some(actor.id.as_str()) != stage.speaker_id.as_deref())
+        .map(|actor| actor.sprite.as_str())
+        .collect();
+    let heroes: Vec<u8> = stage
+        .heroes
+        .iter()
+        .filter_map(|hero| u8::try_from(hero.index + 1).ok())
+        .collect();
+    let story_text = format!("{} {}", scene.narration, scene.dialogue);
+    let shot = shot::direct(&ShotInput {
+        scene_key: scene.key,
+        place_id,
+        place_kind: &place_kind,
+        exterior,
+        title: &scene.title,
+        story_text: &story_text,
+        speaker: speaker.map(|actor| SpeakerInput {
+            sprite: &actor.sprite,
+            gender: actor.gender,
+            age: actor.age,
+        }),
+        others: &other_sprites,
+        heroes: &heroes,
+    })
+    .ok()?;
+    let mut owned = Vec::with_capacity(stage.heroes.len() + stage.cast.len());
+    for hero in &stage.heroes {
+        let art = u8::try_from(hero.index + 1).ok()?;
+        let fallback_art = format!("/assets/ui/generated/figure-hero-{art}.webp");
+        let live_art = state
+            .and_then(|state| state.hero_cutouts.get(&hero.name))
+            .map(ImageKey::path);
+        owned.push((
+            format!("hero-{art}"),
+            hero.name.clone(),
+            fallback_art,
+            live_art,
+            Some(art),
+            Some(format!("hero-{art}") == stage.speaker_id.as_deref().unwrap_or_default()),
+            Some(Expression::Neutral),
+        ));
+    }
+    for actor in &stage.cast {
+        let fallback_art = stage_asset(&actor.sprite);
+        let overlay = state
+            .and_then(|state| state.health_sprites.get(&actor.id))
+            .or_else(|| state.and_then(|state| state.sprites.get(&actor.id)))
+            .filter(|overlay| overlay.source_sprite == actor.sprite);
+        let live_art = overlay.map(|overlay| overlay.key.path());
+        let expression = overlay
+            .map(|overlay| overlay.expression)
+            .or(Some(Expression::Neutral));
+        owned.push((
+            actor.id.clone(),
+            actor.name.clone(),
+            fallback_art,
+            live_art,
+            None,
+            Some(Some(actor.id.as_str()) == stage.speaker_id.as_deref()),
+            expression,
+        ));
+    }
+    let actor_inputs: Vec<ActorInput<'_>> = owned
+        .iter()
+        .map(
+            |(id, name, fallback_art, live_art, hero_art, speaking, expression)| ActorInput {
+                id,
+                name,
+                fallback_art,
+                live_art: live_art.as_deref(),
+                expression: *expression,
+                hero_art: *hero_art,
+                speaking: speaking.unwrap_or(false),
+            },
+        )
+        .collect();
+    scene_graph::build(&SceneGraphInput {
+        scene_key: scene.key,
+        place_id,
+        place_name,
+        fallback_set: &stage_asset(&scene.asset),
+        refreshed_set: state
+            .filter(|state| state.backdrop.is_some())
+            .and_then(|state| state.backdrop.as_ref())
+            .map(|backdrop| backdrop.key.as_str()),
+        exterior,
+        weather: None,
+        shot: &shot,
+        actors: &actor_inputs,
+        speaker_id: stage.speaker_id.as_deref(),
+        listener_id: stage.listener_id.as_deref(),
+        measured_speaker_layout: stage.measured_speaker_layout,
+        scene_open: scene.key == SceneKey::Opening,
+        narrator_speaks: stage.speaker_id.is_none(),
+        line_length: stage.line_length,
+    })
+    .ok()
+}
+
+fn graph_to_wire(graph: &SceneGraph) -> rpc::DisplaySceneGraph {
+    rpc::DisplaySceneGraph {
+        revision: graph.revision,
+        scene_key: graph.scene_key.clone(),
+        set: Some(rpc::DisplaySceneSet {
+            place_id: graph.set.place_id.clone(),
+            place_name: graph.set.place_name.clone(),
+            asset: graph.set.asset.clone(),
+            fallback_asset: graph.set.fallback_asset.clone(),
+            exterior: graph.set.exterior,
+            time_of_day: graph.set.time_of_day.clone(),
+            weather: graph.set.weather.map_or_else(String::new, |weather| {
+                match weather {
+                    scene_graph::Weather::Clear => "clear",
+                    scene_graph::Weather::Fog => "fog",
+                    scene_graph::Weather::Rain => "rain",
+                    scene_graph::Weather::Snow => "snow",
+                    scene_graph::Weather::Wind => "wind",
+                }
+                .to_owned()
+            }),
+            lights: graph.set.lights.clone(),
+        }),
+        camera: match graph.camera {
+            scene_graph::CameraFraming::Wide => rpc::DisplaySceneCamera::Wide,
+            scene_graph::CameraFraming::TwoShot => rpc::DisplaySceneCamera::TwoShot,
+            scene_graph::CameraFraming::Speaker => rpc::DisplaySceneCamera::Speaker,
+        } as i32,
+        actors: graph
+            .actors
+            .iter()
+            .map(|actor| rpc::DisplaySceneActor {
+                id: actor.id.clone(),
+                name: actor.name.clone(),
+                art: actor.art.clone(),
+                fallback_art: actor.fallback_art.clone(),
+                spot: actor.spot.clone(),
+                anchor_x_permille: actor.anchor_x_permille,
+                anchor_y_permille: actor.anchor_y_permille,
+                depth_permille: actor.depth_permille,
+                pose: actor.pose.clone(),
+                expression: actor.expression.clone(),
+                look_at: actor.look_at.clone(),
+                speaking: actor.speaking,
+            })
+            .collect(),
+    }
 }
 
 fn tone_of(kind: SettingKind) -> SceneTone {
@@ -498,6 +775,7 @@ fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
 struct SpriteOverlay {
     /// The authored cut-out this variant replaces; it only applies while the cast names it.
     source_sprite: String,
+    expression: Expression,
     key: ImageKey,
 }
 
@@ -538,10 +816,20 @@ struct State {
     health_sprites: BTreeMap<String, SpriteOverlay>,
     /// The health variant each hero shows now, by name.
     hero_faces: BTreeMap<String, HeroFace>,
+    /// The standing cut-outs, requested once per hero from the opening party sheet.
+    hero_cutouts: BTreeMap<String, ImageKey>,
+    hero_cutouts_in_flight: BTreeSet<String>,
+    failed_hero_cutouts: BTreeSet<String>,
+    scene_graph: Option<SceneGraph>,
 }
 
 /// What the worker should start.
 enum Job {
+    HeroCutout {
+        name: String,
+        index: usize,
+        party: Vec<usize>,
+    },
     Expression {
         member: Member,
         face: Face,
@@ -565,6 +853,10 @@ enum Job {
 }
 
 enum Done {
+    HeroCutout {
+        name: String,
+        result: Result<ImageKey, ImageFailure>,
+    },
     Expression {
         npc_id: String,
         face: Face,
@@ -617,6 +909,7 @@ pub(super) struct LivingScenes {
     _worker: Option<Arc<WorkerGuard>>,
     /// PLAY-V09: the plate director, when plates are on.
     plates: Option<plates::Plates>,
+    last_graph_revision: Arc<Mutex<Option<u64>>>,
 }
 
 /// The health variants of the heroes, by name, on a view's journey.
@@ -734,6 +1027,7 @@ fn refresh_health(state: &mut State) -> bool {
                 member.id.clone(),
                 SpriteOverlay {
                     source_sprite: member.sprite.clone(),
+                    expression: Expression::Neutral,
                     key: key.clone(),
                 },
             );
@@ -779,6 +1073,7 @@ impl LivingScenes {
             inner: None,
             _worker: None,
             plates: None,
+            last_graph_revision: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -811,6 +1106,7 @@ impl LivingScenes {
             inner: Some(inner),
             _worker: Some(Arc::new(WorkerGuard(worker))),
             plates,
+            last_graph_revision: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -830,8 +1126,12 @@ impl LivingScenes {
         &self,
         text: String,
         keep: bool,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<serde_json::Value, ImageFailure>>, &'static str> {
-        self.plates.as_ref().ok_or("imagery or scene plates are off")?.direct(text, keep)
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<serde_json::Value, ImageFailure>>, &'static str>
+    {
+        self.plates
+            .as_ref()
+            .ok_or("imagery or scene plates are off")?
+            .direct(text, keep)
     }
 
     pub(super) fn clear_direction(&self) {
@@ -853,9 +1153,9 @@ impl LivingScenes {
         let Some(stage) = stage_of(message) else {
             return;
         };
-        inner.observe(stage);
+        let graph_revision = inner.observe(stage).unwrap_or_default();
         if let Some(plates) = &self.plates {
-            plates.observe(message);
+            plates.observe(message, graph_revision);
         }
     }
 
@@ -863,15 +1163,33 @@ impl LivingScenes {
     /// the view changes. The backdrop and mood faces are never added in combat or for another
     /// scene; the health variants of the heroes go to every audience.
     pub(super) fn apply(&self, message: &mut rpc::ViewMessage) {
-        let Some(inner) = &self.inner else {
-            return;
-        };
         // PLAY-V09: the scene plate goes to the display and to phones alike.
         if let Some(plates) = &self.plates {
             plates.apply_to_message(message);
         }
         let stage = stage_of(message);
-        inner.apply(stage.as_ref(), message);
+        if let Some(inner) = &self.inner {
+            inner.apply(stage.as_ref(), message);
+        } else if let (Some(stage), Some(rpc::view_message::Audience::Display(display))) =
+            (stage.as_ref(), message.audience.as_mut())
+        {
+            let graph = graph_of(stage, None);
+            self.note_graph(graph.as_ref());
+            display.scene_graph = graph.as_ref().map(graph_to_wire);
+        }
+    }
+
+    fn note_graph(&self, graph: Option<&SceneGraph>) {
+        let revision = graph.map(|graph| graph.revision);
+        let mut known = locked(&self.last_graph_revision);
+        if *known == revision {
+            return;
+        }
+        *known = revision;
+        drop(known);
+        if let Some(graph) = graph {
+            record("SCENE GRAPH", &scene_graph::change_log(graph));
+        }
     }
 }
 
@@ -880,8 +1198,12 @@ impl Inner {
         self.origin.elapsed()
     }
 
-    fn observe(&self, stage: Stage) {
+    fn observe(&self, stage: Stage) -> Option<u64> {
         self.observe_at(stage, self.now());
+        locked(&self.state)
+            .scene_graph
+            .as_ref()
+            .map(|graph| graph.revision)
     }
 
     fn observe_at(&self, stage: Stage, now: Duration) {
@@ -909,8 +1231,21 @@ impl Inner {
         }
         state.stage = Some(stage);
         let health_changed = refresh_health(&mut state);
+        let graph = state
+            .stage
+            .as_ref()
+            .and_then(|stage| graph_of(stage, Some(&state)));
+        let graph_changed = graph.as_ref().map(|graph| graph.revision)
+            != state.scene_graph.as_ref().map(|graph| graph.revision);
+        state.scene_graph = graph;
+        let graph_log = graph_changed
+            .then(|| state.scene_graph.as_ref().map(scene_graph::change_log))
+            .flatten();
         drop(state);
-        if had_overlay || health_changed {
+        if let Some(detail) = graph_log {
+            record("SCENE GRAPH", &detail);
+        }
+        if had_overlay || health_changed || graph_changed {
             self.wake.send_modify(|count| *count += 1);
         }
     }
@@ -950,6 +1285,7 @@ impl Inner {
                         }
                     }
                 }
+                display.scene_graph = state.scene_graph.as_ref().map(graph_to_wire);
                 apply_hero_faces(&state, display.journey.as_mut());
             }
             Some(rpc::view_message::Audience::Player(player)) => {
@@ -985,6 +1321,12 @@ impl Inner {
     fn spawn(self: &Arc<Self>, tasks: &mut JoinSet<Done>, job: Job) {
         let inner = Arc::clone(self);
         match job {
+            Job::HeroCutout { name, index, party } => {
+                tasks.spawn(async move {
+                    let result = inner.render_hero_cutout(index, &party).await;
+                    Done::HeroCutout { name, result }
+                });
+            }
             Job::Expression { member, face } => {
                 tasks.spawn(async move {
                     let result = inner.render_expression(&member, face).await;
@@ -1058,6 +1400,26 @@ impl Inner {
             .await
             .map_err(|_| ImageFailure::Interrupted)?
             .map_err(|_| ImageFailure::InvalidRequest)
+    }
+
+    async fn render_hero_cutout(
+        &self,
+        index: usize,
+        party: &[usize],
+    ) -> Result<ImageKey, ImageFailure> {
+        let mut figures = Vec::with_capacity(party.len());
+        for hero_index in party {
+            figures.push(self.load_figure(&hero_art(*hero_index)).await?);
+        }
+        let sheet = party_sheet(&figures).map_err(|_| ImageFailure::InvalidRequest)?;
+        self.imagery
+            .render(scene_graph::hero_cutout_request(
+                self.rating,
+                sheet,
+                index,
+                party.len(),
+            )?)
+            .await
     }
 
     /// The art the stage shows for this character: the full-body twin of the cut-out where there
@@ -1175,6 +1537,7 @@ impl Inner {
                 .to_owned()
         };
         let (kind, outcome) = match &done {
+            Done::HeroCutout { result, .. } => ("hero_cutout", label_of(result)),
             Done::Expression { result, .. } => ("expression", label_of(result)),
             Done::Refresh { result, .. } => ("refresh", label_of(result)),
             Done::Warm { result, .. } => ("health", label_of(result)),
@@ -1186,6 +1549,22 @@ impl Inner {
         );
         let mut state = locked(&self.state);
         match done {
+            Done::HeroCutout { name, result } => {
+                state.hero_cutouts_in_flight.remove(&name);
+                match result {
+                    Ok(key) => {
+                        state.hero_cutouts.insert(name, key);
+                        drop(state);
+                        self.wake.send_modify(|count| *count += 1);
+                    }
+                    Err(failure) => {
+                        state.failed_hero_cutouts.insert(name);
+                        if failure == ImageFailure::BudgetExhausted {
+                            state.budget_exhausted = true;
+                        }
+                    }
+                }
+            }
             Done::Warm { id, tier, result } => {
                 match result {
                     Ok(key) => state.book.learn(&id, tier, key),
@@ -1227,9 +1606,14 @@ impl Inner {
                                 .any(|cast| cast.id == npc_id && cast.sprite == source_sprite)
                         });
                         if current {
-                            state
-                                .sprites
-                                .insert(npc_id.clone(), SpriteOverlay { source_sprite, key });
+                            state.sprites.insert(
+                                npc_id.clone(),
+                                SpriteOverlay {
+                                    source_sprite,
+                                    expression: face.expression,
+                                    key,
+                                },
+                            );
                             state.tracker.mark_face_shown(&npc_id, face);
                             drop(state);
                             self.wake.send_modify(|count| *count += 1);
@@ -1326,6 +1710,7 @@ impl Inner {
             effect: record.effect,
             attitude: record.attitude,
             opposes: record.opposes,
+            emotional_state: record.emotional_state.clone(),
         });
         if exchange
             .as_ref()
@@ -1343,6 +1728,29 @@ impl Inner {
         };
         let verdict = state.tracker.update(now, &inputs);
         let mut jobs = Vec::new();
+        if !in_combat
+            && stage
+                .story_scene
+                .as_ref()
+                .is_some_and(|scene| scene.key == SceneKey::Opening)
+        {
+            let party: Vec<usize> = stage.heroes.iter().map(|hero| hero.index).collect();
+            for (index, hero) in stage.heroes.iter().enumerate() {
+                if state.hero_cutouts.contains_key(&hero.name)
+                    || state.hero_cutouts_in_flight.contains(&hero.name)
+                    || state.failed_hero_cutouts.contains(&hero.name)
+                    || state.budget_exhausted
+                {
+                    continue;
+                }
+                state.hero_cutouts_in_flight.insert(hero.name.clone());
+                jobs.push(Job::HeroCutout {
+                    name: hero.name.clone(),
+                    index,
+                    party: party.clone(),
+                });
+            }
+        }
         if !in_combat {
             for (id, face) in &verdict.face_changes {
                 // PLAY-V09: the plate director edits the plate; a cut-out nobody sees is not drawn.
@@ -1529,6 +1937,10 @@ impl State {
             book: Book::default(),
             health_sprites: BTreeMap::new(),
             hero_faces: BTreeMap::new(),
+            hero_cutouts: BTreeMap::new(),
+            hero_cutouts_in_flight: BTreeSet::new(),
+            failed_hero_cutouts: BTreeSet::new(),
+            scene_graph: None,
         }
     }
 

@@ -10,6 +10,7 @@ use axum::{
 use df_protocol::common as rpc;
 use df_rpc_bridge::{FRAME_BYTES, MESSAGE_BYTES, NativeAdmission, NativeIncoming};
 use futures::Stream;
+use prost::Message;
 use std::{
     num::NonZeroUsize,
     pin::Pin,
@@ -55,6 +56,104 @@ fn revision(epoch: u64, sequence: u64) -> rpc::SessionRevision {
         epoch: Some(rpc::RecoveryEpoch { value: Some(epoch) }),
         sequence: Some(sequence),
     }
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct OldViewMessage {
+    #[prost(message, optional, tag = "3")]
+    display: Option<OldDisplayGameplayView>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct OldDisplayGameplayView {
+    #[prost(string, tag = "1")]
+    narration: String,
+    #[prost(string, tag = "2")]
+    scene_asset: String,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    scene: Option<Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "4")]
+    journey: Option<Vec<u8>>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct OldGameplayScene {
+    #[prost(string, tag = "2")]
+    title: String,
+    #[prost(string, tag = "20")]
+    live_plate: String,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct OldCombatOutcome {
+    #[prost(string, tag = "1")]
+    actor_name: String,
+    #[prost(uint32, repeated, tag = "9")]
+    damage_dice: Vec<u32>,
+    #[prost(uint32, tag = "10")]
+    damage: u32,
+}
+
+#[test]
+fn appended_scene_graph_is_ignored_by_an_old_display_client() {
+    let current = rpc::ViewMessage {
+        audience: Some(rpc::view_message::Audience::Display(
+            rpc::DisplayGameplayView {
+                narration: "The scene remains readable.".to_owned(),
+                scene_asset: "assets/ui/scenes/harbor.webp".to_owned(),
+                scene: Some(rpc::GameplayScene {
+                    title: "Lantern Wharf".to_owned(),
+                    live_plate: "/gameplay/imagery/plate".to_owned(),
+                    scene_video_state: rpc::HomeVideoState::Ready as i32,
+                    scene_video_path: "/gameplay/video/clip".to_owned(),
+                    ..Default::default()
+                }),
+                scene_graph: Some(rpc::DisplaySceneGraph {
+                    revision: 42,
+                    scene_key: "opening".to_owned(),
+                    ..Default::default()
+                }),
+                live_plate_graph_revision: 42,
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let old = OldViewMessage::decode(current.encode_to_vec().as_slice())
+        .expect("an old client skips appended display fields");
+    let display = old.display.expect("display audience is retained");
+    assert_eq!(display.narration, "The scene remains readable.");
+    assert_eq!(display.scene_asset, "assets/ui/scenes/harbor.webp");
+    let scene = OldGameplayScene::decode(display.scene.unwrap().as_slice())
+        .expect("an old client skips appended scene clip fields");
+    assert_eq!(scene.title, "Lantern Wharf");
+    assert_eq!(scene.live_plate, "/gameplay/imagery/plate");
+}
+
+#[test]
+fn appended_damage_roll_fields_are_ignored_by_an_old_client() {
+    let outcome = rpc::CombatOutcome {
+        actor_name: "Brakka".to_owned(),
+        damage_dice: vec![6, 5],
+        damage: 14,
+        damage_rolls: vec![
+            rpc::DamageRoll {
+                dice: vec![6, 4],
+                kept: false,
+            },
+            rpc::DamageRoll {
+                dice: vec![6, 5],
+                kept: true,
+            },
+        ],
+        damage_modifier: 3,
+        ..Default::default()
+    };
+    let old = OldCombatOutcome::decode(outcome.encode_to_vec().as_slice())
+        .expect("an old client skips appended damage-roll fields");
+    assert_eq!(old.actor_name, "Brakka");
+    assert_eq!(old.damage_dice, [6, 5]);
+    assert_eq!(old.damage, 14);
 }
 
 fn role<T>(request: &Request<T>) -> Result<bool, Status> {

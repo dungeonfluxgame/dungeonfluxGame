@@ -29,6 +29,10 @@ use std::{
 };
 use web_sys::Event;
 
+#[path = "live_scene_stage.rs"]
+mod live_scene_stage;
+pub(super) use live_scene_stage::SceneGraphView;
+
 pub(super) const GENERATED: &str = "/assets/ui/generated";
 // PLAY-Q01: the server's QR code of the join link (see gameplay/join_link.rs).
 const JOIN_QR: &str = "/gameplay/join-qr.svg";
@@ -128,12 +132,17 @@ struct BigCard {
 /// loading or leaving), a slow push-in, drifting dust and a breathing vignette. The stylesheet
 /// (`live_plate.css`) draws every state from the attributes set here.
 type PictureListeners = (Closure<dyn FnMut(Event)>, Closure<dyn FnMut(Event)>);
+type FrameListener = Closure<dyn FnMut(Event)>;
 
 struct PlateLayer {
     root: Element,
+    frames: Vec<Element>,
     images: Vec<Element>,
+    video_loops: Rc<RefCell<Vec<live_home_video::HomeLoop>>>,
+    video_paths: Rc<RefCell<Vec<Option<String>>>>,
     /// Each picture's `load` and `error` listeners, kept so they can be removed.
     listeners: Vec<PictureListeners>,
+    frame_listeners: Vec<FrameListener>,
     /// The scene whose plate is shown, to tell an edit of it from the plate of a new scene.
     scene: RefCell<String>,
     /// Which of the two pictures is the next to be filled.
@@ -166,6 +175,7 @@ pub(super) struct TvStage {
     art: Element,
     art_previous: Element,
     plate: PlateLayer,
+    scene_graph: live_scene_stage::StageLayer,
     /// PLAY-V12: the establishing shot's title card: the adventure title on opening, then the scene title.
     establish_title: Element,
     establish_place: Element,
@@ -313,6 +323,11 @@ fn sync_shot(stage: &Element) -> Result<(), JsValue> {
     stage.set_attribute("data-shot", shot.name())
 }
 
+fn scene_video_url(path: &str) -> Option<&str> {
+    let key = path.strip_prefix("/gameplay/home-video/")?;
+    (key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(path)
+}
+
 fn mount_lower_third(document: &Document, parent: &Element) -> Result<LowerThird, JsValue> {
     let root = node(document, parent, "div", "tv-lower", "")?;
     root.set_attribute("aria-hidden", "true")?;
@@ -334,20 +349,31 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
     let root = node(document, stage, "div", "tv-plate", "")?;
     root.set_attribute("aria-hidden", "true")?;
     let zoom = node(document, &root, "div", "tv-plate-zoom", "")?;
+    let mut frames = Vec::with_capacity(2);
     let mut images = Vec::with_capacity(2);
+    let mut video_loops = Vec::with_capacity(2);
     for index in 0..2 {
-        let image = node(document, &zoom, "img", "tv-plate-img", "")?;
+        let frame = node(document, &zoom, "div", "tv-plate-frame", "")?;
+        frame.set_attribute("data-i", &index.to_string())?;
+        let image = node(document, &frame, "img", "tv-plate-img", "")?;
         image.set_attribute("alt", "")?;
         image.set_attribute("decoding", "async")?;
         image.set_attribute("data-i", &index.to_string())?;
+        let video_layer = node(document, &frame, "div", "tv-loop tv-plate-video", "")?;
+        video_loops.push(live_home_video::HomeLoop::new(document, video_layer)?);
+        frames.push(frame);
         images.push(image);
     }
     node(document, &root, "div", "tv-plate-dust", "")?;
     node(document, &root, "div", "tv-plate-vignette", "")?;
     Ok(PlateLayer {
         root,
+        frames,
         images,
+        video_loops: Rc::new(RefCell::new(video_loops)),
+        video_paths: Rc::new(RefCell::new(vec![None, None])),
         listeners: Vec::with_capacity(2),
+        frame_listeners: Vec::with_capacity(2),
         scene: RefCell::new(String::new()),
         next: Cell::new(0),
         seen: RefCell::new(String::new()),
@@ -380,10 +406,9 @@ fn bind_plate_events(
                 if root.get_attribute("data-pull").as_deref() != Some("focus") {
                     let _set = root.set_attribute("data-push", tick);
                 }
-                let _set = root.set_attribute(
-                    "data-active",
-                    &image.get_attribute("data-i").unwrap_or_default(),
-                );
+                let image_index = image.get_attribute("data-i").unwrap_or_default();
+                let _set = root.set_attribute("data-transition", &image_index);
+                let _set = root.set_attribute("data-active", &image_index);
                 if let Some(figures) = figures.upgrade() {
                     let layout = pending_layout.borrow().clone();
                     let size = image_dimensions(&image);
@@ -429,6 +454,47 @@ fn bind_plate_events(
         image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
         image.add_event_listener_with_callback("error", error.as_ref().unchecked_ref())?;
         layer.listeners.push((load, error));
+    }
+    for (index, frame) in layer.frames.iter().enumerate() {
+        let (root, frame, event_frame) = (layer.root.clone(), frame.clone(), frame.clone());
+        let video_loops = Rc::clone(&layer.video_loops);
+        let video_paths = Rc::clone(&layer.video_paths);
+        let listener = Closure::wrap(Box::new(move |event: Event| {
+            let is_frame = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+                .is_some_and(|target| target.is_same_node(Some(&event_frame)));
+            let is_opacity =
+                js_sys::Reflect::get(event.as_ref(), &JsValue::from_str("propertyName"))
+                    .ok()
+                    .and_then(|property| property.as_string())
+                    .as_deref()
+                    == Some("opacity");
+            let active_index = root
+                .get_attribute("data-active")
+                .and_then(|active| active.parse::<usize>().ok());
+            let transitioning_index = root
+                .get_attribute("data-transition")
+                .and_then(|transitioning| transitioning.parse::<usize>().ok());
+            if is_frame && is_opacity {
+                if active_index == Some(index) && transitioning_index == Some(index) {
+                    let _removed = root.remove_attribute("data-transition");
+                    if let (Some(video_loop), Some(path)) = (
+                        video_loops.borrow().get(index),
+                        video_paths.borrow().get(index),
+                    ) {
+                        let _applied = video_loop.apply(path.as_deref());
+                    }
+                } else if active_index != Some(index)
+                    && let Some(video_loop) = video_loops.borrow().get(index)
+                {
+                    video_loop.release();
+                }
+            }
+        }) as Box<dyn FnMut(Event)>);
+        frame
+            .add_event_listener_with_callback("transitionend", listener.as_ref().unchecked_ref())?;
+        layer.frame_listeners.push(listener);
     }
     Ok(())
 }
@@ -480,6 +546,7 @@ impl TvStage {
         let home_loop = live_home_video::HomeLoop::new(document, loop_layer)?;
         let atmosphere = node(document, &root, "div", "tv-atmosphere", "")?;
         let mut plate = mount_plate(document, &root)?;
+        let scene_graph = live_scene_stage::StageLayer::mount(document, &root)?;
         node(document, &root, "div", "tv-scrim", "")?;
         let figures = Rc::new(Figures::mount(document, &root)?);
         bind_plate_events(&mut plate, &root, Rc::downgrade(&figures))?;
@@ -601,6 +668,7 @@ impl TvStage {
             art,
             art_previous,
             plate,
+            scene_graph,
             establish_title,
             establish_place,
             lower,
@@ -648,6 +716,68 @@ impl TvStage {
     /// The composited characters standing in the scene.
     pub(super) fn figures(&self) -> &Figures {
         &self.figures
+    }
+
+    /// Applies the public server graph after the ordinary display fields have been updated.
+    pub(super) fn update_scene_graph(
+        &self,
+        graph: Option<&SceneGraphView>,
+        baked_revision: Option<u64>,
+    ) -> Result<(), JsValue> {
+        self.scene_graph.update(&self.root, graph, baked_revision)?;
+        sync_shot(&self.root)
+    }
+
+    pub(super) fn update_scene_graph_wire(
+        &self,
+        graph: Option<&rpc::DisplaySceneGraph>,
+        baked_revision: u64,
+    ) -> Result<(), JsValue> {
+        let graph = graph.and_then(SceneGraphView::from_wire);
+        self.update_scene_graph(
+            graph.as_ref(),
+            (baked_revision != 0).then_some(baked_revision),
+        )
+    }
+
+    pub(super) fn update_scene_video_wire(&self, state: i32, path: &str) -> Result<(), JsValue> {
+        let Some(index) = self
+            .plate
+            .root
+            .get_attribute("data-want-i")
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| *index < self.plate.images.len())
+        else {
+            for video_loop in self.plate.video_loops.borrow().iter() {
+                video_loop.release();
+            }
+            self.plate.video_paths.borrow_mut().fill(None);
+            return Ok(());
+        };
+        let path = (state == rpc::HomeVideoState::Ready as i32)
+            .then(|| scene_video_url(path))
+            .flatten()
+            .map(str::to_owned);
+        self.plate.video_paths.borrow_mut()[index] = path.clone();
+        let transitioning_index = self
+            .plate
+            .root
+            .get_attribute("data-transition")
+            .and_then(|transitioning| transitioning.parse::<usize>().ok());
+        if self.root.get_attribute("data-tv-mode").as_deref() != Some("scene") {
+            for video_loop in self.plate.video_loops.borrow().iter() {
+                video_loop.release();
+            }
+            self.plate.video_paths.borrow_mut().fill(None);
+        } else if self.plate.root.get_attribute("data-active").as_deref()
+            == Some(&index.to_string())
+            && self.root.has_attribute("data-plate-loaded")
+            && transitioning_index != Some(index)
+            && let Some(video_loop) = self.plate.video_loops.borrow().get(index)
+        {
+            video_loop.apply(path.as_deref())?;
+        }
+        Ok(())
     }
 
     /// Shows `style` as the painting. A different painting leaves the previous one to fade
@@ -1234,6 +1364,11 @@ impl TvStage {
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
             layer.root.remove_attribute("data-pull")?;
+            layer.root.remove_attribute("data-want-i")?;
+            for video_loop in layer.video_loops.borrow().iter() {
+                video_loop.release();
+            }
+            layer.video_paths.borrow_mut().fill(None);
             layer.scene.borrow_mut().clear();
             *layer.seen.borrow_mut() = scene_key.to_owned();
             *layer.pending_layout.borrow_mut() = None;
@@ -1267,6 +1402,11 @@ impl TvStage {
         let Some(image) = layer.images.get(next) else {
             return Ok(());
         };
+        if let Some(video_loop) = layer.video_loops.borrow().get(next) {
+            video_loop.release();
+        }
+        layer.video_paths.borrow_mut()[next] = None;
+        layer.root.set_attribute("data-want-i", &next.to_string())?;
         layer.next.set(1 - next);
         let key = url.rsplit('/').next().unwrap_or_default();
         self.root.set_attribute("data-plate-key", key)?;
@@ -1292,6 +1432,15 @@ impl TvStage {
             let _removed =
                 image.remove_event_listener_with_callback("error", error.as_ref().unchecked_ref());
         }
+        for (frame, listener) in self.plate.frames.iter().zip(&self.plate.frame_listeners) {
+            let _removed = frame.remove_event_listener_with_callback(
+                "transitionend",
+                listener.as_ref().unchecked_ref(),
+            );
+        }
+        for video_loop in self.plate.video_loops.borrow().iter() {
+            video_loop.release();
+        }
         self.figures.dispose();
         let removed = self.wordmark.image.remove_event_listener_with_callback(
             "load",
@@ -1306,7 +1455,15 @@ impl TvStage {
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_join_host;
+    use super::{is_loopback_join_host, scene_video_url};
+
+    #[test]
+    fn scene_clip_paths_require_the_server_video_route_and_key() {
+        let path = format!("/gameplay/home-video/{}", "a".repeat(64));
+        assert_eq!(scene_video_url(&path), Some(path.as_str()));
+        assert_eq!(scene_video_url("https://example.test/clip.mp4"), None);
+        assert_eq!(scene_video_url("/gameplay/home-video/not-a-key"), None);
+    }
 
     #[test]
     fn loopback_join_hosts_are_not_shown_as_phone_addresses() {

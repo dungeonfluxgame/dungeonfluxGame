@@ -19,13 +19,15 @@
 .tv-plate[data-push=b] .tv-plate-zoom{animation:df-plate-push-b 150s cubic-bezier(.12,.55,.3,1) forwards}
 @keyframes df-plate-push-a{from{transform:scale(1)}to{transform:scale(1.036)}}
 @keyframes df-plate-push-b{from{transform:scale(1)}to{transform:scale(1.036)}}
-.tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;opacity:0;filter:blur(0);transition:opacity 0s 1s,filter 1s ease}
+.tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:opacity 1s ease,filter 1s ease}
+.tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;filter:blur(0)}
+.tv-plate-frame>.tv-plate-video.tv-loop{z-index:2}
 /* the picture that shows is on top and fades in over the one it replaces, which stays fully drawn
    until the new one is opaque and then goes: the plate never has a thin moment */
-.tv-plate[data-active="0"] .tv-plate-img[data-i="0"],.tv-plate[data-active="1"] .tv-plate-img[data-i="1"]{z-index:2;opacity:1;transition:opacity 1s ease,filter 1s ease}
+.tv-plate[data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-active="1"] .tv-plate-frame[data-i="1"]{z-index:2;opacity:1;transition:opacity 1s ease,filter 1s ease}
 /* a mood edit of the shown plate: the new picture comes in from a blur, the old one blurs out under it */
-.tv-plate[data-pull=focus] .tv-plate-img{filter:blur(22px);transition:opacity 0s .8s,filter .6s ease}
-.tv-plate[data-pull=focus][data-active="0"] .tv-plate-img[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-img[data-i="1"]{filter:blur(0);transition:opacity .6s ease .15s,filter .6s ease .15s}
+.tv-plate[data-pull=focus] .tv-plate-frame{filter:blur(22px);transition:opacity .75s ease,filter .6s ease}
+.tv-plate[data-pull=focus][data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-frame[data-i="1"]{filter:blur(0);transition:opacity .6s ease .15s,filter .6s ease .15s}
 /* drifting dust motes or embers, added to the light (additive), always on */
 .tv-plate-dust{position:absolute;inset:0;mix-blend-mode:screen;opacity:.6;overflow:hidden}
 .tv-plate-dust::before,.tv-plate-dust::after{content:'';position:absolute;inset:-8% 0;background-repeat:repeat}
@@ -58,7 +60,7 @@
 @keyframes df-establish-a{from{transform:scale(1.02)}to{transform:scale(1.13)}}
 @keyframes df-establish-b{from{transform:scale(1.02)}to{transform:scale(1.13)}}
 /* the cut: the plate comes in from a blur over the establishing shot */
-.tv-stage:not([data-shot=plate]) .tv-plate:not([data-pull=focus]) .tv-plate-img{filter:blur(24px);transition:none}
+.tv-stage:not([data-shot=plate]) .tv-plate:not([data-pull=focus]) .tv-plate-frame{filter:blur(24px);transition:none}
 /* the title card of the place: the adventure and where this is, while the narrator speaks */
 .tv-establish{position:absolute;left:0;right:0;top:15%;z-index:7;display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*1);padding:0 calc(var(--u)*8);text-align:center;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 1.1s ease,visibility 0s 1.1s}
 .tv-establish-title{margin:0;max-width:calc(var(--u)*72);font:400 calc(var(--u)*5.2)/1.08 var(--serif);color:#f9f1de;text-shadow:0 4px 32px #000,0 0 8px #000a}

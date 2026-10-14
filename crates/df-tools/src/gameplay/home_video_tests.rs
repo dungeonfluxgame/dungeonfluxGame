@@ -3,7 +3,8 @@
 //! painting", "the budget is charged before the submit" and "a cached loop costs nothing" are
 //! checked against the traffic itself, not against the engine's own bookkeeping.
 use super::home_video::{
-    self, Endpoints, LoopView, Span, clip_key, clip_key_with, respond, span_for, test_engine,
+    self, Endpoints, LoopView, Span, clip_key, clip_key_with, respond, scene_test_engine, span_for,
+    test_engine,
 };
 use super::rpc;
 use axum::{
@@ -48,6 +49,7 @@ enum Scenario {
 struct Fake {
     address: SocketAddr,
     requests: Arc<Mutex<Vec<String>>>,
+    bodies: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl Fake {
@@ -68,23 +70,31 @@ fn fake(scenario: Scenario) -> Fake {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
     let address = listener.local_addr().expect("a loopback address");
     let requests = Arc::new(Mutex::new(Vec::new()));
+    let bodies = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&requests);
+    let captured_bodies = Arc::clone(&bodies);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let log = Arc::clone(&log);
+            let captured_bodies = Arc::clone(&captured_bodies);
             thread::spawn(move || {
-                let _ = answer(&mut stream, scenario, &log);
+                let _ = answer(&mut stream, scenario, &log, &captured_bodies);
             });
         }
     });
-    Fake { address, requests }
+    Fake {
+        address,
+        requests,
+        bodies,
+    }
 }
 
 fn answer(
     stream: &mut std::net::TcpStream,
     scenario: Scenario,
     log: &Mutex<Vec<String>>,
+    bodies: &Mutex<Vec<Vec<u8>>>,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut head = Vec::new();
@@ -108,6 +118,11 @@ fn answer(
         .unwrap_or(0);
     let mut body = vec![0u8; length];
     stream.read_exact(&mut body)?;
+    if request_line.starts_with("POST ")
+        && let Ok(mut captured) = bodies.lock()
+    {
+        captured.push(body.clone());
+    }
     if let Ok(mut lines) = log.lock() {
         lines.push(request_line.clone());
     }
@@ -177,6 +192,30 @@ async fn settle(engine: &Arc<home_video::Engine>, painting: &str) -> String {
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+async fn settle_scene(engine: &Arc<home_video::Engine>, plate_key: &str) -> String {
+    let started = Instant::now();
+    loop {
+        let stage = engine.scene_stage_of(plate_key).unwrap_or_default();
+        if !stage.is_empty() && stage != "pending" {
+            return stage;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the scene clip for {plate_key} never settled"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn scene_still() -> Vec<u8> {
+    let pixels = image::RgbImage::from_pixel(8, 4, image::Rgb([23, 81, 144]));
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95)
+        .encode(pixels.as_raw(), 8, 4, image::ExtendedColorType::Rgb8)
+        .expect("the synthetic scene plate encodes");
+    bytes
 }
 
 #[test]
@@ -539,6 +578,8 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
                 narration: String::new(),
                 scene_asset: PAINTING.to_owned(),
                 scene: None,
+                scene_graph: None,
+                live_plate_graph_revision: 0,
                 journey: Some(rpc::JourneyView {
                     phase: rpc::JourneyPhase::Room as i32,
                     ..Default::default()
@@ -687,17 +728,209 @@ fn inputs(
     budget: Option<&str>,
     model: Option<&str>,
 ) -> home_video::HomeVideoInputs {
+    inputs_with_scene(mode, None, key, budget, model)
+}
+
+fn inputs_with_scene(
+    mode: Option<&str>,
+    scene_mode: Option<&str>,
+    key: Option<&str>,
+    budget: Option<&str>,
+    model: Option<&str>,
+) -> home_video::HomeVideoInputs {
     let value = |name: Option<&str>| match name {
         Some(text) => Ok(text.to_owned()),
         None => Err(std::env::VarError::NotPresent),
     };
     home_video::HomeVideoInputs {
         mode: value(mode),
+        scene_mode: value(scene_mode),
         model: value(model),
         budget: value(budget),
         cache: Err(std::env::VarError::NotPresent),
         credential: value(key),
     }
+}
+
+#[test]
+fn the_scene_video_switch_defaults_from_the_provider_and_can_be_explicitly_disabled_or_enabled() {
+    let current = Path::new("/work");
+    let off = home_video::home_video_settings(
+        inputs_with_scene(None, Some("off"), Some("fixture-key"), None, None),
+        current,
+        false,
+    )
+    .expect("scene clips can be disabled");
+    assert!(
+        home_video::startup_line(&off).contains("SCENE VIDEO off (DF_GAMEPLAY_SCENE_VIDEO=off)")
+    );
+
+    let keyless = home_video::home_video_settings(
+        inputs_with_scene(None, Some("on"), None, None, None),
+        current,
+        false,
+    )
+    .expect("explicit scene mode can report the unavailable provider");
+    assert_eq!(
+        home_video::startup_line(&keyless),
+        "HOME VIDEO off (no FAL_KEY); SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s (no FAL_KEY; request logging only)"
+    );
+
+    let invalid = home_video::home_video_settings(
+        inputs_with_scene(None, Some("maybe"), Some("fixture-key"), None, None),
+        current,
+        false,
+    )
+    .expect_err("an unknown scene video mode is refused");
+    assert!(invalid.to_string().contains("DF_GAMEPLAY_SCENE_VIDEO"));
+}
+
+#[tokio::test]
+async fn a_scene_plate_submits_once_with_its_first_frame_prompt_and_failure_keeps_the_still() {
+    let fake = fake(Scenario::Refused);
+    let directory = scratch("scene-request");
+    let engine = scene_test_engine(
+        directory.clone(),
+        endpoints(&fake),
+        Duration::from_secs(30),
+        Some("fixture-private-key".to_owned()),
+    );
+    let plate_key = "a".repeat(64);
+    let still = scene_still();
+    let description = "the innkeeper at mid-left rolls dice beside the fire";
+    engine.request_scene_for_test(
+        &plate_key,
+        still.clone(),
+        description,
+        "current-story-plate",
+        false,
+    );
+    engine.request_scene_for_test(
+        &plate_key,
+        still.clone(),
+        description,
+        "current-story-plate",
+        false,
+    );
+    let stage = settle_scene(&engine, &plate_key).await;
+    assert!(stage.starts_with("failed:"), "{stage}");
+    assert!(engine.scene_view_for_test(&plate_key).path().is_empty());
+    assert_eq!(fake.count("POST "), 1, "a plate is submitted only once");
+
+    let body = {
+        let bodies = fake.bodies.lock().expect("captured request bodies");
+        assert_eq!(bodies.len(), 1);
+        bodies[0].clone()
+    };
+    let request: serde_json::Value = serde_json::from_slice(&body).expect("fal JSON");
+    let prepared = home_video::prepare_scene_still_for_test(still)
+        .await
+        .expect("the first frame is normalized");
+    let expected_frame = format!(
+        "data:image/jpeg;base64,{}",
+        home_video::base64_encode(&prepared)
+    );
+    assert_eq!(request["start_image_url"], expected_frame);
+    assert_eq!(request["end_image_url"], expected_frame);
+    assert_eq!(request["duration"], "5");
+    let prompt = request["prompt"].as_str().expect("ambient prompt");
+    assert!(prompt.contains(description));
+    assert!(prompt.contains("camera completely still"));
+    assert!(prompt.contains("breathe, blink, and shift their weight"));
+    assert!(prompt.contains("dust drifts slowly"));
+}
+
+#[tokio::test]
+async fn a_cached_scene_plate_is_ready_immediately_and_a_new_plate_edit_gets_its_own_request() {
+    let fake = fake(Scenario::Refused);
+    let directory = scratch("scene-cache");
+    let cached_key = "b".repeat(64);
+    std::fs::write(directory.join(format!("{cached_key}.mp4")), vec![0u8; 64])
+        .expect("cached scene clip");
+    let engine = scene_test_engine(
+        directory.clone(),
+        endpoints(&fake),
+        Duration::from_secs(30),
+        Some("fixture-private-key".to_owned()),
+    );
+    engine.request_scene_for_test(
+        &cached_key,
+        scene_still(),
+        "a dice game beside the fire",
+        "current-story-plate",
+        false,
+    );
+    assert_eq!(
+        engine.scene_view_for_test(&cached_key),
+        home_video::SceneClipView::Ready {
+            path: format!("/gameplay/home-video/{cached_key}")
+        }
+    );
+    assert_eq!(
+        fake.count("POST "),
+        0,
+        "a cached plate makes no provider call"
+    );
+
+    let edited_key = "c".repeat(64);
+    engine.request_scene_for_test(
+        &edited_key,
+        scene_still(),
+        "the same group now carries a tray",
+        "current-story-plate-edit",
+        false,
+    );
+    let stage = settle_scene(&engine, &edited_key).await;
+    assert!(stage.starts_with("failed:"), "{stage}");
+    assert_eq!(
+        fake.count("POST "),
+        1,
+        "the edited plate has its own request"
+    );
+}
+
+#[tokio::test]
+async fn scene_clips_are_not_requested_during_combat_or_a_roll() {
+    let fake = fake(Scenario::Refused);
+    let directory = scratch("scene-blocked");
+    let engine = scene_test_engine(
+        directory,
+        endpoints(&fake),
+        Duration::from_secs(30),
+        Some("fixture-private-key".to_owned()),
+    );
+    engine.request_scene_for_test(
+        &"d".repeat(64),
+        scene_still(),
+        "a character rolls dice",
+        "current-story-plate",
+        true,
+    );
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert_eq!(fake.count("POST "), 0);
+    assert_eq!(engine.scene_stage_of(&"d".repeat(64)), None);
+}
+
+#[tokio::test]
+async fn keyless_scene_clips_fail_without_provider_traffic() {
+    let fake = fake(Scenario::Refused);
+    let engine = scene_test_engine(
+        scratch("scene-keyless"),
+        endpoints(&fake),
+        Duration::from_secs(30),
+        None,
+    );
+    let plate_key = "e".repeat(64);
+    engine.request_scene_for_test(
+        &plate_key,
+        scene_still(),
+        "the adventurers wait by the hearth",
+        "current-story-plate",
+        false,
+    );
+    let stage = settle_scene(&engine, &plate_key).await;
+    assert!(stage.contains("no FAL_KEY"), "{stage}");
+    assert_eq!(fake.count("POST "), 0, "a keyless engine never submits");
 }
 
 #[test]
@@ -709,15 +942,19 @@ fn the_setting_is_on_with_a_key_and_the_default_budget_and_model_and_off_without
         false,
     )
     .expect("valid settings");
+    assert!(
+        home_video::startup_line(&on).contains("SCENE VIDEO on"),
+        "scene clips are enabled by default when the media provider is configured"
+    );
     assert_eq!(
         home_video::startup_line(&on),
-        "HOME VIDEO on model=fal-ai/kling-video/o1/image-to-video budget=4 duration=5s"
+        "HOME VIDEO on model=fal-ai/kling-video/o1/image-to-video budget=4 duration=5s; SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
     );
     let without = home_video::home_video_settings(inputs(None, None, None, None), current, false)
         .expect("a missing key is a state");
     assert_eq!(
         home_video::startup_line(&without),
-        "HOME VIDEO off (no FAL_KEY)"
+        "HOME VIDEO off (no FAL_KEY); SCENE VIDEO off (no FAL_KEY)"
     );
     let disabled = home_video::home_video_settings(
         inputs(Some("off"), Some("fixture-key"), None, None),
@@ -727,7 +964,7 @@ fn the_setting_is_on_with_a_key_and_the_default_budget_and_model_and_off_without
     .expect("off is a state");
     assert_eq!(
         home_video::startup_line(&disabled),
-        "HOME VIDEO off (DF_GAMEPLAY_HOME_VIDEO=off)"
+        "HOME VIDEO off (DF_GAMEPLAY_HOME_VIDEO=off); SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
     );
     let qualification = home_video::home_video_settings(
         inputs(None, Some("fixture-key"), None, None),
@@ -737,7 +974,7 @@ fn the_setting_is_on_with_a_key_and_the_default_budget_and_model_and_off_without
     .expect("a qualification run is a state");
     assert_eq!(
         home_video::startup_line(&qualification),
-        "HOME VIDEO off (qualification run)"
+        "HOME VIDEO off (qualification run); SCENE VIDEO off (qualification run)"
     );
 }
 

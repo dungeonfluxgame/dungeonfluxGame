@@ -22,6 +22,9 @@ use super::{
     pack::{Age, Gender, SceneKey},
 };
 
+#[path = "scene_graph.rs"]
+pub(super) mod scene_graph;
+
 const VOCABULARY_JSON: &str = include_str!("shot/place_families.json");
 const VOCABULARY_SCHEMA: &str = "df-shot-vocabulary/1";
 

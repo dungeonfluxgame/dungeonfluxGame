@@ -61,6 +61,7 @@ fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
             kind: SettingKind::BellChamber,
             exterior: false,
             art_key: "bell-chamber".to_owned(),
+            model: None,
         }),
         speaker_portrait: String::new(),
         findings: Vec::new(),
@@ -73,6 +74,8 @@ fn view(scene: &pack::Scene, heroes: &[u8], in_combat: bool) -> View {
         title: scene.title.clone(),
         asset: scene.asset.clone(),
         in_combat,
+        in_roll: false,
+        graph_revision: 1,
         heroes: heroes.to_vec(),
         hero_names: heroes
             .iter()
@@ -243,6 +246,43 @@ fn observe(shared: &Shared, current: &pack::Scene, next: &[pack::Scene], heroes:
     );
 }
 
+#[test]
+fn clip_context_exists_only_for_the_displayed_plate_and_is_blocked_during_rolls() {
+    let (shared, mut queue) = shared(8);
+    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    let plate_key = key('a');
+    locked(&shared.book).entries.insert(
+        id,
+        Entry::Ready {
+            key: plate_key.clone(),
+            placement: None,
+        },
+    );
+    let scene_key = format!("{}|{}", current.title, current.asset);
+
+    let (description, reason, blocked) = shared
+        .current_clip_context(&scene_key, plate_key.as_str())
+        .expect("current plate is eligible for a scene clip");
+    assert_eq!(reason, "scene-plate");
+    assert!(!blocked);
+    assert!(!description.contains(&current.dialogue));
+    let successor_key = key('b');
+    assert!(
+        shared
+            .current_clip_context(&scene_key, successor_key.as_str())
+            .is_none(),
+        "an unshown successor is not eligible"
+    );
+
+    locked(&shared.book).current.as_mut().unwrap().in_roll = true;
+    let (_, _, blocked) = shared
+        .current_clip_context(&scene_key, plate_key.as_str())
+        .expect("the displayed plate remains known during a roll");
+    assert!(blocked);
+}
+
 fn drain(queue: &mut mpsc::Receiver<Job>) -> Vec<Job> {
     let mut jobs = Vec::new();
     while let Ok(job) = queue.try_recv() {
@@ -273,6 +313,7 @@ fn display_message(scene: &pack::Scene) -> rpc::ViewMessage {
                     ..Default::default()
                 }),
                 journey: None,
+                ..Default::default()
             },
         )),
     }
@@ -317,6 +358,8 @@ fn apply(shared: &Shared, message: &mut rpc::ViewMessage) {
 fn ready(shared: &Shared, id: &str, plate: char) {
     shared.finish(Done::Fresh {
         id: id.to_owned(),
+        graph_revision: 1,
+        ahead: false,
         elapsed: Duration::from_secs(14),
         result: Ok((
             key(plate),
@@ -329,6 +372,31 @@ fn ready(shared: &Shared, id: &str, plate: char) {
             }),
         )),
     });
+}
+
+#[tokio::test]
+async fn late_plate_for_an_older_graph_revision_is_dropped() {
+    let (shared, mut queue) = shared(8);
+    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    let first_graph = view(&current, &[1], false);
+    shared.observe_with(&first_graph, Some(current.clone()), Vec::new());
+    let old_id = fresh_ids(&drain(&mut queue)).remove(0);
+
+    let mut next_graph = view(&current, &[1], false);
+    next_graph.graph_revision = 2;
+    shared.observe_with(&next_graph, Some(current.clone()), Vec::new());
+    let new_id = fresh_ids(&drain(&mut queue)).remove(0);
+    assert_ne!(old_id, new_id);
+
+    ready(&shared, &old_id, 'c');
+    assert!(!locked(&shared.book).entries.contains_key(&old_id));
+    let mut message = display_message(&current);
+    apply(&shared, &mut message);
+    assert_eq!(
+        shown_scene(&message).plate_state,
+        rpc::PlateState::Pending as i32
+    );
+    assert!(shown_scene(&message).live_plate.is_empty());
 }
 
 fn layout() -> PlateLayout {
@@ -491,6 +559,8 @@ async fn a_failed_plate_changes_nothing_but_the_state_and_is_asked_for_again_whe
     let id = fresh_ids(&drain(&mut queue)).remove(0);
     shared.finish(Done::Fresh {
         id,
+        graph_revision: 1,
+        ahead: false,
         elapsed: Duration::from_secs(45),
         result: Err(ImageFailure::DeadlineExceeded),
     });
@@ -866,8 +936,8 @@ fn the_party_comes_from_the_ready_members_by_their_art() {
             },
         )),
     };
-    assert_eq!(view_of(&message).unwrap().heroes, [1, 3]);
-    assert!(view_of(&player_message(&scene(SceneKey::Opening, "T", None))).is_none());
+    assert_eq!(view_of(&message, 0).unwrap().heroes, [1, 3]);
+    assert!(view_of(&player_message(&scene(SceneKey::Opening, "T", None)), 0).is_none());
 }
 
 #[tokio::test]

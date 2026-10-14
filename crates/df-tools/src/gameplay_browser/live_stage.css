@@ -299,3 +299,42 @@
 /* A typed line whose hero has no scene figure uses the named lower-third strip. */
 .tv-stage[data-typed-strip] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
 .tv-stage[data-typed-strip][data-typed-strip-closing] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering],[data-line-state=closing]){opacity:0;visibility:hidden;transform:translate(-50%,calc(var(--u)*1));transition:opacity .18s ease,transform .18s ease,visibility 0s .18s}
+
+/* MOT-03: server scene graph composite. The baked plate above it wins only for its matching revision. */
+.tv-scene-graph{position:absolute;z-index:2;inset:0;overflow:hidden;pointer-events:none;opacity:1;visibility:visible;transition:opacity .55s ease,visibility 0s}
+.tv-scene-graph[data-inactive],.tv-stage[data-tv-mode=lobby] .tv-scene-graph,.tv-stage[data-tv-mode=combat] .tv-scene-graph,.tv-stage[data-arrange=combat] .tv-scene-graph,.tv-stage[data-battlefield-live=true] .tv-scene-graph,.tv-stage[data-battle-state]:not([data-battle-state=absent]) .tv-scene-graph,.tv-stage[data-shot=plate] .tv-scene-graph{opacity:0;visibility:hidden;transition:opacity .55s ease,visibility 0s .55s}
+.tv-stage[data-stage-graph] .tv-fig-body{opacity:0;visibility:hidden}
+.tv-scene-camera{position:absolute;inset:0;transform:scale(1.035);transform-origin:var(--camera-x,50%) var(--camera-y,50%);transition:transform .95s cubic-bezier(.2,.65,.25,1);will-change:transform}
+.tv-scene-graph[data-camera=two-shot] .tv-scene-camera{transform:scale(1.13)}
+.tv-scene-graph[data-camera=speaker] .tv-scene-camera{transform:scale(1.21)}
+.tv-scene-graph[data-live-camera=a] .tv-scene-camera{animation:df-scene-camera-a 72s ease-in-out infinite alternate}
+.tv-scene-graph[data-live-camera=b] .tv-scene-camera{animation:df-scene-camera-b 72s ease-in-out infinite alternate}
+@keyframes df-scene-camera-a{from{translate:-.35% .2%}to{translate:.35% -.2%}}
+@keyframes df-scene-camera-b{from{translate:.35% -.2%}to{translate:-.35% .2%}}
+.tv-scene-set{position:absolute;inset:0;background-position:center;background-size:cover;filter:saturate(.94) contrast(1.03)}
+.tv-scene-graph[data-time=dawn] .tv-scene-set,.tv-scene-graph[data-time=dusk] .tv-scene-set{filter:sepia(.1) saturate(.92) brightness(.86) contrast(1.04)}
+.tv-scene-graph[data-time=night] .tv-scene-set{filter:saturate(.7) brightness(.64) hue-rotate(8deg)}
+.tv-scene-actors{position:absolute;inset:0}
+.tv-scene-actor{position:absolute;left:var(--actor-left);top:var(--actor-top);width:calc(var(--u)*25);height:58vh;transform:translate(-50%,-100%) scale(var(--actor-scale));transform-origin:50% 100%;transition:left 1.5s cubic-bezier(.2,.7,.2,1),top 1.5s cubic-bezier(.2,.7,.2,1),transform .8s ease;will-change:left,top,transform}
+.tv-scene-actor[data-absent=true]{display:none}
+.tv-scene-shadow{position:absolute;left:16%;right:16%;bottom:0;height:4%;border-radius:50%;background:radial-gradient(ellipse,#02040aa8 0,#02040a62 42%,transparent 74%);filter:blur(calc(var(--u)*.45));transform:scaleX(1.18)}
+.tv-scene-body{position:absolute;inset:0;transform-origin:50% 85%;transition:transform .45s ease}
+.tv-scene-actor-art{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:50% 100%;opacity:0;filter:brightness(var(--depth-brightness,.9)) blur(var(--depth-blur,0));animation:df-breathe 4.6s ease-in-out infinite;transition:opacity .6s ease,filter .6s ease}
+.tv-scene-actor[data-active="0"] .tv-scene-actor-art[data-i="0"],.tv-scene-actor[data-active="1"] .tv-scene-actor-art[data-i="1"]{opacity:1}
+.tv-scene-actor[data-art-unready] .tv-scene-actor-art{transition:none}
+.tv-scene-actor[data-facing=left] .tv-scene-body{transform:scaleX(-1)}
+.tv-scene-actor[data-facing=right][data-speaking=true] .tv-scene-body{transform:translateX(calc(var(--u)*.6)) rotate(-2deg)}
+.tv-scene-actor[data-facing=left][data-speaking=true] .tv-scene-body{transform:translateX(calc(var(--u)*-.6)) rotate(2deg) scaleX(-1)}
+.tv-scene-actor[data-walk=a],.tv-scene-actor[data-walk=b]{animation:df-scene-walk 1.5s ease-in-out}
+@keyframes df-scene-walk{0%,100%{translate:0 0}24%{translate:0 calc(var(--u)*-1.5)}48%{translate:0 0}72%{translate:0 calc(var(--u)*-.8)}}
+.tv-scene-actor[data-cut=a] .tv-scene-actor-art,.tv-scene-actor[data-cut=b] .tv-scene-actor-art{transition:opacity .65s ease,filter .65s ease}
+.tv-scene-graph[data-light~=lantern-warm] .tv-scene-actor-art,.tv-scene-graph[data-light~=candle-cluster] .tv-scene-actor-art{filter:brightness(var(--depth-brightness,.9)) sepia(.13) saturate(1.12) blur(var(--depth-blur,0))}
+.tv-scene-graph[data-light~=window-cool-daylight] .tv-scene-actor-art{filter:brightness(calc(var(--depth-brightness,.9) + .04)) saturate(.9) hue-rotate(5deg) blur(var(--depth-blur,0))}
+.tv-scene-graph[data-light~=window-cool-moonlight] .tv-scene-actor-art{filter:brightness(calc(var(--depth-brightness,.9) - .08)) saturate(.68) hue-rotate(16deg) blur(var(--depth-blur,0))}
+.tv-scene-atmosphere{position:absolute;z-index:8;inset:0;overflow:hidden;pointer-events:none;mix-blend-mode:screen;opacity:.25}
+.tv-scene-atmosphere[data-weather=fog]{background:linear-gradient(180deg,transparent 38%,#cbd8df45 72%,transparent 100%);animation:df-scene-fog 17s ease-in-out infinite alternate}
+.tv-scene-atmosphere[data-weather=rain]{background:repeating-linear-gradient(108deg,transparent 0 8px,#dcecff18 9px 10px);animation:df-scene-rain .4s linear infinite}
+.tv-scene-atmosphere[data-weather=snow]{background:radial-gradient(circle,#fff9 0 1px,transparent 2px);background-size:calc(var(--u)*7) calc(var(--u)*8);animation:df-dust-rise 18s linear infinite}
+@keyframes df-scene-fog{from{transform:translateX(-2%);opacity:.12}to{transform:translateX(2%);opacity:.42}}
+@keyframes df-scene-rain{from{background-position:0 0}to{background-position:-8px 14px}}
+@media (prefers-reduced-motion:reduce){.tv-scene-camera,.tv-scene-actor,.tv-scene-actor-art,.tv-scene-atmosphere{animation:none!important;transition:none!important;translate:none!important}}

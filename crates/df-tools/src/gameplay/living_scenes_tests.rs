@@ -32,14 +32,21 @@ fn stage(revision: u64) -> Stage {
         scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
         revision: Some((1, revision)),
         in_combat: false,
+        in_roll: false,
         tempo: None,
         speaking_ids: BTreeSet::from(["merchant".to_owned()]),
         recent_kinds: Vec::new(),
         title: "The Heron Shrine".to_owned(),
+        story_scene: None,
         cast: vec![StageCast {
             id: "merchant".to_owned(),
+            name: "Merchant".to_owned(),
             sprite: "sprite-patron-merchant".to_owned(),
         }],
+        speaker_id: Some("merchant".to_owned()),
+        listener_id: None,
+        line_length: 0,
+        measured_speaker_layout: None,
         vitals: Vec::new(),
         heroes: Vec::new(),
     }
@@ -124,7 +131,10 @@ fn refresh_jobs(jobs: &[Job]) -> Vec<(Look, RefreshReason)> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Refresh { look, reason, .. } => Some((*look, *reason)),
-            Job::Expression { .. } | Job::Warm { .. } | Job::Peek { .. } => None,
+            Job::HeroCutout { .. }
+            | Job::Expression { .. }
+            | Job::Warm { .. }
+            | Job::Peek { .. } => None,
         })
         .collect()
 }
@@ -133,7 +143,9 @@ fn face_jobs(jobs: &[Job]) -> Vec<Face> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Expression { face, .. } => Some(*face),
-            Job::Refresh { .. } | Job::Warm { .. } | Job::Peek { .. } => None,
+            Job::HeroCutout { .. } | Job::Refresh { .. } | Job::Warm { .. } | Job::Peek { .. } => {
+                None
+            }
         })
         .collect()
 }
@@ -340,6 +352,7 @@ fn hurt_stage(revision: u64, in_combat: bool, hero_hp: u32, foe_hp: u32) -> Stag
 fn job_labels(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .map(|job| match job {
+            Job::HeroCutout { name, .. } => format!("hero-cutout {name}"),
             Job::Warm { character, tier } => format!("warm {} {}", character.art, tier.label()),
             Job::Peek { character } => format!("peek {}", character.art),
             Job::Expression { .. } => "expression".to_owned(),
@@ -454,6 +467,141 @@ fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
 }
 
 #[test]
+fn opening_scene_requests_each_hero_cutout_once_and_caches_successes() {
+    let timing = timing();
+    let inner = Arc::new(Inner {
+        imagery: Imagery::disabled(ImageryOff::Qualification),
+        references: ReferenceStore::new(PathBuf::new()),
+        social: SocialLedger::open(Vec::new(), "0x07", None).unwrap(),
+        rating: ContentRating::Mature,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    let opening = serde_json::from_value::<pack::Scene>(serde_json::json!({
+        "key": "opening",
+        "title": "The Heron Shrine",
+        "narration": "",
+        "cast": [],
+        "speaker": "",
+        "dialogue": "",
+        "asset": "assets/ui/generated/scene-place-temple-sanctuary.webp",
+        "setting": {
+            "place_id": "temple",
+            "name": "The Heron Shrine",
+            "short": "a shrine beside the marsh",
+            "kind": "temple",
+            "exterior": false,
+            "art_key": "temple"
+        },
+        "speaker_portrait": "",
+        "findings": []
+    }))
+    .unwrap();
+    let mut opening_stage = stage(2);
+    opening_stage.story_scene = Some(opening);
+    opening_stage.heroes = vec![
+        StageHero {
+            index: 0,
+            name: "Brakka".to_owned(),
+            vitals: Vitals {
+                current: 10,
+                maximum: 10,
+                unconscious: false,
+                dying: false,
+            },
+        },
+        StageHero {
+            index: 1,
+            name: "Sigrun".to_owned(),
+            vitals: Vitals {
+                current: 10,
+                maximum: 10,
+                unconscious: false,
+                dying: false,
+            },
+        },
+    ];
+    inner.observe_at(opening_stage, Duration::ZERO);
+
+    let cutout_names = |jobs: Vec<Job>| {
+        jobs.into_iter()
+            .filter_map(|job| match job {
+                Job::HeroCutout { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        cutout_names(inner.evaluate_at(seconds(20))),
+        vec!["Brakka".to_owned(), "Sigrun".to_owned()]
+    );
+    assert!(cutout_names(inner.evaluate_at(seconds(21))).is_empty());
+
+    inner.finish(Done::HeroCutout {
+        name: "Brakka".to_owned(),
+        result: Ok(key('a')),
+    });
+    inner.finish(Done::HeroCutout {
+        name: "Sigrun".to_owned(),
+        result: Ok(key('b')),
+    });
+    assert!(cutout_names(inner.evaluate_at(seconds(22))).is_empty());
+    assert_eq!(locked(&inner.state).hero_cutouts.len(), 2);
+}
+
+#[test]
+fn the_shipped_harbor_scene_builds_a_graph_from_its_painted_backdrop() {
+    let scene = serde_json::from_value::<pack::Scene>(serde_json::json!({
+        "key": "opening",
+        "title": "The Broken Seal",
+        "narration": "Rain moves over the Lantern Wharf.",
+        "rules_note": "",
+        "cast": [{
+            "id": "courier",
+            "name": "Courier",
+            "role": "patron",
+            "sprite": "assets/ui/generated/sprite-courier",
+            "portrait": "assets/ui/generated/portrait-courier",
+            "voice": "hurried and anxious",
+            "gender": "he",
+            "age": "young"
+        }],
+        "narration_rested": null,
+        "speaker": "Courier",
+        "dialogue": "Please help me.",
+        "asset": "assets/ui/scenes/mara-harbor-v4.png",
+        "speaker_portrait": "",
+        "findings": []
+    }))
+    .unwrap();
+    let mut stage = stage(2);
+    stage.story_scene = Some(scene);
+    stage.cast = vec![StageCast {
+        id: "courier".to_owned(),
+        name: "Courier".to_owned(),
+        sprite: "assets/ui/generated/sprite-courier".to_owned(),
+    }];
+    stage.speaker_id = Some("courier".to_owned());
+    stage.heroes = vec![StageHero {
+        index: 0,
+        name: "Brakka".to_owned(),
+        vitals: Vitals::new(13, 13),
+    }];
+
+    let graph = graph_of(&stage, None).expect("painted harbor scene graph");
+    assert_eq!(graph.set.place_id, "lantern-wharf");
+    assert_eq!(graph.set.place_name, "Lantern Wharf");
+    assert_eq!(
+        graph.set.fallback_asset,
+        "/assets/ui/scenes/mara-harbor-v4.png"
+    );
+    assert!(graph.actors.iter().any(|actor| actor.id == "hero-1"));
+    assert!(graph.actors.iter().any(|actor| actor.id == "courier"));
+}
+
+#[test]
 fn bloodied_or_worse_outranks_a_mood_face_and_hurt_only_fills_in_where_there_is_none() {
     let dossier = dossier();
     let (inner, _ledger) = director(&dossier);
@@ -462,6 +610,7 @@ fn bloodied_or_worse_outranks_a_mood_face_and_hurt_only_fills_in_where_there_is_
         "merchant".to_owned(),
         SpriteOverlay {
             source_sprite: "sprite-patron-merchant".to_owned(),
+            expression: Expression::Neutral,
             key: key('a'),
         },
     );
@@ -621,6 +770,7 @@ fn a_new_scene_drops_the_art_of_the_old_one_and_wakes_the_watchers() {
             "merchant".to_owned(),
             SpriteOverlay {
                 source_sprite: "sprite-patron-merchant".to_owned(),
+                expression: Expression::Neutral,
                 key: key('1'),
             },
         );
@@ -663,6 +813,8 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                         speaking: true,
                         live_sprite: String::new(),
                     }],
+                    scene_video_state: 0,
+                    scene_video_path: String::new(),
                     rules_note: String::new(),
                     place: String::new(),
                     location_id: String::new(),
@@ -705,6 +857,7 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     ],
                     ..Default::default()
                 }),
+                ..Default::default()
             },
         )),
     }
@@ -756,6 +909,7 @@ fn a_player_view_is_never_observed_or_changed() {
         inner: Some(inner),
         _worker: None,
         plates: None,
+        last_graph_revision: Arc::new(Mutex::new(None)),
     };
     let mut after = player.clone();
     living.apply(&mut after);
@@ -773,6 +927,7 @@ fn published_art_changes_only_the_art_fields_of_the_display_view() {
             "merchant".to_owned(),
             SpriteOverlay {
                 source_sprite: "sprite-patron-merchant".to_owned(),
+                expression: Expression::Neutral,
                 key: key('3'),
             },
         );
@@ -781,6 +936,7 @@ fn published_art_changes_only_the_art_fields_of_the_display_view() {
         inner: Some(inner),
         _worker: None,
         plates: None,
+        last_graph_revision: Arc::new(Mutex::new(None)),
     };
     let before = display_message(false);
     let mut after = before.clone();
@@ -813,6 +969,7 @@ fn a_sprite_overlay_applies_only_to_the_cutout_it_was_made_from() {
         "merchant".to_owned(),
         SpriteOverlay {
             source_sprite: "sprite-someone-else".to_owned(),
+            expression: Expression::Neutral,
             key: key('4'),
         },
     );
@@ -820,6 +977,7 @@ fn a_sprite_overlay_applies_only_to_the_cutout_it_was_made_from() {
         inner: Some(inner),
         _worker: None,
         plates: None,
+        last_graph_revision: Arc::new(Mutex::new(None)),
     };
     let before = display_message(false);
     let mut after = before.clone();
