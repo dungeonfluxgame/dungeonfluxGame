@@ -259,6 +259,7 @@ impl Shared {
     }
 
     pub(super) async fn render_state_image(&self, job: Job) -> Done {
+        let started = std::time::Instant::now();
         match job {
             Job::Bake {
                 scene,
@@ -292,6 +293,14 @@ impl Shared {
                         .await
                 }
                 .await;
+                crate::gameplay::actor::record_audit_line(
+                    "gameplay.imagery_complete",
+                    crate::gameplay::living_scenes::image_completion_line(
+                        "scene_plate_edit",
+                        started.elapsed(),
+                        result.as_ref(),
+                    ),
+                );
                 Done::Bake {
                     scene,
                     state: pending.state,
@@ -325,6 +334,14 @@ impl Shared {
                         .await
                 }
                 .await;
+                crate::gameplay::actor::record_audit_line(
+                    "gameplay.imagery_complete",
+                    crate::gameplay::living_scenes::image_completion_line(
+                        "item",
+                        started.elapsed(),
+                        result.as_ref(),
+                    ),
+                );
                 Done::Item { id, result }
             }
         }

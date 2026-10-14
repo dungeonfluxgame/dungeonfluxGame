@@ -460,6 +460,7 @@ impl Voice {
     }
 
     pub(super) async fn audio_part(&self, key: &str, index: usize) -> Lookup {
+        let started = std::time::Instant::now();
         let Some(line) = locked(&self.inner.lines).by_key.get(key).cloned() else {
             return Lookup::Unregistered;
         };
@@ -474,7 +475,17 @@ impl Voice {
             role: line.role,
             text: text.clone(),
         };
-        match synthesis.audio(segment).await {
+        let outcome = synthesis.audio(segment).await;
+        super::actor::record_audit_line(
+            "gameplay.voice_clip",
+            format!(
+                "VOICE clip line={key} part={index} ms={} chars={} status={}",
+                started.elapsed().as_millis(),
+                text.chars().count(),
+                if outcome.is_ok() { "ready" } else { "failed" },
+            ),
+        );
+        match outcome {
             Ok(bytes) if segments.len() == 1 => Lookup::Audio(bytes),
             Ok(bytes) => Lookup::Part {
                 bytes,

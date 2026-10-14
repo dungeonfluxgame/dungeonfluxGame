@@ -24,6 +24,18 @@ fn key(byte: char) -> ImageKey {
     ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
 }
 
+#[test]
+fn image_completion_reports_elapsed_milliseconds_for_ready_and_failed_images_without_prompts() {
+    let ready = image_completion_line("scene_plate", Duration::from_millis(123), Ok(&key('a')));
+    assert!(ready.starts_with("IMAGERY ready kind=scene_plate id="));
+    assert!(ready.contains("ms=123 status=ready"));
+    let failed = image_completion_line("item", Duration::from_millis(456), Err(&ImageFailure::Off));
+    assert!(failed.starts_with("IMAGERY failed kind=item id=none"));
+    assert!(failed.contains("ms=456"));
+    assert!(!failed.contains("status=ready"));
+    assert!(!ready.contains("prompt="));
+}
+
 const SCENE: &str = "The Heron Shrine|assets/ui/generated/scene-place-temple-sanctuary.webp";
 
 fn stage(revision: u64) -> Stage {

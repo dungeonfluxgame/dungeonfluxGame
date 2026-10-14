@@ -1336,16 +1336,25 @@ impl Inner {
 
     fn spawn(self: &Arc<Self>, tasks: &mut JoinSet<Done>, job: Job) {
         let inner = Arc::clone(self);
+        let started = Instant::now();
         match job {
             Job::HeroCutout { name, index, party } => {
                 tasks.spawn(async move {
                     let result = inner.render_hero_cutout(index, &party).await;
+                    super::actor::record_audit_line(
+                        "gameplay.imagery_complete",
+                        image_completion_line("hero_cutout", started.elapsed(), result.as_ref()),
+                    );
                     Done::HeroCutout { name, result }
                 });
             }
             Job::Expression { member, face } => {
                 tasks.spawn(async move {
                     let result = inner.render_expression(&member, face).await;
+                    super::actor::record_audit_line(
+                        "gameplay.imagery_complete",
+                        image_completion_line("expression", started.elapsed(), result.as_ref()),
+                    );
                     Done::Expression {
                         npc_id: member.id,
                         face,
@@ -1360,6 +1369,10 @@ impl Inner {
                         Ok(sprite) => inner.render_health(sprite, character.facts, tier).await,
                         Err(failure) => Err(failure),
                     };
+                    super::actor::record_audit_line(
+                        "gameplay.imagery_complete",
+                        image_completion_line("health", started.elapsed(), result.as_ref()),
+                    );
                     Done::Warm {
                         id: character.id,
                         tier,
@@ -1399,6 +1412,10 @@ impl Inner {
                     .unwrap_or_default();
                 tasks.spawn(async move {
                     let result = inner.render_refresh(&place, &scene_asset, look).await;
+                    super::actor::record_audit_line(
+                        "gameplay.imagery_complete",
+                        image_completion_line("refresh", started.elapsed(), result.as_ref()),
+                    );
                     Done::Refresh {
                         look,
                         reason,
@@ -1978,6 +1995,21 @@ fn alternate_look(target: Look, alternates: usize) -> Look {
         shot: ANGLES[alternates % ANGLES.len()],
         ..target
     }
+}
+
+fn image_completion_line(
+    kind: &'static str,
+    elapsed: Duration,
+    result: Result<&ImageKey, &ImageFailure>,
+) -> String {
+    let (outcome, key, status) = match result {
+        Ok(key) => ("ready", key.as_str(), "ready"),
+        Err(failure) => ("failed", "none", failure.label()),
+    };
+    format!(
+        "IMAGERY {outcome} kind={kind} id={key} ms={} status={status} boundary=scene-owner",
+        elapsed.as_millis()
+    )
 }
 
 #[cfg(test)]

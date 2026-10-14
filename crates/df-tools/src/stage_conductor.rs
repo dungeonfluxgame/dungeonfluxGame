@@ -175,6 +175,7 @@ struct LineRun<D> {
     intent: Option<IntentKind>,
     /// When the table last affirmed the loader (a view carrying it).
     affirmed_ms: u64,
+    timing: df_observe::presentation::TimingEvent,
 }
 
 struct Pending<D> {
@@ -195,6 +196,7 @@ struct ActorRun {
 }
 
 pub(crate) struct Conductor<D> {
+    line_timings: std::collections::VecDeque<df_observe::presentation::TimingEvent>,
     scene: SceneState,
     scene_since_ms: u64,
     director: StageDirector<D>,
@@ -236,6 +238,7 @@ impl<D: Clone> Default for Conductor<D> {
 impl<D: Clone> Conductor<D> {
     pub(crate) fn new() -> Self {
         Self {
+            line_timings: std::collections::VecDeque::new(),
             scene: SceneState::Hidden,
             scene_since_ms: 0,
             director: StageDirector::new(),
@@ -287,6 +290,24 @@ impl<D: Clone> Conductor<D> {
         &self,
     ) -> &std::collections::VecDeque<crate::stage_director::BeatRecord> {
         self.director.beat_log()
+    }
+
+    /// Presentation-clock facts only. The DOM adapter supplies scene/character metadata and
+    /// reports them only after successful application; this snapshot grants no game authority.
+    pub(crate) fn line_timing(&self, id: LineId) -> Option<df_observe::presentation::TimingEvent> {
+        self.line_timings
+            .iter()
+            .find(|timing| timing.id == id)
+            .cloned()
+    }
+
+    fn retain_line_timing(&mut self, timing: df_observe::presentation::TimingEvent) {
+        self.line_timings
+            .retain(|previous| previous.id != timing.id);
+        self.line_timings.push_back(timing);
+        if self.line_timings.len() > 128 {
+            self.line_timings.pop_front();
+        }
     }
 
     /// The cue sequencer has nothing playing and nothing queued (a Roll waiting for the
@@ -452,9 +473,7 @@ impl<D: Clone> Conductor<D> {
     /// Lines marked `settled` stand on screen at once; the others play from their start.
     pub(crate) fn restart(&mut self, now_ms: u64, plan: ViewPlan<D>) -> Vec<Command<D>> {
         let mut out = Vec::new();
-        for run in std::mem::take(&mut self.lines) {
-            self.cancel_clip(&run, &mut out);
-        }
+        self.retire_lines(now_ms, "replaced", &mut out);
         self.pending = None;
         self.in_entrance = false;
         self.held.clear();
@@ -608,7 +627,15 @@ impl<D: Clone> Conductor<D> {
             if let Some(next) = clip_next(run.clip, event) {
                 run.clip = next;
                 run.clip_since_ms = now_ms;
+                run.timing.at_ms = now_ms;
+                match signal {
+                    ClipSignal::Started { .. } => run.timing.voice_start_ms = Some(now_ms),
+                    ClipSignal::Finished => run.timing.voice_end_ms = Some(now_ms),
+                    _ => {}
+                }
             }
+            let timing = run.timing.clone();
+            self.retain_line_timing(timing);
         }
         self.step(now_ms, &mut out);
         out
@@ -878,6 +905,15 @@ impl<D: Clone> Conductor<D> {
         } else {
             LineState::Queued
         };
+        let mut timing =
+            df_observe::presentation::TimingEvent::lifecycle("line", "ready", id, 0, now_ms);
+        timing.read_ms = line.read_ms;
+        timing.slot = line
+            .slot
+            .and_then(|slot| u32::try_from(slot).ok())
+            .filter(|slot| *slot <= 31);
+        timing.opened_ms = (state == LineState::Lingering).then_some(now_ms);
+        self.retain_line_timing(timing.clone());
         LineRun {
             id,
             line,
@@ -893,6 +929,7 @@ impl<D: Clone> Conductor<D> {
             reported_clip: ClipState::Silent,
             intent: None,
             affirmed_ms: now_ms,
+            timing,
         }
     }
 
@@ -1049,10 +1086,28 @@ impl<D: Clone> Conductor<D> {
         now_ms: u64,
         out: &mut Vec<Command<D>>,
     ) {
-        for run in std::mem::take(&mut self.lines) {
-            self.cancel_clip(&run, out);
-        }
+        self.retire_lines(now_ms, "scene-change", out);
         self.install_more(script, now_ms, out);
+    }
+
+    fn retire_lines(&mut self, now_ms: u64, reason: &'static str, out: &mut Vec<Command<D>>) {
+        for mut run in std::mem::take(&mut self.lines) {
+            self.cancel_clip(&run, out);
+            if run.state != LineState::Done {
+                run.timing.at_ms = now_ms;
+                run.timing.reason = if run.opened_ms.is_some() {
+                    reason
+                } else {
+                    "skipped"
+                };
+                if run.opened_ms.is_some() {
+                    run.timing.closed_ms = Some(now_ms);
+                    run.state = LineState::Done;
+                    self.emit_line(&run, out);
+                }
+                self.retain_line_timing(run.timing);
+            }
+        }
     }
 
     /// Adds lines behind the ones waiting.
@@ -1154,8 +1209,44 @@ impl<D: Clone> Conductor<D> {
         run.since_ms = now_ms;
         if next == LineState::Opening {
             run.opened_ms = Some(now_ms);
+            run.timing.opened_ms = Some(now_ms);
+        }
+        run.timing.at_ms = now_ms;
+        if event == LineEvent::SpeechDone {
+            // Report which observed gate finished last; short speech must not hide a
+            // longer reading window behind a misleading voice-ended reason.
+            run.timing.reason =
+                if run
+                    .timing
+                    .voice_end_ms
+                    .zip(run.opened_ms)
+                    .is_some_and(|(ended, opened)| {
+                        ended.saturating_sub(opened) >= u64::from(run.line.read_ms)
+                    })
+                {
+                    "voice-ended"
+                } else if run.timing.voice_end_ms.is_none()
+                    && run.timing.voice_start_ms.is_some()
+                    && run.clip == ClipState::Ended
+                {
+                    "timeout"
+                } else {
+                    "read"
+                };
+        }
+        if matches!(next, LineState::Closing | LineState::Done) {
+            run.timing.closed_ms = Some(now_ms);
+            if event == LineEvent::Close {
+                run.timing.reason =
+                    if before == LineState::Queued || run.close_ms == FIGHT_LINE_FADE_MS {
+                        "skipped"
+                    } else {
+                        "scene-change"
+                    };
+            }
         }
         let run = run.clone();
+        self.retain_line_timing(run.timing.clone());
         // A queued line closed before it showed never reaches the screen.
         if !(before == LineState::Queued && next == LineState::Done) {
             self.emit_line(&run, out);
@@ -1597,6 +1688,75 @@ mod tests {
             script,
             cast,
         }
+    }
+
+    #[test]
+    fn line_timing_preserves_actual_voice_end_and_reading_budget_after_close() {
+        for (voice_end, reason) in [(500, "read"), (4_000, "voice-ended")] {
+            let mut conductor = Conductor::new();
+            let run = conductor.make_run(line("public line", true, Some(2)), 0);
+            let id = run.id;
+            conductor.lines.push(run);
+            let mut commands = Vec::new();
+            conductor.set_line(0, LineEvent::Begin, 100, &mut commands);
+            conductor.lines[0].clip = ClipState::Requested;
+            conductor.on_clip(
+                200,
+                id,
+                ClipSignal::Started {
+                    duration_ms: Some(300),
+                },
+            );
+            conductor.on_clip(voice_end, id, ClipSignal::Finished);
+            conductor.set_line(0, LineEvent::SpeechDone, 4_000, &mut commands);
+            conductor.set_line(0, LineEvent::LingerDone, 6_000, &mut commands);
+            let timing = conductor.line_timing(id).unwrap();
+            assert_eq!(timing.opened_ms, Some(100));
+            assert_eq!(timing.voice_start_ms, Some(200));
+            assert_eq!(timing.voice_end_ms, Some(voice_end));
+            assert_eq!(timing.closed_ms, Some(6_000));
+            assert_eq!(timing.read_ms, 3_000);
+            assert_eq!(timing.reason, reason);
+        }
+    }
+
+    #[test]
+    fn voice_watchdog_timing_never_fabricates_a_media_end() {
+        let mut conductor = Conductor::new();
+        let run = conductor.make_run(line("public line", true, None), 0);
+        let id = run.id;
+        conductor.lines.push(run);
+        let mut commands = Vec::new();
+        conductor.set_line(0, LineEvent::Begin, 100, &mut commands);
+        conductor.lines[0].clip = ClipState::Requested;
+        conductor.lines[0].voiced = true;
+        conductor.on_clip(
+            200,
+            id,
+            ClipSignal::Started {
+                duration_ms: Some(300),
+            },
+        );
+        conductor.advance_line(0, 10_000, false, &mut commands);
+        conductor.set_line(0, LineEvent::LingerDone, 11_000, &mut commands);
+        let timing = conductor.line_timing(id).unwrap();
+        assert_eq!(timing.voice_start_ms, Some(200));
+        assert_eq!(timing.voice_end_ms, None);
+        assert_eq!(timing.reason, "timeout");
+    }
+
+    #[test]
+    fn restart_reports_the_previous_visible_lines_closure_before_replacing_it() {
+        let mut conductor = Conductor::new();
+        let run = conductor.make_run(line("public line", false, None), 0);
+        let id = run.id;
+        conductor.lines.push(run);
+        conductor.set_line(0, LineEvent::Begin, 100, &mut Vec::new());
+        let commands = conductor.restart(200, plain(Vec::new(), Vec::new()));
+        assert!(commands.iter().any(|command| matches!(command, Command::Line { id: closed, state: LineState::Done, .. } if *closed == id)));
+        let timing = conductor.line_timing(id).unwrap();
+        assert_eq!(timing.closed_ms, Some(200));
+        assert_eq!(timing.reason, "replaced");
     }
 
     /// A scripted voice: a requested clip loads after `load_ms`; a played clip starts after

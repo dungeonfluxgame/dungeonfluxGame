@@ -182,6 +182,9 @@ impl StageLayer {
             tv_root.remove_attribute("data-stage-graph")?;
             tv_root.remove_attribute("data-stage-frame-revision")?;
             if self.revision.replace(None).is_some() {
+                for layer in self.actors.borrow().iter() {
+                    actor_timing(&layer.root, "figure-hidden", "scene-change");
+                }
                 self.last_graph.borrow_mut().take();
                 self.scene_key.borrow_mut().clear();
                 self.record_change(tv_root, "graph", "scene graph removed from display")?;
@@ -192,6 +195,7 @@ impl StageLayer {
         let previous_revision = self.revision.get();
         let previous_scene = self.scene_key.borrow().clone();
         if self.last_graph.borrow().as_ref() == Some(graph) {
+            refresh_timing_visibility(&self.root);
             let revision = baked_revision.map(|revision| revision.to_string());
             if tv_root.get_attribute("data-stage-frame-revision") != revision {
                 match revision {
@@ -302,6 +306,15 @@ impl StageLayer {
                 .get_attribute("data-name")
                 .unwrap_or_default();
             old_layer.root.remove();
+            actor_timing(
+                &old_layer.root,
+                "figure-hidden",
+                if scene_changed {
+                    "scene-change"
+                } else {
+                    "left"
+                },
+            );
             self.record_change(
                 tv_root,
                 &format!("figure:{actor_name}:present=false"),
@@ -329,6 +342,7 @@ impl StageLayer {
                             .ok_or("display document absent")?,
                         &self.actors_root,
                         actor,
+                        &graph.scene_key,
                     )?);
                     self.record_change(
                         tv_root,
@@ -365,6 +379,7 @@ impl StageLayer {
             }
         }
         *self.last_graph.borrow_mut() = Some(graph.clone());
+        refresh_timing_visibility(&self.root);
         Ok(())
     }
 
@@ -460,10 +475,13 @@ fn mount_actor(
     document: &Document,
     parent: &Element,
     actor: &SceneActorView,
+    scene_key: &str,
 ) -> Result<ActorLayer, JsValue> {
     let root = node(document, parent, "div", "tv-scene-actor", "")?;
     root.set_attribute("data-actor-id", &actor.id)?;
+    root.set_attribute("data-scene-key", scene_key)?;
     root.set_attribute("data-absent", "false")?;
+    root.set_attribute("data-timing-visible", "false")?;
     let shadow = node(document, &root, "span", "tv-scene-shadow", "")?;
     shadow.set_attribute("aria-hidden", "true")?;
     let body = node(document, &root, "span", "tv-scene-body", "")?;
@@ -480,11 +498,14 @@ fn mount_actor(
                 if root.get_attribute("data-art-want").as_deref()
                     == image.get_attribute("data-graph-art").as_deref()
                 {
-                    let _ = root.set_attribute(
+                    let activated = root.set_attribute(
                         "data-active",
                         &image.get_attribute("data-i").unwrap_or_default(),
                     );
                     let _ = root.remove_attribute("data-art-unready");
+                    if activated.is_ok() && actor_can_show(&root) {
+                        actor_timing(&root, "figure-shown", "ready");
+                    }
                 }
             }) as Box<dyn FnMut(Event)>)
         };
@@ -495,6 +516,15 @@ fn mount_actor(
                 if wanted.as_deref() != image.get_attribute("data-graph-art").as_deref() {
                     return;
                 }
+                actor_timing(
+                    &root,
+                    if root.has_attribute("data-active") {
+                        "figure-kept"
+                    } else {
+                        "figure-hidden"
+                    },
+                    "failed",
+                );
                 let fallback = image.get_attribute("data-fallback").unwrap_or_default();
                 if image.get_attribute("data-source").as_deref() != Some(fallback.as_str()) {
                     let _ = image.set_attribute("data-source", &fallback);
@@ -509,11 +539,99 @@ fn mount_actor(
         images.push(image);
         listeners.push((load, error));
     }
+    actor_timing(&root, "figure-mounted", "appeared");
     Ok(ActorLayer {
         root,
         images,
         listeners,
     })
+}
+
+// Mirror the graph's visibility gates in live_stage.css and the figure-over-plate override
+// in live_plate.css. These are DOM visibility transition starts, not pixel observations.
+fn actor_can_show(root: &Element) -> bool {
+    root.is_connected()
+        && root.has_attribute("data-active")
+        && root.get_attribute("data-absent").as_deref() != Some("true")
+        && root.closest("[hidden],.tv-scene-graph[data-inactive]").is_ok_and(|hidden| hidden.is_none())
+        && root.closest(concat!(
+                ".tv-stage[data-tv-mode=lobby],.tv-stage[data-tv-mode=combat],",
+                ".tv-stage[data-arrange=combat],.tv-stage[data-battlefield-live=true],",
+                ".tv-stage[data-battle-state]:not([data-battle-state=absent]),.tv-stage[data-shot=plate]"
+            )).is_ok_and(|hidden| hidden.is_none())
+}
+
+/// Also call after TV mode/shot/battle visibility changes that do not deliver a new graph.
+pub(super) fn refresh_timing_visibility(tv_root: &Element) {
+    let Ok(Some(actors)) = tv_root.query_selector(".tv-scene-actors") else {
+        return;
+    };
+    let mut next = actors.first_element_child();
+    while let Some(root) = next {
+        next = root.next_element_sibling();
+        let shown = actor_can_show(&root);
+        actor_timing(
+            &root,
+            if shown {
+                "figure-shown"
+            } else {
+                "figure-hidden"
+            },
+            if shown { "appeared" } else { "scene-change" },
+        );
+    }
+}
+
+fn actor_timing(root: &Element, kind: &'static str, reason: &'static str) {
+    use df_observe::presentation::{TimingEvent, capture_display, local_identity};
+    let Some(clock) = web_sys::window().and_then(|window| window.performance()) else {
+        web_sys::console::warn_1(&"Figure timing clock unavailable".into());
+        return;
+    };
+    let (Some(scene), Some(actor)) = (
+        root.get_attribute("data-scene-key"),
+        root.get_attribute("data-actor-id"),
+    ) else {
+        web_sys::console::warn_1(&"Figure timing identity unavailable".into());
+        return;
+    };
+    if kind == "figure-shown" && !actor_can_show(root) {
+        return;
+    }
+    let visible = match kind {
+        "figure-shown" => Some("true"),
+        "figure-hidden" => Some("false"),
+        _ => None,
+    };
+    if let Some(visible) = visible {
+        if root.get_attribute("data-timing-visible").as_deref() == Some(visible)
+            && reason != "failed"
+        {
+            return;
+        }
+        if root.set_attribute("data-timing-visible", visible).is_err() {
+            web_sys::console::warn_1(&"Figure timing marker unavailable".into());
+            return;
+        }
+    }
+    let mut event = TimingEvent::lifecycle(
+        kind,
+        reason,
+        local_identity(&actor),
+        local_identity(&scene),
+        clock.now() as u64,
+    );
+    // This records the selection edge; the actor-container fade completes 600 ms later.
+    if kind == "figure-hidden"
+        && root
+            .closest(".tv-stage[data-tv-mode=scene][data-shot=plate]")
+            .is_ok_and(|plate| plate.is_some())
+    {
+        event.crossfade_ms = 600;
+    }
+    if let Err(error) = capture_display(event) {
+        web_sys::console::warn_1(&format!("Figure timing capture refused: {error:?}").into());
+    }
 }
 
 fn update_actor(
@@ -524,6 +642,7 @@ fn update_actor(
 ) -> Result<(), JsValue> {
     let root = &layer.root;
     let previous_art = root.get_attribute("data-art-want");
+    root.set_attribute("data-scene-key", &graph.scene_key)?;
     let previous_expression = root.get_attribute("data-expression");
     let previous_pose = root.get_attribute("data-pose");
     root.set_attribute("data-name", &actor.name)?;
@@ -685,6 +804,151 @@ mod tests {
                 speaking: false,
             }],
         }
+    }
+
+    #[test]
+    fn figure_timing_distinguishes_mounted_from_loaded_and_records_scene_removal() {
+        use df_observe::presentation::drain_display_capture;
+        while !drain_display_capture().0.is_empty() {}
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("div").unwrap();
+        document.body().unwrap().append_child(&root).unwrap();
+        let layer = StageLayer::mount(&document, &root).unwrap();
+        let graph = graph();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        let (events, lost) = drain_display_capture();
+        assert_eq!(lost, 0);
+        assert!(events.iter().any(|event| event.kind == "figure-mounted"));
+        assert!(!events.iter().any(|event| event.kind == "figure-shown"));
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert!(drain_display_capture().0.is_empty());
+        layer.actors.borrow()[0]
+            .root
+            .set_attribute("data-active", "0")
+            .unwrap();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert!(
+            drain_display_capture()
+                .0
+                .iter()
+                .any(|event| event.kind == "figure-shown")
+        );
+        layer.update(&root, None, None).unwrap();
+        assert!(
+            drain_display_capture()
+                .0
+                .iter()
+                .any(|event| event.kind == "figure-hidden" && event.reason == "scene-change")
+        );
+        // A previously loaded sprite can reappear without another image load event.
+        layer.actors.borrow()[0]
+            .root
+            .set_attribute("data-active", "0")
+            .unwrap();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert!(
+            drain_display_capture()
+                .0
+                .iter()
+                .any(|event| event.kind == "figure-shown")
+        );
+        root.remove();
+    }
+
+    #[test]
+    fn loaded_figures_follow_tv_visibility_even_when_the_graph_is_unchanged() {
+        use df_observe::presentation::drain_display_capture;
+        while !drain_display_capture().0.is_empty() {}
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("div").unwrap();
+        root.set_attribute("class", "tv-stage").unwrap();
+        root.set_attribute("data-tv-mode", "combat").unwrap();
+        root.set_attribute("data-battle-state", "active").unwrap();
+        document.body().unwrap().append_child(&root).unwrap();
+        let layer = StageLayer::mount(&document, &root).unwrap();
+        let graph = graph();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        drain_display_capture();
+        let actor = layer.actors.borrow()[0].root.clone();
+        actor.set_attribute("data-active", "0").unwrap();
+        actor_timing(&actor, "figure-shown", "ready");
+        assert!(
+            !drain_display_capture()
+                .0
+                .iter()
+                .any(|event| event.kind == "figure-shown")
+        );
+
+        root.set_attribute("data-tv-mode", "scene").unwrap();
+        root.set_attribute("data-battle-state", "absent").unwrap();
+        root.set_attribute("data-shot", "plate").unwrap();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert!(drain_display_capture().0.is_empty());
+        root.set_attribute("data-shot", "stage").unwrap();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert!(
+            drain_display_capture()
+                .0
+                .iter()
+                .any(|event| event.kind == "figure-shown")
+        );
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert!(drain_display_capture().0.is_empty());
+        root.set_attribute("data-shot", "plate").unwrap();
+        layer.update(&root, Some(&graph), Some(1)).unwrap();
+        assert!(
+            drain_display_capture()
+                .0
+                .iter()
+                .any(|event| event.kind == "figure-hidden")
+        );
+        root.remove();
+    }
+
+    #[test]
+    fn composed_plate_hides_cutouts_and_restores_them_when_the_plate_is_unavailable() {
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(&format!(
+            "{}\n.tv-scene-actors,.tv-fig-body{{transition:none!important}}",
+            include_str!("live_plate.css")
+        )));
+        document.body().unwrap().append_child(&style).unwrap();
+        let root = document.create_element("div").unwrap();
+        root.set_attribute("class", "tv-stage").unwrap();
+        root.set_attribute("data-tv-mode", "scene").unwrap();
+        root.set_attribute("data-battle-state", "absent").unwrap();
+        document.body().unwrap().append_child(&root).unwrap();
+        let layer = StageLayer::mount(&document, &root).unwrap();
+        layer.update(&root, Some(&graph()), Some(1)).unwrap();
+        let actors = root.query_selector(".tv-scene-actors").unwrap().unwrap();
+        let legacy_body = document.create_element("div").unwrap();
+        legacy_body.set_attribute("class", "tv-fig-body").unwrap();
+        root.append_child(&legacy_body).unwrap();
+        let computed = js_sys::Reflect::get(&window, &"getComputedStyle".into())
+            .unwrap()
+            .dyn_into::<js_sys::Function>()
+            .unwrap();
+        for (shot, expected) in [
+            ("stage", "visible"),
+            ("plate", "hidden"),
+            ("stage", "visible"),
+        ] {
+            root.set_attribute("data-shot", shot).unwrap();
+            for body in [&actors, &legacy_body] {
+                let css = computed.call1(&window, body).unwrap();
+                assert_eq!(
+                    js_sys::Reflect::get(&css, &"visibility".into())
+                        .unwrap()
+                        .as_string()
+                        .as_deref(),
+                    Some(expected)
+                );
+            }
+        }
+        root.remove();
+        style.remove();
     }
 
     #[test]

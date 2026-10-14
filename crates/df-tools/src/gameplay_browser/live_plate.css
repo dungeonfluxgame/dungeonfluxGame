@@ -41,11 +41,13 @@
 
 /* the scrim keeps the title and the chips readable without dimming the picture */
 .tv-stage[data-shot=plate][data-tv-mode=scene]>.tv-scrim{background:linear-gradient(0deg,#03060ecc 0%,#03060e66 14%,#03060e00 30%),linear-gradient(180deg,#03060e8c 0%,#03060e00 22%)}
-/* The initial establishing shot may wait for cut-outs; a later plate never removes live figures. */
+/* The initial establishing shot may wait for cut-outs. */
 .tv-stage[data-shot=establishing]:not([data-stage-graph]) .tv-fig-body{opacity:0;visibility:hidden;transition:none}
-/* A plate swaps only the room layer. The live cast and camera stay above it throughout. */
+/* A composed plate includes the cast; retain their nodes as the fallback and bubble anchors. */
 .tv-stage[data-tv-mode=scene][data-stage-graph][data-shot=plate][data-battle-state=absent] .tv-scene-graph{z-index:4;opacity:1;visibility:visible;transition:none}
 .tv-stage[data-stage-graph][data-shot=plate] .tv-scene-set{visibility:hidden}
+.tv-scene-actors{opacity:1;visibility:inherit;transition:opacity .6s,visibility 0s}
+.tv-stage[data-tv-mode=scene][data-shot=plate] :is(.tv-scene-actors,.tv-fig-body){opacity:0;visibility:hidden;transition:opacity .6s,visibility 0s .6s}
 .tv-stage:is([data-shot=establishing],[data-shot=plate]) .tv-mist{display:none}
 .tv-plate-bubbles{position:absolute;inset:0;z-index:9;pointer-events:none}
 .tv-plate-bubbles>.tv-fig-bubbles{position:absolute;top:0;left:0;right:auto}

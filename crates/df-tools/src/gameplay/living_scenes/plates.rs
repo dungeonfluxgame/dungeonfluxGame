@@ -1285,37 +1285,50 @@ impl Shared {
         heroes: &[u8],
         faces: &[(u8, ImageKey)],
     ) -> Result<(ImageKey, Option<PlatePlacement>, Option<Box<Locate>>), ImageFailure> {
-        let (request, locator_face) = self.fresh_request(scene, spec, heroes, faces, None).await?;
+        let started = std::time::Instant::now();
+        let result = async {
+            let (request, locator_face) =
+                self.fresh_request(scene, spec, heroes, faces, None).await?;
+            crate::gameplay::actor::record_audit_line(
+                "gameplay.imagery.request",
+                format!(
+                    "IMAGERY request kind=scene_plate reason={} state={}",
+                    scene.place_id,
+                    scene
+                        .snapshot
+                        .as_ref()
+                        .map_or(0, |snapshot| snapshot.changes.len()),
+                ),
+            );
+            let key = self.inner.imagery.render(request).await?;
+            let Some(speaker) = &spec.speaker else {
+                return Ok((key, None, None));
+            };
+            if let Some(stored) = self.stored_placement(&key).await {
+                return Ok((key, Some(stored), None));
+            }
+            let predicted = PlatePlacement {
+                speaker: speaker.layout,
+                heroes: Vec::new(),
+            };
+            let work = Locate {
+                key: key.clone(),
+                spec: spec.clone(),
+                speaker: speaker.clone(),
+                face: locator_face,
+            };
+            Ok((key, Some(predicted), Some(Box::new(work))))
+        }
+        .await;
         crate::gameplay::actor::record_audit_line(
-            "gameplay.imagery.request",
-            format!(
-                "IMAGERY request kind=scene_plate reason={} state={} prompt={}",
-                scene.place_id,
-                scene
-                    .snapshot
-                    .as_ref()
-                    .map_or(0, |snapshot| snapshot.changes.len()),
-                request.prompt.as_str(),
+            "gameplay.imagery_complete",
+            super::image_completion_line(
+                "scene_plate",
+                started.elapsed(),
+                result.as_ref().map(|(key, _, _)| key),
             ),
         );
-        let key = self.inner.imagery.render(request).await?;
-        let Some(speaker) = &spec.speaker else {
-            return Ok((key, None, None));
-        };
-        if let Some(stored) = self.stored_placement(&key).await {
-            return Ok((key, Some(stored), None));
-        }
-        let predicted = PlatePlacement {
-            speaker: speaker.layout,
-            heroes: Vec::new(),
-        };
-        let work = Locate {
-            key: key.clone(),
-            spec: spec.clone(),
-            speaker: speaker.clone(),
-            face: locator_face,
-        };
-        Ok((key, Some(predicted), Some(Box::new(work))))
+        result
     }
 
     /// The placement kept beside a cached plate by an earlier measurement, when it is intact.
