@@ -544,6 +544,16 @@ pub(crate) fn decode_checkpoint_configuration(
     bytes: &[u8],
     codec_limits: CodecLimits,
 ) -> Result<RevisionLabel, CodecError> {
+    decode_checkpoint_pins(bytes, codec_limits)
+        .map(|pins| pins.build.revision(BuildRevision::Configuration).clone())
+}
+
+/// The pins a stored document was written under, read from its header for refusal
+/// diagnostics only (see `decode_checkpoint_configuration`).
+pub(crate) fn decode_checkpoint_pins(
+    bytes: &[u8],
+    codec_limits: CodecLimits,
+) -> Result<CheckpointPins, CodecError> {
     let limits = codec_limits.validate()?;
     if bytes.len() > limits.maximum_document_bytes {
         return Err(CodecError::Capacity);
@@ -564,8 +574,7 @@ pub(crate) fn decode_checkpoint_configuration(
         return Err(CodecError::Checkpoint(CheckpointError::UnsupportedSchema));
     }
     Basis::read(&mut input)?;
-    let pins = CheckpointPins::read(&mut input)?;
-    Ok(pins.build.revision(BuildRevision::Configuration).clone())
+    CheckpointPins::read(&mut input)
 }
 
 // Explicit schema-2 mapping; schema 1 cannot supply social or agreement provenance.

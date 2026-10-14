@@ -494,5 +494,71 @@ pub(crate) fn decode_current_row(
         checkpoint_limits,
         codec_limits,
     )
-    .map_err(|_| RepositoryError::InvalidCandidate)
+    .map_err(|error| {
+        // The caller only learns "invalid candidate": say here which check of the stored
+        // document refused, and how large it was against the limits, so a session that
+        // will not load can be diagnosed from the server's log alone.
+        eprintln!(
+            "CHECKPOINT decode refused: {error:?} document_bytes={} limit_bytes={} limit_items={} limit_text_bytes={}",
+            document.len(),
+            codec_limits.maximum_document_bytes,
+            codec_limits.maximum_collection_items,
+            codec_limits.maximum_text_bytes,
+        );
+        // A pin mismatch means the document was written under other rules, content or
+        // build than this server admits: print both sides of each pin that differs.
+        if let Ok(stored) = crate::checkpoint_codec::decode_checkpoint_pins(&document, codec_limits)
+        {
+            // One line per rules pin that differs, so the cause can be read at a glance
+            // (a digest that differs means that part of the rules source changed between
+            // the build that wrote the document and this one).
+            let (was, now) = (&stored.rules, &pins.rules);
+            let fields: [(&str, String, String); 8] = [
+                ("mode", format!("{:?}", was.mode), format!("{:?}", now.mode)),
+                ("ruleset", format!("{:?}", was.ruleset), format!("{:?}", now.ruleset)),
+                ("catalog", format!("{:?}", was.catalog), format!("{:?}", now.catalog)),
+                (
+                    "catalog_digest",
+                    format!("{:?}", was.catalog_digest),
+                    format!("{:?}", now.catalog_digest),
+                ),
+                (
+                    "source_manifest",
+                    format!("{:?}", was.source_manifest),
+                    format!("{:?}", now.source_manifest),
+                ),
+                (
+                    "source_manifest_digest",
+                    format!("{:?}", was.source_manifest_digest),
+                    format!("{:?}", now.source_manifest_digest),
+                ),
+                ("handler", format!("{:?}", was.handler), format!("{:?}", now.handler)),
+                (
+                    "handler_digest",
+                    format!("{:?}", was.handler_digest),
+                    format!("{:?}", now.handler_digest),
+                ),
+            ];
+            for (name, stored_value, admitted_value) in fields {
+                if stored_value != admitted_value {
+                    eprintln!(
+                        "CHECKPOINT rules pin differs: {name} stored={stored_value} admitted={admitted_value}"
+                    );
+                }
+            }
+            if stored.content != pins.content {
+                eprintln!(
+                    "CHECKPOINT content pins differ: stored={:?} admitted={:?}",
+                    stored.content, pins.content
+                );
+            }
+            if stored.build != pins.build {
+                eprintln!(
+                    "CHECKPOINT build pins differ: stored={:?} admitted={:?}",
+                    stored.build, pins.build
+                );
+            }
+        }
+        RepositoryError::InvalidCandidate
+    })
 }
