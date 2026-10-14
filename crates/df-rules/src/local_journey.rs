@@ -688,6 +688,306 @@ mod tests {
             Err(JourneyRuleError::InvalidDie)
         );
     }
+    struct ExpectedSrdCreatureCore {
+        id: &'static str,
+        weapon_label: &'static str,
+        page: u16,
+        size: crate::tactical::Size,
+        speed_ft: u16,
+        weapons: &'static [crate::tactical::Weapon],
+        shield: bool,
+        hit_points: u8,
+        armor_class: u8,
+        abilities: [u8; 6],
+        attack_bonus: i32,
+        damage_modifier: i32,
+        damage_dice: (u8, u8),
+    }
+
+    fn assert_srd_creature_core(expected: ExpectedSrdCreatureCore) {
+        let creature = crate::SRD_521_CREATURES
+            .iter()
+            .find(|creature| creature.id == expected.id)
+            .expect("compiled SRD creature");
+        let tactical = crate::tactical::CombatantSpec::creature(
+            3,
+            expected.id,
+            crate::tactical::Cell(2, 1),
+            0,
+        )
+        .expect("compiled tactical creature");
+        assert_eq!(creature.weapon_label, expected.weapon_label);
+        assert_eq!(creature.page, expected.page);
+        assert_eq!(tactical.size, expected.size);
+        assert_eq!(tactical.speed_ft, expected.speed_ft);
+        assert_eq!(tactical.weapons.as_slice(), expected.weapons);
+        assert_eq!(tactical.shield, expected.shield);
+        assert_eq!(creature.rules.hit_points, expected.hit_points);
+        assert_eq!(creature.rules.armor_class, expected.armor_class);
+        assert_eq!(creature.rules.abilities, expected.abilities);
+        assert_eq!(creature.rules.attack_bonus, expected.attack_bonus);
+        assert_eq!(creature.rules.damage_modifier, expected.damage_modifier);
+        assert_eq!(
+            (
+                creature.rules.weapon.damage_dice,
+                creature.rules.weapon.damage_sides,
+            ),
+            expected.damage_dice
+        );
+    }
+
+    // SRD 5.2.1, p. 261. Damage modifier is the Scimitar's +1.
+    #[test]
+    fn bandit_core_stat_block_values_srd_521_p261() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "bandit",
+            weapon_label: "scimitar",
+            page: 261,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 30,
+            weapons: &[
+                crate::tactical::Weapon::Scimitar,
+                crate::tactical::Weapon::LightCrossbow,
+            ],
+            shield: false,
+            hit_points: 11,
+            armor_class: 12,
+            abilities: [11, 12, 12, 10, 10, 10],
+            attack_bonus: 3,
+            damage_modifier: 1,
+            damage_dice: (1, 6),
+        });
+    }
+
+    // SRD 5.2.1, p. 278. The code folds the Sickle's +1 Slashing and +1 Necrotic into +2.
+    #[test]
+    fn cultist_core_stat_block_values_srd_521_p278() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "cultist",
+            weapon_label: "ritual sickle",
+            page: 278,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 30,
+            weapons: &[crate::tactical::Weapon::Sickle],
+            shield: false,
+            hit_points: 9,
+            armor_class: 12,
+            abilities: [11, 12, 10, 10, 11, 10],
+            attack_bonus: 3,
+            damage_modifier: 2,
+            damage_dice: (1, 4),
+        });
+    }
+
+    // SRD 5.2.1, p. 296. The compiled melee action is the Spear.
+    #[test]
+    fn guard_core_stat_block_values_srd_521_p296() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "guard",
+            weapon_label: "spear",
+            page: 296,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 30,
+            weapons: &[crate::tactical::Weapon::Spear],
+            shield: true,
+            hit_points: 11,
+            armor_class: 16,
+            abilities: [13, 12, 12, 10, 11, 10],
+            attack_bonus: 3,
+            damage_modifier: 1,
+            damage_dice: (1, 6),
+        });
+    }
+
+    // SRD 5.2.1, p. 290. The compiled melee action is the Scimitar.
+    #[test]
+    fn goblin_warrior_core_stat_block_values_srd_521_p290() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "goblin-warrior",
+            weapon_label: "scimitar",
+            page: 290,
+            size: crate::tactical::Size::Small,
+            speed_ft: 30,
+            weapons: &[
+                crate::tactical::Weapon::Scimitar,
+                crate::tactical::Weapon::Shortbow,
+            ],
+            shield: true,
+            hit_points: 10,
+            armor_class: 15,
+            abilities: [8, 15, 10, 10, 8, 8],
+            attack_bonus: 4,
+            damage_modifier: 2,
+            damage_dice: (1, 6),
+        });
+    }
+
+    // SRD 5.2.1, p. 302. The compiled melee action is the Dagger.
+    #[test]
+    fn kobold_warrior_core_stat_block_values_srd_521_p302() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "kobold-warrior",
+            weapon_label: "dagger",
+            page: 302,
+            size: crate::tactical::Size::Small,
+            speed_ft: 30,
+            weapons: &[crate::tactical::Weapon::Dagger],
+            shield: false,
+            hit_points: 7,
+            armor_class: 14,
+            abilities: [7, 15, 9, 8, 7, 8],
+            attack_bonus: 4,
+            damage_modifier: 2,
+            damage_dice: (1, 4),
+        });
+    }
+
+    // SRD 5.2.1, p. 325. The compiled melee action is the Shortsword.
+    #[test]
+    fn skeleton_core_stat_block_values_srd_521_p325() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "skeleton",
+            weapon_label: "shortsword",
+            page: 325,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 30,
+            weapons: &[
+                crate::tactical::Weapon::Shortsword,
+                crate::tactical::Weapon::Shortbow,
+            ],
+            shield: false,
+            hit_points: 13,
+            armor_class: 14,
+            abilities: [10, 16, 15, 6, 8, 5],
+            attack_bonus: 5,
+            damage_modifier: 3,
+            damage_dice: (1, 6),
+        });
+    }
+
+    // SRD 5.2.1, p. 343. The compiled action is Slam.
+    #[test]
+    fn zombie_core_stat_block_values_srd_521_p343() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "zombie",
+            weapon_label: "slam",
+            page: 343,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 20,
+            weapons: &[crate::tactical::Weapon::Slam],
+            shield: false,
+            hit_points: 15,
+            armor_class: 8,
+            abilities: [13, 6, 16, 3, 6, 5],
+            attack_bonus: 3,
+            damage_modifier: 1,
+            damage_dice: (1, 8),
+        });
+    }
+
+    // SRD 5.2.1, p. 364. The compiled action is Bite.
+    #[test]
+    fn wolf_core_stat_block_values_srd_521_p364() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "wolf",
+            weapon_label: "bite",
+            page: 364,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 40,
+            weapons: &[crate::tactical::Weapon::Bite],
+            shield: false,
+            hit_points: 11,
+            armor_class: 12,
+            abilities: [14, 15, 12, 3, 12, 6],
+            attack_bonus: 4,
+            damage_modifier: 2,
+            damage_dice: (1, 6),
+        });
+    }
+
+    // SRD 5.2.1, p. 353. The compiled action is Bite.
+    #[test]
+    fn giant_rat_core_stat_block_values_srd_521_p353() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "giant-rat",
+            weapon_label: "bite",
+            page: 353,
+            size: crate::tactical::Size::Small,
+            speed_ft: 30,
+            weapons: &[crate::tactical::Weapon::Bite],
+            shield: false,
+            hit_points: 7,
+            armor_class: 13,
+            abilities: [7, 16, 11, 2, 10, 4],
+            attack_bonus: 5,
+            damage_modifier: 3,
+            damage_dice: (1, 4),
+        });
+    }
+
+    // SRD 5.2.1, p. 355. The compiled action is Bite.
+    #[test]
+    fn giant_weasel_core_stat_block_values_srd_521_p355() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "giant-weasel",
+            weapon_label: "bite",
+            page: 355,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 40,
+            weapons: &[crate::tactical::Weapon::Bite],
+            shield: false,
+            hit_points: 9,
+            armor_class: 13,
+            abilities: [11, 17, 10, 4, 12, 5],
+            attack_bonus: 5,
+            damage_modifier: 3,
+            damage_dice: (1, 4),
+        });
+    }
+
+    // SRD 5.2.1, p. 357. The compiled action is Bite.
+    #[test]
+    fn mastiff_core_stat_block_values_srd_521_p357() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "mastiff",
+            weapon_label: "bite",
+            page: 357,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 40,
+            weapons: &[crate::tactical::Weapon::Bite],
+            shield: false,
+            hit_points: 5,
+            armor_class: 12,
+            abilities: [13, 14, 12, 3, 12, 7],
+            attack_bonus: 3,
+            damage_modifier: 1,
+            damage_dice: (1, 6),
+        });
+    }
+
+    // SRD 5.2.1, p. 322. The compiled legacy attack is Shortsword.
+    #[test]
+    fn scout_core_stat_block_values_srd_521_p322() {
+        assert_srd_creature_core(ExpectedSrdCreatureCore {
+            id: "scout",
+            weapon_label: "shortsword",
+            page: 322,
+            size: crate::tactical::Size::Medium,
+            speed_ft: 30,
+            weapons: &[
+                crate::tactical::Weapon::Shortsword,
+                crate::tactical::Weapon::Longbow,
+            ],
+            shield: false,
+            hit_points: 16,
+            armor_class: 13,
+            abilities: [11, 14, 12, 11, 13, 11],
+            attack_bonus: 4,
+            damage_modifier: 2,
+            damage_dice: (1, 6),
+        });
+    }
+
     fn choices() -> Vec<(&'static str, &'static str)> {
         vec![
             ("species", "dwarf"),

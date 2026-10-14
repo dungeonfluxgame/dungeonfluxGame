@@ -28,7 +28,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "bandit",
         name: "Bandit",
         page: 261,
-        languages: "Common",
+        languages: "Common, Thieves' Cant",
         exact: true,
         attacks_unconscious: false,
         weapon_label: "scimitar",
@@ -135,7 +135,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "skeleton",
         name: "Skeleton",
         page: 325,
-        languages: "Understands the languages it knew in life but can't speak",
+        languages: "Understands Common plus one other language but can't speak",
         exact: true,
         attacks_unconscious: false,
         weapon_label: "shortsword",
@@ -151,12 +151,12 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 343. Undead Fortitude is not modeled. The SRD Knocking Out rule (p.17) replaces 0 HP with 1 HP, which arguably never triggers the trait, but the ruling is not settled here; the owner may reclassify this entry as exact.
+    // SRD 5.2.1, pp. 17, 343. Tactical combat applies Undead Fortitude; the legacy single-opponent encounter does not.
     SrdCreature {
         id: "zombie",
         name: "Zombie",
         page: 343,
-        languages: "Understands the languages it knew in life but can't speak",
+        languages: "Understands Common plus one other language but can't speak",
         exact: false,
         attacks_unconscious: true,
         weapon_label: "slam",
@@ -256,12 +256,12 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 322. Multiattack (two attacks per action) is dropped: the combat model resolves one attack per turn. This makes the Scout weaker than written.
+    // SRD 5.2.1, p. 322. Tactical combat implements Multiattack; the legacy single-opponent encounter uses one attack.
     SrdCreature {
         id: "scout",
         name: "Scout",
         page: 322,
-        languages: "Common, Goblin",
+        languages: "Common plus one other language",
         exact: false,
         attacks_unconscious: false,
         weapon_label: "shortsword",
@@ -295,9 +295,11 @@ pub enum FeatureKind {
     Trait,
     Action,
     BonusAction,
+    Reaction,
     Movement,
+    Sense,
 }
-/// One trait, action, bonus action or movement mode of a 2024 stat block.
+/// One trait, action, bonus action, reaction, movement mode or sense of a 2024 stat block.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreatureFeature {
     pub creature: &'static str,
@@ -321,10 +323,12 @@ const fn feature(
         note,
     }
 }
-use FeatureKind::{Action, BonusAction, Movement, Trait};
+use FeatureKind::{Action, BonusAction, Movement, Reaction, Sense, Trait};
 use FeatureStatus::{Implemented, Missing, NotExercised};
-/// Every trait and action of the twelve compiled stat blocks (SRD 5.2.1 page in the creature
-/// row above), checked by a test so a creature cannot gain a row-less feature silently.
+const DARKVISION_GAP_NOTE: &str =
+    "It can see in darkness within 60 ft.; this fight still treats darkness as limiting its sight.";
+/// Every trait, action, bonus action, reaction, movement mode and sense of the twelve compiled
+/// stat blocks (SRD 5.2.1 page in the creature row above), checked so none is omitted silently.
 pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
     feature(
         "bandit",
@@ -344,8 +348,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "cultist",
         "Ritual Sickle",
         Action,
-        Implemented,
-        "melee; the 1 Necrotic damage is separate from the Slashing damage",
+        Missing,
+        "The Sickle deals 1d4 + 1 Slashing plus 1 Necrotic damage. This fight adds both amounts together as Slashing.",
     ),
     feature(
         "guard",
@@ -389,6 +393,22 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         Missing,
         "no Hide or stealth rules in the tactical subset",
     ),
+    // SRD 5.2.1, p. 290: "Darkvision 60 ft."
+    feature(
+        "goblin-warrior",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
+    ),
+    // SRD 5.2.1, p. 290: "The goblin and that ally swap places, and the ally becomes the target of the attack instead."
+    feature(
+        "goblin-warrior",
+        "Redirect Attack",
+        Reaction,
+        Missing,
+        "When an attack targets it, it can swap places with a Small or Medium ally within 5 ft. and make that ally the target; this fight does not redirect attacks.",
+    ),
     feature(
         "kobold-warrior",
         "Pack Tactics",
@@ -416,6 +436,14 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         Action,
         Implemented,
         "range 20/60 ft, three daggers carried",
+    ),
+    // SRD 5.2.1, p. 302: "Darkvision 60 ft."
+    feature(
+        "kobold-warrior",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
     ),
     feature(
         "skeleton",
@@ -445,6 +473,14 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         Implemented,
         "ranged 80/320 ft",
     ),
+    // SRD 5.2.1, p. 325: "Darkvision 60 ft."
+    feature(
+        "skeleton",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
+    ),
     feature(
         "zombie",
         "Undead Fortitude",
@@ -467,6 +503,14 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "no fight deals poison or applies these conditions",
     ),
     feature("zombie", "Slam", Action, Implemented, "melee, reach 5 ft"),
+    // SRD 5.2.1, p. 343: "Darkvision 60 ft."
+    feature(
+        "zombie",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
+    ),
     feature(
         "wolf",
         "Pack Tactics",
@@ -480,6 +524,14 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         Action,
         Implemented,
         "melee, reach 5 ft; on a hit, a Medium or smaller target is knocked Prone",
+    ),
+    // SRD 5.2.1, p. 364: "Darkvision 60 ft."; Keen Hearing and Smell is not in this 2024 block.
+    feature(
+        "wolf",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
     ),
     feature(
         "giant-rat",
@@ -502,6 +554,14 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         Missing,
         "the grid has no vertical movement",
     ),
+    // SRD 5.2.1, p. 353: "Darkvision 60 ft."; Keen Smell is not in this 2024 block.
+    feature(
+        "giant-rat",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
+    ),
     feature(
         "giant-weasel",
         "Bite",
@@ -516,12 +576,28 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         Missing,
         "the grid has no vertical movement",
     ),
+    // SRD 5.2.1, p. 355: "Darkvision 60 ft."; Keen Hearing and Smell is not in this 2024 block.
+    feature(
+        "giant-weasel",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
+    ),
     feature(
         "mastiff",
         "Bite",
         Action,
         Implemented,
         "melee, reach 5 ft; on a hit, a Medium or smaller target is knocked Prone",
+    ),
+    // SRD 5.2.1, p. 357: "Darkvision 60 ft."; Keen Hearing and Smell is not in this 2024 block.
+    feature(
+        "mastiff",
+        "Darkvision 60 ft.",
+        Sense,
+        Missing,
+        DARKVISION_GAP_NOTE,
     ),
     feature(
         "scout",
@@ -548,6 +624,53 @@ pub fn missing_features(creature: &str) -> impl Iterator<Item = &'static Creatur
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // SRD 5.2.1, pp. 290, 302, 325, 343, 353, 355, 357, 364: these eight blocks have Darkvision 60 ft.
+    #[test]
+    fn darkvision_is_disclosed_for_every_srd_creature_that_has_it() {
+        for (id, page) in [
+            ("goblin-warrior", 290),
+            ("kobold-warrior", 302),
+            ("skeleton", 325),
+            ("zombie", 343),
+            ("giant-rat", 353),
+            ("giant-weasel", 355),
+            ("mastiff", 357),
+            ("wolf", 364),
+        ] {
+            let creature = SRD_521_CREATURES
+                .iter()
+                .find(|creature| creature.id == id)
+                .expect("SRD creature from source list");
+            assert_eq!(creature.page, page);
+            let darkvision = missing_features(id)
+                .find(|row| row.name == "Darkvision 60 ft.")
+                .unwrap_or_else(|| panic!("{id} at SRD p. {page} needs Darkvision disclosed"));
+            assert_eq!(darkvision.kind, Sense);
+            assert_eq!(darkvision.status, Missing);
+            assert!(
+                darkvision
+                    .note
+                    .contains("can see in darkness within 60 ft.")
+            );
+            assert!(darkvision.note.contains("darkness as limiting its sight"));
+        }
+        for (id, absent_2014_trait) in [
+            ("wolf", "Keen Hearing and Smell"),
+            ("giant-rat", "Keen Smell"),
+            ("giant-weasel", "Keen Hearing and Smell"),
+            ("mastiff", "Keen Hearing and Smell"),
+        ] {
+            assert!(
+                !SRD_521_CREATURE_FEATURES
+                    .iter()
+                    .any(|row| row.creature == id && row.name == absent_2014_trait),
+                "{} incorrectly uses the non-SRD 5.2.1 trait {absent_2014_trait}",
+                id
+            );
+        }
+    }
+
     #[test]
     fn creature_languages_distinguish_speech_from_understanding() {
         let creature = |id| {
@@ -558,8 +681,23 @@ mod tests {
         };
         assert_eq!(creature("giant-weasel").languages, "None");
         assert!(!creature("giant-weasel").can_speak());
+        assert_eq!(creature("bandit").languages, "Common, Thieves' Cant");
         assert!(creature("bandit").can_speak());
+        assert_eq!(
+            creature("scout").languages,
+            "Common plus one other language"
+        );
+        assert!(creature("scout").can_speak());
+        assert_eq!(
+            creature("skeleton").languages,
+            "Understands Common plus one other language but can't speak"
+        );
         assert!(!creature("skeleton").can_speak());
+        assert_eq!(
+            creature("zombie").languages,
+            "Understands Common plus one other language but can't speak"
+        );
+        assert!(!creature("zombie").can_speak());
     }
 
     #[test]
@@ -596,8 +734,34 @@ mod tests {
             );
             assert!(!row.note.is_empty());
         }
-        assert_eq!(missing_features("giant-rat").count(), 1);
-        assert_eq!(missing_features("kobold-warrior").count(), 0);
+        assert_eq!(missing_features("giant-rat").count(), 2);
+        assert_eq!(missing_features("kobold-warrior").count(), 1);
+        assert_eq!(missing_features("goblin-warrior").count(), 3);
+    }
+
+    // SRD 5.2.1, p. 290: Redirect Attack is a reaction the tactical rules do not resolve.
+    #[test]
+    fn goblin_redirect_attack_is_disclosed_as_missing() {
+        let redirect = missing_features("goblin-warrior")
+            .find(|row| row.name == "Redirect Attack")
+            .expect("missing reaction is disclosed");
+        assert_eq!(redirect.kind, Reaction);
+        assert_eq!(redirect.status, Missing);
+        assert!(redirect.note.contains("swap places"));
+    }
+
+    // SRD 5.2.1, p. 278: "Hit: 3 (1d4 + 1) Slashing damage plus 1 Necrotic damage."
+    #[test]
+    fn cultist_sickle_discloses_mixed_damage_as_missing() {
+        let sickle = SRD_521_CREATURE_FEATURES
+            .iter()
+            .find(|row| row.creature == "cultist" && row.name == "Ritual Sickle")
+            .expect("Cultist Sickle action");
+        assert_eq!(sickle.kind, Action);
+        assert_eq!(sickle.status, Missing);
+        assert!(sickle.note.contains("1d4 + 1 Slashing"));
+        assert!(sickle.note.contains("1 Necrotic"));
+        assert!(sickle.note.contains("as Slashing"));
     }
 
     #[test]
