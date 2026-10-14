@@ -205,10 +205,16 @@ pub(super) async fn preparing(
     address: std::net::SocketAddr,
     origins: Vec<String>,
 ) -> Result<tokio::task::JoinHandle<Result<(), io::Error>>, io::Error> {
+    /// The holding page a browser gets if it loads while the next adventure's runtime is
+    /// being made: the same picture the running app shows (`live_preparing.html`), and a poll
+    /// that reloads once the real page is being served again. A plain timed refresh would land
+    /// on the browser's own error page in the moment between the two servers and stop there.
     async fn page() -> Html<&'static str> {
-        Html(
-            "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta http-equiv=\"refresh\" content=\"1\"><title>DungeonFlux</title></head><body style=\"background:#080f17;color:#efe6ce;font:24px Georgia;text-align:center;padding-top:30vh\"><p role=\"status\">A new adventure is being prepared...</p></body></html>",
-        )
+        Html(concat!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>DungeonFlux</title><noscript><meta http-equiv=\"refresh\" content=\"2\"></noscript></head><body style=\"margin:0;background:#070b12\">",
+            include_str!("../gameplay_browser/live_preparing.html"),
+            "<script>setInterval(function(){fetch(location.href,{cache:'no-store'}).then(function(r){return r.text()}).then(function(t){if(t.indexOf('data-df-preparing')<0)location.reload()}).catch(function(){})},1000)</script></body></html>"
+        ))
     }
     async fn tunnel(
         State((incoming, origins)): State<(NativeAdmission, Arc<[String]>)>,

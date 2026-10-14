@@ -1999,7 +1999,9 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
             .ok_or_else(|| JsValue::from_str("view absent"))?;
         live_screens::release(client, &surface)?;
         live_combat::release(client)?;
-        surface.set_text_content(Some(NEW_ADVENTURE));
+        // The whole screen between two adventures: a drawn night scene with the same
+        // sentence in it as the notice (`live_preparing.html`, shared with the holding page).
+        surface.set_inner_html(include_str!("gameplay_browser/live_preparing.html"));
         show_notice(&client.borrow(), Some(NEW_ADVENTURE));
         return Ok(());
     }
