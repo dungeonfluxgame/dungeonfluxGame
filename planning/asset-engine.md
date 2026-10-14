@@ -282,3 +282,78 @@ dirt, sweat and bruising). Health outranks mood at Bloodied or worse; above it t
   unreachable and the warm-up makes new ones by itself. The prompts still say "Painterly cinematic
   realism" (`HOUSE_STYLE`) and the backdrop prompts say "painting"; those two phrases need editing
   for a live-action look, and editing them also changes the keys, so everything regenerates.
+
+## Scene rendering engine v2: a layered stage with baked frames (decided 2026-10-13)
+
+Why. The owner, watching played scenes on 2026-10-13: "even though the scenes are updating, the
+player characters never move and nor does the background, the only thing that moves is the npc
+facial expression"; "I want the display plate to be an every 10 second snapshot of the game
+state (json prompting) so we can see emotions on all the characters faces and have them
+interact with the scene and move around"; "with those hard timings and deps I still want more
+motion and dynamism in the scenes"; "make a plan and upgrade the scene rendering engine". Budgets
+are out of scope for now ("a later design config decision"): requests respect only the existing
+`DF_GAMEPLAY_IMAGERY_BUDGET`.
+
+What limits it (measured on 2026-10-13 games, `imagery.jsonl`): a scene plate takes about 19 s
+(23 s at worst), a plate edit 18 s, a transparent cut-out 13 s, an empty-room backdrop 12 s. A
+single baked still therefore cannot follow play; anything that must react within a second or two
+has to be drawn by the browser from parts made in advance.
+
+The model. A story scene is no longer one picture. The server sends a **scene graph** with the
+display view, and the TV draws it in layers; the image models make the layers' parts and, when
+the scene has settled, a photographic **baked frame** of the whole graph.
+
+- **Scene graph (server, JSON, audience-safe).** The place (its empty-room plate), time of day,
+  weather and light; the camera's framing; every actor present (heroes, the cast, background
+  people) with their reference art, where they stand (a named spot in the room with a picture
+  anchor and a depth), pose (standing, seated, leaning, holding, gesturing, walking), expression
+  and body language (from the emotional model, EMO-01), who they are looking at, what they hold;
+  the props that can change (from the scene model, ENV-07) with their state; the effects (fire,
+  candles, rain, smoke). One function builds it from the server's state; its JSON is the prompt
+  of every bake, so a frame is reproducible and two frames can be compared.
+- **Layers on the TV, bottom to top.** (0) the set: the empty-room plate, or its ambient video
+  loop when ready (MOT-02); (1) depth: the floor band and spots of the set, known from the set's
+  own prompt ("a wide clear floor across the lower third") and refined by the existing vision
+  call that measures heads (`PlateLayout`), giving each spot a scale; (2) actors: transparent
+  cut-outs per actor, pose and expression, cached, placed at their spot and scaled by depth, with
+  a contact shadow, relit to the set's light (colour and brightness from the set's measured
+  palette), softened by distance (the battle view's tilt-shift), breathing, turning toward who
+  they look at, leaning in when they speak, sliding with a step bob when they walk to a new spot;
+  (3) props whose state has changed, as cut-outs (a set edit removes a baked prop for good);
+  (4) atmosphere: dust, embers, smoke, rain or snow from the weather, light flicker (done); (5) the
+  camera rig: a slow drift, a push toward the speaker, a pull back for the narrator (done:
+  `f43d3fa7`), and director shots chosen per beat (wide, two-shot of speaker and listener, close
+  on the speaker) with crossfades.
+- **Composite while things change, baked frame when settled.** Every visible change to the graph
+  (an actor moved or changed pose, a feeling went up a level, a prop changed, someone came or
+  left) is drawn at once by the composite. When the graph has been still for a few seconds and
+  differs visibly from the last baked frame, the server bakes it (a plate edit of the last baked
+  frame with the graph as JSON and the fixed references: party sheet, portraits, the set; a fresh
+  plate every few bakes to stop drift) at most once every 10 s; the TV crossfades from the
+  composite to the baked frame (and its video loop) and back to the composite at the next change.
+  A bake that arrives after the graph changed again is dropped.
+- **Heroes act out what players say.** A hero line or action that implies a place or a pose ("I
+  lean on the bar", "I sit by the fire", "I pick up the mug") changes that hero's spot and pose in
+  the graph (the scene model's interaction resolves it); the composite shows it within a second;
+  the next bake makes it photographic.
+- **Item close-ups** (ENV-08) use the same machinery: a cached cut-out or card picture per thing
+  and state.
+- **Phones** keep the latest still (baked frame or set) and do not run the composite.
+- **Never in a fight or a roll**, as today; nothing waits on an image; a missing part falls back to
+  the layer below (no cut-out: the actor is not drawn; no set: the old painting).
+
+Order of work (one worker at a time in `df-tools`):
+
+| Step | Worker | What | Depends on |
+| --- | --- | --- | --- |
+| 1 | coordinator | The living camera on the plate | done `f43d3fa7` |
+| 2 | R01 (Luna, max effort) | Scene graph v1 from what exists (set plate, cast and hero cut-outs, spots from the layout, light); the layered composite on the TV with depth scale, shadows, relighting, idle motion, speaker focus and director shots; hero cut-outs; the composite/baked switch using today's plates as the baked frame | after the investigation worker |
+| 3 | E01 (Sol) | Emotional model: expressions and body language per actor per moment | R01 |
+| 4 | M01 (Luna, max effort) | Ambient video loops of the set and of each baked frame | R01 |
+| 5 | V06 (Luna, max effort) | Scene model and state: spots, props, interactions that move actors and change props | R01 |
+| 6 | V07 (Luna, max effort) | Bake on change from the graph's JSON; set edits for props; item close-ups | V06, E01 |
+
+Acceptance is seen on a running game, not in tests alone: in a conversation scene the heroes and
+the people present are visible as figures that breathe and turn toward whoever speaks, the camera
+moves to the speaker, a hero who says "I lean on the bar" is at the bar within two seconds and in
+the next baked frame, and every face shows the feeling the emotional model holds.
