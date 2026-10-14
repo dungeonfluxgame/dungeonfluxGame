@@ -241,7 +241,7 @@ fn recorded_errand_facts_and_private_clue_become_party_notebook_entries() {
                 .contains("Reward: A silver ring if word arrives before dawn.")
     }));
 
-    let offered_order = notebook
+    let given_order = notebook
         .public_entries()
         .into_iter()
         .find(|entry| entry.kind == Kind::Task)
@@ -254,12 +254,12 @@ fn recorded_errand_facts_and_private_clue_become_party_notebook_entries() {
         .find(|entry| entry.kind == Kind::Task)
         .unwrap()
         .order;
-    assert!(accepted_order > offered_order);
+    assert_eq!(accepted_order, given_order);
     assert!(
         notebook
             .public_entries()
             .iter()
-            .any(|entry| entry.kind == Kind::Task && entry.text.starts_with("Status: accepted\n"))
+            .any(|entry| entry.kind == Kind::Task && entry.text.starts_with("Status: given\n"))
     );
     let choice_scene = scene(super::pack::SceneKey::DialogueSeal);
     notebook
@@ -315,7 +315,7 @@ fn recorded_errand_facts_and_private_clue_become_party_notebook_entries() {
 
 // SRD 5.2.1 p. N/A: task status is narrative memory, not a game rule.
 #[test]
-fn task_status_updates_through_accepted_done_and_failed() {
+fn task_status_updates_through_given_done_and_failed() {
     let notebook = NotebookLedger::none();
     notebook
         .add_fact(
@@ -326,15 +326,169 @@ fn task_status_updates_through_accepted_done_and_failed() {
         )
         .unwrap();
 
-    for status in ["accepted", "done", "failed"] {
+    for (status, recorded) in [
+        ("accepted", "given"),
+        ("done", "done"),
+        ("failed", "failed"),
+    ] {
         notebook.mark_task_status(status).unwrap();
         let task = notebook
             .public_entries()
             .into_iter()
             .find(|entry| entry.kind == Kind::Task)
             .unwrap();
-        assert!(task.text.starts_with(&format!("Status: {status}\n")));
+        assert!(task.text.starts_with(&format!("Status: {recorded}\n")));
     }
+}
+
+// SRD 5.2.1 p. N/A: notebook entries are narrative memory, not a game rule.
+#[test]
+fn notebook_entries_use_scene_titles_and_keep_a_private_clue_once_across_scenes() {
+    let notebook = NotebookLedger::none();
+    let mut opening = scene(super::pack::SceneKey::Opening);
+    opening.title = "At the Ferry Desk".to_owned();
+    notebook
+        .observe_scene(
+            member(1),
+            "Brakka",
+            &opening,
+            "The key is beneath the bell.",
+            false,
+        )
+        .unwrap();
+
+    let mut clue_scene = scene(super::pack::SceneKey::DialogueSeal);
+    clue_scene.title = "The Sealed Warning".to_owned();
+    notebook
+        .observe_scene(
+            member(1),
+            "Brakka",
+            &clue_scene,
+            "The key is beneath the bell.",
+            false,
+        )
+        .unwrap();
+
+    let entries = notebook.visible_to(member(1));
+    let clues = entries
+        .iter()
+        .filter(|entry| entry.kind == Kind::Clue)
+        .collect::<Vec<_>>();
+    assert_eq!(clues.len(), 1);
+    assert_eq!(clues[0].scene, "At the Ferry Desk");
+    let task = entries
+        .iter()
+        .find(|entry| entry.kind == Kind::Task)
+        .unwrap();
+    assert_eq!(task.scene, "At the Ferry Desk");
+}
+
+// SRD 5.2.1 p. N/A: this test checks notebook fact identity, not a game rule.
+#[test]
+fn a_location_short_name_does_not_create_a_second_place_entry() {
+    let mut sheet = fact_sheet();
+    sheet
+        .facts
+        .insert("loc.name".to_owned(), "the Lamplit Market".to_owned());
+    sheet
+        .facts
+        .insert("loc.short".to_owned(), "the market".to_owned());
+    sheet
+        .facts
+        .insert("place_short".to_owned(), "the market".to_owned());
+    sheet.facts.insert(
+        "place_detail".to_owned(),
+        "You leave your meeting place for the market.".to_owned(),
+    );
+    sheet.must_mention = vec!["the Lamplit Market".to_owned(), "the market".to_owned()];
+    let notebook = NotebookLedger::open("seed", Vec::new(), vec![sheet], None).unwrap();
+
+    notebook
+        .observe_scene(
+            member(1),
+            "Brakka",
+            &scene(super::pack::SceneKey::Opening),
+            "",
+            false,
+        )
+        .unwrap();
+
+    let places = notebook
+        .public_entries()
+        .into_iter()
+        .filter(|entry| entry.kind == Kind::Place)
+        .collect::<Vec<_>>();
+    assert_eq!(places.len(), 1);
+    assert_eq!(places[0].title, "the Lamplit Market");
+    assert_eq!(places[0].text, "Also known as the market.");
+}
+
+// SRD 5.2.1 p. N/A: task status records narrative outcome, not a game rule.
+#[test]
+fn a_defeat_marks_the_errand_failed_even_after_a_done_action() {
+    let notebook = NotebookLedger::none();
+    notebook
+        .observe_scene(
+            member(1),
+            "Brakka",
+            &scene(super::pack::SceneKey::Opening),
+            "",
+            false,
+        )
+        .unwrap();
+    notebook.mark_task_status("done").unwrap();
+
+    let mut defeat = scene(super::pack::SceneKey::Defeat);
+    defeat.title = "The Road Goes Dark".to_owned();
+    notebook
+        .observe_scene(member(1), "Brakka", &defeat, "", true)
+        .unwrap();
+
+    let task = notebook
+        .public_entries()
+        .into_iter()
+        .find(|entry| entry.kind == Kind::Task)
+        .unwrap();
+    assert!(task.text.starts_with("Status: failed\n"));
+    assert_eq!(task.scene, "Jorun's Quiet Warning");
+}
+
+// SRD 5.2.1 p. N/A: this test checks person classification, not a game rule.
+#[test]
+fn a_beast_antagonist_is_not_added_to_the_people_list() {
+    let mut sheet = fact_sheet();
+    sheet
+        .facts
+        .insert("ant.full".to_owned(), "The Shaggy Giant Weasel".to_owned());
+    sheet
+        .facts
+        .insert("ant.short".to_owned(), "The Shaggy Giant Weasel".to_owned());
+    sheet
+        .facts
+        .insert("ant.group".to_owned(), "beast".to_owned());
+    sheet
+        .must_mention
+        .push("The Shaggy Giant Weasel".to_owned());
+    let mut opening = scene(super::pack::SceneKey::Opening);
+    opening.cast.push(super::pack::SceneCastMember {
+        id: "giant-weasel".to_owned(),
+        name: "Shaggy Giant Weasel".to_owned(),
+        role: super::pack::CastRole::Antagonist,
+        sprite: String::new(),
+        portrait: String::new(),
+        voice: String::new(),
+        gender: None,
+        age: None,
+    });
+    let notebook = NotebookLedger::open("seed", Vec::new(), vec![sheet], None).unwrap();
+
+    notebook
+        .observe_scene(member(1), "Brakka", &opening, "", false)
+        .unwrap();
+
+    assert!(notebook.public_entries().iter().all(|entry| {
+        entry.kind != Kind::Person || !entry.title.to_lowercase().contains("weasel")
+    }));
 }
 
 fn scene(key: super::pack::SceneKey) -> super::pack::Scene {

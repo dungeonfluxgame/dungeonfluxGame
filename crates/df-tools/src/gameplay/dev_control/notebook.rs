@@ -118,13 +118,12 @@ pub(super) async fn add(
         (hero, member)
     };
     let checkpoint = state.service.updates.borrow().clone();
-    let scene = super::super::beat_script_runtime::scene(checkpoint.state())
-        .map_err(|_| failed("current scene unavailable"))?;
-    let scene = super::super::notebook::scene_name(scene.key)
-        .map_err(|_| failed("current scene unavailable"))?;
+    let scene_title = super::super::beat_script_runtime::scene(checkpoint.state())
+        .map_err(|_| failed("current scene unavailable"))?
+        .title;
     let order = state
         .notebook
-        .add_note(member, &hero, &body.text, &scene)
+        .add_note(member, &hero, &body.text, &scene_title)
         .map_err(|error| match error {
             super::super::notebook::NotebookError::Bound("text") => {
                 bad_request("text must be 1 to 4096 characters")
@@ -137,10 +136,10 @@ pub(super) async fn add(
         df_protocol::common::TableRole::Narrator,
         0,
         df_protocol::common::TableKind::Action,
-        &format!("NOTE added kind=note title=\"Party note\" scene={scene}"),
+        &format!("NOTE added kind=note title=\"Party note\" scene={scene_title}"),
     );
     Ok((
         StatusCode::OK,
-        Json(json!({"status": "added", "hero": hero, "scene": scene, "order": order})),
+        Json(json!({"status": "added", "hero": hero, "scene": scene_title, "order": order})),
     ))
 }

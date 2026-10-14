@@ -239,7 +239,7 @@ impl NotebookLedger {
         if let Some(index) = state
             .entries
             .iter_mut()
-            .position(|entry| entry.kind == kind && entry.title == title)
+            .position(|entry| entry.kind == kind && entry.title.eq_ignore_ascii_case(title))
         {
             if state.entries[index].text == text {
                 return Ok(None);
@@ -269,11 +269,12 @@ impl NotebookLedger {
         private_clue: &str,
         adventure_ended: bool,
     ) -> Result<Vec<EntryView>, NotebookError> {
-        let scene_name = scene_name(scene.key)?;
+        let scene_key = scene_name(scene.key)?;
+        let scene_title = scene.title.as_str();
         let sheets = self
             .fact_sheet
             .iter()
-            .filter(|sheet| sheet.scene.as_deref() == Some(scene_name.as_str()))
+            .filter(|sheet| sheet.scene.as_deref() == Some(scene_key.as_str()))
             .collect::<Vec<_>>();
         let mut added = Vec::new();
         let mut mentioned_people = BTreeSet::new();
@@ -295,6 +296,20 @@ impl NotebookLedger {
                 }) {
                     continue;
                 }
+                if prefix == "ant"
+                    && sheet
+                        .facts
+                        .get("ant.group")
+                        .is_some_and(|group| matches!(group.as_str(), "beast" | "undead"))
+                {
+                    for name in [Some(name), first, short].into_iter().flatten() {
+                        let name = person_name_key(name);
+                        if !name.is_empty() {
+                            mentioned_people.insert(name);
+                        }
+                    }
+                    continue;
+                }
                 let role = sheet
                     .facts
                     .get(&format!("{prefix}.role"))
@@ -309,29 +324,26 @@ impl NotebookLedger {
                     || format!("{role}."),
                     |place| format!("{role}; found at {place}."),
                 );
-                if let Some(order) = self.add_fact(Kind::Person, name, &text, &scene_name)? {
+                if let Some(order) = self.add_fact(Kind::Person, name, &text, scene_title)? {
                     added.push(EntryView {
                         kind: Kind::Person,
                         title: name.clone(),
                         text,
-                        scene: scene_name.clone(),
+                        scene: scene_title.to_owned(),
                         order,
                         owner: None,
                         author: None,
                     });
                 }
-                mentioned_people.insert(name.to_lowercase());
-                mentioned_people.insert(
-                    name.split_whitespace()
-                        .next()
-                        .unwrap_or_default()
-                        .to_lowercase(),
-                );
+                mentioned_people.insert(person_name_key(name));
+                mentioned_people.insert(person_name_key(
+                    name.split_whitespace().next().unwrap_or_default(),
+                ));
                 if let Some(first) = first {
-                    mentioned_people.insert(first.to_lowercase());
+                    mentioned_people.insert(person_name_key(first));
                 }
                 if let Some(short) = short {
-                    mentioned_people.insert(short.to_lowercase());
+                    mentioned_people.insert(person_name_key(short));
                 }
             }
         }
@@ -360,12 +372,12 @@ impl NotebookLedger {
                 Some(place) => format!("{}; found at {}.", dossier.role_label, place),
                 None => format!("{}.", dossier.role_label),
             };
-            if let Some(order) = self.add_fact(Kind::Person, &dossier.name, &text, &scene_name)? {
+            if let Some(order) = self.add_fact(Kind::Person, &dossier.name, &text, scene_title)? {
                 added.push(EntryView {
                     kind: Kind::Person,
                     title: dossier.name.clone(),
                     text,
-                    scene: scene_name.clone(),
+                    scene: scene_title.to_owned(),
                     order,
                     owner: None,
                     author: None,
@@ -374,7 +386,7 @@ impl NotebookLedger {
         }
         for actor in &scene.cast {
             if actor.name.trim().is_empty()
-                || mentioned_people.contains(&actor.name.to_lowercase())
+                || mentioned_people.contains(&person_name_key(&actor.name))
                 || self
                     .dossiers
                     .iter()
@@ -394,12 +406,12 @@ impl NotebookLedger {
                 .map(|setting| setting.name.as_str())
                 .unwrap_or("the current scene");
             let text = format!("{role}; found at {place}.");
-            if let Some(order) = self.add_fact(Kind::Person, &actor.name, &text, &scene_name)? {
+            if let Some(order) = self.add_fact(Kind::Person, &actor.name, &text, scene_title)? {
                 added.push(EntryView {
                     kind: Kind::Person,
                     title: actor.name.clone(),
                     text,
-                    scene: scene_name.clone(),
+                    scene: scene_title.to_owned(),
                     order,
                     owner: None,
                     author: None,
@@ -420,6 +432,14 @@ impl NotebookLedger {
                 {
                     continue;
                 }
+                if key == "place_short"
+                    && sheet
+                        .facts
+                        .get("loc.short")
+                        .is_some_and(|short| short.eq_ignore_ascii_case(name))
+                {
+                    continue;
+                }
                 let detail = if key == "dest.name" {
                     self.dossiers
                         .iter()
@@ -432,7 +452,7 @@ impl NotebookLedger {
                     sheet
                         .facts
                         .get("loc.short")
-                        .cloned()
+                        .map(|short| format!("Also known as {short}."))
                         .unwrap_or_else(|| "Named in the current scene.".to_owned())
                 } else {
                     sheet
@@ -441,12 +461,12 @@ impl NotebookLedger {
                         .cloned()
                         .unwrap_or_else(|| "Named in the current scene.".to_owned())
                 };
-                if let Some(order) = self.add_fact(Kind::Place, name, &detail, &scene_name)? {
+                if let Some(order) = self.add_fact(Kind::Place, name, &detail, scene_title)? {
                     added.push(EntryView {
                         kind: Kind::Place,
                         title: name.clone(),
                         text: detail,
-                        scene: scene_name.clone(),
+                        scene: scene_title.to_owned(),
                         order,
                         owner: None,
                         author: None,
@@ -464,15 +484,15 @@ impl NotebookLedger {
             })
         {
             let task = format!(
-                "Status: offered\n{} asked the party: {}",
+                "Status: given\n{} asked the party: {}",
                 scene.speaker, scene.dialogue
             );
-            if let Some(order) = self.add_fact(Kind::Task, "The errand", &task, &scene_name)? {
+            if let Some(order) = self.add_fact(Kind::Task, "The errand", &task, scene_title)? {
                 added.push(EntryView {
                     kind: Kind::Task,
                     title: "The errand".to_owned(),
                     text: task,
-                    scene: scene_name.clone(),
+                    scene: scene_title.to_owned(),
                     order,
                     owner: None,
                     author: None,
@@ -487,18 +507,18 @@ impl NotebookLedger {
                 self.add_task_reward(reward)?;
             }
         }
-        if adventure_ended {
+        if adventure_ended && scene.key == super::pack::SceneKey::Defeat {
             self.mark_task_failed()?;
         }
         if !private_clue.trim().is_empty()
             && let Some(order) =
-                self.add_clue(member, hero, "Private clue", private_clue, &scene_name)?
+                self.add_clue(member, hero, "Private clue", private_clue, scene_title)?
         {
             added.push(EntryView {
                 kind: Kind::Clue,
                 title: "Private clue".to_owned(),
                 text: private_clue.to_owned(),
-                scene: scene_name,
+                scene: scene_title.to_owned(),
                 order,
                 owner: Some(hero.to_owned()),
                 author: Some(hero.to_owned()),
@@ -508,20 +528,16 @@ impl NotebookLedger {
     }
 
     pub(super) fn mark_task_status(&self, status: &str) -> Result<bool, NotebookError> {
-        if !matches!(status, "accepted" | "done" | "failed") {
-            return Err(NotebookError::Invalid("task status"));
-        }
+        let status = match status {
+            "accepted" | "given" => "given",
+            "done" | "failed" => status,
+            _ => return Err(NotebookError::Invalid("task status")),
+        };
         self.update_task(|text| format!("Status: {status}\n{}", task_details(text)))
     }
 
     fn mark_task_failed(&self) -> Result<bool, NotebookError> {
-        self.update_task(|text| {
-            if text.starts_with("Status: done\n") || text.starts_with("Status: failed\n") {
-                text.to_owned()
-            } else {
-                format!("Status: failed\n{}", task_details(text))
-            }
-        })
+        self.update_task(|text| format!("Status: failed\n{}", task_details(text)))
     }
 
     fn add_task_reward(&self, reward: &str) -> Result<(), NotebookError> {
@@ -582,7 +598,6 @@ impl NotebookLedger {
             entry.kind == Kind::Clue
                 && entry.author_member.as_deref() == Some(member.as_str())
                 && entry.title == title
-                && entry.scene == scene
                 && entry.text == text
         }) {
             return Ok(None);
@@ -806,8 +821,18 @@ pub(super) fn scene_name(key: super::pack::SceneKey) -> Result<String, NotebookE
 }
 
 fn matches_person_name(candidate: &str, full_name: &str) -> bool {
+    let candidate = person_name_key(candidate);
+    let full_name = person_name_key(full_name);
     let first_name = full_name.split_whitespace().next().unwrap_or_default();
-    candidate.eq_ignore_ascii_case(full_name) || candidate.eq_ignore_ascii_case(first_name)
+    candidate.eq_ignore_ascii_case(&full_name) || candidate.eq_ignore_ascii_case(first_name)
+}
+
+fn person_name_key(name: &str) -> String {
+    name.trim()
+        .strip_prefix("The ")
+        .or_else(|| name.trim().strip_prefix("the "))
+        .unwrap_or(name.trim())
+        .to_lowercase()
 }
 
 fn dossier_location(

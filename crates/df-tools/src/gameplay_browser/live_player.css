@@ -117,7 +117,7 @@ main .client.display{background:transparent}
 .client.player .live-notebook-entry{box-sizing:border-box;min-width:0;padding:10px 12px;border:1px solid #c9a35f44;border-radius:8px;background:#070d15}
 .client.player .live-notebook-entry h4{margin:0 0 5px;color:#f3e2bd;font:600 16px var(--serif);overflow-wrap:anywhere}
 .client.player .live-notebook-entry p{margin:0;color:#d7ddd1;font:15px/1.4 var(--serif);overflow-wrap:anywhere;white-space:pre-line}
-.client.player .live-notebook-entry .live-notebook-scene{display:none;margin-top:6px;color:#a9b4be;font:12px/1.3 var(--serif)}
+.client.player .live-notebook-entry .live-notebook-scene{display:block;margin-top:6px;color:#a9b4be;font:12px/1.3 var(--serif)}
 .client.player .live-notebook-entry button,.client.player .live-notebook-composer button{min-height:44px;margin-top:8px;padding:8px 12px;border:1px solid #c9a35f88;border-radius:6px;background:#142133;color:#f3e2bd;font:16px var(--serif);touch-action:manipulation}
 .client.player .live-notebook-composer{display:grid;gap:7px;min-width:0}
 .client.player .live-notebook-composer label{color:#d7ddd1;font:14px/1.35 var(--serif)}

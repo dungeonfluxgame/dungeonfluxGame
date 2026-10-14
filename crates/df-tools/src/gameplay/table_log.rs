@@ -404,6 +404,23 @@ impl TableLog {
         kind: rpc::TableKind,
         text: &str,
     ) {
+        if let Some((entry_kind, title, scene)) = notebook_entry_log_fields(text) {
+            let context = df_observe::OperationContext {
+                trace_parent: String::new(),
+                build: crate::BUILD_ID.to_owned(),
+            };
+            let mut span = df_observe::begin(&context, "gameplay.notebook_entry");
+            span.event(
+                "notebook.entry_added",
+                &[
+                    ("kind", entry_kind.to_owned()),
+                    ("title", title.to_owned()),
+                    ("scene", scene.to_owned()),
+                ],
+            );
+            span.finish_unmeasured("recorded");
+            return;
+        }
         if !self.enabled {
             return;
         }
@@ -999,12 +1016,13 @@ pub(super) fn action_lines(
     // keeps its own line even when the same submit carries a reaction's blow.
     let attacking = matches!(kind, Kind::GreatswordAttack | Kind::OpportunityAttack);
     let phrase = if let Some(outcome) = own.filter(|_| attacking) {
-        let attack = if outcome.attack_style == 2 {
-            format!("shoots the {used}")
-        } else if outcome.grazed || !outcome.hit {
-            format!("swings the {used}")
-        } else {
-            format!("strikes with the {used}")
+        let attack = match attack_action_verb(outcome) {
+            AttackActionVerb::Throw => format!("throws the {used}"),
+            AttackActionVerb::Shoot => format!("shoots the {used}"),
+            AttackActionVerb::Strike if outcome.grazed || !outcome.hit => {
+                format!("swings the {used}")
+            }
+            AttackActionVerb::Strike => format!("strikes with the {used}"),
         };
         let result = if outcome.grazed {
             format!("graze, {} damage", damage_words(outcome))
@@ -1096,9 +1114,20 @@ pub(super) fn action_lines(
             continue;
         }
         let text = if outcome.hit {
+            let weapon = outcome.weapon.replace('-', " ");
+            let attack = match attack_action_verb(outcome) {
+                AttackActionVerb::Throw if !weapon.is_empty() => {
+                    format!("throws the {weapon} at {}", outcome.target_name)
+                }
+                AttackActionVerb::Throw => format!("throws at {}", outcome.target_name),
+                AttackActionVerb::Shoot if !weapon.is_empty() => {
+                    format!("shoots at {} with the {weapon}", outcome.target_name)
+                }
+                AttackActionVerb::Shoot => format!("shoots at {}", outcome.target_name),
+                AttackActionVerb::Strike => format!("strikes {}", outcome.target_name),
+            };
             format!(
-                "strikes {} \u{2014} hit, {} damage{}",
-                outcome.target_name,
+                "{attack} \u{2014} hit, {} damage{}",
                 damage_words(outcome),
                 if outcome.knocked_out {
                     format!(", {} falls unconscious", outcome.target_name)
@@ -1115,6 +1144,36 @@ pub(super) fn action_lines(
         });
     }
     lines
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AttackActionVerb {
+    Throw,
+    Shoot,
+    Strike,
+}
+
+fn attack_action_verb(outcome: &rpc::CombatOutcome) -> AttackActionVerb {
+    if outcome.attack_style != 2 {
+        return AttackActionVerb::Strike;
+    }
+    // SRD 5.2.1 pp. 90-91: the Thrown property makes a ranged attack by throwing the weapon.
+    if matches!(
+        outcome.weapon.as_str(),
+        "club"
+            | "dagger"
+            | "handaxe"
+            | "javelin"
+            | "light-hammer"
+            | "spear"
+            | "trident"
+            | "dart"
+            | "net"
+    ) {
+        AttackActionVerb::Throw
+    } else {
+        AttackActionVerb::Shoot
+    }
 }
 
 /// The damage dealt with its type when the rules named one: "9 slashing".
@@ -1379,6 +1438,14 @@ fn third_person_or_choice(label: &str) -> String {
     } else {
         third_person(label)
     }
+}
+
+fn notebook_entry_log_fields(text: &str) -> Option<(&str, &str, &str)> {
+    let text = text.strip_prefix("NOTE added kind=")?;
+    let (kind, rest) = text.split_once(" title=")?;
+    let (title, scene) = rest.rsplit_once(" scene=")?;
+    let title = title.strip_prefix('"')?.strip_suffix('"')?;
+    (!kind.is_empty() && !title.is_empty() && !scene.is_empty()).then_some((kind, title, scene))
 }
 
 /// The third-person phrase for an offer label: its imperative verb takes an `s`
@@ -2059,6 +2126,61 @@ mod tests {
             damage,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn notebook_add_audit_lines_are_not_published_to_the_player_table_log() {
+        let log = TableLog::new();
+        log.push(
+            "table",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            "NOTE added kind=place title=\"the Lantern-Maker's Shop\" scene=The Lantern-Maker's Shop",
+        );
+
+        assert!(log.lines().is_empty());
+
+        log.push(
+            "Narrator",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            "Added to the notebook: the Lantern-Maker's Shop",
+        );
+        assert_eq!(
+            log.lines().last().map(|line| line.text.as_str()),
+            Some("Added to the notebook: the Lantern-Maker's Shop")
+        );
+    }
+
+    #[test]
+    fn thrown_and_shot_attacks_use_their_weapon_action_in_the_table_log() {
+        let thrown = rpc::CombatOutcome {
+            attack_style: 2,
+            weapon: "javelin".to_owned(),
+            ..outcome("Brakka", "Snag", true, 9)
+        };
+        let shot = rpc::CombatOutcome {
+            attack_style: 2,
+            weapon: "light-crossbow".to_owned(),
+            damage_type: "piercing".to_owned(),
+            ..outcome("Snag", "Brakka", true, 4)
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[thrown, shot],
+            "greatsword",
+            "",
+            "Attack",
+        );
+
+        assert_eq!(lines[0].text, "throws the javelin \u{2014} hit, 9 damage");
+        assert_eq!(
+            lines[1].text,
+            "shoots at Brakka with the light crossbow \u{2014} hit, 4 piercing damage"
+        );
     }
 
     #[test]

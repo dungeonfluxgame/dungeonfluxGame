@@ -206,7 +206,7 @@ mod tests {
                 kind: rpc::NotebookKind::Person as i32,
                 title: "Tomas Greaves".to_owned(),
                 text: "Mapmaker at Tin Street Tea House.".to_owned(),
-                scene: "opening".to_owned(),
+                scene: "Jorun's Quiet Warning".to_owned(),
                 order: 1,
                 attitude: Some("friendly".to_owned()),
                 ..Default::default()
@@ -216,6 +216,7 @@ mod tests {
         let notebook = view(&journey).unwrap();
         assert_eq!(notebook.entries.len(), 1);
         assert_eq!(notebook.entries[0].title, "Tomas Greaves");
+        assert_eq!(notebook.entries[0].scene, "Jorun's Quiet Warning");
         assert_eq!(notebook.entries[0].attitude.as_deref(), Some("friendly"));
     }
 
