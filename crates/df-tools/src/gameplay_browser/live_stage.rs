@@ -59,6 +59,40 @@ const BUBBLE_OUT_ANIMATION: &str = "df-bubble-out";
 const FLOAT_ANIMATION: &str = "df-float-up";
 // PLAY-L01: the animation that fades a replaced cut-out away (see `live_imagery.css`).
 const GHOST_ANIMATION: &str = "df-sprite-ghost";
+const BUBBLE_UI_OBSTACLES: [&str; 4] = [
+    ".tv-headline",
+    ".tv-rules",
+    ".tv-choices",
+    ".combat-roll-panel",
+];
+const BUBBLE_FIXED_OBSTACLES: [&str; 2] = [".tv-headline", ".tv-rules"];
+
+pub(super) struct CheckDisplay {
+    pub(super) hero_name: String,
+    pub(super) ability_skill: String,
+    pub(super) faces: Vec<(u32, bool)>,
+    pub(super) roll_mode: i32,
+    pub(super) modifier: i32,
+    pub(super) total: i32,
+    pub(super) succeeded: bool,
+    pub(super) finding: String,
+}
+
+impl CheckDisplay {
+    fn signature(&self) -> String {
+        format!(
+            "{}|{}|{:?}|{}|{}|{}|{}|{}",
+            self.hero_name,
+            self.ability_skill,
+            self.faces,
+            self.roll_mode,
+            self.modifier,
+            self.total,
+            self.succeeded,
+            self.finding
+        )
+    }
+}
 
 /// Which part of the display the figures are standing in.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -813,6 +847,132 @@ impl Figures {
             })
     }
 
+    pub(super) fn set_check(&self, check: Option<&CheckDisplay>) -> Result<(), JsValue> {
+        let Some(check) = check else {
+            for figure in &self.figures {
+                if let Some(panel) = figure.bubbles.query_selector(".tv-check-result")? {
+                    panel.remove();
+                }
+            }
+            return Ok(());
+        };
+        let slot = self
+            .slot_named(&check.hero_name)
+            .ok_or_else(|| JsValue::from_str("check hero is absent from the scene"))?;
+        let figure = self
+            .figure(slot)
+            .ok_or_else(|| JsValue::from_str("check hero figure is absent"))?;
+        let signature = check.signature();
+        if let Some(panel) = figure.bubbles.query_selector(".tv-check-result")?
+            && panel.get_attribute("data-check-signature").as_deref() == Some(&signature)
+        {
+            self.place_bubble(figure);
+            return Ok(());
+        }
+        for other in &self.figures {
+            if let Some(panel) = other.bubbles.query_selector(".tv-check-result")? {
+                panel.remove();
+            }
+        }
+        figure.bubbles.set_text_content(None);
+        let panel = node(
+            &self.document,
+            &figure.bubbles,
+            "aside",
+            "tv-check-result",
+            "",
+        )?;
+        panel.set_attribute("data-check-signature", &signature)?;
+        panel.set_attribute("data-roll-mode", &check.roll_mode.to_string())?;
+        panel.set_attribute(
+            "data-succeeded",
+            if check.succeeded { "true" } else { "false" },
+        )?;
+        node(
+            &self.document,
+            &panel,
+            "span",
+            "tv-check-hero",
+            &check.hero_name,
+        )?;
+        node(
+            &self.document,
+            &panel,
+            "span",
+            "tv-check-skill",
+            &check.ability_skill,
+        )?;
+        node(
+            &self.document,
+            &panel,
+            "span",
+            "tv-check-mode",
+            match check.roll_mode {
+                -1 => "DISADVANTAGE",
+                1 => "ADVANTAGE",
+                _ => "D20 ROLL",
+            },
+        )?;
+        let roll = node(&self.document, &panel, "div", "tv-check-roll", "")?;
+        let dice = node(&self.document, &roll, "div", "tv-check-dice", "")?;
+        node(&self.document, &dice, "span", "tv-check-die-label", "d20")?;
+        for (face, kept) in &check.faces {
+            let die = node(
+                &self.document,
+                &dice,
+                "span",
+                "tv-check-die",
+                &face.to_string(),
+            )?;
+            if *kept {
+                die.set_attribute("data-kept", "")?;
+            }
+        }
+        let equation = node(&self.document, &roll, "div", "tv-check-equation", "")?;
+        let modifier = if check.modifier >= 0 {
+            format!("+ {}", check.modifier)
+        } else {
+            format!("- {}", check.modifier.unsigned_abs())
+        };
+        node(
+            &self.document,
+            &equation,
+            "span",
+            "tv-check-modifier",
+            &modifier,
+        )?;
+        node(&self.document, &equation, "span", "tv-check-operator", "=")?;
+        node(
+            &self.document,
+            &equation,
+            "b",
+            "tv-check-total",
+            &check.total.to_string(),
+        )?;
+        node(
+            &self.document,
+            &roll,
+            "strong",
+            "tv-check-outcome",
+            if check.succeeded {
+                "SUCCESS"
+            } else {
+                "FAILURE"
+            },
+        )?;
+        if !check.finding.trim().is_empty() {
+            node(
+                &self.document,
+                &panel,
+                "p",
+                "tv-check-finding",
+                &check.finding,
+            )?;
+        }
+        self.place_bubble(figure);
+        Ok(())
+    }
+
     /// The sign (+1 right, -1 left) from `from` towards `to` across the screen.
     pub(super) fn direction(from: ActorSlot, to: ActorSlot) -> i32 {
         match (index(from), index(to)) {
@@ -935,6 +1095,7 @@ impl Figures {
     /// centre of the screen first), then narrower, until the bubble overlaps no other figure's
     /// head, the roll panel or the screen edge. When none fits, the narrowest stays.
     fn place_bubble(&self, speaker: &Figure) {
+        let _shown = speaker.bubbles.remove_attribute("hidden");
         // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
         let geometry = self.plate.borrow().clone();
         if let Some(geometry) = geometry {
@@ -960,12 +1121,14 @@ impl Figures {
         let mut avoid: Vec<(f64, f64, f64, f64)> = Vec::new();
         let (left, top, right, bottom) = rectangle(&speaker.body);
         let (span, tall) = (right - left, bottom - top);
-        avoid.push((
+        let own_head = (
             left + span * 0.2,
             top,
             right - span * 0.2,
             top + tall * 0.36,
-        ));
+        );
+        avoid.push(own_head);
+        let mut fixed_avoid = vec![own_head];
         for other in &self.figures {
             if other.root.is_same_node(Some(speaker.root.as_ref())) || !Self::present(other) {
                 continue;
@@ -979,8 +1142,15 @@ impl Figures {
                 top + tall * 0.36,
             ));
         }
-        if let Ok(Some(panel)) = self.document.query_selector(".combat-roll-panel") {
-            avoid.push(rectangle(&panel));
+        for selector in BUBBLE_FIXED_OBSTACLES {
+            if let Ok(Some(panel)) = self.document.query_selector(selector) {
+                fixed_avoid.push(rectangle(&panel));
+            }
+        }
+        for selector in BUBBLE_UI_OBSTACLES {
+            if let Ok(Some(panel)) = self.document.query_selector(selector) {
+                avoid.push(rectangle(&panel));
+            }
         }
         let inward_first = speaker.root.get_attribute("data-slot").as_deref() == Some("hero-2");
         let sides = if inward_first {
@@ -1002,6 +1172,21 @@ impl Figures {
                 }
             }
         }
+        for narrow in [false, true] {
+            for side in sides {
+                let _set = speaker.bubbles.set_attribute("data-side", side);
+                flag(&speaker.bubbles, "data-narrow", narrow).ok();
+                let placed = rectangle(&speaker.bubbles);
+                let inside = placed.0 >= screen.0
+                    && placed.2 <= screen.2
+                    && placed.1 >= screen.1
+                    && placed.3 <= screen.3;
+                if inside && !fixed_avoid.iter().any(|head| overlaps(placed, *head)) {
+                    return;
+                }
+            }
+        }
+        let _hidden = speaker.bubbles.set_attribute("hidden", "");
     }
 
     /// PLAY-V09: tells the stage that a scene plate with this layout covers the cut-outs (or, with
@@ -1055,6 +1240,7 @@ impl Figures {
         picture_width: f64,
         picture_height: f64,
     ) {
+        let _shown = bubble_owner.bubbles.remove_attribute("hidden");
         let Some(window) = web_sys::window() else {
             return;
         };
@@ -1080,6 +1266,7 @@ impl Figures {
             geometry.head_width,
             geometry.head_height,
         );
+        let mut fallback_avoid = vec![speaker_head];
         let slot = bubble_owner
             .root
             .get_attribute("data-slot")
@@ -1124,9 +1311,17 @@ impl Figures {
                 keep_clear(&card.root);
             }
         }
-        for selector in [".tv-headline", ".tv-choices", ".combat-roll-panel"] {
+        for selector in BUBBLE_UI_OBSTACLES {
             if let Ok(Some(element)) = self.document.query_selector(selector) {
                 keep_clear(&element);
+            }
+        }
+        for selector in BUBBLE_FIXED_OBSTACLES {
+            if let Ok(Some(element)) = self.document.query_selector(selector) {
+                let (left, top, right, bottom) = rectangle(&element);
+                if right > left && bottom > top {
+                    fallback_avoid.push(Rect::new(left, top, right, bottom));
+                }
             }
         }
         avoid.extend(interface);
@@ -1157,9 +1352,11 @@ impl Figures {
                 f64::from(container.client_width()),
                 f64::from(container.client_height()),
             );
-            placement = plate_layout::place_bubble(screen, head, side, size, tail_offset, &[]);
+            placement =
+                plate_layout::place_bubble(screen, head, side, size, tail_offset, &fallback_avoid);
         }
         let Some(placed) = placement else {
+            let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
             return;
         };
         let _set = container.set_attribute("data-side", placed.side.name());
@@ -1467,7 +1664,13 @@ fn healing_action_text(mode: StageMode, amount: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::typed_line_anchor;
+    use super::{BUBBLE_FIXED_OBSTACLES, typed_line_anchor};
+
+    #[test]
+    fn speech_bubble_placement_keeps_off_the_title_and_rules_note() {
+        assert!(BUBBLE_FIXED_OBSTACLES.contains(&".tv-headline"));
+        assert!(BUBBLE_FIXED_OBSTACLES.contains(&".tv-rules"));
+    }
 
     #[test]
     fn speech_replaces_an_active_typed_strip() {

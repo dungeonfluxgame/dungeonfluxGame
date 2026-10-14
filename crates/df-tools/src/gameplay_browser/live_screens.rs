@@ -216,11 +216,6 @@ fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
 
 fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     let lobby = input.phase == rpc::JourneyPhase::Room;
-    let end_notebook = if input.journey.adventure_ended {
-        Some(super::live_notebook::view(input.journey)?)
-    } else {
-        None
-    };
     let join_url = join_address(input.journey)?;
     let (art, art_fallback) = art(input.phase, input.scene);
     let speaker = (!input.journey.dialogue.is_empty()).then(|| TvSpeaker {
@@ -281,7 +276,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
                 input.narration,
             )
         }),
-        end_notebook,
+        check: None,
     })
 }
 
@@ -351,6 +346,40 @@ fn is_simple_offer(offer: &rpc::GameplayActionOffer) -> bool {
         )
 }
 
+fn phone_choice_label(label: &str, tv_choices: &[String]) -> String {
+    tv_choices
+        .iter()
+        .find(|choice| {
+            label
+                .strip_prefix(choice.as_str())
+                .is_some_and(|suffix| suffix.starts_with(" · "))
+        })
+        .cloned()
+        .unwrap_or_else(|| label.to_owned())
+}
+
+fn end_card_contact_ready(
+    scene: &rpc::GameplayScene,
+    graph: Option<&rpc::DisplaySceneGraph>,
+) -> bool {
+    let contacts = scene
+        .cast
+        .iter()
+        .filter(|actor| actor.role == rpc::SceneRole::Contact as i32)
+        .collect::<Vec<_>>();
+    if contacts.is_empty() {
+        return true;
+    }
+    let Some(graph) = graph else {
+        return false;
+    };
+    contacts.iter().all(|contact| {
+        graph.actors.iter().any(|actor| {
+            actor.id == contact.id && (!actor.art.is_empty() || !actor.fallback_art.is_empty())
+        })
+    })
+}
+
 fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, JsValue> {
     let (members, _) = party_members(input.journey);
     let all_ready = !members.is_empty()
@@ -406,7 +435,7 @@ fn exploration_model(
             .filter(|offer| is_simple_offer(offer))
             .map(|offer| ExplorationChoiceModel {
                 id: offer.offer_id.clone(),
-                label: offer.label.clone(),
+                label: phone_choice_label(&offer.label, &input.journey.table_choices),
                 icon: choice_icon(offer.action_kind),
                 disabled_reason: choice_disabled_reason(client.busy, unconfirmed),
             })
@@ -687,6 +716,29 @@ fn render_display(
 ) -> Result<(), JsValue> {
     let mut model = tv_model(input)?;
     model.cast = current_cast(client);
+    let (graph, baked_revision, check) = {
+        let state = client.borrow();
+        state
+            .views
+            .as_ref()
+            .and_then(|views| views.current())
+            .and_then(|view| match view.audience.as_ref() {
+                Some(rpc::view_message::Audience::Display(display)) => Some((
+                    display.scene_graph.clone(),
+                    display.live_plate_graph_revision,
+                    display.check.clone(),
+                )),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    model.check = check
+        .as_ref()
+        .map(|check| super::live_tv::check_display(check, input.journey, input.narration))
+        .transpose()?;
+    if model.check.is_some() {
+        model.speaker = None;
+    }
     if client.borrow().live.tv.is_none() {
         let document = client.borrow().document.clone();
         let stage = TvStage::mount(&document, view)?;
@@ -698,19 +750,8 @@ fn render_display(
             return Err(JsValue::from_str("display stage absent"));
         };
         stage.update(&model)?;
-        let (graph, baked_revision) = state
-            .views
-            .as_ref()
-            .and_then(|views| views.current())
-            .and_then(|view| match view.audience.as_ref() {
-                Some(rpc::view_message::Audience::Display(display)) => Some((
-                    display.scene_graph.as_ref(),
-                    display.live_plate_graph_revision,
-                )),
-                _ => None,
-            })
-            .unwrap_or((None, 0));
-        stage.update_scene_graph_wire(graph, baked_revision)?;
+        stage.update_scene_graph_wire(graph.as_ref(), baked_revision)?;
+        stage.set_end_card_ready(end_card_contact_ready(input.scene, graph.as_ref()))?;
         stage.update_scene_video_wire(
             input.scene.scene_video_state,
             &input.scene.scene_video_path,
@@ -816,9 +857,10 @@ fn render_scene_contents(
 
 #[cfg(test)]
 mod tests {
+    use super::super::rpc;
     use super::{
-        choice_disabled_reason, is_new_private_clue, lobby_art_source,
-        should_show_dialogue_composer, validated_join_scene_asset,
+        choice_disabled_reason, end_card_contact_ready, is_new_private_clue, lobby_art_source,
+        phone_choice_label, should_show_dialogue_composer, validated_join_scene_asset,
     };
 
     #[test]
@@ -917,6 +959,58 @@ mod tests {
     fn ended_adventure_hides_the_dialogue_composer() {
         assert!(should_show_dialogue_composer(false));
         assert!(!should_show_dialogue_composer(true));
+    }
+
+    #[test]
+    fn phone_choice_uses_the_short_label_already_shown_on_the_tv() {
+        let tv_choices = vec!["Continue to the apothecary".to_owned()];
+        assert_eq!(
+            phone_choice_label(
+                "Continue to the apothecary · Brannock's Apothecary",
+                &tv_choices
+            ),
+            "Continue to the apothecary"
+        );
+        assert_eq!(phone_choice_label("Wait here", &tv_choices), "Wait here");
+    }
+
+    #[test]
+    fn end_card_waits_until_the_epilogue_contact_is_in_the_display_graph() {
+        let scene = rpc::GameplayScene {
+            cast: vec![rpc::SceneActor {
+                id: "courier".to_owned(),
+                role: rpc::SceneRole::Contact as i32,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(!end_card_contact_ready(&scene, None));
+        assert!(!end_card_contact_ready(
+            &scene,
+            Some(&rpc::DisplaySceneGraph {
+                actors: vec![rpc::DisplaySceneActor {
+                    id: "courier".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        ));
+        assert!(end_card_contact_ready(
+            &scene,
+            Some(&rpc::DisplaySceneGraph {
+                actors: vec![rpc::DisplaySceneActor {
+                    id: "courier".to_owned(),
+                    art: "portrait-courier".to_owned(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        ));
+    }
+
+    #[test]
+    fn end_card_does_not_wait_for_a_contact_when_the_scene_has_none() {
+        assert!(end_card_contact_ready(&rpc::GameplayScene::default(), None));
     }
 }
 

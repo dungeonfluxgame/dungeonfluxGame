@@ -99,8 +99,8 @@ pub(super) struct TvModel {
     pub(super) narrated: bool,
     /// The adventure's end card, shown over the scene and kept up until the next step.
     pub(super) end: Option<crate::presentation::Card>,
-    /// Shared People, Task and Clues on the closing card only.
-    pub(super) end_notebook: Option<df_ui::NotebookView>,
+    /// The public result of the latest ability check, staged beside its hero.
+    pub(super) check: Option<live_stage::CheckDisplay>,
 }
 
 struct WordmarkSlot {
@@ -125,7 +125,6 @@ struct BigCard {
     line: Element,
     place: Element,
     heroes: Element,
-    notebook: Element,
 }
 
 /// PLAY-V09: the layer that shows the scene plate: two pictures (the shown one and the one that is
@@ -293,8 +292,6 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
     let next = node(document, &root, "p", "tv-bigcard-next", "")?;
     next.set_attribute("data-slot", "next-step")?;
     set_hidden(&next, true)?;
-    let notebook = node(document, &root, "div", "tv-bigcard-notebook", "")?;
-    set_hidden(&notebook, true)?;
     Ok(BigCard {
         root,
         kicker,
@@ -302,7 +299,6 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
         line,
         place,
         heroes,
-        notebook,
     })
 }
 
@@ -326,6 +322,92 @@ fn sync_shot(stage: &Element) -> Result<(), JsValue> {
 fn scene_video_url(path: &str) -> Option<&str> {
     let key = path.strip_prefix("/gameplay/home-video/")?;
     (key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(path)
+}
+
+fn check_skill_label(source_revision: &str) -> Option<(&'static str, &'static str)> {
+    let parts = source_revision.splitn(4, ':').collect::<Vec<_>>();
+    let ["srd521-p6", _, skill, _] = parts.as_slice() else {
+        return None;
+    };
+    match *skill {
+        "perception" => Some(("Wisdom", "Perception")),
+        "insight" => Some(("Wisdom", "Insight")),
+        "survival" => Some(("Wisdom", "Survival")),
+        "medicine" => Some(("Wisdom", "Medicine")),
+        "investigation" => Some(("Intelligence", "Investigation")),
+        "arcana" => Some(("Intelligence", "Arcana")),
+        "history" => Some(("Intelligence", "History")),
+        "nature" => Some(("Intelligence", "Nature")),
+        "religion" => Some(("Intelligence", "Religion")),
+        "stealth" => Some(("Dexterity", "Stealth")),
+        _ => None,
+    }
+}
+
+pub(super) fn check_display(
+    check: &rpc::AbilityCheckResult,
+    journey: &rpc::JourneyView,
+    finding: &str,
+) -> Result<live_stage::CheckDisplay, JsValue> {
+    // SRD 5.2.1 p. 6: add the ability and proficiency modifiers to the d20; p. 7: Advantage
+    // and Disadvantage roll two d20s and keep the higher or lower face, respectively.
+    let proficiency_modifier = i32::try_from(check.proficiency_bonus)
+        .map_err(|_| JsValue::from_str("display check proficiency modifier is invalid"))?;
+    if !(1..=20).contains(&check.die) || !matches!(check.roll_mode, -1..=1) {
+        return Err(JsValue::from_str("display check roll is invalid"));
+    }
+    let expected_faces = if check.roll_mode == 0 { 1 } else { 2 };
+    if check.faces.len() != expected_faces
+        || check.faces.iter().any(|face| !(1..=20).contains(face))
+    {
+        return Err(JsValue::from_str("display check dice are invalid"));
+    }
+    let kept = check
+        .faces
+        .iter()
+        .position(|face| *face == check.die)
+        .ok_or_else(|| JsValue::from_str("display check kept die is absent"))?;
+    let (ability, skill) = check_skill_label(&check.source_revision)
+        .ok_or_else(|| JsValue::from_str("display check skill is unknown"))?;
+    let hero_name = journey
+        .table_log
+        .iter()
+        .rev()
+        .find(|line| {
+            rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
+                && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
+        })
+        .ok_or_else(|| JsValue::from_str("display check hero action is absent"))?
+        .speaker
+        .trim()
+        .to_owned();
+    if hero_name.is_empty() {
+        return Err(JsValue::from_str("display check hero is absent"));
+    }
+    let modifier = check
+        .ability_modifier
+        .checked_add(proficiency_modifier)
+        .ok_or_else(|| JsValue::from_str("display check modifier is invalid"))?;
+    let finding = crate::presentation::first_sentence(finding);
+    if finding.is_empty() {
+        return Err(JsValue::from_str("display check finding is absent"));
+    }
+    Ok(live_stage::CheckDisplay {
+        hero_name,
+        ability_skill: format!("{ability} ({skill})"),
+        faces: check
+            .faces
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, face)| (face, index == kept))
+            .collect(),
+        roll_mode: check.roll_mode,
+        modifier,
+        total: check.total,
+        succeeded: check.succeeded,
+        finding,
+    })
 }
 
 fn mount_lower_third(document: &Document, parent: &Element) -> Result<LowerThird, JsValue> {
@@ -811,15 +893,6 @@ impl TvStage {
     /// Fills the title or closing card; the stylesheet shows it while the director is in the
     /// matching state.
     pub(super) fn show_card(&self, document: &Document, card: &Card) -> Result<(), JsValue> {
-        self.show_card_with_notebook(document, card, None)
-    }
-
-    pub(super) fn show_card_with_notebook(
-        &self,
-        document: &Document,
-        card: &Card,
-        notebook: Option<&df_ui::NotebookView>,
-    ) -> Result<(), JsValue> {
         let shown = &self.card;
         shown.root.set_attribute(
             "data-kind",
@@ -844,62 +917,6 @@ impl TvStage {
             crest.set_attribute("style", &format!("background-image:url({})", hero.portrait))?;
             node(document, &item, "b", "tv-bigcard-name", &hero.name)?;
             node(document, &item, "span", "tv-bigcard-role", &hero.role)?;
-        }
-        shown.notebook.set_text_content(None);
-        let show_notebook = card.kind == CardKind::End && notebook.is_some();
-        set_hidden(&shown.notebook, !show_notebook)?;
-        if let Some(notebook) = notebook.filter(|_| card.kind == CardKind::End) {
-            for (kind, label, empty) in [
-                (df_ui::NotebookKind::Person, "People", "No people recorded."),
-                (df_ui::NotebookKind::Task, "Task", "No task recorded."),
-                (df_ui::NotebookKind::Clue, "Clues", "No clues recorded."),
-            ] {
-                let section = node(
-                    document,
-                    &shown.notebook,
-                    "section",
-                    "tv-bigcard-notebook-section",
-                    "",
-                )?;
-                node(document, &section, "h3", "", label)?;
-                let entries = notebook
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.kind == kind)
-                    .collect::<Vec<_>>();
-                if entries.is_empty() {
-                    node(document, &section, "p", "", empty)?;
-                }
-                for entry in entries {
-                    let item = node(
-                        document,
-                        &section,
-                        "article",
-                        "tv-bigcard-notebook-entry",
-                        "",
-                    )?;
-                    node(document, &item, "h4", "", &entry.title)?;
-                    node(document, &item, "p", "", &entry.text)?;
-                    if kind == df_ui::NotebookKind::Clue
-                        && let Some(author) = &entry.author
-                    {
-                        node(
-                            document,
-                            &item,
-                            "p",
-                            "tv-bigcard-notebook-meta",
-                            &format!("Found by {author}."),
-                        )?;
-                    }
-                    node(
-                        document,
-                        &item,
-                        "p",
-                        "tv-bigcard-notebook-meta",
-                        &format!("Scene: {}", entry.scene.replace('_', " ")),
-                    )?;
-                }
-            }
         }
         Ok(())
     }
@@ -966,7 +983,12 @@ impl TvStage {
     pub(super) fn clear_narration(&self) -> Result<(), JsValue> {
         self.narration.set_text_content(None);
         self.narration.remove_attribute("title")?;
-        self.narration.class_list().remove_1("speaking")
+        self.narration.class_list().remove_1("speaking")?;
+        if let Some(caption) = self.narration.parent_element() {
+            caption.remove_attribute("data-line-id")?;
+            caption.remove_attribute("data-line-state")?;
+        }
+        Ok(())
     }
 
     /// Restarts the staggered title, narration and figure entrance.
@@ -1020,7 +1042,11 @@ impl TvStage {
         self.rules_text.set_text_content(Some(&model.rules_note));
         set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
         self.set_choices(
-            if lobby { &[] } else { &model.choices },
+            if lobby || model.end.is_some() {
+                &[]
+            } else {
+                &model.choices
+            },
             model.choice_hints_hidden,
         )?;
         match &model.end {
@@ -1030,14 +1056,18 @@ impl TvStage {
                     .root
                     .owner_document()
                     .ok_or_else(|| JsValue::from_str("display document absent"))?;
-                self.show_card_with_notebook(&document, card, model.end_notebook.as_ref())?;
+                self.show_card(&document, card)?;
             }
             None => {
                 self.root.remove_attribute("data-ended")?;
+                self.root.remove_attribute("data-ending-ready")?;
             }
         }
         set_hidden(&self.lobby_row, !lobby)?;
-        set_hidden(&self.stagebox, lobby)?;
+        set_hidden(
+            &self.stagebox,
+            lobby || model.end.is_some() || model.check.is_some(),
+        )?;
         // The party cards are one set of nodes that moves with the mode.
         let home = if lobby {
             &self.roster_slot
@@ -1217,8 +1247,22 @@ impl TvStage {
                 StageMode::Scene,
             )?;
         }
+        self.figures.set_check(model.check.as_ref())?;
+        if model.check.is_some() {
+            self.root.set_attribute("data-check-active", "")?;
+        } else {
+            self.root.remove_attribute("data-check-active")?;
+        }
         self.drawn.set(true);
         Ok(())
+    }
+
+    pub(super) fn set_end_card_ready(&self, ready: bool) -> Result<(), JsValue> {
+        if ready {
+            self.root.set_attribute("data-ending-ready", "")
+        } else {
+            self.root.remove_attribute("data-ending-ready")
+        }
     }
 
     /// The read-only row of numbered chips: what the table can do now. It is replaced only
@@ -1455,7 +1499,8 @@ impl TvStage {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_loopback_join_host, scene_video_url};
+    use super::super::rpc;
+    use super::{check_display, is_loopback_join_host, scene_video_url};
 
     #[test]
     fn scene_clip_paths_require_the_server_video_route_and_key() {
@@ -1477,5 +1522,106 @@ mod tests {
     fn network_join_hosts_remain_available_to_phones() {
         assert!(!is_loopback_join_host("192.168.1.20:63319"));
         assert!(!is_loopback_join_host("game.example.com:63319"));
+    }
+
+    #[test]
+    fn display_check_shows_both_advantage_faces_and_the_kept_total_without_the_dc() {
+        let check = rpc::AbilityCheckResult {
+            die: 16,
+            ability_modifier: 1,
+            proficiency_bonus: 2,
+            total: 19,
+            difficulty_class: 15,
+            succeeded: true,
+            source_revision: "srd521-p6:apothecary:perception:finding-counter".to_owned(),
+            faces: vec![16, 4],
+            roll_mode: 1,
+        };
+        let journey = rpc::JourneyView {
+            table_log: vec![rpc::TableLine {
+                role: rpc::TableRole::Hero as i32,
+                kind: rpc::TableKind::Action as i32,
+                speaker: "Brakka".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let shown = check_display(
+            &check,
+            &journey,
+            "The bronze ledger bears a seal. More text.",
+        )
+        .expect("a complete check has a display projection");
+        assert_eq!(shown.hero_name, "Brakka");
+        assert_eq!(shown.ability_skill, "Wisdom (Perception)");
+        assert_eq!(shown.faces, [(16, true), (4, false)]);
+        assert_eq!(shown.modifier, 3);
+        assert_eq!(shown.total, 19);
+        assert!(shown.succeeded);
+        assert_eq!(shown.finding, "The bronze ledger bears a seal.");
+    }
+
+    #[test]
+    fn display_check_keeps_the_lower_disadvantage_face_and_failure_status() {
+        let check = rpc::AbilityCheckResult {
+            die: 4,
+            ability_modifier: -1,
+            total: 3,
+            succeeded: false,
+            source_revision: "srd521-p6:apothecary:perception:finding-counter".to_owned(),
+            faces: vec![16, 4],
+            roll_mode: -1,
+            ..Default::default()
+        };
+        let journey = rpc::JourneyView {
+            table_log: vec![rpc::TableLine {
+                role: rpc::TableRole::Hero as i32,
+                kind: rpc::TableKind::Action as i32,
+                speaker: "Sigrun".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let shown = check_display(&check, &journey, "Nothing new comes to light.")
+            .expect("a complete check has a display projection");
+        assert_eq!(shown.hero_name, "Sigrun");
+        assert_eq!(shown.faces, [(16, false), (4, true)]);
+        assert_eq!(shown.roll_mode, -1);
+        assert_eq!(shown.modifier, -1);
+        assert!(!shown.succeeded);
+    }
+
+    #[test]
+    fn display_check_rejects_an_incomplete_advantage_roll() {
+        let check = rpc::AbilityCheckResult {
+            die: 16,
+            source_revision: "srd521-p6:apothecary:perception:finding-counter".to_owned(),
+            faces: vec![16],
+            roll_mode: 1,
+            ..Default::default()
+        };
+        assert!(check_display(&check, &rpc::JourneyView::default(), "A clue appears.").is_err());
+    }
+
+    #[test]
+    fn check_result_replaces_the_action_bubble_and_lower_third() {
+        let css = include_str!("live_stage.css");
+        assert!(css.contains(
+            ".tv-stage[data-check-active] :is(.tv-bubble,.tv-lower-third){display:none!important}"
+        ));
+        assert!(css.contains(".tv-check-result"));
+    }
+
+    #[test]
+    fn end_card_css_hides_scene_chrome_and_keeps_a_single_composition() {
+        let css = include_str!("live_stage.css");
+        assert!(css.contains(".tv-stage[data-ended] :is("));
+        assert!(!css.contains("tv-bigcard-notebook"));
+    }
+
+    #[test]
+    fn completed_narration_stays_visible_while_the_table_waits() {
+        let css = include_str!("live_stage.css");
+        assert!(css.contains(".tv-dm[data-line-state=done] .tv-narration:not(:empty)"));
     }
 }

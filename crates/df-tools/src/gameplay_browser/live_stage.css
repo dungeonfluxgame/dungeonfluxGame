@@ -198,8 +198,11 @@
 .tv-bigcard-kicker{margin:0;font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.34em;text-transform:uppercase;color:#e8cb94;text-shadow:none}
 .tv-bigcard-title{margin:0;max-width:calc(var(--u)*72);font:400 calc(var(--u)*5.4)/1.08 var(--serif);color:#f9f1de;text-shadow:0 4px 32px #000}
 .tv-bigcard-rule{width:calc(var(--u)*34);height:calc(var(--u)*2);background:url(/assets/ui/generated/divider) center/contain no-repeat}
-.tv-stage[data-ended] .tv-bigcard{opacity:1;visibility:visible;transition:opacity .7s ease,visibility 0s}
-.tv-stage[data-ended] .tv-bubble{opacity:0;visibility:hidden}
+.tv-stage[data-ended] .tv-bigcard:not([data-kind=end]){opacity:1;visibility:visible;transition:opacity .7s ease,visibility 0s}
+.tv-stage[data-ended] .tv-bigcard[data-kind=end]{opacity:0;visibility:hidden;transition:opacity .7s ease,visibility 0s .7s}
+.tv-stage[data-ended][data-ending-ready] .tv-bigcard[data-kind=end]{opacity:1;visibility:visible;transition:opacity .7s ease 1.4s,visibility 0s linear 1.4s}
+.tv-stage[data-ended] :is(.tv-title-block,.tv-stagebox,.tv-partybar,.tv-choices,.tv-dock,.tv-lobby-row,.tv-establish,.tv-lower-third,.tv-hud,.tv-peek,.live-scene-item){display:none!important}
+.tv-stage[data-ended] .tv-bubble{display:none!important}
 .tv-bigcard-next{margin:calc(var(--u)*1) 0 0;font:var(--fs-label)/1.3 var(--serif);letter-spacing:.2em;text-transform:uppercase;color:#d1b883}
 .tv-bigcard-next[hidden]{display:none}
 .tv-bigcard-line{margin:0;max-width:calc(var(--u)*54);font:italic calc(var(--u)*2.1)/1.3 var(--serif);color:#e6dbc2}
@@ -211,24 +214,31 @@
 .tv-bigcard-role{font:italic var(--fs-label)/1.2 var(--serif);color:#c9bb9b}
 .tv-bigcard[data-kind=defeat] .tv-bigcard-kicker{color:#d9a9a0}
 .tv-bigcard :is([hidden]){display:none}
-.tv-stage[data-ended] .tv-bigcard[data-kind=end]{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);grid-template-rows:auto auto auto minmax(0,1fr) auto auto auto;align-items:center;justify-items:center;gap:calc(var(--u)*.65);padding:3vh 5vw}
-.tv-bigcard[data-kind=end] .tv-bigcard-kicker,.tv-bigcard[data-kind=end] .tv-bigcard-title,.tv-bigcard[data-kind=end] .tv-bigcard-rule,.tv-bigcard[data-kind=end] .tv-bigcard-next{grid-column:1/-1}
-.tv-bigcard[data-kind=end] .tv-bigcard-kicker{grid-row:1}
-.tv-bigcard[data-kind=end] .tv-bigcard-title{grid-row:2;font-size:calc(var(--u)*4.4)}
-.tv-bigcard[data-kind=end] .tv-bigcard-rule{grid-row:3}
-.tv-bigcard[data-kind=end] .tv-bigcard-line{grid-column:1;grid-row:4;align-self:end;max-width:100%;max-height:27vh;overflow:hidden;overflow-wrap:anywhere;font-size:calc(var(--u)*1.8)}
-.tv-bigcard[data-kind=end] .tv-bigcard-place{grid-column:1;grid-row:5}
-.tv-bigcard[data-kind=end] .tv-bigcard-heroes{grid-column:1;grid-row:6;gap:calc(var(--u)*2)}
-.tv-bigcard[data-kind=end] .tv-bigcard-next{grid-row:7}
-.tv-bigcard-notebook{grid-column:2;grid-row:4/7;align-self:stretch;box-sizing:border-box;width:100%;max-height:48vh;overflow:hidden;padding:calc(var(--u)*1) calc(var(--u)*1.2);border:1px solid #c9a35f77;border-radius:calc(var(--u)*.6);background:#080d17e8;text-align:left;-webkit-mask-image:linear-gradient(#000 82%,transparent);mask-image:linear-gradient(#000 82%,transparent)}
-.tv-bigcard-notebook[hidden]{display:none}
-.tv-bigcard-notebook-section{display:grid;gap:calc(var(--u)*.45);margin-bottom:calc(var(--u)*.9)}
-.tv-bigcard-notebook-section h3{margin:0;color:#e8cb94;font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.2em;text-transform:uppercase}
-.tv-bigcard-notebook-entry{min-width:0;padding:calc(var(--u)*.45) calc(var(--u)*.6);border-bottom:1px solid #c9a35f44}
-.tv-bigcard-notebook-entry h4{margin:0 0 calc(var(--u)*.2);color:#f3e6c6;font:700 calc(var(--u)*1.3)/1.2 var(--serif);overflow-wrap:anywhere}
-.tv-bigcard-notebook-entry p{margin:0;color:#e6dbc2;font:var(--fs-label)/1.3 var(--serif);overflow-wrap:anywhere}
-.tv-bigcard-notebook-entry .tv-bigcard-notebook-meta:last-child{display:none}
-.tv-bigcard-notebook-entry .tv-bigcard-notebook-meta{margin-top:calc(var(--u)*.2);color:#a9b3bd;font-size:calc(var(--u)*.85)}
+.tv-bigcard[data-kind=end]{gap:calc(var(--u)*1.1);padding:5vh 10vw}
+.tv-bigcard[data-kind=end] .tv-bigcard-title{font-size:calc(var(--u)*4.4)}
+.tv-bigcard[data-kind=end] .tv-bigcard-line{max-width:calc(var(--u)*64);max-height:27vh;overflow:hidden;overflow-wrap:anywhere;font-size:calc(var(--u)*1.8)}
+.tv-bigcard[data-kind=end] .tv-bigcard-heroes{gap:calc(var(--u)*2)}
+
+/* INV-07: show the check where its hero stands, then give the finding its own beat. */
+.tv-stage[data-check-active] :is(.tv-bubble,.tv-lower-third){display:none!important}
+.tv-check-result{display:grid;justify-items:center;gap:calc(var(--u)*.3);min-width:calc(var(--u)*24);max-width:calc(var(--u)*34);padding:calc(var(--u)*.8) calc(var(--u)*1.2);border:calc(var(--u)*.16) solid #e8cb94;border-radius:calc(var(--u)*.8);background:linear-gradient(180deg,#111a29f5,#060b13f5);box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.8) #000d;text-align:center;color:#f7efdc;animation:df-check-result-out 8s ease forwards}
+.tv-check-hero{font:700 var(--fs-label)/1.1 var(--serif);letter-spacing:.12em;text-transform:uppercase;color:#f3d595}
+.tv-check-skill{font:italic var(--fs-label)/1.2 var(--serif);color:#ded5c2}
+.tv-check-mode{font:700 calc(var(--u)*.9)/1.2 system-ui,sans-serif;letter-spacing:.18em;color:#9ec7de}
+.tv-check-roll{display:grid;justify-items:center;gap:calc(var(--u)*.25);animation:df-check-roll-phase 8s ease forwards}
+.tv-check-dice{display:flex;align-items:center;gap:calc(var(--u)*.4)}
+.tv-check-die-label{font:700 var(--fs-label)/1 system-ui,sans-serif;color:#c8d4df}
+.tv-check-die{display:grid;place-items:center;width:calc(var(--u)*3.4);aspect-ratio:1;border:1px solid #f1d59b;border-radius:18%;background:#17283b;color:#f7efdc;font:700 calc(var(--u)*2)/1 system-ui,sans-serif;box-shadow:0 calc(var(--u)*.25) calc(var(--u)*.8) #000a}
+.tv-check-die[data-kept]{background:linear-gradient(145deg,#f3d595,#ba8740);color:#1c160e;transform:scale(1.12)}
+.tv-check-equation{display:flex;align-items:baseline;gap:.45em;font:700 var(--fs-line)/1.1 system-ui,sans-serif;font-variant-numeric:tabular-nums;color:#f7efdc}
+.tv-check-modifier,.tv-check-operator{color:#ded5c2}
+.tv-check-total{font-size:1.35em;color:#fff4d6}
+.tv-check-outcome{font:800 calc(var(--u)*1.8)/1 system-ui,sans-serif;letter-spacing:.16em;color:#a9d49c}
+.tv-check-result[data-succeeded=false] .tv-check-outcome{color:#e3a29a}
+.tv-check-finding{margin:calc(var(--u)*.25) 0 0;font:italic var(--fs-label)/1.25 var(--serif);color:#f1dfbc;animation:df-check-finding-phase 8s ease forwards}
+@keyframes df-check-roll-phase{0%,52%{opacity:1}62%,100%{opacity:0}}
+@keyframes df-check-finding-phase{0%,52%{opacity:0}62%,88%{opacity:1}100%{opacity:0}}
+@keyframes df-check-result-out{0%,86%{opacity:1}100%{opacity:0;visibility:hidden}}
 
 /* ---------- the rules note under the narration of the phone and of the combat screens ---------- */
 .rules-note{display:block;margin:10px 0 0;max-width:580px;font:italic 13px/1.5 var(--serif,Georgia,serif);color:#a9b3bd}
@@ -260,6 +270,7 @@
 /* ---------- display stage machines: every state is on the DOM, every appearance follows one ---------- */
 /* narrator box: shown only while the narrator is the speaker the line machine says */
 .tv-stage[data-scene-state]:not([data-speaker=narrator]) .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .12s ease,visibility 0s .12s}
+.tv-stage[data-scene-state] .tv-stagebox:has(.tv-dm[data-line-state=done] .tv-narration:not(:empty)){opacity:1;visibility:visible;transition:opacity .45s ease,visibility 0s}
 .tv-dm[data-line-state=closing]{opacity:0;transition:opacity .4s ease}
 /* choice chips are visible only once every line has been said */
 .tv-stage[data-scene-state]:not([data-scene-state=awaiting-choice]) .tv-choices{opacity:0;visibility:hidden}
