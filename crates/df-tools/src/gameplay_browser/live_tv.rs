@@ -1238,7 +1238,9 @@ impl TvStage {
                 status,
             });
         }
-        let choices = node(document, &root, "ol", "tv-choices", "")?;
+        let caption_lane = node(document, &root, "div", "tv-caption-lane", "")?;
+        let lower = mount_lower_third(document, &caption_lane)?;
+        let choices = node(document, &caption_lane, "ol", "tv-choices", "")?;
         choices.set_attribute("aria-label", "What the table can do")?;
         let card = mount_card(document, &root)?;
         let sound_gate = mount_sound_gate(document, &root)?;
@@ -1247,7 +1249,6 @@ impl TvStage {
         let establish_title = node(document, &establish, "h2", "tv-establish-title", "")?;
         node(document, &establish, "div", "tv-establish-rule", "")?;
         let establish_place = node(document, &establish, "p", "tv-establish-place", "")?;
-        let lower = mount_lower_third(document, &root)?;
         let dock = node(document, &root, "div", "tv-dock", "")?;
         node(document, &root, "div", "tv-peek", "")?;
         Ok(Self {
@@ -2769,12 +2770,13 @@ mod tests {
         )
         .unwrap();
         style_node.set_text_content(Some(&format!(
-            "{}\n.tv-stagebox{{transition:none!important}}",
-            include_str!("live_stage.css")
+            "{}\n{}\n.tv-stagebox{{transition:none!important}}",
+            include_str!("live_stage.css"),
+            include_str!("live_endings.css")
         )));
         stage
             .root
-            .set_attribute("data-scene-state", "idle")
+            .set_attribute("data-scene-state", "awaiting-choice")
             .unwrap();
         stage
             .narrator_line(

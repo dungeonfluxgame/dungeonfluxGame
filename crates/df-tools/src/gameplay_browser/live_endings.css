@@ -255,7 +255,7 @@
 }
 
 /* TVX-07: keep retained narration visible while the table waits without choice hints. */
-.tv-stage[data-scene-state=awaiting-choice]:not([data-ended]):has(.tv-narration:not(:empty)) .tv-stagebox {
+.tv-stage[data-scene-state=awaiting-choice]:not([data-ended]):not([data-speaker=character]):has(.tv-narration:not(:empty)) .tv-stagebox {
   opacity: 1;
   visibility: visible;
   transition: opacity 0.4s ease, visibility 0s;

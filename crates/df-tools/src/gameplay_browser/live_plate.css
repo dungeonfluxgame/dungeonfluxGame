@@ -98,6 +98,12 @@
 .tv-lower-name{margin:0 0 calc(var(--u)*.3);font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.22em;text-transform:uppercase;color:#e8cb94;text-shadow:none}
 .tv-lower-text{margin:0;font-size:var(--fs-line);line-height:1.3;text-shadow:0 2px 10px #000}
 .tv-stage[data-shot=establishing] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
+/* A retained character line and the choices share normal flow: wrapped labels determine
+   their own height instead of rising into the independently positioned speech panel. */
+.tv-caption-lane{display:contents}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-caption-lane{position:absolute;z-index:7;left:0;right:0;bottom:7vh;display:grid;gap:calc(var(--u)*1.2);pointer-events:none}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-caption-lane>.tv-lower{position:relative;grid-row:1;bottom:auto}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-caption-lane>.tv-choices{position:relative;grid-row:2;left:auto;right:auto;bottom:auto;width:calc(var(--u)*44);margin-left:calc(var(--u)*34)}
 /* the narrator's and the look-result box stay in a wide, low band in the lower third, clear of the
    heads the layout measures, instead of a tall box in the middle over the speaker */
 .tv-stage[data-tv-mode=scene]:is([data-shot=plate],[data-shot=establishing]) .tv-stagebox.tv-stagebox{justify-self:center;width:calc(var(--u)*78);text-align:center;margin-bottom:calc(4.5vh + var(--u)*5.2)}
