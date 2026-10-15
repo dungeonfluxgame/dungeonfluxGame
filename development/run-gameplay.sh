@@ -222,9 +222,17 @@ mkdir -p "$RUN_DIR"
 chmod 700 "$RUN_DIR"
 rm -f "$STOP_FILE"
 
+# Approach model: take only its credential from the ignored .env, never printing it.
+if test -z "${DF_JEV_API_KEY:-}" && test -f "$ROOT/.env"; then
+  DF_JEV_API_KEY=$(sed -n 's/^DF_JEV_API_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
+  if test -n "$DF_JEV_API_KEY"; then export DF_JEV_API_KEY; else unset DF_JEV_API_KEY; fi
+fi
 # Home video (PLAY-V10): take only the fal key from the ignored .env, never printing it.
 if test -z "${FAL_KEY:-}" && test -f "$ROOT/.env"; then
-  FAL_KEY=$(sed -n 's/^FAL_KEY=//p' "$ROOT/.env" | head -n 1)
+  FAL_KEY=$(sed -n 's/^FAL_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
+  if test -z "$FAL_KEY"; then
+    FAL_KEY=$(sed -n 's/^DF_FAL_KEY=//p' "$ROOT/.env" | head -n 1 | tr -d "\"'\r")
+  fi
   if test -n "$FAL_KEY"; then export FAL_KEY; else unset FAL_KEY; fi
 fi
 # Spoken narration: take only the ElevenLabs key from the ignored .env, never printing it.
