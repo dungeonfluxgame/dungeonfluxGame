@@ -950,7 +950,7 @@ fn the_setting_is_on_with_a_key_and_the_default_budget_and_model_and_off_without
     );
     assert_eq!(
         home_video::startup_line(&on),
-        "HOME VIDEO on model=fal-ai/kling-video/o1/image-to-video budget=4 duration=5s; SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
+        "HOME VIDEO on model=fal-ai/kling-video/o1/image-to-video budget=1000 duration=5s; SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
     );
     let without = home_video::home_video_settings(inputs(None, None, None, None), current, false)
         .expect("a missing key is a state");

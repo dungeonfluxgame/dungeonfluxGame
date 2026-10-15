@@ -5,6 +5,7 @@ use crate::gameplay::{
     pack::SceneKey,
     social::PatienceState,
 };
+use std::time::Duration;
 
 fn room() -> (
     super::super::adventure::GeneratedAdventure,

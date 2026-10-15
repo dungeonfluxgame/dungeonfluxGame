@@ -12,11 +12,7 @@
 //! storyteller refuses any reply that uses them. A pack without that list falls back to the
 //! proper names found in the clue text.
 
-use std::{
-    collections::{BTreeMap, VecDeque},
-    sync::{Arc, Mutex, PoisonError},
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
 use df_protocol::common as rpc;
 use df_types::MemberId;
@@ -47,8 +43,6 @@ mod room;
 pub(super) const REPLY_CHARACTERS: usize = 220;
 /// Only this much of the player's words is shown to the model.
 const MAXIMUM_PLAYER_CHARACTERS: usize = 500;
-const REPLIES_PER_WINDOW: usize = 6;
-const WINDOW: Duration = Duration::from_secs(60);
 /// How much of an offered line the reply must say for the line to count as said.
 const USED_COVERAGE: f64 = 0.45;
 
@@ -223,8 +217,6 @@ pub(super) struct Exchange {
 pub(super) enum FallbackReason {
     /// The storyteller is off: no call was made.
     ModelOff,
-    /// The member talked past the reply bounds (six a minute): no call was made.
-    RateLimited,
     /// The per-run token budget could not cover the call.
     BudgetExhausted,
     /// The model call failed or timed out.
@@ -242,7 +234,6 @@ impl FallbackReason {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::ModelOff => "model_off",
-            Self::RateLimited => "rate_limited",
             Self::BudgetExhausted => "budget_exhausted",
             Self::CallFailed => "call_failed",
             Self::RequestInvalid(_) => "request_invalid",
@@ -831,67 +822,9 @@ fn secret_terms(clue: &str, public: &str) -> Vec<String> {
     kept
 }
 
-/// Bounds replies per member: one in flight and a few per minute.
-#[derive(Default)]
-struct ReplyLimiter {
-    members: Mutex<BTreeMap<MemberId, MemberWindow>>,
-}
-
-#[derive(Default)]
-struct MemberWindow {
-    in_flight: bool,
-    starts: VecDeque<Instant>,
-}
-
-/// Held while a reply is being produced; dropping it frees the member's single slot.
-struct Admission {
-    limiter: Arc<ReplyLimiter>,
-    member: MemberId,
-}
-
-impl Drop for Admission {
-    fn drop(&mut self) {
-        let mut members = self
-            .limiter
-            .members
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(window) = members.get_mut(&self.member) {
-            window.in_flight = false;
-        }
-    }
-}
-
-impl ReplyLimiter {
-    fn admit(self: &Arc<Self>, member: MemberId, now: Instant) -> Option<Admission> {
-        let mut members = self.members.lock().unwrap_or_else(PoisonError::into_inner);
-        members.retain(|_, window| {
-            while window
-                .starts
-                .front()
-                .is_some_and(|start| now.duration_since(*start) >= WINDOW)
-            {
-                window.starts.pop_front();
-            }
-            window.in_flight || !window.starts.is_empty()
-        });
-        let window = members.entry(member).or_default();
-        if window.in_flight || window.starts.len() >= REPLIES_PER_WINDOW {
-            return None;
-        }
-        window.in_flight = true;
-        window.starts.push_back(now);
-        Some(Admission {
-            limiter: self.clone(),
-            member,
-        })
-    }
-}
-
-/// The server's NPC voice: asks the storyteller, within the per-member bounds.
+/// The server's NPC voice: asks the storyteller. No per-member reply limit (owner, 2026-10-15).
 pub(super) struct NpcVoice {
     storyteller: Arc<Storyteller>,
-    limiter: Arc<ReplyLimiter>,
     approach_model: ApproachModel,
 }
 
@@ -922,7 +855,6 @@ impl NpcVoice {
     pub(super) fn new(storyteller: Arc<Storyteller>) -> Self {
         Self {
             storyteller,
-            limiter: Arc::default(),
             approach_model: ApproachModel::default(),
         }
     }
@@ -1483,10 +1415,6 @@ impl NpcVoice {
         if !self.storyteller.is_on() {
             return Err(FallbackReason::ModelOff);
         }
-        let _admission = self
-            .limiter
-            .admit(context.member, Instant::now())
-            .ok_or(FallbackReason::RateLimited)?;
         let slots = reply_slots(turn);
         let values = self
             .storyteller
@@ -1533,7 +1461,6 @@ impl NpcVoice {
         if !self.storyteller.is_on() {
             return None;
         }
-        let _admission = self.limiter.admit(context.member, Instant::now())?;
         let slots = [Slot::new("reply", REPLY_CHARACTERS)];
         let values = self
             .storyteller
@@ -1603,6 +1530,7 @@ mod room_tests;
 mod tests {
     use super::super::adventure::dossier::Attitude;
     use super::*;
+    use std::time::Duration;
 
     const CLUE: &str = "The courier quietly tells you: the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.";
 
@@ -2125,39 +2053,6 @@ mod tests {
     }
 
     #[test]
-    fn a_member_has_one_reply_in_flight_and_six_a_minute() {
-        let limiter = Arc::new(ReplyLimiter::default());
-        let start = Instant::now();
-        let (one, two) = (member(1), member(2));
-
-        let held = limiter.admit(one, start).unwrap();
-        assert!(limiter.admit(one, start).is_none(), "second in flight");
-        assert!(
-            limiter.admit(two, start).is_some(),
-            "other members are independent"
-        );
-        drop(held);
-        for step in 1..6 {
-            drop(
-                limiter
-                    .admit(one, start + Duration::from_secs(step))
-                    .unwrap(),
-            );
-        }
-        assert!(
-            limiter
-                .admit(one, start + Duration::from_secs(10))
-                .is_none(),
-            "seventh within a minute"
-        );
-        assert!(
-            limiter
-                .admit(one, start + Duration::from_secs(61))
-                .is_some()
-        );
-    }
-
-    #[test]
     fn outer_quotation_marks_are_removed_from_a_spoken_line() {
         assert_eq!(
             strip_outer_quotes("\u{201c}I cannot say.\u{201d}"),
@@ -2363,7 +2258,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn a_seventh_reply_within_a_minute_is_refused_without_a_call() {
+    async fn a_seventh_reply_within_a_minute_is_answered_like_the_first() {
         let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"reply": "Quiet now."}))]);
         let (voice, cache) = voice(&endpoint, "voice-rate");
 
@@ -2373,9 +2268,10 @@ mod tests {
                 Some("Quiet now.")
             );
         }
+        // No per-member reply limit (owner, 2026-10-15): the seventh is answered too.
         let seventh = voice.reply(question("Hello?")).await;
 
-        assert_eq!(seventh, None);
+        assert_eq!(seventh.as_deref(), Some("Quiet now."));
         assert_eq!(
             endpoint.connections(),
             1,

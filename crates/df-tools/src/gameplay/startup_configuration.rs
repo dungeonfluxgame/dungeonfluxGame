@@ -278,7 +278,7 @@ impl VoiceInputs {
 /// are cast from the voice roster instead of one shared NPC voice.
 pub(super) const DEFAULT_NARRATOR_VOICE: &str = "JBFqnCBsd6RMkjVDRZzb";
 const DEFAULT_VOICE_CASTING: &str = "content/voice-casting.json";
-const DEFAULT_VOICE_CHARACTER_BUDGET: u32 = 12_000;
+const DEFAULT_VOICE_CHARACTER_BUDGET: u32 = MAXIMUM_VOICE_CHARACTER_BUDGET;
 const MAXIMUM_VOICE_CHARACTER_BUDGET: u32 = 1_000_000;
 const DEFAULT_VOICE_CACHE: &str = "artifacts/tmp/play/voice-cache";
 
@@ -1131,9 +1131,9 @@ pub(super) fn battle_grid(input: Result<String, VarError>) -> Result<bool, io::E
 }
 
 const DEFAULT_TEXT_MODEL: &str = "gpt-6-luna";
-const DEFAULT_TEXT_TOKEN_BUDGET: u64 = 150_000;
+const DEFAULT_TEXT_TOKEN_BUDGET: u64 = MAXIMUM_TEXT_TOKEN_BUDGET;
 const MAXIMUM_TEXT_TOKEN_BUDGET: u64 = 100_000_000;
-const DEFAULT_TEXT_DEADLINE_SECONDS: u64 = 12;
+const DEFAULT_TEXT_DEADLINE_SECONDS: u64 = MAXIMUM_TEXT_DEADLINE_SECONDS;
 const MAXIMUM_TEXT_DEADLINE_SECONDS: u64 = 60;
 const DEFAULT_TEXT_CACHE: &str = "artifacts/tmp/play/text-cache";
 
@@ -1301,14 +1301,14 @@ impl ImageryInputs {
     }
 }
 
-const DEFAULT_IMAGERY_BUDGET: u32 = 40;
+const DEFAULT_IMAGERY_BUDGET: u32 = MAXIMUM_IMAGERY_BUDGET;
 const MAXIMUM_IMAGERY_BUDGET: u32 = 10_000;
 /// Scene refreshes are at least this far apart: a repaint every few seconds would cost more
 /// than it adds and would never settle.
 pub(super) const MINIMUM_IMAGERY_INTERVAL_SECONDS: u64 = 20;
-const DEFAULT_IMAGERY_INTERVAL_SECONDS: u64 = 30;
+const DEFAULT_IMAGERY_INTERVAL_SECONDS: u64 = MINIMUM_IMAGERY_INTERVAL_SECONDS;
 const MAXIMUM_IMAGERY_INTERVAL_SECONDS: u64 = 3_600;
-const DEFAULT_IMAGERY_DEADLINE_SECONDS: u64 = 45;
+const DEFAULT_IMAGERY_DEADLINE_SECONDS: u64 = MAXIMUM_IMAGERY_DEADLINE_SECONDS;
 const MAXIMUM_IMAGERY_DEADLINE_SECONDS: u64 = 170;
 const DEFAULT_IMAGERY_MODEL: &str = "gpt-image-2.5-flare";
 const DEFAULT_IMAGERY_CACHE: &str = "artifacts/tmp/play/imagery-cache";
@@ -1637,8 +1637,12 @@ mod tests {
             panic!("storyteller should be on");
         };
         assert_eq!(defaults.model, "gpt-6-luna");
-        assert_eq!(defaults.token_budget, 150_000);
-        assert_eq!(defaults.deadline, Duration::from_secs(12));
+        // No default spend or time limit (owner, 2026-10-15): the defaults are the maximums.
+        assert_eq!(defaults.token_budget, MAXIMUM_TEXT_TOKEN_BUDGET);
+        assert_eq!(
+            defaults.deadline,
+            Duration::from_secs(MAXIMUM_TEXT_DEADLINE_SECONDS)
+        );
         assert_eq!(
             defaults.cache_directory,
             Path::new("/work/artifacts/tmp/play/text-cache")

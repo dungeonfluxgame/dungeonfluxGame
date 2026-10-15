@@ -65,7 +65,7 @@ const SCENE_RECIPE: &str = "df-scene-video/2";
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STILL_QUALITY: u8 = 95;
-const DEFAULT_BUDGET: u32 = 4;
+const DEFAULT_BUDGET: u32 = MAXIMUM_BUDGET;
 const MAXIMUM_BUDGET: u32 = 1_000;
 const DEFAULT_CACHE: &str = "artifacts/tmp/play/home-video-cache";
 /// The fal media hosts the download is pinned to. The adapter refuses any other host.

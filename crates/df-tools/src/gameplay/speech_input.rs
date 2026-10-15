@@ -57,7 +57,7 @@ use crate::speech_clip::{
     UPLOAD_ID_HEADER, pcm_duration, wav_pcm,
 };
 
-const DEFAULT_BUDGET_SECONDS: u32 = 600;
+const DEFAULT_BUDGET_SECONDS: u32 = MAXIMUM_BUDGET_SECONDS;
 const MAXIMUM_BUDGET_SECONDS: u32 = 86_400;
 /// The only model the registered provider route sends. The setting names it so a different
 /// model cannot be selected without a matching provider route.
@@ -1443,14 +1443,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_to_a_ten_minute_budget_and_the_registered_model() {
+    fn settings_default_to_the_largest_budget_and_the_registered_model() {
         let SpeechSettings::On(on) =
             speech_settings(inputs([Some("key"), None, None, None])).unwrap()
         else {
             panic!("speech input should be on");
         };
 
-        assert_eq!(on.budget_seconds, 600);
+        assert_eq!(on.budget_seconds, MAXIMUM_BUDGET_SECONDS);
         assert_eq!(on.model, "scribe_v2");
         let explicit = speech_settings(inputs([
             Some("key"),
