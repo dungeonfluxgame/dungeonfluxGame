@@ -374,6 +374,55 @@ fn creation_packages_stage_through_the_live_entry_for_each_seat_and_match_their_
         }
     });
 }
+
+#[test]
+fn archer_creation_as_second_player_accepts_the_complete_phone_selection() {
+    live_pack(|| {
+        let mut current = joined_room();
+        current = seat_hero(
+            &current,
+            MEMBERS[0],
+            3,
+            "Brakka",
+            "melee-stalwart",
+            "portrait-hero-1",
+        );
+        let second = MemberId::from_bytes(&MEMBERS[1]).expect("second member");
+        let choices = [
+            ("species", "dwarf"),
+            ("class", "fighter-1"),
+            ("background", "soldier"),
+            ("language-1", "elvish"),
+            ("language-2", "orc"),
+            ("skill-1", "acrobatics"),
+            ("skill-2", "insight"),
+            ("gaming-set", "playing-cards"),
+            ("allied-ties", "join-order"),
+            ("alignment", "neutral-good"),
+            ("build-package", "archer"),
+            ("portrait", "portrait-hero-3"),
+        ];
+        let request = phone_create(&current, 4, "Sigrun", &choices);
+        let input = wire::journey_input(&request, second, &current)
+            .expect("the complete archer phone request converts");
+        let mut engine = model::HarborEngine;
+        let next = engine
+            .decide_admitted(
+                &current,
+                &input,
+                OperationId::from_bytes(&[4; 16]).expect("operation"),
+            )
+            .expect("second player archer creation is accepted");
+        let entity = player_entity(second, &next).expect("second hero");
+        assert_eq!(value(next.state(), entity, "armor-class"), Ok(15));
+        assert!(
+            next.state()
+                .inventory
+                .iter()
+                .any(|item| item.owner == entity && item.origin.entry.as_str() == "longbow")
+        );
+    });
+}
 #[test]
 fn appearance_must_match_the_combat_package_on_the_server() {
     live_pack(|| {
