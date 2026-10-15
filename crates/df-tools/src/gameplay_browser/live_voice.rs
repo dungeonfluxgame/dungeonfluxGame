@@ -229,6 +229,15 @@ fn director(document: &Document, root: &Element) -> Result<Shared, JsValue> {
             created
         }
     };
+    // Keep the media element in the document. Chromium will usually allow a detached
+    // HtmlAudioElement to play, but the autoplay unlock and subsequent source changes are
+    // not reliable for a detached element (the failure is silent: no `playing` event).
+    let audio = shared.borrow().audio.clone();
+    if !audio.is_connected() {
+        audio.set_attribute("aria-hidden", "true")?;
+        audio.set_attribute("style", "display:none")?;
+        root.append_child(&audio)?;
+    }
     let control = shared.borrow().control.clone();
     let prompt = shared.borrow().prompt.clone();
     if !control.is_connected() {
@@ -375,6 +384,16 @@ fn signal_later(id: LineId, signal: ClipSignal) {
     });
 }
 
+/// Exposes the last media event on the existing sound control for browser smoke checks. This
+/// stays content-free: it identifies only the line id and media transition.
+fn mark_media_event(shared: &Shared, event: &str, id: Option<LineId>) {
+    let value = id.map_or_else(|| event.to_owned(), |id| format!("{event}:{id}"));
+    let _marked = shared
+        .borrow()
+        .control
+        .set_attribute("data-voice-last-event", &value);
+}
+
 /// Fetches and decodes the audio of the line `id`, without playing it.
 pub(super) fn request(id: LineId, line: &VoiceLine) {
     let Some(shared) = DIRECTOR.with(|slot| slot.borrow().clone()) else {
@@ -413,6 +432,9 @@ pub(super) fn request(id: LineId, line: &VoiceLine) {
                 (false, Err(_)) => None,
             }
         };
+        if signal == Some(ClipSignal::Error) {
+            mark_media_event(&shared, "fetch-error", Some(id));
+        }
         if let Some(signal) = signal {
             live_motion::clip_signal(id, signal);
         }
@@ -460,6 +482,7 @@ pub(super) fn play(id: LineId) {
     };
     match started {
         Some((watch, Ok(promise))) => {
+            mark_media_event(&shared, "play-request", Some(id));
             arm_watch(&shared, id, watch, WATCH_UNSTARTED_MS);
             spawn_local(async move {
                 if let Err(refusal) = JsFuture::from(promise).await {
@@ -553,6 +576,11 @@ pub(super) fn cancel(id: LineId) {
 /// backgrounded tab, a busy device): sound stays on for the lines behind it, and the next play
 /// recovers on its own. One transient refusal must never silence the rest of the session.
 fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
+    let name = js_sys::Reflect::get(refusal, &JsValue::from_str("name"))
+        .ok()
+        .and_then(|name| name.as_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    mark_media_event(shared, &format!("play-refused:{name}"), Some(id));
     let blocked = js_sys::Reflect::get(refusal, &JsValue::from_str("name"))
         .ok()
         .and_then(|name| name.as_string())
@@ -614,6 +642,7 @@ fn on_playing(shared: &Shared, _event: &Event) {
         }
     };
     if let Some((id, watch, duration_ms)) = reported {
+        mark_media_event(shared, "playing", Some(id));
         let bound = duration_ms.map_or(WATCH_UNKNOWN_MS, |length| {
             length.saturating_add(WATCH_MARGIN_MS)
         });
@@ -677,6 +706,7 @@ fn on_ended(shared: &Shared, _event: &Event) {
 }
 
 fn on_error(shared: &Shared, _event: &Event) {
+    mark_media_event(shared, "media-error", None);
     finish(shared, ClipSignal::Error);
 }
 
