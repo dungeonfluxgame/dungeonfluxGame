@@ -217,8 +217,11 @@ fn answer_offered(facts: &Value) -> bool {
     ]
     .iter()
     .any(|key| match facts.get(key) {
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::String(text)) => !text.is_empty(),
+        Some(Value::Array(items)) => items.iter().any(|item| {
+            item.as_str()
+                .is_some_and(|text| !text.is_empty() && !is_denial(text))
+        }),
+        Some(Value::String(text)) => !text.is_empty() && !is_denial(text),
         Some(Value::Null) | None => false,
         Some(_) => true,
     })
@@ -348,7 +351,7 @@ fn fresh_clauses(text: &str, courted: &std::collections::BTreeSet<String>) -> Ve
 pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
     let mut found = Vec::new();
     let mut seen: Vec<(usize, String)> = Vec::new();
-    let mut admissions = 0;
+    let mut admissions = std::collections::BTreeSet::new();
     let mut heard: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let courted: std::collections::BTreeSet<String> = content_sequence(&transcript.courtship)
         .windows(REPEATED_CLAUSE_WORDS)
@@ -409,7 +412,15 @@ pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
                 found.push(finding("restates_the_question", number, first.clone()));
             }
         }
-        admissions += parts.iter().filter(|part| is_denial(part)).count().min(1);
+        if parts.iter().any(|part| is_denial(part))
+            && !admissions.insert(normalised(&exchange.hero_words))
+        {
+            found.push(finding(
+                "says_i_dont_know_more_than_once",
+                number,
+                "repeated admission for the same question",
+            ));
+        }
         // A flat dodge refuses without saying what is known, guessing, or naming who would
         // know: in character, specific and once per topic is owed instead.
         for part in &parts {
@@ -491,13 +502,6 @@ pub(super) fn check(transcript: &Transcript) -> Vec<Finding> {
                 }
             }
         }
-    }
-    if admissions > 1 {
-        found.push(finding(
-            "says_i_dont_know_more_than_once",
-            0,
-            format!("{admissions} replies"),
-        ));
     }
     // A term of address wears out: at most about one reply in four may use one.
     let replies = transcript.exchanges.len();

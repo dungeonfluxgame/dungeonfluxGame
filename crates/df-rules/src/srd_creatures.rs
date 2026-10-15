@@ -3,12 +3,13 @@
 //! encounter. Tactical fights resolve every stat-block action and trait the rules engine
 //! supports; `SRD_521_CREATURE_FEATURES` lists each trait and action of the 2024 stat block with
 //! what is implemented, what no fight can reach yet, and what is missing and must be disclosed.
-use crate::local_journey::{BanditRules, WeaponRules};
+use crate::local_journey::{BanditRules, ChallengeRating, WeaponRules};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SrdCreature {
     pub id: &'static str,
     pub name: &'static str,
     pub page: u16,
+    pub challenge_rating: ChallengeRating,
     pub languages: &'static str,
     pub exact: bool,
     /// Whether the enemy policy may target a hero at 0 Hit Points when no standing hero is actionable.
@@ -21,6 +22,10 @@ impl SrdCreature {
     pub fn can_speak(&self) -> bool {
         self.languages != "None" && !self.languages.contains("can't speak")
     }
+
+    pub fn experience_points(&self) -> Option<u32> {
+        crate::local_journey::experience_points_for_challenge_rating(self.challenge_rating)
+    }
 }
 pub const SRD_521_CREATURES: [SrdCreature; 12] = [
     // SRD 5.2.1, p. 261. Single melee attack taken as written. Light Crossbow is an unused alternative action.
@@ -28,6 +33,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "bandit",
         name: "Bandit",
         page: 261,
+        challenge_rating: ChallengeRating::Eighth,
         languages: "Common, Thieves' Cant",
         exact: true,
         attacks_unconscious: false,
@@ -44,11 +50,14 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 278. The extra 1 necrotic damage is folded into the flat damage modifier (1 + 1 = 2) because the combat model carries one damage type.
+    // SRD 5.2.1, p. 278. The tactical outcome carries the 1d4+1 Slashing and
+    // 1 Necrotic portions separately; no admitted target resists or is immune
+    // to either type, so that interaction remains a disclosed catalog gap.
     SrdCreature {
         id: "cultist",
         name: "Cultist",
         page: 278,
+        challenge_rating: ChallengeRating::Eighth,
         languages: "Common",
         exact: false,
         attacks_unconscious: false,
@@ -70,6 +79,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "guard",
         name: "Guard",
         page: 296,
+        challenge_rating: ChallengeRating::Eighth,
         languages: "Common",
         exact: true,
         attacks_unconscious: false,
@@ -88,11 +98,13 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
     },
     // SRD 5.2.1 p. 290: "AC 15" and "Gear Chain Shirt, Scimitar, Shield, Shortbow";
     // "Shortbow. Ranged Attack Roll: +4, range 80/320 ft." is an action alongside Scimitar.
-    // Nimble Escape and the Advantage rider have no effect in encounters without movement or Advantage.
+    // SRD 5.2.1 p. 290: Warrior has Nimble Escape; Redirect Attack belongs to
+    // the separate Goblin Boss stat block, which is outside this compiled catalog.
     SrdCreature {
         id: "goblin-warrior",
         name: "Goblin Warrior",
         page: 290,
+        challenge_rating: ChallengeRating::Quarter,
         languages: "Common, Goblin",
         exact: true,
         attacks_unconscious: false,
@@ -114,6 +126,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "kobold-warrior",
         name: "Kobold Warrior",
         page: 302,
+        challenge_rating: ChallengeRating::Eighth,
         languages: "Common, Draconic",
         exact: true,
         attacks_unconscious: false,
@@ -135,6 +148,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "skeleton",
         name: "Skeleton",
         page: 325,
+        challenge_rating: ChallengeRating::Quarter,
         languages: "Understands Common plus one other language but can't speak",
         exact: true,
         attacks_unconscious: false,
@@ -156,6 +170,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "zombie",
         name: "Zombie",
         page: 343,
+        challenge_rating: ChallengeRating::Quarter,
         languages: "Understands Common plus one other language but can't speak",
         exact: false,
         attacks_unconscious: true,
@@ -177,6 +192,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "wolf",
         name: "Wolf",
         page: 364,
+        challenge_rating: ChallengeRating::Quarter,
         languages: "None",
         exact: false,
         attacks_unconscious: true,
@@ -193,11 +209,13 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 353. Single bite taken as written. Pack Tactics needs an ally and none is present.
+    // SRD 5.2.1, p. 353. Bite is taken as written; Climb Speed 30 ft. and
+    // Darkvision 60 ft. are catalogued separately from the flat-grid movement.
     SrdCreature {
         id: "giant-rat",
         name: "Giant Rat",
         page: 353,
+        challenge_rating: ChallengeRating::Eighth,
         languages: "None",
         exact: true,
         attacks_unconscious: true,
@@ -214,11 +232,13 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
-    // SRD 5.2.1, p. 355. Single bite taken as written.
+    // SRD 5.2.1, p. 355. Bite is taken as written; Climb Speed 30 ft. and
+    // Darkvision 60 ft. are catalogued separately from the flat-grid movement.
     SrdCreature {
         id: "giant-weasel",
         name: "Giant Weasel",
         page: 355,
+        challenge_rating: ChallengeRating::Eighth,
         languages: "None",
         exact: true,
         attacks_unconscious: true,
@@ -240,6 +260,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "mastiff",
         name: "Mastiff",
         page: 357,
+        challenge_rating: ChallengeRating::Eighth,
         languages: "None",
         exact: false,
         attacks_unconscious: true,
@@ -261,6 +282,7 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         id: "scout",
         name: "Scout",
         page: 322,
+        challenge_rating: ChallengeRating::Half,
         languages: "Common plus one other language",
         exact: false,
         attacks_unconscious: false,
@@ -323,10 +345,9 @@ const fn feature(
         note,
     }
 }
-use FeatureKind::{Action, BonusAction, Movement, Reaction, Sense, Trait};
+use FeatureKind::{Action, BonusAction, Movement, Sense, Trait};
 use FeatureStatus::{Implemented, Missing, NotExercised};
-const DARKVISION_GAP_NOTE: &str =
-    "It can see in darkness within 60 ft.; this fight still treats darkness as limiting its sight.";
+const DARKVISION_NOTE: &str = "It can see in darkness within 60 ft. in this tactical fight.";
 /// Every trait, action, bonus action, reaction, movement mode and sense of the twelve compiled
 /// stat blocks (SRD 5.2.1 page in the creature row above), checked so none is omitted silently.
 pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
@@ -349,7 +370,7 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "Ritual Sickle",
         Action,
         Missing,
-        "The Sickle deals 1d4 + 1 Slashing plus 1 Necrotic damage. This fight adds both amounts together as Slashing.",
+        "The outcome retains 1d4 + 1 Slashing and 1 Necrotic damage separately; no admitted target resists or is immune to either type.",
     ),
     feature(
         "guard",
@@ -383,8 +404,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "goblin-warrior",
         "Nimble Escape (Disengage)",
         BonusAction,
-        NotExercised,
-        "the rules engine resolves it; the enemy policy never chooses it",
+        Implemented,
+        "the enemy policy spends a Bonus Action before leaving a threatened space",
     ),
     feature(
         "goblin-warrior",
@@ -398,16 +419,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "goblin-warrior",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
-    ),
-    // SRD 5.2.1, p. 290: "The goblin and that ally swap places, and the ally becomes the target of the attack instead."
-    feature(
-        "goblin-warrior",
-        "Redirect Attack",
-        Reaction,
-        Missing,
-        "When an attack targets it, it can swap places with a Small or Medium ally within 5 ft. and make that ally the target; this fight does not redirect attacks.",
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "kobold-warrior",
@@ -442,8 +455,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "kobold-warrior",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "skeleton",
@@ -478,8 +491,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "skeleton",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "zombie",
@@ -508,8 +521,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "zombie",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "wolf",
@@ -530,8 +543,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "wolf",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "giant-rat",
@@ -559,8 +572,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "giant-rat",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "giant-weasel",
@@ -581,8 +594,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "giant-weasel",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "mastiff",
@@ -596,8 +609,8 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "mastiff",
         "Darkvision 60 ft.",
         Sense,
-        Missing,
-        DARKVISION_GAP_NOTE,
+        Implemented,
+        DARKVISION_NOTE,
     ),
     feature(
         "scout",
@@ -643,17 +656,18 @@ mod tests {
                 .find(|creature| creature.id == id)
                 .expect("SRD creature from source list");
             assert_eq!(creature.page, page);
-            let darkvision = missing_features(id)
-                .find(|row| row.name == "Darkvision 60 ft.")
+            let darkvision = SRD_521_CREATURE_FEATURES
+                .iter()
+                .find(|row| row.creature == id && row.name == "Darkvision 60 ft.")
                 .unwrap_or_else(|| panic!("{id} at SRD p. {page} needs Darkvision disclosed"));
             assert_eq!(darkvision.kind, Sense);
-            assert_eq!(darkvision.status, Missing);
+            assert_eq!(darkvision.status, Implemented);
             assert!(
                 darkvision
                     .note
                     .contains("can see in darkness within 60 ft.")
             );
-            assert!(darkvision.note.contains("darkness as limiting its sight"));
+            assert!(darkvision.note.contains("tactical fight"));
         }
         for (id, absent_2014_trait) in [
             ("wolf", "Keen Hearing and Smell"),
@@ -734,20 +748,19 @@ mod tests {
             );
             assert!(!row.note.is_empty());
         }
-        assert_eq!(missing_features("giant-rat").count(), 2);
-        assert_eq!(missing_features("kobold-warrior").count(), 1);
-        assert_eq!(missing_features("goblin-warrior").count(), 3);
+        assert_eq!(missing_features("giant-rat").count(), 1);
+        assert_eq!(missing_features("kobold-warrior").count(), 0);
+        assert_eq!(missing_features("goblin-warrior").count(), 1);
     }
 
-    // SRD 5.2.1, p. 290: Redirect Attack is a reaction the tactical rules do not resolve.
+    // SRD 5.2.1 p. 290: only Goblin Boss lists Redirect Attack, not Goblin Warrior.
     #[test]
-    fn goblin_redirect_attack_is_disclosed_as_missing() {
-        let redirect = missing_features("goblin-warrior")
-            .find(|row| row.name == "Redirect Attack")
-            .expect("missing reaction is disclosed");
-        assert_eq!(redirect.kind, Reaction);
-        assert_eq!(redirect.status, Missing);
-        assert!(redirect.note.contains("swap places"));
+    fn goblin_warrior_does_not_gain_boss_redirect_attack() {
+        assert!(
+            !SRD_521_CREATURE_FEATURES
+                .iter()
+                .any(|row| { row.creature == "goblin-warrior" && row.name == "Redirect Attack" })
+        );
     }
 
     // SRD 5.2.1, p. 278: "Hit: 3 (1d4 + 1) Slashing damage plus 1 Necrotic damage."
@@ -761,7 +774,7 @@ mod tests {
         assert_eq!(sickle.status, Missing);
         assert!(sickle.note.contains("1d4 + 1 Slashing"));
         assert!(sickle.note.contains("1 Necrotic"));
-        assert!(sickle.note.contains("as Slashing"));
+        assert!(!sickle.note.contains("as Slashing"));
     }
 
     #[test]

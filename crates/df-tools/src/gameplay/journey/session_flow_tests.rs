@@ -359,6 +359,7 @@ fn action(
                     option_id: value.as_str().to_owned(),
                 })
                 .collect(),
+            ..Default::default()
         });
     }
     assert!(!wire::unrelated_payload(&request, kind));

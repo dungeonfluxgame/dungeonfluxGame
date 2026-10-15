@@ -85,6 +85,10 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
                     .narration
                     .contains(&generated.settings.destination.short)
             );
+            assert!(
+                !victory_setting.narration.starts_with("You reach "),
+                "the next choice may still ask the party to go there"
+            );
             let opening_setting = generated
                 .pack
                 .scenes
@@ -300,6 +304,105 @@ fn two_hundred_campaigns_complete_with_clock_deadlines_and_act_invariants() {
         std::collections::BTreeSet::from(["mystery".into(), "parley".into()])
     );
 }
+
+#[test]
+fn finale_defeat_names_the_same_captured_patron_outcome_as_its_epilogue() {
+    let t = tables();
+    let frame = generate_frame(&t, 51, GenerateOptions::default()).unwrap();
+    let mut record = CampaignRecord::new(frame.clone()).unwrap();
+    let plan = loop {
+        let mut plan = next_chapter(&t, &frame, &record).unwrap();
+        if plan.chapter_type == "finale" {
+            break plan;
+        }
+        generate_chapter(&t, &frame, &mut plan).unwrap();
+        let mut outcome = synthetic(plan.number, 51);
+        outcome.result = ChapterResult::Victory;
+        outcome.destination_reached = true;
+        outcome.antagonist_spared = true;
+        record
+            .begin(
+                plan.clone(),
+                format!("database-{}", plan.number),
+                format!("digest-{}", plan.number),
+            )
+            .unwrap();
+        record.complete(plan.number, outcome).unwrap();
+    };
+    let patron = plan.patron.first.clone();
+    let mut plan = plan;
+    let generated = generate_chapter(&t, &frame, &mut plan).unwrap();
+    let defeat = generated
+        .pack
+        .campaign_epilogue
+        .as_ref()
+        .unwrap()
+        .defeat
+        .as_str();
+    let defeat_scene = &generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::Defeat)
+        .unwrap()
+        .narration;
+
+    assert!(defeat.contains(&patron));
+    assert!(defeat.contains("is dragged away"));
+    assert!(!defeat.contains("begin again"));
+    assert_eq!(defeat_scene, defeat);
+}
+
+#[test]
+fn ending_removes_a_stock_sentence_repeated_from_an_earlier_scene() {
+    let t = tables();
+    let frame = generate_frame(&t, 51, GenerateOptions::default()).unwrap();
+    let record = CampaignRecord::new(frame.clone()).unwrap();
+    let mut plan = next_chapter(&t, &frame, &record).unwrap();
+    let mut generated = generate_chapter(&t, &frame, &mut plan).unwrap();
+    let repeated = "The innkeeper now looks to Brakka for support on the way.";
+    let (earlier_variant, ending_variant) = {
+        let script = generated.pack.beat_script.as_mut().unwrap();
+        let ending_variant = script
+            .beats
+            .iter()
+            .find_map(|beat| {
+                (beat.kind == super::super::beat_script::BeatKind::Ending)
+                    .then(|| beat.scene_variant.clone())
+                    .flatten()
+            })
+            .unwrap();
+        let ending_scene_key = script.scenes[&ending_variant].key;
+        let ending_place = generated.settings.scene(ending_scene_key).place_id.clone();
+        let earlier_variant = script
+            .beats
+            .iter()
+            .filter(|beat| beat.kind != super::super::beat_script::BeatKind::Ending)
+            .filter_map(|beat| beat.scene_variant.as_ref())
+            .find(|variant| {
+                let scene = &script.scenes[*variant];
+                generated.settings.scene(scene.key).place_id != ending_place
+            })
+            .unwrap()
+            .clone();
+        script.scenes.get_mut(&earlier_variant).unwrap().setting = None;
+        script.scenes.get_mut(&ending_variant).unwrap().setting = None;
+        script.scenes.get_mut(&earlier_variant).unwrap().narration = repeated.to_owned();
+        script.scenes.get_mut(&ending_variant).unwrap().narration =
+            format!("{repeated} The road lies ahead.");
+        (earlier_variant, ending_variant)
+    };
+
+    super::campaign_render::remove_repeated_ending_sentences(&mut generated, None);
+
+    let script = generated.pack.beat_script.as_ref().unwrap();
+    assert_eq!(script.scenes[&earlier_variant].narration, repeated);
+    assert_eq!(
+        script.scenes[&ending_variant].narration,
+        "The road lies ahead."
+    );
+}
+
 #[test]
 fn histories_diverge_and_private_facts_do_not_enter_public_recap() {
     let t = tables();

@@ -271,6 +271,7 @@ fn view(player: bool, frame: FixtureFrame) -> rpc::ViewMessage {
                         },
                     ],
                 }],
+                ..Default::default()
             })
         } else {
             None
@@ -505,6 +506,15 @@ impl rpc::room_service_server::RoomService for Service {
 
 #[tonic::async_trait]
 impl rpc::action_service_server::ActionService for Service {
+    async fn preview_hero_identity(
+        &self,
+        _request: Request<rpc::PreviewHeroIdentityRequest>,
+    ) -> Result<Response<rpc::PreviewHeroIdentityResponse>, Status> {
+        Err(Status::unimplemented(
+            "the revision peer does not read hero descriptions",
+        ))
+    }
+
     async fn submit(
         &self,
         request: Request<rpc::SubmitActionRequest>,

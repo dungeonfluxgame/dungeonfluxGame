@@ -1,0 +1,25 @@
+.hero-creator{max-width:560px;margin:auto;padding:16px 14px 24px;color:#f4e8d1;background:#15120ff2;border:1px solid #b5966040;border-radius:14px;font:15px/1.45 system-ui,sans-serif}
+.hero-creator h1{margin:0 0 8px;font:600 28px/1.1 Georgia,serif}
+.hero-intro,.hero-help{margin:8px 0;color:#cfbea0;font-size:13px}
+.hero-field{display:flex;flex-direction:column;gap:5px;margin:10px 0;min-width:0}
+.hero-field select,.hero-field textarea{box-sizing:border-box;width:100%;min-height:44px;padding:10px;color:#f4e8d1;background:#242018;border:1px solid #b5966060;border-radius:8px;font:15px/1.35 system-ui,sans-serif}
+.hero-field textarea{resize:vertical}
+.hero-details{margin:10px 0;padding:10px 12px;border:1px solid #b5966040;border-radius:10px}
+.hero-details summary{min-height:28px;cursor:pointer;color:#e0c288}
+.hero-look-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}
+.hero-read,.hero-confirm button{width:100%;min-height:48px;padding:10px;border:1px solid #cbaa70;border-radius:9px;color:#f4e8d1;background:#44321b;font:600 16px/1.3 system-ui,sans-serif}
+.hero-confirm{margin-top:12px;padding-top:10px;border-top:1px solid #b5966040}
+.hero-missing{margin:0 0 10px;color:#e5d1a9;font-size:13px}
+.hero-feedback:empty{display:none}
+.hero-feedback{color:#e5d1a9;font-size:13px}
+.hero-chips{margin:8px 0;color:#e0c288;font-size:13px;line-height:1.6}
+.hero-creator [hidden]{display:none}
+.hero-fixed-field{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #b5966020;font-size:14px}
+.hero-fixed-field span{color:#e0c288}
+.hero-confirm button:disabled{opacity:.5}
+.hero-creator :focus-visible{outline:2px solid #e0c288;outline-offset:3px}
+.hero-cards{display:flex;gap:8px;overflow-x:auto;scroll-snap-type:x mandatory}
+.hero-card{flex:0 0 80%;box-sizing:border-box;scroll-snap-align:start;display:flex;flex-direction:column;gap:4px;text-align:left;min-height:48px;padding:10px;border:1px solid #b5966060;border-radius:8px;color:#f4e8d1;background:#242018;font:14px/1.4 system-ui,sans-serif}
+.hero-card span{color:#cfbea0;font-size:13px}
+.hero-card[aria-pressed=true]{border-color:#e0c288;background:#44321b}
+.hero-card:only-child{flex-basis:100%}

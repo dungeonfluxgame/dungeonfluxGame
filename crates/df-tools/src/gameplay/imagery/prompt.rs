@@ -12,6 +12,7 @@
 //! gets a seductive variant, and no real public figure or brand can be named.
 
 use super::super::{
+    hero_identity::{IdentityError, ValidatedIdentity},
     pack,
     scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
     startup_configuration::ContentRating,
@@ -37,7 +38,7 @@ pub(super) const NO_PEOPLE: &str =
 const KEEP_FLOOR: &str = "Keep a wide, clear, open floor across the lower third of the frame, \
     with the floor perspective and horizon of the reference, so figures can stand on it.";
 const KEEP_FRAME: &str = "Keep the exact aspect ratio and framing of the reference.";
-const KEEP_PERSON: &str = "Keep exactly the same person: face, hair, beard, build, costume, \
+const KEEP_PERSON: &str = "Keep exactly the same person: face, hair, facial hair, build, costume, \
     pose, framing, camera distance and lighting as in the reference image.";
 const KEEP_TRANSPARENT: &str = "Keep the background fully transparent.";
 const CHANGE_ONLY: &str = "Change only the following.";
@@ -46,6 +47,60 @@ const SCENE_SETTING: &str = "The place is";
 const CHARACTER_IS: &str = "The character is";
 const SHOW_EXPRESSION: &str = "The face shows";
 const SHOW_APPEARANCE: &str = "The character appears";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero portrait prompt"
+)]
+const HERO_PORTRAIT_REFERENCE: &str = "Image 1 is a neutral pose and lighting reference only; rebuild \
+    every physical identity detail from the selected identity below.";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero portrait prompt"
+)]
+const HERO_PORTRAIT: &str = "Photograph one adult fantasy hero full-body from head to boots, in a \
+    clear three-quarter view, isolated on a true transparent background, with the face, hair, \
+    clothing and held gear plainly visible.";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero cut-out prompt"
+)]
+const HERO_SHEET_REFERENCE: &str = "Image 1 is the party sheet. Isolate only its selected figure as a \
+    full-body transparent cut-out; use the sheet for pose and scale only, and rebuild identity \
+    from the selected details below.";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero image prompts"
+)]
+const HERO_SELECTED_IDENTITY: &str =
+    "The hero's exact selected identity and canonical held gear are:";
+const HERO_APPEARANCE_ONLY: &str =
+    "The selected attire is appearance only; it grants no equipment or rules.";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero expression prompt"
+)]
+const HERO_EXPRESSION_IDENTITY: &str = "Keep the same selected hero identity, canonical gear and \
+    facial-hair choice exactly as described.";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero cut-out prompt"
+)]
+const HERO_NUMBERED_FIGURE: &str = "The selected party-sheet figure is number";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero cut-out prompt"
+)]
+const HERO_NUMBERED_FIGURE_END: &str = "from the left.";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero cut-out prompt"
+)]
+const HERO_SHEET_COUNT: &str = "The party sheet contains";
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero cut-out prompt"
+)]
+const HERO_SHEET_FIGURES: &str = "figures.";
 
 /// Why a prompt could not be built. Nothing is sent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -248,6 +303,112 @@ impl PlaceFacts {
 pub(in crate::gameplay) struct CharacterFacts {
     pub(in crate::gameplay) role: CharacterRole,
     pub(in crate::gameplay) life_stage: LifeStage,
+}
+
+/// Server-owned facts used to draw a player hero. Gear phrases must come from the canonical
+/// admitted equipment list; identity appearance phrases come only from the validated menu ids.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::gameplay) struct HeroVisualIdentity<'a> {
+    pub(in crate::gameplay) identity: &'a ValidatedIdentity,
+    pub(in crate::gameplay) species: &'a str,
+    pub(in crate::gameplay) held_gear: &'a [&'static str],
+}
+
+impl HeroVisualIdentity<'_> {
+    pub(in crate::gameplay) fn description(self) -> Result<String, IdentityError> {
+        let appearance = self.identity.appearance_description(self.species)?;
+        let gear = if self.held_gear.is_empty() {
+            "none".to_owned()
+        } else {
+            self.held_gear.join(", ")
+        };
+        Ok(format!(
+            "{}; canonical held gear: {gear}; {}",
+            appearance.trim_end_matches('.'),
+            HERO_APPEARANCE_ONLY
+        ))
+    }
+}
+
+/// A new hero image is authored from closed appearance menus and canonical held gear. Player
+/// names, backstory and free-form descriptions are deliberately not accepted by this API.
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero portrait prompt"
+)]
+pub(in crate::gameplay) fn hero_portrait(
+    rating: ContentRating,
+    hero: HeroVisualIdentity<'_>,
+) -> Result<AssembledPrompt, IdentityError> {
+    let mut parts = vec![
+        Part::Fixed(HERO_PORTRAIT_REFERENCE),
+        Part::Fixed(HERO_PORTRAIT),
+        Part::Fixed(HERO_SELECTED_IDENTITY),
+        Part::Fact(hero.description()?),
+    ];
+    parts.extend(rating_parts(rating));
+    Ok(AssembledPrompt::from_parts(parts))
+}
+
+/// A party-sheet figure is redrawn as its selected hero identity, rather than treated as the
+/// source of face, body, hair or costume.
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero cut-out prompt"
+)]
+pub(in crate::gameplay) fn hero_cutout(
+    rating: ContentRating,
+    hero: HeroVisualIdentity<'_>,
+    figure_index: usize,
+    figure_count: usize,
+) -> Result<AssembledPrompt, IdentityError> {
+    let mut parts = vec![
+        Part::Fixed(HERO_SHEET_REFERENCE),
+        Part::Fixed(HERO_NUMBERED_FIGURE),
+        Part::Fact(figure_index.saturating_add(1).to_string()),
+        Part::Fixed(HERO_NUMBERED_FIGURE_END),
+        Part::Fixed(HERO_SHEET_COUNT),
+        Part::Fact(figure_count.to_string()),
+        Part::Fixed(HERO_SHEET_FIGURES),
+        Part::Fixed(HERO_SELECTED_IDENTITY),
+        Part::Fact(hero.description()?),
+    ];
+    parts.extend(rating_parts(rating));
+    Ok(AssembledPrompt::from_parts(parts))
+}
+
+/// An expression or health edit keeps the hero's appearance and canonically held equipment.
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must consume the checked hero expression prompt"
+)]
+pub(in crate::gameplay) fn hero_expression(
+    rating: ContentRating,
+    hero: HeroVisualIdentity<'_>,
+    expression: Expression,
+    tier: HealthTier,
+) -> Result<AssembledPrompt, IdentityError> {
+    let mut parts = vec![
+        Part::Fixed(KEEP_PERSON),
+        Part::Fixed(KEEP_TRANSPARENT),
+        Part::Fixed(HERO_EXPRESSION_IDENTITY),
+        Part::Fixed(HERO_SELECTED_IDENTITY),
+        Part::Fact(hero.description()?),
+        Part::Fixed(CHANGE_ONLY),
+        Part::Fixed(SHOW_EXPRESSION),
+    ];
+    match health_face_phrase(tier) {
+        Some(face) => {
+            parts.push(Part::Fixed(face));
+            if let Some(look) = health_look_phrase(tier, rating) {
+                parts.push(Part::Fixed(SHOW_APPEARANCE));
+                parts.push(Part::Fixed(look));
+            }
+        }
+        None => parts.push(Part::Fixed(expression_phrase(expression, rating))),
+    }
+    parts.extend(rating_parts(rating));
+    Ok(AssembledPrompt::from_parts(parts))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -551,6 +712,16 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         CHARACTER_IS,
         SHOW_EXPRESSION,
         SHOW_APPEARANCE,
+        HERO_PORTRAIT_REFERENCE,
+        HERO_PORTRAIT,
+        HERO_SHEET_REFERENCE,
+        HERO_SELECTED_IDENTITY,
+        HERO_APPEARANCE_ONLY,
+        HERO_EXPRESSION_IDENTITY,
+        HERO_NUMBERED_FIGURE,
+        HERO_NUMBERED_FIGURE_END,
+        HERO_SHEET_COUNT,
+        HERO_SHEET_FIGURES,
         "The camera:",
         "The light:",
         "The mood of the room:",

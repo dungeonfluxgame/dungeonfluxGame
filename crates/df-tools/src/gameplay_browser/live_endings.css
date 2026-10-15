@@ -59,13 +59,12 @@
 .tv-stage:has(.live-screen[data-screen=aftermath]) .live-screen[data-screen=aftermath] .df-aftermath {
   grid-template-columns: minmax(0, 1fr);
   /* The fight-staging rules narrow this screen for the composited stage; the
-   * held screen fills its own column instead. The painting stack repeats the
-   * rest backdrop from live_combat/style.rs (same scene-asset variable and
-   * combat-art fallback) so the held screen keeps its backdrop. */
+   * held screen fills its own column instead. This backdrop repeats the scene
+   * asset and its photographic fallback from live_combat/style.rs. */
   background:
     linear-gradient(180deg, #05080a70 0, transparent 22%, transparent 40%, #05080ac4 66%, #05080af2),
     var(--asset-scene-courier-road) center 38% / cover,
-    url('/assets/concept-art/combat-harbor-docks-wide-lanterns.webp') center 38% / cover,
+    url('/assets/ui/scenes/mara-harbor-v4.png') center 38% / cover,
     #0b0f0c;
 }
 
@@ -169,7 +168,7 @@
   background:
     linear-gradient(180deg, #0a050acc 0, transparent 30%, transparent 45%, #0a050ae6 75%, #0a050a),
     var(--asset-scene-courier-road) center 38% / cover,
-    url('/assets/concept-art/combat-harbor-docks-wide-lanterns.webp') center 38% / cover,
+    url('/assets/ui/scenes/mara-harbor-v4.png') center 38% / cover,
     #0b0f0c;
 }
 

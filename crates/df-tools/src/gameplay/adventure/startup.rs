@@ -154,6 +154,97 @@ async fn database_connection_retries_after_two_failures() {
     assert_eq!(attempts, 3);
 }
 
+#[cfg(test)]
+#[tokio::test(flavor = "current_thread")]
+async fn fresh_adventure_requests_emotional_profiles_for_generated_dossiers() {
+    use crate::gameplay::{
+        adventure::RulesMode,
+        startup_configuration::{AdventureMode, AdventureSettings},
+        storyteller::tests::{FakeEndpoint, Reply, teller},
+    };
+    use std::{path::PathBuf, sync::Arc, time::Duration};
+
+    let compute: Arc<dyn Fn(&str) -> serde_json::Value + Send + Sync> = Arc::new(|prompt| {
+        let facts = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("FACTS: "))
+            .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .expect("storyteller request has bounded facts");
+        if facts.get("dossier").is_some() {
+            let profile = serde_json::json!({
+                "orientation": "They keep a steady eye on the road.",
+                "adult_only": true,
+                "feelings": [],
+                "forgiveness": "forgiving",
+                "patience": "middling",
+                "tells": [],
+                "legacy_reactions": facts["dossier"]["legacy_reactions"],
+            });
+            return serde_json::json!({"profile": profile.to_string()});
+        }
+        let slots = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("SLOTS: "))
+            .and_then(|line| serde_json::from_str::<Vec<serde_json::Value>>(line).ok())
+            .expect("storyteller request has bounded slots");
+        let answers = slots
+            .into_iter()
+            .map(|slot| {
+                let name = slot["name"].as_str().expect("a named output slot");
+                let draft = facts["drafts"][name]
+                    .as_str()
+                    .expect("the request includes its pattern draft");
+                (name.to_owned(), serde_json::Value::String(draft.to_owned()))
+            })
+            .collect::<serde_json::Map<_, _>>();
+        serde_json::Value::Object(answers)
+    });
+    let endpoint = FakeEndpoint::start((0..128).map(|_| Reply::Compute(compute.clone())).collect());
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/campaign/luna6/B31/startup-profile-cache");
+    let _ = std::fs::remove_dir_all(&cache);
+    let storyteller = teller(endpoint.address, 200_000, Duration::from_secs(15), &cache);
+    let settings = AdventureSettings {
+        mode: AdventureMode::Random,
+        seed: Some(51),
+        tables: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/adventure-tables"),
+        rules_mode: RulesMode::Standard,
+        chapter_type: None,
+    };
+
+    let fresh = fresh_adventure(&settings, &storyteller).await.unwrap();
+    let profile_requests = endpoint
+        .bodies()
+        .iter()
+        .filter(|body| {
+            body["input"]
+                .as_str()
+                .is_some_and(|prompt| prompt.contains("npc_emotional_profile"))
+        })
+        .count();
+
+    assert_eq!(profile_requests, fresh.generated.dossiers.len());
+    assert!(
+        fresh
+            .generated
+            .dossiers
+            .iter()
+            .all(|dossier| dossier.emotional_profile.is_some())
+    );
+    let documents = fresh
+        .generated
+        .documents_expressed(true, fresh.model)
+        .unwrap();
+    let (_, stored) = super::record::reload(&documents).unwrap();
+    assert!(
+        stored
+            .dossiers
+            .iter()
+            .all(|dossier| dossier.emotional_profile.is_some())
+    );
+    let _ = std::fs::remove_dir_all(cache);
+}
+
 /// The pattern adventure is always built first; the storyteller may then rewrite its text.
 /// Whatever stops it (off, over budget, slow, refused) leaves the pattern adventure unchanged.
 async fn fresh_adventure(
@@ -174,7 +265,7 @@ async fn fresh_adventure(
         storyteller,
     )
     .await;
-    Ok(match outcome {
+    let mut fresh = match outcome {
         Ok((generated, model)) => FreshAdventure {
             prose: model.summary(),
             generated,
@@ -185,7 +276,10 @@ async fn fresh_adventure(
             model: None,
             prose: format!("prose=patterns ({reason})"),
         },
-    })
+    };
+    super::super::npc_dossier::write_emotional_profiles(storyteller, &mut fresh.generated.dossiers)
+        .await;
+    Ok(fresh)
 }
 fn pattern_adventure(
     settings: &AdventureSettings,

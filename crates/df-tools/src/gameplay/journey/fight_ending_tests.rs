@@ -200,7 +200,7 @@ fn assert_player_offers_are_accepted(current: &Checkpoint, member: MemberId) {
                 }
             })
             .collect::<Vec<_>>();
-        let request = rpc::SubmitActionRequest {
+        let mut request = rpc::SubmitActionRequest {
             offer_id: offer.offer_id.clone(),
             action_kind: kind as i32,
             destination: offer
@@ -217,6 +217,20 @@ fn assert_player_offers_are_accepted(current: &Checkpoint, member: MemberId) {
                 String::new(),
             )
         };
+        if kind == K::CreateCharacter {
+            request.character = Some(rpc::CharacterSelection {
+                name: "Newhero".to_owned(),
+                choices: crate::gameplay::beat_script_tests::build("Newhero")
+                    .into_iter()
+                    .filter(|(group, _)| group.as_str() != "name")
+                    .map(|(group, option)| rpc::JourneyChoice {
+                        group_id: group.as_str().to_owned(),
+                        option_id: option.as_str().to_owned(),
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+        }
         assert_eq!(
             wire::action_offer_rejection(
                 current,
@@ -298,9 +312,8 @@ fn a_won_fight_resolves_once_closes_and_ends_on_a_card_that_offers_a_new_adventu
         .unwrap();
         assert_eq!(beat_id(&inn), "harbor-inn");
         assert!(kinds(&inn).contains(&K::ResolveErrand));
-        // The played fight left both heroes untouched, so nobody has
-        // anything to regain and no rest is offered.
-        assert!(!kinds(&inn).contains(&K::ShortRest));
+        // Rest remains a choice even when the played fight left everyone untouched.
+        assert!(kinds(&inn).contains(&K::ShortRest));
         let stale = listed(&inn)
             .into_iter()
             .find(|(kind, _, _)| *kind == K::ResolveErrand)
@@ -328,6 +341,63 @@ fn a_won_fight_resolves_once_closes_and_ends_on_a_card_that_offers_a_new_adventu
 }
 
 #[test]
+fn a_won_ending_pays_the_advertised_gold_once_to_each_hero_and_survives_reload() {
+    live(|| {
+        let active = pack::active().unwrap();
+        let mut content = active.pack.clone();
+        content.reward = Some(pack::ErrandReward {
+            gold_per_hero: 14,
+            favour: None,
+        });
+        let loaded = pack::load_from_bytes(
+            &serde_json::to_vec(&content).unwrap(),
+            &serde_json::to_vec(&active.tuning).unwrap(),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let victory = tactical::tests::current_victory("escort-courier");
+            let before = victory
+                .state()
+                .characters
+                .iter()
+                .map(|character| {
+                    (
+                        character.entity,
+                        living_scene::balance_cp(victory.state(), character.entity).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let inn =
+                stage_with_supplier(&victory, &inn_command(&victory, first(), 41), &mut |_| {
+                    panic!("inn cannot roll")
+                })
+                .unwrap();
+            let epilogue = ending_step(&inn, 42).unwrap();
+            assert!(!rewards::paid(epilogue.state()));
+            let ended = ending_step(&epilogue, 43).unwrap();
+            assert!(rewards::paid(ended.state()));
+            for (who, coin) in before {
+                assert_eq!(
+                    living_scene::balance_cp(ended.state(), who).unwrap(),
+                    coin + 1400
+                );
+                assert!(
+                    character_sheet(ended.state(), who)
+                        .unwrap()
+                        .facts
+                        .iter()
+                        .any(|fact| fact.label == "Coin")
+                );
+            }
+            let restored = persisted(&ended);
+            let mut same_state = restored.state().clone();
+            assert_eq!(rewards::pay(&mut same_state).unwrap(), None);
+            assert_eq!(&same_state, restored.state());
+        });
+    });
+}
+
+#[test]
 fn a_short_rest_at_the_inn_still_comes_first_and_the_resolution_stays_offered() {
     live(|| {
         // A hero with a spent Second Wind use, so the inn rest regains it.
@@ -349,8 +419,51 @@ fn a_short_rest_at_the_inn_still_comes_first_and_the_resolution_stays_offered() 
     });
 }
 
-/// The machine's rest rule (OBS-48): one rest per aftermath, only while a
-/// living hero has something to regain, and a stored game that resumes
+#[test]
+fn three_defeated_giant_rats_show_75_xp_only_at_the_won_end_card_after_reload() {
+    live(|| {
+        let active = pack::active().unwrap();
+        let mut tuning = serde_json::to_value(&active.tuning).unwrap();
+        tuning["tactical"] =
+            serde_json::json!({"enemies":[{"srd_id":"giant-rat","count":3,"ammunition":0}]});
+        let loaded = pack::load_from_bytes(
+            &serde_json::to_vec(&active.pack).unwrap(),
+            &serde_json::to_vec(&tuning).unwrap(),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let victory = tactical::tests::current_victory("escort-courier");
+            let inn =
+                stage_with_supplier(&victory, &inn_command(&victory, first(), 41), &mut |_| {
+                    panic!("inn cannot roll")
+                })
+                .unwrap();
+            let epilogue = ending_step(&inn, 42).unwrap();
+            let ended = ending_step(&epilogue, 43).unwrap();
+            for role in [
+                df_persistence::local_demo_scope::LocalDemoRole::Display,
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+            ] {
+                let narration =
+                    |current: &Checkpoint| match wire::journey_view(current, role, first())
+                        .unwrap()
+                        .audience
+                        .unwrap()
+                    {
+                        rpc::view_message::Audience::Display(view) => view.narration,
+                        rpc::view_message::Audience::Player(view) => view.narration,
+                    };
+                assert!(!narration(&epilogue).contains("75 XP"));
+                let expected = narration(&ended);
+                assert!(expected.contains("The party earns 75 XP."));
+                assert_eq!(narration(&persisted(&ended)), expected);
+            }
+        });
+    });
+}
+
+/// The machine's rest rule (OBS-48): one rest per aftermath while a hero
+/// has at least 1 Hit Point, and a stored game that resumes
 /// after the rest loads and plays on to the end card.
 #[test]
 fn a_rest_is_once_per_aftermath_and_a_resumed_rested_game_plays_on() {
@@ -379,14 +492,30 @@ fn a_rest_is_once_per_aftermath_and_a_resumed_rested_game_plays_on() {
     });
 }
 
-/// With nobody to regain anything, the rest is neither offered nor staged.
+/// RUL-26: an unhurt party can spend an hour resting without spending a die.
 #[test]
-fn no_rest_is_offered_when_no_living_hero_has_anything_to_regain() {
+fn a_healthy_party_can_choose_a_short_rest_without_spending_hit_point_dice() {
     live(|| {
         let victory = tactical::tests::current_victory("escort-courier");
-        assert!(!session_machine::rest_accepted(&victory).unwrap());
-        assert!(!kinds(&victory).contains(&K::ShortRest));
-        refuses(&victory, first(), 30, "short-rest");
+        assert!(session_machine::rest_accepted(&victory).unwrap());
+        assert!(kinds(&victory).contains(&K::ShortRest));
+        let rested = stage_with_supplier(
+            &victory,
+            &input(&victory, first(), 30, "short-rest", vec![]),
+            &mut |_| panic!("an unhurt party rolls no Hit Point Dice"),
+        )
+        .unwrap();
+        assert!(rested.state().logical_time.ticks > victory.state().logical_time.ticks);
+        for hero in &victory.state().characters {
+            for resource in ["hit-points", "hit-point-dice"] {
+                assert_eq!(
+                    value(rested.state(), hero.entity, resource).unwrap(),
+                    value(victory.state(), hero.entity, resource).unwrap(),
+                );
+            }
+        }
+        let resumed = persisted(&rested);
+        assert!(!kinds(&resumed).contains(&K::ShortRest));
     });
 }
 
@@ -707,7 +836,22 @@ fn every_listed_player_offer_is_accepted_when_taken_across_the_played_path() {
         .unwrap();
         let epilogue = ending_step(&inn, 22).unwrap();
         let end = ending_step(&epilogue, 23).unwrap();
+        let mut uncreated = initial().unwrap();
+        for operation in [1, 2] {
+            uncreated = stage_join(
+                &uncreated,
+                &input(
+                    &uncreated,
+                    bootstrap_member().unwrap(),
+                    operation,
+                    "join-room",
+                    vec![],
+                ),
+            )
+            .unwrap();
+        }
         let path = [
+            uncreated,
             prepared,
             opening,
             dialogue,

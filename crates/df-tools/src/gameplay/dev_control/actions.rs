@@ -215,6 +215,81 @@ fn creation_choices() -> Vec<rpc::JourneyChoice> {
     choices
 }
 
+fn choice_values(
+    value: Option<&Value>,
+) -> Result<Vec<rpc::JourneyChoice>, (axum::http::StatusCode, Json<Value>)> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_object()
+        .ok_or_else(|| bad_request("choices must be an object of group ids and option ids"))?;
+    if values.len() > 32 {
+        return Err(bad_request("at most 32 choice groups"));
+    }
+    values
+        .iter()
+        .map(|(group, value)| {
+            let option = value
+                .as_str()
+                .ok_or_else(|| bad_request("choice values must be option ids or labels"))?;
+            if group.is_empty() || group.len() > 128 || option.is_empty() || option.len() > 256 {
+                return Err(bad_request("choice ids must be bounded and non-empty"));
+            }
+            Ok(rpc::JourneyChoice {
+                group_id: group.clone(),
+                option_id: option.into(),
+            })
+        })
+        .collect()
+}
+
+fn selected_creation_choices(
+    body: &Value,
+) -> Result<Vec<rpc::JourneyChoice>, (axum::http::StatusCode, Json<Value>)> {
+    let mut choices = creation_choices();
+    for choice in choice_values(body.get("choices"))? {
+        if let Some(found) = choices
+            .iter_mut()
+            .find(|found| found.group_id == choice.group_id)
+        {
+            *found = choice;
+        } else {
+            choices.push(choice);
+        }
+    }
+    Ok(choices)
+}
+
+fn selected_identity(
+    body: &Value,
+) -> Result<Option<rpc::HeroIdentity>, (axum::http::StatusCode, Json<Value>)> {
+    use crate::gameplay::hero_identity::Identity;
+    if body.get("identity").is_some() && body.get("identity_choices").is_some() {
+        return Err(bad_request(
+            "provide identity or identity_choices, not both",
+        ));
+    }
+    let identity = if let Some(value) = body.get("identity") {
+        serde_json::from_value::<Identity>(value.clone())
+            .map_err(|_| bad_request("identity shape is invalid"))?
+            .validate()
+    } else if body.get("identity_choices").is_some() {
+        let choices = choice_values(body.get("identity_choices"))?;
+        Identity::from_menus(
+            &choices
+                .iter()
+                .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        return Ok(None);
+    };
+    identity
+        .map(|identity| Some(identity.to_rpc()))
+        .map_err(|error| bad_request(format!("identity: {error:?}")))
+}
+
 /// `POST /dev/create {"seat": "1", "name": "Brynn"}`: creates the canonical
 /// hero for that seat through the owner's create-character path.
 pub(super) async fn create_hero(
@@ -270,7 +345,8 @@ pub(super) async fn create_hero(
         action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
         character: Some(rpc::CharacterSelection {
             name: name.to_owned(),
-            choices: creation_choices(),
+            choices: selected_creation_choices(&body)?,
+            identity: selected_identity(&body)?,
         }),
         ..Default::default()
     };
@@ -282,6 +358,74 @@ pub(super) async fn create_hero(
             .map_err(|_| failed("dev control seat state unavailable"))?;
     }
     Ok((code, Json(answer)))
+}
+
+/// Uses the same authenticated, read-only identity preview as the creation page.
+pub(super) async fn preview_identity(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let hero = body
+        .get("seat")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_request("preview needs a seat"))?;
+    let index = {
+        let seats = state.seats.lock().await;
+        super::resolve_hero(&seats, hero).map_err(bad_request)?
+    };
+    let credential = state.seats.lock().await.seats[index]
+        .credential
+        .ok_or_else(|| bad_request("join this seat first"))?;
+    let member = state.seats.lock().await.seats[index]
+        .member
+        .clone()
+        .ok_or_else(|| bad_request("join this seat first"))?;
+    let (revision, _) = seat_view(&state, index).await?;
+    let (session_id, run_id) = {
+        let seats = state.seats.lock().await;
+        super::scope_of(&seats)?
+    };
+    let mut request = tonic::Request::new(rpc::PreviewHeroIdentityRequest {
+        session_id: Some(rpc::SessionId {
+            value: Some(session_id),
+        }),
+        run_id: Some(rpc::RunId {
+            value: Some(run_id),
+        }),
+        observed_revision: Some(revision),
+        client_binding_id: Some(rpc::ClientBindingId {
+            value: Some(member),
+        }),
+        appearance_text: body
+            .get("appearance_text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .into(),
+        backstory_text: body
+            .get("backstory_text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .into(),
+        current_identity: selected_identity(&body)?,
+    });
+    request.metadata_mut().insert(
+        "x-df-local-binding",
+        crate::gameplay::journey::hex(&credential)
+            .parse()
+            .map_err(|_| failed("seat binding invalid"))?,
+    );
+    let result =
+        rpc::action_service_server::ActionService::preview_hero_identity(&state.service, request)
+            .await
+            .map_err(|status| bad_request(status.message()))?
+            .into_inner();
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(json!({"status":"previewed", "source":result.source,
+        "identity":result.proposed_identity.as_ref().map(super::reads::identity_json), "warnings":result.warnings})),
+    ))
 }
 
 /// One offer from a player view, with its selectable inputs.
@@ -442,7 +586,59 @@ pub(super) async fn act(
         .get("action")
         .and_then(Value::as_str)
         .ok_or_else(|| bad_request("act needs {\"hero\": \"Brynn\", \"action\": \"move\", ...}"))?;
-    let action = parse::parse_action(action).map_err(bad_request)?;
+    if action.eq_ignore_ascii_case("interact") {
+        let index = {
+            let seats = state.seats.lock().await;
+            super::resolve_hero(&seats, hero).map_err(bad_request)?
+        };
+        let credential = state.seats.lock().await.seats[index]
+            .credential
+            .ok_or_else(|| bad_request("join this seat first"))?;
+        let (revision, _) = seat_view(&state, index).await?;
+        let current = state.service.updates.borrow().clone();
+        let target = body
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad_request("interact needs --target <scene id>"))?;
+        let option = body
+            .get("option")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad_request("interact needs --option <action>"))?;
+        let mut submit = rpc::SubmitActionRequest {
+            observed_revision: Some(revision),
+            offer_id: crate::gameplay::journey::living_scene::offer_id(&current),
+            action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
+            action_choices: vec![
+                rpc::JourneyChoice {
+                    group_id: "scene-target".into(),
+                    option_id: target.into(),
+                },
+                rpc::JourneyChoice {
+                    group_id: "scene-option".into(),
+                    option_id: option.into(),
+                },
+            ],
+            ..Default::default()
+        };
+        fill_scope(&state, &mut submit).await?;
+        submit.operation_id = Some(rpc::OperationId {
+            value: Some(random_array::<16>().await?.to_vec()),
+        });
+        return owner_submit_action(&state, credential, submit).await;
+    }
+    let mut body = body.clone();
+    let action = match parse::parse_action(action) {
+        Ok(action) => action,
+        Err(_) => {
+            if body.get("option").is_some() {
+                return Err(bad_request(
+                    "use choose with --option, or an offer label directly",
+                ));
+            }
+            body["option"] = json!(action);
+            parse::PlayAction::Choose
+        }
+    };
     let index = {
         let seats = state.seats.lock().await;
         super::resolve_hero(&seats, hero).map_err(bad_request)?
@@ -453,12 +649,32 @@ pub(super) async fn act(
             .credential
             .ok_or_else(|| bad_request(format!("seat{} has not joined yet", index + 1)))?
     };
+    if action == parse::PlayAction::TableSetting {
+        let hidden = body
+            .get("choice_hints_hidden")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| bad_request("table-setting needs choice_hints_hidden: true or false"))?;
+        let (revision, _) = seat_view(&state, index).await?;
+        let mut submit = rpc::SubmitActionRequest {
+            observed_revision: Some(revision),
+            action_kind: action.kind() as i32,
+            operation_id: Some(rpc::OperationId {
+                value: Some(random_array::<16>().await?.to_vec()),
+            }),
+            table_setting: Some(rpc::TableSettingChange {
+                value: Some(rpc::table_setting_change::Value::ChoiceHintsHidden(hidden)),
+            }),
+            ..Default::default()
+        };
+        fill_scope(&state, &mut submit).await?;
+        return owner_submit_action(&state, credential, submit).await;
+    }
     let (revision, offers) = seat_offers(&state, index).await?;
     let offer_index = if action == parse::PlayAction::Choose {
         let option = body
             .get("option")
             .and_then(Value::as_str)
-            .filter(|option| !option.trim().is_empty() && option.len() <= 64)
+            .filter(|option| !option.trim().is_empty() && option.len() <= 256)
             .ok_or_else(|| bad_request("choose needs {\"option\": \"<label or id>\"}"))?;
         unique_offer_match(&offers, option)
     } else {
@@ -499,7 +715,89 @@ pub(super) async fn act(
         value: Some(operation.to_vec()),
     });
     fill_action_choices(&body, action, offer, &mut submit)?;
+    if body.get("confirmation_token").is_some() {
+        let mut request = tonic::Request::new(rpc::ConfirmDialogueRequest {
+            input_id: Some(rpc::OperationId {
+                value: Some(proof_bytes(&body, "input_id", 16)?),
+            }),
+            confirmation_token: proof_bytes(&body, "confirmation_token", 32)?,
+            action: Some(submit),
+        });
+        request.metadata_mut().insert(
+            "x-df-local-binding",
+            crate::gameplay::journey::hex(&credential)
+                .parse()
+                .map_err(|_| failed("seat binding invalid"))?,
+        );
+        let response =
+            rpc::dialogue_service_server::DialogueService::confirm(&state.service, request)
+                .await
+                .map_err(|status| bad_request(status.message()))?
+                .into_inner();
+        return Ok((
+            axum::http::StatusCode::OK,
+            Json(super::submit_json(response)),
+        ));
+    }
     owner_submit_action(&state, credential, submit).await
+}
+
+fn proof_bytes(
+    body: &Value,
+    key: &str,
+    size: usize,
+) -> Result<Vec<u8>, (axum::http::StatusCode, Json<Value>)> {
+    let text = body
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_request(format!("{key} is required")))?;
+    let bytes = crate::gameplay::journey::unhex(text)
+        .map_err(|_| bad_request(format!("{key} must be hexadecimal")))?;
+    if bytes.len() != size {
+        return Err(bad_request(format!("{key} must have {size} bytes")));
+    }
+    Ok(bytes)
+}
+
+pub(super) async fn cancel_dialogue(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let hero = body
+        .get("hero")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_request("cancel needs a hero"))?;
+    let index = {
+        let seats = state.seats.lock().await;
+        super::resolve_hero(&seats, hero).map_err(bad_request)?
+    };
+    let credential = state.seats.lock().await.seats[index]
+        .credential
+        .ok_or_else(|| bad_request("join this seat first"))?;
+    let mut request = tonic::Request::new(rpc::CancelDialogueRequest {
+        input_id: Some(rpc::OperationId {
+            value: Some(proof_bytes(&body, "input_id", 16)?),
+        }),
+        confirmation_token: proof_bytes(&body, "confirmation_token", 32)?,
+    });
+    request.metadata_mut().insert(
+        "x-df-local-binding",
+        crate::gameplay::journey::hex(&credential)
+            .parse()
+            .map_err(|_| failed("seat binding invalid"))?,
+    );
+    let response = rpc::dialogue_service_server::DialogueService::cancel(&state.service, request)
+        .await
+        .map_err(|status| bad_request(status.message()))?
+        .into_inner();
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(
+            json!({"status":"cancelled","disposition":disposition_name(response.disposition),"revision":super::revision_json(response.revision.as_ref())}),
+        ),
+    ))
 }
 
 async fn fill_scope(
@@ -522,6 +820,70 @@ async fn fill_scope(
 /// guessing. A well-formed but illegal selection (for example a cell outside
 /// reach) is still submitted so the server's own refusal is reported.
 fn fill_action_choices(
+    body: &Value,
+    action: parse::PlayAction,
+    offer: &Offer,
+    submit: &mut rpc::SubmitActionRequest,
+) -> Result<(), (axum::http::StatusCode, Json<Value>)> {
+    let explicit = choice_values(body.get("choices"))?;
+    let mut selected_body = body.clone();
+    if selected_body.get("option").is_none()
+        && selected_body.get("target").is_none()
+        && selected_body.get("cell").is_none()
+        && action != parse::PlayAction::Choose
+        && let Some(first) = offer.groups.first()
+        && let Some(choice) = explicit
+            .iter()
+            .find(|choice| choice.group_id == first.group_id)
+    {
+        selected_body["option"] = json!(choice.option_id);
+    }
+    default_action_choices(&selected_body, action, offer, submit)?;
+    for choice in explicit {
+        let group = offer
+            .groups
+            .iter()
+            .find(|group| group.group_id == choice.group_id)
+            .ok_or_else(|| {
+                bad_request(format!("choice group {:?} is not offered", choice.group_id))
+            })?;
+        let id = group
+            .options
+            .iter()
+            .find(|option| option.option_id == choice.option_id)
+            .map(|option| option.option_id.clone())
+            .or_else(|| {
+                let labels = group
+                    .options
+                    .iter()
+                    .map(|option| option.label.as_str())
+                    .collect::<Vec<_>>();
+                parse::match_index(&labels, &choice.option_id)
+                    .map(|index| group.options[index].option_id.clone())
+            })
+            .ok_or_else(|| {
+                bad_request(format!(
+                    "choice {:?} is absent or ambiguous",
+                    choice.option_id
+                ))
+            })?;
+        if let Some(found) = submit
+            .action_choices
+            .iter_mut()
+            .find(|found| found.group_id == choice.group_id)
+        {
+            found.option_id = id;
+        } else {
+            submit.action_choices.push(rpc::JourneyChoice {
+                group_id: choice.group_id,
+                option_id: id,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn default_action_choices(
     body: &Value,
     action: parse::PlayAction,
     offer: &Offer,
@@ -785,9 +1147,10 @@ pub(super) async fn say(
         "plan" => rpc::DialogueContext::PlanOnly,
         "meta" => rpc::DialogueContext::Meta,
         "joke" => rpc::DialogueContext::Joke,
+        "clarify" => rpc::DialogueContext::Clarify,
         _ => {
             return Err(bad_request(
-                "context must be question, social, plan, meta or joke",
+                "context must be question, social, plan, meta, joke or clarify",
             ));
         }
     };
@@ -822,12 +1185,13 @@ pub(super) async fn say(
         finality: rpc::DialogueFinality::Final as i32,
         offer_id: String::new(),
     };
+    let started = std::time::Instant::now();
     let answer = state
         .service
         .submit_line(credential, request)
         .await
         .map_err(|status| failed(status.message()))?;
-    match answer {
+    let result = match answer {
         super::super::dialogue::DialogueReply::Raw(response, npc) => {
             let npc_reply = match npc {
                 Some(context) => {
@@ -841,7 +1205,7 @@ pub(super) async fn say(
                         .await
                         .unwrap_or_default()
                 }
-                None => String::new(),
+                None => response.npc_reply.clone(),
             };
             Ok((
                 axum::http::StatusCode::OK,
@@ -850,12 +1214,28 @@ pub(super) async fn say(
                     "disposition": disposition_name(response.disposition),
                     "npc_reply": npc_reply,
                     "confirmation_required": response.confirmation_required,
+                    "input_id":response.input_id.as_ref().and_then(|id|id.value.as_ref()).map(|bytes|crate::gameplay::journey::hex(bytes)),
+                    "confirmation_token":crate::gameplay::journey::hex(&response.confirmation_token),
                     "revision": super::revision_json(response.revision.as_ref()),
                 })),
             ))
         }
         _ => Err(failed("dialogue response binding invalid")),
-    }
+    };
+    super::super::actor::record_audit_line(
+        "gameplay.exchange_timing",
+        format!(
+            "STORY exchange id={} total_ms={} status={}",
+            super::super::journey::hex(&input),
+            started.elapsed().as_millis(),
+            if result.is_ok() {
+                "completed"
+            } else {
+                "failed"
+            },
+        ),
+    );
+    result
 }
 
 fn disposition_name(disposition: i32) -> &'static str {
@@ -1027,5 +1407,80 @@ mod offer_tests {
             "stabilise:hero-2"
         );
         assert!(target_option(&json!({}), &options).is_err());
+    }
+}
+
+#[cfg(test)]
+mod explicit_choice_tests {
+    use super::*;
+
+    #[test]
+    fn any_offer_can_take_explicit_values_for_every_group() {
+        let offer = Offer {
+            offer_id: "offer".into(),
+            action_kind: rpc::GameplayActionKind::GreatswordAttack as i32,
+            label: "Attack".into(),
+            destinations: Vec::new(),
+            groups: vec![rpc::JourneyGroup {
+                group_id: "weapon-mastery".into(),
+                label: "Mastery".into(),
+                options: ["yes", "no"]
+                    .iter()
+                    .map(|id| rpc::JourneyOption {
+                        option_id: (*id).into(),
+                        label: (*id).into(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            }],
+        };
+        let mut submit = rpc::SubmitActionRequest::default();
+        fill_action_choices(
+            &json!({"option":"offer", "choices":{"weapon-mastery":"yes"}}),
+            parse::PlayAction::Choose,
+            &offer,
+            &mut submit,
+        )
+        .unwrap();
+        assert_eq!(submit.action_choices[0].option_id, "yes");
+    }
+}
+
+#[cfg(test)]
+mod creation_selection_tests {
+    use super::*;
+    #[test]
+    fn creation_overrides_the_selected_menu_and_keeps_other_required_groups() {
+        let choices =
+            selected_creation_choices(&json!({"choices":{"alignment":"neutral-good"}})).unwrap();
+        assert_eq!(
+            choices
+                .iter()
+                .filter(|choice| choice.group_id == "alignment")
+                .count(),
+            1
+        );
+        assert_eq!(
+            choices
+                .iter()
+                .find(|choice| choice.group_id == "alignment")
+                .unwrap()
+                .option_id,
+            "neutral-good"
+        );
+        assert_eq!(choices.len(), creation_choices().len());
+        assert!(choice_values(Some(&json!({"alignment":5}))).is_err());
+    }
+    #[test]
+    fn identity_menu_choices_keep_the_selected_presentation_and_pronouns() {
+        let identity = selected_identity(
+            &json!({"identity_choices":{"presentation":"feminine","pronouns":"she-her"}}),
+        )
+        .unwrap()
+        .unwrap();
+        let appearance = identity.appearance.unwrap();
+        assert_eq!(appearance.presentation, "feminine");
+        assert_eq!(appearance.pronouns, "she-her");
+        assert!(selected_identity(&json!({"identity":{},"identity_choices":{}})).is_err());
     }
 }

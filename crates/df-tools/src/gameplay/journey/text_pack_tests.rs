@@ -51,12 +51,32 @@ fn scenes() -> Vec<(SceneKey, bool, Checkpoint)> {
         &mut |sides| Ok(sides),
     )
     .unwrap();
-    let rested = stage_with_supplier(
+    let mut rested = stage_with_supplier(
         &defeated,
         &input(&defeated, first, 9, "short-rest", vec![]),
         &mut |_| panic!("rest cannot draw"),
     )
     .unwrap();
+    for (member, operation) in [(first, 10), (second, 11)] {
+        if hit_point_die_offered(rested.state(), player_entity(member, &rested).unwrap()).unwrap() {
+            rested = stage_with_supplier(
+                &rested,
+                &input(
+                    &rested,
+                    member,
+                    operation,
+                    "short-rest",
+                    vec![(
+                        model::label("hit-point-die").unwrap(),
+                        model::label("keep").unwrap(),
+                    )],
+                ),
+                &mut |_| panic!("keeping a die cannot draw"),
+            )
+            .unwrap();
+        }
+    }
+    assert!(short_rest_completed(rested.state()));
     let room = initial().unwrap();
     let room = stage_join(
         &room,

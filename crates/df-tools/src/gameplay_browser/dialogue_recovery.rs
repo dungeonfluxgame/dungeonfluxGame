@@ -7,6 +7,7 @@ use web_sys::HtmlTextAreaElement;
 pub(super) struct DialogueRecovery {
     channel: Option<rpc::dialogue_service_client::DialogueServiceClient<BrowserChannel>>,
     editor: Option<HtmlTextAreaElement>,
+    send_button: Option<Element>,
     offers: Vec<rpc::GameplayActionOffer>,
     ticket: Option<(rpc::RawDialogueRequest, rpc::DialogueResponse)>,
     confirmation: Option<rpc::ConfirmDialogueRequest>,
@@ -100,10 +101,20 @@ fn speaker_portrait_url(scene: Option<&rpc::GameplayScene>, speaker: &str) -> St
 }
 
 fn composer_available(journey: Option<&rpc::JourneyView>) -> bool {
-    journey.is_some_and(|journey| !journey.adventure_ended && journey.own_character.is_some())
+    journey.is_some_and(|journey| {
+        !journey.adventure_ended
+            && journey.creation.is_none()
+            && journey.own_character.is_some()
+            && !super::is_dead_hero(journey)
+    })
 }
 
 impl DialogueRecovery {
+    #[cfg(test)]
+    pub(super) fn set_test_editor(&mut self, editor: HtmlTextAreaElement) {
+        self.editor = Some(editor);
+    }
+
     pub(super) fn editor(&self) -> Option<&HtmlTextAreaElement> {
         self.editor.as_ref()
     }
@@ -185,6 +196,13 @@ enum Call {
     Raw(rpc::RawDialogueRequest),
     Cancel(rpc::CancelDialogueRequest),
     Confirm(rpc::ConfirmDialogueRequest),
+}
+
+pub(super) fn submit_disabled(client: &Client) -> bool {
+    client.busy
+        || client.dialogue.channel.is_none()
+        || client.dialogue.confirmation.is_some()
+        || client.dialogue.talk.is_busy()
 }
 
 pub(super) fn mount(
@@ -325,7 +343,7 @@ pub(super) fn mount(
         recovery.offers = current;
     }
     let controls = node(&document, &panel, "div", "dialogue-controls", "")?;
-    let raw = button(client, &controls, "Say it", submit)?;
+    let raw = mount_send(client, &controls)?;
     let has_ticket = client.borrow().dialogue.ticket.is_some();
     let cancel = has_ticket
         .then(|| button(client, &controls, "Decline this choice", decline))
@@ -345,6 +363,7 @@ pub(super) fn mount(
     } else {
         None
     };
+    update_typed_draft(&editor)?;
     let state = client.borrow();
     let recovery = &state.dialogue;
     raw.set_attribute("data-dialogue", "submit")?;
@@ -357,29 +376,29 @@ pub(super) fn mount(
     if let Some(retry) = &retry {
         retry.set_attribute("data-dialogue", "retry")?;
     }
-    for (element, disabled) in std::iter::once((
-        &raw,
-        state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
-    ))
-    .chain(cancel.iter().map(|element| {
-        (
-            element,
-            state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
+    for (element, disabled) in std::iter::once((&raw, submit_disabled(&state)))
+        .chain(cancel.iter().map(|element| {
+            (
+                element,
+                state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
+            )
+        }))
+        .chain(confirm.iter().map(|element| {
+            (
+                element,
+                state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
+            )
+        }))
+        .chain(
+            retry
+                .as_ref()
+                .map(|retry| (retry, state.busy || recovery.channel.is_none())),
         )
-    }))
-    .chain(confirm.iter().map(|element| {
-        (
-            element,
-            state.busy || recovery.channel.is_none() || recovery.confirmation.is_some(),
-        )
-    }))
-    .chain(
-        retry
-            .as_ref()
-            .map(|retry| (retry, state.busy || recovery.channel.is_none())),
-    ) {
+    {
         if disabled {
             element.set_attribute("disabled", "")?;
+        } else {
+            element.remove_attribute("disabled")?;
         }
     }
     if !recovery.message.is_empty() {
@@ -399,6 +418,21 @@ pub(super) fn mount(
         }
     }
     Ok(())
+}
+
+fn mount_send(client: &Rc<RefCell<Client>>, controls: &Element) -> Result<Element, JsValue> {
+    let existing = client.borrow().dialogue.send_button.clone();
+    let raw = match existing {
+        Some(raw) => {
+            controls.append_child(&raw)?;
+            bind_click(client, &raw, super::talk_control::send)?;
+            raw
+        }
+        None => button(client, controls, "Say it", super::talk_control::send)?,
+    };
+    raw.set_attribute("type", "button")?;
+    client.borrow_mut().dialogue.send_button = Some(raw.clone());
+    Ok(raw)
 }
 
 /// While a speaker writes a reply the phone shows who is thinking, with animated dots beside
@@ -450,6 +484,18 @@ fn thinking_row(
     Ok(())
 }
 
+/// Typing changes the emphasis of the existing controls without replacing the editor/button.
+pub(super) fn update_typed_draft(editor: &HtmlTextAreaElement) -> Result<(), JsValue> {
+    if let Some(panel) = editor.closest(".dialogue-recovery")? {
+        if editor.value().trim().is_empty() {
+            panel.remove_attribute("data-typed")?;
+        } else {
+            panel.set_attribute("data-typed", "")?;
+        }
+    }
+    Ok(())
+}
+
 /// What the draft says about the player's intent: typing while there is text, otherwise nothing.
 fn draft_intent(client: &Rc<RefCell<Client>>) -> live_presence::Intent {
     let typing = client
@@ -491,6 +537,14 @@ fn listen_for_intent(
         };
     attach(editor.as_ref(), "input", |client, event| {
         client.borrow_mut().dialogue.message.clear();
+        if let Some(editor) = client.borrow().dialogue.editor()
+            && update_typed_draft(editor).is_err()
+        {
+            status(
+                &client.borrow(),
+                "Your draft controls could not be updated.",
+            );
+        }
         if let Some(target) = event
             .target()
             .and_then(|target| target.dyn_into::<Element>().ok())
@@ -961,6 +1015,54 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_same_send_button_remains_callable_after_page_callbacks_are_cleared() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let client = new_client(&document, root.clone(), "player").unwrap();
+        let controls = node(&document, &root, "div", "dialogue-controls", "").unwrap();
+        let first = mount_send(&client, &controls).unwrap();
+        clear_callbacks(&mut client.borrow_mut());
+        let second = mount_send(&client, &controls).unwrap();
+        assert!(first.is_same_node(Some(second.as_ref())));
+        assert_eq!(controls.query_selector_all("button").unwrap().length(), 1);
+        second
+            .dispatch_event(&web_sys::Event::new("click").unwrap())
+            .unwrap();
+        assert!(!client.borrow().dialogue.message.is_empty());
+    }
+
+    #[test]
+    fn typing_promotes_the_same_composer_and_clearing_restores_voice_emphasis() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let panel = document.create_element("section").unwrap();
+        panel.set_class_name("dialogue-recovery");
+        let editor = node(&document, &panel, "textarea", "dialogue-draft", "")
+            .unwrap()
+            .dyn_into::<HtmlTextAreaElement>()
+            .unwrap();
+        let send = node(&document, &panel, "button", "", "Say it").unwrap();
+        editor.set_value("What happened here?");
+        update_typed_draft(&editor).unwrap();
+        assert!(panel.has_attribute("data-typed"));
+        assert_eq!(editor.value(), "What happened here?");
+        assert!(
+            send.is_same_node(
+                panel
+                    .query_selector("button")
+                    .unwrap()
+                    .as_ref()
+                    .map(|node| node.as_ref())
+            )
+        );
+        editor.set_value("");
+        update_typed_draft(&editor).unwrap();
+        assert!(!panel.has_attribute("data-typed"));
+        assert_eq!(panel.query_selector_all("textarea").unwrap().length(), 1);
+    }
+
     use super::{
         composer_available, scope_change_notice, speaker_portrait_url, split_action_response,
     };
@@ -1003,6 +1105,23 @@ mod tests {
         journey.own_character = None;
         assert!(!composer_available(Some(&journey)));
         journey.own_character = Some(Default::default());
+        assert!(composer_available(Some(&journey)));
+        journey
+            .own_character
+            .as_mut()
+            .expect("own hero present")
+            .facts
+            .push(super::rpc::SheetFact {
+                label: "Condition".to_owned(),
+                value: "Dead".to_owned(),
+            });
+        assert!(!composer_available(Some(&journey)));
+        journey
+            .own_character
+            .as_mut()
+            .expect("own hero present")
+            .facts
+            .clear();
         assert!(composer_available(Some(&journey)));
         journey.adventure_ended = true;
         assert!(!composer_available(Some(&journey)));

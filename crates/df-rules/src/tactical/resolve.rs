@@ -1,4 +1,5 @@
-use super::state::{Effect, PendingMove};
+use super::state::CombatantSpec;
+use super::state::{Effect, HelpEffect, PendingMove};
 use super::{Battle, Cell, Cover, CreatureKind, DamageType, Mastery, RuleError, Weapon};
 use df_model::checkpoint::{ActualDraw, ResolutionId, RuleReference, WindowId};
 use df_types::OperationId;
@@ -33,6 +34,49 @@ pub struct AttackUse {
     pub use_mastery: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HelpPurpose {
+    Attack { ally: u32, target: u32 },
+    Stabilize { target: u32 },
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StabilizationOutcome {
+    Medicine {
+        die: u32,
+        modifier: i16,
+        total: i16,
+        success: bool,
+    },
+    HealersKit {
+        uses_remaining: u8,
+    },
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StabilizationSummary {
+    pub helper: u32,
+    pub target: u32,
+    pub outcome: StabilizationOutcome,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HelpSummary {
+    pub helper: u32,
+    pub ally: u32,
+    pub target: u32,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum D20Test {
+    Attack,
+    DeathSave,
+    AbilityCheck,
+    Initiative,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct D20Reroll {
+    pub actor: u32,
+    pub test: D20Test,
+    pub original: u32,
+    pub replacement: u32,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     Move(Vec<Cell>),
     Stand,
@@ -40,6 +84,12 @@ pub enum Action {
     Dash,
     Disengage,
     Dodge,
+    Help {
+        purpose: HelpPurpose,
+    },
+    UtilizeHealersKit {
+        target: u32,
+    },
     NimbleDisengage,
     Attack {
         target: u32,
@@ -79,6 +129,11 @@ pub enum AttackReason {
     PackTactics,
     /// Kobold Warrior in sunlight (SRD 5.2.1 p302): Disadvantage on attack rolls.
     SunlightSensitivity,
+    /// SRD 5.2.1 p16: an attacker that cannot see its target attacks with Disadvantage.
+    UnseenTarget,
+    /// SRD 5.2.1 p16: attacks against an unseen attacker have Advantage.
+    UnseenAttacker,
+    Help,
     Vex,
     Sap,
 }
@@ -95,7 +150,7 @@ pub struct AttackSummary {
     pub modifier: i16,
     pub advantage: Vec<AttackReason>,
     pub disadvantage: Vec<AttackReason>,
-    /// -1 disadvantage, 0 normal, +1 advantage; the chosen face and both actual draws retained.
+    /// -1 disadvantage, 0 normal, +1 advantage; faces are post-reroll, and Resolution.rerolls records Halfling Luck draws.
     pub roll_mode: i8,
     pub faces: Vec<u32>,
     pub selected: u32,
@@ -162,6 +217,9 @@ pub struct Resolution {
     pub moves: Vec<MoveSummary>,
     pub death_saves: Vec<DeathSaveSummary>,
     pub recoveries: Vec<RecoverySummary>,
+    pub helps: Vec<HelpSummary>,
+    pub stabilizations: Vec<StabilizationSummary>,
+    pub rerolls: Vec<D20Reroll>,
 }
 
 pub(crate) struct Draws<'a> {
@@ -223,6 +281,33 @@ impl<'a> Draws<'a> {
     }
 }
 
+pub(crate) fn take_d20(
+    spec: &CombatantSpec,
+    actor: u32,
+    test: D20Test,
+    draws: &mut Draws<'_>,
+    rerolls: &mut Vec<D20Reroll>,
+) -> Result<u32, RuleError> {
+    let original = draws.take(20)?;
+    // SRD 5.2.1 p. 86: "When you roll a 1 on the d20 of a D20 Test, you can reroll the die, and you must use the new roll."
+    if original == 1
+        && spec
+            .species
+            .is_some_and(|species| species.combat_traits().reroll_natural_ones)
+    {
+        let replacement = draws.take(20)?;
+        rerolls.push(D20Reroll {
+            actor,
+            test,
+            original,
+            replacement,
+        });
+        Ok(replacement)
+    } else {
+        Ok(original)
+    }
+}
+
 /// Resolve one currently legal input. Moves pause at optional Opportunity Attack windows,
 /// before the provoking square is left. No RNG, I/O, timer or mutation of input occurs.
 pub fn resolve(
@@ -238,6 +323,9 @@ pub fn resolve(
     let mut moves = Vec::new();
     let mut death_saves = Vec::new();
     let mut recoveries = Vec::new();
+    let mut helps = Vec::new();
+    let mut stabilizations = Vec::new();
+    let mut rerolls = Vec::new();
     if let Action::Opportunity { attack } = action {
         react(
             &mut next,
@@ -246,6 +334,7 @@ pub fn resolve(
             &mut draws,
             &mut attacks,
             &mut moves,
+            &mut rerolls,
         )?;
     } else {
         if next.pending.is_some() {
@@ -301,7 +390,7 @@ pub fn resolve(
                 if next.active_actor() != Some(actor) || !next.needs_death_save {
                     return Err(RuleError::NotYourTurn);
                 }
-                death_saves.push(death_save(&mut next, actor, &mut draws)?);
+                death_saves.push(death_save(&mut next, actor, &mut draws, &mut rerolls)?);
                 next.needs_death_save = false;
             }
             _ => {
@@ -350,6 +439,23 @@ pub fn resolve(
                         }
                         combatant.health.prone = true;
                     }
+                    Action::Help { purpose } => match purpose {
+                        HelpPurpose::Attack { ally, target } => {
+                            helps.push(help_attack(&mut next, actor, *ally, *target)?);
+                        }
+                        HelpPurpose::Stabilize { target } => {
+                            stabilizations.push(stabilize_with_medicine(
+                                &mut next,
+                                actor,
+                                *target,
+                                &mut draws,
+                                &mut rerolls,
+                            )?);
+                        }
+                    },
+                    Action::UtilizeHealersKit { target } => {
+                        stabilizations.push(stabilize_with_healers_kit(&mut next, actor, *target)?);
+                    }
                     Action::Dash | Action::Disengage | Action::Dodge | Action::DoffShield => {
                         let combatant = next.actor_mut(actor)?;
                         if combatant.budget.action_used {
@@ -392,7 +498,13 @@ pub fn resolve(
                         admit_attack(&next, actor, *target, *weapon)?;
                         spend_attack(&mut next, actor, weapon.weapon, *spend)?;
                         attacks.push(attack(
-                            &mut next, actor, *target, *weapon, *spend, &mut draws,
+                            &mut next,
+                            actor,
+                            *target,
+                            *weapon,
+                            *spend,
+                            &mut draws,
+                            &mut rerolls,
                         )?);
                     }
                     Action::SecondWind => {
@@ -468,8 +580,135 @@ pub fn resolve(
         moves,
         death_saves,
         recoveries,
+        helps,
+        stabilizations,
+        rerolls,
     })
 }
+
+fn help_attack(
+    battle: &mut Battle,
+    helper: u32,
+    ally: u32,
+    target: u32,
+) -> Result<HelpSummary, RuleError> {
+    let helper_actor = battle.actor(helper)?;
+    let ally_actor = battle.actor(ally)?;
+    let target_actor = battle.actor(target)?;
+    if helper == ally
+        || helper_actor.side() != ally_actor.side()
+        || helper_actor.side() == target_actor.side()
+        || ally_actor.health().incapacitated()
+        || target_actor.health().incapacitated()
+    {
+        return Err(RuleError::InvalidTarget);
+    }
+    // SRD 5.2.1 p. 182: "The creature you aid has Advantage on the next attack roll it makes against a creature within 5 feet of you."
+    if helper_actor.cell().distance(target_actor.cell()) > 5 {
+        return Err(RuleError::OutOfRange);
+    }
+    if helper_actor.budget().action_used {
+        return Err(RuleError::ActionSpent);
+    }
+    if battle.helped_attacks.len() >= 64 {
+        return Err(RuleError::Capacity);
+    }
+    let helper_turn_count = helper_actor.turn_count;
+    battle.actor_mut(helper)?.budget.action_used = true;
+    battle.helped_attacks.push(HelpEffect {
+        helper,
+        helper_turn_count,
+        ally,
+        target,
+    });
+    Ok(HelpSummary {
+        helper,
+        ally,
+        target,
+    })
+}
+
+fn validate_stabilization_target(
+    battle: &Battle,
+    helper: u32,
+    target: u32,
+) -> Result<(), RuleError> {
+    let helper_actor = battle.actor(helper)?;
+    let target_actor = battle.actor(target)?;
+    if target_actor.health().hit_points != 0
+        || target_actor.health().dead
+        || target_actor.health().stable
+        || !target_actor.health().unconscious
+    {
+        return Err(RuleError::InvalidTarget);
+    }
+    // The session's disclosed adjudication keeps stabilization actions within 5 feet.
+    if helper_actor.cell().distance(target_actor.cell()) > 5 {
+        return Err(RuleError::OutOfRange);
+    }
+    if helper_actor.budget().action_used {
+        return Err(RuleError::ActionSpent);
+    }
+    Ok(())
+}
+
+fn stabilize_with_medicine(
+    battle: &mut Battle,
+    helper: u32,
+    target: u32,
+    draws: &mut Draws<'_>,
+    rerolls: &mut Vec<D20Reroll>,
+) -> Result<StabilizationSummary, RuleError> {
+    // SRD 5.2.1 p. 18: "You can take the Help action to try to stabilize a creature
+    // with 0 Hit Points, which requires a successful DC 10 Wisdom (Medicine) check."
+    validate_stabilization_target(battle, helper, target)?;
+    let helper_spec = battle.actor(helper)?.spec();
+    let wisdom = helper_spec.abilities[4];
+    let modifier = crate::local_journey::ability_modifier(wisdom) as i16;
+    let die = take_d20(helper_spec, helper, D20Test::AbilityCheck, draws, rerolls)?;
+    let total = die as i16 + modifier;
+    let success = total >= 10;
+    battle.actor_mut(helper)?.budget.action_used = true;
+    if success {
+        battle.actor_mut(target)?.health.stable = true;
+    }
+    Ok(StabilizationSummary {
+        helper,
+        target,
+        outcome: StabilizationOutcome::Medicine {
+            die,
+            modifier,
+            total,
+            success,
+        },
+    })
+}
+
+fn stabilize_with_healers_kit(
+    battle: &mut Battle,
+    helper: u32,
+    target: u32,
+) -> Result<StabilizationSummary, RuleError> {
+    // SRD 5.2.1 p. 97: "As a Utilize action, you can expend one of its uses to
+    // stabilize an Unconscious creature that has 0 Hit Points without needing to
+    // make a Wisdom (Medicine) check."
+    validate_stabilization_target(battle, helper, target)?;
+    let uses_remaining = battle
+        .actor(helper)?
+        .spec
+        .healers_kit_uses
+        .checked_sub(1)
+        .ok_or(RuleError::HealersKitMissing)?;
+    battle.actor_mut(helper)?.budget.action_used = true;
+    battle.actor_mut(helper)?.spec.healers_kit_uses = uses_remaining;
+    battle.actor_mut(target)?.health.stable = true;
+    Ok(StabilizationSummary {
+        helper,
+        target,
+        outcome: StabilizationOutcome::HealersKit { uses_remaining },
+    })
+}
+
 fn move_summary(
     battle: &Battle,
     actor: u32,
@@ -577,20 +816,16 @@ impl Battle {
         self.actors
             .iter()
             .filter(|creature| {
+                // SRD 5.2.1 p. 15: a creature offers Half Cover only when it covers
+                // at least half the target. A prone body lies below this grid's
+                // representative Small and Medium target heights.
                 !creature.health.dead
-                    && (!creature.health.prone
-                        || !prone_body_covers_target_size(creature.spec.size, target.spec.size))
+                    && !creature.health.prone
+                    && u32::from(super::map::target_height_dm(creature.spec.size)) * 2
+                        >= u32::from(super::map::target_height_dm(target.spec.size))
             })
             .map(super::Combatant::cell)
             .collect()
-    }
-}
-
-fn prone_body_covers_target_size(coverer: super::Size, target: super::Size) -> bool {
-    match coverer {
-        super::Size::Small => true,
-        super::Size::Medium => matches!(target, super::Size::Medium | super::Size::Large),
-        super::Size::Large => target == super::Size::Large,
     }
 }
 
@@ -736,6 +971,14 @@ fn modifiers(
     let target = battle.actor(target)?;
     let mut advantage = Vec::new();
     let mut disadvantage = Vec::new();
+    // Vision and Light, SRD 5.2.1 p16: darkness and observer-specific
+    // darkvision determine whether an attack is seen; the attack remains legal.
+    if !battle.can_see_actor(actor, target) {
+        disadvantage.push(AttackReason::UnseenTarget);
+    }
+    if !battle.can_see_actor(target, actor) {
+        advantage.push(AttackReason::UnseenAttacker);
+    }
     let ability = if (usage.ranged && usage.weapon.ranged_weapon()) || usage.finesse_dexterity {
         1
     } else {
@@ -782,7 +1025,7 @@ fn modifiers(
     if target.budget.dodging
         && target.speed_ft() != 0
         && !target.health.incapacitated()
-        && battle.can_see(target.cell(), actor.cell())
+        && battle.can_see_actor(target, actor)
     {
         disadvantage.push(AttackReason::Dodge);
     }
@@ -806,7 +1049,7 @@ fn modifiers(
             other.side() != actor.side()
                 && !other.health.incapacitated()
                 && other.cell().distance(actor.cell()) <= 5
-                && battle.can_see(other.cell(), actor.cell())
+                && battle.can_see_actor(other, actor)
         }) {
             disadvantage.push(AttackReason::HostileNearby);
         }
@@ -829,6 +1072,13 @@ fn modifiers(
     if actor.vex.iter().any(|(marked, _)| *marked == target.id()) {
         advantage.push(AttackReason::Vex);
     }
+    if battle
+        .helped_attacks
+        .iter()
+        .any(|effect| effect.ally == id && effect.target == target.id())
+    {
+        advantage.push(AttackReason::Help);
+    }
     Ok((advantage, disadvantage, attack_modifier, damage_modifier))
 }
 fn attack(
@@ -838,6 +1088,7 @@ fn attack(
     usage: AttackUse,
     spend: AttackSpend,
     draws: &mut Draws<'_>,
+    rerolls: &mut Vec<D20Reroll>,
 ) -> Result<AttackSummary, RuleError> {
     let (advantage, disadvantage, modifier, ability_modifier) =
         modifiers(battle, id, target, usage)?;
@@ -846,12 +1097,13 @@ fn attack(
         (true, false) => -1,
         _ => 0,
     };
-    let mut faces = vec![draws.take(20)?];
+    let actor_spec = battle.actor(id)?.spec();
+    let mut faces = vec![take_d20(actor_spec, id, D20Test::Attack, draws, rerolls)?];
     let first = faces[0];
     let selected = if roll_mode == 0 {
         first
     } else {
-        let second = draws.take(20)?;
+        let second = take_d20(actor_spec, id, D20Test::Attack, draws, rerolls)?;
         faces.push(second);
         if roll_mode > 0 {
             first.max(second)
@@ -859,6 +1111,9 @@ fn attack(
             first.min(second)
         }
     };
+    battle
+        .helped_attacks
+        .retain(|effect| !(effect.ally == id && effect.target == target));
     let cover = battle.attack_cover(id, target)?;
     let armor_class = battle.actor(target)?.spec.armor_class + cover.bonus() as u16;
     let hit = selected != 1 && (selected == 20 || selected as i16 + modifier >= armor_class as i16);
@@ -948,15 +1203,19 @@ fn attack(
                 damage += face as u16;
             }
         }
+        // SRD 5.2.1 pp. 16-17, 278: preserve the Ritual Sickle's Slashing
+        // and Necrotic amounts separately through target defenses.
         if kind == CreatureKind::Cultist && usage.weapon == Weapon::Sickle {
             necrotic_damage = 1;
         }
     }
-    if battle.actor(target)?.spec.kind == CreatureKind::Skeleton
-        && usage.weapon.damage_type() == DamageType::Bludgeoning
-    {
-        damage *= 2;
-    }
+    [damage, necrotic_damage] = apply_typed_defenses(
+        [
+            (usage.weapon.damage_type(), damage),
+            (DamageType::Necrotic, necrotic_damage),
+        ],
+        source_damage_defenses(battle.actor(target)?.spec()),
+    );
     {
         let actor = battle.actor_mut(id)?;
         if !matches!(
@@ -1084,6 +1343,64 @@ fn attack(
         mastery,
     })
 }
+struct DamageDefenses<'a> {
+    resistances: &'a [DamageType],
+    immunities: &'a [DamageType],
+    vulnerabilities: &'a [DamageType],
+}
+
+fn source_damage_defenses(spec: &CombatantSpec) -> DamageDefenses<'static> {
+    // SRD 5.2.1 p. 84: "You have Resistance to Poison damage." (Dwarven Resilience.)
+    if spec.kind == CreatureKind::Hero
+        && spec.species == Some(crate::local_journey::HeroSpecies::Dwarf)
+    {
+        return DamageDefenses {
+            resistances: &[DamageType::Poison],
+            immunities: &[],
+            vulnerabilities: &[],
+        };
+    }
+    // SRD 5.2.1 pp. 325, 343: Skeletons are vulnerable to Bludgeoning;
+    // Skeletons and Zombies are immune to Poison. No admitted target resists
+    // or is immune to the Ritual Sickle's Slashing or Necrotic damage.
+    match spec.kind {
+        CreatureKind::Skeleton => DamageDefenses {
+            resistances: &[],
+            immunities: &[DamageType::Poison],
+            vulnerabilities: &[DamageType::Bludgeoning],
+        },
+        CreatureKind::Zombie => DamageDefenses {
+            resistances: &[],
+            immunities: &[DamageType::Poison],
+            vulnerabilities: &[],
+        },
+        _ => DamageDefenses {
+            resistances: &[],
+            immunities: &[],
+            vulnerabilities: &[],
+        },
+    }
+}
+
+fn apply_typed_defenses(parts: [(DamageType, u16); 2], defenses: DamageDefenses<'_>) -> [u16; 2] {
+    parts.map(|(kind, amount)| {
+        if defenses.immunities.contains(&kind) {
+            0
+        } else {
+            let amount = if defenses.vulnerabilities.contains(&kind) {
+                amount * 2
+            } else {
+                amount
+            };
+            if defenses.resistances.contains(&kind) {
+                amount / 2
+            } else {
+                amount
+            }
+        }
+    })
+}
+
 fn apply_damage(
     battle: &mut Battle,
     target: u32,
@@ -1107,6 +1424,16 @@ fn apply_damage(
         actor.health.unconscious = true;
         actor.health.prone = true;
         drop_held(actor)?;
+        return Ok(());
+    }
+    // SRD 5.2.1 p. 86: "When you are reduced to 0 Hit Points but not killed outright, you can drop to 1 Hit Point instead."
+    if hp > 0
+        && actor.spec.kind == CreatureKind::Hero
+        && actor.spec.relentless_endurance_available
+        && damage - hp < actor.health.maximum
+    {
+        actor.health.hit_points = 1;
+        actor.spec.relentless_endurance_available = false;
         return Ok(());
     }
     if hp > 0 && actor.spec.kind == CreatureKind::Zombie && !critical {
@@ -1138,20 +1465,20 @@ fn apply_damage(
     }
     Ok(())
 }
+
 fn death_save(
     battle: &mut Battle,
     id: u32,
     draws: &mut Draws<'_>,
+    rerolls: &mut Vec<D20Reroll>,
 ) -> Result<DeathSaveSummary, RuleError> {
-    let actor = battle.actor_mut(id)?;
-    if actor.health.hit_points != 0
-        || actor.health.dead
-        || actor.health.stable
-        || actor.spec.kind != CreatureKind::Hero
-    {
+    let spec = battle.actor(id)?.spec();
+    let health = battle.actor(id)?.health();
+    if health.hit_points != 0 || health.dead || health.stable || spec.kind != CreatureKind::Hero {
         return Err(RuleError::InvalidTarget);
     }
-    let die = draws.take(20)?;
+    let die = take_d20(spec, id, D20Test::DeathSave, draws, rerolls)?;
+    let actor = battle.actor_mut(id)?;
     let mut result = if die == 20 {
         actor.health.hit_points = 1;
         actor.health.unconscious = false;
@@ -1220,6 +1547,9 @@ fn end_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
     actor.light_first = None;
     actor.light_used = false;
     actor.extra_attacks = 0;
+    battle
+        .helped_attacks
+        .retain(|effect| effect.helper != next || effect.helper_turn_count >= turn);
     for actor in &mut battle.actors {
         actor
             .slow
@@ -1256,7 +1586,7 @@ fn continue_move(
                     && other.cell().distance(actor.cell()) <= 5
                     && other.cell().distance(to) > 5
                     && battle.map.step_clear(other.cell(), actor.cell())
-                    && battle.can_see(other.cell(), actor.cell())
+                    && battle.can_see_actor(other, actor)
                 {
                     movement.eligible.push(id);
                 }
@@ -1286,6 +1616,7 @@ fn react(
     draws: &mut Draws<'_>,
     attacks: &mut Vec<AttackSummary>,
     moves: &mut Vec<MoveSummary>,
+    rerolls: &mut Vec<D20Reroll>,
 ) -> Result<(), RuleError> {
     let pending = battle
         .pending
@@ -1317,6 +1648,7 @@ fn react(
             usage,
             AttackSpend::Action,
             draws,
+            rerolls,
         )?);
     }
     if battle.actor(mover)?.health.incapacitated() || battle.finished() {
@@ -1347,4 +1679,82 @@ fn drop_held(actor: &mut super::Combatant) -> Result<(), RuleError> {
         actor.dropped.push((weapon, actor.spec.cell));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod typed_damage_tests {
+    use super::*;
+
+    fn defenses_for(id: &str) -> DamageDefenses<'static> {
+        let spec = CombatantSpec::creature(1, id, Cell(1, 1), 0).unwrap();
+        source_damage_defenses(&spec)
+    }
+
+    #[test]
+    fn srd_521_p16_p278_ritual_sickle_parts_meet_defenses_independently() {
+        let parts = [(DamageType::Slashing, 5), (DamageType::Necrotic, 1)];
+        assert_eq!(
+            apply_typed_defenses(
+                parts,
+                DamageDefenses {
+                    resistances: &[DamageType::Slashing],
+                    immunities: &[],
+                    vulnerabilities: &[],
+                }
+            ),
+            [2, 1]
+        );
+        assert_eq!(
+            apply_typed_defenses(
+                parts,
+                DamageDefenses {
+                    resistances: &[],
+                    immunities: &[DamageType::Necrotic],
+                    vulnerabilities: &[],
+                }
+            ),
+            [5, 0]
+        );
+        assert_eq!(
+            apply_typed_defenses(parts, defenses_for("skeleton")),
+            [5, 1]
+        );
+        assert_eq!(
+            apply_typed_defenses(
+                parts,
+                DamageDefenses {
+                    resistances: &[DamageType::Slashing],
+                    immunities: &[],
+                    vulnerabilities: &[DamageType::Slashing],
+                }
+            ),
+            [5, 1]
+        );
+    }
+
+    #[test]
+    fn srd_521_p325_p343_catalog_defenses_cover_bludgeoning_and_poison() {
+        let parts = [(DamageType::Bludgeoning, 3), (DamageType::Poison, 1)];
+        assert_eq!(
+            apply_typed_defenses(parts, defenses_for("skeleton")),
+            [6, 0]
+        );
+        assert_eq!(apply_typed_defenses(parts, defenses_for("zombie")), [3, 0]);
+    }
+
+    #[test]
+    fn srd_521_p84_dwarven_resilience_halves_poison_damage() {
+        let mut dwarf =
+            crate::tactical::CombatantSpec::creature(1, "giant-weasel", Cell(1, 1), 0).unwrap();
+        dwarf.kind = CreatureKind::Hero;
+        dwarf.species = Some(crate::local_journey::HeroSpecies::Dwarf);
+
+        assert_eq!(
+            apply_typed_defenses(
+                [(DamageType::Poison, 5), (DamageType::Necrotic, 1)],
+                source_damage_defenses(&dwarf),
+            ),
+            [2, 1]
+        );
+    }
 }

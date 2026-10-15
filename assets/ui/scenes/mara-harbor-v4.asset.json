@@ -1,32 +1,27 @@
 {
   "schema": 1,
-  "asset_id": "dungeonflux-demo-mara-harbor-v4",
+  "asset_id": "dungeonflux-neutral-harbor-fallback-v1",
   "asset_file": "mara-harbor-v4.png",
-  "sha256": "4983bec21d787c4067686a9a4400ec5e05b7c3ddafb6f5a6e18871c6f7765ea2",
+  "sha256": "00d03f5e4fbd738ae7b2c6af095e609c37bdf004af190055ade38bd0c4840c8e",
   "dimensions": [
     1672,
     941
   ],
   "synthetic": true,
   "generator": {
-    "tool": "built-in image_gen",
-    "prompt": "Create one new wide cinematic fantasy harbor scene from two references. Image 1 is the exact identity and wardrobe reference sheet for fictional adult Mara; image 2 is the harbor environment/style reference. Put Mara standing at the left foreground on the wet wooden dock, full body from head to boots, FACE AND TORSO FRONTAL TOWARD THE VIEWER like the front view and face closeup on Image 1. Do not turn or mirror her face. Copy her recognizable adult facial features, gray eyes, silver braided hair, proportions and exact plain outfit: navy knee-length travel coat with plain sleeves over a light shirt, dark trousers, brown boots. Copy the small diagonal scar crossing her anatomical LEFT eyebrow from Image 1; because she faces the viewer, the scar must appear on the eyebrow on the VIEWER'S RIGHT side of her face. Her other eyebrow, on the viewer's left, is unscarred. The scar should be subtly but clearly visible at scene resolution. The harbor is moonlit with cool blue mist, wet dock reflections, warm lanterns, canal water, rowboat, distant bridge and castle, in the painterly realistic style of Image 2. Warm lantern edge light and cool moonlight on Mara; natural feet-to-dock contact. Keep broad atmospheric space to the upper right for later UI. No backpack, harness, armor, straps, pouches, weapons, props, additional character beside Mara, text, UI or watermark.",
+    "tool": "reused checked-in photographic scene still",
+    "prompt": "Reuse the empty, photorealistic ferry-office harbor environment from assets/ui/generated/scene-place-ferry-office.webp as a static fallback. Keep its cool blue shadows, warm practical lanterns, water reflections and film-like contrast. Show no people, hero or portrait; this file is only the backdrop beneath current player and scene content.",
     "references": [
       {
-        "path": "assets/ui/characters/mara-reference-v2.png",
-        "role": "character_identity",
-        "sha256": "8283601be16ba040c7a1385d5c025d3cd7efcc380dade333e9c58d5c952e7e5c"
-      },
-      {
-        "path": "assets/concept-art/establishing-harbor-canal-rowboat-bridge.webp",
-        "role": "environment_style",
-        "sha256": "1c2165af89f6ca125fc89d6fcb824e0d0acf2aa86b5f739b40eea84888df87d8"
+        "path": "assets/ui/generated/scene-place-ferry-office.webp",
+        "role": "photographic_backdrop",
+        "sha256": "8ad93ad4f871a7915a76c44187a66f0d2ea307a818a4afcba23503924f4b8b04"
       }
     ]
   },
   "acceptance": {
-    "scope": "Independently reviewed static reference-sheet and scene pair",
-    "review_id": "evaluator-review-04"
+    "scope": "Static photographic fallback for scene and lobby displays",
+    "review_id": "B29-photo-fallback"
   },
-  "runtime_status": "Static demo asset; automatic post-creation generation and scene RPC integration remain pending"
+  "runtime_status": "Static neutral photo fallback; runtime scene plates take precedence"
 }

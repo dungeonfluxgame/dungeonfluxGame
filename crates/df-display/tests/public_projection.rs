@@ -72,6 +72,7 @@ fn display_view() -> DisplayGameplayView {
             }),
             ..JourneyView::default()
         }),
+        ..Default::default()
     }
 }
 

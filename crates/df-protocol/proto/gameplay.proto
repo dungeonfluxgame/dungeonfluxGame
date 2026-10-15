@@ -1,7 +1,7 @@
 syntax = "proto3";
 package dungeonflux.public.v1;
 import "common.proto";
-service ActionService { rpc Submit(SubmitActionRequest) returns (SubmitActionResponse); }
+service ActionService { rpc Submit(SubmitActionRequest) returns (SubmitActionResponse); rpc PreviewHeroIdentity(PreviewHeroIdentityRequest) returns (PreviewHeroIdentityResponse); }
 service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage); rpc ReportPresented(PresentedRequest) returns (PresentedResponse); }
 // The shared display's presentation report: the last combat beat sequence it has finished
 // presenting (CombatOutcome.sequence). Sequence only; the server accepts it solely from the
@@ -12,7 +12,7 @@ service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage
 // out. Zero is the legacy unknown instance.
 message PresentedRequest { uint64 sequence = 1; uint64 display_instance = 2; }
 message PresentedResponse { uint64 released_sequence = 1; }
-enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; MOVE = 12; DASH = 13; DODGE = 14; DISENGAGE = 15; OPPORTUNITY_ATTACK = 16; DECLINE_REACTION = 17; STAND = 18; PICK_UP_WEAPON = 19; RESOLVE_ERRAND = 20; START_NEW_ADVENTURE = 21; STABILISE_WITH_HEALERS_KIT = 22; STABILISE_MEDICINE = 23; SET_TABLE_SETTING = 40; }
+enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; MOVE = 12; DASH = 13; DODGE = 14; DISENGAGE = 15; OPPORTUNITY_ATTACK = 16; DECLINE_REACTION = 17; STAND = 18; PICK_UP_WEAPON = 19; RESOLVE_ERRAND = 20; START_NEW_ADVENTURE = 21; STABILISE_WITH_HEALERS_KIT = 22; STABILISE_MEDICINE = 23; HELP_ATTACK = 24; SET_TABLE_SETTING = 40; }
 enum RejectionCode { REJECTION_CODE_UNSPECIFIED = 0; STALE_OFFER = 1; WRONG_TURN = 2; INVALID_SELECTION = 3; PAUSED = 4; RESOURCE_MISSING = 5; CAPABILITY_UNAVAILABLE = 6; RECOVERY_REQUIRED = 7; REVISION_CONFLICT = 8; OPERATION_CONFLICT = 9; OPERATION_EXPIRED = 10; }
 message Rejection { RejectionCode code = 1; }
 message AcceptedAction { AbilityCheckResult check = 1; GameplayScene scene = 2; CharacterSheet character = 3; repeated CombatOutcome combat = 4; JourneyPhase phase = 5; }
@@ -23,7 +23,7 @@ message AbilityCheckResult { uint32 die = 1; sint32 ability_modifier = 2; uint32
 message DecisionReceipt { OperationId operation_id = 1; SessionRevision revision = 2; SessionId session_id = 3; RunId run_id = 4; bool replayed = 5; oneof outcome { AcceptedAction accepted = 6; Rejection rejected = 7; } }
 message WatchViewRequest { SessionId session_id = 1; RunId run_id = 2; ClientBindingId client_binding_id = 3; SessionRevision after_revision = 4; }
 message PlayerGameplayView { string offer_id = 1; string narration = 2; AbilityCheckResult check = 3; string private_clue = 4; bool action_available = 5; repeated GameplayActionOffer offers = 6; GameplayScene scene = 7; JourneyView journey = 8; }
-message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; }
+message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; }
 message ViewMessage { SessionRevision revision = 1; oneof audience { PlayerGameplayView player = 2; DisplayGameplayView display = 3; } }
 message OperationObservation { RejectionCode code = 1; }
 message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decision = 1; OperationObservation operation_observation = 2; } }
@@ -66,11 +66,13 @@ enum SeatReclaimRefusal { SEAT_RECLAIM_REFUSAL_UNSPECIFIED = 0; SEAT_NOT_AWAY = 
 message ReclaimRoomResponse { oneof outcome { JoinedRoom joined = 1; SeatReclaimRefusal refused = 2; } repeated AwayHero away_heroes = 3; }
 enum JourneyPhase { JOURNEY_PHASE_UNSPECIFIED = 0; ROOM = 1; CHARACTER_CREATION = 2; OPENING = 3; DIALOGUE = 4; COMBAT = 5; COMPLETE = 6; }
 message JourneyChoice { string group_id = 1; string option_id = 2; }
-message CharacterSelection { string name = 1; repeated JourneyChoice choices = 2; }
+message CharacterSelection { string name = 1; repeated JourneyChoice choices = 2; HeroIdentity identity = 3; }
 message JourneyOption { string option_id = 1; string label = 2; string description = 3; string requires_group = 4; repeated string requires_options = 5; }
 message JourneyGroup { string group_id = 1; string label = 2; repeated JourneyOption options = 3; }
-message CharacterCreationOffer { string description = 1; repeated JourneyGroup groups = 2; string source_revision = 3; }
-message CharacterSheet { string name = 1; repeated SheetFact facts = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; uint32 armor_class = 5; string source_revision = 6; }
+// The 13 identity groups and default_identity are server-owned; their menu text carries narrative
+// colour only and does not grant game mechanics.
+message CharacterCreationOffer { string description = 1; repeated JourneyGroup groups = 2; string source_revision = 3; repeated JourneyGroup identity_groups = 4; HeroIdentity default_identity = 5; }
+message CharacterSheet { string name = 1; repeated SheetFact facts = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; uint32 armor_class = 5; string source_revision = 6; HeroIdentity identity = 7; }
 message SheetFact { string label = 1; string value = 2; }
 message PartyMemberView { string name = 1; bool character_ready = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; bool active_turn = 5; bool unconscious = 6; bytes participant_id = 7; GridCell cell = 8; uint32 side = 9; repeated string conditions = 10; uint32 attack_style = 11; string voice_set = 12; string portrait = 13; }
 // PLAY-R01: every outcome says what happened and proves it was legal. kind ATTACK or OPPORTUNITY_ATTACK carries
@@ -94,7 +96,7 @@ message DeathSaveState { bytes participant_id = 1; string name = 2; uint32 succe
 message FightLine { TableRole role = 1; uint32 hero_index = 2; string speaker = 3; string text = 4; }
 message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; string weapon = 17; uint32 attack_style = 18; string damage_type = 19; uint32 distance_ft = 20; OutcomeKind kind = 21; repeated GridCell path = 22; uint32 cost_ft = 23; uint32 remaining_ft = 24; sint32 roll_mode = 25; repeated uint32 faces = 26; repeated string reasons = 27; string cover = 28; DeathSaveResult death_save_result = 29; uint32 death_successes = 30; uint32 death_failures = 31; uint32 recovery_hours = 32; repeated FightLine lines = 33; uint64 sequence = 34; StabilizationResult stabilization = 35; repeated DamageRoll damage_rolls = 36; sint32 damage_modifier = 37; }
 message StabilizationResult { StabilizationMethod method = 1; uint32 die = 2; sint32 wisdom_modifier = 3; uint32 dc = 4; bool succeeded = 5; uint32 uses_left = 6; }
-message CombatView { repeated PartyMemberView participants = 1; string active_actor = 2; uint32 round = 3; repeated CombatOutcome outcomes = 4; bool finished = 5; string source_revision = 6; bytes active_participant_id = 7; repeated InitiativeRoll initiative = 8; string layout_id = 9; repeated GridCell reachable_cells = 10; repeated LegalCombatTarget legal_targets = 11; TurnBudget own_budget = 12; CombatAmmunition own_ammunition = 13; bytes reaction_participant_id = 14; string location_id = 15; repeated DeathSaveState death_saves = 16; repeated CombatOutcome move_outcomes = 17; repeated CombatOutcome death_save_outcomes = 18; repeated FightLine closing_lines = 19; uint64 latest_sequence = 20; uint64 released_sequence = 21; }
+message CombatView { repeated PartyMemberView participants = 1; string active_actor = 2; uint32 round = 3; repeated CombatOutcome outcomes = 4; bool finished = 5; string source_revision = 6; bytes active_participant_id = 7; repeated InitiativeRoll initiative = 8; string layout_id = 9; repeated GridCell reachable_cells = 10; repeated LegalCombatTarget legal_targets = 11; TurnBudget own_budget = 12; CombatAmmunition own_ammunition = 13; bytes reaction_participant_id = 14; string location_id = 15; repeated DeathSaveState death_saves = 16; repeated CombatOutcome move_outcomes = 17; repeated CombatOutcome death_save_outcomes = 18; repeated FightLine closing_lines = 19; uint64 latest_sequence = 20; uint64 released_sequence = 21; uint32 reaction_seconds_remaining = 22; }
 message InitiativeRoll { bytes participant_id = 1; string name = 2; uint32 die = 3; sint32 modifier = 4; sint32 total = 5; uint32 order = 6; }
 // adventure_name (PLAY-V12, display and phones): the adventure's own title, on every view; the display's establishing shot names it with the place. Presentation only.
 message JourneyView { JourneyPhase phase = 1; string room_code = 2; string join_path = 3; repeated PartyMemberView party = 4; CharacterCreationOffer creation = 5; CharacterSheet own_character = 6; CombatView combat = 7; string speaker = 8; string dialogue = 9; repeated TableLine table_log = 10; TempoCue tempo = 11; repeated string table_choices = 12; repeated NpcStanding standing = 13; repeated LiveFace live_faces = 14; uint64 presentation_sequence = 15; string reply_speaker = 16; repeated ComposingHero composing = 17; HomeTheme home = 30; HomeVideoState home_video_state = 31; string home_video_path = 32; string join_url = 45; bool adventure_ended = 50; bool preparing_adventure = 76; string adventure_title = 51; bool choice_hints_hidden = 70; string adventure_name = 75; repeated NotebookEntry notebook = 77; }
@@ -153,3 +155,22 @@ message NotebookEntry { NotebookKind kind = 1; string title = 2; string text = 3
 
 // RUL-04: one complete damage roll; `kept` names the rule-authoritative chosen roll.
 message DamageRoll { repeated uint32 dice = 1; bool kept = 2; }
+
+// Closed-menu appearance IDs are each bounded to 32 UTF-8 bytes. Narrative text is bounded and
+// descriptive only; it never grants a rule, feature, proficiency, item, statistic, or entitlement.
+message HeroAppearance { string presentation = 1; string pronouns = 2; string age = 3; string build = 4; string skin = 5; string hair = 6; string hair_color = 7; string eyes = 8; string mark = 9; string attire = 10; }
+// Optional on CharacterSelection and CharacterSheet so an absent legacy choice remains distinct
+// from a new hero's explicitly selected identity. origin, occupation and motivation are each
+// bounded to 160 Unicode characters; backstory is bounded to 480; facts contain 3 to 6 entries,
+// each bounded to 160; the encoded identity is bounded to 8 KiB.
+message HeroIdentity { HeroAppearance appearance = 1; string origin = 2; string occupation = 3; string motivation = 4; string backstory = 5; repeated string facts = 6; }
+// Preview is authenticated to a joined seat, read-only, deadline/cancellation bounded, and must
+// recheck observed_revision before returning. appearance_text is bounded to 1000 Unicode
+// characters and backstory_text to 4000; source is "models" or "local-menu-matches".
+message PreviewHeroIdentityRequest { SessionId session_id = 1; RunId run_id = 2; SessionRevision observed_revision = 3; string appearance_text = 4; string backstory_text = 5; HeroIdentity current_identity = 6; ClientBindingId client_binding_id = 7; }
+message PreviewHeroIdentityResponse { HeroIdentity proposed_identity = 1; repeated string warnings = 2; string source = 3; }
+
+// Bounded diagnostic upload; never advances gameplay or presentation authority.
+service PresentationTelemetryService { rpc Upload(PresentationTelemetryRequest) returns (PresentationTelemetryResponse); }
+message PresentationTelemetryRequest { WatchViewRequest scope = 1; bytes producer_id = 2; uint64 batch_sequence = 3; bytes otlp_logs = 4; uint64 dropped_records = 5; }
+message PresentationTelemetryResponse { uint64 batch_sequence = 1; uint32 accepted_records = 2; bool replayed = 3; }

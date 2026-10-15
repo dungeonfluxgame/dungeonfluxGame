@@ -272,6 +272,7 @@ fn phone_create(
                     option_id: (*option).to_owned(),
                 })
                 .collect(),
+            ..Default::default()
         }),
         ..Default::default()
     }

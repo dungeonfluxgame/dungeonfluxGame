@@ -7,6 +7,9 @@
 
 use std::{ffi::OsString, time::Duration};
 
+#[path = "dev_cli/play.rs"]
+mod play;
+
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -189,7 +192,8 @@ fn print_help() {
          health                       server liveness and current revision\n\
          join <seat>                  join the room as seat 1 or 2\n\
          reclaim <seat>               take an away hero back on this control seat\n\
-         create <seat> <name>         create the canonical hero for a seat\n\
+         create <seat> <name>         --choice group=id (repeatable), --identity <JSON>, --identity-choice group=id\n\
+         preview <seat>              --appearance <text> --backstory <text>; review returned identity JSON\n\
          act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id>\n\
          say <hero> <text>            speak one line; [--context question|social|plan|meta|joke]\n\
          direct plate <text>          re-render the current scene picture; [--keep] [--wait]\n\
@@ -198,6 +202,10 @@ fn print_help() {
          view --as tv|<hero>          exactly the view that screen is being sent\n\
          notes <hero>                 print the notebook as that hero sees it\n\
          note <hero> <text>           add a shared party note\n\
+         scene <hero>                current contents and item card\n\
+         feelings <npc>               current development-only NPC diagnostic\n\
+         timeline [--last <n>]         last N audit events with wall and elapsed times\n\
+         play --to <phase>            play to room|creation|opening|dialogue|combat|complete|ended\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
          script <file>                run one dev command per line, stop at first failure\n\
@@ -216,6 +224,10 @@ fn print_help() {
          \n\
          actions: begin ask escort defend move attack second-wind end-turn dash dodge\n\
                   disengage stand pick-up short-rest inn resolve search new-adventure\n\
+                  opportunity-attack decline-reaction stabilise-kit stabilise-medicine table-setting\n\
+         choose any offer: act <hero> <label-or-id>, or act <hero> choose --option <label-or-id>\n\
+         table-setting: --choice-hints-hidden true|false\n\
+         every choice group: --choice group=id (repeatable) or --choices <JSON>\n\
          one JSON document per command on stdout; errors are JSON on stderr.",
     );
 }
@@ -273,9 +285,21 @@ async fn dispatch(
                 positional.get(1).cloned().unwrap_or_default(),
                 positional.get(2).cloned().unwrap_or_default(),
             );
-            post(client, "/dev/create", &json!({"seat": seat, "name": name})).await
+            let mut body = json!({"seat":seat, "name":name});
+            if let Err(message) = selection_flags(&mut body, options) { return client.print_error(message); }
+            post(client, "/dev/create", &body).await
         }
-        "act" => {
+        "preview" => {
+            let mut body = json!({"seat":positional.get(1).cloned().unwrap_or_default(),
+                "appearance_text":flag("--appearance").unwrap_or_default(), "backstory_text":flag("--backstory").unwrap_or_default()});
+            if let Err(message) = selection_flags(&mut body, options) { return client.print_error(message); }
+            post(client, "/dev/preview", &body).await
+        }
+        "act" | "confirm" => {
+            if positional.first().is_some_and(|command| command == "confirm")
+                && (flag("--input-id").is_none() || flag("--confirmation-token").is_none()) {
+                return client.print_error("confirm needs --input-id and --confirmation-token from say");
+            }
             let mut body = json!({
                 "hero": positional.get(1).cloned().unwrap_or_default(),
                 "action": positional.get(2).cloned().unwrap_or_default(),
@@ -285,13 +309,24 @@ async fn dispatch(
                 ("target", "--target"),
                 ("weapon", "--weapon"),
                 ("option", "--option"),
+                ("input_id", "--input-id"),
+                ("confirmation_token", "--confirmation-token"),
             ] {
                 if let Some(option) = flag(value) {
                     body[key] = Value::String(option);
                 }
             }
+            if let Err(message) = selection_flags(&mut body, options) { return client.print_error(message); }
+            if let Some(hidden) = flag("--choice-hints-hidden") {
+                match hidden.parse::<bool>() {
+                    Ok(hidden) => body["choice_hints_hidden"] = json!(hidden),
+                    Err(_) => return client.print_error("--choice-hints-hidden must be true or false"),
+                }
+            }
             post(client, "/dev/act", &body).await
         }
+        "cancel" => post(client, "/dev/cancel", &json!({"hero":positional.get(1).cloned().unwrap_or_default(),
+            "input_id":flag("--input-id").unwrap_or_default(), "confirmation_token":flag("--confirmation-token").unwrap_or_default()})).await,
         "say" => {
             let text = positional.get(2..).unwrap_or(&[]).join(" ");
             let mut body = json!({
@@ -313,6 +348,10 @@ async fn dispatch(
             post(client, "/dev/note", &json!({"hero": hero, "text": text})).await
         }
         "state" => get(client, "/dev/state").await,
+        command @ ("scene" | "feelings") => match positional.get(1) {
+            Some(name) => get(client, &format!("/dev/{command}?name={}", url_escape(name))).await,
+            None => client.print_error("scene/feelings needs a name"),
+        },
         "direct" => direct(client, positional, options).await,
         "view" => match flag("--as") {
             Some(who) => get(client, &format!("/dev/view?as={}", url_escape(&who))).await,
@@ -322,6 +361,8 @@ async fn dispatch(
             Some(since) => get(client, &format!("/dev/log?since={}", url_escape(&since))).await,
             None => get(client, "/dev/log").await,
         },
+        "timeline" => get(client, &format!("/dev/timeline?last={}", url_escape(&flag("--last").or_else(|| positional.get(1).cloned()).unwrap_or_else(|| "50".into())))).await,
+        "play" => play::run(client, options).await,
         "wait" => wait(client, options).await,
         "checkpoint" => match positional.get(1).map(String::as_str).unwrap_or("") {
             "save" => {
@@ -367,6 +408,53 @@ async fn dispatch(
         "describe" => get(client, "/dev/describe").await,
         other => client.print_error(format!("unknown dev command {other:?}; see dev --help")),
     }
+}
+
+fn selection_flags(body: &mut Value, options: &[(String, String)]) -> Result<(), String> {
+    if let Some((_, value)) = options
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "--choice-hints-hidden")
+    {
+        let hidden = value
+            .parse::<bool>()
+            .map_err(|_| "--choice-hints-hidden must be true or false".to_owned())?;
+        body["choice_hints_hidden"] = json!(hidden);
+    }
+    for (name, field) in [
+        ("--choices", "choices"),
+        ("--identity", "identity"),
+        ("--identity-choices", "identity_choices"),
+    ] {
+        if let Some((_, value)) = options.iter().rev().find(|(key, _)| key == name) {
+            body[field] =
+                serde_json::from_str(value).map_err(|_| format!("{name} needs a JSON object"))?;
+            if !body[field].is_object() {
+                return Err(format!("{name} needs a JSON object"));
+            }
+        }
+    }
+    for (flag, field) in [
+        ("--choice", "choices"),
+        ("--identity-choice", "identity_choices"),
+    ] {
+        for (_, value) in options.iter().filter(|(key, _)| key == flag) {
+            let (group, option) = value
+                .split_once('=')
+                .filter(|(group, option)| !group.is_empty() && !option.is_empty())
+                .ok_or_else(|| format!("{flag} needs group=option"))?;
+            if body.get(field).is_none() {
+                body[field] = json!({});
+            }
+            let values = body[field]
+                .as_object_mut()
+                .ok_or_else(|| format!("{flag} needs an object"))?;
+            if values.insert(group.into(), json!(option)).is_some() {
+                return Err(format!("duplicate choice group {group:?}"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn url_escape(text: &str) -> String {
@@ -717,5 +805,57 @@ mod tests {
         assert!(condition_met(&state, &["phase", "combat"]));
         let ended = json!({"phase": "complete", "combat": {"finished": true}});
         assert!(condition_met(&ended, &["fight-end"]));
+    }
+}
+
+#[cfg(test)]
+mod selection_flag_tests {
+    use super::*;
+    #[test]
+    fn choices_preserve_all_values_and_identity_is_a_separate_object() {
+        let mut body = json!({});
+        selection_flags(
+            &mut body,
+            &[
+                ("--choice".into(), "skill-1=perception".into()),
+                ("--choice".into(), "skill-2=survival".into()),
+                ("--identity-choice".into(), "pronouns=she-her".into()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(body["choices"].as_object().unwrap().len(), 2);
+        assert_eq!(body["identity_choices"]["pronouns"], "she-her");
+        assert!(
+            selection_flags(
+                &mut body,
+                &[("--choice".into(), "skill-1=athletics".into())]
+            )
+            .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod table_setting_flag_tests {
+    use super::*;
+
+    #[test]
+    fn table_hint_setting_sends_a_typed_boolean_and_rejects_an_invalid_value() {
+        for hidden in [true, false] {
+            let mut body = json!({});
+            selection_flags(
+                &mut body,
+                &[("--choice-hints-hidden".into(), hidden.to_string())],
+            )
+            .unwrap();
+            assert_eq!(body["choice_hints_hidden"], hidden);
+        }
+        assert!(
+            selection_flags(
+                &mut json!({}),
+                &[("--choice-hints-hidden".into(), "maybe".into())]
+            )
+            .is_err()
+        );
     }
 }

@@ -130,3 +130,43 @@ stays instant. */
 .live-screen[data-role=display][data-rest="1600"]{--dice-card-delay:1600ms}
 @keyframes tv-roll-reveal{from{visibility:hidden}to{visibility:visible}}
 .client.display>.live-toast .tools button{font-size:clamp(24px,calc(min(1vw,1.7778vh)*1.3),56px);min-height:56px}
+
+/* AUD-01: one clear, full-screen choice unlocks sound before the story begins. */
+.tv-sound-gate{position:absolute;z-index:1001;inset:0;display:grid;align-content:center;justify-items:center;gap:2.5vh;padding:8vh 8vw;background:#05080df5;color:#f0eee8;text-align:center;text-shadow:none}
+.tv-sound-gate h1{margin:0;font:400 clamp(36px,calc(var(--u)*4),180px)/1.1 Georgia,serif;letter-spacing:.01em;color:#f0eee8}
+.tv-sound-gate p{max-width:40ch;margin:0;color:#c7c9c9;font:400 clamp(20px,calc(var(--u)*1.45),64px)/1.5 var(--serif,Georgia,serif)}
+.tv-sound-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:1.5rem;margin-top:1.5vh}
+.tv-sound-actions button{min-width:min(34vw,420px);min-height:72px;padding:.75em 1.2em;border:1px solid #aeb9bf;border-radius:3px;background:#111a22;color:#f3f1ea;font:500 clamp(20px,calc(var(--u)*1.5),64px)/1.2 var(--serif,Georgia,serif);cursor:pointer}
+.tv-sound-actions .tv-sound-start{border-color:#e3d5ba;background:#e3d5ba;color:#10151a}
+.tv-sound-actions button:focus-visible{outline:3px solid #f1c77c;outline-offset:5px}
+body:has(.tv-stage[data-sound-gate]) .tv-voice-control,body:has(.tv-stage[data-sound-gate]) .tv-voice-prompt{display:none!important}
+
+/* Film grade stays on image layers; the TV UI and cast retain their own contrast. */
+.tv-stage[data-tv-mode=scene]>.tv-art{filter:saturate(.88) contrast(1.04) brightness(.64) blur(2px)}
+.tv-stage[data-tv-mode=scene]>.tv-art::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,#d49b6800 38%,#d49b6812 100%),linear-gradient(135deg,#42618018 0%,transparent 55%);mix-blend-mode:soft-light}
+.tv-stage[data-shot=plate] .tv-plate-img{filter:saturate(.88) contrast(1.04) brightness(.97)}
+.tv-stage[data-shot=plate] .tv-plate-video .tv-loop-clip{filter:saturate(.88) contrast(1.04) brightness(.97)}
+.tv-plate-dust{display:none}
+.tv-plate-vignette{opacity:.66;animation:none}
+.tv-plate::before,.tv-plate::after{content:'';position:absolute;z-index:5;inset:0;pointer-events:none}
+.tv-plate::before{background:linear-gradient(180deg,#d49b6800 38%,#d49b6814 100%),linear-gradient(135deg,#42618018 0%,transparent 55%);mix-blend-mode:soft-light}
+.tv-plate::after{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.45'/%3E%3C/svg%3E");background-size:180px 180px;opacity:.08;mix-blend-mode:soft-light}
+
+/* Letterbox only the cinematic story image; lobby, combat and battlefield stay full-frame. */
+.tv-stage[data-tv-mode=scene]:not([data-battlefield-live=true]):not(:has(.tv-figures[data-arrange=combat])):not(:has(.live-screen[data-screen=combat]))::before,.tv-stage[data-tv-mode=scene]:not([data-battlefield-live=true]):not(:has(.tv-figures[data-arrange=combat])):not(:has(.live-screen[data-screen=combat]))::after{content:'';position:absolute;z-index:100;left:0;right:0;height:5vh;background:#020305;pointer-events:none}
+.tv-stage[data-tv-mode=scene]:not([data-battlefield-live=true]):not(:has(.tv-figures[data-arrange=combat])):not(:has(.live-screen[data-screen=combat]))::before{top:0}
+.tv-stage[data-tv-mode=scene]:not([data-battlefield-live=true]):not(:has(.tv-figures[data-arrange=combat])):not(:has(.live-screen[data-screen=combat]))::after{bottom:0}
+.tv-stage[data-tv-mode=scene] .tv-brand{display:none}
+.tv-stage[data-tv-mode=scene] .tv-title{font:400 clamp(30px,calc(var(--u)*2.8),140px)/1.12 Georgia,serif;letter-spacing:.01em;color:#f0eee8;background:none;-webkit-text-fill-color:#f0eee8;text-shadow:0 2px 18px #05080d}
+.tv-stage[data-tv-mode=scene] .tv-bigcard-rule{display:none}
+.tv-stage[data-tv-mode=scene] .tv-bigcard-kicker,.tv-stage[data-tv-mode=scene] .tv-bigcard-place{font-weight:400;letter-spacing:.12em;color:#ddd8cd}
+.tv-stage[data-tv-mode=scene] .tv-bigcard-title{font-weight:400;color:#f0eee8;text-shadow:0 2px 18px #05080d}
+.tv-stage[data-tv-mode=scene] .tv-bigcard-crest{border:0;box-shadow:none}
+.tv-stage[data-tv-mode=scene] .tv-stagebox{width:min(86vw,calc(var(--u)*88));padding:calc(var(--u)*.45) calc(var(--u)*1.3);background:linear-gradient(0deg,#03060eb8 0%,#03060e78 60%,#03060e00 100%);text-align:center}
+.tv-stage[data-tv-mode=scene] .tv-narration{max-width:52ch;color:#f1efe9;font-family:Georgia,serif;line-height:1.38;text-shadow:0 1px 12px #000}
+
+/* Settled context on reconnect is static, separate from the active subtitle lane. */
+.tv-scene-context{position:absolute;z-index:24;top:11vh;left:4vw;width:min(46vw,55ch);padding:.5em .8em;background:#03060e9c;color:#e5e3dd;font:400 clamp(20px,1.4vw,30px)/1.4 Georgia,serif;text-shadow:0 1px 8px #000;pointer-events:none}
+.tv-stage[data-tv-mode=lobby] .tv-scene-context,.tv-stage[data-battlefield-live=true] .tv-scene-context,.tv-stage[data-ended] .tv-scene-context{display:none}
+
+.tv-bigcard-rewards{color:#eee8da;font:400 clamp(22px,1.6vw,42px)/1.4 Georgia,serif}.tv-bigcard-reward{margin:.3em 0}

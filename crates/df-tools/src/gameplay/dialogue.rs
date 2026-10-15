@@ -25,6 +25,7 @@ const MAXIMUM_PENDING_MEMBERS: usize = 32;
 const MAXIMUM_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
 pub(super) enum DialogueRequest {
+    SyncNotes,
     Raw(Vec<u8>),
     Confirm(Vec<u8>),
     Cancel(Vec<u8>),
@@ -142,12 +143,14 @@ mod observation_label_tests {
 impl DialogueRequest {
     pub(super) fn retained_heap_bytes(&self) -> usize {
         match self {
+            Self::SyncNotes => 0,
             Self::Raw(bytes) | Self::Confirm(bytes) | Self::Cancel(bytes) => bytes.capacity(),
         }
     }
 }
 
 pub(super) enum DialogueReply {
+    NotesSynced,
     /// The response, plus what a spoken in-character reply needs when the line qualifies.
     Raw(rpc::DialogueResponse, Option<NpcReplyContext>),
     Confirmed(rpc::SubmitActionResponse),
@@ -200,6 +203,14 @@ fn note_scene_title(scene: &super::pack::Scene) -> &str {
     &scene.title
 }
 
+fn addresses_party_hero(words: &str, party: &[String]) -> bool {
+    words.split_once(',').is_some_and(|(name, _)| {
+        party
+            .iter()
+            .any(|hero| hero.eq_ignore_ascii_case(name.trim()))
+    })
+}
+
 fn is_observation_submission(
     request: &rpc::RawDialogueRequest,
     reading: &super::approach_model::LineReading,
@@ -210,6 +221,17 @@ fn is_observation_submission(
 #[cfg(test)]
 mod classified_line_tests {
     use super::*;
+
+    #[test]
+    fn an_npc_name_before_a_comma_is_not_a_party_hero_address() {
+        let party = vec!["Brakka".to_owned(), "Sigrun".to_owned()];
+        assert!(!addresses_party_hero("Ilsa, who is Elin?", &party));
+        assert!(addresses_party_hero("Sigrun, come here", &party));
+        assert!(!addresses_party_hero(
+            "who is that lady with the tray?",
+            &party
+        ));
+    }
 
     #[test]
     fn plan_context_does_not_suppress_a_final_search_attempt_srd_521_page_187() {
@@ -261,6 +283,36 @@ impl Service {
     pub(super) async fn submit_line(
         &self,
         credential: [u8; 32],
+        request: rpc::RawDialogueRequest,
+    ) -> Result<DialogueReply, Status> {
+        let started = std::time::Instant::now();
+        let id = request
+            .input_id
+            .as_ref()
+            .and_then(|id| id.value.as_ref())
+            .filter(|bytes| bytes.len() == 16)
+            .map(|bytes| journey::hex(bytes))
+            .unwrap_or_else(|| "invalid".to_owned());
+        let chars = request.text.chars().count();
+        let answer = self.submit_line_inner(credential, request).await;
+        actor::record_audit_line(
+            "gameplay.input_timing",
+            format!(
+                "STORY input id={id} chars={chars} elapsed_ms={} status={}",
+                started.elapsed().as_millis(),
+                if answer.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                },
+            ),
+        );
+        answer
+    }
+
+    async fn submit_line_inner(
+        &self,
+        credential: [u8; 32],
         mut request: rpc::RawDialogueRequest,
     ) -> Result<DialogueReply, Status> {
         let declared = context(request.context)?;
@@ -273,17 +325,32 @@ impl Service {
         let current = self.updates.borrow().clone();
         let scene =
             super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
-        let available_things = scene
-            .findings
+        let catalog = super::investigation::targets(
+            &scene,
+            &super::investigation::party_targets(current.state()).map_err(actor::unavailable)?,
+        );
+        let available_things = catalog
             .iter()
-            .map(|finding| finding.id.clone())
-            .chain(scene.cast.iter().map(|person| person.name.clone()))
+            .map(|target| target.name.clone())
             .collect::<Vec<_>>();
         let public_scene = format!("{} {}", scene.title, scene.narration);
-        let reading = self
+        let mut reading = self
             .npc_voice
             .classify_input(&request.text, &public_scene, &available_things)
             .await;
+        if reading.source == "rules"
+            && let Some(local) = super::investigation::local_reading(&request.text, &catalog)
+        {
+            reading = local;
+        }
+        if finality(request.finality)? == InputFinality::Final
+            && let Some((target, option)) =
+                journey::living_scene::interaction_for_line(&scene, &request.text)
+        {
+            return self
+                .interaction_call(credential, &request, &target, option)
+                .await;
+        }
         let input_finality = finality(request.finality)?;
         if input_finality == InputFinality::Final
             && reading.intent == super::approach_model::LineIntent::GameQuestion
@@ -314,7 +381,22 @@ impl Service {
         }
         request.context = match reading.intent {
             super::approach_model::LineIntent::PartyNote => rpc::DialogueContext::Meta as i32,
-            super::approach_model::LineIntent::HeroSpeech => rpc::DialogueContext::PlanOnly as i32,
+            super::approach_model::LineIntent::HeroSpeech => {
+                let party = current
+                    .state()
+                    .characters
+                    .iter()
+                    .map(|character| journey::name(current.state(), character.entity))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(actor::unavailable)?;
+                if addresses_party_hero(&request.text, &party) {
+                    rpc::DialogueContext::PlanOnly as i32
+                } else if request.text.trim_end().ends_with('?') {
+                    rpc::DialogueContext::Question as i32
+                } else {
+                    rpc::DialogueContext::Social as i32
+                }
+            }
             super::approach_model::LineIntent::GameQuestion => rpc::DialogueContext::Meta as i32,
             super::approach_model::LineIntent::CharacterSpeech => {
                 if request.text.trim_end().ends_with('?') {
@@ -376,37 +458,44 @@ impl Service {
         }
         let offer_id = observation_offer
             .ok_or_else(|| Status::failed_precondition("this scene has no observation offer"))?;
-        let mut action_choices = Vec::new();
-        if reading.intent == super::approach_model::LineIntent::WatchPerson {
-            let person = scene.cast.iter().find(|person| {
-                !reading.thing.is_empty()
-                    && reading
-                        .thing
-                        .to_lowercase()
-                        .contains(&person.name.to_lowercase())
-            });
-            let person = person
-                .ok_or_else(|| Status::failed_precondition("name the person you want to watch"))?;
-            action_choices.push(rpc::JourneyChoice {
-                group_id: "finding".to_owned(),
-                option_id: format!("watch-{}", person.id),
-            });
-            action_choices.push(rpc::JourneyChoice {
-                group_id: "attempt-skill".to_owned(),
-                option_id: "insight".to_owned(),
-            });
-        } else if let Some(skill) = reading.skill {
-            action_choices.push(rpc::JourneyChoice {
+        let catalog = super::investigation::targets(
+            scene,
+            &super::investigation::party_targets(current.state()).map_err(actor::unavailable)?,
+        );
+        let target = self
+            .npc_voice
+            .resolve_investigation_target(&request.text, &catalog)
+            .await;
+        let skill = super::investigation::skill(&request.text, reading.skill);
+        if !target.present
+            || target.id.starts_with("surface-")
+                && super::investigation::finding_on(scene, &target, &skill).is_none()
+        {
+            return match self
+                .interaction_call(credential, request, &target.id, "examine")
+                .await?
+            {
+                DialogueReply::Raw(response, _) => Ok(response),
+                _ => Err(Status::internal("observation response binding invalid")),
+            };
+        }
+        actor::record_audit_line(
+            "gameplay.investigation_attempt",
+            format!(
+                "ATTEMPT source={} kind={:?} skill={skill} target={:?} elapsed_ms={}",
+                reading.source, reading.intent, target.name, reading.elapsed_ms
+            ),
+        );
+        let action_choices = vec![
+            rpc::JourneyChoice {
                 group_id: "attempt-skill".to_owned(),
                 option_id: skill.to_owned(),
-            });
-        }
-        if let Some(thing) = observation_thing_label(&reading.thing) {
-            action_choices.push(rpc::JourneyChoice {
+            },
+            rpc::JourneyChoice {
                 group_id: "attempt-thing".to_owned(),
-                option_id: thing,
-            });
-        }
+                option_id: target.id,
+            },
+        ];
         let action = rpc::SubmitActionRequest {
             session_id: request.session_id.clone(),
             run_id: request.run_id.clone(),
@@ -440,7 +529,41 @@ impl Service {
             .check
             .as_ref()
             .ok_or_else(|| Status::internal("observation check receipt absent"))?;
-        let line = observation_result(&current, scene, check, reading, member, &self.social)?;
+        let line = if let Some(observation) = super::investigation::observation(scene, check) {
+            let public = observation.public_view();
+            let line = self.npc_voice.describe_observation(&public).await;
+            let hero = journey::name(
+                current.state(),
+                journey::player_entity(member, &current).map_err(actor::unavailable)?,
+            )
+            .map_err(actor::unavailable)?;
+            if let Some(id) = observation.target.id.strip_prefix("thing-") {
+                actor::record_audit_line(
+                    "gameplay.scene_item_request",
+                    format!(
+                        "IMAGERY kind=item actor={hero:?} target={id:?} requested_after_commit=true"
+                    ),
+                );
+                if let Err(reason) =
+                    self.living
+                        .request_item(&hero, id, observation.finding.clone(), false)
+                {
+                    actor::record_audit_line(
+                        "gameplay.scene_item_request",
+                        format!(
+                            "IMAGERY kind=item actor={hero:?} target={id:?} status=text reason={reason:?}"
+                        ),
+                    );
+                }
+            }
+            if observation.private_finding {
+                observation.fallback()
+            } else {
+                line
+            }
+        } else {
+            observation_result(&current, scene, check, reading, member, &self.social)?
+        };
         Ok(rpc::DialogueResponse {
             input_id: request.input_id.clone(),
             disposition: rpc::DialogueDisposition::Action as i32,
@@ -449,6 +572,137 @@ impl Service {
             revision: receipt.revision,
             npc_reply: line,
         })
+    }
+
+    async fn interaction_call(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        target: &str,
+        option: &str,
+    ) -> Result<DialogueReply, Status> {
+        let observed = df_api::session_revision(request.observed_revision.as_ref())
+            .map_err(|_| Status::invalid_argument("interaction revision required"))?;
+        let mut submit = rpc::SubmitActionRequest {
+            session_id: request.session_id.clone(),
+            run_id: request.run_id.clone(),
+            observed_revision: request.observed_revision.clone(),
+            operation_id: request.input_id.clone(),
+            offer_id: journey::living_scene::offer_id_at(observed),
+            action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
+            action_choices: vec![
+                rpc::JourneyChoice {
+                    group_id: "scene-target".into(),
+                    option_id: target.into(),
+                },
+                rpc::JourneyChoice {
+                    group_id: "scene-option".into(),
+                    option_id: option.into(),
+                },
+            ],
+            ..Default::default()
+        };
+        if option == "gift" {
+            let amount = journey::living_scene::gift_amount(&request.text)
+                .ok_or_else(|| Status::invalid_argument("Name one gift amount in GP."))?;
+            submit.action_choices.push(rpc::JourneyChoice {
+                group_id: "scene-amount".into(),
+                option_id: amount.to_string(),
+            });
+        }
+        let (reply, receive) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::Submit {
+                credential,
+                request: submit,
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+        let response = tokio::time::timeout(super::timing::active().reply, receive)
+            .await
+            .map_err(|_| Status::deadline_exceeded("retain the interaction for lookup"))?
+            .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+        let Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) =
+            response.outcome
+        else {
+            return Err(Status::failed_precondition("interaction was not committed"));
+        };
+        if !matches!(
+            receipt.outcome,
+            Some(rpc::decision_receipt::Outcome::Accepted(_))
+        ) {
+            return Err(Status::failed_precondition("interaction was refused"));
+        }
+        let operation = df_api::operation_id(request.input_id.as_ref())
+            .map_err(|_| Status::invalid_argument("interaction identity required"))?;
+        let after = self.updates.borrow().clone();
+        let line =
+            journey::living_scene::line(after.state(), operation).map_err(actor::unavailable)?;
+        actor::record_audit_line(
+            "gameplay.scene_item_request",
+            format!("IMAGERY kind=item target={target:?} requested_after_commit=true"),
+        );
+        // Pictures cannot delay or undo a committed scene interaction.
+        let scene = super::beat_script_runtime::scene(after.state()).map_err(actor::unavailable)?;
+        if let Some(thing) = scene
+            .setting
+            .as_ref()
+            .and_then(|setting| setting.model.as_ref())
+            .and_then(|model| model.things.iter().find(|thing| thing.id == target))
+        {
+            let hero = journey::living_scene::hero(after.state(), operation)
+                .map_err(actor::unavailable)?;
+            if matches!(option, "examine" | "take" | "share")
+                && let Err(reason) =
+                    self.living
+                        .request_item(&hero, &thing.id, None, option == "share")
+            {
+                actor::record_audit_line(
+                    "gameplay.scene_item_request",
+                    format!("IMAGERY kind=item target={target:?} status=text reason={reason:?}"),
+                );
+            }
+        }
+        if matches!(option, "buy" | "use")
+            && journey::living_scene::coin_was_transferred(after.state(), operation)
+                .map_err(actor::unavailable)?
+        {
+            let hero = journey::living_scene::hero(after.state(), operation)
+                .map_err(actor::unavailable)?;
+            if let Err(reason) = self.living.request_item(&hero, target, None, false) {
+                actor::record_audit_line(
+                    "gameplay.scene_item_request",
+                    format!("IMAGERY kind=item target={target:?} status=text reason={reason:?}"),
+                );
+            }
+        }
+        if option == "gift"
+            && journey::living_scene::coin_was_transferred(after.state(), operation)
+                .map_err(actor::unavailable)?
+        {
+            let mut spoken = request.clone();
+            spoken.observed_revision = receipt.revision.clone();
+            spoken.context = rpc::DialogueContext::Social as i32;
+            if let DialogueReply::Raw(mut response, npc) = self
+                .dialogue_call(credential, DialogueRequest::Raw(encode(&spoken)?))
+                .await?
+            {
+                response.disposition = rpc::DialogueDisposition::Action as i32;
+                response.npc_reply = line;
+                return Ok(DialogueReply::Raw(response, npc));
+            }
+            return Err(Status::internal("gift reply binding invalid"));
+        }
+        Ok(DialogueReply::Raw(
+            rpc::DialogueResponse {
+                input_id: request.input_id.clone(),
+                disposition: rpc::DialogueDisposition::Action as i32,
+                revision: receipt.revision,
+                npc_reply: line,
+                ..Default::default()
+            },
+            None,
+        ))
     }
 }
 
@@ -472,6 +726,12 @@ impl rpc::dialogue_service_server::DialogueService for Service {
                     let _thinking = self.table_log.reply_pending(&context.speaker);
                     if let Some(reply) = self.npc_voice.converse(context, &self.table_log).await {
                         response.npc_reply = reply;
+                    }
+                    if let Err(error) = self
+                        .dialogue_call(credential, DialogueRequest::SyncNotes)
+                        .await
+                    {
+                        actor::record_unavailable("notebook-grievance", error.message());
                     }
                 }
                 Ok(Response::new(response))
@@ -553,6 +813,9 @@ fn observation_result(
     member: MemberId,
     social: &super::social::SocialLedger,
 ) -> Result<String, Status> {
+    if let Some(observation) = super::investigation::observation(scene, check) {
+        return Ok(observation.fallback());
+    }
     let projection = wire::project_journey(current, LocalDemoRole::Player, member)
         .map_err(actor::unavailable)?;
     let hero = match projection.view.audience {
@@ -814,6 +1077,32 @@ impl actor::Actor {
         request: DialogueRequest,
     ) -> Result<DialogueReply, Status> {
         match request {
+            DialogueRequest::SyncNotes => {
+                let member = self.dialogue_member(&credential)?;
+                let current = self.owner.checkpoint();
+                let hero = journey::name(
+                    current.state(),
+                    journey::player_entity(member, current).map_err(actor::unavailable)?,
+                )
+                .map_err(actor::unavailable)?;
+                let scene = super::beat_script_runtime::scene(current.state())
+                    .map_err(actor::unavailable)?;
+                for (npc, reason) in self.social.permanent_grievances(member) {
+                    self.notebook
+                        .record_never_forgives(
+                            member,
+                            &hero,
+                            &npc,
+                            &reason,
+                            &format!("{:?}", scene.key),
+                        )
+                        .map_err(|error| {
+                            actor::record_unavailable("notebook-grievance", &error.to_string());
+                            Status::unavailable("The note could not be saved.")
+                        })?;
+                }
+                Ok(DialogueReply::NotesSynced)
+            }
             DialogueRequest::Raw(bytes) => {
                 let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
                     .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
@@ -853,6 +1142,14 @@ impl actor::Actor {
         let observed =
             df_api::session_revision(request.observed_revision.as_ref()).map_err(|_| invalid())?;
         let current = self.owner.checkpoint();
+        let who = journey::player_entity(member, current).map_err(actor::unavailable)?;
+        if journey::tactical::present(current.state())
+            && journey::tactical::hero_is_dead(current.state(), who).map_err(actor::unavailable)?
+        {
+            return Err(Status::failed_precondition(
+                "A dead hero cannot speak or act.",
+            ));
+        }
         let basis = current.basis();
         if session != basis.session || run != basis.run || observed != basis.revision {
             return Err(Status::failed_precondition("dialogue basis changed"));
@@ -953,15 +1250,18 @@ impl actor::Actor {
         }
         // Conversation addressed to the scene's speaker is answered in character; a pending
         // confirmation ticket means the player is clarifying an action, which is not.
+        let influence_speech = declared == DiscourseContext::Social
+            && super::social::classify_keywords(&request.text).is_influence_attempt();
         let npc = (token.is_empty()
             && finality == InputFinality::Final
-            && matches!(
-                result,
-                IntentDisposition::Question
-                    | IntentDisposition::Social
-                    | IntentDisposition::Joke
-                    | IntentDisposition::Clarify
-            ))
+            && (influence_speech
+                || matches!(
+                    result,
+                    IntentDisposition::Question
+                        | IntentDisposition::Social
+                        | IntentDisposition::Joke
+                        | IntentDisposition::Clarify
+                )))
         .then(|| self.npc_reply_context(member, &request.text))
         .flatten();
         if finality == InputFinality::Final
@@ -1000,6 +1300,27 @@ impl actor::Actor {
     /// The facts for the speaker's reply, taken from this member's own view. Failing to build
     /// them only means this line gets today's response without a spoken reply.
     fn npc_reply_context(&self, member: MemberId, typed: &str) -> Option<NpcReplyContext> {
+        let current = self.owner.checkpoint();
+        let scene = match super::beat_script_runtime::scene(current.state()) {
+            Ok(scene) => scene,
+            Err(error) => {
+                actor::record_unavailable("scene-reply", &format!("{error:?}"));
+                return None;
+            }
+        };
+        let snapshot = match journey::living_scene::snapshot(current.state(), &scene) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                actor::record_unavailable("scene-reply", &format!("{error:?}"));
+                return None;
+            }
+        };
+        if let Some(snapshot) = snapshot {
+            if let Err(error) = self.social.sync_room(&format!("{:?}", scene.key), snapshot) {
+                actor::record_unavailable("scene-social-reply", &error.to_string());
+                return None;
+            }
+        }
         let projection =
             wire::project_journey(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
         let story = super::pack::with_content(StoryFacts::from_pack);

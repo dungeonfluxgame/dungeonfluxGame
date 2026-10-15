@@ -162,8 +162,8 @@ pub(crate) const fn is_stale_combat_sequence(current: u64, incoming: u64) -> boo
     incoming < current
 }
 
-/// Merge move-only turns with attacks in server order. An attack already carries its walk:
-/// queuing that move separately would delay its dice behind the very walk they introduce.
+/// Merge a move directly before its actor's attack into that attack. A later attack after another
+/// actor's turn must not pull the move out of server order.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn fresh_combat_beats(combat: &rpc::CombatView, after: u64) -> Vec<&rpc::CombatOutcome> {
     let pending_move = pending_combat_move(combat).map(|movement| movement.sequence);
@@ -172,9 +172,16 @@ pub(crate) fn fresh_combat_beats(combat: &rpc::CombatView, after: u64) -> Vec<&r
         .iter()
         .chain(combat.move_outcomes.iter().filter(|movement| {
             pending_move != Some(movement.sequence)
-                && !combat.outcomes.iter().any(|attack| {
-                    attack.sequence > movement.sequence && attack.actor_name == movement.actor_name
-                })
+                && !combat
+                    .outcomes
+                    .iter()
+                    .chain(combat.move_outcomes.iter())
+                    .filter(|outcome| outcome.sequence > movement.sequence)
+                    .min_by_key(|outcome| outcome.sequence)
+                    .is_some_and(|next| {
+                        next.actor_name == movement.actor_name
+                            && next.kind != rpc::OutcomeKind::Move as i32
+                    })
         }))
         .filter(|outcome| outcome.sequence > after)
         .collect();
@@ -1236,6 +1243,39 @@ mod tests {
         let marks = turn_marks(&fresh, &HashMap::new(), &HashMap::new());
         assert!(marks.iter().all(|mark| mark.turn_start));
         assert_eq!(fresh_combat_beats(&combat, 4)[0].actor_name, "Weasel 3");
+    }
+
+    #[test]
+    fn live_move_only_turn_stays_before_later_actor_turns() {
+        let combat = rpc::CombatView {
+            move_outcomes: vec![rpc::CombatOutcome {
+                sequence: 1,
+                actor_name: "Weasel 1".to_owned(),
+                kind: rpc::OutcomeKind::Move as i32,
+                ..Default::default()
+            }],
+            outcomes: vec![
+                rpc::CombatOutcome {
+                    sequence: 2,
+                    actor_name: "Weasel 2".to_owned(),
+                    ..Default::default()
+                },
+                rpc::CombatOutcome {
+                    sequence: 3,
+                    actor_name: "Weasel 1".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            fresh_combat_beats(&combat, 0)
+                .iter()
+                .map(|outcome| outcome.sequence)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
     }
 
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.

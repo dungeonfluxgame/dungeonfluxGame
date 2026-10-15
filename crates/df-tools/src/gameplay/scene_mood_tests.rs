@@ -6,6 +6,28 @@ fn seconds(count: u64) -> Duration {
     Duration::from_secs(count)
 }
 
+#[test]
+fn dwindling_patience_sours_even_a_fond_characters_visible_expression() {
+    let mut signal = signal(
+        1,
+        Approach::Question,
+        Effect::Steady,
+        Attitude::Friendly,
+        false,
+    );
+    signal.emotional_state.fond = EmotionLevel::Much;
+    signal.emotional_state.patience = super::super::social::PatienceState::Short;
+    assert_eq!(
+        exchange_reading(&signal, &[]),
+        (Mood::Tense, Expression::Pained)
+    );
+    signal.emotional_state.patience = super::super::social::PatienceState::Done;
+    assert_eq!(
+        exchange_reading(&signal, &[]),
+        (Mood::Grim, Expression::Contemptuous)
+    );
+}
+
 fn signal(
     sequence: u64,
     approach: Approach,

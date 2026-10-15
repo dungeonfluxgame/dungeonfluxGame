@@ -11,9 +11,9 @@ const ENEMY_ENTITIES: [[u8; 16]; 4] = [[0x65; 16], [0x71; 16], [0x72; 16], [0x73
 // This persisted revision also pins the enemy reaction policy for deterministic fight replay.
 const TACTICAL_SOURCE_REVISION_LEGACY_POLICY: &str = tactical_rules::SOURCE_REVISION;
 const TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY: &str =
-    "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v1";
+    "SRD-5.2.1:PLAY-T01:3:enemy-policy-opportunity-v1";
 const TACTICAL_SOURCE_REVISION_LATEST_POLICY: &str =
-    "SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2";
+    "SRD-5.2.1:PLAY-T01:3:enemy-policy-opportunity-v2";
 const SCENES: &[(&str, &[u8])] = &[
     (
         "salt-quay",
@@ -367,7 +367,7 @@ fn canonical(state: &GameState, id: u32) -> Result<EntityId, RepositoryError> {
         .map(|(_, entity)| *entity)
         .ok_or(RepositoryError::InvalidCandidate)
 }
-fn actor_id(state: &GameState, entity: EntityId) -> Result<u32, RepositoryError> {
+pub(super) fn actor_id(state: &GameState, entity: EntityId) -> Result<u32, RepositoryError> {
     snapshot(state)?
         .actors
         .iter()
@@ -446,6 +446,14 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
             set(state, who, key, value)?;
         }
         if actor.side() == Side::Heroes {
+            if carries_healers_kit(state, who) {
+                set(
+                    state,
+                    who,
+                    "healer-kit-uses",
+                    u32::from(actor.spec().healers_kit_uses),
+                )?;
+            }
             for (entry, quantity) in [
                 ("arrow", u64::from(actor.arrows())),
                 ("crossbow-bolt", u64::from(actor.bolts())),
@@ -816,6 +824,43 @@ fn record_outcomes(
             ..Default::default()
         });
     }
+    for stabilization in &result.stabilizations {
+        let helper = canonical(state, stabilization.helper)?;
+        let target = canonical(state, stabilization.target)?;
+        let detail = match stabilization.outcome {
+            tactical_rules::StabilizationOutcome::Medicine {
+                die,
+                modifier,
+                success,
+                ..
+            } => rpc::StabilizationResult {
+                method: rpc::StabilizationMethod::Medicine as i32,
+                die,
+                wisdom_modifier: i32::from(modifier),
+                dc: 10,
+                succeeded: success,
+                ..Default::default()
+            },
+            tactical_rules::StabilizationOutcome::HealersKit { uses_remaining } => {
+                rpc::StabilizationResult {
+                    method: rpc::StabilizationMethod::HealersKit as i32,
+                    uses_left: u32::from(uses_remaining),
+                    succeeded: true,
+                    ..Default::default()
+                }
+            }
+        };
+        outcomes.push(rpc::CombatOutcome {
+            actor_name: name(state, helper)?,
+            target_name: name(state, target)?,
+            actor_id: helper.as_bytes().to_vec(),
+            target_id: target.as_bytes().to_vec(),
+            source_revision: model::source_revision(),
+            kind: rpc::OutcomeKind::Stabilisation as i32,
+            stabilization: Some(detail),
+            ..Default::default()
+        });
+    }
     Ok(())
 }
 fn record_moves(
@@ -1042,6 +1087,8 @@ fn enemy_action_description(action: &Action) -> (&'static str, &'static str) {
         Action::Dash => ("dash", "reach a target beyond current movement"),
         Action::Attack { .. } => ("attack", "target is in range"),
         Action::Dodge => ("dodge", "no attack target is currently reachable"),
+        Action::Help { .. } => ("help", "help an ally"),
+        Action::UtilizeHealersKit { .. } => ("healers-kit", "stabilize a dying ally"),
         Action::EndTurn => ("end-turn", "no reachable target or available action"),
         Action::Stand => ("stand", "recover from prone"),
         Action::DropProne => ("drop-prone", "take cover from ranged attacks"),
@@ -1295,6 +1342,24 @@ pub(super) fn start(
                 )
                 .map_err(bad),
         )?;
+        let relentless_endurance_available = result
+            .battle
+            .actor(*id)
+            .map_err(bad)?
+            .spec()
+            .relentless_endurance_available;
+        result.battle = noted(
+            "fight-hero-feature-resources",
+            result
+                .battle
+                .clone()
+                .with_hero_feature_resources(
+                    *id,
+                    u8::try_from(value(state, *who, "healer-kit-uses")?).map_err(bad)?,
+                    relentless_endurance_available,
+                )
+                .map_err(bad),
+        )?;
         let quantities = result
             .battle
             .actor(*id)
@@ -1527,6 +1592,36 @@ fn options(
                 }
             }
             K::Stand => candidates.push((String::new(), Action::Stand, "Stand up".to_owned())),
+            // SRD 5.2.1 pp. 18, 97: Help (Medicine DC 10) or Utilize the kit.
+            K::StabiliseWithHealersKit | K::StabiliseMedicine => {
+                for target in battle
+                    .combatants()
+                    .iter()
+                    .filter(|target| target.side() == Side::Heroes && target.id() != actor)
+                {
+                    let target_id = target.id();
+                    let target_name = name(state, canonical(state, target_id)?)?;
+                    let (action, label) = if kind == K::StabiliseWithHealersKit {
+                        (
+                            Action::UtilizeHealersKit { target: target_id },
+                            format!(
+                                "Stabilize {target_name} with Healer's Kit ({} uses left)",
+                                combatant.spec().healers_kit_uses
+                            ),
+                        )
+                    } else {
+                        (
+                            Action::Help {
+                                purpose: tactical_rules::HelpPurpose::Stabilize {
+                                    target: target_id,
+                                },
+                            },
+                            format!("Stabilize {target_name} (Wisdom (Medicine) DC 10)"),
+                        )
+                    };
+                    candidates.push((target_id.to_string(), action, label));
+                }
+            }
             K::PickUpWeapon => {
                 for held in &combatant.spec().weapons {
                     candidates.push((
@@ -2013,6 +2108,9 @@ pub(super) fn validate_encounter(current: &Checkpoint) -> Result<(), RepositoryE
             || value(state, who, "unconscious")? != u32::from(actor.health().unconscious)
             || value(state, who, "prone")? != u32::from(actor.health().prone)
             || value(state, who, "second-wind")? != u32::from(actor.spec().second_wind_uses)
+            || (actor.side() == Side::Heroes
+                && value(state, who, "healer-kit-uses")?
+                    != u32::from(actor.spec().healers_kit_uses))
             || value(state, who, "action-used")? != u32::from(actor.budget().action_used)
             || value(state, who, "bonus-used")? != u32::from(actor.budget().bonus_action_used)
             || value(state, who, "held-weapon")? != u32::from(!actor.held_weapons().is_empty())
@@ -2250,7 +2348,10 @@ pub(in crate::gameplay) fn all_heroes_dead(state: &GameState) -> Result<bool, Re
     Ok(!heroes.is_empty() && heroes.iter().all(|actor| actor.health().dead))
 }
 
-pub(super) fn hero_is_dead(state: &GameState, who: EntityId) -> Result<bool, RepositoryError> {
+pub(in crate::gameplay) fn hero_is_dead(
+    state: &GameState,
+    who: EntityId,
+) -> Result<bool, RepositoryError> {
     let actor = actor_id(state, who)?;
     Ok(read(state)?.actor(actor).map_err(bad)?.health().dead)
 }
@@ -2836,12 +2937,15 @@ fn reason_label(reason: tactical_rules::AttackReason) -> &'static str {
         R::ProneAttacker => "attacker prone",
         R::ProneTarget => "target prone",
         R::UnconsciousTarget => "target unconscious",
+        R::UnseenTarget => "target unseen",
+        R::UnseenAttacker => "attacker unseen",
         R::Dodge => "target dodging",
         R::Sap => "attacker affected by Sap",
         R::Heavy => "Heavy weapon ability requirement",
         R::PackTactics => "Pack Tactics",
         R::SunlightSensitivity => "Sunlight Sensitivity",
         R::Vex => "Vex mastery",
+        R::Help => "Help from an ally",
     }
 }
 
@@ -2931,6 +3035,7 @@ pub(super) mod tests {
             .unwrap();
         target["health"]["hit_points"] = serde_json::json!(0);
         target["health"]["unconscious"] = serde_json::json!(true);
+        target["health"]["prone"] = serde_json::json!(true);
         target["health"]["dead"] = serde_json::json!(false);
         target["health"]["stable"] = serde_json::json!(false);
         snapshot.state = serde_json::to_vec(&battle).unwrap();
@@ -3880,6 +3985,75 @@ pub(super) mod tests {
         .unwrap();
         pack::with_test_pack(loaded, run);
     }
+    #[test]
+    fn kit_stabilization_commits_native_zero_hp_outcome_and_remaining_uses() {
+        // SRD 5.2.1 pp. 18, 97: stabilize at 0 HP, spend one kit use without a roll.
+        with_live(|| {
+            let current = fight(true);
+            let helper = current
+                .state()
+                .inventory
+                .iter()
+                .find(|item| item.origin.entry.as_str() == "healers-kit")
+                .unwrap()
+                .owner;
+            let helper_id = actor_id(current.state(), helper).unwrap();
+            let battle = read(current.state()).unwrap();
+            let target_id = battle
+                .combatants()
+                .iter()
+                .find(|actor| {
+                    actor.side() == Side::Heroes
+                        && actor.id() != helper_id
+                        && actor
+                            .cell()
+                            .distance(battle.actor(helper_id).unwrap().cell())
+                            <= 5
+                })
+                .unwrap()
+                .id();
+            let target = canonical(current.state(), target_id).unwrap();
+            let mut state = with_dying_companion(&current, helper, target);
+            let options = options(
+                &state,
+                helper_id,
+                rpc::GameplayActionKind::StabiliseWithHealersKit,
+            )
+            .unwrap();
+            let source = rule().unwrap();
+            let context =
+                binding(OperationId::from_bytes(&[0xa3; 16]).unwrap(), &source, 0).unwrap();
+            let result = tactical_rules::resolve(
+                &read(&state).unwrap(),
+                helper_id,
+                &options[0].1,
+                context,
+                &[],
+            )
+            .unwrap();
+            let mut outcomes = Vec::new();
+            record_outcomes(&state, &result, false, false, &mut outcomes).unwrap();
+            store(&mut state, &result.battle).unwrap();
+            let restored = read(&state).unwrap();
+            assert!(restored.actor(target_id).unwrap().health().stable);
+            assert_eq!(restored.actor(target_id).unwrap().health().hit_points, 0);
+            assert!(restored.actor(helper_id).unwrap().budget().action_used);
+            assert_eq!(value(&state, helper, "healer-kit-uses").unwrap(), 9);
+            let receipt = outcomes
+                .iter()
+                .find(|outcome| outcome.kind == rpc::OutcomeKind::Stabilisation as i32)
+                .unwrap();
+            assert_eq!(receipt.actor_name, name(&state, helper).unwrap());
+            assert_eq!(receipt.target_name, name(&state, target).unwrap());
+            assert_eq!(receipt.stabilization.as_ref().unwrap().uses_left, 9);
+            assert!(receipt.stabilization.as_ref().unwrap().succeeded);
+            assert_eq!(
+                restored.snapshot().unwrap(),
+                result.battle.snapshot().unwrap()
+            );
+        });
+    }
+
     #[test]
     fn stabilisation_offers_name_a_dying_companion_and_only_carriers_get_the_kit_srd_521_p18_p97() {
         // Help stabilization is SRD 5.2.1 p18; the Healer's Kit is p97.
@@ -6036,11 +6210,11 @@ mod shared_scene_tests {
                         });
                         let expected = height.map_or(Cover::Total, |height_dm| {
                             let height = u32::from(height_dm);
-                            if height * 4 < 18 {
+                            if height * 2 < 18 {
                                 Cover::None
-                            } else if height * 2 <= 18 {
+                            } else if height * 4 < 54 {
                                 Cover::Half
-                            } else if height * 4 <= 54 {
+                            } else if height < 18 {
                                 Cover::ThreeQuarters
                             } else {
                                 Cover::Total
@@ -6083,7 +6257,20 @@ mod shared_scene_tests {
                                 let to = tactical_rules::Cell(after.0 as u16, after.1 as u16);
                                 let cover = map.cover_between(from, to, &[]).unwrap();
                                 assert!(
-                                    cover >= obstacle.cover,
+                                    cover
+                                        >= obstacle.cover.min({
+                                            // SRD 5.2.1 p. 15, against the disclosed 18 dm Medium target.
+                                            let height = (obstacle.height_m * 10.0).round() as u32;
+                                            if height * 2 < 18 {
+                                                Cover::None
+                                            } else if height * 4 < 54 {
+                                                Cover::Half
+                                            } else if height < 18 {
+                                                Cover::ThreeQuarters
+                                            } else {
+                                                Cover::Total
+                                            }
+                                        }),
                                     "{id}/{}: {} through {col},{row}",
                                     layout.id,
                                     obstacle.id
@@ -6282,6 +6469,65 @@ mod shared_scene_tests {
 #[cfg(test)]
 mod private_outcome_tests {
     use super::*;
+
+    #[test]
+    fn a_shortbow_attack_updates_the_requesting_heros_sheet_from_the_live_battle() {
+        // SRD 5.2.1 p. 177: the attack changes the equipped weapon, even on a miss.
+        let mut tuning: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../../../content/harbor-journey/tuning.json"
+        ))
+        .unwrap();
+        tuning["tactical"] =
+            serde_json::json!({"enemies":[{"srd_id":"bandit","count":2,"ammunition":20}]});
+        let loaded = pack::load_from_bytes(
+            include_bytes!("../../../../../content/harbor-journey/pack.json"),
+            &serde_json::to_vec(&tuning).unwrap(),
+        )
+        .unwrap();
+        pack::with_test_pack(loaded, || {
+            let current = tests::current_combat("escort-courier");
+            let battle = read(current.state()).unwrap();
+            let actor = battle.active_actor().unwrap();
+            let who = canonical(current.state(), actor).unwrap();
+            let member = current
+                .state()
+                .members
+                .iter()
+                .find(|link| {
+                    link.character == Some(who)
+                        && link.member != super::super::bootstrap_member().unwrap()
+                })
+                .unwrap()
+                .member;
+            let selected = options(current.state(), actor, rpc::GameplayActionKind::GreatswordAttack).unwrap().into_iter()
+                .find(|(_, action, _)| matches!(action, Action::Attack { weapon, spend: AttackSpend::Action, .. } if weapon.weapon == Weapon::Shortbow && !weapon.savage_attacker && !weapon.use_mastery)).unwrap();
+            let input = crate::gameplay::beat_script_tests::input(
+                &current,
+                member,
+                97,
+                "greatsword-attack",
+                vec![(
+                    model::label("tactical-choice").unwrap(),
+                    model::label(&selected.0).unwrap(),
+                )],
+            );
+            let after =
+                super::super::stage_with_supplier(&current, &input, &mut |_| Ok(1)).unwrap();
+            let sheet = super::super::character_sheet(after.state(), who).unwrap();
+            assert!(
+                sheet
+                    .facts
+                    .iter()
+                    .any(|fact| fact.label == "Shortbow" && fact.value == "Held")
+            );
+            assert!(
+                sheet
+                    .facts
+                    .iter()
+                    .any(|fact| fact.label == "Greatsword" && fact.value == "Stowed")
+            );
+        });
+    }
 
     #[test]
     fn savage_attacker_damage_rolls_keep_the_higher_complete_roll() {

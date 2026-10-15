@@ -1,0 +1,771 @@
+[
+  {
+    "id": "presentation",
+    "label": "Gender presentation",
+    "default": "androgynous",
+    "options": [
+      {
+        "id": "androgynous",
+        "label": "Androgynous",
+        "phrase": "androgynous presentation",
+        "aliases": [
+          "androgynous"
+        ]
+      },
+      {
+        "id": "feminine",
+        "label": "Feminine",
+        "phrase": "feminine presentation",
+        "aliases": [
+          "woman",
+          "feminine"
+        ]
+      },
+      {
+        "id": "masculine",
+        "label": "Masculine",
+        "phrase": "masculine presentation",
+        "aliases": [
+          "man",
+          "masculine"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "pronouns",
+    "label": "Pronouns",
+    "default": "they-them",
+    "options": [
+      {
+        "id": "they-them",
+        "label": "They / them",
+        "phrase": "they / them",
+        "aliases": [
+          "they them"
+        ]
+      },
+      {
+        "id": "she-her",
+        "label": "She / her",
+        "phrase": "she / her",
+        "aliases": [
+          "she her"
+        ]
+      },
+      {
+        "id": "he-him",
+        "label": "He / him",
+        "phrase": "he / him",
+        "aliases": [
+          "he him"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "age",
+    "label": "Age",
+    "default": "adult",
+    "options": [
+      {
+        "id": "young-adult",
+        "label": "Young adult",
+        "phrase": "young adult",
+        "aliases": [
+          "young adult"
+        ]
+      },
+      {
+        "id": "adult",
+        "label": "Adult",
+        "phrase": "adult",
+        "aliases": [
+          "adult"
+        ]
+      },
+      {
+        "id": "middle-aged",
+        "label": "Middle aged",
+        "phrase": "middle aged adult",
+        "aliases": [
+          "middle aged"
+        ]
+      },
+      {
+        "id": "elder",
+        "label": "Elder",
+        "phrase": "elder adult",
+        "aliases": [
+          "elder",
+          "elderly",
+          "old woman",
+          "old man"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "build",
+    "label": "Build",
+    "default": "average",
+    "options": [
+      {
+        "id": "average",
+        "label": "Average",
+        "phrase": "average build",
+        "aliases": [
+          "average build"
+        ]
+      },
+      {
+        "id": "wiry",
+        "label": "Wiry",
+        "phrase": "wiry build",
+        "aliases": [
+          "wiry"
+        ]
+      },
+      {
+        "id": "slender",
+        "label": "Slender",
+        "phrase": "slender build",
+        "aliases": [
+          "slender",
+          "slim"
+        ]
+      },
+      {
+        "id": "stocky",
+        "label": "Stocky",
+        "phrase": "stocky build",
+        "aliases": [
+          "stocky"
+        ]
+      },
+      {
+        "id": "broad",
+        "label": "Broad",
+        "phrase": "broad build",
+        "aliases": [
+          "broad"
+        ]
+      },
+      {
+        "id": "muscular",
+        "label": "Muscular",
+        "phrase": "muscular build",
+        "aliases": [
+          "muscular"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "skin",
+    "label": "Skin",
+    "default": "brown",
+    "options": [
+      {
+        "id": "pale",
+        "label": "Pale",
+        "phrase": "pale skin",
+        "aliases": [
+          "pale skin"
+        ]
+      },
+      {
+        "id": "tan",
+        "label": "Tan",
+        "phrase": "tan skin",
+        "aliases": [
+          "tan skin",
+          "tanned"
+        ]
+      },
+      {
+        "id": "olive",
+        "label": "Olive",
+        "phrase": "olive skin",
+        "aliases": [
+          "olive skin"
+        ]
+      },
+      {
+        "id": "brown",
+        "label": "Brown",
+        "phrase": "brown skin",
+        "aliases": [
+          "brown skin"
+        ]
+      },
+      {
+        "id": "deep-brown",
+        "label": "Deep brown",
+        "phrase": "deep brown skin",
+        "aliases": [
+          "deep brown skin"
+        ]
+      },
+      {
+        "id": "grey",
+        "label": "Grey",
+        "phrase": "grey skin",
+        "aliases": [
+          "grey skin",
+          "gray skin"
+        ]
+      },
+      {
+        "id": "green",
+        "label": "Green",
+        "phrase": "green skin",
+        "aliases": [
+          "green skin"
+        ]
+      },
+      {
+        "id": "red",
+        "label": "Red",
+        "phrase": "red skin",
+        "aliases": [
+          "red skin"
+        ]
+      },
+      {
+        "id": "blue",
+        "label": "Blue",
+        "phrase": "blue skin",
+        "aliases": [
+          "blue skin"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "hair",
+    "label": "Hair",
+    "default": "short",
+    "options": [
+      {
+        "id": "short",
+        "label": "Short",
+        "phrase": "short hair",
+        "aliases": [
+          "short hair"
+        ]
+      },
+      {
+        "id": "long",
+        "label": "Long",
+        "phrase": "long hair",
+        "aliases": [
+          "long hair"
+        ]
+      },
+      {
+        "id": "braids",
+        "label": "Braids",
+        "phrase": "braided hair",
+        "aliases": [
+          "braided",
+          "braids"
+        ]
+      },
+      {
+        "id": "curly",
+        "label": "Curly",
+        "phrase": "curly hair",
+        "aliases": [
+          "curly"
+        ]
+      },
+      {
+        "id": "bald",
+        "label": "Bald",
+        "phrase": "bald head",
+        "aliases": [
+          "bald"
+        ]
+      },
+      {
+        "id": "shaved",
+        "label": "Shaved",
+        "phrase": "shaved head",
+        "aliases": [
+          "shaved head"
+        ]
+      },
+      {
+        "id": "short-and-beard",
+        "label": "Short hair and beard",
+        "phrase": "short hair and a beard",
+        "aliases": [
+          "short hair and beard"
+        ]
+      },
+      {
+        "id": "braids-and-beard",
+        "label": "Braids and beard",
+        "phrase": "braided hair and a beard",
+        "aliases": [
+          "braids and beard"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "hair-color",
+    "label": "Hair colour",
+    "default": "brown",
+    "options": [
+      {
+        "id": "black",
+        "label": "Black",
+        "phrase": "black hair",
+        "aliases": [
+          "black hair",
+          "black haired"
+        ]
+      },
+      {
+        "id": "brown",
+        "label": "Brown",
+        "phrase": "brown hair",
+        "aliases": [
+          "brown hair",
+          "brown haired"
+        ]
+      },
+      {
+        "id": "blond",
+        "label": "Blond",
+        "phrase": "blond hair",
+        "aliases": [
+          "blond hair",
+          "blond haired",
+          "blonde"
+        ]
+      },
+      {
+        "id": "red",
+        "label": "Red",
+        "phrase": "red hair",
+        "aliases": [
+          "red hair",
+          "red haired"
+        ]
+      },
+      {
+        "id": "grey",
+        "label": "Grey",
+        "phrase": "grey hair",
+        "aliases": [
+          "grey hair",
+          "grey haired",
+          "gray hair",
+          "gray haired"
+        ]
+      },
+      {
+        "id": "white",
+        "label": "White",
+        "phrase": "white hair",
+        "aliases": [
+          "white hair",
+          "white haired"
+        ]
+      },
+      {
+        "id": "blue",
+        "label": "Blue",
+        "phrase": "blue hair",
+        "aliases": [
+          "blue hair",
+          "blue haired"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "eyes",
+    "label": "Eyes",
+    "default": "brown",
+    "options": [
+      {
+        "id": "brown",
+        "label": "Brown",
+        "phrase": "brown eyes",
+        "aliases": [
+          "brown eyes",
+          "brown eyed"
+        ]
+      },
+      {
+        "id": "blue",
+        "label": "Blue",
+        "phrase": "blue eyes",
+        "aliases": [
+          "blue eyes",
+          "blue eyed"
+        ]
+      },
+      {
+        "id": "green",
+        "label": "Green",
+        "phrase": "green eyes",
+        "aliases": [
+          "green eyes",
+          "green eyed"
+        ]
+      },
+      {
+        "id": "grey",
+        "label": "Grey",
+        "phrase": "grey eyes",
+        "aliases": [
+          "grey eyes",
+          "grey eyed"
+        ]
+      },
+      {
+        "id": "amber",
+        "label": "Amber",
+        "phrase": "amber eyes",
+        "aliases": [
+          "amber eyes"
+        ]
+      },
+      {
+        "id": "hazel",
+        "label": "Hazel",
+        "phrase": "hazel eyes",
+        "aliases": [
+          "hazel eyes"
+        ]
+      },
+      {
+        "id": "black",
+        "label": "Black",
+        "phrase": "black eyes",
+        "aliases": [
+          "black eyes"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "mark",
+    "label": "Distinguishing mark",
+    "default": "none",
+    "options": [
+      {
+        "id": "none",
+        "label": "None",
+        "phrase": "",
+        "aliases": [
+          "no scars"
+        ]
+      },
+      {
+        "id": "burn-scar",
+        "label": "Burn scar",
+        "phrase": "a healed burn scar",
+        "aliases": [
+          "burn scar"
+        ]
+      },
+      {
+        "id": "scar",
+        "label": "Scar",
+        "phrase": "a healed facial scar",
+        "aliases": [
+          "facial scar"
+        ]
+      },
+      {
+        "id": "freckles",
+        "label": "Freckles",
+        "phrase": "freckles",
+        "aliases": [
+          "freckles"
+        ]
+      },
+      {
+        "id": "tattoo",
+        "label": "Tattoo",
+        "phrase": "a small geometric tattoo",
+        "aliases": [
+          "tattoo"
+        ]
+      },
+      {
+        "id": "birthmark",
+        "label": "Birthmark",
+        "phrase": "a visible birthmark",
+        "aliases": [
+          "birthmark"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "attire",
+    "label": "Attire",
+    "default": "travel-clothes",
+    "options": [
+      {
+        "id": "travel-clothes",
+        "label": "Travel clothes",
+        "phrase": "worn woven travel clothes",
+        "aliases": [
+          "travel clothes"
+        ]
+      },
+      {
+        "id": "blue-cloak",
+        "label": "Blue cloak",
+        "phrase": "a blue cloak over travel clothes",
+        "aliases": [
+          "blue cloak"
+        ]
+      },
+      {
+        "id": "red-cloak",
+        "label": "Red cloak",
+        "phrase": "a red cloak over travel clothes",
+        "aliases": [
+          "red cloak"
+        ]
+      },
+      {
+        "id": "green-cloak",
+        "label": "Green cloak",
+        "phrase": "a green cloak over travel clothes",
+        "aliases": [
+          "green cloak"
+        ]
+      },
+      {
+        "id": "dark-cloak",
+        "label": "Dark cloak",
+        "phrase": "a dark cloak over travel clothes",
+        "aliases": [
+          "dark cloak",
+          "black cloak"
+        ]
+      },
+      {
+        "id": "plain-robes",
+        "label": "Plain robes",
+        "phrase": "plain woven robes",
+        "aliases": [
+          "plain robes"
+        ]
+      },
+      {
+        "id": "work-clothes",
+        "label": "Work clothes",
+        "phrase": "patched work clothes",
+        "aliases": [
+          "work clothes"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "origin",
+    "label": "Where are you from?",
+    "default": "highlands",
+    "options": [
+      {
+        "id": "highlands",
+        "label": "The highlands",
+        "phrase": "I grew up in the highlands",
+        "aliases": [
+          "from the highlands",
+          "grew up in the highlands"
+        ]
+      },
+      {
+        "id": "city",
+        "label": "A busy city",
+        "phrase": "I grew up in a busy city",
+        "aliases": [
+          "from a city",
+          "grew up in a city",
+          "grew up in a busy city"
+        ]
+      },
+      {
+        "id": "coast",
+        "label": "The coast",
+        "phrase": "I grew up on the coast",
+        "aliases": [
+          "from the coast",
+          "grew up on the coast"
+        ]
+      },
+      {
+        "id": "forest",
+        "label": "A forest settlement",
+        "phrase": "I grew up in a forest settlement",
+        "aliases": [
+          "from the forest",
+          "grew up in a forest settlement"
+        ]
+      },
+      {
+        "id": "farm",
+        "label": "A farming village",
+        "phrase": "I grew up in a farming village",
+        "aliases": [
+          "from a farming village",
+          "grew up in a farming village"
+        ]
+      },
+      {
+        "id": "road",
+        "label": "A life on the road",
+        "phrase": "I grew up on the road",
+        "aliases": [
+          "grew up on the road"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "occupation",
+    "label": "What did you do?",
+    "default": "guard",
+    "options": [
+      {
+        "id": "guard",
+        "label": "Guard",
+        "phrase": "I worked as a guard",
+        "aliases": [
+          "worked as a guard",
+          "was a guard",
+          "guarded a quarry"
+        ]
+      },
+      {
+        "id": "sailor",
+        "label": "Sailor",
+        "phrase": "I worked as a sailor",
+        "aliases": [
+          "worked as a sailor",
+          "was a sailor"
+        ]
+      },
+      {
+        "id": "scribe",
+        "label": "Scribe",
+        "phrase": "I worked as a scribe",
+        "aliases": [
+          "worked as a scribe",
+          "was a scribe"
+        ]
+      },
+      {
+        "id": "craftsperson",
+        "label": "Craftsperson",
+        "phrase": "I worked as a craftsperson",
+        "aliases": [
+          "worked as a craftsperson",
+          "was a craftsperson"
+        ]
+      },
+      {
+        "id": "acolyte",
+        "label": "Temple helper",
+        "phrase": "I helped at a temple",
+        "aliases": [
+          "helped at a temple",
+          "was a temple helper"
+        ]
+      },
+      {
+        "id": "thief",
+        "label": "Thief",
+        "phrase": "I lived by stealing",
+        "aliases": [
+          "lived by stealing",
+          "was a thief"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "motivation",
+    "label": "What do you want or fear?",
+    "default": "protect-home",
+    "options": [
+      {
+        "id": "protect-home",
+        "label": "Protect my home",
+        "phrase": "I want to protect my home",
+        "aliases": [
+          "want to protect my home",
+          "protect my home"
+        ]
+      },
+      {
+        "id": "find-family",
+        "label": "Find someone I love",
+        "phrase": "I want to find someone I love",
+        "aliases": [
+          "want to find someone i love",
+          "find my sister",
+          "find my brother",
+          "find my family"
+        ]
+      },
+      {
+        "id": "repay-debt",
+        "label": "Repay a debt",
+        "phrase": "I want to repay a debt",
+        "aliases": [
+          "want to repay a debt",
+          "repay my debt"
+        ]
+      },
+      {
+        "id": "clear-name",
+        "label": "Clear my name",
+        "phrase": "I want to clear my name",
+        "aliases": [
+          "want to clear my name",
+          "clear my name"
+        ]
+      },
+      {
+        "id": "uncover-mystery",
+        "label": "Uncover a mystery",
+        "phrase": "I want to uncover a mystery",
+        "aliases": [
+          "want to uncover a mystery",
+          "uncover a mystery"
+        ]
+      },
+      {
+        "id": "fear-fire",
+        "label": "I fear fire",
+        "phrase": "I fear fire",
+        "aliases": [
+          "fear fire",
+          "afraid of fire"
+        ]
+      },
+      {
+        "id": "fear-water",
+        "label": "I fear deep water",
+        "phrase": "I fear deep water",
+        "aliases": [
+          "fear deep water",
+          "afraid of deep water"
+        ]
+      }
+    ]
+  }
+]

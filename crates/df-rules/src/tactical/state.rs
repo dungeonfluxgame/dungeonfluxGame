@@ -1,4 +1,5 @@
 use super::{BattleMap, Cell, RuleError, Weapon};
+use crate::local_journey::{ChallengeRating, HeroSpecies, SpeciesCombatTraits, SpeciesSize};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,6 +41,8 @@ pub struct CombatantSpec {
     pub cell: Cell,
     pub size: Size,
     pub kind: CreatureKind,
+    #[serde(default)]
+    pub species: Option<HeroSpecies>,
     pub abilities: [u8; 6],
     pub armor_class: u16,
     pub hit_points: u16,
@@ -51,6 +54,10 @@ pub struct CombatantSpec {
     pub archery: bool,
     pub savage_attacker: bool,
     pub second_wind_uses: u8,
+    #[serde(default)]
+    pub healers_kit_uses: u8,
+    #[serde(default)]
+    pub relentless_endurance_available: bool,
     /// An equipped shield bars a hero's two-handed attacks; creature attacks follow
     /// their stat blocks.
     pub shield: bool,
@@ -74,8 +81,44 @@ impl CreatureKind {
             Self::Scout => "scout",
         })
     }
+
+    /// SRD 5.2.1 pp. 353, 355: the two creatures have a 30 ft. Climb Speed.
+    /// The current battle grid is flat, so callers must use this only when a
+    /// vertical movement model is admitted.
+    pub fn climb_speed_ft(self) -> Option<u16> {
+        matches!(self, Self::GiantRat | Self::GiantWeasel).then_some(30)
+    }
+
+    /// SRD 5.2.1 pp. 290, 302, 325, 343, 353, 355, 357, 364: these creature
+    /// stat blocks have Darkvision 60 ft.; hero sight is selected by species.
+    pub fn darkvision_ft(self) -> Option<u16> {
+        match self {
+            Self::Hero => None,
+            Self::Goblin
+            | Self::Kobold
+            | Self::Skeleton
+            | Self::Zombie
+            | Self::Wolf
+            | Self::GiantRat
+            | Self::GiantWeasel
+            | Self::Mastiff => Some(60),
+            _ => None,
+        }
+    }
 }
 impl CombatantSpec {
+    pub fn species_traits(&self) -> Option<SpeciesCombatTraits> {
+        self.species.map(HeroSpecies::combat_traits)
+    }
+
+    pub fn darkvision_ft(&self) -> Option<u16> {
+        if self.kind == CreatureKind::Hero {
+            self.species_traits()?.darkvision_ft
+        } else {
+            self.kind.darkvision_ft()
+        }
+    }
+
     /// Source-derived hero attack and damage modifiers for a supported carried weapon.
     pub fn hero_attack_modifiers(
         &self,
@@ -126,16 +169,27 @@ impl CombatantSpec {
         if &checked != character {
             return Err(RuleError::InvalidBuild);
         }
+        let species = checked
+            .choices
+            .iter()
+            .find(|(key, _)| key == "species")
+            .and_then(|(_, value)| HeroSpecies::from_choice(value))
+            .ok_or(RuleError::InvalidBuild)?;
+        let traits = species.combat_traits();
         Ok(Self {
             id,
             side: Side::Heroes,
             cell,
-            size: Size::Medium,
+            size: match traits.size {
+                SpeciesSize::Small => Size::Small,
+                SpeciesSize::Medium => Size::Medium,
+            },
             kind: CreatureKind::Hero,
+            species: Some(species),
             abilities: checked.abilities,
             armor_class: 17,
-            hit_points: 13,
-            speed_ft: 30,
+            hit_points: u16::try_from(checked.hit_points).map_err(|_| RuleError::InvalidBuild)?,
+            speed_ft: traits.speed_ft,
             weapons: vec![
                 Weapon::Greatsword,
                 Weapon::Flail,
@@ -149,6 +203,8 @@ impl CombatantSpec {
             archery: false,
             savage_attacker: true,
             second_wind_uses: 2,
+            healers_kit_uses: 10,
+            relentless_endurance_available: traits.relentless_endurance,
             shield: false,
         })
     }
@@ -252,6 +308,7 @@ impl CombatantSpec {
             cell,
             size,
             kind,
+            species: None,
             abilities: source.rules.abilities,
             armor_class: u16::from(source.rules.armor_class),
             hit_points: u16::from(source.rules.hit_points),
@@ -263,6 +320,8 @@ impl CombatantSpec {
             archery: false,
             savage_attacker: false,
             second_wind_uses: 0,
+            healers_kit_uses: 0,
+            relentless_endurance_available: false,
             shield,
         })
     }
@@ -302,6 +361,14 @@ impl Health {
 pub(crate) struct Effect {
     pub origin: u32,
     pub expires_turn: u32,
+}
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HelpEffect {
+    pub helper: u32,
+    pub helper_turn_count: u32,
+    pub ally: u32,
+    pub target: u32,
 }
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -417,7 +484,21 @@ pub struct Battle {
     pub(crate) active: usize,
     pub(crate) round: u32,
     pub(crate) pending: Option<PendingMove>,
+    pub(crate) helped_attacks: Vec<HelpEffect>,
     pub(crate) needs_death_save: bool,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CreatureExperience {
+    pub combatant: u32,
+    pub challenge_rating: ChallengeRating,
+    pub experience_points: u32,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
+pub struct EncounterExperience {
+    pub creatures: Vec<CreatureExperience>,
+    pub total_xp: u32,
 }
 impl Battle {
     /// Carry admitted canonical resources into a fresh encounter without restoring them.
@@ -441,6 +522,28 @@ impl Battle {
         actor.health.hit_points = hit_points;
         actor.spec.arrows = arrows;
         actor.spec.second_wind_uses = second_wind;
+        Ok(self)
+    }
+    /// Carry remaining Healer's Kit uses and Orc Relentless Endurance into a new encounter.
+    pub fn with_hero_feature_resources(
+        mut self,
+        id: u32,
+        healers_kit_uses: u8,
+        relentless_endurance_available: bool,
+    ) -> Result<Self, RuleError> {
+        let actor = self.actor_mut(id)?;
+        let can_use_relentless_endurance = actor
+            .spec
+            .species
+            .is_some_and(|species| species.combat_traits().relentless_endurance);
+        if actor.spec.kind != CreatureKind::Hero
+            || healers_kit_uses > 10
+            || (relentless_endurance_available && !can_use_relentless_endurance)
+        {
+            return Err(RuleError::InvalidCombatant);
+        }
+        actor.spec.healers_kit_uses = healers_kit_uses;
+        actor.spec.relentless_endurance_available = relentless_endurance_available;
         Ok(self)
     }
     /// Carry the admitted canonical inventory into a fresh hero encounter.
@@ -518,6 +621,45 @@ impl Battle {
             _ => None,
         }
     }
+    /// Award source-derived monster XP only after the heroes have won the encounter.
+    /// SRD 5.2.1 p. 256: XP is awarded "for defeating the monster in combat or otherwise neutralizing it."
+    pub fn experience_award(&self) -> Result<Option<EncounterExperience>, RuleError> {
+        if self.winner() != Some(Side::Heroes) {
+            return Ok(None);
+        }
+        let mut creatures = Vec::new();
+        let mut total_xp = 0_u32;
+        for actor in self
+            .actors
+            .iter()
+            .filter(|actor| actor.side() == Side::Enemies && actor.health.incapacitated())
+        {
+            let id = actor
+                .spec
+                .kind
+                .srd_id()
+                .ok_or(RuleError::UnsupportedCreature)?;
+            let creature = crate::SRD_521_CREATURES
+                .iter()
+                .find(|creature| creature.id == id)
+                .ok_or(RuleError::UnsupportedCreature)?;
+            let experience_points = creature
+                .experience_points()
+                .ok_or(RuleError::UnpricedExperience)?;
+            total_xp = total_xp
+                .checked_add(experience_points)
+                .ok_or(RuleError::Capacity)?;
+            creatures.push(CreatureExperience {
+                combatant: actor.id(),
+                challenge_rating: creature.challenge_rating,
+                experience_points,
+            });
+        }
+        Ok(Some(EncounterExperience {
+            creatures,
+            total_xp,
+        }))
+    }
     pub fn finished(&self) -> bool {
         ![Side::Heroes, Side::Enemies].iter().all(|side| {
             self.actors
@@ -535,6 +677,13 @@ impl Battle {
         self.map
             .cover_between(from, to, &[])
             .is_ok_and(|cover| cover != super::Cover::Total)
+    }
+    pub(crate) fn can_see_actor(&self, observer: &Combatant, target: &Combatant) -> bool {
+        self.can_see(observer.cell(), target.cell())
+            && (self.map.lighting() != super::Lighting::Darkness
+                || observer.spec.darkvision_ft().is_some_and(|range| {
+                    target.cell().distance(observer.cell()) <= u32::from(range)
+                }))
     }
     pub(crate) fn step_cost(
         &self,
@@ -557,6 +706,9 @@ impl Battle {
                 difficult |= other.side() != actor.side();
             }
         }
+        // SRD 5.2.1 p. 14: a dead body no longer occupies creature space; whether
+        // its remains are Difficult Terrain needs a DM ruling. This flat-grid
+        // policy leaves the cell passable (tactical.dead-space-passable).
         // Crawling and difficult terrain each add one extra foot, rather than multiply.
         Ok(5 * (1 + u16::from(difficult) + u16::from(actor.health.prone)))
     }
@@ -728,6 +880,7 @@ fn begin_faces(
             || spec.masteries.len() > 3
             || (spec.shield && spec.armor_class < 3)
             || spec.second_wind_uses > 2
+            || spec.healers_kit_uses > 10
             || spec.arrows > 1000
             || spec.bolts > 1000
             || spec
@@ -767,6 +920,8 @@ fn begin_faces(
             }
         }
     }
+    // SRD 5.2.1 p. 13 leaves Initiative ties to the DM. The deterministic
+    // input order breaks ties here (tactical.initiative-ties-input-order).
     let mut order: Vec<usize> = (0..specs.len()).collect();
     order.sort_by_key(|&i| {
         (
@@ -846,6 +1001,7 @@ fn begin_faces(
         active: 0,
         round: 1,
         pending: None,
+        helped_attacks: Vec::new(),
         needs_death_save: false,
     };
     if let Some(id) = battle.active_actor() {
@@ -868,6 +1024,7 @@ pub fn begin(
     }
     let mut draws = super::resolve::Draws::new(binding, records)?;
     let mut initiatives = Vec::with_capacity(specs.len());
+    let mut rerolls = Vec::new();
     for (index, actor) in specs.iter().enumerate() {
         if actor.kind != CreatureKind::Hero
             && let Some(earlier) = specs
@@ -878,11 +1035,23 @@ pub fn begin(
             initiatives.push(initiatives[earlier]);
             continue;
         }
-        let mut face = draws.take(20)?;
+        let mut face = super::resolve::take_d20(
+            actor,
+            actor.id,
+            super::D20Test::Initiative,
+            &mut draws,
+            &mut rerolls,
+        )?;
         // SRD 5.2.1 p302: a Kobold in sunlight has Disadvantage on ability checks, and
         // Initiative is a Dexterity check. The group makes one roll, with Disadvantage.
         if actor.kind == CreatureKind::Kobold && map.lighting() == super::Lighting::Sunlight {
-            face = face.min(draws.take(20)?);
+            face = face.min(super::resolve::take_d20(
+                actor,
+                actor.id,
+                super::D20Test::Initiative,
+                &mut draws,
+                &mut rerolls,
+            )?);
         }
         initiatives.push(face);
     }
@@ -894,11 +1063,27 @@ pub fn begin(
         moves: vec![],
         death_saves: vec![],
         recoveries: vec![],
+        helps: vec![],
+        stabilizations: vec![],
+        rerolls,
     })
 }
 
 pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleError> {
     if spec.kind == CreatureKind::Hero {
+        let species = spec.species.ok_or(RuleError::InvalidBuild)?;
+        let species_traits = species.combat_traits();
+        let supported_species = matches!(
+            species,
+            HeroSpecies::Dwarf | HeroSpecies::Halfling | HeroSpecies::Orc
+        );
+        let expected_size = match species_traits.size {
+            SpeciesSize::Small => Size::Small,
+            SpeciesSize::Medium => Size::Medium,
+        };
+        let expected_hit_points = 10_i32
+            + crate::local_journey::ability_modifier(spec.abilities[2])
+            + i32::from(species_traits.hit_points_per_level);
         let standard_melee = matches!(
             spec.abilities,
             [17, 13, 15, 10, 12, 8] | [17, 14, 14, 8, 10, 12]
@@ -919,12 +1104,15 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             && spec.weapons == [Weapon::Longbow, Weapon::Scimitar, Weapon::Shortsword]
             && spec.masteries == spec.weapons;
         if spec.side != Side::Heroes
-            || spec.size != Size::Medium
+            || !supported_species
+            || spec.size != expected_size
             || (!standard_melee && !standard_archer)
-            || spec.hit_points != 13
-            || spec.speed_ft != 30
+            || i32::from(spec.hit_points) != expected_hit_points
+            || spec.speed_ft != species_traits.speed_ft
             || !spec.savage_attacker
             || spec.second_wind_uses != 2
+            || spec.healers_kit_uses > 10
+            || (spec.relentless_endurance_available && !species_traits.relentless_endurance)
             || spec.shield
             || spec.bolts != 0
             || spec.arrows != 20
@@ -932,6 +1120,12 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             return Err(RuleError::InvalidBuild);
         }
     } else {
+        if spec.species.is_some()
+            || spec.healers_kit_uses != 0
+            || spec.relentless_endurance_available
+        {
+            return Err(RuleError::InvalidBuild);
+        }
         let source_id = match spec.kind {
             CreatureKind::Bandit => "bandit",
             CreatureKind::Cultist => "cultist",

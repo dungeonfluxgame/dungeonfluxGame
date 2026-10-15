@@ -55,7 +55,10 @@ mod tests {
         let mut directions = Directions::default();
         directions.enter("scene-a");
         directions.set(Target::Plate, "Draw the sword".to_owned(), false);
-        assert_eq!(directions.take(Target::Plate).as_deref(), Some("Draw the sword"));
+        assert_eq!(
+            directions.take(Target::Plate).as_deref(),
+            Some("Draw the sword")
+        );
         assert_eq!(directions.take(Target::Plate), None);
     }
 

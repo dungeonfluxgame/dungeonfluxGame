@@ -331,6 +331,7 @@ fn malformed_original_correlation_and_hidden_spare_capacity_are_bounded() {
     value.character = Some(wire::CharacterSelection {
         name: "Mira".into(),
         choices: Vec::with_capacity(1000),
+        identity: None,
     });
     assert!(matches!(
         ActionDraft::from_uncertain(UncertainOperation::new(key(), value)),

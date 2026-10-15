@@ -45,6 +45,15 @@ pub(super) async fn read(
         (hero, member)
     };
     let checkpoint = state.service.updates.borrow().clone();
+    if let Some(reward) = super::super::pack::with_content(|pack| pack.reward.clone()) {
+        state
+            .notebook
+            .sync_task_reward(
+                reward.gold_per_hero,
+                super::super::journey::rewards::paid(checkpoint.state()),
+            )
+            .map_err(|_| failed("notebook state unavailable"))?;
+    }
     let mut view = super::super::wire::journey_view(
         &checkpoint,
         df_persistence::local_demo_scope::LocalDemoRole::Player,

@@ -23,6 +23,9 @@ mod dialogue_tests;
 mod dev_control;
 mod fight_lines;
 mod health_faces;
+#[cfg(test)]
+mod hero_catalog;
+mod hero_identity;
 mod home_theme;
 #[cfg(test)]
 mod home_theme_tests;
@@ -57,6 +60,8 @@ mod npc_talk_rules;
 mod pack;
 #[cfg(test)]
 mod pack_tests;
+#[path = "gameplay_browser/presentation_ingress.rs"]
+mod presentation_ingress;
 mod public_assets;
 mod qualification;
 #[cfg(test)]
@@ -206,6 +211,15 @@ impl rpc::action_service_server::ActionService for Service {
             .map_err(|_| Status::deadline_exceeded("retain your gameplay operation for lookup"))?
             .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
         Ok(Response::new(outcome))
+    }
+
+    /// Reads a typed description of a hero's looks and story into a proposed identity. Worker C01
+    /// builds the reader (`gameplay/hero_identity.rs`); until it is connected the call says so.
+    async fn preview_hero_identity(
+        &self,
+        request: Request<rpc::PreviewHeroIdentityRequest>,
+    ) -> Result<Response<rpc::PreviewHeroIdentityResponse>, Status> {
+        hero_identity::preview(self, request).await
     }
 }
 type ViewStream = Pin<Box<dyn Stream<Item = Result<rpc::ViewMessage, Status>> + Send>>;
@@ -1621,6 +1635,13 @@ async fn serve_run(
         .max_frame_size(FRAME_BYTES as u32)
         .http2_max_header_list_size(FRAME_BYTES as u32)
         .max_concurrent_streams(CONCURRENT_STREAMS)
+        .add_service(
+            rpc::presentation_telemetry_service_server::PresentationTelemetryServiceServer::new(
+                presentation_ingress::PresentationIngress::new(service.clone()),
+            )
+            .max_decoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
+            .max_encoding_message_size(1024),
+        )
         .add_service(
             rpc::dialogue_service_server::DialogueServiceServer::new(service.clone())
                 .max_decoding_message_size(8192)

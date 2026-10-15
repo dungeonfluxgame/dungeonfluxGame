@@ -192,6 +192,7 @@ pub(super) fn roll_for(
     .map_err(GenerateError::Dossier)?;
     for dossier in &mut dossiers {
         dossier.subject_answers = subject_answers(adventure, dossier)?;
+        store_profile(dossier);
         if let Some(leak) = dossier.leak() {
             return Err(GenerateError::Dossier(DossierError::Leak {
                 npc_id: dossier.npc_id.clone(),
@@ -200,7 +201,142 @@ pub(super) fn roll_for(
             }));
         }
     }
+    // Bystanders use independent per-person streams, so they never change the named cast's
+    // rolls. Their room knowledge is their own; the patron's errand answers are not inherited.
+    for setting in [
+        &adventure.settings.meeting,
+        &adventure.settings.confrontation,
+        &adventure.settings.destination,
+    ] {
+        if let Some(model) = &setting.model {
+            for person in model.people.iter().filter(|person| person.is_background) {
+                let mut local = facts.clone();
+                local.cast = vec![CastMember {
+                    id: format!("bystander:{}", person.id),
+                    name: person.name.clone(),
+                    role: NpcRole::Contact,
+                    role_label: person.role.clone(),
+                    archetype: person.role.clone(),
+                    gender: if person.role.contains("woman") {
+                        Gender::She
+                    } else {
+                        Gender::He
+                    },
+                    group: Group::Person,
+                    mannerism: Some(person.description.clone()),
+                    delivery: None,
+                    voice: None,
+                }];
+                local.authored.clear();
+                for mut dossier in roll_dossiers(
+                    &tables.for_rating(adventure.rating).dossiers,
+                    &local,
+                    adventure.seed,
+                )
+                .map_err(GenerateError::Dossier)?
+                {
+                    dossier.starting_attitude = match person.attitude {
+                        super::scene_model::StartingAttitude::Friendly => {
+                            super::dossier::Attitude::Friendly
+                        }
+                        super::scene_model::StartingAttitude::Indifferent => {
+                            super::dossier::Attitude::Indifferent
+                        }
+                        super::scene_model::StartingAttitude::Hostile => {
+                            super::dossier::Attitude::Hostile
+                        }
+                    };
+                    // Preserve this person's generated biography, but not generic errand
+                    // claims they were never given. Room facts still pass the existing secret
+                    // guard; a lexical collision must not prevent the whole adventure loading.
+                    dossier.knowledge.says_freely.retain(|fact| {
+                        !matches!(
+                            fact.source.as_str(),
+                            "identity_line"
+                                | "authored_line"
+                                | "errand_line"
+                                | "lore_line"
+                                | "rumour_line"
+                                | "hint_line"
+                                | "stand_down_line"
+                                | "world_line"
+                                | "place_line"
+                                | "place_line2"
+                        )
+                    });
+                    let room_knowledge = person
+                        .knowledge
+                        .iter()
+                        .filter(|fact| {
+                            !dossier.knowledge.never_says.iter().any(|secret| {
+                                secret
+                                    .terms
+                                    .iter()
+                                    .any(|term| mentions_term(&fact.statement, term))
+                            })
+                        })
+                        .map(|fact| super::dossier::Knowledge {
+                            topic: super::dossier::Topic::ThePlace,
+                            source: "place_line".to_owned(),
+                            text: fact.statement.clone(),
+                            id: fact.fact_id.clone(),
+                            about: Some(person.id.clone()),
+                        })
+                        .collect::<Vec<_>>();
+                    dossier.knowledge.says_freely.extend(room_knowledge);
+                    dossier.knowledge.says_when_trusted.clear();
+                    dossier.prepared_answers.insert(
+                        super::dossier::Topic::WhoAreYou,
+                        format!("I'm {}, the {}.", person.name, person.role),
+                    );
+                    dossier.prepared_answers.insert(
+                        super::dossier::Topic::WhatAreYouHiding,
+                        "I don't know about that.".to_owned(),
+                    );
+                    store_profile(&mut dossier);
+                    if let Some(leak) = dossier.leak() {
+                        return Err(GenerateError::Dossier(DossierError::Leak {
+                            npc_id: dossier.npc_id,
+                            field: leak.field,
+                            term: leak.term,
+                        }));
+                    }
+                    dossiers.push(dossier);
+                }
+            }
+        }
+    }
     Ok(dossiers)
+}
+
+fn store_profile(dossier: &mut Dossier) {
+    use super::dossier::{Effect, FeelingKind, Forgiveness, GroundedFeeling, Length, Patience};
+    let mut profile = dossier.emotional_profile();
+    for (kind, because, text) in [
+        (FeelingKind::Delight, "want", &dossier.want.text),
+        (FeelingKind::Aversion, "flaw", &dossier.flaw.text),
+    ] {
+        let evidence: String = text.chars().take(120).collect();
+        profile.feelings.push(GroundedFeeling {
+            kind,
+            text: evidence.clone(),
+            because: because.to_owned(),
+            evidence,
+        });
+    }
+    profile.forgiveness = if dossier.temperament.threats.effect == Effect::Cool
+        && dossier.temperament.lies.effect == Effect::Cool
+    {
+        Forgiveness::Unforgiving
+    } else {
+        Forgiveness::Forgiving
+    };
+    profile.patience = match dossier.speech_style.length {
+        Length::Short => Patience::Low,
+        Length::Medium => Patience::Middling,
+        Length::Long => Patience::High,
+    };
+    dossier.emotional_profile = Some(profile);
 }
 
 fn subject_answers(
@@ -457,10 +593,18 @@ mod tests {
                     .unwrap_or(&adventure.facts["stake.short"])
             );
             for dossier in adventure.dossiers {
-                assert_eq!(
-                    dossier.subject_answers[&AnswerSubject::ErrandObject].text,
-                    expected
-                );
+                if dossier.npc_id.starts_with("bystander:") {
+                    assert!(
+                        !dossier
+                            .subject_answers
+                            .contains_key(&AnswerSubject::ErrandObject)
+                    );
+                } else {
+                    assert_eq!(
+                        dossier.subject_answers[&AnswerSubject::ErrandObject].text,
+                        expected
+                    );
+                }
             }
         }
         assert_eq!(

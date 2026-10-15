@@ -214,6 +214,7 @@ fn notebook_reads(key: &str) -> bool {
             | "loc.short"
             | "dest.name"
             | "reward.line"
+            | "reward.gold"
     ) || ["patron.", "contact.", "ant."].iter().any(|prefix| {
         key.strip_prefix(prefix).is_some_and(|rest| {
             matches!(rest, "full" | "first" | "short" | "role" | "the" | "group")
@@ -284,7 +285,7 @@ pub(crate) fn reload(
         );
         return Err(RecordError::Invalid("document size"));
     }
-    let loaded =
+    let mut loaded =
         pack::load_from_bytes(&documents.pack, &documents.tuning).map_err(RecordError::Pack)?;
     let record: AdventureRecord = serde_json::from_slice(&documents.record)
         .map_err(|_| RecordError::Invalid("adventure.json schema"))?;
@@ -423,10 +424,52 @@ pub(crate) fn reload(
     if record.entry("antagonist")? != antagonist
         || record.rules_mode == RulesMode::Standard
             && loaded.departures.iter().any(|departure| {
-                departure != "tactical.cover-centre-line" || loaded.tuning.tactical.is_none()
+                !matches!(
+                    departure.as_str(),
+                    "tactical.cover-centre-line"
+                        | "tactical.cover-representative-height"
+                        | "tactical.initiative-ties-input-order"
+                        | "tactical.dead-space-passable"
+                ) || loaded.tuning.tactical.is_none()
             })
     {
         return Err(RecordError::Invalid("antagonist or standard rules binding"));
+    }
+    // Compact documents keep models once in the validated record. Hydrate only runtime
+    // scenes before checkpoint replay; document bytes and their revision pins stay exact.
+    if let Some(settings) = &record.settings {
+        for setting in [
+            &settings.meeting,
+            &settings.confrontation,
+            &settings.destination,
+        ] {
+            if let Some(model) = &setting.model {
+                model
+                    .validate_structure()
+                    .map_err(|_| RecordError::Invalid("record scene model"))?;
+            }
+        }
+        for scene in loaded.pack.scenes.iter_mut().chain(
+            loaded
+                .pack
+                .beat_script
+                .as_mut()
+                .into_iter()
+                .flat_map(|script| script.scenes.values_mut()),
+        ) {
+            if let Some(setting) = &mut scene.setting
+                && let Some(model) = [
+                    &settings.meeting,
+                    &settings.confrontation,
+                    &settings.destination,
+                ]
+                .into_iter()
+                .find(|source| source.place_id == setting.place_id)
+                .and_then(|source| source.model.as_ref())
+            {
+                setting.model = Some(model.clone());
+            }
+        }
     }
     Ok((loaded, record))
 }
@@ -694,6 +737,31 @@ mod notebook_group_tests {
             !notebook.visible_to(member).iter().any(
                 |entry| entry.kind == Kind::Person && entry.title == "The Barrow-Cold Sentinel"
             )
+        );
+    }
+
+    #[test]
+    fn compacted_fact_sheet_keeps_canonical_reward_gold() {
+        let sheet = FactSheet {
+            scene: Some("opening".to_owned()),
+            beat: String::new(),
+            slot: String::new(),
+            speaker: String::new(),
+            voice: String::new(),
+            delivery: String::new(),
+            facts: BTreeMap::from([("reward.gold".to_owned(), "14".to_owned())]),
+            must_mention: Vec::new(),
+            forbidden: Vec::new(),
+            bounds: 0,
+            baseline: String::new(),
+            tone: String::new(),
+        };
+
+        let compacted = notebook_fact_sheets(&[sheet]);
+
+        assert_eq!(
+            compacted[0].facts.get("reward.gold").map(String::as_str),
+            Some("14")
         );
     }
 }

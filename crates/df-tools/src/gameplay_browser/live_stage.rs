@@ -1500,7 +1500,16 @@ impl Figures {
         };
         let Some(figure) = anchor.and_then(|position| self.figures.get(position)) else {
             if bubble.kind == BubbleKind::Typed {
-                return self.set_typed_line_strip(id, state);
+                let opened = self.set_typed_line_strip(id, state)?;
+                super::presentation_timing::line(
+                    id,
+                    state,
+                    None,
+                    bubble.text.chars().count() as u32,
+                    crate::stage_machines::reading_time_ms(bubble.text),
+                    &self.scene.borrow(),
+                );
+                return Ok(opened);
             }
             return Ok(false);
         };
@@ -1530,6 +1539,14 @@ impl Figures {
             LineState::Done => element.remove(),
             _ => {}
         }
+        super::presentation_timing::line(
+            id,
+            state,
+            anchor,
+            bubble.text.chars().count() as u32,
+            crate::stage_machines::reading_time_ms(bubble.text),
+            &self.scene.borrow(),
+        );
         Ok(opened)
     }
 

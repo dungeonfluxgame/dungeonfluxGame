@@ -160,7 +160,6 @@ struct Row {
     label: Element,
     status: Element,
     actions: Element,
-    send: Element,
     clear: Element,
     cancel: Element,
 }
@@ -182,6 +181,10 @@ pub(super) struct Talk {
 }
 
 impl Talk {
+    pub(super) fn is_busy(&self) -> bool {
+        self.capture.is_busy()
+    }
+
     /// Whether the control is listening for the player's words, which keeps the speech-intent
     /// mark live.
     pub(super) fn is_listening(&self) -> bool {
@@ -331,11 +334,15 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let status = node(&document, &root, "p", "talk-status", "")?;
     status.set_attribute("role", "status")?;
     let actions = node(&document, &root, "div", "talk-actions", "")?;
-    let send_button = button(client, &actions, "Say it", send)?;
-    send_button.set_attribute("data-talk", "send")?;
-    let clear_button = button(client, &actions, "Clear", clear)?;
+    let clear_button = node(&document, &actions, "button", "", "Clear")?;
+    clear_button.set_attribute("type", "button")?;
+    listen(client, clear_button.as_ref(), "click", |client, _| {
+        clear(client)
+    })?;
     clear_button.set_attribute("data-talk", "clear")?;
-    let cancel_button = button(client, &actions, "Cancel", |client| {
+    let cancel_button = node(&document, &actions, "button", "", "Cancel")?;
+    cancel_button.set_attribute("type", "button")?;
+    listen(client, cancel_button.as_ref(), "click", |client, _| {
         interrupt(&client, Interruption::Cancelled)
     })?;
     cancel_button.set_attribute("data-talk", "cancel")?;
@@ -345,7 +352,6 @@ fn build(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         label,
         status,
         actions,
-        send: send_button,
         clear: clear_button,
         cancel: cancel_button,
     });
@@ -1097,7 +1103,6 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 row.label.clone(),
                 row.status.clone(),
                 row.actions.clone(),
-                row.send.clone(),
                 row.clear.clone(),
                 row.cancel.clone(),
             ),
@@ -1107,7 +1112,7 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             talk.capture.elapsed_seconds(now()),
         )
     };
-    let (root, hold, label, status_line, actions, send_button, clear_button, cancel_button) = row;
+    let (root, hold, label, status_line, actions, clear_button, cancel_button) = row;
     let name = match phase {
         Phase::Idle => "idle",
         Phase::Requesting(_) => "requesting",
@@ -1116,6 +1121,15 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         Phase::Review => "review",
     };
     root.set_attribute("data-state", name)?;
+    if let Some(panel) = root.closest(".dialogue-recovery")?
+        && let Some(send) = panel.query_selector("[data-dialogue=submit]")?
+    {
+        if dialogue_recovery::submit_disabled(&client.borrow()) {
+            send.set_attribute("disabled", "")?;
+        } else {
+            send.remove_attribute("disabled")?;
+        }
+    }
     label.set_text_content(Some(&match phase {
         Phase::Requesting(_) => "Starting…".to_owned(),
         Phase::Recording { .. } => {
@@ -1147,11 +1161,7 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     }));
     let review = phase == Phase::Review;
     let listening = phase == Phase::Listening;
-    for (button, visible) in [
-        (&send_button, review),
-        (&clear_button, review),
-        (&cancel_button, listening),
-    ] {
+    for (button, visible) in [(&clear_button, review), (&cancel_button, listening)] {
         if visible {
             button.remove_attribute("hidden")?;
         } else {
@@ -1167,7 +1177,14 @@ fn refresh(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
 }
 
 /// Sends the draft exactly as if it had been typed.
-fn send(client: Rc<RefCell<Client>>) {
+pub(super) fn send(client: Rc<RefCell<Client>>) {
+    if client.borrow().dialogue.talk.capture.is_busy() {
+        feedback(
+            &client.borrow(),
+            "Finish recording and review the words before sending.",
+        );
+        return;
+    }
     if !ensure_current_scope(&client) {
         return;
     }
@@ -1180,6 +1197,12 @@ fn clear(client: Rc<RefCell<Client>>) {
     let editor = client.borrow().dialogue.editor().cloned();
     if let Some(editor) = editor {
         editor.set_value("");
+        if dialogue_recovery::update_typed_draft(&editor).is_err() {
+            status(
+                &client.borrow(),
+                "Your draft controls could not be updated.",
+            );
+        }
     }
     client.borrow_mut().dialogue.talk.capture.settle_draft();
     client.borrow_mut().dialogue.talk.transcript_revision = None;
@@ -1189,6 +1212,82 @@ fn clear(client: Rc<RefCell<Client>>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_shared_send_does_not_submit_an_old_draft_while_speech_is_being_captured() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let client = new_client(&document, root.clone(), "player").unwrap();
+        let editor = node(&document, &root, "textarea", "dialogue-draft", "")
+            .unwrap()
+            .dyn_into::<web_sys::HtmlTextAreaElement>()
+            .unwrap();
+        editor.set_value("An earlier draft");
+        client.borrow_mut().dialogue.set_test_editor(editor.clone());
+        {
+            let mut state = client.borrow_mut();
+            state.dialogue.talk.capture.press_down();
+            assert_eq!(
+                state.dialogue.talk.capture.release(
+                    Duration::ZERO,
+                    true,
+                    Environment {
+                        secure_context: true,
+                        can_record: true
+                    },
+                ),
+                Some(Command::OpenMicrophone)
+            );
+        }
+        send(client.clone());
+        assert_eq!(editor.value(), "An earlier draft");
+        assert!(!client.borrow().busy);
+        assert!(
+            root.query_selector(".feedback")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .unwrap()
+                .contains("Finish recording")
+        );
+    }
+
+    #[test]
+    fn speech_review_has_one_send_action_and_clear_survives_a_page_redraw() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let panel = node(&document, &root, "section", "dialogue-recovery", "").unwrap();
+        let client = new_client(&document, root, "player").unwrap();
+        let editor = node(&document, &panel, "textarea", "dialogue-draft", "")
+            .unwrap()
+            .dyn_into::<web_sys::HtmlTextAreaElement>()
+            .unwrap();
+        client.borrow_mut().dialogue.set_test_editor(editor.clone());
+        client.borrow_mut().dialogue.talk.availability = Availability::Available;
+        mount(&client, &panel).unwrap();
+        node(&document, &panel, "button", "", "Say it").unwrap();
+        let buttons = panel.query_selector_all("button").unwrap();
+        let sends = (0..buttons.length())
+            .filter(|index| {
+                buttons.item(*index).unwrap().text_content().as_deref() == Some("Say it")
+            })
+            .count();
+        assert_eq!(sends, 1);
+        editor.set_value("Words to clear");
+        panel.set_attribute("data-typed", "").unwrap();
+        clear_callbacks(&mut client.borrow_mut());
+        mount(&client, &panel).unwrap();
+        panel
+            .query_selector("[data-talk=clear]")
+            .unwrap()
+            .unwrap()
+            .dispatch_event(&web_sys::Event::new("click").unwrap())
+            .unwrap();
+        assert_eq!(editor.value(), "");
+        assert!(!panel.has_attribute("data-typed"));
+    }
+
     use super::scope_matches;
     #[cfg(target_arch = "wasm32")]
     use super::{CancelRequest, UploadIdentity};

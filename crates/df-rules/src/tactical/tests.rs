@@ -86,6 +86,7 @@ fn melee(id: u32, cell: Cell) -> CombatantSpec {
         cell,
         size: Size::Medium,
         kind: CreatureKind::Hero,
+        species: Some(crate::local_journey::HeroSpecies::Dwarf),
         abilities: [17, 13, 15, 10, 12, 8],
         armor_class: 17,
         hit_points: 13,
@@ -103,6 +104,8 @@ fn melee(id: u32, cell: Cell) -> CombatantSpec {
         archery: false,
         savage_attacker: true,
         second_wind_uses: 2,
+        healers_kit_uses: 10,
+        relentless_endurance_available: false,
         shield: false,
     }
 }
@@ -333,6 +336,23 @@ fn movement_diagonals_difficult_allies_hostiles_split_move_and_shortest_path() {
         1,
         Action::Move(vec![Cell(2, 1)]),
         RuleError::Occupied,
+    );
+}
+#[test]
+fn srd_521_p14_dead_creature_space_uses_disclosed_passable_policy() {
+    // SRD 5.2.1 p. 14 does not say whether a dead creature still occupies a space.
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wolf", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "wolf", Cell(10, 1), 0).unwrap(),
+    ]);
+    state.actor_mut(3).unwrap().health.dead = true;
+    state.actor_mut(3).unwrap().health.unconscious = true;
+    state.actor_mut(3).unwrap().health.hit_points = 0;
+    assert_eq!(state.validate_path(1, &[Cell(2, 1)]), Ok(5));
+    assert_eq!(
+        state.shortest_path(1, Cell(2, 1), None),
+        Ok(vec![Cell(2, 1)])
     );
 }
 #[test]
@@ -619,7 +639,7 @@ fn a_prone_creature_gives_no_cover_to_same_size_or_larger_targets_srd_p15() {
     ]);
     rat_target.actor_mut(2).unwrap().health.prone = true;
     rat_target.actor_mut(2).unwrap().health.unconscious = true;
-    assert_eq!(rat_target.attack_cover(1, 3), Ok(Cover::Half));
+    assert_eq!(rat_target.attack_cover(1, 3), Ok(Cover::None));
 
     let small_body = CombatantSpec::creature(2, "giant-rat", Cell(5, 1), 0).unwrap();
     let mut larger_target = battle(vec![
@@ -1192,6 +1212,27 @@ fn full_creature_catalog_preserves_actions_and_required_riders() {
 }
 
 #[test]
+fn creature_senses_and_climb_speeds_match_srd_521_catalog() {
+    // SRD 5.2.1 pp. 290, 302, 325, 343, 353, 355, 357, 364.
+    for kind in [
+        CreatureKind::Goblin,
+        CreatureKind::Kobold,
+        CreatureKind::Skeleton,
+        CreatureKind::Zombie,
+        CreatureKind::Wolf,
+        CreatureKind::GiantRat,
+        CreatureKind::GiantWeasel,
+        CreatureKind::Mastiff,
+    ] {
+        assert_eq!(kind.darkvision_ft(), Some(60));
+    }
+    assert_eq!(melee(1, Cell(1, 1)).darkvision_ft(), Some(120));
+    assert_eq!(CreatureKind::GiantRat.climb_speed_ft(), Some(30));
+    assert_eq!(CreatureKind::GiantWeasel.climb_speed_ft(), Some(30));
+    assert_eq!(CreatureKind::Wolf.climb_speed_ft(), None);
+}
+
+#[test]
 fn a_wolf_bite_does_not_knock_a_large_target_prone() {
     // SRD 5.2.1 p. 364: the Prone rider applies only to Medium or smaller targets.
     let mut state = battle(vec![
@@ -1323,6 +1364,24 @@ fn initiative_group_draws_ties_and_invalid_size_or_stats_are_explicit() {
         ),
         Err(RuleError::InvalidCombatant)
     );
+}
+#[test]
+fn srd_521_p13_initiative_tie_uses_disclosed_input_order_even_with_enemy_first() {
+    // SRD 5.2.1 p. 13 leaves ties to the DM; this server discloses input order.
+    let src = source();
+    let specs = vec![
+        CombatantSpec::creature(3, "wolf", Cell(10, 1), 0).unwrap(),
+        melee(1, Cell(1, 1)),
+    ];
+    // The Wolf's +2 and Hero's +1 make these equal Initiative totals.
+    let result = begin(
+        map("open-court"),
+        specs,
+        binding(&src),
+        &records(&src, &[(20, 9), (20, 10)]),
+    )
+    .unwrap();
+    assert_eq!(result.battle.initiative_order(), &[3, 1]);
 }
 #[test]
 fn archer_standard_array_background_creation_data_and_derived_sheet_match() {
@@ -1688,7 +1747,7 @@ fn tactical_snapshot_refuses_incompatible_source_map_order_health_and_overlappin
     for field in ["version", "source", "order", "health", "cell"] {
         let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         match field {
-            "version" => json["version"] = 2.into(),
+            "version" => json["version"] = 1.into(),
             "source" => json["source"] = "unadmitted".into(),
             "order" => json["order"] = serde_json::json!([1, 1]),
             "health" => json["actors"][0]["health"]["hit_points"] = 99.into(),
@@ -1829,6 +1888,205 @@ fn a_move_reports_the_squares_entered_and_their_cost_and_a_paused_move_reports_o
 }
 
 #[test]
+fn help_can_stabilize_with_medicine_or_consume_one_healers_kit_use() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        melee(2, Cell(1, 2)),
+        CombatantSpec::creature(3, "giant-weasel", Cell(7, 1), 0).unwrap(),
+    ]);
+    let target = state.actor_mut(2).unwrap();
+    target.health.hit_points = 0;
+    target.health.unconscious = true;
+    target.health.prone = true;
+
+    let medicine = step(
+        &state,
+        1,
+        Action::Help {
+            purpose: HelpPurpose::Stabilize { target: 2 },
+        },
+        &[(20, 9)],
+    );
+    assert_eq!(
+        medicine.stabilizations,
+        vec![StabilizationSummary {
+            helper: 1,
+            target: 2,
+            outcome: StabilizationOutcome::Medicine {
+                die: 9,
+                modifier: 1,
+                total: 10,
+                success: true,
+            },
+        }]
+    );
+    let health = medicine.battle.actor(2).unwrap().health();
+    assert_eq!(health.hit_points, 0);
+    assert!(health.unconscious && health.stable);
+    assert!(medicine.battle.actor(1).unwrap().budget().action_used);
+
+    let mut failed = state.clone();
+    failed.actor_mut(2).unwrap().health.death_failures = 1;
+    let medicine = step(
+        &failed,
+        1,
+        Action::Help {
+            purpose: HelpPurpose::Stabilize { target: 2 },
+        },
+        &[(20, 8)],
+    );
+    assert!(!medicine.battle.actor(2).unwrap().health().stable);
+    assert_eq!(medicine.battle.actor(2).unwrap().health().death_failures, 1);
+    assert!(medicine.battle.actor(1).unwrap().budget().action_used);
+
+    let kit = step(&state, 1, Action::UtilizeHealersKit { target: 2 }, &[]);
+    assert_eq!(kit.draws, []);
+    assert_eq!(
+        kit.stabilizations[0].outcome,
+        StabilizationOutcome::HealersKit { uses_remaining: 9 }
+    );
+    assert!(kit.battle.actor(2).unwrap().health().stable);
+    assert_eq!(kit.battle.actor(1).unwrap().spec().healers_kit_uses, 9);
+    let mut empty_kit = state;
+    empty_kit.actor_mut(1).unwrap().spec.healers_kit_uses = 0;
+    rejects(
+        &empty_kit,
+        1,
+        Action::UtilizeHealersKit { target: 2 },
+        RuleError::HealersKitMissing,
+    );
+}
+
+#[test]
+fn help_gives_one_ally_advantage_on_the_target_before_the_helpers_next_turn() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)),
+        melee(2, Cell(1, 2)),
+        CombatantSpec::creature(3, "giant-weasel", Cell(2, 1), 0).unwrap(),
+    ]);
+    let helped = step(
+        &state,
+        1,
+        Action::Help {
+            purpose: HelpPurpose::Attack { ally: 2, target: 3 },
+        },
+        &[],
+    );
+    let restored = Battle::from_snapshot(
+        helped.battle.map().clone(),
+        &helped.battle.snapshot().unwrap(),
+    )
+    .unwrap();
+    let ally_turn = step(&restored, 1, Action::EndTurn, &[]).battle;
+    let attack = step(
+        &ally_turn,
+        2,
+        strike(3, Weapon::Greatsword, false),
+        &[(20, 5), (20, 15), (6, 1), (6, 1)],
+    );
+    assert!(attack.attacks[0].advantage.contains(&AttackReason::Help));
+    assert_eq!(attack.attacks[0].roll_mode, 1);
+    assert_eq!(attack.attacks[0].selected, 15);
+
+    let next_helper_turn = next_turn(attack.battle, 1);
+    let (advantage, _) = next_helper_turn
+        .attack_reasons(2, 3, usage(Weapon::Greatsword, false))
+        .unwrap();
+    assert!(!advantage.contains(&AttackReason::Help));
+}
+
+#[test]
+fn a_won_encounter_reports_srd_challenge_rating_xp_and_its_total() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "giant-weasel", Cell(7, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "giant-weasel", Cell(8, 1), 0).unwrap(),
+        CombatantSpec::creature(5, "giant-weasel", Cell(9, 1), 0).unwrap(),
+    ]);
+    for id in [3, 4, 5] {
+        let enemy = state.actor_mut(id).unwrap();
+        enemy.health.hit_points = 0;
+        enemy.health.unconscious = true;
+        enemy.health.dead = true;
+    }
+
+    assert_eq!(state.winner(), Some(Side::Heroes));
+    let award = state.experience_award().unwrap().unwrap();
+    assert_eq!(award.total_xp, 75);
+    assert_eq!(award.creatures.len(), 3);
+    assert!(award.creatures.iter().all(|creature| {
+        creature.challenge_rating == ChallengeRating::Eighth && creature.experience_points == 25
+    }));
+
+    let mut defeat = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "giant-weasel", Cell(2, 1), 0).unwrap(),
+    ]);
+    let hero = defeat.actor_mut(1).unwrap();
+    hero.health.hit_points = 0;
+    hero.health.dead = true;
+    hero.health.unconscious = true;
+    assert_eq!(defeat.experience_award(), Ok(None));
+}
+
+#[test]
+fn halfling_luck_rerolls_a_natural_one_on_an_attack_and_uses_the_new_face() {
+    let mut halfling = melee(1, Cell(1, 1));
+    halfling.species = Some(crate::local_journey::HeroSpecies::Halfling);
+    halfling.size = Size::Small;
+    halfling.hit_points = 12;
+    let state = battle(vec![
+        halfling,
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+
+    let resolved = step(
+        &state,
+        1,
+        strike(3, Weapon::Greatsword, false),
+        &[(20, 1), (20, 15), (6, 2), (6, 3)],
+    );
+
+    assert_eq!(resolved.attacks[0].faces, vec![15]);
+    assert_eq!(resolved.attacks[0].selected, 15);
+    assert_eq!(
+        resolved.rerolls,
+        vec![D20Reroll {
+            actor: 1,
+            test: D20Test::Attack,
+            original: 1,
+            replacement: 15,
+        }]
+    );
+}
+
+#[test]
+fn orc_relentless_endurance_prevents_nonlethal_damage_from_reducing_hp_to_zero() {
+    let mut orc = melee(1, Cell(1, 1));
+    orc.species = Some(crate::local_journey::HeroSpecies::Orc);
+    orc.hit_points = 12;
+    orc.relentless_endurance_available = true;
+    let mut state = battle(vec![
+        orc,
+        CombatantSpec::creature(3, "giant-weasel", Cell(2, 1), 0).unwrap(),
+    ]);
+    state.actor_mut(1).unwrap().health.hit_points = 1;
+    let state = next_turn(state, 3);
+
+    let resolved = step(
+        &state,
+        3,
+        strike(1, Weapon::Bite, false),
+        &[(20, 15), (4, 4)],
+    );
+
+    let orc = resolved.battle.actor(1).unwrap();
+    assert_eq!(orc.health().hit_points, 1);
+    assert!(!orc.health().unconscious && !orc.health().dead);
+    assert!(!orc.spec().relentless_endurance_available);
+}
+
+#[test]
 fn kobold_sunlight_sensitivity_cancels_pack_tactics_and_its_initiative_has_disadvantage() {
     let src = source();
     let sunlit = map("open-court").with_lighting(Lighting::Sunlight);
@@ -1887,6 +2145,50 @@ fn kobold_sunlight_sensitivity_cancels_pack_tactics_and_its_initiative_has_disad
     );
     assert_eq!(rolled.attacks[0].roll_mode, 1);
     assert_eq!(rolled.attacks[0].selected, 15);
+}
+
+#[test]
+fn darkness_uses_observer_darkvision_for_unseen_attack_reasons() {
+    let dark = map("open-court").with_lighting(Lighting::Darkness);
+    let state = battle_with_map(
+        dark,
+        vec![
+            melee(1, Cell(3, 3)),
+            CombatantSpec::creature(10, "bandit", Cell(4, 3), 0).unwrap(),
+        ],
+    );
+
+    // A bandit has no darkvision, so its attack at a visible distance is still
+    // against an unseen target in Darkness (SRD 5.2.1 p16).
+    let mut bandit_weapon = usage(Weapon::Scimitar, false);
+    bandit_weapon.use_mastery = false;
+    let (_, disadvantage) = state.attack_reasons(10, 1, bandit_weapon).unwrap();
+    assert!(disadvantage.contains(&AttackReason::UnseenTarget));
+
+    // The Dwarf hero's 120-foot darkvision makes the same distance visible.
+    let (advantage, disadvantage) = state
+        .attack_reasons(1, 10, usage(Weapon::Greatsword, false))
+        .unwrap();
+    assert!(advantage.contains(&AttackReason::UnseenAttacker));
+    assert!(!disadvantage.contains(&AttackReason::UnseenTarget));
+
+    let long_map = BattleMap::from_json(
+        br#"{"schema":2,"grid":{"cols":26,"rows":1,"blocked":[]},"layouts":[{"id":"long-dark","obstacles":[],"difficult":[],"spawns":{"heroes":[[0,0]],"enemies":[[25,0]]}}]}"#,
+        "long-dark",
+    )
+    .unwrap()
+    .with_lighting(Lighting::Darkness);
+    let long_state = battle_with_map(
+        long_map,
+        vec![
+            archer(1, Cell(0, 0)),
+            CombatantSpec::creature(10, "bandit", Cell(25, 0), 0).unwrap(),
+        ],
+    );
+    let (_, disadvantage) = long_state
+        .attack_reasons(1, 10, usage(Weapon::Longbow, true))
+        .unwrap();
+    assert!(disadvantage.contains(&AttackReason::UnseenTarget));
 }
 
 #[test]

@@ -70,6 +70,13 @@ fn dossier() -> Dossier {
     // The generator's temperaments move between releases; the tests pin the one they need.
     dossier.temperament.flirting.effect = Effect::Warm;
     dossier
+        .emotional_profile
+        .as_mut()
+        .unwrap()
+        .legacy_reactions
+        .flirting
+        .effect = Effect::Warm;
+    dossier
 }
 
 fn facts(dossier: &Dossier) -> SceneFacts {

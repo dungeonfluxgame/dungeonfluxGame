@@ -28,8 +28,8 @@ use super::{
     npc_dossier::{self, Clue, Inputs, Turn, Withheld, released_terms},
     pack::{Age, PackFile, SceneKey, SpeakerProfile},
     social::{
-        Appraisal, Approach, EmotionLevel, EmotionReaction, InfluenceWillingness, Shift,
-        SocialLedger, shift_line,
+        Approach, EmotionLevel, EmotionReaction, InfluenceWillingness, Shift, SocialLedger,
+        shift_line,
     },
     speech_text::{coverage, sentences},
     startup_configuration::content_rating,
@@ -39,6 +39,9 @@ use super::{
     },
     table_log::TableLog,
 };
+
+#[path = "npc_room.rs"]
+mod room;
 
 /// Longest in-character reply, in characters.
 pub(super) const REPLY_CHARACTERS: usize = 220;
@@ -67,6 +70,7 @@ pub(super) struct StoryFacts {
     speakers: Vec<SpeakerProfile>,
     /// Each scene's spoken line, with the scene's place in the story and its name.
     scene_lines: Vec<(usize, String, String)>,
+    scenes: Vec<super::pack::Scene>,
 }
 
 impl StoryFacts {
@@ -76,6 +80,7 @@ impl StoryFacts {
             secret_terms: pack.secret_terms.clone(),
             public_names: spoken_names(pack),
             speakers: pack.speakers.clone(),
+            scenes: pack.scenes.clone(),
             scene_lines: pack
                 .scenes
                 .iter()
@@ -192,6 +197,7 @@ pub(super) struct NpcReplyContext {
     known_names: Vec<String>,
     /// The public appearance facts the hero's own sheet lets another character perceive.
     hero_visible: Value,
+    room: Option<super::adventure::scene_model::SceneNow>,
     /// Set when the addressed NPC has a backstory: the reply then draws on it and moves the
     /// NPC's attitude toward this hero.
     pub(super) turn: Option<Box<Turn>>,
@@ -255,7 +261,8 @@ fn addressee<'a>(
     let named: Vec<(&rpc::SceneActor, &Dossier)> = present
         .iter()
         .filter(|(actor, dossier)| {
-            mentions_term(words, &dossier.name) || mentions_term(words, &actor.name)
+            room::addresses(words, &actor.name)
+                && (mentions_term(words, &dossier.name) || mentions_term(words, &actor.name))
         })
         .copied()
         .collect();
@@ -307,15 +314,84 @@ impl NpcReplyContext {
             return None;
         }
         let scene = player.scene.as_ref()?;
+        let room = social.scene_now(scene_key).or_else(|| {
+            story
+                .scenes
+                .iter()
+                .find(|scene| format!("{:?}", scene.key) == scene_key)
+                .and_then(|scene| {
+                    scene.setting.as_ref()?.model.as_ref().map(|model| {
+                        super::adventure::scene_model::SceneNow {
+                            model: model.for_scene(scene.key),
+                            changes: Vec::new(),
+                        }
+                    })
+                })
+        });
+        let background: Vec<rpc::SceneActor> = room
+            .as_ref()
+            .map(|room| {
+                room.model
+                    .people
+                    .iter()
+                    .filter(|person| person.is_background)
+                    .map(|person| rpc::SceneActor {
+                        id: person.id.clone(),
+                        name: person.name.clone(),
+                        role: rpc::SceneRole::Bystander as i32,
+                        ..Default::default()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let present: Vec<(&rpc::SceneActor, &Dossier)> = scene
             .cast
             .iter()
+            .chain(&background)
             .filter_map(|actor| {
                 let role = rpc::SceneRole::try_from(actor.role).ok()?;
                 Some((actor, social.dossier_of(role, &actor.id)?))
             })
             .collect();
-        let (actor, dossier) = addressee(&present, &words)?;
+        let lowered = words.to_lowercase();
+        let explicitly_named = present
+            .iter()
+            .find(|(actor, dossier)| {
+                actor.role != rpc::SceneRole::Bystander as i32
+                    && [&actor.name, &dossier.name].iter().any(|name| {
+                        let name = name.to_lowercase();
+                        [
+                            format!("{name},"),
+                            format!("{name}:"),
+                            format!("i ask {name} "),
+                            format!("i talk to {name} "),
+                            format!("i walk over to {name} "),
+                        ]
+                        .iter()
+                        .any(|prefix| lowered.starts_with(prefix))
+                    })
+            })
+            .copied();
+        let addressed = room
+            .as_ref()
+            .and_then(|room| room.model.resolve_target(&words))
+            .filter(|target| target.kind == super::adventure::scene_model::SceneTargetKind::Person)
+            .filter(|target| room::addresses(&words, &target.name))
+            .and_then(|target| {
+                present
+                    .iter()
+                    .find(|(actor, dossier)| {
+                        target.ids.iter().any(|id| {
+                            actor.id == *id
+                                || dossier.npc_id.starts_with(&format!("{id}:"))
+                                || dossier.npc_id.ends_with(&format!(":{id}"))
+                        })
+                    })
+                    .copied()
+            });
+        let (actor, dossier) = explicitly_named
+            .or(addressed)
+            .or_else(|| addressee(&present, &words))?;
         let choices: Vec<&str> = player
             .offers
             .iter()
@@ -402,6 +478,10 @@ impl NpcReplyContext {
         };
         let (mut facts, offered, said_lines) =
             npc_dossier::facts_with_scene(&inputs, &player.narration, &present);
+        if let Some(room) = &room {
+            facts["now"]["room"] = room::facts(room, dossier, &withheld);
+        }
+        facts["hero_visible"] = visible_hero(hero);
         let answer_offered = ["answer_from", "you_told_this_hero_in_private"]
             .iter()
             .any(|key| match &facts[*key] {
@@ -445,6 +525,7 @@ impl NpcReplyContext {
             public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
             hero_visible: visible_hero(hero),
+            room,
             turn: Some(Box::new(Turn {
                 ledger: social.clone(),
                 dossier: dossier.clone(),
@@ -549,6 +630,7 @@ impl NpcReplyContext {
             known_names: scene_names(journey, player.scene.as_ref()),
             hero_visible: visible_hero(hero),
             turn: None,
+            room: None,
         })
     }
 
@@ -592,7 +674,27 @@ fn visible_hero(hero: &rpc::CharacterSheet) -> Value {
         })
         .map(|fact| format!("{}: {}", fact.label, fact.value))
         .collect();
-    json!(visible)
+    let identity = hero.identity.as_ref();
+    let appearance = identity.and_then(|identity| identity.appearance.as_ref());
+    let pronouns = appearance.and_then(|appearance| match appearance.pronouns.as_str() {
+        "she-her" => Some(json!({"subject": "she", "object": "her", "possessive": "her", "possessive_pronoun": "hers"})),
+        "he-him" => Some(json!({"subject": "he", "object": "him", "possessive": "his", "possessive_pronoun": "his"})),
+        "they-them" => Some(json!({"subject": "they", "object": "them", "possessive": "their", "possessive_pronoun": "theirs"})),
+        _ => None,
+    });
+    json!({
+        "visible_facts": visible, "pronouns": pronouns,
+        "appearance": appearance.map(|appearance| json!({
+            "presentation": appearance.presentation, "age": appearance.age, "build": appearance.build,
+            "skin": appearance.skin, "hair": appearance.hair, "hair_color": appearance.hair_color,
+            "eyes": appearance.eyes, "mark": appearance.mark, "attire": appearance.attire,
+        })),
+        "hero_account": identity.map(|identity| json!({
+            "origin": identity.origin, "occupation": identity.occupation, "motivation": identity.motivation,
+            "backstory": identity.backstory, "facts": identity.facts,
+            "verified_world_truth": false, "grants_mechanics": false,
+        })),
+    })
 }
 
 /// The names a scene shows: its heroes, cast, speaker and the capitalised words of its title.
@@ -794,6 +896,29 @@ pub(super) struct NpcVoice {
 }
 
 impl NpcVoice {
+    pub(super) fn hero_identity_models(&self) -> (&Storyteller, &ApproachModel) {
+        (self.storyteller.as_ref(), &self.approach_model)
+    }
+
+    pub(super) async fn resolve_investigation_target(
+        &self,
+        words: &str,
+        options: &[super::investigation::Target],
+    ) -> super::investigation::Target {
+        self.approach_model
+            .resolve_investigation_target(words, options)
+            .await
+    }
+
+    /// Public narration always uses the listener-safe view. Private findings are rendered
+    /// separately by the granting owner, never passed to the public table log.
+    pub(super) async fn describe_observation(
+        &self,
+        observation: &super::investigation::Observation,
+    ) -> String {
+        super::investigation::describe(&self.storyteller, &observation.public_view()).await
+    }
+
     pub(super) fn new(storyteller: Arc<Storyteller>) -> Self {
         Self {
             storyteller,
@@ -908,10 +1033,11 @@ impl NpcVoice {
             return None;
         }
         let dossier = &context.turn.as_ref()?.dossier;
+        let question_body = room::question_body(&context);
         let reading = self
             .approach_model
             .classify_for_dossier(
-                &context.typed_words,
+                &question_body,
                 &context.speaker,
                 &context.public_scene,
                 dossier,
@@ -925,14 +1051,15 @@ impl NpcVoice {
         context.facts["player"]["approach"] = json!(approach.label());
         context.facts["player"]["subject"] = json!(reading.subject.label());
         let mut appraised_reaction = None;
+        let mut reaction_note = None;
         let mut influence_willingness = None;
         if let Some(turn) = context.turn.as_mut() {
             let similar_asks = if approach == Approach::Question {
-                turn.ledger.note_subject(
+                turn.ledger.note_question(
                     context.member,
                     &turn.dossier,
                     &turn.scene,
-                    reading.subject,
+                    &question_body,
                 )
             } else {
                 0
@@ -940,6 +1067,10 @@ impl NpcVoice {
             let current = turn
                 .ledger
                 .emotional_state(context.member, &turn.dossier, &turn.scene);
+            let visible_moment = json!({
+                "hero": {"name": context.hero_name, "appearance": context.hero_visible},
+                "current_room": context.facts["now"]["room"],
+            });
             let appraisal = self
                 .approach_model
                 .appraise(
@@ -949,35 +1080,40 @@ impl NpcVoice {
                     approach,
                     reading.subject,
                     &context.typed_words,
-                    &context.hero_visible,
+                    &visible_moment,
                     similar_asks,
                 )
                 .await;
             let (appraisal, source) = match appraisal {
                 Some(appraisal) => (Some(appraisal), "jev"),
-                None if approach != Approach::Intimidation => {
-                    let effect = super::social::effect_of(&turn.dossier, approach);
-                    let reaction = match effect {
-                        super::adventure::dossier::Effect::Warm => EmotionReaction::Warmed,
-                        super::adventure::dossier::Effect::Cool => EmotionReaction::Offended,
-                        super::adventure::dossier::Effect::Steady => EmotionReaction::Unmoved,
-                    };
-                    (
-                        Some(Appraisal {
-                            reaction,
-                            strength: EmotionLevel::ALittle,
-                            willingness: None,
-                            effect,
-                        }),
-                        "fallback",
-                    )
-                }
+                None if approach != Approach::Intimidation => (
+                    Some(turn.ledger.fallback_appraisal(
+                        context.member,
+                        &turn.dossier,
+                        &turn.scene,
+                        approach,
+                        similar_asks,
+                    )),
+                    "fallback",
+                ),
                 None => (None, "fallback"),
             };
-            if let Some(appraisal) = appraisal {
+            if let Some(mut appraisal) = appraisal {
+                // An ordinary low-stakes question does not rewrite a relationship.
+                if matches!(approach, Approach::Question | Approach::Other)
+                    && appraisal.strength != EmotionLevel::Much
+                    && !matches!(
+                        appraisal.reaction,
+                        EmotionReaction::LosingPatience | EmotionReaction::Done
+                    )
+                {
+                    appraisal.reaction = EmotionReaction::Unmoved;
+                    appraisal.effect = super::adventure::dossier::Effect::Steady;
+                }
+                let previous = current.clone();
                 influence_willingness =
                     influence_request.then_some(appraisal.willingness).flatten();
-                let (reaction, shift) = turn.ledger.apply_appraisal(
+                let (reaction, _shift) = turn.ledger.apply_appraisal(
                     context.member,
                     &turn.dossier,
                     &turn.scene,
@@ -1017,21 +1153,9 @@ impl NpcVoice {
                         summary,
                     ),
                 );
-                log.push(
-                    &context.speaker,
-                    rpc::TableRole::Npc,
-                    context.hero_index,
-                    rpc::TableKind::Action,
-                    &current.perceived_line(&context.speaker, &context.hero_name),
-                );
-                if let Some(shift) = shift {
-                    log.push(
-                        &context.speaker,
-                        rpc::TableRole::Npc,
-                        context.hero_index,
-                        rpc::TableKind::Action,
-                        &shift_line(shift, &context.hero_name),
-                    );
+                if current.noticeable_change_from(&previous) {
+                    reaction_note =
+                        Some(current.perceived_line(&context.speaker, &context.hero_name));
                 }
             }
         }
@@ -1066,7 +1190,8 @@ impl NpcVoice {
         } else {
             None
         };
-        if let Some(shift @ Shift::Level { from, to }) = threat_shift {
+        if let Some(Shift::Level { from, to }) = threat_shift {
+            reaction_note = Some(shift_line(Shift::Level { from, to }, &context.hero_name));
             let turn = context.turn.as_ref()?;
             context.facts["attitude_toward_hero"] = json!(turn.standing.attitude.label());
             eprintln!(
@@ -1075,16 +1200,12 @@ impl NpcVoice {
                 from.label(),
                 to.label(),
             );
-            log.push(
-                &context.speaker,
-                rpc::TableRole::Npc,
-                context.hero_index,
-                rpc::TableKind::Action,
-                &shift_line(shift, &context.hero_name),
-            );
         }
         if approach == Approach::Intimidation && appraised_reaction.is_none() {
             let turn = context.turn.as_mut()?;
+            let previous = turn
+                .ledger
+                .emotional_state(context.member, &turn.dossier, &turn.scene);
             let reaction =
                 turn.ledger
                     .apply_legacy_threat_emotion(context.member, &turn.dossier, &turn.scene);
@@ -1116,14 +1237,13 @@ impl NpcVoice {
                     summary,
                 ),
             );
-            log.push(
-                &context.speaker,
-                rpc::TableRole::Npc,
-                context.hero_index,
-                rpc::TableKind::Action,
-                &current.perceived_line(&context.speaker, &context.hero_name),
-            );
+            if current.noticeable_change_from(&previous) {
+                reaction_note = Some(current.perceived_line(&context.speaker, &context.hero_name));
+            }
         }
+        let room_answer = (approach == Approach::Question)
+            .then(|| room::answer(&context))
+            .flatten();
         let subject_answer = if approach == Approach::Intimidation
             || private_clue_withheld
             || (influence_request
@@ -1134,16 +1254,20 @@ impl NpcVoice {
             None
         } else {
             let turn = context.turn.as_ref()?;
-            npc_dossier::subject_fallback(
-                &turn.dossier,
-                reading.subject,
-                &turn.withheld,
-                &npc_dossier::Memory {
-                    conversation: &turn.conversation,
-                    said: &turn.said,
-                    offered: &turn.offered,
-                },
-            )
+            room_answer
+                .map(|answer| (answer, "room:answer".to_owned()))
+                .or_else(|| {
+                    npc_dossier::subject_fallback(
+                        &turn.dossier,
+                        reading.subject,
+                        &turn.withheld,
+                        &npc_dossier::Memory {
+                            conversation: &turn.conversation,
+                            said: &turn.said,
+                            offered: &turn.offered,
+                        },
+                    )
+                })
         };
         if let Some((answer, _)) = &subject_answer {
             context.facts["answer_from"] = json!([answer]);
@@ -1152,7 +1276,9 @@ impl NpcVoice {
             }
         }
         if let Some(turn) = context.turn.as_mut() {
-            turn.answer_offered = subject_answer.is_some();
+            turn.answer_offered = subject_answer
+                .as_ref()
+                .is_some_and(|(answer, _)| !super::speech_text::is_denial(answer));
             context.facts["already_said"] = json!(
                 turn.said
                     .iter()
@@ -1183,6 +1309,7 @@ impl NpcVoice {
                 ),
             );
         }
+        super::npc_facts::trim_background_facts(&mut context.facts);
         let modeled = if done_now || never_forgive_now || unwilling_now || hesitant_now {
             Err(FallbackReason::ReplyRejected)
         } else {
@@ -1207,7 +1334,7 @@ impl NpcVoice {
                 );
                 let (answer, answer_key): (String, Option<String>) = if done_now {
                     (
-                        "I cannot answer more of your questions this scene.".to_owned(),
+                        "I've had enough questions. Leave me be for now.".to_owned(),
                         None,
                     )
                 } else if never_forgive_now {
@@ -1254,7 +1381,8 @@ impl NpcVoice {
         let from_model = fallback.is_none();
         // What was whispered to this hero alone is answered to this hero alone: the table sees
         // that the speaker murmured, not the words.
-        let private = !turn.withheld.released().is_empty();
+        let private = !turn.withheld.released().is_empty()
+            && !(done_now || never_forgive_now || unwilling_now || hesitant_now);
         if private {
             log.push(
                 &context.speaker,
@@ -1293,13 +1421,17 @@ impl NpcVoice {
         }
         turn.ledger
             .remember_offered(context.member, &turn.dossier, &used);
-        if let Some(shift) = recorded.shift {
+        let reaction_note = reaction_note.or_else(|| match recorded.shift {
+            Some(shift @ Shift::Level { .. }) => Some(shift_line(shift, &context.hero_name)),
+            _ => None,
+        });
+        if let Some(note) = reaction_note {
             log.push(
                 &context.speaker,
                 rpc::TableRole::Npc,
                 context.hero_index,
                 rpc::TableKind::Action,
-                &shift_line(shift, &context.hero_name),
+                &note,
             );
         }
         let ledger = turn.ledger.clone();
@@ -1464,6 +1596,10 @@ fn strip_outer_quotes(text: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "npc_room_tests.rs"]
+mod room_tests;
+
+#[cfg(test)]
 mod tests {
     use super::super::adventure::dossier::Attitude;
     use super::*;
@@ -1483,6 +1619,7 @@ mod tests {
             public_names: vec!["Jorun".to_owned(), "Net Loft".to_owned()],
             speakers: Vec::new(),
             scene_lines: Vec::new(),
+            scenes: Vec::new(),
         };
         assert_eq!(
             unheard_secret_terms(&story, "A quiet room."),
@@ -1497,6 +1634,7 @@ mod tests {
             public_names: Vec::new(),
             speakers: Vec::new(),
             scene_lines: Vec::new(),
+            scenes: Vec::new(),
         }
     }
 
@@ -1568,6 +1706,7 @@ mod tests {
                 },
             ],
             scene_lines: Vec::new(),
+            scenes: Vec::new(),
         }
     }
 

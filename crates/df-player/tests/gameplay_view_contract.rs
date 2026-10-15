@@ -183,6 +183,7 @@ fn display_or_missing_audience_never_produces_a_player_projection() {
             scene_asset: String::new(),
             scene: None,
             journey: None,
+            ..Default::default()
         })),
     };
     assert_eq!(

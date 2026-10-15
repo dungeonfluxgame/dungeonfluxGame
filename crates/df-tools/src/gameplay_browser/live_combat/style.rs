@@ -210,6 +210,20 @@ const PLAYER: &str = r#"
 @S[data-role=player] .tactical-controls .attack-option select{display:block;width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 @S[data-role=player] .tactical-controls button[data-action-kind="10"]{grid-column:1/-1;border-color:#f0d195;background:linear-gradient(135deg,#f0d5a4,#c6a05e);color:#211b11;font-weight:700}
 @S[data-role=player] .combat-hp-text{z-index:1;font-size:12px;text-shadow:0 1px 3px #000,0 0 3px #000}
+@S[data-role=player] .df-combat[data-own-turn=true] .combat-story{padding:8px 16px 4px}
+@S[data-role=player] .df-combat[data-own-turn=true] .combat-story h1,@S[data-role=player] .df-combat[data-own-turn=true] .combat-narration{display:none}
+@S[data-role=player] .df-combat[data-own-turn=true] .combat-turn-badge{margin:0;padding:8px 10px;letter-spacing:.08em}
+@S[data-role=player] .df-combat[data-own-turn=true] .tactical-controls button[data-action-kind="8"]{grid-column:1/-1;min-height:56px;border-color:#f0d195;background:linear-gradient(135deg,#f0d5a4,#c6a05e);color:#211b11;font-size:19px;font-weight:700}
+@S[data-role=player] .df-combat[data-own-turn=true] .tactical-controls button[data-action-kind="10"]{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom));z-index:6;border-color:#d9b77a;background:#17222d;color:#fff1d2}
+@S[data-role=player] .tactical-controls[data-reaction=decision],@S[data-role=player] .tactical-controls[data-reaction=waiting]{order:0;width:auto;margin:8px 12px 12px;padding:12px;border:2px solid #f0d195;border-radius:12px;background:linear-gradient(145deg,#21180cfa,#0b1118fa);box-shadow:0 10px 28px #000b}
+@S[data-role=player] .reaction-prompt,@S[data-role=player] .reaction-waiting{grid-column:1/-1;margin:0;padding:8px 10px;border-radius:8px;background:#30210e;color:#fff0d1}
+@S[data-role=player] .tactical-controls[data-reaction=decision] .reaction-prompt,@S[data-role=player] .tactical-controls[data-reaction=waiting] .reaction-waiting{order:-2}
+@S[data-role=player] .reaction-prompt h2{margin:0 0 4px;font:700 16px/1.35 system-ui,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#f0cf8e}
+@S[data-role=player] .reaction-question{margin:0;font:700 20px/1.3 system-ui,sans-serif;color:#fff7e6}
+@S[data-role=player] .reaction-countdown{grid-column:1/-1;margin:4px 0 0;font:700 16px/1.3 system-ui,sans-serif;color:#f0cf8e}
+@S[data-role=player] .reaction-waiting{font:700 18px/1.35 system-ui,sans-serif;text-align:center}
+@S[data-role=player] .tactical-controls[data-reaction=decision] button[data-action-kind="16"]{grid-column:span 3;border-color:#f0d195;background:linear-gradient(135deg,#f0d5a4,#c6a05e);color:#211b11;font-weight:700}
+@S[data-role=player] .tactical-controls[data-reaction=decision] button[data-action-kind="17"]{grid-column:span 3;border-color:#d9b77a;background:#17222d;color:#fff1d2}
 "#;
 
 /// A fixed 16:9, ten-foot interface in the display's `.tv-stage`. `--u` is 1% of the width

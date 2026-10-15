@@ -196,6 +196,7 @@ fn request(
         },
         character: if kind == rpc::GameplayActionKind::CreateCharacter {
             Some(rpc::CharacterSelection {
+                identity: None,
                 name: if member == first() { "Brynn" } else { "Vale" }.into(),
                 choices: build(if member == first() { "Brynn" } else { "Vale" })
                     .into_iter()

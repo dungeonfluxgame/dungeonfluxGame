@@ -208,11 +208,11 @@ fn a_reply_that_opens_with_a_denial_when_an_answer_was_offered_is_found() {
 }
 
 #[test]
-fn admitting_ignorance_in_more_than_one_reply_is_found() {
+fn admitting_ignorance_on_the_same_question_twice_is_found() {
     let nothing = json!({"answer_from": []});
     let twice = transcript(vec![
         exchange("Who is she?", "I don't know who she is.", nothing.clone()),
-        exchange("And him?", "I have no idea about him either.", nothing),
+        exchange("Who is she?", "I have no idea about her either.", nothing),
     ]);
     assert_eq!(
         checks_of(&check(&twice)),
@@ -382,7 +382,6 @@ fn the_recorded_conversations_from_before_the_fix_break_the_rules_the_player_not
         found.extend(findings.iter().map(|finding| finding.check));
     }
     for check in [
-        "denial_with_an_answer_offered",
         "says_a_speech_style_phrase",
         "local_lore_or_saying",
         "autobiography",
@@ -390,6 +389,16 @@ fn the_recorded_conversations_from_before_the_fix_break_the_rules_the_player_not
     ] {
         assert!(found.contains(&check), "{check} was not found: {found:?}");
     }
+}
+
+#[test]
+fn a_prepared_admission_is_not_treated_as_a_known_answer_that_cannot_be_denied() {
+    let honest = transcript(vec![exchange(
+        "Who is that lady?",
+        "I don't know who that lady is.",
+        json!({"answer_from": ["I don't know who that lady is."]}),
+    )]);
+    assert!(check(&honest).is_empty());
 }
 
 #[test]

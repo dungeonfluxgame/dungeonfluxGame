@@ -133,6 +133,44 @@ fn observation_table_line(
     ))
 }
 
+fn watch_scope_identity(
+    basis: df_model::checkpoint::Basis,
+    role: LocalDemoRole,
+    principal: [u8; 16],
+    request: &rpc::WatchViewRequest,
+) -> Result<df_types::MemberId, tonic::Status> {
+    let session = df_api::session_id(request.session_id.as_ref())
+        .map_err(|_| tonic::Status::invalid_argument("required watch scope invalid"))?;
+    let run = df_api::run_id(request.run_id.as_ref())
+        .map_err(|_| tonic::Status::invalid_argument("required watch scope invalid"))?;
+    let binding = df_api::client_binding_id(request.client_binding_id.as_ref())
+        .map_err(|_| tonic::Status::invalid_argument("required watch binding invalid"))?;
+    let expected_binding = match role {
+        LocalDemoRole::Player => principal,
+        LocalDemoRole::Display => [0x72; 16],
+    };
+    if session != basis.session || run != basis.run || binding.as_bytes() != &expected_binding {
+        return Err(tonic::Status::permission_denied("local watch scope denied"));
+    }
+    if let Some(revision) = request.after_revision.as_ref() {
+        let observed = df_api::session_revision(Some(revision))
+            .map_err(|_| tonic::Status::invalid_argument("watch revision invalid"))?;
+        if observed.epoch() != basis.revision.epoch() || observed > basis.revision {
+            return Err(tonic::Status::failed_precondition(
+                "watch recovery required",
+            ));
+        }
+    }
+    if principal == df_persistence::local_demo_scope::PLAYER {
+        return Err(tonic::Status::permission_denied(
+            "bootstrap scope cannot watch",
+        ));
+    }
+    let member = df_types::MemberId::from_bytes(&principal)
+        .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
+    Ok(member)
+}
+
 pub(super) enum Call {
     PublicSceneAsset {
         reply: oneshot::Sender<Result<String, tonic::Status>>,
@@ -163,6 +201,12 @@ pub(super) enum Call {
         credential: [u8; 32],
         request: super::dialogue::DialogueRequest,
         reply: oneshot::Sender<Result<super::dialogue::DialogueReply, tonic::Status>>,
+    },
+    /// Read-only telemetry authorization; does not publish or refresh a player's activity.
+    TelemetryIdentity {
+        credential: [u8; 32],
+        request: rpc::WatchViewRequest,
+        reply: oneshot::Sender<Result<LocalDemoRole, tonic::Status>>,
     },
     View {
         credential: [u8; 32],
@@ -276,7 +320,7 @@ impl ActorInput for Call {
                     )?
                     .checked_add(character_bytes)
             }
-            Self::View { request, .. } => request
+            Self::View { request, .. } | Self::TelemetryIdentity { request, .. } => request
                 .session_id
                 .as_ref()
                 .map_or(0, |id| bytes(&id.value))
@@ -619,6 +663,7 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
 }
 
 pub(super) fn record_audit_line(event: &'static str, line: String) {
+    super::dev_control::timeline::record(event, &line);
     println!("{line}");
     let context = OperationContext {
         trace_parent: String::new(),
@@ -1691,6 +1736,11 @@ impl Actor {
                 })?;
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
                 if !replayed {
+                    if let Err(error) =
+                        super::journey::living_scene::publish(self.owner.checkpoint())
+                    {
+                        record_unavailable("scene-publication", &format!("{error:?}"));
+                    }
                     self.record_table_action(member, &request, &accepted, &before, reservation);
                     // The recorded moment keeps the commit's own lines: the
                     // publication hook runs before table lines are pushed.
@@ -1892,26 +1942,41 @@ impl Actor {
         else {
             return;
         };
+        match super::journey::living_scene::last_line(self.owner.checkpoint().state()) {
+            Ok(Some(line)) => {
+                self.table_log.push_reserved(
+                    reservation,
+                    "Narrator",
+                    rpc::TableRole::Narrator,
+                    0,
+                    rpc::TableKind::Action,
+                    &line,
+                );
+                record_audit_line(
+                    "gameplay.scene_interaction",
+                    format!("SCENE actor={hero:?} result={line:?}"),
+                );
+                return;
+            }
+            Err(error) => record_unavailable("scene-interaction-log", &format!("{error:?}")),
+            Ok(None) => {}
+        }
         if kind == rpc::GameplayActionKind::ExamineHarborSeal
             && let Some(check) = accepted.check.as_ref()
         {
             let Ok(scene) = super::beat_script_runtime::scene(before.state()) else {
                 return;
             };
-            let Some(table_line) =
-                observation_table_line(&hero, &scene, check, &request.action_choices)
+            let observation = super::investigation::observation(&scene, check);
+            let Some(table_line) = observation
+                .as_ref()
+                .map(|observation| observation.roll_line(&hero, check))
+                .or_else(|| observation_table_line(&hero, &scene, check, &request.action_choices))
             else {
                 record_unavailable("search-audit", "check result cannot be displayed");
                 return;
             };
-            self.table_log.push_reserved(
-                reservation,
-                &hero,
-                rpc::TableRole::Hero,
-                index,
-                rpc::TableKind::Action,
-                &table_line,
-            );
+            self.table_log.push_check(reservation, index, &table_line);
             if let Some(finding) = super::beat_script_runtime::observation_finding(&scene, check) {
                 let Ok(scene_name) = notebook::scene_name(scene.key) else {
                     record_unavailable("notebook-save", "finding scene invalid");
@@ -1952,6 +2017,14 @@ impl Actor {
                         &finding.sentence,
                     );
                 }
+            } else if let Some(observation) = observation {
+                self.table_log.push(
+                    "Narrator",
+                    rpc::TableRole::Narrator,
+                    0,
+                    rpc::TableKind::Action,
+                    &observation.public_view().fallback(),
+                );
             } else if check.succeeded {
                 self.table_log.push(
                     "Narrator",
@@ -2026,6 +2099,8 @@ impl Actor {
         if let Some(line) = lines.next() {
             let (role, hero_index) = if line.speaker == hero {
                 (rpc::TableRole::Hero, index)
+            } else if line.speaker == "Narrator" {
+                (rpc::TableRole::Narrator, 0)
             } else {
                 (rpc::TableRole::Npc, 0)
             };
@@ -2041,6 +2116,8 @@ impl Actor {
         for line in lines {
             let (role, hero_index) = if line.speaker == hero {
                 (rpc::TableRole::Hero, index)
+            } else if line.speaker == "Narrator" {
+                (rpc::TableRole::Narrator, 0)
             } else {
                 (rpc::TableRole::Npc, 0)
             };
@@ -2051,6 +2128,61 @@ impl Actor {
                 rpc::TableKind::Action,
                 &line.text,
             );
+        }
+        if !super::journey::rewards::paid(before.state())
+            && super::journey::rewards::paid(after.state())
+            && let Some(reward) = super::pack::with_content(|pack| pack.reward.clone())
+        {
+            let line = format!(
+                "Each hero receives {} GP for the completed errand.",
+                reward.gold_per_hero
+            );
+            self.table_log.push(
+                "Narrator",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Action,
+                &line,
+            );
+            record_audit_line(
+                "gameplay.reward",
+                format!(
+                    "REWARD status=paid gold_per_hero={} heroes={}",
+                    reward.gold_per_hero,
+                    after.state().characters.len()
+                ),
+            );
+            if let Some(favour) = reward.favour {
+                if let Err(error) =
+                    self.notebook
+                        .add_note(member, &hero, &favour, "The completed errand")
+                {
+                    record_unavailable("reward-favour-note", &error.to_string());
+                }
+            }
+        } else {
+            match (
+                super::beat_script_runtime::ended(after.state()),
+                super::beat_script_runtime::ended(before.state()),
+            ) {
+                (Ok(true), Ok(false)) => match super::journey::combat_victory(after.state()) {
+                    Ok(false) => {
+                        self.table_log.push(
+                            "Narrator",
+                            rpc::TableRole::Narrator,
+                            0,
+                            rpc::TableKind::Action,
+                            "The errand was lost. No reward is paid.",
+                        );
+                    }
+                    Ok(true) => {}
+                    Err(error) => record_unavailable("reward-outcome", &format!("{error:?}")),
+                },
+                (Ok(_), Ok(_)) => {}
+                (Err(error), _) | (_, Err(error)) => {
+                    record_unavailable("reward-ending", &format!("{error:?}"))
+                }
+            }
         }
     }
 
@@ -2295,6 +2427,20 @@ impl Actor {
             }
         }
     }
+    fn telemetry_identity(
+        &self,
+        credential: [u8; 32],
+        request: rpc::WatchViewRequest,
+    ) -> Result<LocalDemoRole, tonic::Status> {
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        require_readable(self.fenced)?;
+        let role = self.issuer.authenticate(&credential).map_err(unavailable)?;
+        let principal = self.issuer.principal(&credential).map_err(unavailable)?;
+        watch_scope_identity(self.owner.checkpoint().basis(), role, principal, &request)?;
+        Ok(role)
+    }
     fn view(
         &mut self,
         credential: [u8; 32],
@@ -2305,42 +2451,21 @@ impl Actor {
         }
         require_readable(self.fenced)?;
         let role = self.issuer.authenticate(&credential).map_err(unavailable)?;
-        let session = df_api::session_id(request.session_id.as_ref())
-            .map_err(|_| tonic::Status::invalid_argument("required watch scope invalid"))?;
-        let run = df_api::run_id(request.run_id.as_ref())
-            .map_err(|_| tonic::Status::invalid_argument("required watch scope invalid"))?;
-        let binding = df_api::client_binding_id(request.client_binding_id.as_ref())
-            .map_err(|_| tonic::Status::invalid_argument("required watch binding invalid"))?;
-        let expected_binding = match role {
-            LocalDemoRole::Player => self.issuer.principal(&credential).map_err(unavailable)?,
-            LocalDemoRole::Display => [0x72; 16],
-        };
-        let current = self.owner.checkpoint();
-        if session != current.basis().session
-            || run != current.basis().run
-            || binding.as_bytes() != &expected_binding
-        {
-            return Err(tonic::Status::permission_denied("local watch scope denied"));
-        }
-        if let Some(revision) = request.after_revision.as_ref() {
-            let observed = df_api::session_revision(Some(revision))
-                .map_err(|_| tonic::Status::invalid_argument("watch revision invalid"))?;
-            if observed.epoch() != current.basis().revision.epoch()
-                || observed > current.basis().revision
-            {
-                return Err(tonic::Status::failed_precondition(
-                    "watch recovery required",
-                ));
-            }
-        }
         let principal = self.issuer.principal(&credential).map_err(unavailable)?;
-        if principal == df_persistence::local_demo_scope::PLAYER {
-            return Err(tonic::Status::permission_denied(
-                "bootstrap scope cannot watch",
-            ));
+        let current = self.owner.checkpoint();
+        let member = watch_scope_identity(current.basis(), role, principal, &request)?;
+        let scene = super::beat_script_runtime::scene(current.state()).map_err(unavailable)?;
+        if let Some(snapshot) =
+            super::journey::living_scene::snapshot(current.state(), &scene).map_err(unavailable)?
+        {
+            self.social
+                .sync_room(&format!("{:?}", scene.key), snapshot)
+                .map_err(|error| {
+                    record_unavailable("scene-social-projection", &error.to_string());
+                    tonic::Status::unavailable("scene state unavailable")
+                })?;
         }
-        let member = df_types::MemberId::from_bytes(&principal)
-            .map_err(|_| tonic::Status::permission_denied("binding invalid"))?;
+        super::journey::living_scene::publish(current).map_err(unavailable)?;
         let mut view = wire::journey_view(current, role, member).map_err(unavailable)?;
         self.table_settings.attach(&mut view);
         self.social.attach(&mut view, member);
@@ -2372,6 +2497,17 @@ impl Actor {
             for entry in entries {
                 self.log_notebook_entry(&entry);
             }
+        }
+        if let Some(reward) = super::pack::with_content(|pack| pack.reward.clone()) {
+            self.notebook
+                .sync_task_reward(
+                    reward.gold_per_hero,
+                    super::journey::rewards::paid(current.state()),
+                )
+                .map_err(|error| {
+                    record_unavailable("notebook-save", &error.to_string());
+                    tonic::Status::unavailable("notebook state unavailable")
+                })?;
         }
         let notebook = if role == LocalDemoRole::Display {
             self.notebook.public_entries()
@@ -2484,6 +2620,14 @@ impl Reducer<Call> for Actor {
         // A speech-intent mark is served first and alone: no budget, heartbeat, grant
         // reconnect or committed-job dispatch, so it can neither fence nor delay the session.
         let call = match call {
+            Call::TelemetryIdentity {
+                credential,
+                request,
+                reply,
+            } => {
+                let _delivered = reply.send(self.telemetry_identity(credential, request));
+                return;
+            }
             Call::Presence {
                 credential,
                 kind,
@@ -2566,7 +2710,8 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
-                Call::Presence { .. } | Call::Presented { .. } => {}
+                Call::Presence { .. } | Call::Presented { .. } | Call::TelemetryIdentity { .. } => {
+                }
             }
             return;
         }
@@ -2627,6 +2772,7 @@ impl Reducer<Call> for Actor {
                         rpc::RawDialogueRequest::decode(bytes.as_slice()).ok()
                     }
                     super::dialogue::DialogueRequest::Confirm(_)
+                    | super::dialogue::DialogueRequest::SyncNotes
                     | super::dialogue::DialogueRequest::Cancel(_) => None,
                 };
                 let result = after_grant_reconnect(reconnected, || {
@@ -2694,7 +2840,7 @@ impl Reducer<Call> for Actor {
                     super::dev_control::direct::admit(&mut history, &view, order)
                 }))
                 .is_ok(),
-            Call::Presence { .. } | Call::Presented { .. } => true,
+            Call::Presence { .. } | Call::Presented { .. } | Call::TelemetryIdentity { .. } => true,
         };
         span.finish_unmeasured(if delivered {
             "actor_outcome_delivered"
@@ -3127,5 +3273,68 @@ mod enemy_turn_audit_tests {
         );
         assert!(line.contains("policy=\"SRD-5.2.1:PLAY-T01:1:enemy-policy-opportunity-v2\""));
         assert!(line.contains("action=dodge reason=\"no attack target is currently reachable\""));
+    }
+}
+
+#[cfg(test)]
+mod telemetry_identity_tests {
+    use super::*;
+
+    #[test]
+    fn telemetry_scope_accepts_live_roles_and_refuses_wrong_binding_run_and_revision() {
+        let current = crate::gameplay::journey::initial().unwrap();
+        let basis = current.basis();
+        for (role, principal, binding) in [
+            (
+                LocalDemoRole::Display,
+                df_persistence::local_demo_scope::DISPLAY,
+                [0x72; 16],
+            ),
+            (LocalDemoRole::Player, [0x61; 16], [0x61; 16]),
+        ] {
+            let request = rpc::WatchViewRequest {
+                session_id: Some(rpc::SessionId {
+                    value: Some(basis.session.as_bytes().to_vec()),
+                }),
+                run_id: Some(rpc::RunId {
+                    value: Some(basis.run.as_bytes().to_vec()),
+                }),
+                client_binding_id: Some(rpc::ClientBindingId {
+                    value: Some(binding.to_vec()),
+                }),
+                after_revision: Some(wire::revision(basis.revision)),
+            };
+            assert_eq!(
+                watch_scope_identity(basis, role, principal, &request)
+                    .unwrap()
+                    .as_bytes(),
+                &principal
+            );
+            let mut wrong = request.clone();
+            wrong.client_binding_id.as_mut().unwrap().value = Some(vec![0x99; 16]);
+            assert_eq!(
+                watch_scope_identity(basis, role, principal, &wrong)
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::PermissionDenied
+            );
+            wrong = request.clone();
+            wrong.run_id.as_mut().unwrap().value = Some(vec![0x99; 16]);
+            assert_eq!(
+                watch_scope_identity(basis, role, principal, &wrong)
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::PermissionDenied
+            );
+            wrong = request.clone();
+            wrong.after_revision = Some(wire::revision(basis.revision.next_sequence().unwrap()));
+            assert_eq!(
+                watch_scope_identity(basis, role, principal, &wrong)
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::FailedPrecondition
+            );
+        }
+        assert_eq!(basis, current.basis());
     }
 }

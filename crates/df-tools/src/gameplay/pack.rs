@@ -615,6 +615,8 @@ pub(super) struct PackFile {
     pub(super) id: String,
     pub(super) locale: String,
     pub(super) room_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) reward: Option<ErrandReward>,
     /// Absence is the versioned canonical legacy journey, with unchanged stored bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) beat_script: Option<super::beat_script::BeatScript>,
@@ -640,6 +642,13 @@ pub(super) struct PackFile {
     /// Who each speaking character is, by the name a scene shows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) speakers: Vec<SpeakerProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ErrandReward {
+    pub(super) gold_per_hero: u32,
+    pub(super) favour: Option<String>,
 }
 
 /// One character on stage in a scene.
@@ -906,28 +915,48 @@ pub(super) struct RestedStoryError;
 /// Split authored Short Rest rules prose from the story before projecting a rested scene.
 pub(super) fn rested_story_and_rules(scene: &Scene) -> Result<(String, String), RestedStoryError> {
     const HOUR_RULES: &str = "An uninterrupted hour has passed without Hit Point Dice or healing.";
-    const BENEFIT_RULES: &str = "Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived.";
+    const BENEFIT_RULES: [&str; 3] = [
+        "Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived.",
+        "Knocked-out creatures are awake with 1 HP, still Prone; their held weapons remain dropped.",
+        "They awaken with 1 HP, still Prone, and their held weapons remain dropped.",
+    ];
+    // SRD 5.2.1 pp. 18, 47, 187: stable recovery, Second Wind, and optional Hit Point Dice.
+    const RULES: &str = "During the Short Rest each eligible hero chooses whether to spend Hit Point Dice to heal. Eligible heroes regain one use of Second Wind. A stable creature that isn't healed regains 1 Hit Point after 1d4 hours; a dead creature remains dead.";
     let narration = scene.narration_rested.as_deref().ok_or(RestedStoryError)?;
-    if narration.matches(HOUR_RULES).count() != 1 || narration.matches(BENEFIT_RULES).count() != 1 {
+    if narration.trim().is_empty() {
+        return Err(RestedStoryError);
+    }
+    if !narration.contains(HOUR_RULES)
+        && !BENEFIT_RULES
+            .iter()
+            .any(|benefit| narration.contains(benefit))
+    {
+        return Ok((narration.to_owned(), RULES.to_owned()));
+    }
+    // Stored scenes retain their exact bytes; replace their old mechanical sentence in the view.
+    let mut benefits = BENEFIT_RULES
+        .into_iter()
+        .filter(|benefit| narration.contains(benefit));
+    let benefit_rules = benefits.next().ok_or(RestedStoryError)?;
+    if narration.matches(HOUR_RULES).count() != 1
+        || narration.matches(benefit_rules).count() != 1
+        || benefits.next().is_some()
+    {
         return Err(RestedStoryError);
     }
     let start = narration.find(HOUR_RULES).ok_or(RestedStoryError)?;
     let after_hour = start + HOUR_RULES.len();
     let benefits = narration[after_hour..]
-        .find(BENEFIT_RULES)
+        .find(benefit_rules)
         .map(|offset| after_hour + offset)
         .ok_or(RestedStoryError)?;
-    let end = benefits + BENEFIT_RULES.len();
+    let end = benefits + benefit_rules.len();
     let story = format!(
         "{}The party spends an hour catching its breath.{}",
         &narration[..start],
         &narration[end..]
     );
-    // SRD 5.2.1 pp. 16, 22: “hour-long Short Rests”; “can spend Hit Dice during a Short Rest.”
-    // SRD 5.2.1 p. 18: “A Stable creature that isn't healed regains 1 Hit Point after 1d4 hours.”
-    // SRD 5.2.1 p. 48: “You regain one expended use when you finish a Short Rest.”
-    let rules = "No Hit Point Dice are spent and no healing is received during the Short Rest. Eligible heroes regain one use of Second Wind. A stable creature that isn't healed regains 1 Hit Point after 1d4 hours; a dead creature remains dead.";
-    Ok((story, rules.to_owned()))
+    Ok((story, RULES.to_owned()))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2233,7 +2262,11 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<String> {
             "hero.proficiency_bonus",
         ),
         (
-            hero.base_hit_points != baseline.creation.base_hit_points,
+            hero.base_hit_points
+                != baseline.creation.base_hit_points
+                    + df_rules::local_journey::HeroSpecies::Dwarf
+                        .combat_traits()
+                        .hit_points_per_level,
             "hero.base_hit_points",
         ),
         (!arrays_match, "hero.ability_arrays"),
@@ -2375,6 +2408,28 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<String> {
 static ACTIVE: std::sync::RwLock<Option<std::sync::Arc<LoadedPack>>> = std::sync::RwLock::new(None);
 
 pub(super) fn install(loaded: LoadedPack) -> Result<(), io::Error> {
+    super::journey::living_scene::clear();
+    let setting = |key| {
+        loaded
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == key)
+            .and_then(|scene| scene.setting.clone())
+    };
+    if let (Some(meeting), Some(confrontation), Some(destination)) = (
+        setting(SceneKey::Opening),
+        setting(SceneKey::Combat),
+        setting(SceneKey::Inn),
+    ) {
+        super::adventure::scene_model::install_scenes(
+            &super::adventure::setting::ChapterSettings {
+                meeting,
+                confrontation,
+                destination,
+            },
+        );
+    }
     *ACTIVE
         .write()
         .map_err(|_| io::Error::other("gameplay pack lock poisoned"))? =
@@ -2432,7 +2487,13 @@ pub(super) fn with_creation<T>(
             strength: hero.background_bonus.strength,
             constitution: hero.background_bonus.constitution,
         },
-        base_hit_points: hero.base_hit_points,
+        // This pinned pack field historically includes Dwarven Toughness (SRD 5.2.1 p. 84).
+        // The native rules now apply the selected species bonus separately. Preserve the
+        // legacy pack's actual HP and custom delta while passing the class base to rules.
+        base_hit_points: hero.base_hit_points
+            - rules::HeroSpecies::Dwarf
+                .combat_traits()
+                .hit_points_per_level,
         armor_class: hero.armor_class,
         proficiency_bonus: hero.proficiency_bonus,
         second_wind_uses_max: hero.second_wind.uses_max,

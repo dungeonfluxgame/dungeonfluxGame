@@ -279,7 +279,7 @@ fn recorded_errand_facts_and_private_clue_become_party_notebook_entries() {
         entry.kind == Kind::Task
             && entry
                 .text
-                .contains("Reward: A silver ring if word arrives before dawn.")
+                .contains("Next hook: A silver ring if word arrives before dawn.")
     }));
 
     let given_order = notebook
@@ -595,4 +595,153 @@ fn fact_sheet() -> super::adventure::FactSheet {
         baseline: String::new(),
         tone: "restrained".to_owned(),
     }
+}
+
+// SRD 5.2.1 p. N/A: place aliases identify the same authored place.
+#[test]
+fn the_current_setting_short_name_and_destination_are_one_place() {
+    let adventure = super::npc_dossier_tests::adventure(0x97);
+    let mut setting = adventure.settings.destination.clone();
+    setting.name = "the Binding Workshop".to_owned();
+    setting.short = "the bindery".to_owned();
+    let mut current = scene(super::pack::SceneKey::Opening);
+    current.setting = Some(setting);
+    let mut sheet = fact_sheet();
+    sheet
+        .facts
+        .insert("place_short".to_owned(), "the bindery".to_owned());
+    sheet
+        .facts
+        .insert("dest.name".to_owned(), "the Binding Workshop".to_owned());
+    sheet.must_mention = vec!["the bindery".to_owned(), "the Binding Workshop".to_owned()];
+    let notebook = NotebookLedger::open("seed", Vec::new(), vec![sheet], None).unwrap();
+    notebook
+        .observe_scene(member(1), "Brakka", &current, "", false)
+        .unwrap();
+    let places = notebook
+        .public_entries()
+        .into_iter()
+        .filter(|entry| entry.kind == Kind::Place)
+        .collect::<Vec<_>>();
+    assert_eq!(places.len(), 1);
+    assert_eq!(places[0].title, "the Binding Workshop");
+}
+
+// SRD 5.2.1 p. N/A: a future story hook is not a payment.
+#[test]
+fn the_next_hook_is_not_recorded_as_a_paid_reward() {
+    let mut inn = fact_sheet();
+    inn.scene = Some("inn".to_owned());
+    inn.facts.insert(
+        "reward.line".to_owned(),
+        "There is talk of trouble farther along.".to_owned(),
+    );
+    let notebook = NotebookLedger::open("seed", Vec::new(), vec![fact_sheet(), inn], None).unwrap();
+    notebook
+        .observe_scene(
+            member(1),
+            "Brakka",
+            &scene(super::pack::SceneKey::Opening),
+            "",
+            false,
+        )
+        .unwrap();
+    notebook
+        .observe_scene(
+            member(1),
+            "Brakka",
+            &scene(super::pack::SceneKey::Inn),
+            "",
+            false,
+        )
+        .unwrap();
+    let task = notebook
+        .public_entries()
+        .into_iter()
+        .find(|entry| entry.kind == Kind::Task)
+        .unwrap();
+    assert!(
+        task.text
+            .contains("Next hook: There is talk of trouble farther along.")
+    );
+    assert!(!task.text.lines().any(|line| line.starts_with("Reward:")));
+}
+
+// SRD 5.2.1 p. N/A: payment status mirrors the committed payment marker.
+#[test]
+fn the_canonical_coin_reward_is_offered_then_paid_once_and_survives_reload() {
+    let directory = test_directory();
+    fs::create_dir_all(&directory).unwrap();
+    let notebook = NotebookLedger::open("seed", Vec::new(), Vec::new(), Some(&directory)).unwrap();
+    notebook
+        .add_fact(
+            Kind::Task,
+            "The errand",
+            "Status: done\nWarn Tomas.\nNext hook: Trouble farther along.",
+            "opening",
+        )
+        .unwrap();
+    assert!(notebook.sync_task_reward(14, false).unwrap());
+    let task = notebook
+        .public_entries()
+        .into_iter()
+        .find(|entry| entry.kind == Kind::Task)
+        .unwrap();
+    assert!(
+        task.text
+            .contains("Reward: 14 GP per hero (offered; not paid).")
+    );
+    assert!(notebook.sync_task_reward(14, true).unwrap());
+    let paid = notebook
+        .public_entries()
+        .into_iter()
+        .find(|entry| entry.kind == Kind::Task)
+        .unwrap();
+    assert!(paid.text.contains("Reward: 14 GP per hero (paid)."));
+    assert!(paid.text.contains("Next hook: Trouble farther along."));
+    assert!(!notebook.sync_task_reward(14, true).unwrap());
+    assert_eq!(notebook.public_entries()[0].order, paid.order);
+    let resumed = NotebookLedger::open("seed", Vec::new(), Vec::new(), Some(&directory)).unwrap();
+    assert!(!resumed.sync_task_reward(14, true).unwrap());
+    assert_eq!(resumed.public_entries()[0], paid);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+// SRD 5.2.1 p. N/A: refresh corrects an existing authored place alias.
+#[test]
+fn an_existing_place_alias_is_merged_on_scene_refresh() {
+    let adventure = super::npc_dossier_tests::adventure(0x97);
+    let mut setting = adventure.settings.destination.clone();
+    setting.name = "the Binding Workshop".to_owned();
+    setting.short = "the bindery".to_owned();
+    let mut current = scene(super::pack::SceneKey::Opening);
+    current.setting = Some(setting);
+    let notebook = NotebookLedger::none();
+    notebook
+        .add_fact(
+            Kind::Place,
+            "the bindery",
+            "Books are bound here.",
+            "opening",
+        )
+        .unwrap();
+    notebook
+        .add_fact(
+            Kind::Place,
+            "the Binding Workshop",
+            "Tomas works here.",
+            "opening",
+        )
+        .unwrap();
+    notebook
+        .observe_scene(member(1), "Brakka", &current, "", false)
+        .unwrap();
+    let places = notebook
+        .public_entries()
+        .into_iter()
+        .filter(|entry| entry.kind == Kind::Place)
+        .collect::<Vec<_>>();
+    assert_eq!(places.len(), 1);
+    assert_eq!(places[0].title, "the Binding Workshop");
+    assert_eq!(places[0].text, "Tomas works here.");
 }

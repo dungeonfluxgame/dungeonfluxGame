@@ -15,6 +15,7 @@ use tonic::codegen::Service;
 
 use super::{
     super::{
+        hero_identity::{Identity, ValidatedIdentity},
         npc_dossier_tests::adventure,
         pack,
         scene_mood::{Expression, HealthTier, Lighting, Look, Mood, Shot},
@@ -29,6 +30,15 @@ use super::{
 const SIZE: (u32, u32) = (1024, 640);
 /// What a successful fake call reports: 100 text, 900 image and 300 output tokens.
 const FAKE_MICRO_DOLLARS: u64 = 100 * 5 + 900 * 8 + 300 * 30;
+
+fn hero_identity(choices: &[(&str, &str)], backstory: &str) -> ValidatedIdentity {
+    let mut identity = Identity::from_menus(choices)
+        .expect("valid menu choices")
+        .identity()
+        .clone();
+    identity.backstory = backstory.to_owned();
+    identity.validate().expect("the checked hero identity")
+}
 
 #[test]
 fn scene_prompts_follow_the_narration_snapshot_and_item_card_detail() {
@@ -67,6 +77,26 @@ fn scene_prompts_follow_the_narration_snapshot_and_item_card_detail() {
     assert!(item.as_str().contains(&thing.picture_description));
     assert!(item.as_str().contains("green wax and grave dirt"));
     assert!(item.as_str().contains("Show no people"));
+}
+
+#[test]
+fn a_model_plate_names_each_person_and_keeps_their_staged_positions() {
+    let model = adventure(39).settings.meeting.model.unwrap();
+    let plate = model_plate(
+        ContentRating::Mature,
+        &model,
+        "The Heron Shrine",
+        &["Brakka".into(), "Sigrun".into()],
+    )
+    .expect("the scene model plate");
+    let state = model.picture_state().expect("the safe scene picture state");
+
+    assert!(plate.as_str().contains(&state));
+    assert!(plate.as_str().contains("Brakka, Sigrun"));
+    for person in &model.people {
+        assert!(plate.as_str().contains(&person.name));
+        assert!(plate.as_str().contains(&person.position));
+    }
 }
 
 #[test]
@@ -136,7 +166,7 @@ fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration(
         item_picture(ContentRating::Mature, thing, None).expect("an item prompt"),
     ];
 
-    for prompt in prompts {
+    for prompt in &prompts {
         let text = prompt.as_str().to_ascii_lowercase();
         for marker in [
             "real camera",
@@ -154,6 +184,126 @@ fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration(
         assert!(!text.contains("painting of"), "{text}");
         assert!(!text.contains("repaint"), "{text}");
     }
+}
+
+#[test]
+fn hero_portrait_cutout_and_expression_prompts_use_only_the_checked_identity_and_held_gear() {
+    let identity = hero_identity(
+        &[
+            ("presentation", "feminine"),
+            ("pronouns", "she-her"),
+            ("age", "elder"),
+            ("build", "slender"),
+            ("skin", "olive"),
+            ("hair", "braids"),
+            ("hair-color", "grey"),
+            ("eyes", "green"),
+            ("mark", "scar"),
+            ("attire", "red-cloak"),
+        ],
+        "I keep a violet tin beneath the west bridge.",
+    );
+    let visual = HeroVisualIdentity {
+        identity: &identity,
+        species: "dwarf",
+        held_gear: &["a longbow"],
+    };
+    let prompts = [
+        hero_portrait(ContentRating::Mature, visual).expect("an identity portrait prompt"),
+        hero_cutout(ContentRating::Mature, visual, 1, 2).expect("an identity cut-out prompt"),
+        hero_expression(
+            ContentRating::Mature,
+            visual,
+            Expression::Afraid,
+            HealthTier::Hurt,
+        )
+        .expect("an identity expression prompt"),
+    ];
+
+    for prompt in &prompts {
+        let text = prompt.as_str();
+        for detail in [
+            "dwarf",
+            "feminine presentation",
+            "elder adult",
+            "slender build",
+            "olive skin",
+            "braided hair",
+            "grey hair",
+            "green eyes",
+            "healed facial scar",
+            "red cloak",
+            "canonical held gear: a longbow",
+            "appearance only",
+            "no facial hair",
+        ] {
+            assert!(text.contains(detail), "missing {detail:?} in {text}");
+        }
+        assert!(!text.contains("violet tin"));
+        assert!(!text.contains("bearded dwarf"));
+    }
+    assert!(prompts[1].as_str().contains("number 2 from the left"));
+    assert!(prompts[1].as_str().contains("contains 2 figures"));
+}
+
+#[test]
+fn a_different_hero_identity_changes_the_drawn_species_presentation_and_canonical_gear() {
+    let first = hero_identity(
+        &[("presentation", "feminine")],
+        "A quiet story kept at home.",
+    );
+    let second = hero_identity(&[("presentation", "masculine")], "A separate quiet story.");
+    let first_prompt = hero_portrait(
+        ContentRating::Mature,
+        HeroVisualIdentity {
+            identity: &first,
+            species: "dwarf",
+            held_gear: &["a shortbow"],
+        },
+    )
+    .expect("the first portrait");
+    let second_prompt = hero_portrait(
+        ContentRating::Mature,
+        HeroVisualIdentity {
+            identity: &second,
+            species: "human",
+            held_gear: &["a longsword"],
+        },
+    )
+    .expect("the second portrait");
+
+    assert!(first_prompt.as_str().contains("feminine presentation"));
+    assert!(
+        first_prompt
+            .as_str()
+            .contains("canonical held gear: a shortbow")
+    );
+    assert!(second_prompt.as_str().contains("human"));
+    assert!(second_prompt.as_str().contains("masculine presentation"));
+    assert!(
+        second_prompt
+            .as_str()
+            .contains("canonical held gear: a longsword")
+    );
+    assert_ne!(first_prompt, second_prompt);
+}
+
+#[test]
+fn hero_image_prompts_refuse_species_outside_the_admitted_build_catalog() {
+    let identity = hero_identity(&[], "A short backstory.");
+    let prompt = hero_portrait(
+        ContentRating::Mature,
+        HeroVisualIdentity {
+            identity: &identity,
+            species: "player-entered-species",
+            held_gear: &[],
+        },
+    );
+
+    assert_eq!(
+        prompt.unwrap_err(),
+        super::super::hero_identity::IdentityError::InvalidOption
+    );
 }
 
 #[tokio::test]

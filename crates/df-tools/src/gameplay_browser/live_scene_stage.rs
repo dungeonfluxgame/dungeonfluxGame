@@ -906,6 +906,45 @@ mod tests {
     }
 
     #[test]
+    fn unloaded_scene_plate_uses_a_neutral_backdrop_instead_of_the_empty_room() {
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(include_str!("live_plate.css")));
+        document.body().unwrap().append_child(&style).unwrap();
+        let root = document.create_element("div").unwrap();
+        root.set_attribute("class", "tv-stage").unwrap();
+        root.set_attribute("data-tv-mode", "scene").unwrap();
+        root.set_attribute("data-plate-state", "pending").unwrap();
+        document.body().unwrap().append_child(&root).unwrap();
+        let set = document.create_element("div").unwrap();
+        set.set_attribute("class", "tv-scene-set").unwrap();
+        set.set_attribute(
+            "style",
+            "background-image:url('/empty-shop-placeholder.jpg')",
+        )
+        .unwrap();
+        root.append_child(&set).unwrap();
+        let computed = js_sys::Reflect::get(&window, &"getComputedStyle".into())
+            .unwrap()
+            .dyn_into::<js_sys::Function>()
+            .unwrap();
+        for state in ["pending", "ready", "failed"] {
+            root.set_attribute("data-plate-state", state).unwrap();
+            root.remove_attribute("data-plate-loaded").unwrap();
+            let css = computed.call1(&window, &set).unwrap();
+            let background = js_sys::Reflect::get(&css, &"backgroundImage".into())
+                .unwrap()
+                .as_string()
+                .unwrap();
+            assert!(background.contains("radial-gradient"));
+            assert!(!background.contains("empty-shop-placeholder"));
+        }
+        root.remove();
+        style.remove();
+    }
+
+    #[test]
     fn composed_plate_hides_cutouts_and_restores_them_when_the_plate_is_unavailable() {
         let window = web_sys::window().unwrap();
         let document = window.document().unwrap();

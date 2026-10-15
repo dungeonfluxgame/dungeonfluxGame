@@ -1,6 +1,7 @@
 use super::{
     super::{
         super::{
+            hero_identity::{Identity, ValidatedIdentity},
             pack::{Age, Gender, SceneKey},
             scene_mood::{Expression as FaceExpression, HealthTier},
             shot::{self, ShotInput, SpeakerInput, vocabulary_phrases},
@@ -61,6 +62,15 @@ fn spec_for(
 
 fn place() -> PlaceFacts {
     PlaceFacts::new("The Heron Shrine", "a shrine beside the marsh").unwrap()
+}
+
+fn hero_identity(choices: &[(&str, &str)], backstory: &str) -> ValidatedIdentity {
+    let mut identity = Identity::from_menus(choices)
+        .expect("valid menu choices")
+        .identity()
+        .clone();
+    identity.backstory = backstory.to_owned();
+    identity.validate().expect("the checked hero identity")
 }
 
 fn references_for(spec: &ShotSpec) -> PlateReferences {
@@ -269,6 +279,122 @@ fn the_heroes_are_named_by_their_place_on_the_sheet_and_the_speaker_by_the_speak
     }
     assert_eq!(sheet_position(&spec.heroes, 3), 2);
     assert_eq!(sheet_position(&spec.heroes, 1), 0);
+}
+
+#[test]
+fn a_party_plate_does_not_impose_the_stock_dwarf_appearances() {
+    let spec = spec_for("inn", SceneKey::Opening, None, &[1, 2, 3], "T").unwrap();
+    let text = scene_plate(
+        ContentRating::Mature,
+        &spec,
+        Some(&place()),
+        references_for(&spec),
+    )
+    .unwrap()
+    .as_str()
+    .to_owned();
+
+    assert!(text.contains("keep each hero's exact face, hair, build, costume and weapon"));
+    assert!(!text.contains("red-bearded"));
+    assert!(!text.contains("red-haired adult dwarf"));
+    assert!(!text.contains("blonde-braided adult dwarf"));
+}
+
+#[test]
+fn a_party_plate_stages_each_checked_identity_in_sheet_order_without_backstory() {
+    let spec = spec_for("inn", SceneKey::Opening, None, &[1, 2], "T").unwrap();
+    let first = hero_identity(
+        &[
+            ("presentation", "feminine"),
+            ("age", "elder"),
+            ("build", "slender"),
+            ("skin", "olive"),
+            ("hair", "braids"),
+            ("hair-color", "grey"),
+            ("eyes", "green"),
+            ("mark", "scar"),
+            ("attire", "red-cloak"),
+        ],
+        "I keep a violet tin beneath the west bridge.",
+    );
+    let second = hero_identity(
+        &[
+            ("presentation", "masculine"),
+            ("age", "middle-aged"),
+            ("build", "broad"),
+            ("skin", "deep-brown"),
+            ("hair", "shaved"),
+            ("eyes", "amber"),
+            ("attire", "plain-robes"),
+        ],
+        "I once hid a copper compass in the old mill.",
+    );
+    let heroes = [
+        HeroVisualIdentity {
+            identity: &first,
+            species: "dwarf",
+            held_gear: &["a longbow"],
+        },
+        HeroVisualIdentity {
+            identity: &second,
+            species: "human",
+            held_gear: &["a longsword"],
+        },
+    ];
+    let text = scene_plate_for_heroes(
+        ContentRating::Mature,
+        &spec,
+        Some(&place()),
+        references_for(&spec),
+        &heroes,
+    )
+    .unwrap()
+    .as_str()
+    .to_owned();
+
+    for detail in [
+        "Hero 1 (first figure on the sheet)",
+        "Hero 2 (second figure on the sheet)",
+        "feminine presentation",
+        "olive skin",
+        "red cloak",
+        "canonical held gear: a longbow",
+        "masculine presentation",
+        "deep brown skin",
+        "shaved head",
+        "plain woven robes",
+        "canonical held gear: a longsword",
+        "at the left side of the frame",
+        "at the right side of the frame",
+    ] {
+        assert!(text.contains(detail), "missing {detail:?} in {text}");
+    }
+    assert!(!text.contains("violet tin"));
+    assert!(!text.contains("copper compass"));
+    assert!(!text.contains("red-bearded"));
+}
+
+#[test]
+fn a_plate_refuses_a_hero_identity_list_that_does_not_match_the_cast() {
+    let spec = spec_for("inn", SceneKey::Opening, None, &[1, 2], "T").unwrap();
+    let identity = hero_identity(&[], "A short backstory.");
+    let heroes = [HeroVisualIdentity {
+        identity: &identity,
+        species: "dwarf",
+        held_gear: &[],
+    }];
+
+    assert_eq!(
+        scene_plate_for_heroes(
+            ContentRating::Mature,
+            &spec,
+            Some(&place()),
+            references_for(&spec),
+            &heroes,
+        )
+        .unwrap_err(),
+        PlatePromptRefusal::HeroIdentity
+    );
 }
 
 #[test]

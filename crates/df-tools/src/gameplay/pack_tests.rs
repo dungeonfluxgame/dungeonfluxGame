@@ -151,7 +151,13 @@ fn shipped_files_load_with_only_disclosed_tactical_cover_policy() {
     let loaded = load(&shipped_directory()).expect("shipped files must load");
 
     assert!(
-        loaded.departures == ["tactical.cover-centre-line"],
+        loaded.departures
+            == [
+                "tactical.cover-centre-line",
+                "tactical.cover-representative-height",
+                "tactical.initiative-ties-input-order",
+                "tactical.dead-space-passable",
+            ],
         "departures: {:?}",
         loaded.departures
     );
@@ -1049,6 +1055,36 @@ fn creation_groups_must_be_the_supported_set() {
         "creation.groups[0].options[0].id",
         CrossRefReason::UnknownOption,
     );
+}
+
+#[test]
+fn stored_legacy_rest_sentences_project_story_and_current_rules_without_claiming_revival() {
+    let pack: super::pack::PackFile =
+        serde_json::from_slice(include_bytes!("fixtures/harbor-journey-pack-baseline.json"))
+            .unwrap();
+    for scene in pack
+        .scenes
+        .iter()
+        .filter(|scene| scene.narration_rested.is_some())
+    {
+        let (story, rules) = super::pack::rested_story_and_rules(scene).unwrap();
+        assert!(story.contains("The party spends an hour catching its breath."));
+        assert!(!story.contains("awaken") && !story.contains("awake with 1 HP"));
+        assert!(!story.contains("Hit Point Dice"));
+        assert!(rules.contains("chooses whether to spend Hit Point Dice"));
+        assert!(rules.contains("1d4 hours") && rules.contains("dead creature remains dead"));
+    }
+}
+
+#[test]
+fn authored_rest_story_does_not_require_mechanical_sentences_to_render() {
+    let mut scene = super::pack::scene(super::pack::SceneKey::Victory);
+    scene.narration_rested = Some("The party trades stories beside the hearth.".into());
+    let (story, rules) = super::pack::rested_story_and_rules(&scene).unwrap();
+    assert_eq!(story, "The party trades stories beside the hearth.");
+    assert!(rules.contains("chooses whether to spend Hit Point Dice"));
+    scene.narration_rested = Some(String::new());
+    assert!(super::pack::rested_story_and_rules(&scene).is_err());
 }
 
 #[test]

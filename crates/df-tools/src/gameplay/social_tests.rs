@@ -922,8 +922,9 @@ fn an_opposing_npc_never_becomes_friendly_from_talk_alone_but_may_start_to_liste
 }
 
 #[test]
-fn the_dossiers_temperament_decides_whether_an_approach_warms_cools_or_changes_nothing() {
+fn a_legacy_dossiers_temperament_decides_whether_an_approach_warms_cools_or_changes_nothing() {
     let mut dossier = patron(Attitude::Indifferent);
+    dossier.emotional_profile = None;
     dossier.temperament.flirting.effect = Effect::Cool;
     dossier.temperament.flattery.effect = Effect::Warm;
     dossier.temperament.bribes.effect = Effect::Steady;

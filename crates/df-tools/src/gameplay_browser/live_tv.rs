@@ -27,7 +27,8 @@ use std::{
     rc::{Rc, Weak},
     time::Duration,
 };
-use web_sys::Event;
+use wasm_bindgen::JsCast;
+use web_sys::{Event, HtmlImageElement};
 
 #[path = "live_scene_stage.rs"]
 mod live_scene_stage;
@@ -42,7 +43,6 @@ const PARTY_SLOTS: usize = 2;
 /// all in one row.
 const LOBBY_SEATS_MIN: usize = 4;
 const PARTY_MAX: usize = 6;
-const DM_AVATAR: &str = "/assets/concept-art/dm-avatar.webp";
 const GATHERED_SOUND_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -125,6 +125,15 @@ struct BigCard {
     line: Element,
     place: Element,
     heroes: Element,
+    rewards: Element,
+}
+
+struct SoundGate {
+    layer: Element,
+    start: Element,
+    skip: Element,
+    dismiss_listeners: Vec<Closure<dyn FnMut(Event)>>,
+    skip_guards: Vec<Closure<dyn FnMut(Event)>>,
 }
 
 /// PLAY-V09: the layer that shows the scene plate: two pictures (the shown one and the one that is
@@ -142,10 +151,13 @@ struct PlateLayer {
     /// Each picture's `load` and `error` listeners, kept so they can be removed.
     listeners: Vec<PictureListeners>,
     frame_listeners: Vec<FrameListener>,
+    video_ready_listeners: Vec<(Element, &'static str, FrameListener)>,
     /// The scene whose plate is shown, to tell an edit of it from the plate of a new scene.
     scene: RefCell<String>,
     /// Which of the two pictures is the next to be filled.
     next: Cell<usize>,
+    /// Distinguishes callbacks from successive requests that reuse the inactive picture.
+    request: Cell<u64>,
     /// The scene the last view was for, so a new scene can be told from the one on screen.
     seen: RefCell<String>,
     /// Plate pictures fetched ahead, by path, so a scene change can show its plate at once.
@@ -219,6 +231,7 @@ pub(super) struct TvStage {
     cards: Vec<SeatCard>,
     dock: Element,
     wordmark: WordmarkSlot,
+    sound_gate: SoundGate,
 }
 
 /// The loading wordmark, centred with a subtle shimmer until the first view arrives.
@@ -288,6 +301,8 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
     let line = node(document, &root, "p", "tv-bigcard-line", "")?;
     let place = node(document, &root, "p", "tv-bigcard-place", "")?;
     let heroes = node(document, &root, "ul", "tv-bigcard-heroes", "")?;
+    let rewards = node(document, &root, "div", "tv-bigcard-rewards", "")?;
+    set_hidden(&rewards, true)?;
     // The next-step prompt of the end card belongs here; it stays empty until that step exists.
     let next = node(document, &root, "p", "tv-bigcard-next", "")?;
     next.set_attribute("data-slot", "next-step")?;
@@ -299,6 +314,67 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
         line,
         place,
         heroes,
+        rewards,
+    })
+}
+
+fn mount_sound_gate(document: &Document, stage: &Element) -> Result<SoundGate, JsValue> {
+    let layer = node(document, stage, "section", "tv-sound-gate", "")?;
+    layer.set_attribute("role", "dialog")?;
+    layer.set_attribute("aria-modal", "true")?;
+    layer.set_attribute("aria-labelledby", "tv-sound-title")?;
+    let title = node(document, &layer, "h1", "tv-sound-title", "Start with sound")?;
+    title.set_attribute("id", "tv-sound-title")?;
+    node(
+        document,
+        &layer,
+        "p",
+        "tv-sound-copy",
+        "Hear the story together. You can mute sound at any time.",
+    )?;
+    let controls = node(document, &layer, "div", "tv-sound-actions", "")?;
+    let start = node(
+        document,
+        &controls,
+        "button",
+        "tv-sound-start",
+        "Start with sound",
+    )?;
+    start.set_attribute("type", "button")?;
+    let skip = node(
+        document,
+        &controls,
+        "button",
+        "tv-sound-skip",
+        "Continue without sound",
+    )?;
+    skip.set_attribute("type", "button")?;
+    skip.set_attribute("data-sound-skip", "")?;
+    stage.set_attribute("data-sound-gate", "")?;
+
+    let mut dismiss_listeners = Vec::with_capacity(2);
+    for button in [&start, &skip] {
+        let (stage, layer) = (stage.clone(), layer.clone());
+        let listener = Closure::wrap(Box::new(move |_: Event| {
+            let _removed = stage.remove_attribute("data-sound-gate");
+            layer.remove();
+        }) as Box<dyn FnMut(Event)>);
+        button.add_event_listener_with_callback("click", listener.as_ref().unchecked_ref())?;
+        dismiss_listeners.push(listener);
+    }
+
+    let stop_unlock = Closure::wrap(Box::new(move |event: Event| {
+        event.stop_propagation();
+    }) as Box<dyn FnMut(Event)>);
+    skip.add_event_listener_with_callback("pointerdown", stop_unlock.as_ref().unchecked_ref())?;
+    skip.add_event_listener_with_callback("keydown", stop_unlock.as_ref().unchecked_ref())?;
+
+    Ok(SoundGate {
+        layer,
+        start,
+        skip,
+        dismiss_listeners,
+        skip_guards: vec![stop_unlock],
     })
 }
 
@@ -308,15 +384,128 @@ fn mount_card(document: &Document, parent: &Element) -> Result<BigCard, JsValue>
 /// own picture.
 fn sync_shot(stage: &Element) -> Result<(), JsValue> {
     let shot = if stage.get_attribute("data-tv-mode").as_deref() == Some("scene") {
-        shot_of(
-            PlateState::from_name(&stage.get_attribute("data-plate-state").unwrap_or_default()),
-            stage.has_attribute("data-plate-loaded"),
-            stage.has_attribute("data-narration-over"),
-        )
+        if stage.has_attribute("data-plate-loaded")
+            && stage.get_attribute("data-shot").as_deref() == Some("plate")
+        {
+            crate::presentation::Shot::Plate
+        } else {
+            shot_of(
+                PlateState::from_name(&stage.get_attribute("data-plate-state").unwrap_or_default()),
+                stage.has_attribute("data-plate-loaded"),
+                stage.has_attribute("data-narration-over"),
+            )
+        }
     } else {
         crate::presentation::Shot::Stage
     };
-    stage.set_attribute("data-shot", shot.name())
+    stage.set_attribute("data-shot", shot.name())?;
+    refresh_timing_visibility(stage);
+    Ok(())
+}
+
+/// Observe visibility after motion-only changes as well as media/view updates.
+pub(super) fn refresh_timing_visibility(stage: &Element) {
+    live_scene_stage::refresh_timing_visibility(stage);
+    let check_visible = stage.is_connected()
+        && stage.get_attribute("data-tv-mode").as_deref() == Some("scene")
+        && !stage.has_attribute("data-sound-gate")
+        && stage.has_attribute("data-check-active")
+        && stage.get_attribute("data-battlefield-live").as_deref() != Some("true");
+    let check = if check_visible {
+        stage
+            .query_selector(".tv-check-result")
+            .ok()
+            .flatten()
+            .and_then(|panel| panel.get_attribute("data-check-signature"))
+    } else {
+        None
+    };
+    let previous = stage.get_attribute("data-timing-check");
+    if previous != check {
+        let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+        if let Some(previous) = previous {
+            super::presentation_timing::media("check-hidden", &scene, &previous, "replaced", 0);
+        }
+        if let Some(signature) = check {
+            if stage.set_attribute("data-timing-check", &signature).is_ok() {
+                super::presentation_timing::media("check-shown", &scene, &signature, "ready", 0);
+            }
+        } else {
+            let _removed = stage.remove_attribute("data-timing-check");
+        }
+    }
+    let Ok(Some(plate)) = stage.query_selector(".tv-plate") else {
+        return;
+    };
+    let visible = stage.is_connected()
+        && stage.get_attribute("data-tv-mode").as_deref() == Some("scene")
+        && stage.get_attribute("data-shot").as_deref() == Some("plate")
+        && stage.get_attribute("data-battlefield-live").as_deref() != Some("true")
+        && stage
+            .get_attribute("data-battle-state")
+            .is_none_or(|state| state == "absent")
+        && !stage.has_attribute("data-sound-gate");
+    let active = plate.get_attribute("data-active");
+    let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+    let Ok(frames) = plate.query_selector_all(".tv-plate-frame") else {
+        return;
+    };
+    for index in 0..frames.length() {
+        let Some(frame) = frames
+            .item(index)
+            .and_then(|node| node.dyn_into::<Element>().ok())
+        else {
+            continue;
+        };
+        let shown = visible && active == frame.get_attribute("data-i");
+        if !shown {
+            let _removed = frame.remove_attribute("data-timing-shown");
+            let _removed = frame.remove_attribute("data-clip-shown");
+            continue;
+        }
+        if let Ok(Some(image)) = frame.query_selector(".tv-plate-img") {
+            let request = image.get_attribute("data-request");
+            if request.is_some()
+                && frame.get_attribute("data-timing-shown") != request
+                && let Some(request) = request
+                && frame.set_attribute("data-timing-shown", &request).is_ok()
+            {
+                super::presentation_timing::media(
+                    "plate-shown",
+                    &scene,
+                    &image.get_attribute("data-src").unwrap_or_default(),
+                    "ready",
+                    1200,
+                );
+            }
+        }
+        let playing = frame
+            .query_selector_all("video.tv-loop-clip")
+            .ok()
+            .and_then(|videos| {
+                (0..videos.length()).find_map(|index| {
+                    let video = videos
+                        .item(index)?
+                        .dyn_into::<web_sys::HtmlVideoElement>()
+                        .ok()?;
+                    (!video.paused()
+                        && video.has_attribute("data-on")
+                        && video.has_attribute("data-timing-playing"))
+                    .then_some(video)
+                })
+            });
+        if let Some(video) = playing {
+            let path = video.get_attribute("src");
+            if video.has_attribute("data-timing-playing")
+                && path.is_some()
+                && frame.get_attribute("data-clip-shown") != path
+                && let Some(path) = path
+                && frame.set_attribute("data-clip-shown", &path).is_ok()
+            {
+                super::presentation_timing::media("clip-shown", &scene, &path, "ready", 1200);
+            }
+        }
+    }
 }
 
 fn scene_video_url(path: &str) -> Option<&str> {
@@ -329,7 +518,16 @@ fn check_skill_label(source_revision: &str) -> Option<(&'static str, &'static st
     let ["srd521-p6", _, skill, _] = parts.as_slice() else {
         return None;
     };
+    // SRD 5.2.1 p. 9, Skills: names and the ability check each skill most often applies to.
     match *skill {
+        "acrobatics" => Some(("Dexterity", "Acrobatics")),
+        "animal-handling" => Some(("Wisdom", "Animal Handling")),
+        "athletics" => Some(("Strength", "Athletics")),
+        "deception" => Some(("Charisma", "Deception")),
+        "intimidation" => Some(("Charisma", "Intimidation")),
+        "performance" => Some(("Charisma", "Performance")),
+        "persuasion" => Some(("Charisma", "Persuasion")),
+        "sleight-of-hand" => Some(("Dexterity", "Sleight of Hand")),
         "perception" => Some(("Wisdom", "Perception")),
         "insight" => Some(("Wisdom", "Insight")),
         "survival" => Some(("Wisdom", "Survival")),
@@ -369,21 +567,25 @@ pub(super) fn check_display(
         .ok_or_else(|| JsValue::from_str("display check kept die is absent"))?;
     let (ability, skill) = check_skill_label(&check.source_revision)
         .ok_or_else(|| JsValue::from_str("display check skill is unknown"))?;
-    let hero_name = journey
+    let roller_index = journey
         .table_log
         .iter()
         .rev()
         .find(|line| {
-            rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
+            rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Narrator)
                 && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
+                && line.speaker == "Roll"
         })
-        .ok_or_else(|| JsValue::from_str("display check hero action is absent"))?
-        .speaker
-        .trim()
-        .to_owned();
-    if hero_name.is_empty() {
-        return Err(JsValue::from_str("display check hero is absent"));
-    }
+        .map(|line| line.hero_index)
+        .and_then(|index| usize::try_from(index).ok())
+        .ok_or_else(|| JsValue::from_str("display check roller is absent"))?;
+    let hero_name = journey
+        .party
+        .get(roller_index)
+        .map(|hero| hero.name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| JsValue::from_str("display check roller is absent"))?;
     let modifier = check
         .ability_modifier
         .checked_add(proficiency_modifier)
@@ -456,8 +658,10 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
         video_paths: Rc::new(RefCell::new(vec![None, None])),
         listeners: Vec::with_capacity(2),
         frame_listeners: Vec::with_capacity(2),
+        video_ready_listeners: Vec::with_capacity(2),
         scene: RefCell::new(String::new()),
         next: Cell::new(0),
+        request: Cell::new(0),
         seen: RefCell::new(String::new()),
         preloads: RefCell::new(Vec::new()),
         pending_layout: Rc::new(RefCell::new(None)),
@@ -477,36 +681,67 @@ fn bind_plate_events(
             let pending_layout = Rc::clone(&layer.pending_layout);
             let picture_size = Rc::clone(&layer.picture_size);
             Closure::wrap(Box::new(move |_: Event| {
-                if root.get_attribute("data-want") != image.get_attribute("data-src") {
+                if !plate_request_matches(&root, &image) {
                     return;
                 }
-                let tick = if root.get_attribute("data-push").as_deref() == Some("a") {
-                    "b"
-                } else {
-                    "a"
+                let Ok(image) = image.clone().dyn_into::<HtmlImageElement>() else {
+                    fail_plate_request(
+                        &stage,
+                        &root,
+                        &image,
+                        &figures,
+                        &pending_layout,
+                        &picture_size,
+                    );
+                    return;
                 };
-                if root.get_attribute("data-pull").as_deref() != Some("focus") {
-                    let _set = root.set_attribute("data-push", tick);
-                }
-                let image_index = image.get_attribute("data-i").unwrap_or_default();
-                let _set = root.set_attribute("data-transition", &image_index);
-                let _set = root.set_attribute("data-active", &image_index);
-                if let Some(figures) = figures.upgrade() {
-                    let layout = pending_layout.borrow().clone();
-                    let size = image_dimensions(&image);
-                    picture_size.set(size);
-                    if let Some(style) = layout
-                        .as_ref()
-                        .and_then(|layout| plate_head_style(layout, size))
-                    {
-                        let _set = root.set_attribute("style", &style);
+                super::presentation_timing::media(
+                    "plate-loaded",
+                    &stage.get_attribute("data-scene-key").unwrap_or_default(),
+                    &image.get_attribute("data-src").unwrap_or_default(),
+                    "ready",
+                    0,
+                );
+                let decoded = image.decode();
+                let (decode_stage, decode_root, decode_figures) =
+                    (stage.clone(), root.clone(), figures.clone());
+                let (decode_layout, decode_picture_size) =
+                    (Rc::clone(&pending_layout), Rc::clone(&picture_size));
+                wasm_bindgen_futures::spawn_local(async move {
+                    if wasm_bindgen_futures::JsFuture::from(decoded).await.is_ok() {
+                        if plate_request_matches(&decode_root, &image)
+                            && let Some(request) = decode_root.get_attribute("data-request")
+                            && image.set_attribute("data-decoded", &request).is_ok()
+                        {
+                            super::presentation_timing::media(
+                                "plate-decoded",
+                                &decode_stage
+                                    .get_attribute("data-scene-key")
+                                    .unwrap_or_default(),
+                                &image.get_attribute("data-src").unwrap_or_default(),
+                                "ready",
+                                0,
+                            );
+                        }
+                        activate_plate_request(
+                            &decode_stage,
+                            &decode_root,
+                            image.as_ref(),
+                            &decode_figures,
+                            &decode_layout,
+                            &decode_picture_size,
+                        );
                     } else {
-                        let _removed = root.remove_attribute("style");
+                        fail_plate_request(
+                            &decode_stage,
+                            &decode_root,
+                            image.as_ref(),
+                            &decode_figures,
+                            &decode_layout,
+                            &decode_picture_size,
+                        );
                     }
-                    let _applied = figures.set_plate(layout, size);
-                }
-                let _set = stage.set_attribute("data-plate-loaded", "");
-                let _synced = sync_shot(&stage);
+                });
             }) as Box<dyn FnMut(Event)>)
         };
         let error = {
@@ -515,22 +750,14 @@ fn bind_plate_events(
             let pending_layout = Rc::clone(&layer.pending_layout);
             let picture_size = Rc::clone(&layer.picture_size);
             Closure::wrap(Box::new(move |_: Event| {
-                if root.get_attribute("data-want") != image.get_attribute("data-src") {
-                    return;
-                }
-                let _set = root.set_attribute(
-                    "data-failed",
-                    &image.get_attribute("data-src").unwrap_or_default(),
+                fail_plate_request(
+                    &stage,
+                    &root,
+                    &image,
+                    &figures,
+                    &pending_layout,
+                    &picture_size,
                 );
-                let _set = stage.set_attribute("data-plate-state", "failed");
-                let _removed = stage.remove_attribute("data-plate-loaded");
-                *pending_layout.borrow_mut() = None;
-                let _removed = root.remove_attribute("style");
-                picture_size.set(None);
-                if let Some(figures) = figures.upgrade() {
-                    let _applied = figures.set_plate(None, None);
-                }
-                let _synced = sync_shot(&stage);
             }) as Box<dyn FnMut(Event)>)
         };
         image.add_event_listener_with_callback("load", load.as_ref().unchecked_ref())?;
@@ -539,6 +766,7 @@ fn bind_plate_events(
     }
     for (index, frame) in layer.frames.iter().enumerate() {
         let (root, frame, event_frame) = (layer.root.clone(), frame.clone(), frame.clone());
+        let video_frame = frame.clone();
         let video_loops = Rc::clone(&layer.video_loops);
         let video_paths = Rc::clone(&layer.video_paths);
         let listener = Closure::wrap(Box::new(move |event: Event| {
@@ -571,14 +799,290 @@ fn bind_plate_events(
                     && let Some(video_loop) = video_loops.borrow().get(index)
                 {
                     video_loop.release();
+                    let _removed = frame.remove_attribute("data-video-ready");
                 }
             }
         }) as Box<dyn FnMut(Event)>);
-        frame
+        video_frame
             .add_event_listener_with_callback("transitionend", listener.as_ref().unchecked_ref())?;
         layer.frame_listeners.push(listener);
+
+        let Some(video) = video_frame.query_selector("video.tv-loop-clip")? else {
+            continue;
+        };
+        let timing_stage = stage.clone();
+        let timing_figures = figures.clone();
+        let (stage, root, frame, image) = (
+            stage.clone(),
+            layer.root.clone(),
+            video_frame.clone(),
+            layer.images[index].clone(),
+        );
+        let figures = figures.clone();
+        let pending_layout = Rc::clone(&layer.pending_layout);
+        let picture_size = Rc::clone(&layer.picture_size);
+        let ready = Closure::wrap(Box::new(move |event: Event| {
+            let Some(wanted_video) = frame.get_attribute("data-video-want") else {
+                return;
+            };
+            let is_wanted_video = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+                .and_then(|target| target.get_attribute("src"))
+                .as_deref()
+                == Some(wanted_video.as_str());
+            if !is_wanted_video {
+                return;
+            }
+            if frame
+                .set_attribute("data-video-ready", &wanted_video)
+                .is_ok()
+            {
+                super::presentation_timing::media(
+                    "clip-ready",
+                    &stage.get_attribute("data-scene-key").unwrap_or_default(),
+                    &wanted_video,
+                    "ready",
+                    0,
+                );
+            }
+            activate_plate_request(
+                &stage,
+                &root,
+                &image,
+                &figures,
+                &pending_layout,
+                &picture_size,
+            );
+        }) as Box<dyn FnMut(Event)>);
+        video.add_event_listener_with_callback("canplay", ready.as_ref().unchecked_ref())?;
+        layer.video_ready_listeners.push((video, "canplay", ready));
+        let videos = video_frame.query_selector_all("video.tv-loop-clip")?;
+        for video_index in 0..videos.length() {
+            let Some(video) = videos
+                .item(video_index)
+                .and_then(|node| node.dyn_into::<Element>().ok())
+            else {
+                continue;
+            };
+            for event_name in ["playing", "ended", "error"] {
+                let video = video.clone();
+                let (stage, root, image) = (
+                    timing_stage.clone(),
+                    layer.root.clone(),
+                    layer.images[index].clone(),
+                );
+                let figures = timing_figures.clone();
+                let (layout, size) = (
+                    Rc::clone(&layer.pending_layout),
+                    Rc::clone(&layer.picture_size),
+                );
+                let observed_video = video.clone();
+                let listener = Closure::wrap(Box::new(move |_: Event| {
+                    let path = observed_video.get_attribute("src").unwrap_or_default();
+                    let current = image
+                        .parent_element()
+                        .and_then(|frame| frame.get_attribute("data-video-want"));
+                    if !observed_video.is_connected() || current.as_deref() != Some(&path) {
+                        return;
+                    }
+                    match event_name {
+                        "playing" => {
+                            if observed_video
+                                .set_attribute("data-timing-playing", "")
+                                .is_ok()
+                            {
+                                refresh_timing_visibility(&stage);
+                            }
+                        }
+                        "ended" => {
+                            let _removed = observed_video.remove_attribute("data-timing-playing");
+                            super::presentation_timing::media(
+                                "clip-ended",
+                                &stage.get_attribute("data-scene-key").unwrap_or_default(),
+                                &path,
+                                "ended",
+                                0,
+                            );
+                        }
+                        _ => {
+                            let _removed = observed_video.remove_attribute("data-timing-playing");
+                            super::presentation_timing::media(
+                                "clip-failed",
+                                &stage.get_attribute("data-scene-key").unwrap_or_default(),
+                                &path,
+                                "failed",
+                                0,
+                            );
+                            fail_plate_request(&stage, &root, &image, &figures, &layout, &size);
+                        }
+                    }
+                }) as Box<dyn FnMut(Event)>);
+                // Observe failure before HomeLoop's listener releases and clears the source.
+                video.add_event_listener_with_callback_and_bool(
+                    event_name,
+                    listener.as_ref().unchecked_ref(),
+                    true,
+                )?;
+                layer
+                    .video_ready_listeners
+                    .push((video, event_name, listener));
+            }
+        }
     }
     Ok(())
+}
+
+fn plate_request_matches(root: &Element, image: &Element) -> bool {
+    let Some(wanted) = root.get_attribute("data-want") else {
+        return false;
+    };
+    let Some(wanted_index) = root.get_attribute("data-want-i") else {
+        return false;
+    };
+    let Some(request) = root.get_attribute("data-request") else {
+        return false;
+    };
+    root.is_connected()
+        && image.is_connected()
+        && Some(wanted) == image.get_attribute("data-src")
+        && Some(wanted_index) == image.get_attribute("data-i")
+        && Some(request) == image.get_attribute("data-request")
+}
+
+fn scene_clip_needs_frame_swap(
+    active_index: Option<usize>,
+    want_index: usize,
+    plate_loaded: bool,
+    existing_path: Option<&str>,
+    next_path: Option<&str>,
+) -> bool {
+    active_index == Some(want_index)
+        && plate_loaded
+        && next_path.is_some()
+        && existing_path != next_path
+}
+
+fn scene_plate_media_ready(
+    image_decoded: bool,
+    wanted_video: Option<&str>,
+    ready_video: Option<&str>,
+) -> bool {
+    image_decoded && wanted_video.is_none_or(|wanted| ready_video == Some(wanted))
+}
+
+fn activate_plate_request(
+    stage: &Element,
+    root: &Element,
+    image: &Element,
+    figures: &Weak<Figures>,
+    pending_layout: &Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
+    picture_size: &Rc<Cell<Option<(f64, f64)>>>,
+) {
+    if !plate_request_matches(root, image) {
+        return;
+    }
+    let request = root.get_attribute("data-request");
+    if request.is_some() && root.get_attribute("data-applied-request") == request {
+        return;
+    }
+    let image_decoded = image.get_attribute("data-decoded") == request;
+    let frame = image.parent_element();
+    if !scene_plate_media_ready(
+        image_decoded,
+        frame
+            .as_ref()
+            .and_then(|frame| frame.get_attribute("data-video-want"))
+            .as_deref(),
+        frame
+            .as_ref()
+            .and_then(|frame| frame.get_attribute("data-video-ready"))
+            .as_deref(),
+    ) {
+        return;
+    }
+    let Some(image_index) = image.get_attribute("data-i") else {
+        return;
+    };
+    let Some(key) = root.get_attribute("data-want-key") else {
+        return;
+    };
+    let tick = if root.get_attribute("data-push").as_deref() == Some("a") {
+        "b"
+    } else {
+        "a"
+    };
+    if root.get_attribute("data-pull").as_deref() != Some("focus") {
+        let _set = root.set_attribute("data-push", tick);
+    }
+    if let Some(request) = request {
+        let _set = root.set_attribute("data-applied-request", &request);
+    }
+    let _set = root.set_attribute("data-transition", &image_index);
+    let _set = root.set_attribute("data-active", &image_index);
+    let _set = stage.set_attribute("data-plate-key", &key);
+    let _set = stage.set_attribute("data-plate-state", "ready");
+    let _removed = root.remove_attribute("data-failed");
+    if let Some(figures) = figures.upgrade() {
+        let layout = pending_layout.borrow().clone();
+        let size = image_dimensions(image);
+        picture_size.set(size);
+        if let Some(style) = layout
+            .as_ref()
+            .and_then(|layout| plate_head_style(layout, size))
+        {
+            let _set = root.set_attribute("style", &style);
+        } else {
+            let _removed = root.remove_attribute("style");
+        }
+        let _applied = figures.set_plate(layout, size);
+    }
+    let _set = stage.set_attribute("data-plate-loaded", "");
+    let _synced = sync_shot(stage);
+}
+
+fn fail_plate_request(
+    stage: &Element,
+    root: &Element,
+    image: &Element,
+    figures: &Weak<Figures>,
+    pending_layout: &Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
+    picture_size: &Rc<Cell<Option<(f64, f64)>>>,
+) {
+    if !plate_request_matches(root, image) {
+        return;
+    }
+    let Some(url) = image.get_attribute("data-src") else {
+        return;
+    };
+    let _set = root.set_attribute("data-failed", &url);
+    if root.has_attribute("data-active") && stage.has_attribute("data-plate-loaded") {
+        let _set = stage.set_attribute("data-plate-state", "ready");
+        let active = root.get_attribute("data-active").unwrap_or_default();
+        let retained = root
+            .query_selector(&format!(".tv-plate-img[data-i=\"{active}\"]"))
+            .ok()
+            .flatten()
+            .and_then(|image| image.get_attribute("data-src"))
+            .unwrap_or_default();
+        super::presentation_timing::media(
+            "plate-kept",
+            &stage.get_attribute("data-scene-key").unwrap_or_default(),
+            &retained,
+            "failed",
+            0,
+        );
+    } else {
+        let _set = stage.set_attribute("data-plate-state", "failed");
+        let _removed = stage.remove_attribute("data-plate-loaded");
+        *pending_layout.borrow_mut() = None;
+        let _removed = root.remove_attribute("style");
+        picture_size.set(None);
+        if let Some(figures) = figures.upgrade() {
+            let _applied = figures.set_plate(None, None);
+        }
+    }
+    let _synced = sync_shot(stage);
 }
 
 fn image_dimensions(image: &Element) -> Option<(f64, f64)> {
@@ -694,7 +1198,7 @@ impl TvStage {
         let caption = node(document, &stagebox, "div", "tv-dm", "")?;
         let caption_head = node(document, &caption, "div", "tv-dm-head", "")?;
         let avatar = node(document, &caption_head, "img", "tv-dm-avatar", "")?;
-        avatar.set_attribute("src", DM_AVATAR)?;
+        set_hidden(&avatar, true)?;
         avatar.set_attribute("alt", "")?;
         node(
             document,
@@ -737,6 +1241,7 @@ impl TvStage {
         let choices = node(document, &root, "ol", "tv-choices", "")?;
         choices.set_attribute("aria-label", "What the table can do")?;
         let card = mount_card(document, &root)?;
+        let sound_gate = mount_sound_gate(document, &root)?;
         let establish = node(document, &root, "div", "tv-establish", "")?;
         establish.set_attribute("aria-hidden", "true")?;
         let establish_title = node(document, &establish, "h2", "tv-establish-title", "")?;
@@ -787,6 +1292,7 @@ impl TvStage {
             cards,
             dock,
             wordmark: WordmarkSlot { image, text, load },
+            sound_gate,
         })
     }
 
@@ -823,7 +1329,7 @@ impl TvStage {
     }
 
     pub(super) fn update_scene_video_wire(&self, state: i32, path: &str) -> Result<(), JsValue> {
-        let Some(index) = self
+        let Some(mut index) = self
             .plate
             .root
             .get_attribute("data-want-i")
@@ -834,13 +1340,21 @@ impl TvStage {
                 video_loop.release();
             }
             self.plate.video_paths.borrow_mut().fill(None);
+            for frame in &self.plate.frames {
+                let _removed = frame.remove_attribute("data-video-want");
+                let _removed = frame.remove_attribute("data-video-ready");
+            }
             return Ok(());
         };
         let path = (state == rpc::HomeVideoState::Ready as i32)
             .then(|| scene_video_url(path))
             .flatten()
             .map(str::to_owned);
-        self.plate.video_paths.borrow_mut()[index] = path.clone();
+        let active_index = self
+            .plate
+            .root
+            .get_attribute("data-active")
+            .and_then(|active| active.parse::<usize>().ok());
         let transitioning_index = self
             .plate
             .root
@@ -851,13 +1365,110 @@ impl TvStage {
                 video_loop.release();
             }
             self.plate.video_paths.borrow_mut().fill(None);
-        } else if self.plate.root.get_attribute("data-active").as_deref()
-            == Some(&index.to_string())
-            && self.root.has_attribute("data-plate-loaded")
-            && transitioning_index != Some(index)
-            && let Some(video_loop) = self.plate.video_loops.borrow().get(index)
-        {
-            video_loop.apply(path.as_deref())?;
+            for frame in &self.plate.frames {
+                let _removed = frame.remove_attribute("data-video-want");
+                let _removed = frame.remove_attribute("data-video-ready");
+            }
+        } else if state == rpc::HomeVideoState::Pending as i32 && active_index == Some(index) {
+            // Keep a playing clip over its plate while the server prepares its replacement.
+        } else {
+            let needs_swap = {
+                let video_paths = self.plate.video_paths.borrow();
+                scene_clip_needs_frame_swap(
+                    active_index,
+                    index,
+                    self.root.has_attribute("data-plate-loaded"),
+                    video_paths.get(index).and_then(Option::as_deref),
+                    path.as_deref(),
+                )
+            };
+            if needs_swap {
+                let target = 1 - index;
+                let Some(url) = self.plate.root.get_attribute("data-want") else {
+                    return Ok(());
+                };
+                let Some(key) = self.root.get_attribute("data-plate-key") else {
+                    return Ok(());
+                };
+                let Some(image) = self.plate.images.get(target) else {
+                    return Ok(());
+                };
+                let request = self
+                    .plate
+                    .request
+                    .get()
+                    .checked_add(1)
+                    .ok_or_else(|| JsValue::from_str("plate request generation exhausted"))?;
+                self.plate.request.set(request);
+                self.plate
+                    .root
+                    .set_attribute("data-request", &request.to_string())?;
+                self.plate
+                    .root
+                    .set_attribute("data-want-i", &target.to_string())?;
+                self.plate.root.set_attribute("data-want-key", &key)?;
+                self.plate.root.set_attribute("data-pull", "focus")?;
+                image.set_attribute("data-request", &request.to_string())?;
+                image.set_attribute("data-src", &url)?;
+                image.remove_attribute("src")?;
+                image.set_attribute("src", &url)?;
+                self.plate.next.set(index);
+                index = target;
+            }
+            let Some(frame) = self.plate.frames.get(index) else {
+                return Ok(());
+            };
+            let video_changed = self
+                .plate
+                .video_paths
+                .borrow()
+                .get(index)
+                .and_then(Option::as_deref)
+                != path.as_deref();
+            if video_changed {
+                if let Some(path) = path.as_deref() {
+                    super::presentation_timing::media(
+                        "clip-requested",
+                        &self
+                            .root
+                            .get_attribute("data-scene-key")
+                            .unwrap_or_default(),
+                        path,
+                        "replaced",
+                        0,
+                    );
+                }
+                if let Some(video) = frame.query_selector("video.tv-loop-clip")? {
+                    video.remove_attribute("data-timing-playing")?;
+                }
+                frame.remove_attribute("data-video-ready")?;
+                if let Some(path) = path.as_deref() {
+                    frame.set_attribute("data-video-want", path)?;
+                } else {
+                    frame.remove_attribute("data-video-want")?;
+                }
+            }
+            self.plate.video_paths.borrow_mut()[index] = path.clone();
+            if transitioning_index != Some(index)
+                && let Some(video_loop) = self.plate.video_loops.borrow().get(index)
+            {
+                // The inactive frame is ready before the plate cross-fade reaches it.
+                video_loop.apply(path.as_deref())?;
+            }
+            if video_changed
+                && path.is_none()
+                && active_index != Some(index)
+                && let Some(image) = self.plate.images.get(index)
+            {
+                activate_plate_request(
+                    &self.root,
+                    &self.plate.root,
+                    image,
+                    &Rc::downgrade(&self.figures),
+                    &self.plate.pending_layout,
+                    &self.plate.picture_size,
+                );
+            }
         }
         Ok(())
     }
@@ -909,6 +1520,9 @@ impl TvStage {
         shown.place.set_text_content(Some(&card.place));
         set_hidden(&shown.place, card.place.is_empty())?;
         set_hidden(&shown.line, card.subline.is_empty())?;
+        if card.kind != CardKind::End {
+            set_hidden(&shown.rewards, true)?;
+        }
         shown.heroes.set_text_content(None);
         set_hidden(&shown.heroes, card.heroes.is_empty())?;
         for hero in &card.heroes {
@@ -976,11 +1590,41 @@ impl TvStage {
             }
             _ => {}
         }
+        super::presentation_timing::line(
+            id,
+            state,
+            None,
+            text.chars().count() as u32,
+            crate::stage_machines::reading_time_ms(text),
+            &self
+                .root
+                .get_attribute("data-scene-key")
+                .unwrap_or_default(),
+        );
         Ok(opened)
     }
 
     /// Empties the Dungeon Master's box: a new scene starts with none of the old scene's words.
     pub(super) fn clear_narration(&self) -> Result<(), JsValue> {
+        if let Some(id) = self
+            .narration
+            .parent_element()
+            .and_then(|caption| caption.get_attribute("data-line-id"))
+            .and_then(|id| id.parse::<u64>().ok())
+        {
+            super::presentation_timing::close_reason(id, "scene-change");
+            super::presentation_timing::line(
+                id,
+                LineState::Done,
+                None,
+                0,
+                0,
+                &self
+                    .root
+                    .get_attribute("data-scene-key")
+                    .unwrap_or_default(),
+            );
+        }
         self.narration.set_text_content(None);
         self.narration.remove_attribute("title")?;
         self.narration.class_list().remove_1("speaking")?;
@@ -1011,12 +1655,40 @@ impl TvStage {
     }
 
     /// The container for recovery controls; it is emptied and refilled on every render.
+    /// Silent context on a late join sits apart from the single active subtitle lane.
+    pub(super) fn set_scene_context(&self, text: &str) -> Result<(), JsValue> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let context = match self.root.query_selector(".tv-scene-context")? {
+            Some(context) => context,
+            None => {
+                let document = self
+                    .root
+                    .owner_document()
+                    .ok_or_else(|| JsValue::from_str("display document absent"))?;
+                let context = node(&document, &self.root, "aside", "tv-scene-context", "")?;
+                context.set_attribute("aria-label", "Scene context")?;
+                context
+            }
+        };
+        context.set_text_content(Some(text));
+        Ok(())
+    }
+
     pub(super) fn dock(&self) -> &Element {
         &self.dock
     }
 
     pub(super) fn update(&self, model: &TvModel) -> Result<(), JsValue> {
         let lobby = model.mode == TvMode::Lobby;
+        if self.root.get_attribute("data-scene-key").as_deref() != Some(&model.scene_key)
+            && let Some(context) = self.root.query_selector(".tv-scene-context")?
+        {
+            context.remove();
+        }
+        self.root
+            .set_attribute("data-scene-key", &model.scene_key)?;
         self.root
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
@@ -1254,6 +1926,26 @@ impl TvStage {
             self.root.remove_attribute("data-check-active")?;
         }
         self.drawn.set(true);
+        refresh_timing_visibility(&self.root);
+        Ok(())
+    }
+
+    pub(super) fn set_end_rewards(&self, rewards: &[String]) -> Result<(), JsValue> {
+        self.card.rewards.set_text_content(None);
+        set_hidden(&self.card.rewards, rewards.is_empty())?;
+        let document = self
+            .root
+            .owner_document()
+            .ok_or_else(|| JsValue::from_str("display document absent"))?;
+        for reward in rewards {
+            node(
+                &document,
+                &self.card.rewards,
+                "p",
+                "tv-bigcard-reward",
+                reward,
+            )?;
+        }
         Ok(())
     }
 
@@ -1401,29 +2093,47 @@ impl TvStage {
             (PlateState::Ready, None) => PlateState::Failed,
             (state, _) => state,
         };
-        self.root.set_attribute("data-plate-state", state.name())?;
         let Some(url) = usable else {
+            if matches!(state, PlateState::Pending | PlateState::Failed)
+                && layer.root.has_attribute("data-active")
+                && self.root.has_attribute("data-plate-loaded")
+            {
+                self.root.set_attribute("data-plate-state", "ready")?;
+                *layer.seen.borrow_mut() = scene_key.to_owned();
+                return Ok(());
+            }
+            self.root.set_attribute("data-plate-state", state.name())?;
             self.root.remove_attribute("data-plate-key")?;
             self.root.remove_attribute("data-plate-loaded")?;
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
             layer.root.remove_attribute("data-pull")?;
             layer.root.remove_attribute("data-want-i")?;
+            layer.root.remove_attribute("data-request")?;
+            layer.root.remove_attribute("data-want-key")?;
             for video_loop in layer.video_loops.borrow().iter() {
                 video_loop.release();
             }
             layer.video_paths.borrow_mut().fill(None);
+            for frame in &layer.frames {
+                let _removed = frame.remove_attribute("data-video-want");
+                let _removed = frame.remove_attribute("data-video-ready");
+            }
             layer.scene.borrow_mut().clear();
             *layer.seen.borrow_mut() = scene_key.to_owned();
             *layer.pending_layout.borrow_mut() = None;
             self.figures.set_plate(None, None)?;
             return Ok(());
         };
+        self.root.set_attribute("data-plate-state", "ready")?;
         if layer.root.get_attribute("data-want").as_deref() == Some(url.as_str()) {
             // The same picture can arrive with a new layout: its speaker has moved.
             let layout = plate.layout.clone();
             *layer.pending_layout.borrow_mut() = layout.clone();
-            if self.root.has_attribute("data-plate-loaded") {
+            if self.root.has_attribute("data-plate-loaded")
+                && layer.root.get_attribute("data-active")
+                    == layer.root.get_attribute("data-want-i")
+            {
                 if let Some(style) = layout
                     .as_ref()
                     .and_then(|layout| plate_head_style(layout, layer.picture_size.get()))
@@ -1439,36 +2149,69 @@ impl TvStage {
         let same_scene =
             layer.scene.borrow().as_str() == scene_key && layer.root.has_attribute("data-want");
         *layer.pending_layout.borrow_mut() = plate.layout.clone();
-        if !same_scene {
-            self.figures.set_plate(None, None)?;
-        }
-        let next = layer.next.get();
+        let active = layer
+            .root
+            .get_attribute("data-active")
+            .and_then(|active| active.parse::<usize>().ok())
+            .filter(|index| *index < layer.images.len())
+            .filter(|_| self.root.has_attribute("data-plate-loaded"));
+        let next = active.map_or_else(|| layer.next.get(), |active| 1 - active);
         let Some(image) = layer.images.get(next) else {
             return Ok(());
         };
         if let Some(video_loop) = layer.video_loops.borrow().get(next) {
             video_loop.release();
         }
+        if let Some(frame) = layer.frames.get(next) {
+            frame.remove_attribute("data-video-want")?;
+            frame.remove_attribute("data-video-ready")?;
+        }
         layer.video_paths.borrow_mut()[next] = None;
+        let request = layer
+            .request
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| JsValue::from_str("plate request generation exhausted"))?;
+        layer.request.set(request);
+        layer
+            .root
+            .set_attribute("data-request", &request.to_string())?;
+        image.set_attribute("data-request", &request.to_string())?;
         layer.root.set_attribute("data-want-i", &next.to_string())?;
         layer.next.set(1 - next);
-        let key = url.rsplit('/').next().unwrap_or_default();
-        self.root.set_attribute("data-plate-key", key)?;
+        let key = url
+            .rsplit('/')
+            .next()
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| JsValue::from_str("plate URL has no asset key"))?;
+        layer.root.set_attribute("data-want-key", key)?;
         layer.root.set_attribute("data-want", url)?;
         if same_scene {
             // An edit of the plate on screen: the old one stays until the new one has loaded.
             layer.root.set_attribute("data-pull", "focus")?;
         } else {
             layer.root.remove_attribute("data-pull")?;
-            self.root.remove_attribute("data-plate-loaded")?;
             *layer.scene.borrow_mut() = scene_key.to_owned();
         }
         *layer.seen.borrow_mut() = scene_key.to_owned();
         image.set_attribute("data-src", url)?;
-        image.set_attribute("src", url)
+        image.set_attribute("src", url)?;
+        super::presentation_timing::media(
+            "plate-requested",
+            scene_key,
+            url,
+            if same_scene {
+                "replaced"
+            } else {
+                "scene-change"
+            },
+            1200,
+        );
+        Ok(())
     }
 
     pub(super) fn dispose(self) -> Result<(), JsValue> {
+        self.sound_gate.layer.remove();
         for (image, (load, error)) in self.plate.images.iter().zip(&self.plate.listeners) {
             // Listeners die with their elements; removing them is hygiene.
             let _removed =
@@ -1481,6 +2224,30 @@ impl TvStage {
                 "transitionend",
                 listener.as_ref().unchecked_ref(),
             );
+        }
+        for (video, event_name, listener) in &self.plate.video_ready_listeners {
+            let _removed = video.remove_event_listener_with_callback_and_bool(
+                event_name,
+                listener.as_ref().unchecked_ref(),
+                *event_name != "canplay",
+            );
+        }
+        for (button, listener) in [self.sound_gate.start.clone(), self.sound_gate.skip.clone()]
+            .iter()
+            .zip(&self.sound_gate.dismiss_listeners)
+        {
+            let _removed = button
+                .remove_event_listener_with_callback("click", listener.as_ref().unchecked_ref());
+        }
+        for listener in &self.sound_gate.skip_guards {
+            let _removed = self.sound_gate.skip.remove_event_listener_with_callback(
+                "pointerdown",
+                listener.as_ref().unchecked_ref(),
+            );
+            let _removed = self
+                .sound_gate
+                .skip
+                .remove_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref());
         }
         for video_loop in self.plate.video_loops.borrow().iter() {
             video_loop.release();
@@ -1500,7 +2267,47 @@ impl TvStage {
 #[cfg(test)]
 mod tests {
     use super::super::rpc;
-    use super::{check_display, is_loopback_join_host, scene_video_url};
+    use super::{
+        PlateState, PlateView, TvStage, check_display, is_loopback_join_host,
+        scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
+    };
+    fn mounted_stage() -> (web_sys::Element, TvStage) {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let stage = TvStage::mount(&document, &parent).unwrap();
+        (parent, stage)
+    }
+
+    fn seed_active_plate(stage: &TvStage) {
+        let image = &stage.plate.images[0];
+        image.set_attribute("data-i", "0").unwrap();
+        image
+            .set_attribute("data-src", "/gameplay/imagery/old")
+            .unwrap();
+        stage.plate.root.set_attribute("data-active", "0").unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-want", "/gameplay/imagery/old")
+            .unwrap();
+        stage.plate.root.set_attribute("data-want-i", "0").unwrap();
+        stage.plate.next.set(1);
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage
+            .root
+            .set_attribute("data-plate-state", "ready")
+            .unwrap();
+        stage.root.set_attribute("data-plate-loaded", "").unwrap();
+        stage.root.set_attribute("data-shot", "plate").unwrap();
+        *stage.plate.scene.borrow_mut() = "old-scene".to_owned();
+        *stage.plate.seen.borrow_mut() = "old-scene".to_owned();
+    }
+
+    fn finish_stage(parent: web_sys::Element, stage: TvStage) {
+        stage.dispose().unwrap();
+        parent.remove();
+    }
 
     #[test]
     fn scene_clip_paths_require_the_server_video_route_and_key() {
@@ -1508,6 +2315,45 @@ mod tests {
         assert_eq!(scene_video_url(&path), Some(path.as_str()));
         assert_eq!(scene_video_url("https://example.test/clip.mp4"), None);
         assert_eq!(scene_video_url("/gameplay/home-video/not-a-key"), None);
+    }
+
+    #[test]
+    fn changed_scene_clip_uses_the_inactive_plate_frame_until_it_is_ready() {
+        assert!(scene_clip_needs_frame_swap(
+            Some(0),
+            0,
+            true,
+            Some("/gameplay/home-video/old"),
+            Some("/gameplay/home-video/new"),
+        ));
+        assert!(!scene_clip_needs_frame_swap(
+            Some(0),
+            0,
+            true,
+            Some("/gameplay/home-video/new"),
+            Some("/gameplay/home-video/new"),
+        ));
+        assert!(!scene_clip_needs_frame_swap(
+            Some(0),
+            0,
+            false,
+            None,
+            Some("/gameplay/home-video/new"),
+        ));
+    }
+
+    #[test]
+    fn scene_plate_waits_for_both_the_image_and_requested_clip() {
+        let clip = "/gameplay/home-video/new";
+        assert!(!scene_plate_media_ready(false, Some(clip), Some(clip)));
+        assert!(!scene_plate_media_ready(true, Some(clip), None));
+        assert!(!scene_plate_media_ready(
+            true,
+            Some(clip),
+            Some("/gameplay/home-video/old")
+        ));
+        assert!(scene_plate_media_ready(true, Some(clip), Some(clip)));
+        assert!(scene_plate_media_ready(true, None, None));
     }
 
     #[test]
@@ -1525,6 +2371,256 @@ mod tests {
     }
 
     #[test]
+    fn narration_in_a_new_scene_does_not_hide_the_plate_awaiting_its_successor() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        let plate = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/next-plate".to_owned()),
+            layout: None,
+        };
+        stage.set_plate(&plate, "next-scene", true).unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("plate")
+        );
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn repeated_media_ready_callback_does_not_restart_the_crossfade() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        let url = "/gameplay/imagery/next-plate";
+        let plate = PlateView {
+            state: PlateState::Ready,
+            url: Some(url.to_owned()),
+            ..Default::default()
+        };
+        stage.apply_plate(&plate, "next-scene").unwrap();
+        let index: usize = stage
+            .plate
+            .root
+            .get_attribute("data-want-i")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let image = &stage.plate.images[index];
+        let request = stage.plate.root.get_attribute("data-request").unwrap();
+        image.set_attribute("data-decoded", &request).unwrap();
+        super::activate_plate_request(
+            &stage.root,
+            &stage.plate.root,
+            image,
+            &std::rc::Rc::downgrade(&stage.figures),
+            &stage.plate.pending_layout,
+            &stage.plate.picture_size,
+        );
+        let push = stage.plate.root.get_attribute("data-push");
+        super::activate_plate_request(
+            &stage.root,
+            &stage.plate.root,
+            image,
+            &std::rc::Rc::downgrade(&stage.figures),
+            &stage.plate.pending_layout,
+            &stage.plate.picture_size,
+        );
+        assert_eq!(stage.plate.root.get_attribute("data-push"), push);
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn late_join_context_is_separate_from_the_active_narrator_caption() {
+        let (parent, stage) = mounted_stage();
+        stage
+            .set_scene_context("A letter lies on the table.")
+            .unwrap();
+        stage
+            .narrator_line(
+                1,
+                crate::stage_machines::LineState::Done,
+                "A reply has arrived.",
+            )
+            .unwrap();
+        assert_eq!(
+            stage
+                .root
+                .query_selector(".tv-scene-context")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .as_deref(),
+            Some("A letter lies on the table.")
+        );
+        assert_eq!(
+            stage.narration.text_content().as_deref(),
+            Some("A reply has arrived.")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn new_scene_plate_keeps_the_current_plate_visible_until_replacement_is_ready() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        let replacement = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/new".to_owned()),
+            layout: None,
+        };
+
+        stage.set_plate(&replacement, "new-scene", true).unwrap();
+
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            stage.plate.root.get_attribute("data-want-i").as_deref(),
+            Some("1")
+        );
+        assert!(stage.root.has_attribute("data-plate-loaded"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn pending_new_scene_keeps_the_current_plate_visible() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        let pending = PlateView {
+            state: PlateState::Pending,
+            url: None,
+            layout: None,
+        };
+
+        stage.set_plate(&pending, "new-scene", true).unwrap();
+
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        assert!(stage.root.has_attribute("data-plate-loaded"));
+        assert_eq!(
+            stage.root.get_attribute("data-plate-state").as_deref(),
+            Some("ready")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn failed_plate_replacement_keeps_the_current_plate_visible() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        stage
+            .plate
+            .root
+            .set_attribute("data-want", "/gameplay/imagery/new")
+            .unwrap();
+        stage.plate.root.set_attribute("data-want-i", "1").unwrap();
+        stage.plate.root.set_attribute("data-request", "1").unwrap();
+        stage.plate.images[1]
+            .set_attribute("data-src", "/gameplay/imagery/new")
+            .unwrap();
+        stage.plate.images[1]
+            .set_attribute("data-request", "1")
+            .unwrap();
+
+        stage.plate.images[1]
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        assert!(stage.root.has_attribute("data-plate-loaded"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn stale_plate_failure_for_a_reused_asset_path_is_ignored() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        stage
+            .plate
+            .root
+            .set_attribute("data-want", "/gameplay/imagery/new")
+            .unwrap();
+        stage.plate.root.set_attribute("data-want-i", "1").unwrap();
+        stage.plate.root.set_attribute("data-request", "2").unwrap();
+        stage.plate.images[1]
+            .set_attribute("data-src", "/gameplay/imagery/new")
+            .unwrap();
+        stage.plate.images[1]
+            .set_attribute("data-request", "1")
+            .unwrap();
+
+        stage.plate.images[1]
+            .dispatch_event(&web_sys::Event::new("error").unwrap())
+            .unwrap();
+
+        assert!(!stage.plate.root.has_attribute("data-failed"));
+        assert!(stage.root.has_attribute("data-plate-loaded"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn sound_gate_offers_start_with_sound_and_continue_without_sound() {
+        let (parent, stage) = mounted_stage();
+        assert!(stage.root.has_attribute("data-sound-gate"));
+        assert_eq!(
+            stage.sound_gate.layer.get_attribute("role").as_deref(),
+            Some("dialog")
+        );
+        assert_eq!(
+            stage.sound_gate.start.text_content().as_deref(),
+            Some("Start with sound")
+        );
+        assert_eq!(
+            stage.sound_gate.skip.text_content().as_deref(),
+            Some("Continue without sound")
+        );
+
+        let skip_press = web_sys::Event::new("pointerdown").unwrap();
+        stage.sound_gate.skip.dispatch_event(&skip_press).unwrap();
+        assert!(
+            js_sys::Reflect::get(
+                skip_press.as_ref(),
+                &wasm_bindgen::JsValue::from_str("cancelBubble"),
+            )
+            .unwrap()
+            .as_bool()
+            .unwrap()
+        );
+
+        let start_press = web_sys::Event::new("pointerdown").unwrap();
+        stage.sound_gate.start.dispatch_event(&start_press).unwrap();
+        assert!(
+            !js_sys::Reflect::get(
+                start_press.as_ref(),
+                &wasm_bindgen::JsValue::from_str("cancelBubble"),
+            )
+            .unwrap()
+            .as_bool()
+            .unwrap()
+        );
+
+        stage
+            .sound_gate
+            .skip
+            .dispatch_event(&web_sys::Event::new("click").unwrap())
+            .unwrap();
+
+        assert!(!stage.root.has_attribute("data-sound-gate"));
+        assert!(stage.sound_gate.layer.parent_element().is_none());
+        finish_stage(parent, stage);
+    }
+
+    #[test]
     fn display_check_shows_both_advantage_faces_and_the_kept_total_without_the_dc() {
         let check = rpc::AbilityCheckResult {
             die: 16,
@@ -1538,10 +2634,14 @@ mod tests {
             roll_mode: 1,
         };
         let journey = rpc::JourneyView {
+            party: vec![rpc::PartyMemberView {
+                name: "Brakka".to_owned(),
+                ..Default::default()
+            }],
             table_log: vec![rpc::TableLine {
-                role: rpc::TableRole::Hero as i32,
+                role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
-                speaker: "Brakka".to_owned(),
+                speaker: "Roll".to_owned(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1562,7 +2662,7 @@ mod tests {
     }
 
     #[test]
-    fn display_check_keeps_the_lower_disadvantage_face_and_failure_status() {
+    fn display_check_uses_roller_index_when_the_latest_hero_action_is_different() {
         let check = rpc::AbilityCheckResult {
             die: 4,
             ability_modifier: -1,
@@ -1574,12 +2674,31 @@ mod tests {
             ..Default::default()
         };
         let journey = rpc::JourneyView {
-            table_log: vec![rpc::TableLine {
-                role: rpc::TableRole::Hero as i32,
-                kind: rpc::TableKind::Action as i32,
-                speaker: "Sigrun".to_owned(),
-                ..Default::default()
-            }],
+            party: vec![
+                rpc::PartyMemberView {
+                    name: "Brakka".to_owned(),
+                    ..Default::default()
+                },
+                rpc::PartyMemberView {
+                    name: "Sigrun".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            table_log: vec![
+                rpc::TableLine {
+                    role: rpc::TableRole::Hero as i32,
+                    kind: rpc::TableKind::Action as i32,
+                    speaker: "Brakka".to_owned(),
+                    ..Default::default()
+                },
+                rpc::TableLine {
+                    role: rpc::TableRole::Narrator as i32,
+                    hero_index: 1,
+                    kind: rpc::TableKind::Action as i32,
+                    speaker: "Roll".to_owned(),
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         };
         let shown = check_display(&check, &journey, "Nothing new comes to light.")
@@ -1589,6 +2708,25 @@ mod tests {
         assert_eq!(shown.roll_mode, -1);
         assert_eq!(shown.modifier, -1);
         assert!(!shown.succeeded);
+    }
+
+    #[test]
+    fn display_check_accepts_social_and_dexterity_skill_labels() {
+        for (skill, ability, label) in [
+            ("acrobatics", "Dexterity", "Acrobatics"),
+            ("animal-handling", "Wisdom", "Animal Handling"),
+            ("athletics", "Strength", "Athletics"),
+            ("deception", "Charisma", "Deception"),
+            ("intimidation", "Charisma", "Intimidation"),
+            ("performance", "Charisma", "Performance"),
+            ("persuasion", "Charisma", "Persuasion"),
+            ("sleight-of-hand", "Dexterity", "Sleight of Hand"),
+        ] {
+            assert_eq!(
+                super::check_skill_label(&format!("srd521-p6:hero:{skill}:target")),
+                Some((ability, label))
+            );
+        }
     }
 
     #[test]
@@ -1617,6 +2755,49 @@ mod tests {
         let css = include_str!("live_stage.css");
         assert!(css.contains(".tv-stage[data-ended] :is("));
         assert!(!css.contains("tv-bigcard-notebook"));
+    }
+
+    #[test]
+    fn completed_narration_does_not_overlap_a_character_subtitle() {
+        let (parent, stage) = mounted_stage();
+        let style_node = super::node(
+            &stage.root.owner_document().unwrap(),
+            &parent,
+            "style",
+            "",
+            "",
+        )
+        .unwrap();
+        style_node.set_text_content(Some(&format!(
+            "{}\n.tv-stagebox{{transition:none!important}}",
+            include_str!("live_stage.css")
+        )));
+        stage
+            .root
+            .set_attribute("data-scene-state", "idle")
+            .unwrap();
+        stage
+            .narrator_line(
+                1,
+                crate::stage_machines::LineState::Done,
+                "The room is quiet.",
+            )
+            .unwrap();
+        stage.set_speaker("character").unwrap();
+        let style = web_sys::window()
+            .unwrap()
+            .get_computed_style(&stage.stagebox)
+            .unwrap()
+            .unwrap();
+        assert_eq!(style.get_property_value("visibility").unwrap(), "hidden");
+        stage.set_speaker("narrator").unwrap();
+        let style = web_sys::window()
+            .unwrap()
+            .get_computed_style(&stage.stagebox)
+            .unwrap()
+            .unwrap();
+        assert_eq!(style.get_property_value("visibility").unwrap(), "visible");
+        finish_stage(parent, stage);
     }
 
     #[test]

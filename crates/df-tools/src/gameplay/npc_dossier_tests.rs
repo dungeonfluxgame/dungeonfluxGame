@@ -771,7 +771,12 @@ async fn a_ten_line_conversation_shows_the_model_only_the_last_six_lines() {
 fn a_line_names_an_on_stage_npc_and_that_npc_answers_otherwise_the_speaker_does() {
     let adventure = (1..300)
         .map(adventure)
-        .find(|adventure| adventure.dossiers.len() == 3)
+        .find(|adventure| {
+            adventure
+                .dossiers
+                .iter()
+                .any(|dossier| dossier.role == NpcRole::Antagonist)
+        })
         .unwrap();
     let ledger = SocialLedger::open(adventure.dossiers.clone(), "0x01", None).unwrap();
     let patron = adventure
@@ -866,6 +871,7 @@ fn the_heros_own_view_lists_each_present_npcs_attitude_and_the_display_gets_none
                 scene_graph: None,
                 live_plate_graph_revision: 0,
                 check: None,
+                encounter_xp: None,
             },
         )),
     };

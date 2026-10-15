@@ -357,7 +357,50 @@ async fn the_final_adventure_reloads_and_records_the_model_slots() {
         .documents_expressed(true, Some(model.clone()))
         .unwrap();
     let (loaded, stored) = record::reload(&documents).unwrap();
-    assert_eq!(loaded.pack, generated.pack);
+    let loaded_pack = serde_json::to_value(&loaded.pack).unwrap();
+    let generated_pack = serde_json::to_value(&generated.pack).unwrap();
+    fn changed_paths(
+        left: &serde_json::Value,
+        right: &serde_json::Value,
+        path: &str,
+        output: &mut Vec<String>,
+    ) {
+        match (left, right) {
+            (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+                for (field, value) in left {
+                    let next = format!("{path}.{field}");
+                    if let Some(other) = right.get(field) {
+                        changed_paths(value, other, &next, output);
+                    } else if !next.ends_with(".setting.model") {
+                        output.push(next);
+                    }
+                }
+                for field in right.keys().filter(|field| !left.contains_key(*field)) {
+                    let next = format!("{path}.{field}");
+                    if !next.ends_with(".setting.model") {
+                        output.push(next);
+                    }
+                }
+            }
+            (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+                if left.len() != right.len() {
+                    output.push(format!("{path}.length"));
+                }
+                for (index, (left, right)) in left.iter().zip(right).enumerate() {
+                    changed_paths(left, right, &format!("{path}[{index}]"), output);
+                }
+            }
+            _ if left != right && !path.ends_with(".setting.model") => output.push(path.to_owned()),
+            _ => {}
+        }
+    }
+    let mut mismatched_paths = Vec::new();
+    // Reload restores approved scene models from the canonical chapter settings in the record.
+    changed_paths(&loaded_pack, &generated_pack, "pack", &mut mismatched_paths);
+    assert!(
+        mismatched_paths.is_empty(),
+        "pack fields differ: {mismatched_paths:?}"
+    );
     assert_eq!(stored.prose_summary(), model.summary());
     assert!(model.summary().starts_with("prose=model slots="));
     let record_text = String::from_utf8(documents.record).unwrap();
@@ -374,7 +417,7 @@ async fn the_requests_carry_low_reasoning_a_large_cap_and_tell_the_secret_only_w
 
     let (baseline, outcome) = express_with(&endpoint, &cache).await;
 
-    outcome.unwrap();
+    let _ = outcome.unwrap();
     let bodies = endpoint.bodies();
     assert!(bodies.len() >= 2);
     for body in &bodies {
@@ -413,12 +456,24 @@ async fn the_requests_carry_low_reasoning_a_large_cap_and_tell_the_secret_only_w
     // The lint asked again for the label with digits, and said what to fix.
     let reasks: Vec<&&str> = inputs
         .iter()
-        .filter(|input| input.contains("rewrite_notes"))
+        .filter(|input| input.contains("\"rewrite_notes\":"))
+        .collect();
+    let request_summary: Vec<(usize, bool, bool)> = inputs
+        .iter()
+        .map(|input| {
+            (
+                input.len(),
+                input.contains("rewrite_notes"),
+                input.contains("contains digits; write numbers in words"),
+            )
+        })
         .collect();
     assert!(
         reasks
             .iter()
-            .any(|input| input.contains("contains digits; write numbers in words"))
+            .any(|input| input.contains("contains digits; write numbers in words")),
+        "rewrite note was not sent in {} retry requests: {request_summary:?}",
+        reasks.len(),
     );
     for input in reasks {
         if !input.contains("\"secret\":") {
@@ -491,10 +546,168 @@ fn slot_groups_are_small_opening_first_and_never_mixed() {
     assert!(rewritable < planned.len(), "the plan holds offer labels");
     let first = &groups[0].2;
     assert!(
-        first.contains(&planned[0].name),
-        "first group must hold the opening slot {}: {first:?}",
-        planned[0].name
+        first.contains("opening_narration"),
+        "the first provider request must contain the opening scene: {first:?}"
     );
+    assert!(groups[1].2.contains("opening_line"));
+    assert_eq!(OPENING_GROUP_DEADLINE, Duration::from_secs(12));
+    assert_eq!(DEADLINE, Duration::from_secs(60));
+}
+
+#[test]
+fn storyteller_facts_are_scoped_to_each_scene_and_unresolved_outcomes() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let planned = plan(&baseline).unwrap();
+    let active = BTreeSet::from([
+        "opening_narration".to_owned(),
+        "dialogue_seal_narration".to_owned(),
+    ]);
+    let facts = group_facts(&baseline, &planned, false, None, Some(&active));
+    let opening = &facts["scene_facts"]["opening_narration"];
+    let present: Vec<&str> = opening["present_cast"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|person| person.as_str().unwrap())
+        .collect();
+
+    assert!(opening["setting"]["place"].as_str().is_some());
+    assert!(present.contains(&baseline.facts["patron.first"].as_str()));
+    assert!(!present.contains(&baseline.facts["contact.first"].as_str()));
+    assert_eq!(opening["outcome"]["resolved"], false);
+    assert_eq!(opening["outcome"]["injuries"], json!([]));
+    let dialogue = &facts["scene_facts"]["dialogue_seal_narration"];
+    assert_eq!(dialogue["scene"], "dialogue-seal");
+    assert!(
+        dialogue["present_cast"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| { name.as_str() == Some(baseline.pack.bandit.name.as_str()) })
+    );
+    assert!(serde_json::to_vec(&facts).unwrap().len() <= 16 * 1024);
+}
+
+#[test]
+fn lint_retry_only_carries_prose_that_caused_a_repetition() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let planned = plan(&baseline).unwrap();
+    let narrations: Vec<&Planned<'_>> = planned
+        .iter()
+        .filter(|slot| slot.sheet.slot == "narration")
+        .take(3)
+        .collect();
+    let retry = Rewrites {
+        notes: BTreeMap::from([(
+            narrations[0].name.clone(),
+            rewrite_note("repeated_sentence"),
+        )]),
+        previous: BTreeMap::from([(
+            narrations[0].name.clone(),
+            "The lantern hangs beside the old road.".to_owned(),
+        )]),
+        written: BTreeMap::from([
+            (
+                narrations[1].name.clone(),
+                "The lantern hangs beside the old road. Rain falls beyond it.".to_owned(),
+            ),
+            (
+                narrations[2].name.clone(),
+                "The watch bell sounds across the crowded market.".to_owned(),
+            ),
+        ]),
+    };
+    let active = BTreeSet::from([narrations[0].name.clone()]);
+
+    let facts = group_facts(&baseline, &planned, false, Some(&retry), Some(&active));
+
+    assert_eq!(
+        facts["already_written"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![narrations[1].name.clone()]
+    );
+    assert!(serde_json::to_vec(&facts).unwrap().len() <= 16 * 1024);
+}
+
+#[test]
+fn unsupported_presence_and_injury_claims_are_rejected() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let planned = plan(&baseline).unwrap();
+    let known = known_words(&baseline);
+    let specific = specific_words(&baseline);
+    let contact = &baseline.facts["contact.first"];
+    let found = find_problems(
+        &planned,
+        &BTreeMap::from([(
+            "opening_narration".to_owned(),
+            format!("{contact} steps into the room with a wounded arm."),
+        )]),
+        &known,
+        &specific,
+        &baseline,
+    );
+
+    assert_eq!(found["opening_narration"], "unsupported_presence");
+
+    let found = find_problems(
+        &planned,
+        &BTreeMap::from([(
+            "opening_narration".to_owned(),
+            "A wounded hero waits nearby.".to_owned(),
+        )]),
+        &known,
+        &specific,
+        &baseline,
+    );
+
+    assert_eq!(found["opening_narration"], "unsupported_outcome");
+}
+
+#[test]
+fn model_text_must_keep_opening_story_facts() {
+    let tables = tables();
+    let baseline = baseline(&tables);
+    let planned = plan(&baseline).unwrap();
+    let known = known_words(&baseline);
+    let specific = specific_words(&baseline);
+    for (name, text) in [
+        ("opening_narration", "A quiet day begins."),
+        ("opening_line", "I will see what I can do."),
+        ("dialogue_seal_narration", "The road lies quiet."),
+        ("dialogue_escort_narration", "The road lies quiet."),
+    ] {
+        let found = find_problems(
+            &planned,
+            &BTreeMap::from([(name.to_owned(), text.to_owned())]),
+            &known,
+            &specific,
+            &baseline,
+        );
+        assert_eq!(found[name], "required_fact", "{name}");
+    }
+
+    let resolution = planned
+        .iter()
+        .find(|slot| slot.sheet.beat == "resolution" && slot.sheet.slot == "narration")
+        .expect("the resolution narration carries the source outcome");
+    let found = find_problems(
+        &planned,
+        &BTreeMap::from([(
+            resolution.name.clone(),
+            "The old road lies quiet.".to_owned(),
+        )]),
+        &known,
+        &specific,
+        &baseline,
+    );
+    assert_eq!(found[&resolution.name], "required_fact");
 }
 
 /// SES-05: a provider that fails some groups still yields the groups that
@@ -635,6 +848,14 @@ fn the_lint_finds_stock_phrases_long_sentences_and_repeats_across_slots() {
     let long = "Over the market the lanterns sway above the crowd while the hawkers shout over \
                 the sizzling pans and somebody drops a tray of bells and a child laughs at \
                 the noise tonight.";
+    let pre_fight_narration = format!(
+        "The {} waits beyond the awning.",
+        baseline.facts["ant.short"]
+    );
+    let inn_narration = format!(
+        "Rain falls on the old awnings again. {}",
+        baseline.facts["stake.resolution"]
+    );
     let found = find_problems(
         &planned,
         &texts(&[
@@ -644,17 +865,15 @@ fn the_lint_finds_stock_phrases_long_sentences_and_repeats_across_slots() {
                 "combat_narration",
                 "Rain falls on the old awnings again. The crowd parts.",
             ),
-            (
-                "inn_narration",
-                "Rain falls on the old awnings again. Softly.",
-            ),
+            ("inn_narration", &inn_narration),
             ("victory_narration", "The lanterns sway in the damp air."),
             ("defeat_narration", "The lanterns sway in the damp air."),
-            ("dialogue_seal_narration", "Ilsa steps close and waits."),
-            ("dialogue_escort_narration", "Ilsa steps close and waits."),
+            ("dialogue_seal_narration", &pre_fight_narration),
+            ("dialogue_escort_narration", &pre_fight_narration),
         ]),
         &known,
         &specific,
+        &baseline,
     );
     assert_eq!(found["opening_narration"], "stock_phrase");
     assert_eq!(found["room_narration"], "long_sentence");
@@ -667,14 +886,19 @@ fn the_lint_finds_stock_phrases_long_sentences_and_repeats_across_slots() {
         !found.contains_key("dialogue_escort_narration"),
         "the two answers to the patron are alternatives"
     );
+    let opening_line = format!(
+        "The lamps are burning low. I fear {}. I will earn {} gold.",
+        baseline.facts["stake.short"], baseline.facts["reward.words"]
+    );
     let found = find_problems(
         &planned,
         &texts(&[
-            ("opening_line", "The lamps are burning low and I fear it."),
+            ("opening_line", &opening_line),
             ("combat_line", "The lamps are all that I wanted."),
         ]),
         &known,
         &specific,
+        &baseline,
     );
     assert_eq!(found["combat_line"], "same_opening");
 }
@@ -873,7 +1097,7 @@ fn the_model_is_told_the_rating_tone_and_the_always_on_limits_in_both_ratings() 
     let facts_of = |rating| {
         let baseline = generate(&tables(), SEED, rated(rating), &ForcedEntries::new()).unwrap();
         let planned = plan(&baseline).unwrap();
-        group_facts(&baseline, &planned, true, None)
+        group_facts(&baseline, &planned, true, None, None)
     };
     let (restrained, mature) = (
         facts_of(ContentRating::Restrained),
@@ -923,7 +1147,7 @@ fn a_young_cast_member_is_named_a_young_adult_in_the_facts() {
         )
         .unwrap();
         let planned = plan(&baseline).unwrap();
-        let facts = group_facts(&baseline, &planned, false, None);
+        let facts = group_facts(&baseline, &planned, false, None, None);
         for (key, person) in [
             ("patron", "patron"),
             ("contact", "contact"),
@@ -1128,7 +1352,7 @@ async fn live_one_raw_scenes_attempt() {
         .iter()
         .map(|slot| slot_spec(slot, &baseline))
         .collect();
-    let facts = group_facts(&baseline, &planned, false, None);
+    let facts = group_facts(&baseline, &planned, false, None, None);
     let request = Expression {
         purpose: "adventure",
         facts: &facts,
@@ -1218,7 +1442,7 @@ fn print_the_adventure_prompt_sizes() {
                 .iter()
                 .map(|slot| slot_spec(slot, &baseline))
                 .collect();
-            let facts = group_facts(&baseline, &planned, group == Group::Voices, None);
+            let facts = group_facts(&baseline, &planned, group == Group::Voices, None, None);
             let prompt = super::super::super::storyteller::build_prompt(
                 &super::super::super::storyteller::Expression {
                     purpose: "adventure",
@@ -1280,7 +1504,7 @@ fn script_slot_registration_preserves_existing_semantic_privacy_lints_and_accept
                 _ => panic!("unregistered semantic category"),
             }
         }
-        let public = group_facts(&baseline, &planned, false, None);
+        let public = group_facts(&baseline, &planned, false, None, None);
         assert!(public.get("secret").is_none());
         let mut texts = vec![None; baseline.fact_sheet.len()];
         let label = extra

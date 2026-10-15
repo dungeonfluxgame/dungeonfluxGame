@@ -21,8 +21,8 @@ use super::{
         startup_configuration::ContentRating,
     },
     prompt::{
-        AssembledPrompt, FILM_LOOK, LifeStage, Part, PlaceFacts, expression_phrase,
-        health_face_phrase, health_look_phrase,
+        AssembledPrompt, FILM_LOOK, HeroVisualIdentity, LifeStage, Part, PlaceFacts,
+        expression_phrase, health_face_phrase, health_look_phrase,
     },
 };
 
@@ -38,6 +38,8 @@ pub(in crate::gameplay) enum PlatePromptRefusal {
     TooLong,
     /// More references than the adapter takes, or a hero without a party sheet.
     References,
+    /// The supplied hero identities do not match the staged party.
+    HeroIdentity,
 }
 
 /// Which references the request carries, in this order: the party sheet, the speaker's art, the
@@ -111,11 +113,13 @@ const HEROES_IDENTITY: &str = "Image 1 is the party sheet (the heroes on plain g
     hair, build, costume and weapon, in new poses and viewpoint.";
 const HERO_NUMBER: [&str; 3] = ["Hero 1", "Hero 2", "Hero 3"];
 const SHEET_POSITION: [&str; 3] = [
-    "(first figure on the sheet,",
-    "(second figure on the sheet,",
-    "(third figure on the sheet,",
+    "(first figure on the sheet)",
+    "(second figure on the sheet)",
+    "(third figure on the sheet)",
 ];
 const HERO_IS: &str = "is";
+const HERO_FROM_SHEET: &str = "the exact hero shown in Image 1";
+const HERO_ACTIVITY: &str = "Their activity is";
 const SPEAKER_IS: &str = "The speaker is";
 const SPEAKER_REFERENCE: [&str; 5] = [
     "",
@@ -265,23 +269,24 @@ fn slot_phrase(slot: HeroSlot) -> &'static str {
     }
 }
 
-/// What each hero's art shows, for the party sheet's figures.
-fn hero_description(art: u8) -> &'static str {
-    match art {
-        1 => "red-bearded adult dwarf fighter in chainmail, greatsword)",
-        2 => "red-haired adult dwarf woman fighter in a blue cloak, greatsword)",
-        _ => "blonde-braided adult dwarf woman archer in a teal cloak, longbow)",
-    }
+/// What the head locator is told about a hero seen from behind in the plate when identity is not
+/// yet available. The party sheet, not a stock archetype, remains the reference.
+pub(in crate::gameplay) fn hero_locator_phrase(_art: u8) -> &'static str {
+    "the selected hero matching the party-sheet figure, seen from behind or in profile"
 }
 
-/// What the head locator is told about a hero seen from behind in the plate: fixed phrases that
-/// match the hero's art, so it can tell one hero's head from another's.
-pub(in crate::gameplay) fn hero_locator_phrase(art: u8) -> &'static str {
-    match art {
-        1 => "the red-bearded dwarf fighter in chainmail, seen from behind or in profile",
-        2 => "the red-haired braided dwarf woman fighter in a blue cloak, seen from behind",
-        _ => "the blonde-braided dwarf woman archer in a teal cloak, seen from behind",
-    }
+/// The identity-specific head description used by the plate locator.
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must use the checked identity for its hero locator"
+)]
+pub(in crate::gameplay) fn hero_locator_phrase_for_identity(
+    hero: HeroVisualIdentity<'_>,
+) -> Result<String, crate::gameplay::hero_identity::IdentityError> {
+    let appearance = hero.identity.appearance_description(hero.species)?;
+    Ok(format!(
+        "the hero matching {appearance}, seen from behind or in profile"
+    ))
 }
 
 fn extra_zone_phrase(zone: ExtraZone) -> &'static str {
@@ -312,9 +317,34 @@ pub(in crate::gameplay) fn scene_plate(
     place: Option<&PlaceFacts>,
     references: PlateReferences,
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
-    match scene_plate_with(rating, spec, place, references) {
+    scene_plate_for(rating, spec, place, references, None)
+}
+
+/// A plate with each hero's selected appearance and canonical held gear.
+#[allow(
+    dead_code,
+    reason = "T02 stage rendering must pass each checked hero identity into this plate prompt"
+)]
+pub(in crate::gameplay) fn scene_plate_for_heroes(
+    rating: ContentRating,
+    spec: &ShotSpec,
+    place: Option<&PlaceFacts>,
+    references: PlateReferences,
+    heroes: &[HeroVisualIdentity<'_>],
+) -> Result<AssembledPrompt, PlatePromptRefusal> {
+    scene_plate_for(rating, spec, place, references, Some(heroes))
+}
+
+fn scene_plate_for(
+    rating: ContentRating,
+    spec: &ShotSpec,
+    place: Option<&PlaceFacts>,
+    references: PlateReferences,
+    heroes: Option<&[HeroVisualIdentity<'_>]>,
+) -> Result<AssembledPrompt, PlatePromptRefusal> {
+    match scene_plate_with(rating, spec, place, references, heroes) {
         Err(PlatePromptRefusal::TooLong) if place.is_some() => {
-            scene_plate_with(rating, spec, None, references)
+            scene_plate_with(rating, spec, None, references, heroes)
         }
         other => other,
     }
@@ -325,6 +355,7 @@ fn scene_plate_with(
     spec: &ShotSpec,
     place: Option<&PlaceFacts>,
     references: PlateReferences,
+    heroes: Option<&[HeroVisualIdentity<'_>]>,
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
     let reference_count = [references.party_sheet, references.speaker, references.place]
         .into_iter()
@@ -332,6 +363,9 @@ fn scene_plate_with(
         .count();
     if reference_count > 4 || references.party_sheet != !spec.heroes.is_empty() {
         return Err(PlatePromptRefusal::References);
+    }
+    if heroes.is_some_and(|heroes| heroes.len() != spec.heroes.len()) {
+        return Err(PlatePromptRefusal::HeroIdentity);
     }
     let mut parts = vec![
         Part::Fixed(FILM_LOOK),
@@ -358,13 +392,25 @@ fn scene_plate_with(
             parts.extend([
                 Part::Fixed(HERO_NUMBER[ordinal.min(2)]),
                 Part::Fixed(SHEET_POSITION[sheet]),
-                Part::Fixed(hero_description(hero.art)),
                 Part::Fixed(slot_phrase(hero.slot)),
                 Part::Fixed(HERO_IS),
-                Part::Fixed(hero.activity),
             ]);
-            // The activity is a phrase; end each hero's sentence.
-            parts.push(Part::Fixed("."));
+            match heroes {
+                Some(heroes) => parts.push(Part::Fact(
+                    heroes
+                        .get(ordinal)
+                        .ok_or(PlatePromptRefusal::HeroIdentity)?
+                        .description()
+                        .map_err(|_| PlatePromptRefusal::HeroIdentity)?,
+                )),
+                None => parts.push(Part::Fixed(HERO_FROM_SHEET)),
+            }
+            parts.extend([
+                Part::Fixed("."),
+                Part::Fixed(HERO_ACTIVITY),
+                Part::Fixed(hero.activity),
+                Part::Fixed("."),
+            ]);
         }
     }
     if let Some(speaker) = &spec.speaker {
@@ -500,6 +546,8 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         EXTERIOR,
         HEROES_IDENTITY,
         HERO_IS,
+        HERO_FROM_SHEET,
+        HERO_ACTIVITY,
         SPEAKER_IS,
         SPEAKER_STAGING,
         SPEAKER_EXPRESSION,
@@ -561,7 +609,6 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         ]
         .map(expression_phrase_of),
     );
-    phrases.extend([1, 2, 3].map(hero_description));
     phrases.extend([1, 2, 3].map(hero_locator_phrase));
     phrases.extend([Some(Gender::He), Some(Gender::She), None].map(gender_phrase));
     phrases.extend([LifeStage::YoungAdult, LifeStage::Adult, LifeStage::Elder].map(stage_phrase));

@@ -808,3 +808,55 @@ oneof dungeonflux.public.v1.NotebookEntry _attitude
 oneof dungeonflux.public.v1.NotebookEntry _author
 oneof dungeonflux.public.v1.NotebookEntry _owner
 oneof dungeonflux.public.v1.ReclaimRoomResponse outcome
+# CRE-IDENTITY: additive optional hero identity; absent remains distinct from a selected identity.
+field dungeonflux.public.v1.CharacterSelection 3 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.CharacterSheet 7 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 4 identity_groups type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyGroup oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 5 default_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+method dungeonflux.public.v1.ActionService PreviewHeroIdentity .dungeonflux.public.v1.PreviewHeroIdentityRequest .dungeonflux.public.v1.PreviewHeroIdentityResponse client-stream=false server-stream=false
+message dungeonflux.public.v1.HeroAppearance
+field dungeonflux.public.v1.HeroAppearance 1 presentation type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 2 pronouns type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 3 age type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 4 build type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 5 skin type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 6 hair type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 7 hair_color type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 8 eyes type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 9 mark type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 10 attire type=9 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.HeroIdentity
+field dungeonflux.public.v1.HeroIdentity 1 appearance type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroAppearance oneof=-
+field dungeonflux.public.v1.HeroIdentity 2 origin type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 3 occupation type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 4 motivation type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 5 backstory type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 6 facts type=9 label=3 presence=false target=- oneof=-
+message dungeonflux.public.v1.PreviewHeroIdentityRequest
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 4 appearance_text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 5 backstory_text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 6 current_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+message dungeonflux.public.v1.PreviewHeroIdentityResponse
+field dungeonflux.public.v1.PreviewHeroIdentityResponse 1 proposed_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityResponse 2 warnings type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityResponse 3 source type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 7 client_binding_id type=11 label=1 presence=false target=.dungeonflux.public.v1.ClientBindingId oneof=-
+message dungeonflux.public.v1.PresentationTelemetryRequest
+field dungeonflux.public.v1.PresentationTelemetryRequest 1 scope type=11 label=1 presence=false target=.dungeonflux.public.v1.WatchViewRequest oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 2 producer_id type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 3 batch_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 4 otlp_logs type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 5 dropped_records type=4 label=1 presence=false target=- oneof=-
+message dungeonflux.public.v1.PresentationTelemetryResponse
+field dungeonflux.public.v1.PresentationTelemetryResponse 1 batch_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryResponse 2 accepted_records type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryResponse 3 replayed type=8 label=1 presence=false target=- oneof=-
+service dungeonflux.public.v1.PresentationTelemetryService
+method dungeonflux.public.v1.PresentationTelemetryService Upload .dungeonflux.public.v1.PresentationTelemetryRequest .dungeonflux.public.v1.PresentationTelemetryResponse client-stream=false server-stream=false
+enum-value dungeonflux.public.v1.GameplayActionKind 24 HELP_ATTACK
+field dungeonflux.public.v1.CombatView 22 reaction_seconds_remaining type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 8 encounter_xp type=13 label=1 presence=true target=- oneof=_encounter_xp
+oneof dungeonflux.public.v1.DisplayGameplayView _encounter_xp

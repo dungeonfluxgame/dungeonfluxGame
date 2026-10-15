@@ -58,6 +58,8 @@ pub(super) enum PlayAction {
     StabiliseWithHealersKit,
     StabiliseMedicine,
     EndTurn,
+    OpportunityAttack,
+    DeclineReaction,
     Dash,
     Dodge,
     Disengage,
@@ -68,6 +70,7 @@ pub(super) enum PlayAction {
     ResolveErrand,
     NewAdventure,
     Search,
+    TableSetting,
     Choose,
 }
 
@@ -86,6 +89,8 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "stabilise-kit" | "stabilise-with-healers-kit" => PlayAction::StabiliseWithHealersKit,
         "stabilise-medicine" => PlayAction::StabiliseMedicine,
         "end-turn" => PlayAction::EndTurn,
+        "opportunity-attack" => PlayAction::OpportunityAttack,
+        "decline-reaction" => PlayAction::DeclineReaction,
         "dash" => PlayAction::Dash,
         "dodge" => PlayAction::Dodge,
         "disengage" => PlayAction::Disengage,
@@ -97,6 +102,7 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "new-adventure" => PlayAction::NewAdventure,
         "search" => PlayAction::Search,
         "choose" => PlayAction::Choose,
+        "table-setting" => PlayAction::TableSetting,
         _ => return Err(format!("unknown action {text:?}; see dev describe")),
     })
 }
@@ -116,6 +122,8 @@ impl PlayAction {
             Self::StabiliseWithHealersKit => rpc::GameplayActionKind::StabiliseWithHealersKit,
             Self::StabiliseMedicine => rpc::GameplayActionKind::StabiliseMedicine,
             Self::EndTurn => rpc::GameplayActionKind::EndTurn,
+            Self::OpportunityAttack => rpc::GameplayActionKind::OpportunityAttack,
+            Self::DeclineReaction => rpc::GameplayActionKind::DeclineReaction,
             Self::Dash => rpc::GameplayActionKind::Dash,
             Self::Dodge => rpc::GameplayActionKind::Dodge,
             Self::Disengage => rpc::GameplayActionKind::Disengage,
@@ -127,6 +135,7 @@ impl PlayAction {
             Self::NewAdventure => rpc::GameplayActionKind::StartNewAdventure,
             Self::Search => rpc::GameplayActionKind::ExamineHarborSeal,
             Self::Choose => rpc::GameplayActionKind::Unspecified,
+            Self::TableSetting => rpc::GameplayActionKind::SetTableSetting,
         }
     }
 
@@ -136,12 +145,34 @@ impl PlayAction {
             self,
             Self::Move
                 | Self::Attack
+                | Self::OpportunityAttack
                 | Self::StabiliseWithHealersKit
                 | Self::StabiliseMedicine
                 | Self::PickUpWeapon
                 | Self::Search
                 | Self::Choose
         )
+    }
+}
+
+#[cfg(test)]
+mod action_name_tests {
+    use super::*;
+
+    #[test]
+    fn listed_reaction_action_names_parse_to_the_same_wire_kind() {
+        for (name, kind) in [
+            (
+                "opportunity-attack",
+                rpc::GameplayActionKind::OpportunityAttack,
+            ),
+            ("decline-reaction", rpc::GameplayActionKind::DeclineReaction),
+            ("search", rpc::GameplayActionKind::ExamineHarborSeal),
+        ] {
+            assert_eq!(parse_action(name).unwrap().kind(), kind);
+        }
+        assert!(parse_action("opportunity-attack").unwrap().needs_option());
+        assert!(!parse_action("decline-reaction").unwrap().needs_option());
     }
 }
 

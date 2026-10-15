@@ -41,6 +41,7 @@ mod jumps;
 mod notebook;
 mod parse;
 mod reads;
+pub(super) mod timeline;
 
 /// The development history bundle, wired only when the surface is on: the
 /// back/forward ring plus the actor-side state the checkpoint does not carry
@@ -179,13 +180,18 @@ pub(super) fn setup(
         .route("/dev/join", post(actions::join_seat))
         .route("/dev/reclaim", post(actions::reclaim_seat))
         .route("/dev/create", post(actions::create_hero))
+        .route("/dev/preview", post(actions::preview_identity))
         .route("/dev/act", post(actions::act))
         .route("/dev/say", post(actions::say))
+        .route("/dev/cancel", post(actions::cancel_dialogue))
         .route("/dev/direct", post(direct::direct))
         .route("/dev/direct/{key}", get(direct::status))
         .route("/dev/state", get(reads::game_state))
         .route("/dev/view", get(reads::view_as))
+        .route("/dev/scene", get(reads::scene_for))
+        .route("/dev/feelings", get(reads::feelings))
         .route("/dev/log", get(reads::game_log))
+        .route("/dev/timeline", get(reads::timeline))
         .route("/dev/notes", get(notebook::read))
         .route("/dev/note", post(notebook::add))
         .route("/dev/checkpoint", post(reads::save_checkpoint))
@@ -404,34 +410,17 @@ async fn owner_view(
     credential: [u8; 32],
     request: rpc::WatchViewRequest,
 ) -> Result<(rpc::SessionRevision, rpc::ViewMessage), (StatusCode, Json<Value>)> {
-    let (reply, wait) = oneshot::channel();
-    state
+    let (_, view) = state
         .service
-        .actor
-        .try_submit(actor::Call::View {
-            credential,
-            request,
-            reply,
-        })
-        .map_err(|_| failed("gameplay actor queue full"))?;
-    let (role, mut view) = tokio::time::timeout(timing::active().reply, wait)
+        .view(credential, request)
         .await
-        .map_err(|_| failed("gameplay view deadline"))?
-        .map_err(|_| failed("gameplay actor stopped"))?
         .map_err(|status| {
             (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({"error": status.message()})),
+                Json(json!({"error":status.message()})),
             )
         })?;
-    let _ = role;
-    // Presentation-only decoration the Service layer applies to every served
-    // view is intentionally left out here (see the handoff); the journey
-    // projection below is exactly what the owner committed.
     let revision = view.revision.unwrap_or_default();
-    super::home_video::apply(&mut view);
-    state.service.living.observe(&view);
-    state.service.living.apply(&mut view);
     Ok((revision, view))
 }
 
@@ -529,6 +518,16 @@ fn combat_json(outcome: &rpc::CombatOutcome) -> Value {
         "target_hit_points": outcome.target_hit_points,
         "knocked_out": outcome.knocked_out,
         "weapon": outcome.weapon,
+        "sequence":outcome.sequence, "faces":outcome.faces, "roll_mode":outcome.roll_mode,
+        "attack_modifier":outcome.attack_modifier, "target_armor_class":outcome.target_armor_class,
+        "damage_dice":outcome.damage_dice, "damage_type":outcome.damage_type,
+        "damage_rolls":outcome.damage_rolls.iter().map(|roll|json!({"dice":roll.dice,"kept":roll.kept})).collect::<Vec<_>>(),
+        "path":outcome.path.iter().map(|cell|json!({"col":cell.col,"row":cell.row})).collect::<Vec<_>>(),
+        "cost_ft":outcome.cost_ft, "remaining_ft":outcome.remaining_ft,
+        "death_save_result":outcome.death_save_result,"death_successes":outcome.death_successes,"death_failures":outcome.death_failures,
+        "recovery_hours":outcome.recovery_hours,
+        "stabilization":outcome.stabilization.as_ref().map(|result|json!({"method":result.method,"die":result.die,"wisdom_modifier":result.wisdom_modifier,"dc":result.dc,"succeeded":result.succeeded,"uses_left":result.uses_left})),
+        "lines":outcome.lines.iter().map(|line|json!({"speaker":line.speaker,"role":line.role,"hero_index":line.hero_index,"text":line.text})).collect::<Vec<_>>(),
     })
 }
 
@@ -538,6 +537,7 @@ fn sheet_json(sheet: &rpc::CharacterSheet) -> Value {
         "hit_points": sheet.hit_points,
         "maximum_hit_points": sheet.maximum_hit_points,
         "armor_class": sheet.armor_class,
+        "identity": sheet.identity.as_ref().map(reads::identity_json),
         "facts": sheet.facts.iter().map(|fact| json!({"label": fact.label, "value": fact.value})).collect::<Vec<_>>(),
     })
 }

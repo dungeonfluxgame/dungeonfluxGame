@@ -7,26 +7,37 @@ mod snapshot;
 mod state;
 mod weapons;
 
+pub use crate::local_journey::{
+    ChallengeRating, HeroSpecies, OriginFeat, SpeciesCombatTraits, SpeciesSize,
+    background_origin_feat, experience_points_for_challenge_rating,
+};
 pub use build::{ARCHER_CREATION_JSON, ArcherBuild, validate_archer};
 pub use map::{
     BattleMap, BattleSceneData, Cell, Cover, GridData, LayoutData, Lighting, ObstacleData,
     SpawnData,
 };
 pub use resolve::{
-    Action, AttackReason, AttackSpend, AttackSummary, AttackUse, DeathSaveResult, DeathSaveSummary,
-    DrawBinding, MoveSummary, RecoverySummary, Resolution, resolve,
+    Action, AttackReason, AttackSpend, AttackSummary, AttackUse, D20Reroll, D20Test,
+    DeathSaveResult, DeathSaveSummary, DrawBinding, HelpPurpose, HelpSummary, MoveSummary,
+    RecoverySummary, Resolution, StabilizationOutcome, StabilizationSummary, resolve,
 };
 pub use state::{
-    Battle, Budget, Combatant, CombatantSpec, CreatureKind, Health, Side, Size, begin,
+    Battle, Budget, Combatant, CombatantSpec, CreatureExperience, CreatureKind,
+    EncounterExperience, Health, Side, Size, begin,
 };
 pub use weapons::{DamageType, Mastery, Weapon};
 
 /// Local immutable rules/source revision, separate from the caller's canonical catalog pins.
-pub const SOURCE_REVISION: &str = "SRD-5.2.1:PLAY-T01:1";
+pub const SOURCE_REVISION: &str = "SRD-5.2.1:PLAY-T01:3";
 /// Shared attribution and PDF checksum are retained by the existing local journey authority.
 pub const SOURCE: &str = crate::local_journey::SOURCE;
 /// Explicit table adjudication: SRD Cover does not specify grid ray arithmetic.
-pub const DEPARTURES: &[&str] = &["tactical.cover-centre-line"];
+pub const DEPARTURES: &[&str] = &[
+    "tactical.cover-centre-line",
+    "tactical.cover-representative-height",
+    "tactical.initiative-ties-input-order",
+    "tactical.dead-space-passable",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuleError {
@@ -72,6 +83,8 @@ pub enum RuleError {
     StaleDraw,
     Finished,
     RecoveryUnavailable,
+    HealersKitMissing,
+    UnpricedExperience,
 }
 
 #[cfg(test)]

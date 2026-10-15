@@ -1,5 +1,6 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
 mod dialogue_recovery;
+mod hero_creator;
 mod live_battlefield;
 mod live_chrome;
 mod live_combat;
@@ -20,6 +21,8 @@ mod live_stage;
 mod live_theme;
 mod live_tv;
 mod live_voice;
+mod phone_controls;
+mod presentation_timing;
 mod public_scene_assets;
 mod seat_recovery;
 mod talk_control;
@@ -32,10 +35,6 @@ use df_client::{
 };
 use df_protocol::common as rpc;
 use df_rpc_bridge::{BrowserChannel, BrowserConnection, RPC_MESSAGE_BYTES};
-use df_ui::{
-    CharacterAction, CharacterActionKind, CharacterGroup, CharacterLimits, CharacterOption,
-    CharacterPhaseSurface, CharacterPhaseView, CharacterStatus,
-};
 use futures::future::{AbortHandle, Abortable};
 use public_scene_assets::browser::PublicSceneDelivery;
 use std::{cell::RefCell, rc::Rc};
@@ -75,7 +74,8 @@ struct Client {
     connection: Option<RpcConnection<SessionClient>>,
     watch_abort: Option<AbortHandle>,
     callbacks: Vec<Callback>,
-    creation: Option<CharacterPhaseSurface>,
+    creation: Option<hero_creator::HeroCreator>,
+    creation_preview: Option<(Rc<()>, AbortHandle)>,
     /// The creation offer of the view the form is drawn in: a confirm always sends this one,
     /// never the offer the form was first built with.
     creation_offer: Option<rpc::GameplayActionOffer>,
@@ -108,6 +108,8 @@ struct Reconnect {
 }
 impl Drop for Client {
     fn drop(&mut self) {
+        presentation_timing::disconnect(self);
+        cancel_creation_preview(self);
         seat_recovery::stop(self);
         if let Some(abort) = self.watch_abort.take() {
             abort.abort();
@@ -403,6 +405,8 @@ fn request<T>(body: T, credential: &str) -> Result<tonic::Request<T>, String> {
     Ok(request)
 }
 fn retire_transport(client: &mut Client) {
+    presentation_timing::disconnect(client);
+    cancel_creation_preview(client);
     client.dialogue.retire_transport();
     if let Some(scene) = &client.scene_delivery
         && scene.suspend().is_err()
@@ -424,6 +428,7 @@ fn retire_transport(client: &mut Client) {
     client.busy = false;
 }
 fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
+    cancel_creation_preview(client);
     client.dialogue.clear_scope();
     if let Some(scene) = &client.scene_delivery {
         scene
@@ -458,7 +463,10 @@ fn clear_view_scope(client: &mut Client) -> Result<(), JsValue> {
 }
 fn render_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     live_screens::render_join(client)?;
-    seat_recovery::ensure_poll(client)
+    seat_recovery::ensure_poll(client)?;
+    phone_controls::bind(client)?;
+    presentation_timing::paint(client);
+    Ok(())
 }
 const LEAVE_LABEL: &str = "Leave this game on this device";
 /// Shown while a saved player is reconnecting, and as the way out if that cannot finish.
@@ -927,6 +935,7 @@ fn connect(client: Rc<RefCell<Client>>) {
             let mut sessions = SessionClient::new(channel.clone())
                 .max_decoding_message_size(RPC_MESSAGE_BYTES)
                 .max_encoding_message_size(RPC_MESSAGE_BYTES);
+            let timing_channel = channel.clone();
             let connection = RpcConnection::from_browser(sessions.clone(), connection);
             let view_generation = connection.generation();
             {
@@ -947,6 +956,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                 state.sessions = Some(sessions.clone());
                 state.connection = Some(connection);
             }
+            presentation_timing::connect(&owned, timing_channel);
             // Reconnect refreshes local input/busy state from the retained snapshot.
             // A duplicate server frame never replaces that snapshot.
             redraw_current(&owned).map_err(|_| "Saved view could not be displayed")?;
@@ -990,6 +1000,7 @@ fn connect(client: Rc<RefCell<Client>>) {
                 forget_saved_game(&owned, "That hero is being played on another phone.");
                 return;
             }
+            presentation_timing::disconnect(&owned.borrow());
             if let Some(connection) = owned.borrow_mut().connection.take() {
                 connection.close();
             }
@@ -1268,6 +1279,10 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
     let (mut action, credential, generation) = match prepared {
         Ok(value) => value,
         Err(error) => {
+            if let Some(creator) = client.borrow().creation.as_ref() {
+                creator.set_pending(false);
+                creator.show_error(&error);
+            }
             feedback(&client.borrow(), &error);
             return;
         }
@@ -1299,7 +1314,15 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
         let message = {
             let mut state = client.borrow_mut();
             state.busy = false;
-            complete_action_response(&mut state, &body, result)
+            let message = complete_action_response(&mut state, &body, result);
+            if message == ACTION_REFUSAL_FEEDBACK
+                && body.character.is_some()
+                && let Some(creator) = state.creation.as_ref()
+            {
+                creator.set_pending(false);
+                creator.show_error("Your hero could not be saved. Your details are still here.");
+            }
+            message
         };
         if redraw_current(&client).is_err() {
             status(&client.borrow(), "Saved view could not be displayed.");
@@ -1466,116 +1489,230 @@ fn replay(client: Rc<RefCell<Client>>, first_attack: bool) {
         send(client, body, true);
     }
 }
-fn character_render_error(
-    client: &Rc<RefCell<Client>>,
-    error: &df_ui::CharacterPhaseError,
-) -> JsValue {
-    let code = match error {
-        df_ui::CharacterPhaseError::InvalidView(reason) => reason.to_string(),
-        df_ui::CharacterPhaseError::Control(_) => "character-control".to_owned(),
-        df_ui::CharacterPhaseError::Dom(_) => "character-dom".to_owned(),
-        df_ui::CharacterPhaseError::UpdateCleanup { .. } => "character-update-cleanup".to_owned(),
-    };
-    let _ = client
-        .borrow()
-        .root
-        .set_attribute("data-render-error", &code);
-    JsValue::from_str("Character controls could not be displayed")
+fn cancel_creation_preview(client: &mut Client) {
+    if let Some((_, abort)) = client.creation_preview.take() {
+        abort.abort();
+    }
 }
+
 fn creation(
     client: &Rc<RefCell<Client>>,
     surface: &Element,
     offer: &rpc::CharacterCreationOffer,
     action: &rpc::GameplayActionOffer,
 ) -> Result<(), JsValue> {
-    let state = client.borrow();
-    let owner = state
-        .binding
-        .as_ref()
-        .and_then(|binding| binding.value.as_ref())
-        .map(|bytes| {
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        })
-        .ok_or_else(|| JsValue::from_str("character owner absent"))?;
-    let editable = true;
-    let view=CharacterPhaseView {generation:state.revision.and_then(|revision|revision.epoch).and_then(|epoch|epoch.value).ok_or_else(||JsValue::from_str("creation epoch absent"))?,owner_key:owner,revision:state.revision.and_then(|revision|revision.sequence).ok_or_else(||JsValue::from_str("creation revision absent"))?,
-        chapter:"Your hero".to_owned(),title:"Make your hero".to_owned(),description:offer.description.clone(),
-        connection:"Connected to your shared room".to_owned(),status:CharacterStatus::Editing,
-        status_message:"Choose your options and confirm. Names may use letters, dashes, or underscores (up to 24 characters).".to_owned(),
-        editable,name:String::new(),flavor:String::new(),appearance:None,portrait:None,
-        groups:offer.groups.iter().map(|group|CharacterGroup {id:group.group_id.clone(),label:creation_group_label(&group.group_id, &group.label),
-            description:creation_group_description(group),selected:(group.options.len() == 1).then(|| group.options[0].option_id.clone()),options:group.options.iter().map(|option|CharacterOption {
-                id:option.option_id.clone(),label:creation_option_label(&group.group_id, &option.label),description:creation_option_description(&group.group_id, &option.description),
-                enabled:true,availability:"Available in this room".to_owned(),portrait:None,
-            }).collect()}).collect(),
-        facts:vec![],
-        actions:vec![CharacterAction {id:action.offer_id.clone(),kind:CharacterActionKind::SubmitDraft,
-            label:"Confirm your hero".to_owned(),enabled:editable}],
-    };
-    drop(state);
-    client.borrow_mut().creation_offer = Some(action.clone());
-    if let Some(existing) = client.borrow().creation.as_ref() {
-        existing
-            .update(&view)
-            .map_err(|error| character_render_error(client, &error))?;
-        apply_option_requirements(client, existing, offer)?;
+    let mut state = client.borrow_mut();
+    state.creation_offer = Some(action.clone());
+    if let Some(existing) = state.creation.as_ref() {
+        let accepted = state.last_accepted
+            && state.last_request.as_ref().is_some_and(|request| {
+                request.offer_id == action.offer_id
+                    && request.action_kind == rpc::GameplayActionKind::CreateCharacter as i32
+            });
+        existing.set_pending(
+            state.busy || accepted || (!state.last_confirmed && state.last_request.is_some()),
+        );
+        if existing.root().parent_element().as_ref() != Some(surface) {
+            surface.append_child(existing.root())?;
+        }
         return Ok(());
     }
+    let Some(identity) = offer.default_identity.as_ref() else {
+        let document = state.document.clone();
+        drop(state);
+        surface.set_text_content(None);
+        node(&document, surface, "h1", "", "Make your hero")?;
+        node(
+            &document,
+            surface,
+            "p",
+            "hero-unavailable",
+            "The table could not load the hero creator. Your seat is saved. Try reconnecting.",
+        )?;
+        button(client, surface, "Reconnect", connect)?;
+        return Ok(());
+    };
+    let initial = hero_creator::IdentityDraft::from_rpc(identity)?;
+    let document = state.document.clone();
+    drop(state);
+    let mut shown = offer.clone();
+    for group in &mut shown.groups {
+        group.label = creation_group_label(&group.group_id, &group.label);
+        for option in &mut group.options {
+            option.label = creation_option_label(&group.group_id, &option.label);
+            option.description = creation_option_description(&group.group_id, &option.description);
+        }
+    }
     let weak = Rc::downgrade(client);
-    let created = CharacterPhaseSurface::create(
-        &client.borrow().document,
-        "journey-character",
-        &view,
-        CharacterLimits {
-            max_groups: 16,
-            max_options: 128,
-            max_facts: 32,
-            max_actions: 4,
-            max_text_bytes: 8192,
-        },
-        move |submission| {
+    let created = hero_creator::HeroCreator::create(
+        &document,
+        surface,
+        &shown,
+        &offer.identity_groups,
+        &initial,
+        move |event| {
             let Some(client) = weak.upgrade() else {
                 return;
             };
-            let Some(offered) = client.borrow().creation_offer.clone() else {
-                return;
-            };
-            let selection = rpc::CharacterSelection {
-                name: submission.name,
-                choices: submission
-                    .choices
-                    .into_iter()
-                    .map(|choice| rpc::JourneyChoice {
-                        group_id: choice.group_id,
-                        option_id: choice.option_id,
-                    })
-                    .collect(),
-            };
-            match prepare(
-                &client,
-                &offered,
-                Some(selection),
-                false,
-                false,
-                rpc::HarborDestination::Unspecified as i32,
-            ) {
-                Ok(body) => send(client, body, false),
-                Err(error) => feedback(&client.borrow(), &error),
+            match event {
+                hero_creator::CreationEvent::Preview {
+                    draft_version,
+                    appearance_text,
+                    backstory_text,
+                    current,
+                } => preview_creation(
+                    &client,
+                    draft_version,
+                    appearance_text,
+                    backstory_text,
+                    current,
+                ),
+                hero_creator::CreationEvent::Confirm(draft) => {
+                    cancel_creation_preview(&mut client.borrow_mut());
+                    let prepared = (|| {
+                        let offered = client.borrow().creation_offer.clone().ok_or_else(|| {
+                            "Your hero options changed. Review them again.".to_owned()
+                        })?;
+                        let selection = draft
+                            .selection()
+                            .map_err(|_| "Choose all your hero's details.".to_owned())?;
+                        prepare(
+                            &client,
+                            &offered,
+                            Some(selection),
+                            false,
+                            false,
+                            rpc::HarborDestination::Unspecified as i32,
+                        )
+                    })();
+                    match prepared {
+                        Ok(body) => send(client, body, false),
+                        Err(error) => {
+                            if let Some(creator) = client.borrow().creation.as_ref() {
+                                creator.set_pending(false);
+                                creator.show_error(&error);
+                            }
+                        }
+                    }
+                }
             }
         },
-    )
-    .map_err(|error| character_render_error(client, &error))?;
-    // Flavor is not an admitted field in this bounded character contract.
-    created.flavor_input().root().set_attribute("hidden", "")?;
-    apply_option_requirements(client, &created, offer)?;
-    surface.append_child(created.root())?;
+    )?;
     client.borrow_mut().creation = Some(created);
     Ok(())
 }
 
+fn preview_creation(
+    client: &Rc<RefCell<Client>>,
+    draft_version: u64,
+    appearance_text: String,
+    backstory_text: String,
+    current: hero_creator::HeroDraft,
+) {
+    let prepared = (|| -> Result<_, String> {
+        let mut state = client.borrow_mut();
+        cancel_creation_preview(&mut state);
+        let action = state
+            .action
+            .clone()
+            .ok_or("Reconnect to read your description.")?;
+        let body = rpc::PreviewHeroIdentityRequest {
+            client_binding_id: state.binding.clone(),
+            session_id: state.session.clone(),
+            run_id: state.run.clone(),
+            observed_revision: state.revision,
+            appearance_text,
+            backstory_text,
+            current_identity: Some(
+                current
+                    .identity
+                    .to_rpc()
+                    .map_err(|_| "Choose all your hero's details.")?,
+            ),
+        };
+        let (abort, registration) = AbortHandle::new_pair();
+        let token = Rc::new(());
+        state.creation_preview = Some((token.clone(), abort));
+        if let Some(creator) = state.creation.as_ref() {
+            creator.show_error("Reading your description?");
+        }
+        Ok((
+            action,
+            body,
+            state.credential.clone(),
+            state.generation,
+            token,
+            registration,
+        ))
+    })();
+    let (mut action, body, credential, generation, token, registration) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if let Some(creator) = client.borrow().creation.as_ref() {
+                creator.show_error(&error);
+            }
+            return;
+        }
+    };
+    let revision = body.observed_revision;
+    let weak = Rc::downgrade(client);
+    wasm_bindgen_futures::spawn_local(async move {
+        let read = async {
+            let mut request =
+                request(body, &credential).map_err(|_| "Reconnect to read your description.")?;
+            request.set_timeout(std::time::Duration::from_secs(8));
+            action
+                .preview_hero_identity(request)
+                .await
+                .map(|response| response.into_inner())
+                .map_err(
+                    |_| "Your description could not be read. Try again or choose your details.",
+                )
+        };
+        let result = Abortable::new(read, registration).await;
+        let Some(client) = weak.upgrade() else {
+            return;
+        };
+        let mut state = client.borrow_mut();
+        if state.generation != generation
+            || !state
+                .creation_preview
+                .as_ref()
+                .is_some_and(|(active, _)| Rc::ptr_eq(active, &token))
+        {
+            return;
+        }
+        state.creation_preview.take();
+        let Some(creator) = state.creation.as_ref() else {
+            return;
+        };
+        if state.revision != revision {
+            creator.show_error("Your hero options changed. Read your description again.");
+            return;
+        }
+        match result {
+            Ok(Ok(response)) => {
+                let identity = response
+                    .proposed_identity
+                    .as_ref()
+                    .ok_or_else(|| JsValue::from_str("Hero details were not returned."))
+                    .and_then(hero_creator::IdentityDraft::from_rpc);
+                match identity {
+                    Ok(identity) => {
+                        if !creator.apply_preview(draft_version, &identity, &response.warnings) {
+                            creator.show_error("Your description changed. Read it again.");
+                        }
+                    }
+                    Err(_) => creator.show_error("Your description could not be read. Try again."),
+                }
+            }
+            Ok(Err(error)) => creator.show_error(error),
+            Err(_) => creator.show_error("Reading stopped. Your description is still editable."),
+        }
+    });
+}
+
+#[cfg(test)]
 fn creation_group_description(group: &rpc::JourneyGroup) -> String {
     let [option] = group.options.as_slice() else {
         return "Choose one.".to_owned();
@@ -1634,31 +1771,6 @@ fn creation_option_description(group_id: &str, description: &str) -> String {
     }
 }
 
-/// Lists an option only with the choices the server says it goes with (an appearance only with
-/// the packages that grant the weapon it shows); the server refuses the others in any case.
-fn apply_option_requirements(
-    client: &Rc<RefCell<Client>>,
-    surface: &CharacterPhaseSurface,
-    offer: &rpc::CharacterCreationOffer,
-) -> Result<(), JsValue> {
-    for group in &offer.groups {
-        for option in group
-            .options
-            .iter()
-            .filter(|option| !option.requires_group.is_empty())
-        {
-            surface
-                .require_option(
-                    &group.group_id,
-                    &option.option_id,
-                    &option.requires_group,
-                    &option.requires_options,
-                )
-                .map_err(|error| character_render_error(client, &error))?;
-        }
-    }
-    Ok(())
-}
 pub(super) fn action_identity(offer: &rpc::GameplayActionOffer) -> String {
     let mut groups = offer
         .input_groups
@@ -2007,7 +2119,17 @@ fn receive_view(
         feedback(&client.borrow(), "");
         if client.borrow().role == "display" {
             // The display draws through the presentation director, which orders the change.
-            live_motion::on_view(client)?;
+            let waiting_for_sound = client
+                .borrow()
+                .live
+                .tv
+                .as_ref()
+                .is_some_and(|stage| stage.root().has_attribute("data-sound-gate"));
+            if waiting_for_sound {
+                redraw_current(client)?;
+            } else {
+                live_motion::on_view(client)?;
+            }
         } else {
             redraw_current(client)?;
             live_health::phone_sync(client)?;
@@ -2035,8 +2157,84 @@ fn redraw_current(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     Ok(())
 }
 
+fn is_dead_hero(journey: &rpc::JourneyView) -> bool {
+    let Some(own) = journey.own_character.as_ref() else {
+        return false;
+    };
+    own.facts
+        .iter()
+        .any(|fact| fact.label == "Condition" && fact.value.eq_ignore_ascii_case("Dead"))
+        || journey.combat.as_ref().is_some_and(|combat| {
+            combat
+                .death_saves
+                .iter()
+                .any(|save| save.dead && save.name == own.name)
+        })
+}
+
+fn dead_hero_notice(journey: &rpc::JourneyView) -> Option<String> {
+    is_dead_hero(journey).then(|| {
+        format!(
+            "{} has died. You can make a new hero to join at the next story scene. Until then, you can watch the table.",
+            journey.own_character.as_ref().map_or("Your hero", |own| &own.name)
+        )
+    })
+}
+
+fn player_offers_for(
+    journey: &rpc::JourneyView,
+    offers: &[rpc::GameplayActionOffer],
+) -> Vec<rpc::GameplayActionOffer> {
+    if is_dead_hero(journey) {
+        offers
+            .iter()
+            .filter(|offer| offer.action_kind == rpc::GameplayActionKind::CreateCharacter as i32)
+            .cloned()
+            .collect()
+    } else {
+        offers.to_vec()
+    }
+}
+
+fn render_dead_hero_notice(
+    client: &Rc<RefCell<Client>>,
+    parent: &Element,
+    journey: &rpc::JourneyView,
+    offers: &[rpc::GameplayActionOffer],
+) -> Result<(), JsValue> {
+    if let Some(previous) = parent.query_selector(":scope > .dead-hero-notice")? {
+        previous.remove();
+    }
+    let Some(message) = dead_hero_notice(journey) else {
+        return Ok(());
+    };
+    let document = client.borrow().document.clone();
+    let notice = node(&document, parent, "section", "dead-hero-notice", "")?;
+    notice.set_attribute("role", "status")?;
+    notice.set_attribute("aria-live", "polite")?;
+    node(&document, &notice, "p", "dead-hero-copy", &message)?;
+    if journey.creation.is_none() {
+        if let Some(offer) = offers
+            .iter()
+            .find(|offer| offer.action_kind == rpc::GameplayActionKind::CreateCharacter as i32)
+        {
+            let mut offer = offer.clone();
+            offer.label = "Make a new hero".to_owned();
+            action_button(client, &notice, offer)?;
+        }
+    }
+    Ok(())
+}
+
 /// Only admitted snapshots or a local redraw of the retained snapshot reach rendering.
 fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), JsValue> {
+    render_view(client, view)?;
+    phone_controls::bind(client)?;
+    presentation_timing::paint(client);
+    Ok(())
+}
+
+fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), JsValue> {
     let (document, root, role) = {
         let mut state = client.borrow_mut();
         let document = state.document.clone();
@@ -2062,6 +2260,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         _ => return Err(JsValue::from_str("server audience mismatch")),
     };
     let journey = journey.ok_or_else(|| JsValue::from_str("server journey missing"))?;
+    let dead_hero = role == "player" && is_dead_hero(&journey);
     if let Some(own) = journey.own_character.as_ref() {
         let notebook = live_notebook::view(&journey)?;
         live_notebook::render(client, &notebook, &own.name)?;
@@ -2081,6 +2280,11 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
     if journey.party.len() > 2 || offers.len() > 12 {
         return Err(JsValue::from_str("server view exceeds bound"));
     }
+    let offers = if role == "player" {
+        player_offers_for(&journey, &offers)
+    } else {
+        offers
+    };
     if role == "display" {
         // PLAY-H01: the battlefield draws the server's health variants of these combatants.
         live_health::publish_battlefield_variants(&journey, scene.as_ref());
@@ -2104,6 +2308,9 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         if client.borrow().creation.is_none() {
             surface.set_text_content(None);
         }
+        if dead_hero {
+            render_dead_hero_notice(client, &surface, &journey, &offers)?;
+        }
         creation(client, &surface, creation_offer, offered)?;
         dialogue_recovery::mount(client, &surface, &offers)?;
         // Recovery remains reachable while a creation submission is uncertain.
@@ -2126,6 +2333,8 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         recovery_details(client, &surface)?;
         return Ok(());
     }
+    cancel_creation_preview(&mut client.borrow_mut());
+    client.borrow_mut().creation_offer = None;
     if let Some(creation) = client.borrow_mut().creation.take() {
         creation
             .dispose()
@@ -2145,7 +2354,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         }
         surface.set_attribute("data-destination", &shown.destination.to_string())?;
         live_combat::release(client)?;
-        return live_screens::render(
+        live_screens::render(
             client,
             &surface,
             &live_screens::SceneInput {
@@ -2156,7 +2365,11 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
                 offers: &offers,
                 clue: &clue,
             },
-        );
+        )?;
+        if dead_hero {
+            render_dead_hero_notice(client, &surface, &journey, &offers)?;
+        }
+        return Ok(());
     }
     let scene = scene.ok_or_else(|| JsValue::from_str("server scene missing"))?;
     let live_view = live_combat::LiveView {
@@ -2167,6 +2380,9 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         offers: &offers,
     };
     if live_combat::present(client, &live_view)? {
+        if dead_hero {
+            render_dead_hero_notice(client, &surface, &journey, &offers)?;
+        }
         return Ok(());
     }
     live_screens::release(client, &surface)?;
@@ -2244,6 +2460,9 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         &scene.title,
     )?;
     node(&document, &body, "p", "narration", &narration)?;
+    if dead_hero {
+        render_dead_hero_notice(client, &body, &journey, &offers)?;
+    }
     let phase = rpc::JourneyPhase::try_from(journey.phase)
         .map_err(|_| JsValue::from_str("unknown required phase"))?;
     if phase == rpc::JourneyPhase::Room {
@@ -2293,8 +2512,10 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
 
     dialogue_recovery::mount(client, &body, &offers)?;
     let actions = node(&document, &body, "div", "scene-actions", "")?;
-    for offer in offers {
-        action_button(client, &actions, offer)?;
+    if !dead_hero {
+        for offer in offers {
+            action_button(client, &actions, offer)?;
+        }
     }
     recovery_prompt(client, &body)?;
     node(&document, &body, "p", "feedback", "")?;
@@ -2425,6 +2646,7 @@ fn new_client(
         watch_abort: None,
         callbacks: Vec::new(),
         creation: None,
+        creation_preview: None,
         creation_offer: None,
         live: live_screens::LiveScreens::default(),
         chrome: live_chrome::Chrome::default(),
@@ -2719,11 +2941,166 @@ pub mod fixture {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_server_identity_metadata_keeps_a_readable_creation_page() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let surface = node(&document, &root, "div", "view", "").unwrap();
+        let client = new_client(&document, root, "player").unwrap();
+        creation(
+            &client,
+            &surface,
+            &rpc::CharacterCreationOffer::default(),
+            &rpc::GameplayActionOffer::default(),
+        )
+        .unwrap();
+        assert!(
+            surface
+                .query_selector(".hero-unavailable")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .unwrap()
+                .contains("Your seat is saved")
+        );
+        assert!(surface.query_selector("button").unwrap().is_some());
+        assert!(client.borrow().creation.is_none());
+    }
+
+    #[test]
+    fn phone_tabs_switch_sheets_after_callbacks_are_rebound() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let client = new_client(&document, root.clone(), "player").unwrap();
+        phone_controls::bind(&client).unwrap();
+        let tabs = root.query_selector_all(".live-tab").unwrap();
+        let click = |index| {
+            tabs.item(index)
+                .unwrap()
+                .dyn_into::<Element>()
+                .unwrap()
+                .dispatch_event(&web_sys::Event::new("click").unwrap())
+                .unwrap();
+        };
+        click(2);
+        assert_eq!(
+            root.query_selector_all(".live-sheet[data-open]")
+                .unwrap()
+                .length(),
+            1
+        );
+        click(3);
+        assert_eq!(
+            root.query_selector_all(".live-sheet[data-open]")
+                .unwrap()
+                .length(),
+            1
+        );
+        assert!(
+            !root
+                .query_selector(".live-notebook-sheet")
+                .unwrap()
+                .unwrap()
+                .has_attribute("data-open")
+        );
+        clear_callbacks(&mut client.borrow_mut());
+        phone_controls::bind(&client).unwrap();
+        click(2);
+        assert_eq!(
+            root.query_selector_all(".live-sheet[data-open]")
+                .unwrap()
+                .length(),
+            1
+        );
+        click(0);
+        assert_eq!(
+            root.query_selector_all(".live-sheet[data-open]")
+                .unwrap()
+                .length(),
+            0
+        );
+        for index in 0..tabs.length() {
+            assert!(
+                tabs.item(index)
+                    .unwrap()
+                    .dyn_into::<Element>()
+                    .unwrap()
+                    .has_attribute("aria-label")
+            );
+        }
+    }
+
+    #[test]
+    fn live_creation_mounts_identity_controls_and_keeps_the_draft_after_redraw() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let surface = node(&document, &root, "div", "view", "").unwrap();
+        let client = new_client(&document, root, "player").unwrap();
+        client.borrow_mut().binding = Some(rpc::ClientBindingId {
+            value: Some(vec![1; 16]),
+        });
+        client.borrow_mut().revision = Some(rpc::SessionRevision {
+            epoch: Some(rpc::RecoveryEpoch { value: Some(1) }),
+            sequence: Some(1),
+        });
+        let offer = rpc::CharacterCreationOffer {
+            description: "Choose your hero".to_owned(),
+            default_identity: Some(rpc::HeroIdentity {
+                appearance: Some(rpc::HeroAppearance::default()),
+                origin: "The hills".to_owned(),
+                occupation: "A guard".to_owned(),
+                motivation: "Protect home".to_owned(),
+                backstory: "A guard from the hills protecting home".to_owned(),
+                facts: vec![
+                    "The hills".to_owned(),
+                    "A guard".to_owned(),
+                    "Protect home".to_owned(),
+                ],
+            }),
+            ..Default::default()
+        };
+        let action = rpc::GameplayActionOffer::default();
+        creation(&client, &surface, &offer, &action).unwrap();
+        let creator = surface.query_selector(".hero-creator").unwrap().unwrap();
+        let editor = creator
+            .query_selector("textarea")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::HtmlTextAreaElement>()
+            .unwrap();
+        editor.set_value("Maren");
+        editor
+            .dispatch_event(&web_sys::Event::new("input").unwrap())
+            .unwrap();
+        clear_callbacks(&mut client.borrow_mut());
+        creation(&client, &surface, &offer, &action).unwrap();
+        assert!(
+            creator.is_same_node(
+                surface
+                    .query_selector(".hero-creator")
+                    .unwrap()
+                    .as_ref()
+                    .map(|node| node.as_ref())
+            )
+        );
+        assert_eq!(editor.value(), "Maren");
+        assert_eq!(
+            surface
+                .query_selector_all(".hero-creator")
+                .unwrap()
+                .length(),
+            1
+        );
+    }
+
     use super::{
         ACTION_REFUSAL_FEEDBACK, ROOM_CONNECTION_UNAVAILABLE, SERVER_LOST, SubmitFailure,
         action_identity, classify_submit_failure, creation_group_description,
-        creation_option_description, creation_option_label, record_join_retry,
-        should_replace_feedback, tactical_action_choice,
+        creation_option_description, creation_option_label, dead_hero_notice, is_dead_hero,
+        player_offers_for, record_join_retry, should_replace_feedback, tactical_action_choice,
     };
 
     #[test]
@@ -2999,5 +3376,89 @@ mod tests {
             ..refreshed.clone()
         };
         assert_ne!(action_identity(&refreshed), action_identity(&other_label));
+    }
+
+    #[test]
+    fn dead_hero_notice_is_plain_and_keeps_only_the_replacement_offer() {
+        let mut journey = df_protocol::common::JourneyView {
+            own_character: Some(df_protocol::common::CharacterSheet {
+                name: "Sigrun".to_owned(),
+                facts: vec![df_protocol::common::SheetFact {
+                    label: "Condition".to_owned(),
+                    value: "Dead".to_owned(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let offers = vec![
+            df_protocol::common::GameplayActionOffer {
+                action_kind: df_protocol::common::GameplayActionKind::ShortRest as i32,
+                label: "Short Rest".to_owned(),
+                ..Default::default()
+            },
+            df_protocol::common::GameplayActionOffer {
+                action_kind: df_protocol::common::GameplayActionKind::CreateCharacter as i32,
+                label: "Make a new hero".to_owned(),
+                ..Default::default()
+            },
+        ];
+
+        assert!(is_dead_hero(&journey));
+        assert_eq!(
+            dead_hero_notice(&journey).as_deref(),
+            Some(
+                "Sigrun has died. You can make a new hero to join at the next story scene. Until then, you can watch the table."
+            )
+        );
+        assert_eq!(player_offers_for(&journey, &offers), [offers[1].clone()]);
+
+        journey
+            .own_character
+            .as_mut()
+            .expect("own hero present")
+            .facts
+            .clear();
+        journey.combat = Some(df_protocol::common::CombatView {
+            death_saves: vec![df_protocol::common::DeathSaveState {
+                name: "Sigrun".to_owned(),
+                dead: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(is_dead_hero(&journey));
+        assert_eq!(
+            dead_hero_notice(&journey).as_deref(),
+            Some(
+                "Sigrun has died. You can make a new hero to join at the next story scene. Until then, you can watch the table."
+            )
+        );
+    }
+
+    #[test]
+    fn a_stable_zero_hit_point_hero_is_not_mistaken_for_dead() {
+        let journey = df_protocol::common::JourneyView {
+            own_character: Some(df_protocol::common::CharacterSheet {
+                name: "Sigrun".to_owned(),
+                facts: vec![df_protocol::common::SheetFact {
+                    label: "Condition".to_owned(),
+                    value: "Stable at 0 HP".to_owned(),
+                }],
+                ..Default::default()
+            }),
+            combat: Some(df_protocol::common::CombatView {
+                death_saves: vec![df_protocol::common::DeathSaveState {
+                    name: "Sigrun".to_owned(),
+                    stable: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(!is_dead_hero(&journey));
+        assert!(dead_hero_notice(&journey).is_none());
     }
 }

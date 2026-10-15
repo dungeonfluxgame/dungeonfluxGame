@@ -20,6 +20,7 @@ impl Cell {
 pub enum Lighting {
     Sunlight,
     NightOrInterior,
+    Darkness,
 }
 
 /// Authored obstacle coverage, interpreted by the disclosed centre-line convention.
@@ -102,6 +103,7 @@ pub struct BattleMap {
     step_heights: BTreeMap<[Cell; 2], Option<u16>>,
     difficult: BTreeSet<Cell>,
     cover: BTreeMap<Cell, Cover>,
+    cover_heights_dm: BTreeMap<Cell, u16>,
     hero_spawns: Vec<Cell>,
     enemy_spawns: Vec<Cell>,
     lighting: Lighting,
@@ -176,6 +178,7 @@ impl BattleMap {
                 step_heights: BTreeMap::new(),
                 difficult: BTreeSet::new(),
                 cover: BTreeMap::new(),
+                cover_heights_dm: BTreeMap::new(),
                 hero_spawns: layout.spawns.heroes.clone(),
                 enemy_spawns: layout.spawns.enemies.clone(),
                 lighting: Lighting::NightOrInterior,
@@ -215,6 +218,11 @@ impl BattleMap {
                 {
                     return Err(RuleError::MapData);
                 }
+                let height_dm = (obstacle.height_m * 10.0).round();
+                if height_dm > f64::from(u16::MAX) {
+                    return Err(RuleError::MapData);
+                }
+                let height_dm = height_dm as u16;
                 let mut cells = BTreeSet::new();
                 for &cell in &obstacle.cells {
                     map.require_cell(cell)?;
@@ -228,6 +236,12 @@ impl BattleMap {
                         .entry(cell)
                         .and_modify(|cover| *cover = (*cover).max(obstacle.cover))
                         .or_insert(obstacle.cover);
+                    if obstacle.cover != Cover::None {
+                        map.cover_heights_dm
+                            .entry(cell)
+                            .and_modify(|height| *height = (*height).max(height_dm))
+                            .or_insert(height_dm);
+                    }
                 }
             }
             for &cell in &layout.difficult {
@@ -360,7 +374,18 @@ impl BattleMap {
         ));
         for (&cell, &grade) in &self.cover {
             if cell != from && intersects(from, to, cell) {
-                cover = cover.max(grade);
+                // SRD 5.2.1 p15: a barrier's height determines whether it covers
+                // half, three-quarters, or the whole target. The authored cover
+                // label remains a bounded legacy hint, but cannot turn a low
+                // obstacle into Total Cover.
+                let height_grade = self
+                    .cover_heights_dm
+                    .get(&cell)
+                    .copied()
+                    .map_or(grade, |height| {
+                        grade.min(barrier_cover(height, target_height_dm(target_size)))
+                    });
+                cover = cover.max(height_grade);
             }
         }
         for &cell in creatures {
@@ -385,7 +410,7 @@ fn ordered_step(from: Cell, to: Cell) -> [Cell; 2] {
 // stopped, the same way a line that only touches an obstacle's corner takes no cover from it.
 // A blocked diagonal step is a body-width fact (a figure cannot squeeze round that corner) and
 // stops no line. All arithmetic is integral.
-fn target_height_dm(size: Size) -> u16 {
+pub(crate) fn target_height_dm(size: Size) -> u16 {
     // The scene rules have no creature-height field; use representative heights for its sizes.
     match size {
         Size::Small => 12,
@@ -397,11 +422,13 @@ fn target_height_dm(size: Size) -> u16 {
 fn barrier_cover(height_dm: u16, target_height_dm: u16) -> Cover {
     let height = u32::from(height_dm);
     let target = u32::from(target_height_dm);
-    if height * 4 < target {
+    // SRD 5.2.1 p15: Half Cover covers at least half the target, Three-Quarters
+    // at least three-quarters, and Total Cover the whole target.
+    if height * 2 < target {
         Cover::None
-    } else if height * 2 <= target {
+    } else if height * 4 < target * 3 {
         Cover::Half
-    } else if height * 4 <= target * 3 {
+    } else if height < target {
         Cover::ThreeQuarters
     } else {
         Cover::Total
@@ -644,11 +671,12 @@ mod collision_tests {
 
         for (height_dm, expected) in [
             (Some(4), Cover::None),
-            (Some(5), Cover::Half),
+            (Some(5), Cover::None),
             (Some(9), Cover::Half),
-            (Some(10), Cover::ThreeQuarters),
-            (Some(13), Cover::ThreeQuarters),
-            (Some(14), Cover::Total),
+            (Some(10), Cover::Half),
+            (Some(13), Cover::Half),
+            (Some(14), Cover::ThreeQuarters),
+            (Some(18), Cover::Total),
             (None, Cover::Total),
         ] {
             assert_eq!(
@@ -685,7 +713,43 @@ mod collision_tests {
         );
         assert_eq!(
             map.cover_between_for_size(Cell(0, 1), Cell(3, 1), &[], Size::Small),
+            Ok(Cover::None)
+        );
+    }
+
+    #[test]
+    fn obstacle_cover_uses_height_against_target_size_srd_521_p15() {
+        let map = |height_m: f64| {
+            let data = serde_json::json!({
+                "schema": 2,
+                "grid": {"cols": 5, "rows": 1, "blocked": []},
+                "layouts": [{
+                    "id": "height",
+                    "obstacles": [{
+                        "id": "bush",
+                        "kind": "bush",
+                        "cells": [[2, 0]],
+                        "blocks_movement": false,
+                        "cover": "total",
+                        "height_m": height_m
+                    }],
+                    "difficult": [],
+                    "spawns": {"heroes": [[0, 0]], "enemies": [[4, 0]]}
+                }]
+            });
+            BattleMap::from_json(data.to_string().as_bytes(), "height").unwrap()
+        };
+        assert_eq!(
+            map(0.4).cover_between(Cell(0, 0), Cell(4, 0), &[]),
+            Ok(Cover::None)
+        );
+        assert_eq!(
+            map(1.0).cover_between(Cell(0, 0), Cell(4, 0), &[]),
             Ok(Cover::Half)
+        );
+        assert_eq!(
+            map(2.0).cover_between(Cell(0, 0), Cell(4, 0), &[]),
+            Ok(Cover::Total)
         );
     }
 }

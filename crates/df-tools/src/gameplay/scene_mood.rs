@@ -417,6 +417,11 @@ pub(super) fn exchange_reading(signal: &ExchangeSignal, recent: &[Approach]) -> 
     {
         return (Mood::Menacing, Expression::Angry);
     }
+    match signal.emotional_state.patience {
+        super::social::PatienceState::Done => return (Mood::Grim, Expression::Contemptuous),
+        super::social::PatienceState::Short => return (Mood::Tense, Expression::Pained),
+        super::social::PatienceState::Plenty => {}
+    }
     if signal.emotional_state.drawn_to != EmotionLevel::None {
         return (Mood::Flirtatious, Expression::Flirtatious);
     }

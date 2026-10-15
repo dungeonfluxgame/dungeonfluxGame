@@ -442,7 +442,7 @@ pub(crate) fn generate_chapter(
     mechanical.insert(
         "story".into(),
         format!(
-            "You reach {}. {}",
+            "The path to {} remains open. {}",
             generated.settings.destination.short, victory.text
         ),
     );
@@ -481,13 +481,13 @@ pub(crate) fn generate_chapter(
                     let text = super::render::render(&template.text, &mechanical)?;
                     if rested {
                         scene.narration_rested = Some(format!(
-                            "You reach {}. {} {text}",
+                            "The path to {} remains open. {} {text}",
                             generated.settings.destination.short, victory.text
                         ));
                     } else {
                         // The rules sentences are the scene's own `rules_note`; display joins them.
                         scene.narration = format!(
-                            "You reach {}. {}",
+                            "The path to {} remains open. {}",
                             generated.settings.destination.short, victory.text
                         );
                     }
@@ -707,8 +707,8 @@ pub(super) fn epilogue(
 ) -> String {
     if !victory {
         return format!(
-            "The {} claims {}. The region must endure what comes next.",
-            frame.villain.title, frame.artifact.name
+            "{} is dragged away as the {} claims {}.",
+            plan.patron.first, frame.villain.title, frame.artifact.name
         );
     }
     let strategy = match approach {
@@ -808,23 +808,20 @@ pub(super) fn remove_repeated_ending_sentences(
     generated: &mut GeneratedAdventure,
     table_text: Option<&GeneratedAdventure>,
 ) {
+    let settings = &generated.settings;
     let Some(script) = &mut generated.pack.beat_script else {
         return;
     };
-    let mut earlier: Vec<(String, String, String)> = Vec::new();
+    let mut earlier: Vec<(SceneKey, String, String)> = Vec::new();
     for beat in &script.beats {
         if beat.kind == super::super::beat_script::BeatKind::Ending {
             if let Some(variant) = &beat.scene_variant
                 && let Some(ending) = script.scenes.get_mut(variant)
             {
+                let ending_place = settings.scene(ending.key).place_id.clone();
                 let prior_text: Vec<&str> = earlier
                     .iter()
-                    .filter(|(place_id, _, _)| {
-                        ending
-                            .setting
-                            .as_ref()
-                            .is_some_and(|setting| setting.place_id.as_str() != place_id.as_str())
-                    })
+                    .filter(|(scene, _, _)| settings.scene(*scene).place_id != ending_place)
                     .flat_map(|(_, narration, dialogue)| [narration.as_str(), dialogue.as_str()])
                     .collect();
                 let narration =
@@ -866,13 +863,8 @@ pub(super) fn remove_repeated_ending_sentences(
         }
         if let Some(variant) = &beat.scene_variant
             && let Some(scene) = script.scenes.get(variant)
-            && let Some(setting) = &scene.setting
         {
-            earlier.push((
-                setting.place_id.clone(),
-                scene.narration.clone(),
-                scene.dialogue.clone(),
-            ));
+            earlier.push((scene.key, scene.narration.clone(), scene.dialogue.clone()));
         }
     }
 }

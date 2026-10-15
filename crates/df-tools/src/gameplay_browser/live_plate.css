@@ -43,6 +43,8 @@
 .tv-stage[data-shot=plate][data-tv-mode=scene]>.tv-scrim{background:linear-gradient(0deg,#03060ecc 0%,#03060e66 14%,#03060e00 30%),linear-gradient(180deg,#03060e8c 0%,#03060e00 22%)}
 /* The initial establishing shot may wait for cut-outs. */
 .tv-stage[data-shot=establishing]:not([data-stage-graph]) .tv-fig-body{opacity:0;visibility:hidden;transition:none}
+/* The empty-room asset can be the wrong first frame while this scene's composed plate loads. */
+.tv-stage[data-tv-mode=scene][data-plate-state=pending] .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=ready]:not([data-plate-loaded]) .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=failed]:not([data-plate-loaded]) .tv-scene-set{background-image:radial-gradient(ellipse at 50% 42%,#574c3a 0,#2a2930 48%,#131720 100%)!important}
 /* A composed plate includes the cast; retain their nodes as the fallback and bubble anchors. */
 .tv-stage[data-tv-mode=scene][data-stage-graph][data-shot=plate][data-battle-state=absent] .tv-scene-graph{z-index:4;opacity:1;visibility:visible;transition:none}
 .tv-stage[data-stage-graph][data-shot=plate] .tv-scene-set{visibility:hidden}

@@ -246,7 +246,13 @@ fn propose_with_shield_policy(
         }
         let usage = weapon_use(weapon, true);
         // Occupancy-aware reachable cells; seek cover and remain beyond melee proximity.
-        if actor.movement_remaining_ft() > 0 && !actor.shield_equipped() {
+        if actor.movement_remaining_ft() > 0
+            && (!actor.shield_equipped()
+                || actor.spec().kind == CreatureKind::Goblin
+                    && opponents
+                        .iter()
+                        .any(|enemy| enemy.cell().distance(actor.cell()) <= 5))
+        {
             let (normal, _) = weapon.range().ok_or(RuleError::InvalidWeapon)?;
             let mut destinations = Vec::new();
             for cell in battle.reachable_cells(id)? {
@@ -408,8 +414,27 @@ fn propose_with_shield_policy(
 pub fn propose_latest(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError> {
     let actor = battle.actor(id)?;
     let action = propose_with_shield_policy(battle, id, actor.side() == Side::Heroes)?;
+    if actor.spec().kind == CreatureKind::Goblin
+        && !actor.budget().bonus_action_used
+        && !actor.budget().disengaged
+        && let Some(Action::Move(path)) = &action
+        && battle.combatants().iter().any(|enemy| {
+            enemy.side() != actor.side()
+                && !enemy.health().incapacitated()
+                && !enemy.budget().reaction_used
+                && enemy.cell().distance(actor.cell()) <= 5
+                && path.iter().any(|cell| enemy.cell().distance(*cell) > 5)
+        })
+    {
+        // SRD 5.2.1 p. 290: Nimble Escape makes Disengage a Bonus Action.
+        return Ok(Some(Action::NimbleDisengage));
+    }
     if matches!(&action, Some(Action::Dash)) && actor.speed_ft() == 0 {
-        return Ok(Some(Action::Dodge));
+        return Ok(Some(if actor.side() == Side::Enemies {
+            Action::EndTurn
+        } else {
+            Action::Dodge
+        }));
     }
     if actor.side() != Side::Enemies {
         return Ok(action);
@@ -452,6 +477,12 @@ pub fn propose_latest(battle: &Battle, id: u32) -> Result<Option<Action>, RuleEr
         && let Some(approach) = approach_target(battle, id)?
     {
         return Ok(Some(approach));
+    }
+    if actor.side() == Side::Enemies && matches!(&action, Some(Action::Dodge)) {
+        // SRD 5.2.1 p. 14: an enemy spends its turn on a declared action. Do not
+        // leave an enemy taking Dodge forever when no legal attack or purposeful
+        // movement exists; EndTurn records the no-target outcome for the caller.
+        return Ok(Some(Action::EndTurn));
     }
     Ok(action)
 }

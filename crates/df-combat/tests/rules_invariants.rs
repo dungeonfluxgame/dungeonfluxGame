@@ -266,6 +266,52 @@ fn hero(id: u32, cell: Cell, archer: bool) -> CombatantSpec {
     }
 }
 
+/// SRD 5.2.1 p. 290: a Goblin Warrior can Disengage as a Bonus Action before retreating.
+#[test]
+fn goblin_spends_nimble_escape_before_leaving_a_hero_reach() {
+    let map = BattleMap::from_json(
+        br#"{"schema":2,"grid":{"cols":8,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[2,1]],"enemies":[[3,1]]}}]}"#,
+        "flat",
+    )
+    .unwrap();
+    let specs = vec![
+        hero(1, Cell(2, 1), false),
+        CombatantSpec::creature(10, "goblin-warrior", Cell(3, 1), 20).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(57);
+    let mut initiative = vec![
+        record(&mut rng, 20, 0, &source),
+        record(&mut rng, 20, 1, &source),
+    ];
+    initiative[0].value = 1;
+    initiative[1].value = 20;
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    let attack = Action::Attack {
+        target: 1,
+        weapon: AttackUse {
+            weapon: Weapon::Scimitar,
+            ranged: false,
+            hands: 1,
+            finesse_dexterity: false,
+            knockout: false,
+            savage_attacker: false,
+            use_mastery: false,
+        },
+        spend: AttackSpend::Action,
+    };
+    let battle = resolve_faces(&battle, 10, &attack, &[1]).battle;
+    assert_eq!(propose(&battle, 10), Ok(Some(Action::NimbleDisengage)));
+    let disengaged = resolve_faces(&battle, 10, &Action::NimbleDisengage, &[]).battle;
+    assert!(disengaged.actor(10).unwrap().budget().disengaged);
+    assert!(matches!(
+        propose(&disengaged, 10),
+        Ok(Some(Action::Move(_)))
+    ));
+}
+
 struct Fight<'g> {
     battle: Battle,
     grid: &'g Grid,
@@ -1327,6 +1373,56 @@ fn a_kobold_that_cannot_reach_melee_this_turn_walks_into_range_and_throws_its_da
     assert_eq!(battle.actor(10).unwrap().weapon_count(Weapon::Dagger), 2);
 }
 
+/// SRD 5.2.1 p. 14: an enemy with no attack or reachable standing target must not Dodge forever.
+#[test]
+fn cultist_ends_turn_instead_of_dodging_beside_a_dying_hero() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":4,"rows":3,"blocked":[[1,0],[1,1],[1,2]]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[2,1]],"enemies":[[3,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(0, 1), false),
+        hero(2, Cell(2, 1), false),
+        CombatantSpec::creature(10, "bandit", Cell(2, 0), 0).unwrap(),
+        CombatantSpec::creature(11, "cultist", Cell(2, 2), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(53);
+    let mut initiative = Vec::new();
+    for (ordinal, face) in [18, 17, 20, 19].into_iter().enumerate() {
+        let mut draw = record(&mut rng, 20, ordinal as u32, &source);
+        draw.value = face;
+        initiative.push(draw);
+    }
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    assert_eq!(battle.active_actor(), Some(10));
+
+    let bandit_attack = Action::Attack {
+        target: 2,
+        weapon: AttackUse {
+            weapon: Weapon::Scimitar,
+            ranged: false,
+            hands: 1,
+            finesse_dexterity: false,
+            knockout: false,
+            savage_attacker: false,
+            use_mastery: false,
+        },
+        spend: AttackSpend::Action,
+    };
+    let downed = resolve_faces(&battle, 10, &bandit_attack, &[20, 6, 6]).battle;
+    assert!(downed.actor(2).unwrap().health().unconscious);
+    let goblin_turn = resolve_dice(&downed, 10, &Action::EndTurn, &mut rng)
+        .unwrap()
+        .battle;
+    assert_eq!(goblin_turn.active_actor(), Some(11));
+
+    assert_eq!(
+        df_combat::tactical::propose_latest(&goblin_turn, 11).unwrap(),
+        Some(Action::EndTurn)
+    );
+}
+
 /// SRD 5.2.1 pp. 18, 190: damage at 0 HP causes a Death Saving Throw failure, doubled on a Critical Hit.
 #[test]
 fn wolf_attacks_a_dying_hero_when_no_standing_hero_can_be_attacked_this_turn() {
@@ -1568,6 +1664,41 @@ fn enemy_policy_takes_a_natural_weapon_opportunity_attack() {
         df_combat::tactical::propose_legacy(&moving, 10).unwrap(),
         Some(Action::Opportunity { attack: None })
     );
+}
+
+/// SRD 5.2.1 p. 14: an Opportunity Attack is one held melee weapon attack;
+/// a Fighter holding a Greatsword may select that weapon.
+#[test]
+fn fighter_opportunity_attack_uses_held_greatsword() {
+    let json: &[u8] = br#"{"schema":2,"grid":{"cols":4,"rows":3,"blocked":[]},"layouts":[{"id":"flat","obstacles":[],"difficult":[],"spawns":{"heroes":[[2,1]],"enemies":[[1,1]]}}]}"#;
+    let map = BattleMap::from_json(json, "flat").unwrap();
+    let specs = vec![
+        hero(1, Cell(2, 1), false),
+        CombatantSpec::creature(10, "giant-weasel", Cell(1, 1), 0).unwrap(),
+    ];
+    let source = source();
+    let mut rng = Rng(12);
+    let mut initiative = [
+        record(&mut rng, 20, 0, &source),
+        record(&mut rng, 20, 1, &source),
+    ];
+    initiative[0].value = 1;
+    initiative[1].value = 20;
+    let battle = begin(map, specs, binding(&source), &initiative)
+        .unwrap()
+        .battle;
+    let moving = resolve_dice(&battle, 10, &Action::Move(vec![Cell(0, 1)]), &mut rng)
+        .unwrap()
+        .battle;
+    assert_eq!(moving.reaction_offers(), &[1]);
+    let Action::Opportunity {
+        attack: Some(attack),
+    } = propose(&moving, 1).unwrap().unwrap()
+    else {
+        panic!("the Fighter must receive an opportunity attack offer");
+    };
+    assert_eq!(attack.weapon, Weapon::Greatsword);
+    assert!(!attack.ranged);
 }
 
 /// SRD 5.2.1 pp. 9, 14: a spent Reaction cannot be used for a second mover before the enemy's turn.

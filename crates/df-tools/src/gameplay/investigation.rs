@@ -147,7 +147,49 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
                 entry.aliases.extend(offer.aliases.clone());
                 options.push(entry);
             }
+            // A surface named by the model's positions is present even without a prop row.
+            for surface in [
+                "bar", "counter", "table", "shelf", "wall", "floor", "ceiling",
+            ] {
+                if options.iter().any(|entry| {
+                    entry.aliases.iter().any(|alias| {
+                        word_position(&normalized(alias), surface).is_some()
+                            && !alias.contains(" on ")
+                            && !alias.starts_with("on ")
+                    })
+                }) {
+                    continue;
+                }
+                let descriptions = model
+                    .things
+                    .iter()
+                    .filter(|thing| {
+                        thing.in_scene
+                            && word_position(&normalized(&thing.position), surface).is_some()
+                    })
+                    .map(|thing| format!("You can see {} {}.", thing.short, thing.position))
+                    .collect::<Vec<_>>();
+                let person_here = model
+                    .people
+                    .iter()
+                    .any(|person| word_position(&normalized(&person.position), surface).is_some());
+                if !descriptions.is_empty() || person_here {
+                    let mut entry = target(
+                        &format!("the {surface}"),
+                        &if descriptions.is_empty() {
+                            format!("You can see the {surface} from here.")
+                        } else {
+                            descriptions.join(" ")
+                        },
+                        false,
+                    );
+                    entry.id = format!("surface-{surface}");
+                    entry.aliases.push(surface.into());
+                    options.push(entry);
+                }
+            }
             merge_targets(&mut options, canonical);
+            ordinary_aliases(&mut options);
             options.truncate(64);
             return options;
         }
@@ -218,8 +260,34 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
         }
     }
     merge_targets(&mut options, canonical);
+    ordinary_aliases(&mut options);
     options.truncate(64);
     options
+}
+
+fn ordinary_aliases(options: &mut [Target]) {
+    for entry in options {
+        let names = entry
+            .aliases
+            .iter()
+            .chain(std::iter::once(&entry.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in names {
+            for (left, right) in [("bar", "counter"), ("tankard", "mug"), ("woman", "lady")] {
+                for (from, to) in [(left, right), (right, left)] {
+                    let lower = normalized(&name);
+                    if let Some(position) = word_position(&lower, from) {
+                        let mut alias = lower;
+                        alias.replace_range(position..position + from.len(), to);
+                        if !entry.aliases.contains(&alias) {
+                            entry.aliases.push(alias);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn merge_targets(options: &mut Vec<Target>, canonical: &[Target]) {
@@ -322,6 +390,13 @@ fn word_position(text: &str, alias: &str) -> Option<usize> {
 
 pub(super) fn local_target(words: &str, options: &[Target]) -> Target {
     let lowered = normalized(words);
+    if ["look around", "what do i see", "what can i see"]
+        .iter()
+        .any(|phrase| lowered.contains(phrase))
+        && let Some(room) = options.iter().find(|entry| entry.id == "room")
+    {
+        return room.clone();
+    }
     let requested = normalized(&requested_name(words));
     let primary = requested
         .split(" on ")
@@ -345,6 +420,11 @@ pub(super) fn local_target(words: &str, options: &[Target]) -> Target {
             .flat_map(|entry| {
                 entry.aliases.iter().filter_map(move |alias| {
                     let alias = normalized(alias);
+                    if matches!(alias.as_str(), "her" | "his")
+                        && (text.contains("search her ") || text.contains("search his "))
+                    {
+                        return None;
+                    }
                     word_position(text, &alias)
                         .map(|position| (position, usize::MAX - alias.len(), entry))
                 })
@@ -515,12 +595,25 @@ pub(super) fn observation(
         .splitn(4, ':')
         .nth(3)?
         .starts_with("repeat-");
-    let target = check_target(scene, check)?;
+    let mut target = check_target(scene, check)?;
     let found = if check.succeeded && !repeated {
         finding_on(scene, &target, &skill)
     } else {
         None
     };
+    if check.succeeded
+        && !repeated
+        && let Some(id) = target.id.strip_prefix("thing-")
+        && let Some(thing) = scene
+            .setting
+            .as_ref()
+            .and_then(|setting| setting.model.as_ref())
+            .and_then(|model| model.things.iter().find(|thing| thing.id == id))
+        && thing.finding_id.is_none()
+        && thing.clue_fact_id.is_none()
+    {
+        target.description = format!("{} {}", target.description, thing.closer_look);
+    }
     Some(Observation {
         target,
         skill,
@@ -731,7 +824,27 @@ pub(super) fn difficulty_class(
         } else if skill == "stealth" {
             15
         } else {
-            finding_on(scene, target, skill).map_or(10, |finding| finding.dc)
+            if let Some(finding) = finding_on(scene, target, skill) {
+                finding.dc
+            } else if let Some(thing) = target
+                .id
+                .strip_prefix("thing-")
+                .and_then(|id| {
+                    scene
+                        .setting
+                        .as_ref()?
+                        .model
+                        .as_ref()?
+                        .things
+                        .iter()
+                        .find(|thing| thing.id == id)
+                })
+                .filter(|thing| finding_skill(thing.skill) == skill)
+            {
+                thing.dc
+            } else {
+                10
+            }
         },
     )
 }
@@ -859,6 +972,7 @@ pub(super) fn local_reading(
         "i look around",
         "i look at ",
         "i look under ",
+        "i look behind ",
         "i look out ",
         "i look closely ",
         "i look for ",

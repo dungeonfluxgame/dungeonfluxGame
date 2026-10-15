@@ -234,11 +234,9 @@ pub(super) fn internal_reason(state: SessionState, event: Event) -> Option<&'sta
 }
 
 /// The Aftermath rest rule, decided here like every other transition: a
-/// short rest is accepted at most once per aftermath (per fight), and only
-/// while some living hero has something to regain: hit points below the
-/// maximum, a Second Wind use below the maximum, or a knockout to wake
-/// from. (The rest itself currently restores Second Wind and wakes the
-/// knocked out; a Hit Point Die choice can remain pending in the aftermath.)
+/// short rest is accepted at most once per aftermath (per fight), while a
+/// hero has at least 1 Hit Point. SRD 5.2.1 p. 187 does not require injury
+/// or an expended resource to rest; spending Hit Point Dice is optional.
 /// Derived from the checkpoint like the state itself, so a stored game that
 /// resumes during those choices can continue with the unresolved hero.
 pub(super) fn rest_accepted(current: &Checkpoint) -> Result<bool, RepositoryError> {
@@ -256,13 +254,7 @@ pub(super) fn rest_accepted(current: &Checkpoint) -> Result<bool, RepositoryErro
     for character in &state.characters {
         let who = character.entity;
         let hit_points = super::value(state, who, "hit-points")?;
-        if hit_points > 0
-            && ((hit_points < super::maximum_hit_points(state, who)?
-                && super::value(state, who, "hit-point-dice")? > 0)
-                || super::value(state, who, "second-wind")?
-                    < u32::from(super::super::pack::second_wind().uses_max)
-                || super::value(state, who, "unconscious")? != 0)
-        {
+        if hit_points > 0 {
             return Ok(true);
         }
     }

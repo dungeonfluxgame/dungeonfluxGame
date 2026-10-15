@@ -75,7 +75,7 @@ main .client.display{background:transparent}
 .live-tab[hidden]{display:none}
 .live-tab-icon{width:26px;height:26px;object-fit:contain}
 .live-tab[aria-current=page]{color:var(--gold);background:url(/assets/ui/generated/button-frame) center/100% 100% no-repeat}
-.live-sheet{position:fixed;inset:0;z-index:50;display:none;align-items:flex-end;background:#02040ab8}
+.live-sheet{position:fixed;inset:0 0 calc(72px + env(safe-area-inset-bottom));z-index:25;display:none;align-items:flex-end;background:#02040ab8}
 .live-sheet[data-open]{display:flex}
 .live-sheet-panel{width:100%;max-height:82vh;overflow:auto;padding:20px 16px calc(20px + env(safe-area-inset-bottom));background:linear-gradient(#101b29,#070d15);border-top:1px solid #c9a35f99;border-radius:16px 16px 0 0}
 .live-sheet-panel h2{margin:0 0 14px;font:400 24px var(--serif);color:var(--gold)}
@@ -151,3 +151,13 @@ main .client.display{background:transparent}
 .client.player .live-toast{border-color:#5b6064;border-radius:3px;background:#080c10f5}
 .client.player .df-exploration .stage>.narration blockquote{color:var(--df-film-ivory);text-shadow:0 1px 8px #000}
 .client.player .df-campaign[data-join-phase] .topbar{background:linear-gradient(#06090dcc,#06090f00)}
+
+/* Keep both sheet navigation and the active text action above the phone's tab bar. */
+.client.player .live-sheet-panel{box-sizing:border-box;max-height:100%;padding-bottom:20px}
+.client.player .live-notebook-sheet .live-sheet-panel{height:100%;max-height:100%}
+.client.player .dialogue-controls{position:sticky;bottom:calc(80px + env(safe-area-inset-bottom));z-index:10;padding:8px 0;background:#080d11}
+.client.player .dialogue-controls [data-dialogue=submit]{width:100%;min-height:48px;font-size:17px}
+.client.player .dialogue-recovery[data-typed] [data-dialogue=submit]{background:#443a25;border:1px solid #c9bca0;color:#fff6df;font-weight:600}
+.client.player .dialogue-recovery[data-typed] .talk-hold{min-height:44px;padding:8px 12px;background:#0a0e12;border-color:#555c61;font-size:15px}
+.client.player .live-dock .say-more{margin-top:0}
+.client.player .df-exploration .exploration-actions:has(.exploration-choices:empty){display:none}

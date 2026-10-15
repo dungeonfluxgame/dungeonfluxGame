@@ -75,6 +75,8 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
         "defend-courier" => rpc::GameplayActionKind::DefendCourier,
         "greatsword-attack" => rpc::GameplayActionKind::GreatswordAttack,
         "second-wind" => rpc::GameplayActionKind::SecondWind,
+        "stabilise-kit" => rpc::GameplayActionKind::StabiliseWithHealersKit,
+        "stabilise-medicine" => rpc::GameplayActionKind::StabiliseMedicine,
         "end-turn" => rpc::GameplayActionKind::EndTurn,
         "move" => rpc::GameplayActionKind::Move,
         "dash" => rpc::GameplayActionKind::Dash,
@@ -101,6 +103,8 @@ pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str
         rpc::GameplayActionKind::DefendCourier => "defend-courier",
         rpc::GameplayActionKind::GreatswordAttack => "greatsword-attack",
         rpc::GameplayActionKind::SecondWind => "second-wind",
+        rpc::GameplayActionKind::StabiliseWithHealersKit => "stabilise-kit",
+        rpc::GameplayActionKind::StabiliseMedicine => "stabilise-medicine",
         rpc::GameplayActionKind::EndTurn => "end-turn",
         rpc::GameplayActionKind::Move => "move",
         rpc::GameplayActionKind::Dash => "dash",
@@ -147,12 +151,16 @@ pub(super) fn journey_input(
     }
     // A fight action carries at most its choice from the list and the two attack variants
     // (weapon mastery, Savage Attacker).
+    let interaction_offer = kind == rpc::GameplayActionKind::ExamineHarborSeal
+        && request.offer_id == super::journey::living_scene::offer_id(current);
     let observation_offer = kind == rpc::GameplayActionKind::ExamineHarborSeal
-        && super::beat_script_runtime::is_observation_offer(current, &request.offer_id)
-            .map_err(|_| invalid())?;
+        && (interaction_offer
+            || super::beat_script_runtime::is_observation_offer(current, &request.offer_id)
+                .map_err(|_| invalid())?);
     if request.action_choices.len() > 3
         || (!super::journey::tactical::present(current.state())
             && !observation_offer
+            && kind != rpc::GameplayActionKind::ShortRest
             && !request.action_choices.is_empty())
     {
         return Err(invalid());
@@ -186,6 +194,12 @@ pub(super) fn journey_input(
         ));
     }
     if let Some(character) = &request.character {
+        if character.identity.is_some() {
+            super::refusal_detail::note("hero-identity-storage-unavailable");
+            return Err(tonic::Status::failed_precondition(
+                "Your hero's appearance and backstory could not be saved yet.",
+            ));
+        }
         if character.name.len() > 48 || character.choices.len() > 16 {
             return Err(tonic::Status::invalid_argument(
                 "character choices exceed bound",
@@ -385,6 +399,7 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
             description: content.creation.description.clone(),
             groups,
             source_revision: model::source_revision(),
+            ..Default::default()
         })
     })
 }
@@ -755,7 +770,7 @@ fn rested_text(
     authored: &super::pack::Scene,
     rested: bool,
 ) -> Result<(String, Option<String>), RepositoryError> {
-    if rested {
+    if rested && authored.narration_rested.is_some() {
         let (story, rules) = super::pack::rested_story_and_rules(authored)
             .map_err(|_| refused("rested-story-shape"))?;
         Ok((story, Some(rules)))
@@ -1002,7 +1017,12 @@ pub(super) fn project_journey(
                 } else {
                     Vec::new()
                 },
-                input_groups: if journey::tactical::present(state) {
+                input_groups: if kind == rpc::GameplayActionKind::ShortRest {
+                    stage(
+                        "view-short-rest-groups",
+                        journey::short_rest_choice_groups(current, principal),
+                    )?
+                } else if journey::tactical::present(state) {
                     stage(
                         "view-tactical-groups",
                         journey::tactical::groups(current, principal, kind),
@@ -1226,6 +1246,13 @@ pub(super) fn project_journey(
     } else {
         narration
     };
+    let encounter_xp = stage(
+        "view-encounter-experience",
+        journey::rewards::encounter_experience(state),
+    )?;
+    if let Some(experience) = encounter_xp {
+        narration.push_str(&format!(" The party earns {experience} XP."));
+    }
     if role == LocalDemoRole::Player
         && phase == rpc::JourneyPhase::Dialogue
         && !authored.findings.is_empty()
@@ -1357,7 +1384,34 @@ pub(super) fn project_journey(
         .as_ref()
         .map(|setting| setting.place_id.clone())
         .unwrap_or_default();
+    if let Some(room) = stage(
+        "view-room-snapshot",
+        journey::living_scene::snapshot(state, &authored),
+    )? {
+        scene.scene_contents_json = room.model.public_contents().map_err(|_| {
+            super::refusal_detail::note("view-room-contents");
+            RepositoryError::InvalidCandidate
+        })?;
+    }
+    if role == LocalDemoRole::Player
+        && let Some(hero) = journey.own_character.as_ref()
+    {
+        scene.item = journey::living_scene::item_for(state, &authored, &hero.name)?;
+    }
 
+    let latest_check = state
+        .decisions
+        .last()
+        .filter(|decision| decision.revision == current.basis().revision)
+        .filter(|decision| decision.source_policy.as_str() == journey::THREAD_POLICY)
+        .map(journey::accepted)
+        .transpose()?
+        .and_then(|accepted| accepted.check);
+    if let Some(check) = &latest_check
+        && let Some(observation) = super::investigation::observation(&authored, check)
+    {
+        narration = observation.public_view().fallback();
+    }
     let audience = match role {
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {
             narration: narration.clone(),
@@ -1366,12 +1420,13 @@ pub(super) fn project_journey(
             journey: Some(journey),
             scene_graph: None,
             live_plate_graph_revision: 0,
-            check: None,
+            check: latest_check.clone(),
+            encounter_xp,
         }),
         LocalDemoRole::Player => rpc::view_message::Audience::Player(rpc::PlayerGameplayView {
             offer_id: String::new(),
             narration,
-            check: None,
+            check: latest_check,
             private_clue,
             action_available: !offers.is_empty(),
             offers,
@@ -1583,6 +1638,21 @@ pub(super) fn tactical_selection_rejected(
     kind: rpc::GameplayActionKind,
     choices: &[rpc::JourneyChoice],
 ) -> Result<bool, RepositoryError> {
+    if kind == rpc::GameplayActionKind::ShortRest {
+        let groups = super::journey::short_rest_choice_groups(current, member)?;
+        return Ok(choices.len() != groups.len()
+            || groups.iter().any(|group| {
+                let matching = choices
+                    .iter()
+                    .filter(|choice| choice.group_id == group.group_id)
+                    .collect::<Vec<_>>();
+                matching.len() != 1
+                    || !group
+                        .options
+                        .iter()
+                        .any(|option| option.option_id == matching[0].option_id)
+            }));
+    }
     if !super::journey::tactical::present(current.state()) {
         return Ok(false);
     }
@@ -1599,6 +1669,12 @@ pub(super) fn action_offer_rejection(
     offer: &str,
     choices: &[rpc::JourneyChoice],
 ) -> Result<Option<rpc::RejectionCode>, RepositoryError> {
+    if kind == rpc::GameplayActionKind::ExamineHarborSeal
+        && offer == super::journey::living_scene::offer_id(current)
+    {
+        return Ok((!super::journey::living_scene::available(current, member)?)
+            .then_some(rpc::RejectionCode::StaleOffer));
+    }
     if kind == rpc::GameplayActionKind::StartNewAdventure
         && super::journey::session_machine::SessionState::of(current)?
             != super::journey::session_machine::SessionState::Ended

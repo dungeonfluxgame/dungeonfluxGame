@@ -460,6 +460,10 @@ impl TableLog {
         if text.is_empty() {
             return;
         }
+        super::actor::record_audit_line(
+            "gameplay.table_line",
+            format!("LINE queued speaker={speaker:?} role={role:?} kind={kind:?} text={text:?}"),
+        );
         let version = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
             let sequence = reserved_sequence.unwrap_or_else(|| {

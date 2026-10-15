@@ -202,6 +202,7 @@ fn create(checkpoint: &Checkpoint, operation: u8) -> rpc::SubmitActionRequest {
         rpc::GameplayActionKind::CreateCharacter,
     );
     body.character = Some(rpc::CharacterSelection {
+        identity: None,
         name: "Rest-Fighter".to_owned(),
         choices: [
             ("species", "dwarf"),

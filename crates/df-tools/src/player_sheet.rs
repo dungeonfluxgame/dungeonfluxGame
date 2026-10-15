@@ -30,8 +30,17 @@ fn player_sheet_fact_value(label: &str, value: &str) -> Option<String> {
                 Some(format!("{equipment} · {amount} gp"))
             }
         }
-        "First language" | "Second language" | "Base language" | "First class skill"
-        | "Second class skill" | "Gaming set" | "Alignment" => Some(display_label(value)),
+        "First language"
+        | "Second language"
+        | "Base language"
+        | "First class skill"
+        | "Second class skill"
+        | "Soldier skill proficiencies"
+        | "Saving throw proficiencies"
+        | "In hand"
+        | "Dropped weapons"
+        | "Gaming set"
+        | "Alignment" => Some(display_label(value)),
         _ if value == "Held" => Some("(in hand)".to_owned()),
         _ if value.starts_with("Dropped") => Some("(dropped)".to_owned()),
         _ => Some(value.to_owned()),
@@ -101,6 +110,24 @@ mod tests {
             ]
         );
         assert_eq!(sheet.facts[0].value, "insight");
+    }
+
+    /// SRD 5.2.1 pp. 47, 83-84: show the Soldier and Fighter's stated proficiencies by name.
+    #[test]
+    fn player_sheet_view_formats_soldier_and_saving_throw_proficiencies() {
+        let sheet = rpc::CharacterSheet {
+            facts: vec![
+                fact("Soldier skill proficiencies", "athletics, intimidation"),
+                fact("Saving throw proficiencies", "strength, constitution"),
+            ],
+            ..Default::default()
+        };
+
+        let view = player_sheet_view(&sheet);
+
+        assert_eq!(view.facts[0].value, "Athletics, Intimidation");
+        assert_eq!(view.facts[1].value, "Strength, Constitution");
+        assert_eq!(sheet.facts[0].value, "athletics, intimidation");
     }
 
     fn fact(label: &str, value: &str) -> rpc::SheetFact {

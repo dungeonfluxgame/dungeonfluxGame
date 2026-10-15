@@ -2,12 +2,12 @@
 //! This codec grants no source, actor or persistence authority.
 use super::{
     Battle, BattleMap, RuleError,
-    state::{Combatant, PendingMove},
+    state::{Combatant, HelpEffect, PendingMove},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const MAXIMUM_BYTES: usize = 1024 * 1024;
 
 #[derive(Deserialize, Serialize)]
@@ -21,6 +21,7 @@ struct Snapshot {
     active: usize,
     round: u32,
     pending: Option<PendingMove>,
+    helped_attacks: Vec<HelpEffect>,
     needs_death_save: bool,
 }
 
@@ -37,6 +38,7 @@ impl Battle {
             active: self.active,
             round: self.round,
             pending: self.pending.clone(),
+            helped_attacks: self.helped_attacks.clone(),
             needs_death_save: self.needs_death_save,
         })
         .map_err(|_| RuleError::SnapshotData)?;
@@ -60,6 +62,7 @@ impl Battle {
             || !(2..=64).contains(&state.actors.len())
             || state.order.len() != state.actors.len()
             || state.active >= state.order.len()
+            || state.helped_attacks.len() > 64
         {
             return Err(RuleError::SnapshotData);
         }
@@ -155,6 +158,31 @@ impl Battle {
                 return Err(RuleError::SnapshotData);
             }
         }
+        for effect in &state.helped_attacks {
+            let helper = state
+                .actors
+                .iter()
+                .find(|actor| actor.id() == effect.helper)
+                .ok_or(RuleError::SnapshotData)?;
+            let ally = state
+                .actors
+                .iter()
+                .find(|actor| actor.id() == effect.ally)
+                .ok_or(RuleError::SnapshotData)?;
+            let target = state
+                .actors
+                .iter()
+                .find(|actor| actor.id() == effect.target)
+                .ok_or(RuleError::SnapshotData)?;
+            if effect.helper == effect.ally
+                || helper.side() != ally.side()
+                || helper.side() == target.side()
+                || helper.turn_count != effect.helper_turn_count
+                || !helper.budget.action_used
+            {
+                return Err(RuleError::SnapshotData);
+            }
+        }
         if state.order.iter().copied().collect::<BTreeSet<_>>() != ids {
             return Err(RuleError::SnapshotData);
         }
@@ -201,6 +229,7 @@ impl Battle {
             active: state.active,
             round: state.round,
             pending: state.pending,
+            helped_attacks: state.helped_attacks,
             needs_death_save: state.needs_death_save,
         };
         if let Some(pending) = &battle.pending {
@@ -230,7 +259,7 @@ impl Battle {
                             || reactor.budget.reaction_used
                             || reactor.cell().distance(mover.cell()) > 5
                             || reactor.cell().distance(destination) <= 5
-                            || !battle.can_see(reactor.cell(), mover.cell())
+                            || !battle.can_see_actor(reactor, mover)
                     })
                 })
             {

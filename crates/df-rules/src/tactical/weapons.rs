@@ -31,6 +31,7 @@ pub enum DamageType {
     Piercing,
     Bludgeoning,
     Necrotic,
+    Poison,
 }
 
 impl DamageType {
@@ -41,6 +42,7 @@ impl DamageType {
             Self::Piercing => "piercing",
             Self::Bludgeoning => "bludgeoning",
             Self::Necrotic => "necrotic",
+            Self::Poison => "poison",
         }
     }
 }

@@ -158,11 +158,11 @@ pub(super) fn skill_check_modifiers(
     skill: &str,
 ) -> Result<(i8, u8), RepositoryError> {
     let ability_name = match skill {
-        "perception" | "insight" | "survival" | "medicine" => "wisdom",
+        "perception" | "insight" | "survival" | "medicine" | "animal-handling" => "wisdom",
         "investigation" | "arcana" | "history" | "nature" | "religion" => "intelligence",
-        "stealth" => "dexterity",
+        "stealth" | "sleight-of-hand" | "acrobatics" => "dexterity",
         "athletics" => "strength",
-        "intimidation" => "charisma",
+        "intimidation" | "persuasion" | "deception" | "performance" => "charisma",
         _ => {
             refusal_detail::note("search-skill");
             return Err(RepositoryError::InvalidCandidate);
@@ -257,6 +257,11 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
                 pack::active().and_then(|loaded| loaded.script_scene_assets.get(variant).cloned())
         {
             scene.asset = asset;
+        }
+        if let Some(snapshot) = journey::living_scene::snapshot(state, &scene)?
+            && let Some(setting) = scene.setting.as_mut()
+        {
+            setting.model = Some(snapshot.model);
         }
         Ok(scene)
     })
@@ -497,6 +502,10 @@ pub(super) fn validate(
             continue;
         }
         let Some((choice_fact, id, member)) = choice(state, decision)? else {
+            let mut creation_state = state.clone();
+            creation_state
+                .decisions
+                .retain(|record| record.revision <= decision.revision);
             let character = state
                 .characters
                 .get(creations)
@@ -504,7 +513,8 @@ pub(super) fn validate(
             creations += 1;
             if started
                 || receipt.phase != rpc::JourneyPhase::Room as i32
-                || receipt.character != Some(journey::character_sheet(state, character.entity)?)
+                || receipt.character
+                    != Some(journey::character_sheet(&creation_state, character.entity)?)
                 || receipt.check.is_some()
                 || receipt.scene.is_some()
                 || !receipt.combat.is_empty()
@@ -676,6 +686,13 @@ pub(super) fn observation_finding<'a>(
     let [_, _, skill, detail] = parts.as_slice() else {
         return None;
     };
+    if detail.starts_with("target-") || detail.starts_with("repeat-target-") {
+        if detail.starts_with("repeat-") {
+            return None;
+        }
+        let target = super::investigation::check_target(scene, check)?;
+        return super::investigation::finding_on(scene, &target, skill);
+    }
     if let Some(id) = detail.strip_prefix("finding-") {
         return scene.findings.iter().find(|finding| finding.id == id);
     }
@@ -706,6 +723,13 @@ fn validate_observation_check(
     scene_scope: &str,
     check: Option<&rpc::AbilityCheckResult>,
 ) -> Result<(), RepositoryError> {
+    let mut source_scene = scene.clone();
+    if let Some(snapshot) = journey::living_scene::snapshot(state, &source_scene)?
+        && let Some(setting) = source_scene.setting.as_mut()
+    {
+        setting.model = Some(snapshot.model);
+    }
+    let scene = &source_scene;
     let invalid = || {
         refusal_detail::note("search-replay-check");
         RepositoryError::InvalidCandidate
@@ -729,6 +753,7 @@ fn validate_observation_check(
             | "nature"
             | "religion"
             | "stealth"
+            | "sleight-of-hand"
     ) {
         return Err(invalid());
     }
@@ -784,7 +809,11 @@ fn validate_observation_check(
         + i32::from(ability_modifier)
         + i32::from(proficiency_bonus);
     // SRD 5.2.1 p. 183: "you must succeed on a DC 15 Dexterity (Stealth) check" to Hide.
-    let difficulty_class = if skill == "stealth" {
+    let difficulty_class = if detail.starts_with("target-") || detail.starts_with("repeat-target-")
+    {
+        let target = super::investigation::check_target(scene, check).ok_or_else(invalid)?;
+        super::investigation::difficulty_class(state, scene, &target, skill)?
+    } else if skill == "stealth" {
         15
     } else {
         matching.map_or(10, |finding| finding.dc)

@@ -1,5 +1,5 @@
 use super::{Cell, CombatantSpec, CreatureKind, RuleError, Side, Size, Weapon};
-use crate::local_journey::{self, LegalCharacter};
+use crate::local_journey::{self, HeroSpecies, LegalCharacter, SpeciesSize};
 
 /// Creation-group/array data for the follow-up loader; current pack.rs cannot yet accept it.
 pub const ARCHER_CREATION_JSON: &str =
@@ -11,6 +11,7 @@ pub const ARCHER_CREATION_JSON: &str =
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArcherBuild {
     character: LegalCharacter,
+    species: HeroSpecies,
 }
 impl ArcherBuild {
     pub fn character(&self) -> &LegalCharacter {
@@ -18,16 +19,21 @@ impl ArcherBuild {
     }
     /// Derived combat profile, never client-supplied bonuses or AC.
     pub fn combatant(&self, id: u32, cell: Cell) -> CombatantSpec {
+        let traits = self.species.combat_traits();
         CombatantSpec {
             id,
             side: Side::Heroes,
             cell,
-            size: Size::Medium,
+            size: match traits.size {
+                SpeciesSize::Small => Size::Small,
+                SpeciesSize::Medium => Size::Medium,
+            },
             kind: CreatureKind::Hero,
+            species: Some(self.species),
             abilities: self.character.abilities,
             armor_class: 15,
-            hit_points: 13,
-            speed_ft: 30,
+            hit_points: self.character.hit_points as u16,
+            speed_ft: traits.speed_ft,
             weapons: vec![Weapon::Longbow, Weapon::Scimitar, Weapon::Shortsword],
             masteries: vec![Weapon::Longbow, Weapon::Scimitar, Weapon::Shortsword],
             arrows: 20,
@@ -35,6 +41,8 @@ impl ArcherBuild {
             archery: true,
             savage_attacker: true,
             second_wind_uses: 2,
+            healers_kit_uses: 0,
+            relentless_endurance_available: traits.relentless_endurance,
             shield: false,
         }
     }
@@ -63,9 +71,21 @@ pub fn validate_archer(name: &str, choices: &[(&str, &str)]) -> Result<ArcherBui
             .map_err(|_| RuleError::InvalidBuild)?;
     character.abilities = [13, 17, 15, 10, 12, 8];
     character.armor_class = 15;
+    let species = HeroSpecies::from_choice(
+        choices
+            .iter()
+            .find(|(group, _)| *group == "species")
+            .map(|(_, value)| *value)
+            .ok_or(RuleError::InvalidBuild)?,
+    )
+    .ok_or(RuleError::InvalidBuild)?;
+    character.hit_points = (10_i32
+        + local_journey::ability_modifier(character.abilities[2])
+        + i32::from(species.combat_traits().hit_points_per_level))
+        as u32;
     character.choices = choices
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect();
-    Ok(ArcherBuild { character })
+    Ok(ArcherBuild { character, species })
 }

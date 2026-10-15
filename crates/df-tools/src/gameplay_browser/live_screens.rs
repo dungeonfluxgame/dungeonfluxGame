@@ -10,8 +10,7 @@ use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
 use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
 
-const HARBOR_ESTABLISHING: &str =
-    "/assets/concept-art/establishing-harbor-canal-rowboat-bridge.webp";
+const HARBOR_ESTABLISHING: &str = "/assets/ui/scenes/mara-harbor-v4.png";
 const HARBOR_WHARF: &str = "/assets/ui/scenes/mara-harbor-v4.png";
 const HARBOR_INN: &str = "/assets/concept-art/scene-tavern-barkeep-talk-rain.webp";
 const WAITING_TEXT: &str = "The story is being told. Your next choice will appear here.";
@@ -258,6 +257,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         cast: Vec::new(),
         place: input.scene.place.clone(),
         rules_note: input.scene.rules_note.clone(),
+        // A display has no player offers; its choices come from the public server projection.
         choices: input.journey.table_choices.clone(),
         choice_hints_hidden: input.journey.choice_hints_hidden,
         family: crate::presentation::scene_family(&input.scene.scene_asset),
@@ -356,6 +356,25 @@ fn phone_choice_label(label: &str, tv_choices: &[String]) -> String {
         })
         .cloned()
         .unwrap_or_else(|| label.to_owned())
+}
+
+fn end_rewards(journey: &rpc::JourneyView, encounter_xp: Option<u32>) -> Vec<String> {
+    if !journey.adventure_ended {
+        return Vec::new();
+    }
+    // Render the server's public notebook reward line verbatim; never infer payment or XP.
+    let mut rewards = journey
+        .notebook
+        .iter()
+        .filter(|entry| entry.kind == rpc::NotebookKind::Task as i32)
+        .flat_map(|entry| entry.text.lines())
+        .filter(|line| line.starts_with("Reward: "))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if let Some(xp) = encounter_xp {
+        rewards.push(format!("Encounter experience: {xp} XP"));
+    }
+    rewards
 }
 
 fn end_card_contact_ready(
@@ -716,7 +735,7 @@ fn render_display(
 ) -> Result<(), JsValue> {
     let mut model = tv_model(input)?;
     model.cast = current_cast(client);
-    let (graph, baked_revision, check) = {
+    let (graph, baked_revision, check, encounter_xp) = {
         let state = client.borrow();
         state
             .views
@@ -727,6 +746,7 @@ fn render_display(
                     display.scene_graph.clone(),
                     display.live_plate_graph_revision,
                     display.check.clone(),
+                    display.encounter_xp,
                 )),
                 _ => None,
             })
@@ -750,7 +770,22 @@ fn render_display(
             return Err(JsValue::from_str("display stage absent"));
         };
         stage.update(&model)?;
+        let generation = state.generation.to_string();
+        if stage
+            .root()
+            .get_attribute("data-context-generation")
+            .as_deref()
+            != Some(&generation)
+        {
+            if input.phase != rpc::JourneyPhase::Room {
+                stage.set_scene_context(input.narration)?;
+            }
+            stage
+                .root()
+                .set_attribute("data-context-generation", &generation)?;
+        }
         stage.update_scene_graph_wire(graph.as_ref(), baked_revision)?;
+        stage.set_end_rewards(&end_rewards(input.journey, encounter_xp))?;
         stage.set_end_card_ready(end_card_contact_ready(input.scene, graph.as_ref()))?;
         stage.update_scene_video_wire(
             input.scene.scene_video_state,
@@ -764,7 +799,66 @@ fn render_display(
         )?;
         stage.dock().clone()
     };
+    for selector in [".tv-sound-start", ".tv-sound-skip"] {
+        let button = client.borrow().root.query_selector(selector)?;
+        if let Some(button) = button {
+            bind_click(client, &button, move |client| {
+                super::presentation_timing::sound(
+                    &client.borrow().root,
+                    "playback",
+                    if selector == ".tv-sound-start" {
+                        if super::live_voice::effects_gate().is_some() {
+                            "unlocked"
+                        } else {
+                            "blocked"
+                        }
+                    } else {
+                        "blocked"
+                    },
+                );
+                if super::live_motion::on_view(&client).is_err() {
+                    feedback(
+                        &client.borrow(),
+                        "The story could not be displayed. Reconnect to try again.",
+                    );
+                }
+            })?;
+        }
+    }
+    let sound_control = client.borrow().root.query_selector(".tv-voice-control")?;
+    if let Some(control) = sound_control {
+        label_sound_control(&control)?;
+        let observed = control.clone();
+        bind_click(client, &control, move |client| {
+            if label_sound_control(&observed).is_err() {
+                web_sys::console::warn_1(&"Sound control label unavailable".into());
+            }
+            super::presentation_timing::sound(
+                &client.borrow().root,
+                "playback",
+                observed_sound_reason(),
+            );
+        })?;
+    }
     recovery(client, &dock)
+}
+
+fn observed_sound_reason() -> &'static str {
+    match super::live_voice::effects_muted() {
+        Some(true) => "muted",
+        Some(false) => "unlocked",
+        None => "blocked",
+    }
+}
+
+fn label_sound_control(control: &Element) -> Result<(), JsValue> {
+    let label = if observed_sound_reason() == "unlocked" {
+        "Mute sound"
+    } else {
+        "Turn sound on"
+    };
+    control.set_attribute("aria-label", label)?;
+    control.set_attribute("title", label)
 }
 
 fn render_item_card(
@@ -859,8 +953,9 @@ fn render_scene_contents(
 mod tests {
     use super::super::rpc;
     use super::{
-        choice_disabled_reason, end_card_contact_ready, is_new_private_clue, lobby_art_source,
-        phone_choice_label, should_show_dialogue_composer, validated_join_scene_asset,
+        SceneInput, choice_disabled_reason, end_card_contact_ready, is_new_private_clue,
+        lobby_art_source, phone_choice_label, should_show_dialogue_composer, tv_model,
+        validated_join_scene_asset,
     };
 
     #[test]
@@ -972,6 +1067,96 @@ mod tests {
             "Continue to the apothecary"
         );
         assert_eq!(phone_choice_label("Wait here", &tv_choices), "Wait here");
+    }
+
+    #[test]
+    fn tv_and_phone_show_the_same_server_scene_choices() {
+        let offers = [
+            rpc::GameplayActionOffer {
+                offer_id: "look-around".to_owned(),
+                action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
+                label: "Look around".to_owned(),
+                input_groups: vec![rpc::JourneyGroup::default()],
+                ..Default::default()
+            },
+            rpc::GameplayActionOffer {
+                offer_id: "ask-perrin".to_owned(),
+                action_kind: rpc::GameplayActionKind::AskCourier as i32,
+                label: "Ask Perrin".to_owned(),
+                ..Default::default()
+            },
+            rpc::GameplayActionOffer {
+                offer_id: "escort-perrin".to_owned(),
+                action_kind: rpc::GameplayActionKind::EscortCourier as i32,
+                label: "Escort Perrin".to_owned(),
+                ..Default::default()
+            },
+        ];
+        let journey = rpc::JourneyView {
+            join_path: "/gameplay/player?room=ABCDEF".to_owned(),
+            join_url: "http://game.example/gameplay/player?room=ABCDEF".to_owned(),
+            table_choices: vec![
+                "Look around".to_owned(),
+                "Ask Perrin".to_owned(),
+                "Escort Perrin".to_owned(),
+            ],
+            ..Default::default()
+        };
+        let scene = rpc::GameplayScene::default();
+        let input = SceneInput {
+            phase: rpc::JourneyPhase::Opening,
+            narration: "The guardhouse waits.",
+            scene: &scene,
+            journey: &journey,
+            offers: &[],
+            clue: "",
+        };
+
+        let tv_choices = tv_model(&input).unwrap().choices;
+        let phone_choices = offers
+            .iter()
+            .map(|offer| phone_choice_label(&offer.label, &journey.table_choices))
+            .collect::<Vec<_>>();
+
+        assert_eq!(tv_choices, phone_choices);
+        assert_eq!(
+            tv_choices,
+            vec![
+                "Look around".to_owned(),
+                "Ask Perrin".to_owned(),
+                "Escort Perrin".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn ending_shows_committed_reward_and_encounter_experience_without_inventing_awards() {
+        let mut journey = rpc::JourneyView {
+            adventure_ended: true,
+            notebook: vec![rpc::NotebookEntry {
+                kind: rpc::NotebookKind::Task as i32,
+                text: "The letter reached shelter.\nReward: 20 GP per hero (paid).".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            super::end_rewards(&journey, Some(75)),
+            vec![
+                "Reward: 20 GP per hero (paid).",
+                "Encounter experience: 75 XP"
+            ]
+        );
+        assert_eq!(
+            super::end_rewards(&journey, None),
+            vec!["Reward: 20 GP per hero (paid)."]
+        );
+        assert_eq!(
+            super::end_rewards(&journey, Some(0))[1],
+            "Encounter experience: 0 XP"
+        );
+        journey.adventure_ended = false;
+        assert!(super::end_rewards(&journey, Some(75)).is_empty());
     }
 
     #[test]

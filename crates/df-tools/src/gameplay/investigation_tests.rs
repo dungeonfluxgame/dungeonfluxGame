@@ -519,7 +519,6 @@ fn opening() -> (df_model::checkpoint::Checkpoint, MemberId) {
 }
 
 #[test]
-#[ignore = "red until the dialogue routing and check resolution call investigation::plan (INV-04): un-ignore when wired"]
 fn registered_search_accepts_repeated_and_different_targets_without_unrelated_findings() {
     let mut content: pack::PackFile = serde_json::from_slice(include_bytes!(
         "../../../../content/harbor-journey/pack.json"
@@ -688,4 +687,66 @@ fn an_absent_notice_is_not_resolved_to_the_door_it_would_be_pinned_to() {
     assert!(!target.present);
     assert_eq!(target.name, "the notice");
     assert!(target.description.contains("no notice"));
+}
+
+#[test]
+fn looking_around_the_taproom_does_not_select_the_lodging_offer_named_room() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
+    let mut scene = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == pack::SceneKey::Opening)
+        .unwrap()
+        .clone();
+    scene.setting = Some(generated.settings.meeting);
+    let options = targets(&scene, &[]);
+    assert_eq!(local_target("I look around the room", &options).id, "room");
+}
+
+#[test]
+fn searching_an_absent_satchel_does_not_search_its_owners_face() {
+    let mut options = room();
+    options.push(Target {
+        id: "person-innkeeper".into(),
+        name: "Ilsa".into(),
+        description: "Ilsa watches the room.".into(),
+        aliases: vec!["Ilsa".into(), "her".into()],
+        person: true,
+        present: true,
+        finding_ids: Vec::new(),
+    });
+    let target = local_target("I search her satchel", &options);
+    assert!(!target.present);
+    assert!(!target.person);
+    assert_eq!(target.name, "her satchel");
+}
+#[test]
+fn looking_behind_the_counter_is_an_investigation_in_the_keyless_route() {
+    let reading = local_reading("I look behind the counter", &[]).unwrap();
+    assert!(reading.intent.is_attempt());
+    assert_eq!(reading.skill, Some("perception"));
+}
+
+#[test]
+fn scene_names_accept_ordinary_synonyms_without_matching_nearby_objects() {
+    let mut scene = pack::scene(pack::SceneKey::Opening);
+    let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
+    scene.setting = Some(generated.settings.meeting);
+    let model = scene.setting.as_mut().unwrap().model.as_mut().unwrap();
+    // The bar is named by object and person positions, rather than a separate prop.
+    let expected = "surface-bar";
+    let mug = model
+        .things
+        .iter_mut()
+        .find(|thing| thing.name.contains("tankard"))
+        .unwrap();
+    mug.aliases = vec!["tankard".into()];
+    let mug_id = format!("thing-{}", mug.id);
+    let options = targets(&scene, &[]);
+    assert_eq!(
+        local_target("I look behind the counter.", &options).id,
+        expected
+    );
+    assert_eq!(local_target("I examine the mug.", &options).id, mug_id);
 }

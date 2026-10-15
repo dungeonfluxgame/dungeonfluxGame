@@ -68,7 +68,11 @@ struct Text {
     notice: &'static str,
     turn_label: String,
     active: Option<String>,
+    own_turn: bool,
     action_empty: String,
+    reaction_prompt: Option<String>,
+    reaction_waiting: Option<String>,
+    reaction_countdown: Option<String>,
     busy: bool,
     actors: Vec<ActorText>,
     offers: Vec<OfferText>,
@@ -314,8 +318,42 @@ fn waiting_for_current_view(
 
 fn ordered_tactical_offers(offers: &[rpc::GameplayActionOffer]) -> Vec<&rpc::GameplayActionOffer> {
     let mut ordered = offers.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|offer| offer.action_kind != rpc::GameplayActionKind::EndTurn as i32);
+    ordered.sort_by_key(
+        |offer| match rpc::GameplayActionKind::try_from(offer.action_kind) {
+            Ok(
+                rpc::GameplayActionKind::GreatswordAttack
+                | rpc::GameplayActionKind::OpportunityAttack,
+            ) => 0,
+            Ok(rpc::GameplayActionKind::EndTurn | rpc::GameplayActionKind::DeclineReaction) => 1,
+            _ => 2,
+        },
+    );
     ordered
+}
+
+fn pending_hero_reaction(combat: &rpc::CombatView) -> Option<(&str, &str)> {
+    let reactor = combat.participants.iter().find(|member| {
+        member.side == 1
+            && !combat.reaction_participant_id.is_empty()
+            && member.participant_id == combat.reaction_participant_id
+    })?;
+    let mover = (!combat.active_actor.is_empty()).then_some(combat.active_actor.as_str())?;
+    Some((reactor.name.as_str(), mover))
+}
+
+fn own_hit_points(participants: &[rpc::PartyMemberView], own_name: &str) -> Option<(u32, u32)> {
+    let mut matching = participants.iter().filter(|member| member.name == own_name);
+    let member = matching.next()?;
+    matching
+        .next()
+        .is_none()
+        .then_some((member.hit_points, member.maximum_hit_points))
+}
+
+fn reaction_countdown_text(combat: &rpc::CombatView) -> Option<String> {
+    (!combat.reaction_participant_id.is_empty())
+        .then_some(combat.reaction_seconds_remaining)
+        .and_then(crate::combat_text::reaction_countdown)
 }
 
 fn actors(view: &LiveView<'_>, combat: &rpc::CombatView) -> (Vec<ActorText>, Option<String>) {
@@ -698,6 +736,24 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         .own_character
         .as_ref()
         .is_some_and(|own| Some(own.name.as_str()) == active_name);
+    let pending_reaction = if player {
+        pending_hero_reaction(combat)
+    } else {
+        None
+    };
+    let own_reaction = pending_reaction.is_some_and(|(reactor, _)| {
+        view.journey
+            .own_character
+            .as_ref()
+            .is_some_and(|own| own.name == reactor)
+    });
+    let reaction_prompt = pending_reaction
+        .filter(|_| own_reaction)
+        .map(|(_, mover)| crate::combat_text::opportunity_attack_prompt(mover));
+    let reaction_waiting = pending_reaction
+        .filter(|_| !own_reaction)
+        .map(|(reactor, _)| crate::combat_text::reaction_waiting_prompt(reactor));
+    let reaction_countdown = pending_reaction.and_then(|_| reaction_countdown_text(combat));
     let waiting_for_view = waiting_for_current_view(
         state.role,
         state.last_accepted,
@@ -719,7 +775,24 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         (false, Some(_)) if own_turn => format!("Round {} · Your turn", combat.round),
         (false, Some(name)) => format!("Round {} · {name}'s turn", combat.round),
     };
-    if let Some(disclosure) = initiative_tie_disclosure(combat) {
+    if own_reaction {
+        turn_label = "Your reaction".to_owned();
+    } else if let Some(waiting) = &reaction_waiting {
+        turn_label = waiting.clone();
+    } else if own_turn
+        && let Some((hit_points, maximum_hit_points)) = view
+            .journey
+            .own_character
+            .as_ref()
+            .and_then(|own| own_hit_points(&combat.participants, &own.name))
+        && maximum_hit_points > 0
+    {
+        turn_label.push_str(&format!(" · {hit_points}/{maximum_hit_points} HP"));
+    }
+    if !own_reaction
+        && reaction_waiting.is_none()
+        && let Some(disclosure) = initiative_tie_disclosure(combat)
+    {
         turn_label.push_str(" · ");
         turn_label.push_str(disclosure);
     }
@@ -744,7 +817,17 @@ fn build(state: &Client, view: &LiveView<'_>) -> Result<Text, JsValue> {
         },
         turn_label,
         active,
-        action_empty: action_empty(player, own_turn, active_name, waiting_for_view, resolving),
+        own_turn,
+        action_empty: reaction_waiting.clone().unwrap_or_else(|| {
+            if own_reaction {
+                "Choose Attack or Let it go.".to_owned()
+            } else {
+                action_empty(player, own_turn, active_name, waiting_for_view, resolving)
+            }
+        }),
+        reaction_prompt,
+        reaction_waiting,
+        reaction_countdown,
         busy: state.busy,
         actors,
         offers: offers(state, view, blocked || waiting_for_view)?,
@@ -884,7 +967,7 @@ pub(super) fn present(
             .map_err(|_| render_error(client, "combat-update"))?;
         publish_keyart(&document, surface.root(), text.keyart.as_deref())?;
         publish_initiative(&document, surface.root(), role, view)?;
-        publish_tactical_controls(client, surface.root(), view)?;
+        publish_tactical_controls(client, surface.root(), view, &text)?;
         return Ok(());
     }
     let surface = with_view(&text, |view| {
@@ -908,7 +991,7 @@ pub(super) fn present(
         .map_err(|_| render_error(client, "combat-intent"))?;
     publish_keyart(&document, surface.root(), text.keyart.as_deref())?;
     publish_initiative(&document, surface.root(), role, view)?;
-    publish_tactical_controls(client, surface.root(), view)?;
+    publish_tactical_controls(client, surface.root(), view, &text)?;
     host.insert_before(surface.root(), host.first_child().as_ref())?;
     client.borrow_mut().combat.mounted = Some(Mounted::Combat(Rc::new(surface)));
     Ok(())
@@ -919,6 +1002,7 @@ fn publish_tactical_controls(
     client: &Rc<RefCell<Client>>,
     root: &Element,
     view: &LiveView<'_>,
+    text: &Text,
 ) -> Result<(), JsValue> {
     use crate::gameplay_browser::{action_button, action_identity, node};
     let existing = root.query_selector(":scope > .tactical-controls")?;
@@ -933,6 +1017,7 @@ fn publish_tactical_controls(
         }
         return Ok(());
     };
+    root.set_attribute("data-own-turn", &text.own_turn.to_string())?;
     let document = client.borrow().document.clone();
     let controls = match existing {
         Some(existing) => existing,
@@ -943,6 +1028,27 @@ fn publish_tactical_controls(
         if let Some(child) = stale_children.item(index) {
             child.unchecked_into::<Element>().remove();
         }
+    }
+    if let Some(prompt) = &text.reaction_prompt {
+        controls.set_attribute("data-reaction", "decision")?;
+        let panel = node(&document, &controls, "section", "reaction-prompt", "")?;
+        panel.set_attribute("role", "alert")?;
+        panel.set_attribute("aria-live", "assertive")?;
+        node(&document, &panel, "h2", "", "Your reaction")?;
+        node(&document, &panel, "p", "reaction-question", prompt)?;
+        if let Some(countdown) = &text.reaction_countdown {
+            node(&document, &panel, "p", "reaction-countdown", countdown)?;
+        }
+    } else if let Some(waiting) = &text.reaction_waiting {
+        controls.set_attribute("data-reaction", "waiting")?;
+        let panel = node(&document, &controls, "p", "reaction-waiting", waiting)?;
+        panel.set_attribute("role", "status")?;
+        panel.set_attribute("aria-live", "polite")?;
+        if let Some(countdown) = &text.reaction_countdown {
+            node(&document, &controls, "p", "reaction-countdown", countdown)?;
+        }
+    } else {
+        controls.remove_attribute("data-reaction")?;
     }
     if let Some(budget) = &combat.own_budget {
         let strip = node(
@@ -1001,6 +1107,20 @@ fn publish_tactical_controls(
     let mut active_action_ids = Vec::new();
     for offer in ordered_tactical_offers(view.offers) {
         let mut offer = offer.clone();
+        match rpc::GameplayActionKind::try_from(offer.action_kind) {
+            Ok(rpc::GameplayActionKind::OpportunityAttack) => {
+                // SRD 5.2.1 p. 15: an Opportunity Attack uses a melee weapon or Unarmed Strike;
+                // the server supplies the legal weapon choices and remains authoritative.
+                offer.label = "Attack".to_owned();
+                for group in &mut offer.input_groups {
+                    group.label = "Weapon".to_owned();
+                }
+            }
+            Ok(rpc::GameplayActionKind::DeclineReaction) => {
+                offer.label = "Let it go".to_owned();
+            }
+            _ => {}
+        }
         for group in &mut offer.input_groups {
             for option in &mut group.options {
                 if let Some(target) = combat
@@ -1266,7 +1386,7 @@ fn publish_fight_map(
         "Map of the fight. Tap a lit square to move there, or an enemy to aim at it.",
     )?;
     map.set_attribute("style", &format!("--columns:{columns}"))?;
-    controls.insert_before(&map, controls.first_child().as_ref())?;
+    controls.append_child(&map)?;
     let chosen = document.create_element("p")?;
     chosen.set_class_name("move-chosen");
     map.after_with_node_1(&chosen)?;
@@ -1690,8 +1810,8 @@ mod tests {
     use super::{
         action_empty, attack_roll_explanation, conditions_resource, death_save_for,
         death_save_summary, initiative_tie_disclosure, movement_dead_space_disclosure,
-        ordered_tactical_offers, reaction_status, rolls, tactical_option_label,
-        waiting_for_current_view,
+        ordered_tactical_offers, own_hit_points, pending_hero_reaction, reaction_countdown_text,
+        reaction_status, rolls, tactical_option_label, waiting_for_current_view,
     };
     use df_protocol::common as rpc;
 
@@ -1833,7 +1953,7 @@ mod tests {
     }
 
     #[test]
-    fn phone_tactical_actions_put_end_turn_first() {
+    fn phone_tactical_actions_put_attack_and_end_turn_first() {
         let offers = [
             rpc::GameplayActionOffer {
                 action_kind: rpc::GameplayActionKind::Move as i32,
@@ -1847,6 +1967,10 @@ mod tests {
                 action_kind: rpc::GameplayActionKind::Dodge as i32,
                 ..Default::default()
             },
+            rpc::GameplayActionOffer {
+                action_kind: rpc::GameplayActionKind::GreatswordAttack as i32,
+                ..Default::default()
+            },
         ];
 
         let ordered = ordered_tactical_offers(&offers);
@@ -1857,11 +1981,99 @@ mod tests {
                 .map(|offer| offer.action_kind)
                 .collect::<Vec<_>>(),
             [
+                rpc::GameplayActionKind::GreatswordAttack as i32,
                 rpc::GameplayActionKind::EndTurn as i32,
                 rpc::GameplayActionKind::Move as i32,
                 rpc::GameplayActionKind::Dodge as i32,
             ]
         );
+    }
+
+    #[test]
+    fn phone_opportunity_reaction_puts_attack_before_let_it_go() {
+        let offers = [
+            rpc::GameplayActionOffer {
+                action_kind: rpc::GameplayActionKind::DeclineReaction as i32,
+                ..Default::default()
+            },
+            rpc::GameplayActionOffer {
+                action_kind: rpc::GameplayActionKind::OpportunityAttack as i32,
+                ..Default::default()
+            },
+        ];
+
+        let ordered = ordered_tactical_offers(&offers);
+
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|offer| offer.action_kind)
+                .collect::<Vec<_>>(),
+            [
+                rpc::GameplayActionKind::OpportunityAttack as i32,
+                rpc::GameplayActionKind::DeclineReaction as i32,
+            ]
+        );
+    }
+
+    #[test]
+    fn phone_reaction_view_names_the_reactor_and_the_moving_creature() {
+        let combat = rpc::CombatView {
+            participants: vec![
+                rpc::PartyMemberView {
+                    name: "Brakka".to_owned(),
+                    participant_id: b"brakka".to_vec(),
+                    side: 1,
+                    ..Default::default()
+                },
+                rpc::PartyMemberView {
+                    name: "Giant Rat 1".to_owned(),
+                    participant_id: b"rat".to_vec(),
+                    side: 2,
+                    ..Default::default()
+                },
+            ],
+            active_actor: "Giant Rat 1".to_owned(),
+            reaction_participant_id: b"brakka".to_vec(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            pending_hero_reaction(&combat),
+            Some(("Brakka", "Giant Rat 1"))
+        );
+    }
+
+    #[test]
+    fn phone_reaction_countdown_uses_only_the_server_projected_view_value() {
+        let combat = rpc::CombatView {
+            reaction_participant_id: b"brakka".to_vec(),
+            reaction_seconds_remaining: 17,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            reaction_countdown_text(&combat).as_deref(),
+            Some("17 seconds remaining")
+        );
+        let expired = rpc::CombatView {
+            reaction_participant_id: b"brakka".to_vec(),
+            ..Default::default()
+        };
+        assert_eq!(reaction_countdown_text(&expired), None);
+    }
+
+    #[test]
+    fn phone_turn_summary_uses_the_own_hero_hit_points_only_when_unambiguous() {
+        let participants = [rpc::PartyMemberView {
+            name: "Brakka".to_owned(),
+            hit_points: 9,
+            maximum_hit_points: 13,
+            ..Default::default()
+        }];
+
+        assert_eq!(own_hit_points(&participants, "Brakka"), Some((9, 13)));
+        assert_eq!(own_hit_points(&participants, "Sigrun"), None);
     }
 
     #[test]

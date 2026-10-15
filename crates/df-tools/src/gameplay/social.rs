@@ -42,6 +42,9 @@ use super::{
     storyteller::contains_whole_word,
 };
 
+#[path = "social_scene.rs"]
+mod scene_state;
+
 /// Trust points in one direction that move the attitude one level.
 const TRUST_STEP: i8 = 2;
 /// Lines kept, and shown to the model, of one hero's conversation with one NPC.
@@ -300,8 +303,29 @@ impl EmotionalState {
         .to_lowercase()
     }
 
+    /// Only a visible change earns a public caption; small feelings stay in the relationship.
+    pub(super) fn noticeable_change_from(&self, previous: &Self) -> bool {
+        (self.patience != previous.patience && self.patience != PatienceState::Plenty)
+            || (self.never_forgives.is_some() && previous.never_forgives.is_none())
+            || [
+                (self.fond, previous.fond),
+                (self.afraid, previous.afraid),
+                (self.drawn_to, previous.drawn_to),
+                (self.resentful, previous.resentful),
+                (self.wary, previous.wary),
+            ]
+            .into_iter()
+            .any(|(now, before)| {
+                (now == EmotionLevel::Much || before == EmotionLevel::Much) && now != before
+            })
+    }
+
     pub(super) fn perceived_line(&self, npc: &str, hero: &str) -> String {
-        if self.never_forgives.is_some() || self.resentful == EmotionLevel::Much {
+        if self.patience == PatienceState::Done {
+            format!("{npc} will not answer {hero} again for now.")
+        } else if self.patience == PatienceState::Short {
+            format!("{npc} is losing patience with {hero}.")
+        } else if self.never_forgives.is_some() || self.resentful == EmotionLevel::Much {
             format!("{npc} seems resentful of {hero}.")
         } else if self.afraid != EmotionLevel::None {
             format!("{npc} seems afraid of {hero}.")
@@ -1012,6 +1036,8 @@ struct Relationship {
     last_subject: String,
     #[serde(default)]
     same_subject_count: u32,
+    #[serde(default)]
+    patience_spent: u16,
     /// Set when a threat has already moved the attitude for the exchange now being answered, so
     /// recording that exchange does not move it again. Never stored.
     #[serde(skip)]
@@ -1038,6 +1064,7 @@ impl Relationship {
             emotional: EmotionalState::default(),
             last_subject: String::new(),
             same_subject_count: 0,
+            patience_spent: 0,
             threat_applied: false,
             appraised: false,
             pending_shift: None,
@@ -1058,6 +1085,7 @@ impl Relationship {
         self.emotional.done_said = false;
         self.last_subject.clear();
         self.same_subject_count = 0;
+        self.patience_spent = 0;
     }
 
     /// Applies one exchange's effect inside the bounds in the module documentation.
@@ -1251,6 +1279,7 @@ impl SocialSnapshot {
 
 /// The standings and conversations of one run, and the dossiers that start them.
 pub(super) struct SocialLedger {
+    rooms: Mutex<scene_state::Rooms>,
     dossiers: Vec<Dossier>,
     adventure_seed: String,
     relationships: Mutex<BTreeMap<(MemberId, String), Relationship>>,
@@ -1268,6 +1297,7 @@ impl SocialLedger {
     /// dossiers existed): nothing is addressable and nothing is saved.
     pub(super) fn none() -> Arc<Self> {
         Arc::new(Self {
+            rooms: Mutex::default(),
             dossiers: Vec::new(),
             adventure_seed: String::new(),
             relationships: Mutex::new(BTreeMap::new()),
@@ -1287,6 +1317,7 @@ impl SocialLedger {
     ) -> Result<Arc<Self>, SocialError> {
         let file = directory.map(|directory| directory.join(FILE_NAME));
         let mut relationships = BTreeMap::new();
+        let rooms = scene_state::Rooms::default();
         if let Some(file) = &file {
             match read_saved(file) {
                 Ok(saved) => {
@@ -1303,8 +1334,9 @@ impl SocialLedger {
                         let relationship = entry.relationship;
                         if relationship.trust.abs() >= TRUST_STEP
                             || relationship.recent.len() > RECENT_LINES
-                            || relationship.last_subject.len() > 24
+                            || relationship.last_subject.len() > 512
                             || relationship.same_subject_count > 100
+                            || relationship.patience_spent > 100
                             || relationship.emotional.never_forgives.as_ref().is_some_and(
                                 |reason| {
                                     reason.is_empty()
@@ -1326,7 +1358,8 @@ impl SocialLedger {
                 Err(error) => return Err(error),
             }
         }
-        Ok(Arc::new(Self {
+        let ledger = Arc::new(Self {
+            rooms: Mutex::new(rooms),
             dossiers,
             adventure_seed: adventure_seed.to_owned(),
             relationships: Mutex::new(relationships),
@@ -1334,7 +1367,9 @@ impl SocialLedger {
             writing: Mutex::new(()),
             latest: Mutex::new(None),
             exchanges: watch::channel(0).0,
-        }))
+        });
+        ledger.install_cached_rooms()?;
+        Ok(ledger)
     }
 
     pub(super) fn is_active(&self) -> bool {
@@ -1347,7 +1382,8 @@ impl SocialLedger {
             rpc::SceneRole::Patron => "patron",
             rpc::SceneRole::Contact => "contact",
             rpc::SceneRole::Antagonist => "antagonist",
-            rpc::SceneRole::Bystander | rpc::SceneRole::Unspecified => return None,
+            rpc::SceneRole::Bystander => "bystander",
+            rpc::SceneRole::Unspecified => return None,
         };
         let wanted = format!("{label}:{id}");
         self.dossiers
@@ -1376,6 +1412,11 @@ impl SocialLedger {
     /// (the session owner thread already blocks on durable commits there).
     pub(super) fn restore_snapshot(&self, snapshot: &SocialSnapshot) -> Result<(), SocialError> {
         *self.lock() = snapshot.relationships.clone();
+        {
+            let mut rooms = self.rooms.lock().unwrap_or_else(PoisonError::into_inner);
+            rooms.projections.clear();
+            rooms.active_scene = None;
+        }
         self.save()
     }
 
@@ -1391,6 +1432,25 @@ impl SocialLedger {
             .collect();
         told.sort();
         told
+    }
+
+    /// Only this hero's observable permanent breaks, for the owning notebook's private notes.
+    pub(super) fn permanent_grievances(&self, member: MemberId) -> Vec<(String, String)> {
+        self.lock()
+            .iter()
+            .filter(|((owner, _), _)| *owner == member)
+            .filter_map(|((_, npc_id), relationship)| {
+                let _reason = relationship.emotional.never_forgives.as_ref()?;
+                let dossier = self
+                    .dossiers
+                    .iter()
+                    .find(|dossier| dossier.npc_id == *npc_id)?;
+                Some((
+                    dossier.name.clone(),
+                    "They made it clear that this offense will not be forgiven.".to_owned(),
+                ))
+            })
+            .collect()
     }
 
     /// How this NPC feels about this hero right now.
@@ -1422,27 +1482,120 @@ impl SocialLedger {
         relationship.emotional.clone()
     }
 
-    /// Tracks the already-classified subject so Jev can see repeated asks without Rust inferring
-    /// emotional meaning from the line.
-    pub(super) fn note_subject(
+    #[cfg(test)]
+    fn note_subject(
         &self,
         member: MemberId,
         dossier: &Dossier,
         scene: &str,
         subject: AnswerSubject,
     ) -> u32 {
+        self.note_question(member, dossier, scene, subject.label())
+    }
+
+    /// Counts similar asks by the actual question, not by broad labels like "people".
+    pub(super) fn note_question(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+        words: &str,
+    ) -> u32 {
+        let key: String = super::speech_text::normalised(words)
+            .chars()
+            .take(128)
+            .collect();
         let mut relationships = self.lock();
         let relationship = relationships
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier));
         relationship.begin_scene(scene);
-        if relationship.last_subject == subject.label() {
-            relationship.same_subject_count = relationship.same_subject_count.saturating_add(1);
+        if relationship.last_subject == key {
+            relationship.same_subject_count =
+                relationship.same_subject_count.saturating_add(1).min(100);
         } else {
-            relationship.last_subject = subject.label().to_owned();
+            relationship.last_subject = key;
             relationship.same_subject_count = 1;
         }
         relationship.same_subject_count.saturating_sub(1)
+    }
+
+    /// Keyless fallback uses the dossier's reactions and patience; it invents no model-only
+    /// attraction, fear or permanent grudge. Repetition costs more; a helpful line restores some.
+    pub(super) fn fallback_appraisal(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+        approach: Approach,
+        similar_asks: u32,
+    ) -> Appraisal {
+        let effect = effect_of(dossier, approach);
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        let emotion = &relationship.emotional;
+        let profile = dossier.emotional_profile();
+        let base: u16 = match profile.patience {
+            super::adventure::dossier::Patience::Low => 7,
+            super::adventure::dossier::Patience::Middling => 16,
+            super::adventure::dossier::Patience::High => 24,
+        };
+        let variation = dossier
+            .npc_id
+            .bytes()
+            .fold(0_u16, |sum, byte| sum.wrapping_add(u16::from(byte)))
+            % 3;
+        let fond = match emotion.fond {
+            EmotionLevel::None => 0,
+            EmotionLevel::ALittle => 3,
+            EmotionLevel::Much => 6,
+        };
+        let attitude = match relationship.attitude {
+            Attitude::Friendly => 3,
+            Attitude::Indifferent => 0,
+            Attitude::Hostile => 0,
+        };
+        let adverse = if emotion.afraid == EmotionLevel::Much
+            || emotion.resentful == EmotionLevel::Much
+        {
+            6
+        } else if emotion.afraid != EmotionLevel::None || emotion.resentful != EmotionLevel::None {
+            3
+        } else {
+            0
+        };
+        let limit = (base + variation + fond + attitude)
+            .saturating_sub(adverse)
+            .max(4);
+        if effect == Effect::Warm {
+            relationship.patience_spent = relationship.patience_spent.saturating_sub(3);
+        } else {
+            let cost = 1 + u16::from(similar_asks > 0) * 2 + u16::from(effect == Effect::Cool);
+            relationship.patience_spent = relationship.patience_spent.saturating_add(cost).min(100);
+        }
+        let reaction = if relationship.patience_spent >= limit {
+            EmotionReaction::Done
+        } else if relationship.patience_spent >= limit.saturating_sub(3) {
+            EmotionReaction::LosingPatience
+        } else {
+            if effect == Effect::Warm {
+                relationship.emotional.patience = PatienceState::Plenty;
+            }
+            match effect {
+                Effect::Warm => EmotionReaction::Warmed,
+                Effect::Cool => EmotionReaction::Offended,
+                Effect::Steady => EmotionReaction::Unmoved,
+            }
+        };
+        Appraisal {
+            reaction,
+            strength: EmotionLevel::ALittle,
+            willingness: None,
+            effect,
+        }
     }
 
     /// Whether this hero has already heard the character say it will not answer again this scene.
@@ -1474,6 +1627,25 @@ impl SocialLedger {
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier));
         relationship.begin_scene(scene);
+        // Forgiving recovery follows several meaningful warm exchanges, using the same
+        // bounded trust already earned. A lasting grudge is never cleared here.
+        if profile.forgiveness == Forgiveness::Forgiving
+            && appraisal.reaction == EmotionReaction::Warmed
+            && appraisal.effect == Effect::Warm
+            && relationship.trust >= TRUST_STEP - 1
+            && relationship.emotional.never_forgives.is_none()
+        {
+            for feeling in [
+                &mut relationship.emotional.afraid,
+                &mut relationship.emotional.wary,
+                &mut relationship.emotional.resentful,
+            ] {
+                *feeling = match *feeling {
+                    EmotionLevel::None | EmotionLevel::ALittle => EmotionLevel::None,
+                    EmotionLevel::Much => EmotionLevel::ALittle,
+                };
+            }
+        }
         let reaction = relationship
             .emotional
             .apply(appraisal, profile.forgiveness, &grudge_reason);
@@ -1502,28 +1674,16 @@ impl SocialLedger {
         dossier: &Dossier,
         scene: &str,
     ) -> EmotionReaction {
-        let effect = effect_of(dossier, Approach::Intimidation);
-        let reaction = match effect {
-            Effect::Warm => EmotionReaction::Warmed,
-            Effect::Cool => EmotionReaction::Offended,
-            Effect::Steady => EmotionReaction::Unmoved,
-        };
+        let appraisal = self.fallback_appraisal(member, dossier, scene, Approach::Intimidation, 0);
         let profile = dossier.emotional_profile();
         let mut relationships = self.lock();
         let relationship = relationships
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier));
         relationship.begin_scene(scene);
-        relationship.emotional.apply(
-            Appraisal {
-                reaction,
-                strength: EmotionLevel::ALittle,
-                willingness: None,
-                effect,
-            },
-            profile.forgiveness,
-            "that threat",
-        )
+        relationship
+            .emotional
+            .apply(appraisal, profile.forgiveness, "that threat")
     }
 
     /// Development-only state keyed by opaque member ids; the caller resolves ids to hero names.
@@ -1747,10 +1907,51 @@ impl SocialLedger {
                     npc_id: dossier.npc_id.clone(),
                     name: actor.name.clone(),
                     attitude: attitude_code(self.standing(member, dossier).attitude),
-                    perceived_reaction: String::new(),
+                    perceived_reaction: self
+                        .lock()
+                        .get(&(member, dossier.npc_id.clone()))
+                        .map_or_else(
+                            || EmotionalState::default().perceived_line(&actor.name, "you"),
+                            |relationship| {
+                                relationship.emotional.perceived_line(&actor.name, "you")
+                            },
+                        ),
                 })
             })
             .collect();
+        if let Some(room) = self.active_room() {
+            for person in room
+                .model
+                .people
+                .iter()
+                .filter(|person| person.is_background)
+            {
+                let Some(dossier) = self.dossier_of(rpc::SceneRole::Bystander, &person.id) else {
+                    continue;
+                };
+                if journey
+                    .standing
+                    .iter()
+                    .any(|standing| standing.npc_id == dossier.npc_id)
+                {
+                    continue;
+                }
+                journey.standing.push(rpc::NpcStanding {
+                    npc_id: dossier.npc_id.clone(),
+                    name: person.name.clone(),
+                    attitude: attitude_code(self.standing(member, dossier).attitude),
+                    perceived_reaction: self
+                        .lock()
+                        .get(&(member, dossier.npc_id.clone()))
+                        .map_or_else(
+                            || EmotionalState::default().perceived_line(&person.name, "you"),
+                            |relationship| {
+                                relationship.emotional.perceived_line(&person.name, "you")
+                            },
+                        ),
+                });
+            }
+        }
     }
 }
 

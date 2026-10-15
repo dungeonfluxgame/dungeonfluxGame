@@ -88,6 +88,9 @@ fn encounter(archer: bool) -> Battle {
         archery,
         savage_attacker: true,
         second_wind_uses: 2,
+        species: Some(df_rules::local_journey::HeroSpecies::Orc),
+        healers_kit_uses: 0,
+        relentless_endurance_available: true,
         shield: false,
     };
     let zombie = CombatantSpec::creature(2, "zombie", Cell(2, 1), 0).unwrap();

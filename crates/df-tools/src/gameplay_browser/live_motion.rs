@@ -105,7 +105,7 @@ struct RollDetail {
     /// before the turn's first attack.
     walk: Option<(GridCell, GridCell)>,
     /// The outcome's cries and narration as stage script lines. They ride the blow's cues
-    /// and are installed when the dice roll, never before: a skipped blow stays silent.
+    /// and are installed after its dice have settled: a skipped blow stays silent.
     beat: Vec<ScriptLine<Detail>>,
     /// The server's beat sequence of this outcome: the one clock every layer follows.
     sequence: u64,
@@ -130,6 +130,7 @@ struct LineDetail {
     role: TableRole,
     kind: TableKind,
     text: String,
+    fight_line: bool,
     /// The clip the server voices this line with, when it is voiced at all.
     voice: Option<VoiceLine>,
 }
@@ -141,6 +142,7 @@ impl LineDetail {
             role: line.role,
             kind: line.kind,
             text: line.text.clone(),
+            fight_line: false,
             voice: None,
         }
     }
@@ -160,6 +162,10 @@ struct Motion {
     cells: HashMap<String, GridCell>,
     /// Lines the battlefield is showing as a bubble over their speaker.
     battlefield_lines: Vec<LineId>,
+    /// Recent fight lines, retained briefly so late actual voice callbacks are recorded.
+    fight_lines: VecDeque<LineId>,
+    /// Actual clip callbacks can arrive just before the opened line is passed to the adapter.
+    pending_fight_voice: VecDeque<(LineId, ClipState, u64)>,
     seen: VecDeque<u64>,
     generation: u64,
     roll_tick: bool,
@@ -220,6 +226,8 @@ fn ensure_motion(client: &Rc<RefCell<Client>>) {
                 party_hit_points: Vec::new(),
                 cells: HashMap::new(),
                 battlefield_lines: Vec::new(),
+                fight_lines: VecDeque::new(),
+                pending_fight_voice: VecDeque::new(),
                 seen: VecDeque::new(),
                 generation: 0,
                 roll_tick: false,
@@ -351,6 +359,7 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
             role: TableRole::Narrator,
             kind: TableKind::Speech,
             text: text.to_owned(),
+            fight_line: true,
             voice: Some(voice),
         }),
     })
@@ -394,6 +403,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                     role: TableRole::Npc,
                     kind: TableKind::Speech,
                     text: line.text.clone(),
+                    fight_line: true,
                     voice: Some(voice),
                 }),
             })
@@ -466,6 +476,7 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
             role: TableRole::Narrator,
             kind: TableKind::Speech,
             text: narration.to_owned(),
+            fight_line: false,
             voice,
         }),
     }
@@ -1212,14 +1223,14 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
                 short,
             } => {
                 let outcome = enter(client, state, detail.as_ref(), short);
-                // The beat's own lines start with the beat: a blow's cries when its dice
-                // roll, the closing line when the banner rises. Beats that never start
+                // The beat's own lines start after its dice settle: a blow's cries at impact,
+                // the closing line when the banner rises. Beats that never start
                 // never install their lines.
-                let beat = match (state, detail.as_ref()) {
-                    (StageState::Rolling | StageState::Turn, Some(Detail::Roll(roll))) => {
+                let beat = match detail.as_ref() {
+                    Some(Detail::Roll(roll)) if fight_line_stage(state, roll.turn_only) => {
                         roll.beat.clone()
                     }
-                    (StageState::Aftermath, Some(Detail::Banner { closing, .. })) => {
+                    Some(Detail::Banner { closing, .. }) if state == StageState::Aftermath => {
                         closing.clone()
                     }
                     _ => Vec::new(),
@@ -1293,6 +1304,10 @@ fn state_name(state: StageState) -> &'static str {
         StageState::Aftermath => "aftermath",
         StageState::ClosingCard => "closing",
     }
+}
+
+fn fight_line_stage(state: StageState, turn_only: bool) -> bool {
+    state == StageState::Impact || (state == StageState::Turn && turn_only)
 }
 
 fn enter(
@@ -1728,6 +1743,9 @@ fn line_command(
     };
     mirror_splash_caption(state, line, slot);
     if battlefield_speech(id, state, line) {
+        if line.fight_line {
+            record_fight_line(id, state, line, slot);
+        }
         return Ok(());
     }
     let shown = {
@@ -1761,7 +1779,57 @@ fn line_command(
     if shown && state == LineState::Opening && slot.is_some() {
         live_sfx::play(Cue::BubblePop, Duration::ZERO);
     }
+    if shown && line.fight_line {
+        record_fight_line(id, state, line, slot);
+    }
     Ok(())
+}
+
+fn record_fight_line(id: LineId, state: LineState, line: &LineDetail, slot: Option<usize>) {
+    let pending = with_motion(|motion| {
+        if matches!(state, LineState::Opening | LineState::Lingering)
+            && !motion.fight_lines.contains(&id)
+        {
+            motion.fight_lines.push_back(id);
+            if motion.fight_lines.len() > 128 {
+                motion.fight_lines.pop_front();
+            }
+        }
+        if motion.fight_lines.contains(&id) {
+            take_pending_fight_voice(&mut motion.pending_fight_voice, id)
+        } else {
+            Vec::new()
+        }
+    })
+    .unwrap_or_default();
+    super::presentation_timing::line(
+        id,
+        state,
+        slot,
+        line.text.chars().count() as u32,
+        reading_time_ms(&line.text),
+        "fight",
+    );
+    for (state, at_ms) in pending {
+        super::presentation_timing::voice_at(id, state, at_ms);
+    }
+}
+
+fn take_pending_fight_voice(
+    pending: &mut VecDeque<(LineId, ClipState, u64)>,
+    id: LineId,
+) -> Vec<(ClipState, u64)> {
+    let mut matching = Vec::new();
+    let mut retained = VecDeque::with_capacity(pending.len());
+    while let Some((pending_id, state, at_ms)) = pending.pop_front() {
+        if pending_id == id {
+            matching.push((state, at_ms));
+        } else {
+            retained.push_back((pending_id, state, at_ms));
+        }
+    }
+    *pending = retained;
+    matching
 }
 
 /// While the fight's loading splash holds, the line being spoken is read on it too, in the
@@ -1840,6 +1908,32 @@ fn actor_command(
 
 /// The voice player reports about the clip of line `id`; the line machine follows it.
 pub(super) fn clip_signal(id: LineId, signal: ClipSignal) {
+    let clip_state = timing_clip_state(signal);
+    let voice_observation = clip_state.and_then(|state| {
+        let at_ms = web_sys::window()?.performance()?.now();
+        (at_ms.is_finite() && at_ms >= 0.0).then_some((state, at_ms as u64))
+    });
+    if clip_state.is_some() && voice_observation.is_none() {
+        super::presentation_timing::report_loss(1);
+    }
+    let voice_observation = with_motion(|motion| {
+        if motion.fight_lines.contains(&id) {
+            voice_observation
+        } else {
+            if let Some((state, at_ms)) = voice_observation {
+                if motion.pending_fight_voice.len() == 128 {
+                    motion.pending_fight_voice.pop_front();
+                    super::presentation_timing::report_loss(1);
+                }
+                motion.pending_fight_voice.push_back((id, state, at_ms));
+            }
+            None
+        }
+    })
+    .flatten();
+    if let Some((state, at_ms)) = voice_observation {
+        super::presentation_timing::voice_at(id, state, at_ms);
+    }
     let now = now_ms();
     let planned = with_motion(|motion| {
         (
@@ -1854,6 +1948,15 @@ pub(super) fn clip_signal(id: LineId, signal: ClipSignal) {
     let _applied = apply(&client, commands);
     let _published = publish_state(&client);
     ensure_frame();
+}
+
+fn timing_clip_state(signal: ClipSignal) -> Option<ClipState> {
+    match signal {
+        ClipSignal::Started { .. } => Some(ClipState::Playing),
+        ClipSignal::Finished => Some(ClipState::Ended),
+        ClipSignal::Error => Some(ClipState::Failed),
+        ClipSignal::Loaded => None,
+    }
 }
 
 /// Sound was unlocked, muted or unmuted: later lines ask for a clip only while it is on.
@@ -2147,7 +2250,10 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{fresh_outcomes, merge_battlefield_beat_log, restore_pending_move_origin};
+    use super::{
+        Detail, fight_line_stage, fight_scripts, fresh_outcomes, merge_battlefield_beat_log,
+        restore_pending_move_origin, take_pending_fight_voice, timing_clip_state,
+    };
     use std::collections::HashMap;
 
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
@@ -2199,6 +2305,77 @@ mod tests {
                 "4:Weasel 2:heading=320:walk=440:roll=1500:approach=300:strike=500:settle=250",
             ),
             "4:rolling:0:1200:wait=0:battlefield=4:Weasel 2:heading=320:walk=440:roll=1500:approach=300:strike=500:settle=250,4:impact:1200:2700:wait=0,6:rolling:2700:3900:wait=0"
+        );
+    }
+
+    #[test]
+    fn fight_narration_and_cries_are_staged_as_voiced_fight_lines() {
+        use crate::stage_conductor::ClipSignal;
+        use df_protocol::common as rpc;
+
+        let lines = [
+            rpc::FightLine {
+                role: rpc::TableRole::Narrator as i32,
+                text: "The rat rushes from the shadows.".to_owned(),
+                ..Default::default()
+            },
+            rpc::FightLine {
+                role: rpc::TableRole::Hero as i32,
+                hero_index: 0,
+                speaker: "Brakka".to_owned(),
+                text: "Hold the line!".to_owned(),
+            },
+        ];
+        let scripts = fight_scripts(&lines, &[]);
+
+        assert_eq!(scripts.len(), 2);
+        assert!(!fight_line_stage(
+            crate::stage_director::StageState::Rolling,
+            false
+        ));
+        assert!(fight_line_stage(
+            crate::stage_director::StageState::Impact,
+            false
+        ));
+        assert!(fight_line_stage(
+            crate::stage_director::StageState::Turn,
+            true
+        ));
+        assert!(scripts.iter().all(|script| script.voiceable));
+        assert!(scripts.iter().all(|script| match &script.detail {
+            Detail::Line(line) => line.fight_line && line.voice.is_some(),
+            _ => false,
+        }));
+        assert_eq!(
+            timing_clip_state(ClipSignal::Started {
+                duration_ms: Some(1_100),
+            }),
+            Some(crate::stage_machines::ClipState::Playing)
+        );
+        assert_eq!(
+            timing_clip_state(ClipSignal::Finished),
+            Some(crate::stage_machines::ClipState::Ended)
+        );
+    }
+
+    #[test]
+    fn fight_voice_callbacks_before_the_line_opens_are_retained_for_timing() {
+        let mut pending = std::collections::VecDeque::from([
+            (41, crate::stage_machines::ClipState::Playing, 10),
+            (42, crate::stage_machines::ClipState::Failed, 20),
+            (41, crate::stage_machines::ClipState::Ended, 30),
+        ]);
+
+        assert_eq!(
+            take_pending_fight_voice(&mut pending, 41),
+            [
+                (crate::stage_machines::ClipState::Playing, 10),
+                (crate::stage_machines::ClipState::Ended, 30)
+            ]
+        );
+        assert_eq!(
+            pending,
+            std::collections::VecDeque::from([(42, crate::stage_machines::ClipState::Failed, 20,)])
         );
     }
 }

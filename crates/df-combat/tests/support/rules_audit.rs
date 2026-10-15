@@ -82,6 +82,7 @@ pub struct Grid {
     blocked_steps: BTreeSet<[Cell; 2]>,
     difficult: BTreeSet<Cell>,
     cover: BTreeMap<Cell, Cover>,
+    cover_heights_dm: BTreeMap<Cell, u16>,
     barriers: Vec<([Cell; 2], Option<u16>)>,
     pub hero_spawns: Vec<Cell>,
     pub enemy_spawns: Vec<Cell>,
@@ -113,6 +114,7 @@ impl Grid {
             })
             .collect();
         let mut cover = BTreeMap::new();
+        let mut cover_heights_dm = BTreeMap::new();
         for obstacle in &chosen.obstacles {
             for &cell in &obstacle.cells {
                 if obstacle.blocks_movement {
@@ -120,15 +122,21 @@ impl Grid {
                 }
                 let entry = cover.entry(cell).or_insert(Cover::None);
                 *entry = (*entry).max(obstacle.cover);
+                if obstacle.cover != Cover::None {
+                    let height_dm = (obstacle.height_m * 10.0).round() as u16;
+                    let entry = cover_heights_dm.entry(cell).or_insert(0);
+                    *entry = (*entry).max(height_dm);
+                }
             }
         }
         Grid {
             cols: data.grid.cols,
             rows: data.grid.rows,
             blocked,
-            blocked_steps: data.grid.blocked_steps.iter().map(|step| *step).collect(),
+            blocked_steps: data.grid.blocked_steps.iter().copied().collect(),
             difficult: chosen.difficult.iter().copied().collect(),
             cover,
+            cover_heights_dm,
             barriers,
             hero_spawns: chosen.spawns.heroes.clone(),
             enemy_spawns: chosen.spawns.enemies.clone(),
@@ -160,7 +168,10 @@ impl Grid {
         let mut result = barrier_cover(&self.barriers, from, to, target_height_dm(target_size));
         for (&cell, &grade) in &self.cover {
             if cell != from && segment_enters(from, to, cell) {
-                result = result.max(grade);
+                let height_grade = self.cover_heights_dm.get(&cell).map_or(grade, |height| {
+                    grade.min(height_cover(*height, target_height_dm(target_size)))
+                });
+                result = result.max(height_grade);
             }
         }
         for creature in creatures {
@@ -193,11 +204,21 @@ fn target_height_dm(size: Size) -> u16 {
 }
 fn covers_when_standing_or_large_enough(creature: Coverer, target_size: Size) -> bool {
     !creature.prone
-        || match creature.size {
-            Size::Small => false,
-            Size::Medium => target_size == Size::Small,
-            Size::Large => target_size != Size::Large,
-        }
+        && u32::from(target_height_dm(creature.size)) * 2
+            >= u32::from(target_height_dm(target_size))
+}
+fn height_cover(height_dm: u16, target_height_dm: u16) -> Cover {
+    let height = u32::from(height_dm);
+    let target = u32::from(target_height_dm);
+    if height * 2 < target {
+        Cover::None
+    } else if height * 4 < target * 3 {
+        Cover::Half
+    } else if height < target {
+        Cover::ThreeQuarters
+    } else {
+        Cover::Total
+    }
 }
 fn barrier_cover(
     barriers: &[([Cell; 2], Option<u16>)],
@@ -229,15 +250,9 @@ fn barrier_cover(
         if delta[0] != 0 && delta[1] != 0 {
             continue;
         }
-        let grade = match height {
-            None => Cover::Total,
-            Some(height) if u32::from(*height) * 4 < u32::from(target_height_dm) => Cover::None,
-            Some(height) if u32::from(*height) * 2 <= u32::from(target_height_dm) => Cover::Half,
-            Some(height) if u32::from(*height) * 4 <= u32::from(target_height_dm) * 3 => {
-                Cover::ThreeQuarters
-            }
-            Some(_) => Cover::Total,
-        };
+        let grade = height.map_or(Cover::Total, |height| {
+            height_cover(height, target_height_dm)
+        });
         let midpoint = [
             i64::from(left.0) + i64::from(right.0) + 1,
             i64::from(left.1) + i64::from(right.1) + 1,
@@ -738,6 +753,9 @@ fn reason_name(reason: AttackReason) -> &'static str {
         AttackReason::Dodge => "Dodge",
         AttackReason::PackTactics => "PackTactics",
         AttackReason::SunlightSensitivity => "SunlightSensitivity",
+        AttackReason::UnseenTarget => "UnseenTarget",
+        AttackReason::UnseenAttacker => "UnseenAttacker",
+        AttackReason::Help => "Help",
         AttackReason::Vex => "Vex",
         AttackReason::Sap => "Sap",
     }
@@ -979,6 +997,9 @@ impl<'g> FightAudit<'g> {
             }
             Action::NimbleDisengage => {
                 self.take_bonus(before, actor);
+            }
+            Action::Help { .. } | Action::UtilizeHealersKit { .. } => {
+                self.audit_action_flag(before, actor, action, after)
             }
             Action::Attack {
                 target,
@@ -2110,6 +2131,7 @@ mod cover_tests {
             blocked_steps: BTreeSet::new(),
             difficult: BTreeSet::new(),
             cover: BTreeMap::new(),
+            cover_heights_dm: BTreeMap::new(),
             barriers,
             hero_spawns: Vec::new(),
             enemy_spawns: Vec::new(),
@@ -2126,8 +2148,9 @@ mod cover_tests {
 
         assert_eq!(cover_for(Some(4)), Cover::None);
         assert_eq!(cover_for(Some(9)), Cover::Half);
-        assert_eq!(cover_for(Some(13)), Cover::ThreeQuarters);
-        assert_eq!(cover_for(Some(14)), Cover::Total);
+        assert_eq!(cover_for(Some(13)), Cover::Half);
+        assert_eq!(cover_for(Some(14)), Cover::ThreeQuarters);
+        assert_eq!(cover_for(Some(18)), Cover::Total);
         assert_eq!(cover_for(None), Cover::Total);
     }
 

@@ -310,19 +310,18 @@ macro_rules! reply_rules_start {
 You voice facts.npc, speaking to facts.hero. Slot \"reply\" is what they say aloud, as talking.\n\
 a. Use one to three short, plain sentences (forty words max). No \
 semicolon, colon, or restated question.\n\
-b. Answer facts.npc_reaction first if present; else answer facts.answer_from in your own voice, \
+b. Show facts.npc_reaction through your tone; answer facts.answer_from in your own voice, \
 one clause per facts.player.question_parts in order. No greeting, saying, name, interjection or \
 verbatim dossier sentence. Name/address the hero at most every fourth reply; never reuse \
 facts.already_said or facts.recent_exchange.\n\
 c. Use only facts.answer_from, facts.volunteer, facts.you_told_this_hero_in_private and \
-facts.now; facts.now is current and outranks all. Invent no names, places, times, numbers or \
+facts.now; facts.now is current and outranks all. Use facts.hero_visible for the listener; never \
+copy their term of address back. Invent no names, places, times, numbers or \
 dangers; an enemy threatens but offers nothing. Never contradict facts or yourself or add beyond \
 the answer.\n\
-d. If facts.answer_from is empty and facts.conversation.may_say_i_dont_know is true, refuse in \
-character, name what was asked and refuse each question part. Prefer what you know, a marked \
+d. If you do not know, say so about what was asked. Prefer what you know, a marked \
 guess, facts.nearest_you_know or facts.who_would_know. Never use flat dodges like I cannot tell \
-you, nothing more to add, a question for another time or a mind elsewhere. Otherwise steer to \
-what you know.\n\
+you, nothing more to add, a question for another time or a mind elsewhere.\n\
 e. facts.how_you_speak, facts.inner_state and facts.npc colour every reply but are never said. \
 Mention wants, fears, past, trade, sayings or lore only when asked about you or this place.\n\
 f. When facts.hero_claims_against_errand is true, deny, doubt or question the claim, staying on \
@@ -761,7 +760,7 @@ pub(super) fn style_phrases(dossier: &Dossier) -> Vec<String> {
 pub(super) fn spoken_rules(
     answer_offered: bool,
     said: &[String],
-    admitted_ignorance: bool,
+    _admitted_ignorance: bool,
 ) -> Vec<SpokenRule> {
     let mut rules = vec![
         SpokenRule::SentencesAtMost(REPLY_SENTENCES),
@@ -773,8 +772,6 @@ pub(super) fn spoken_rules(
     ];
     if answer_offered {
         rules.push(SpokenRule::NoDenialFirst);
-    } else if admitted_ignorance {
-        rules.push(SpokenRule::NoDenial);
     }
     rules
 }

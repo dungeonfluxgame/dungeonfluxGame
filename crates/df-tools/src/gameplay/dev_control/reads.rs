@@ -84,6 +84,7 @@ async fn seat_json(
         "offer_id": player.offer_id,
         "action_available": player.action_available,
         "offers": player.offers.iter().map(|offer| json!({
+            "offer_id": offer.offer_id,
             "action": action_name(offer.action_kind),
             "label": offer.label,
         })).collect::<Vec<_>>(),
@@ -137,9 +138,110 @@ fn phase_of(journey: &rpc::JourneyView) -> i32 {
 }
 
 fn scene_json(scene: &rpc::GameplayScene) -> Value {
-    json!({"title": scene.title, "place": scene.place, "rules_note": scene.rules_note})
+    json!({"title": scene.title, "place": scene.place, "rules_note": scene.rules_note,
+        "location_id":scene.location_id, "scene_asset":scene.scene_asset, "live_backdrop":scene.live_backdrop,
+        "live_plate":scene.live_plate, "plate_state":scene.plate_state,
+        "scene_video_state":scene.scene_video_state, "scene_video_path":scene.scene_video_path,
+        "cast":scene.cast.iter().map(|actor| json!({"id":actor.id,"name":actor.name,"role":actor.role,"sprite":actor.sprite,"live_sprite":actor.live_sprite,"speaking":actor.speaking})).collect::<Vec<_>>(),
+        "contents": scene.scene_contents_json,
+        "item": scene.item.as_ref().map(|item| json!({
+            "id": item.thing_id, "name": item.name, "detail": item.detail,
+            "image_path": item.image_path, "image_state": item.image_state,
+            "status": rpc::PlateState::try_from(item.image_state).map_or("unrecognized", |state| state.as_str_name()),
+            "state_revision": item.state_revision,
+        })),
+    })
 }
 
+pub(super) async fn scene_for(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let hero = params
+        .get("name")
+        .ok_or_else(|| bad_request("scene needs a hero name"))?;
+    let index = {
+        let seats = state.seats.lock().await;
+        super::resolve_hero(&seats, hero).map_err(bad_request)?
+    };
+    let (_, view) = seat_view(&state, index).await?;
+    let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+        return Err(super::failed("player view required"));
+    };
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(json!({
+            "hero": hero, "scene": player.scene.as_ref().map(scene_json),
+        })),
+    ))
+}
+
+pub(super) async fn feelings(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let requested = params
+        .get("name")
+        .ok_or_else(|| bad_request("feelings needs an NPC id or name"))?;
+    let current = state.service.updates.borrow().clone();
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())
+        .map_err(|_| super::failed("scene unavailable"))?;
+    let id = feelings_identity(&scene, requested);
+    let feelings = state
+        .social
+        .development_feelings(&id)
+        .ok_or_else(|| bad_request("NPC profile not found"))?;
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(json!({"npc": requested, "profile": feelings.0,
+            "relationships": feelings.1.iter().map(|(hero, attitude, emotion)| json!({
+                "member": hero, "attitude": format!("{attitude:?}"), "emotion": emotion,
+            })).collect::<Vec<_>>(),
+        })),
+    ))
+}
+
+fn feelings_identity(scene: &crate::gameplay::pack::Scene, requested: &str) -> String {
+    use crate::gameplay::pack::CastRole;
+    let role_name = |role| match role {
+        CastRole::Patron => "patron",
+        CastRole::Antagonist => "antagonist",
+        CastRole::Contact => "contact",
+        CastRole::Bystander => "bystander",
+    };
+    if let Some(person) = scene.cast.iter().find(|person| {
+        person.name.eq_ignore_ascii_case(requested) || person.id.eq_ignore_ascii_case(requested)
+    }) {
+        return format!("{}:{}", role_name(person.role), person.id);
+    }
+    if let Some(person) = scene
+        .setting
+        .as_ref()
+        .and_then(|setting| setting.model.as_ref())
+        .and_then(|model| {
+            model.people.iter().find(|person| {
+                person.name.eq_ignore_ascii_case(requested)
+                    || person.id.eq_ignore_ascii_case(requested)
+            })
+        })
+    {
+        if person.is_background {
+            return format!("bystander:{}", person.id);
+        }
+        if let Some(cast) = scene
+            .cast
+            .iter()
+            .find(|cast| role_name(cast.role) == person.role)
+        {
+            return format!("{}:{}", role_name(cast.role), cast.id);
+        }
+    }
+    requested.to_owned()
+}
 fn party_json(member: &rpc::PartyMemberView) -> Value {
     json!({
         "name": member.name,
@@ -166,6 +268,13 @@ fn combat_json(combat: &rpc::CombatView) -> Value {
         .collect();
     json!({
         "round": combat.round,
+        "latest_sequence":combat.latest_sequence, "released_sequence":combat.released_sequence,
+        "own_budget":combat.own_budget.as_ref().map(|budget|json!({"movement_ft":budget.movement_ft,"action":budget.action,"bonus_action":budget.bonus_action,"reaction":budget.reaction})),
+        "own_ammunition":combat.own_ammunition.as_ref().map(|ammo|json!({"arrows":ammo.arrows,"bolts":ammo.bolts})),
+        "outcomes":combat.outcomes.iter().map(super::combat_json).collect::<Vec<_>>(),
+        "move_outcomes":combat.move_outcomes.iter().map(super::combat_json).collect::<Vec<_>>(),
+        "death_save_outcomes":combat.death_save_outcomes.iter().map(super::combat_json).collect::<Vec<_>>(),
+        "closing_lines":combat.closing_lines.iter().map(|line|json!({"speaker":line.speaker,"role":line.role,"hero_index":line.hero_index,"text":line.text})).collect::<Vec<_>>(),
         "active_actor": combat.active_actor,
         "finished": combat.finished,
         "layout": combat.layout_id,
@@ -216,6 +325,12 @@ fn action_name(kind: i32) -> &'static str {
         Ok(rpc::GameplayActionKind::ChooseHarborScene) => "inn",
         Ok(rpc::GameplayActionKind::ResolveErrand) => "resolve",
         Ok(rpc::GameplayActionKind::StartNewAdventure) => "new-adventure",
+        Ok(rpc::GameplayActionKind::ExamineHarborSeal) => "search",
+        Ok(rpc::GameplayActionKind::OpportunityAttack) => "opportunity-attack",
+        Ok(rpc::GameplayActionKind::DeclineReaction) => "decline-reaction",
+        Ok(rpc::GameplayActionKind::StabiliseWithHealersKit) => "stabilise-kit",
+        Ok(rpc::GameplayActionKind::StabiliseMedicine) => "stabilise-medicine",
+        Ok(rpc::GameplayActionKind::SetTableSetting) => "table-setting",
         _ => "unknown",
     }
 }
@@ -237,7 +352,7 @@ pub(super) async fn view_as(
         return Ok((
             axum::http::StatusCode::OK,
             Json(
-                json!({"as": "tv", "revision": revision_json(Some(&revision)), "view": view_json(&view)}),
+                json!({"as": "tv", "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20)}),
             ),
         ));
     }
@@ -249,7 +364,7 @@ pub(super) async fn view_as(
     Ok((
         axum::http::StatusCode::OK,
         Json(
-            json!({"as": who, "revision": revision_json(Some(&revision)), "view": view_json(&view)}),
+            json!({"as": who, "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20)}),
         ),
     ))
 }
@@ -262,6 +377,7 @@ fn view_json(view: &rpc::ViewMessage) -> Value {
             "narration": player.narration,
             "private_clue": player.private_clue,
             "action_available": player.action_available,
+            "check": player.check.as_ref().map(|check|check_view_json(check, player.journey.as_ref())),
             "offers": player.offers.iter().map(|offer| json!({
                 "offer_id": offer.offer_id,
                 "action": action_name(offer.action_kind),
@@ -281,11 +397,70 @@ fn view_json(view: &rpc::ViewMessage) -> Value {
         Some(rpc::view_message::Audience::Display(display)) => json!({
             "audience": "display",
             "narration": display.narration,
+            "scene_graph": display.scene_graph.as_ref().map(|graph| json!({
+                "revision": graph.revision, "scene_key": graph.scene_key,
+                "camera": graph.camera,
+                "set": graph.set.as_ref().map(|set| json!({
+                    "place_id": set.place_id, "place_name": set.place_name, "asset": set.asset,
+                    "exterior": set.exterior, "time_of_day": set.time_of_day, "weather": set.weather,
+                    "lights": set.lights,
+                    "fallback_asset": set.fallback_asset,
+                })),
+                "actors": graph.actors.iter().map(|actor| json!({
+                    "id": actor.id, "name": actor.name, "spot": actor.spot, "pose": actor.pose,
+                    "expression": actor.expression, "speaking": actor.speaking,
+                    "art": actor.art, "fallback_art": actor.fallback_art, "look_at": actor.look_at,
+                    "anchor_x_permille": actor.anchor_x_permille, "anchor_y_permille": actor.anchor_y_permille,
+                    "depth_permille": actor.depth_permille,
+                })).collect::<Vec<_>>(),
+            })),
+            "check": display.check.as_ref().map(|check|check_view_json(check, display.journey.as_ref())),
             "scene": display.scene.as_ref().map(scene_json).unwrap_or(json!(null)),
             "journey": display.journey.as_ref().map(journey_json).unwrap_or(json!(null)),
         }),
         None => json!({"audience": "none"}),
     }
+}
+
+fn group_json(group: &rpc::JourneyGroup) -> Value {
+    json!({"group_id": group.group_id, "label": group.label,
+        "options": group.options.iter().map(|option| json!({
+            "option_id": option.option_id, "label": option.label, "description": option.description,
+            "requires_group": option.requires_group, "requires_options": option.requires_options,
+        })).collect::<Vec<_>>()})
+}
+
+pub(super) fn identity_json(identity: &rpc::HeroIdentity) -> Value {
+    json!({"appearance": identity.appearance.as_ref().map(|appearance| json!({
+        "presentation":appearance.presentation, "pronouns":appearance.pronouns, "age":appearance.age,
+        "build":appearance.build, "skin":appearance.skin, "hair":appearance.hair, "hair_color":appearance.hair_color,
+        "eyes":appearance.eyes, "mark":appearance.mark, "attire":appearance.attire,
+    })), "origin":identity.origin, "occupation":identity.occupation, "motivation":identity.motivation,
+        "backstory":identity.backstory, "facts":identity.facts})
+}
+
+fn check_view_json(check: &rpc::AbilityCheckResult, journey: Option<&rpc::JourneyView>) -> Value {
+    let mut value = check_json(check);
+    value["actor"] = journey
+        .and_then(|journey| {
+            let line = journey.table_log.iter().rev().find(|line| {
+                line.speaker == "Roll"
+                    && line.role == rpc::TableRole::Narrator as i32
+                    && line.kind == rpc::TableKind::Action as i32
+            })?;
+            journey
+                .party
+                .get(line.hero_index as usize)
+                .map(|hero| json!(hero.name))
+        })
+        .unwrap_or(Value::Null);
+    value
+}
+
+fn check_json(check: &rpc::AbilityCheckResult) -> Value {
+    json!({"die":check.die, "faces":check.faces, "roll_mode":check.roll_mode,
+        "ability_modifier":check.ability_modifier, "proficiency_bonus":check.proficiency_bonus,
+        "total":check.total, "succeeded":check.succeeded, "source_revision":check.source_revision})
 }
 
 fn journey_json(journey: &rpc::JourneyView) -> Value {
@@ -296,7 +471,10 @@ fn journey_json(journey: &rpc::JourneyView) -> Value {
         "own_character": journey.own_character.as_ref().map(super::sheet_json).unwrap_or(json!(null)),
         "creation": journey.creation.as_ref().map(|creation| json!({
             "description": creation.description,
-            "groups": creation.groups.iter().map(|group| group.group_id.clone()).collect::<Vec<_>>(),
+            "source_revision": creation.source_revision,
+            "groups": creation.groups.iter().map(group_json).collect::<Vec<_>>(),
+            "identity_groups": creation.identity_groups.iter().map(group_json).collect::<Vec<_>>(),
+            "default_identity": creation.default_identity.as_ref().map(identity_json),
         })).unwrap_or(json!(null)),
         "combat": journey.combat.as_ref().map(combat_json).unwrap_or(json!(null)),
         "speaker": journey.speaker,
@@ -307,6 +485,12 @@ fn journey_json(journey: &rpc::JourneyView) -> Value {
             "npc": standing.name, "attitude": attitude_name(standing.attitude),
         })).collect::<Vec<_>>(),
         "adventure_ended": journey.adventure_ended,
+        "notebook":journey.notebook.iter().map(|entry|json!({"kind":entry.kind,"title":entry.title,"text":entry.text,"scene":entry.scene,"order":entry.order,"owner":entry.owner,"author":entry.author,"attitude":entry.attitude})).collect::<Vec<_>>(),
+        "choice_hints_hidden":journey.choice_hints_hidden,
+        "presentation_sequence":journey.presentation_sequence,
+        "reply_speaker":journey.reply_speaker,
+        "home_video_state":journey.home_video_state,"home_video_path":journey.home_video_path,
+        "tempo":journey.tempo.as_ref().map(|cue|json!({"phase":cue.phase,"intensity_permille":cue.intensity_permille,"sequence":cue.sequence,"hold_millis":cue.hold_millis})),
     })
 }
 
@@ -314,6 +498,7 @@ fn line_json(line: &rpc::TableLine) -> Value {
     json!({
         "sequence": line.sequence,
         "speaker": line.speaker,
+        "hero_index": line.hero_index,
         "role": table_role_name(line.role),
         "kind": table_kind_name(line.kind),
         "text": line.text,
@@ -377,6 +562,27 @@ pub(super) async fn game_log(
             "lines": lines.iter().map(line_json).collect::<Vec<_>>(),
             "overrides": overrides,
         })),
+    ))
+}
+
+pub(super) async fn timeline(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let last = params
+        .get("last")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|_| bad_request("last must be 1 to 1000"))?
+        .unwrap_or(50);
+    if !(1..=1000).contains(&last) {
+        return Err(bad_request("last must be 1 to 1000"));
+    }
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(super::timeline::snapshot(last)),
     ))
 }
 
@@ -489,7 +695,19 @@ fn describe_json() -> Value {
         "auth": "every request carries Authorization: Bearer <token from the run's dev-control-token file>",
         "envelope": "domain outcomes (accepted/refused/unavailable/ambiguous/said/saved) arrive with HTTP 200; malformed dev requests are HTTP 400 JSON {error}; server failures are HTTP 502/500 JSON {error}",
         "refusals": "a refused action reports the server's own reason code: stale-offer, wrong-turn, invalid-selection, paused, resource-missing, capability-unavailable, recovery-required, revision-conflict, operation-conflict, operation-expired",
+        "phases":["room","creation","opening","dialogue","combat","complete","ended (adventure_ended)"],
+        "views":["tv","each joined seat or hero name"],
+        "actions":(1..=40).filter_map(|value|rpc::GameplayActionKind::try_from(value).ok())
+            .map(|kind|json!({"wire_kind":kind.as_str_name(),"action":action_name(kind as i32)})).collect::<Vec<_>>(),
+        "selection":"act <hero> <offer label or id>, or act <hero> choose --option <offer label or id>; --choice group=id repeatable / --choices JSON sets every input group; uses live server offers",
         "commands": [
+            {"command":"confirm", "method":"POST", "path":"/dev/act", "args":"<hero> <action> --input-id <hex> --confirmation-token <hex> [action selections]", "output":"same admitted action receipt; requires a current pending confirmation from say"},
+            {"command":"cancel", "method":"POST", "path":"/dev/cancel", "args":"<hero> --input-id <hex> --confirmation-token <hex>", "output":"{status:cancelled,disposition,revision}"},
+            {"command":"preview", "method":"POST", "path":"/dev/preview", "args":{"seat":"seat or hero name","appearance_text":"up to 1000 characters","backstory_text":"up to 4000 characters","identity":"optional current identity JSON"}, "output":"{status:previewed, identity, source, warnings}; read-only, review then create --identity"},
+            {"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"},
+            {"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"},
+            {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>", "args":{"last":"1..1000, default 50"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line}],dropped,capacity,scope}; line/plate/clip/check/combat audit events"},
+            {"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates, chooses current offers, fights, rests and closes chapters; ordinary presentation gates remain authoritative"},
             {"command": "join", "method": "POST", "path": "/dev/join",
              "args": {"seat": "1 or 2"},
              "output": "{status: joined|refused, seat, receipt?}"},
@@ -497,14 +715,14 @@ fn describe_json() -> Value {
              "args": {"seat": "1 or 2"},
              "output": "{status: joined|refused, seat?, receipt?, reason?}; replaces an away hero's phone after 30 seconds"},
             {"command": "create", "method": "POST", "path": "/dev/create",
-             "args": {"seat": "1 or 2", "name": "hero name, 1-48 chars"},
-             "output": "{status: accepted|refused|unavailable, ...}; the canonical Dwarf Fighter/Soldier is created"},
+             "args": {"seat": "1 or 2", "name": "hero name, 1-48 chars", "choices":"group-id to option-id object (or --choice group=id)","identity":"optional validated identity JSON","identity_choices":"optional identity menu group-id to option-id object"},
+             "output": "{status: accepted|refused|unavailable, ...}; mechanical choices use server validation; a supplied identity requires canonical storage support"},
             {"command": "act", "method": "POST", "path": "/dev/act",
              "args": {"hero": "seat or hero name", "action": "begin|ask|escort|defend|move|attack|second-wind|end-turn|dash|dodge|disengage|stand|pick-up|short-rest|inn|resolve",
                      "cell": "c5r6 for move", "target": "foe or hero name for attack", "weapon": "optional weapon name", "option": "explicit option id or label"},
              "output": "{status: accepted|refused|unavailable|ambiguous|observation, revision, ...}; illegal selections are submitted so the server's refusal is reported"},
             {"command": "say", "method": "POST", "path": "/dev/say",
-             "args": {"hero": "seat or hero name", "text": "1-4096 chars", "context": "question (default)|social|plan|meta|joke"},
+             "args": {"hero": "seat or hero name", "text": "1-4096 chars", "context": "question (default)|social|plan|meta|joke|clarify"},
              "output": "{status: said, disposition, npc_reply, confirmation_required, revision}"},
             {"command": "direct plate <text> [--keep] [--wait]", "method": "POST", "path": "/dev/direct",
              "args": {"kind": "plate|clear", "text": "1-1000 characters", "keep": "false by default"},
@@ -574,5 +792,120 @@ mod reclaim_tests {
         assert_eq!(reclaim["method"], "POST");
         assert_eq!(reclaim["path"], "/dev/reclaim");
         assert_eq!(reclaim["args"]["seat"], "1 or 2");
+    }
+}
+
+#[cfg(test)]
+mod complete_view_tests {
+    use super::*;
+
+    #[test]
+    fn creation_view_includes_choices_and_identity_menus() {
+        let view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(rpc::JourneyView {
+                        creation: Some(rpc::CharacterCreationOffer {
+                            groups: vec![rpc::JourneyGroup {
+                                group_id: "alignment".into(),
+                                label: "Alignment".into(),
+                                options: vec![rpc::JourneyOption {
+                                    option_id: "neutral-good".into(),
+                                    label: "Neutral Good".into(),
+                                    ..Default::default()
+                                }],
+                            }],
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let shown = view_json(&view);
+        assert_eq!(
+            shown["journey"]["creation"]["groups"][0]["options"][0]["option_id"],
+            "neutral-good"
+        );
+        assert!(
+            shown["journey"]["creation"]
+                .get("identity_groups")
+                .is_some()
+        );
+    }
+}
+
+#[cfg(test)]
+mod command_coverage_tests {
+    use super::*;
+    #[test]
+    fn every_concrete_wire_action_has_a_named_dev_action() {
+        for value in 1..=40 {
+            if let Ok(kind) = rpc::GameplayActionKind::try_from(value) {
+                let name = action_name(value);
+                assert_ne!(name, "unknown", "{kind:?}");
+                assert_eq!(
+                    super::super::parse::parse_action(name).unwrap().kind(),
+                    kind
+                );
+            }
+        }
+        let description = describe_json();
+        for name in [
+            "scene", "feelings", "timeline", "play", "preview", "confirm", "cancel", "create",
+            "act", "say", "view",
+        ] {
+            assert!(
+                description["commands"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|command| command["command"] == name),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod feelings_identity_tests {
+    use super::*;
+    #[test]
+    fn feelings_uses_the_same_role_qualified_identity_as_npc_speech() {
+        let adventure = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
+        let scene = adventure
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| !scene.cast.is_empty())
+            .unwrap();
+        let person = &scene.cast[0];
+        assert_eq!(
+            feelings_identity(scene, &person.name),
+            format!("patron:{}", person.id)
+        );
+        assert_eq!(
+            feelings_identity(scene, &person.id),
+            format!("patron:{}", person.id)
+        );
+        let mut modeled = scene.clone();
+        modeled.setting = Some(adventure.settings.scene(scene.key).clone());
+        let background = modeled
+            .setting
+            .as_ref()
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .people
+            .iter()
+            .find(|person| person.is_background)
+            .unwrap();
+        assert_eq!(
+            feelings_identity(&modeled, &background.name),
+            format!("bystander:{}", background.id)
+        );
     }
 }

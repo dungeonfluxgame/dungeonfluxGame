@@ -58,9 +58,13 @@ use tokio::sync::{Semaphore, watch};
     reason = "the investigation task (a follow-up) is the first caller"
 )]
 pub(super) use artifact::{ArtifactSubject, SubjectRefusal, close_up_request};
+#[allow(
+    unused_imports,
+    reason = "T02 stage rendering must pass each checked hero identity into these prompts"
+)]
 pub(super) use prompt::{
-    AssembledPrompt, CharacterFacts, CharacterRole, FILM_LOOK, LifeStage, PlaceFacts,
-    cast_expression, scene_refresh,
+    AssembledPrompt, CharacterFacts, CharacterRole, FILM_LOOK, HeroVisualIdentity, LifeStage,
+    PlaceFacts, cast_expression, hero_cutout, hero_expression, hero_portrait, scene_refresh,
 };
 #[allow(
     unused_imports,
@@ -71,6 +75,11 @@ pub(super) use prompt::{PromptRefusal, VettedFact};
 use party_sheet::SheetError;
 pub(super) use party_sheet::{party_sheet, vision_picture};
 pub(super) use plate_prompt::{PlateReferences, hero_locator_phrase, plate_moment, scene_plate};
+#[allow(
+    unused_imports,
+    reason = "T02 stage rendering must pass each checked hero identity into these prompts"
+)]
+pub(super) use plate_prompt::{hero_locator_phrase_for_identity, scene_plate_for_heroes};
 pub(super) use references::{ReferenceImage, ReferenceStore};
 
 use super::startup_configuration::{

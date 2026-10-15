@@ -35,6 +35,7 @@ pub(super) const DEADLINE: Duration = Duration::from_secs(60);
 /// Deadline of one slot-group request attempt. Groups are small, so a healthy
 /// answer arrives well inside this; a miss is retried once (see `ask_group`).
 const GROUP_DEADLINE: Duration = Duration::from_secs(20);
+const OPENING_GROUP_DEADLINE: Duration = Duration::from_secs(12);
 /// Slots per model request. Two whole-adventure requests routinely missed the
 /// old single 25 s deadline; small groups answer faster and fail independently.
 const GROUP_SLOTS: usize = 6;
@@ -151,9 +152,10 @@ VOICE: narration is second person and present tense in plain strong verbs. A nar
 LINES: a spoken line is only the character's own first-person words, with no quotation marks, stage directions or narration about them. Lines sound spoken (contractions, a catch, a trailing thought) and every speaker sounds different: let facts.cast voice, delivery and mannerism shape word choice and rhythm. A speaker sounds the same in every line.\n\
 TITLES: two to five words, specific to this adventure and built on its place, object or person (like \"The Bell That Wasn't Rung\"). Never a generic mood phrase such as \"A Moment of Quiet\", \"Safe at Last\" or \"Hard Questions\".\n\
 PLACE: use two or three concrete sensory details from facts.location (sound, smell, light, weather), different ones in each scene, and never the same sentence twice. Do not start two slots with the same words.\n\
-CHARACTERS: each appearance gets one consistent physical beat that fits the character's archetype, mannerism and mood together. Never contradictory, such as a brisk sergeant rubbing tired eyes or a cheerful tinker breathing hard.\n\
+CHARACTERS: each appearance gets one consistent physical beat that fits the character's archetype, mannerism and mood together. Never contradictory, such as a brisk sergeant rubbing tired eyes or a cheerful tinker breathing hard. Use only the people in facts.scene_facts for that slot.\n\
 STAKES: the patron's opening line has a clear ask, what is at stake if the heroes refuse or fail, and one human detail, in the patron's own voice. The enemy's line is a threat that reveals a motive, in a voice that fits its kind. A creature that does not speak (facts.cast.enemy.speaks is false) gets a narrated menace beat instead of a line.\n\
 PAYOFF: the contact's closing line acknowledges what the heroes did, lets the table hear that the patron's secret mattered without repeating its private wording, and gives a concrete reward or tempting lead from facts.story.thanks.\n\
+SCENE FACTS: facts.scene_facts names each slot's setting, approved appearance and present cast. Its outcome is unresolved and injuries are empty; add no injury, presence or event claim absent from those facts.\n\
 CONTINUITY: keep every name, place, object and creature exactly as in FACTS and write every must_mention term verbatim. Each scene moves the story on rather than restating the last. The victory scene tells how the fight ended only in general terms. Add no new objects, people, events or injuries. "
     };
 }
@@ -340,9 +342,21 @@ fn slot_groups(planned: &[Planned<'_>]) -> Vec<(String, Group, BTreeSet<String>)
             ));
         }
     }
-    // Opening text first: order groups by the earliest slot they contain.
+    // Ask for the opening narration first and its spoken line second.
     let position = |name: &str| planned.iter().position(|slot| slot.name == name);
-    groups.sort_by_key(|(_, _, names)| names.iter().filter_map(|name| position(name)).min());
+    groups.sort_by_key(|(_, _, names)| {
+        let opening_rank = if names.iter().any(|name| name == "opening_narration") {
+            0
+        } else if names.iter().any(|name| name == "opening_line") {
+            1
+        } else {
+            2
+        };
+        (
+            opening_rank,
+            names.iter().filter_map(|name| position(name)).min(),
+        )
+    });
     groups
 }
 
@@ -365,6 +379,10 @@ fn scene_name(key: SceneKey) -> &'static str {
         SceneKey::Victory => "victory",
         SceneKey::Defeat => "defeat",
     }
+}
+
+fn scene_fact_name(key: SceneKey) -> String {
+    scene_name(key).replace('_', "-")
 }
 
 /// Names every slot the generator expressed, in generation order: five labels and the clue,
@@ -465,10 +483,53 @@ fn content_terms(baseline: &GeneratedAdventure) -> Vec<String> {
         .collect()
 }
 
+fn required_story_facts(sheet: &FactSheet) -> Vec<(String, String)> {
+    let mut required = Vec::new();
+    if sheet.scene.as_deref() == Some("opening")
+        && sheet.beat == "hook"
+        && sheet.slot == "narration"
+    {
+        for key in ["hook.job", "stake.failure"] {
+            if let Some(value) = sheet.facts.get(key) {
+                required.push((key.to_owned(), value.clone()));
+            }
+        }
+    }
+    if sheet.scene.as_deref() == Some("opening") && sheet.beat == "hook" && sheet.slot == "line" {
+        if let Some(stake) = sheet.facts.get("stake.short") {
+            required.push(("stake.short".to_owned(), stake.clone()));
+        }
+        if let Some(reward) = sheet.facts.get("reward.words") {
+            required.push(("reward.words".to_owned(), format!("{reward} gold")));
+        }
+    }
+    if matches!(
+        sheet.scene.as_deref(),
+        Some("dialogue-seal" | "dialogue-escort")
+    ) && sheet.beat == "roleplay"
+        && sheet.slot == "narration"
+    {
+        if let Some(antagonist) = sheet.facts.get("ant.short") {
+            required.push(("ant.short".to_owned(), antagonist.clone()));
+        }
+    }
+    if sheet.beat == "resolution"
+        && let Some(resolution) = sheet.facts.get("stake.resolution")
+    {
+        required.push(("stake.resolution".to_owned(), resolution.clone()));
+    }
+    required
+}
+
 fn slot_spec(planned: &Planned<'_>, baseline: &GeneratedAdventure) -> Slot {
     let sheet = planned.sheet;
     let secret_terms = &baseline.pack.secret_terms;
     let mut mention = sheet.must_mention.clone();
+    mention.extend(
+        required_story_facts(sheet)
+            .into_iter()
+            .map(|(_, value)| value),
+    );
     if sheet.slot == "clue" {
         mention.extend(secret_terms.first().cloned());
     }
@@ -491,6 +552,57 @@ fn slot_spec(planned: &Planned<'_>, baseline: &GeneratedAdventure) -> Slot {
         .forbidding(bounded_terms(forbidden))
 }
 
+fn scene_context_facts(baseline: &GeneratedAdventure, planned: &Planned<'_>) -> Value {
+    let mut present = BTreeSet::new();
+    let mut setting = Value::Null;
+    let mut appearance = Value::Null;
+    if let Some(scene_key) = planned.sheet.scene.as_deref()
+        && let Some(scene) = baseline
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene_fact_name(scene.key) == scene_key)
+    {
+        present.extend(scene.cast.iter().map(|person| person.name.clone()));
+        if let Some(scene_setting) = &scene.setting {
+            setting = json!({
+                "place": scene_setting.name,
+                "short": scene_setting.short,
+                "exterior": scene_setting.exterior,
+            });
+        }
+        if let Some(model) = &baseline.settings.scene(scene.key).model {
+            let model = model.for_scene(scene.key);
+            present.extend(model.people.iter().map(|person| person.name.clone()));
+            if planned.sheet.slot == "narration" {
+                appearance = json!({
+                    "time_of_day": model.time_of_day,
+                    "weather": model.weather,
+                    "people": model.people.iter().map(|person| json!({
+                        "name": person.name,
+                        "description": person.description,
+                        "position": person.position,
+                    })).collect::<Vec<_>>(),
+                    "things": model.things.iter().filter(|thing| thing.in_scene).map(|thing| json!({
+                        "name": thing.name,
+                        "detail": thing.detail,
+                    })).collect::<Vec<_>>(),
+                });
+            }
+        }
+    }
+    let required_story_facts: BTreeMap<String, String> =
+        required_story_facts(planned.sheet).into_iter().collect();
+    json!({
+        "scene": planned.sheet.scene,
+        "setting": setting,
+        "approved_appearance": appearance,
+        "present_cast": present,
+        "outcome": {"resolved": false, "injuries": []},
+        "required_story_facts": required_story_facts,
+    })
+}
+
 /// The DM's fact sheet for one request. The secret is told only to a request that writes the
 /// private clue or the closing lines. `rewrites` adds the notes and context of a second ask.
 fn group_facts(
@@ -498,6 +610,7 @@ fn group_facts(
     planned: &[Planned<'_>],
     with_secret: bool,
     rewrites: Option<&Rewrites>,
+    active_names: Option<&BTreeSet<String>>,
 ) -> Value {
     let fact = |key: &str| baseline.facts.get(key).cloned().unwrap_or_default();
     let encounter_fact = |key: &str| {
@@ -524,11 +637,14 @@ fn group_facts(
             "sexual_content_allowed": sexual_content_allowed(&age, false),
         })
     };
-    let speaks = planned
-        .iter()
-        .any(|slot| slot.name == "combat_line" && !slot.sheet.baseline.is_empty());
+    let speaks = planned.iter().any(|slot| {
+        slot.name == "combat_line"
+            && !slot.sheet.baseline.is_empty()
+            && active_names.is_none_or(|names| names.contains(&slot.name))
+    });
     let drafts: BTreeMap<&str, String> = planned
         .iter()
+        .filter(|slot| active_names.is_none_or(|names| names.contains(&slot.name)))
         .filter(|slot| {
             with_secret
                 || (slot.sheet.slot != "clue"
@@ -545,6 +661,11 @@ fn group_facts(
             )
         })
         .collect();
+    let scene_facts: BTreeMap<String, Value> = planned
+        .iter()
+        .filter(|slot| active_names.is_none_or(|names| names.contains(&slot.name)))
+        .map(|slot| (slot.name.clone(), scene_context_facts(baseline, slot)))
+        .collect();
     let mut facts = json!({
         "tone": tone_of(baseline.rating),
         "location": {
@@ -559,6 +680,7 @@ fn group_facts(
             "thanks": fact("reward.line"),
         },
         "scene_roles": SCENE_ROLES.iter().copied().collect::<BTreeMap<&str, &str>>(),
+        "scene_facts": scene_facts,
         "cast": {
             "patron": person("patron"),
             "contact": person("contact"),
@@ -594,10 +716,12 @@ fn group_facts(
                         || (slot.sheet.beat == "resolution" && slot.sheet.slot == "line"))
             })
         };
+        let repeated_context = repeated_context_slots(planned, rewrites);
         let written: BTreeMap<&String, &String> = rewrites
             .written
             .iter()
             .filter(|(name, _)| with_secret || !secret_slot(name))
+            .filter(|(name, _)| repeated_context.contains(*name))
             .collect();
         facts["rewrite_notes"] = json!(rewrites.notes);
         facts["previous_attempt"] = json!(rewrites.previous);
@@ -614,6 +738,62 @@ struct Rewrites {
     written: BTreeMap<String, String>,
 }
 
+fn repeated_context_slots(planned: &[Planned<'_>], rewrites: &Rewrites) -> BTreeSet<String> {
+    let mut context = BTreeSet::new();
+    for (rewrite, note) in &rewrites.notes {
+        let Some(previous) = rewrites.previous.get(rewrite) else {
+            continue;
+        };
+        let Some(slot) = planned.iter().find(|slot| slot.name == *rewrite) else {
+            continue;
+        };
+        if !matches!(slot.sheet.slot.as_str(), "narration" | "line") {
+            continue;
+        }
+        let previous_sentences: BTreeSet<String> = sentences(previous)
+            .into_iter()
+            .filter(|sentence| words(sentence).len() >= 4)
+            .map(str::to_lowercase)
+            .collect();
+        let previous_opening: Vec<String> = words(previous)
+            .into_iter()
+            .take(3)
+            .map(str::to_lowercase)
+            .collect();
+        for (other, text) in &rewrites.written {
+            if !planned.iter().any(|slot| {
+                slot.name == *other && matches!(slot.sheet.slot.as_str(), "narration" | "line")
+            }) {
+                continue;
+            }
+            if alternatives(&slot.name, other) {
+                continue;
+            }
+            let overlaps = match *note {
+                "repeats a sentence of another slot; write something new" => {
+                    sentences(text).into_iter().any(|sentence| {
+                        words(sentence).len() >= 4
+                            && previous_sentences.contains(&sentence.to_lowercase())
+                    })
+                }
+                "starts with the same words as another slot; open differently" => {
+                    let other_opening: Vec<String> = words(text)
+                        .into_iter()
+                        .take(3)
+                        .map(str::to_lowercase)
+                        .collect();
+                    previous_opening.len() == 3 && previous_opening == other_opening
+                }
+                _ => false,
+            };
+            if overlaps {
+                context.insert(other.clone());
+            }
+        }
+    }
+    context
+}
+
 /// What to tell the model about a problem, by the name `find_problems` reports it under.
 fn rewrite_note(problem: &str) -> &'static str {
     match problem {
@@ -626,6 +806,11 @@ fn rewrite_note(problem: &str) -> &'static str {
             "uses a semicolon, parenthesis or question mark; use short plain sentences"
         }
         "new_name" => "names a person or place that is not in the facts; use only the facts' names",
+        "required_fact" => {
+            "omits an established errand fact; keep the exact job, stake, named threat and promised gold"
+        }
+        "unsupported_presence" => "puts a person on stage who is not in this scene's present cast",
+        "unsupported_outcome" => "claims an injury before any injury has been established",
         "title" => {
             "the title must be two to five words, specific to this adventure's place, object or person, not a generic mood phrase and not the draft's title"
         }
@@ -787,6 +972,85 @@ fn alternatives(a: &str, b: &str) -> bool {
     pair("dialogue_seal", "dialogue_escort") || pair("victory", "defeat")
 }
 
+fn scene_people(baseline: &GeneratedAdventure) -> BTreeMap<String, BTreeSet<String>> {
+    let mut people = BTreeMap::<String, BTreeSet<String>>::new();
+    for scene in &baseline.pack.scenes {
+        people
+            .entry(scene_fact_name(scene.key))
+            .or_default()
+            .extend(scene.cast.iter().map(|person| person.name.clone()));
+    }
+    for setting in [
+        &baseline.settings.meeting,
+        &baseline.settings.confrontation,
+        &baseline.settings.destination,
+    ] {
+        if let Some(model) = &setting.model {
+            for person in &model.people {
+                for scene in &person.present_in {
+                    people
+                        .entry(scene.clone())
+                        .or_default()
+                        .insert(person.name.clone());
+                }
+            }
+        }
+    }
+    people
+}
+
+fn contains_phrase(text: &str, phrase: &str) -> bool {
+    let lowered = text.to_lowercase();
+    let text_words = words(&lowered);
+    let lowered_phrase = phrase.to_lowercase();
+    let phrase_words = words(&lowered_phrase);
+    !phrase_words.is_empty()
+        && text_words
+            .windows(phrase_words.len())
+            .any(|window| window == phrase_words)
+}
+
+fn scene_problem(
+    sheet: &FactSheet,
+    text: &str,
+    baseline: &GeneratedAdventure,
+) -> Option<&'static str> {
+    let scene_key = sheet.scene.as_deref()?;
+    const PRESENCE_WORDS: &[&str] = &[
+        "appears", "arrives", "comes", "enters", "joins", "kneels", "leaves", "looks", "moves",
+        "sits", "stands", "steps", "waits", "watches",
+    ];
+    const INJURY_WORDS: &[&str] = &[
+        "bleed", "bleeds", "bled", "bleeding", "bloodied", "bruise", "bruised", "injured",
+        "injuries", "injury", "limp", "limping", "wound", "wounded", "wounds",
+    ];
+    let people = scene_people(baseline);
+    let present = people.get(scene_key);
+    let mentions_absent_person = people.values().flatten().any(|name| {
+        present.is_none_or(|present| !present.contains(name)) && contains_phrase(text, name)
+    });
+    let lowered = text.to_lowercase();
+    if mentions_absent_person
+        && PRESENCE_WORDS
+            .iter()
+            .any(|word| contains_whole_word(&lowered, word))
+    {
+        return Some("unsupported_presence");
+    }
+    INJURY_WORDS
+        .iter()
+        .any(|word| contains_whole_word(&lowered, word))
+        .then_some("unsupported_outcome")
+}
+
+fn required_story_problem(sheet: &FactSheet, text: &str) -> Option<&'static str> {
+    let lowered = text.to_lowercase();
+    required_story_facts(sheet)
+        .iter()
+        .any(|(_, fact)| !lowered.contains(&fact.to_lowercase()))
+        .then_some("required_fact")
+}
+
 /// Every problem in the accepted text, by slot: the single-slot checks, then the checks across
 /// slots (a sentence or an opening of three words used twice, a title used twice). The later
 /// slot of a pair is the one reported.
@@ -795,6 +1059,7 @@ fn find_problems(
     texts: &BTreeMap<String, String>,
     known: &BTreeSet<String>,
     specific: &BTreeSet<String>,
+    baseline: &GeneratedAdventure,
 ) -> BTreeMap<String, &'static str> {
     let mut problems = BTreeMap::new();
     let mut seen: Vec<(&str, BTreeSet<String>, String)> = Vec::new();
@@ -803,8 +1068,10 @@ fn find_problems(
         let Some(text) = texts.get(&slot.name) else {
             continue;
         };
-        if let Some(problem) =
-            semantic_problem(slot.sheet, text, known, specific).or_else(|| slot_lint(text))
+        if let Some(problem) = scene_problem(slot.sheet, text, baseline)
+            .or_else(|| semantic_problem(slot.sheet, text, known, specific))
+            .or_else(|| slot_lint(text))
+            .or_else(|| required_story_problem(slot.sheet, text))
         {
             problems.insert(slot.name.clone(), problem);
             continue;
@@ -987,8 +1254,10 @@ async fn ask(
         return Ok(Answer::default());
     }
     let slots: Vec<Slot> = asked.iter().map(|slot| slot_spec(slot, baseline)).collect();
-    let with_secret = asked.iter().any(|slot| slot.group == Group::Voices);
-    let facts = group_facts(baseline, planned, with_secret, rewrites);
+    let with_secret = asked.iter().any(|slot| {
+        slot.sheet.slot == "clue" || (slot.sheet.beat == "resolution" && slot.sheet.slot == "line")
+    });
+    let facts = group_facts(baseline, planned, with_secret, rewrites, names);
     let answer = storyteller
         .express_adventure_partial(&facts, &slots, guidance(baseline.rating), deadline)
         .await?;
@@ -1161,6 +1430,14 @@ async fn write_with_limits(
     let (results, started_at, deadline_hit) =
         collect_replenishing(groups.len(), concurrency, deadline, |index| {
             let (_, group, names) = &groups[index];
+            let group_deadline = if names
+                .iter()
+                .any(|name| name == "opening_narration" || name == "opening_line")
+            {
+                OPENING_GROUP_DEADLINE
+            } else {
+                group_deadline
+            };
             ask_group(
                 storyteller,
                 baseline,
@@ -1212,7 +1489,7 @@ async fn write_with_limits(
     let known = known_words(baseline);
     let specific = specific_words(baseline);
     let mut texts = cleaned(planned, &raw);
-    let mut problems = find_problems(planned, &texts, &known, &specific);
+    let mut problems = find_problems(planned, &texts, &known, &specific, baseline);
     let remaining = DEADLINE.saturating_sub(started.elapsed());
     if !problems.is_empty() && remaining >= REASK_MINIMUM {
         let rewrites = Rewrites {
@@ -1246,7 +1523,7 @@ async fn write_with_limits(
         {
             tokens = tokens.saturating_add(second.tokens);
             texts.extend(cleaned(planned, &second.accepted));
-            problems = find_problems(planned, &texts, &known, &specific);
+            problems = find_problems(planned, &texts, &known, &specific, baseline);
         }
     }
     for (slot, problem) in &problems {

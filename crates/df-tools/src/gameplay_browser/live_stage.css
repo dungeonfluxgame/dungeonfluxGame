@@ -270,7 +270,7 @@
 /* ---------- display stage machines: every state is on the DOM, every appearance follows one ---------- */
 /* narrator box: shown only while the narrator is the speaker the line machine says */
 .tv-stage[data-scene-state]:not([data-speaker=narrator]) .tv-stagebox{opacity:0;visibility:hidden;transition:opacity .12s ease,visibility 0s .12s}
-.tv-stage[data-scene-state] .tv-stagebox:has(.tv-dm[data-line-state=done] .tv-narration:not(:empty)){opacity:1;visibility:visible;transition:opacity .45s ease,visibility 0s}
+.tv-stage[data-scene-state]:not([data-speaker=character]) .tv-stagebox:has(.tv-dm[data-line-state=done] .tv-narration:not(:empty)){opacity:1;visibility:visible;transition:opacity .45s ease,visibility 0s}
 .tv-dm[data-line-state=closing]{opacity:0;transition:opacity .4s ease}
 /* choice chips are visible only once every line has been said */
 .tv-stage[data-scene-state]:not([data-scene-state=awaiting-choice]) .tv-choices{opacity:0;visibility:hidden}
@@ -350,3 +350,25 @@
 @keyframes df-scene-fog{from{transform:translateX(-2%);opacity:.12}to{transform:translateX(2%);opacity:.42}}
 @keyframes df-scene-rain{from{background-position:0 0}to{background-position:-8px 14px}}
 @media (prefers-reduced-motion:reduce){.tv-scene-camera,.tv-scene-actor,.tv-scene-actor-art,.tv-scene-atmosphere{animation:none!important;transition:none!important;translate:none!important}}
+
+/* Film treatment: a restrained grade and fine grain on the scene image, not the cast or captions. */
+.tv-scene-set{filter:saturate(.88) contrast(1.04) brightness(.94)}
+.tv-scene-graph[data-time=dawn] .tv-scene-set,.tv-scene-graph[data-time=dusk] .tv-scene-set{filter:sepia(.08) saturate(.86) brightness(.82) contrast(1.04)}
+.tv-scene-graph[data-time=night] .tv-scene-set{filter:saturate(.66) brightness(.68) hue-rotate(6deg) contrast(1.06)}
+.tv-scene-set::before{content:'';position:absolute;z-index:1;inset:0;pointer-events:none;background:linear-gradient(180deg,#d49b6800 38%,#d49b6812 100%),linear-gradient(135deg,#42618018 0%,transparent 55%);mix-blend-mode:soft-light}
+.tv-scene-set::after{content:'';position:absolute;z-index:2;inset:0;pointer-events:none;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.45'/%3E%3C/svg%3E");background-size:180px 180px;opacity:.08;mix-blend-mode:soft-light}
+
+/* Dialogue reads like a subtitle over a low scrim; actor cut-outs remain clear above it. */
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-bubble:is([data-kind=speech],[data-kind=typed]){padding:calc(var(--u)*.45) calc(var(--u)*.7);border:0;border-radius:0;background:linear-gradient(0deg,#03060eb8 0%,#03060e66 72%,#03060e00 100%);box-shadow:none;color:#f2f0e9;text-shadow:0 1px 10px #000;}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-bubble:is([data-kind=speech],[data-kind=typed])::after,.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-bubble:is([data-kind=speech],[data-kind=typed]).speaking::before{display:none}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-bubble:is([data-kind=speech],[data-kind=typed]) .tv-bubble-name{color:#f0e7d5;font-weight:500;letter-spacing:.06em;text-transform:none}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-choice{background:linear-gradient(0deg,#03060eb8 0%,#03060e66 72%,#03060e00 100%);border:0;border-radius:0;box-shadow:none;color:#f2f0e9}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-choice-number{width:1.5em;border:0;border-radius:0;background:none;color:#f0e7d5;font-weight:400}
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])) .tv-choices{bottom:7vh}
+
+/* The bars clear the safe content; the scene camera eases for a calm 800 ms change. */
+.tv-stage[data-tv-mode=scene]:not(:has(.tv-figures[data-arrange=combat])):not([data-battlefield-live=true]) .tv-safe{top:7vh;bottom:7vh}
+.tv-stage[data-tv-mode=scene] .tv-scene-graph{transition:opacity .8s cubic-bezier(.2,.65,.25,1),visibility 0s}
+.tv-stage[data-tv-mode=scene] .tv-scene-graph[data-inactive],.tv-stage[data-tv-mode=scene][data-shot=plate] .tv-scene-graph,.tv-stage[data-tv-mode=scene][data-battlefield-live=true] .tv-scene-graph,.tv-stage[data-tv-mode=scene][data-battle-state]:not([data-battle-state=absent]) .tv-scene-graph{transition:opacity .8s cubic-bezier(.2,.65,.25,1),visibility 0s .8s}
+
+@media (prefers-reduced-motion:reduce){.tv-stage[data-tv-mode=scene] .tv-scene-graph,.tv-plate-vignette{animation:none!important;transition:none!important}}

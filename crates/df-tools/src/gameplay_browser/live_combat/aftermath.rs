@@ -45,6 +45,36 @@ fn short_rest_button_label(label: &str) -> String {
     format!("{label}\n{}", short_rest_benefit())
 }
 
+fn roll_notice(journey: &rpc::JourneyView) -> Option<String> {
+    if let Some(roll) = own_hit_point_die_roll(journey) {
+        return Some(format!("Hit Point Die: {roll}"));
+    }
+    let combat = journey.combat.as_ref()?;
+    let mut outcomes = combat
+        .death_save_outcomes
+        .iter()
+        .filter(|outcome| outcome.sequence <= combat.released_sequence)
+        .collect::<Vec<_>>();
+    outcomes.sort_by_key(|outcome| outcome.sequence);
+    let lines = outcomes.into_iter()
+        .map(|outcome| {
+            let (result, explanation, _) = super::combat::death_save_result(outcome);
+            format!("{} rolls a Death Saving Throw: d20 {} · {result} — {explanation} · {} successes, {} failures", outcome.actor_name, outcome.attack_die, outcome.death_successes, outcome.death_failures)
+        }).collect::<Vec<_>>();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn hit_point_detail(member: &rpc::PartyMemberView, combat: Option<&rpc::CombatView>) -> String {
+    let mut detail = format!("HP {} / {}", member.hit_points, member.maximum_hit_points);
+    if let Some(save) =
+        combat.and_then(|combat| super::combat::death_save_for(member, &combat.death_saves))
+    {
+        detail.push_str(" · ");
+        detail.push_str(&super::combat::death_save_summary(save));
+    }
+    detail
+}
+
 fn preserve_rest_label_layout(surface: &CampfireSurface) -> Result<(), JsValue> {
     if let Some(button) = surface
         .root()
@@ -228,6 +258,16 @@ fn is_extra_control(offer: &rpc::GameplayActionOffer) -> bool {
     offer.action_kind == rpc::GameplayActionKind::EndTurn as i32 || !offer.input_groups.is_empty()
 }
 
+fn aftermath_action(offer: &rpc::GameplayActionOffer) -> rpc::GameplayActionOffer {
+    let mut action = offer.clone();
+    if action.action_kind == rpc::GameplayActionKind::EndTurn as i32
+        && action.label.to_lowercase().contains("death saves")
+    {
+        action.label = "Roll Death Saving Throw".to_owned();
+    }
+    action
+}
+
 /// A player's rest and continue choices, enabled only while a request can be made.
 pub(super) fn present_rest(
     client: &Rc<RefCell<Client>>,
@@ -261,7 +301,7 @@ pub(super) fn present_rest(
         .journey
         .party
         .iter()
-        .map(|member| format!("HP {} / {}", member.hit_points, member.maximum_hit_points))
+        .map(|member| hit_point_detail(member, view.journey.combat.as_ref()))
         .collect();
     let members: Vec<CampfireMember<'_>> = view
         .journey
@@ -290,8 +330,7 @@ pub(super) fn present_rest(
     let location = outcome_word(view);
     let result_line = dialogue_line(view.journey);
     let rest_label = rest.map(|offer| short_rest_button_label(&offer.label));
-    let roll_notice =
-        own_hit_point_die_roll(view.journey).map(|roll| format!("Hit Point Die: {roll}"));
+    let roll_notice = roll_notice(view.journey);
     let choice_notice = result_line.as_ref().map_or_else(
         || "Choose what your hero does with the Hit Point Die.".to_owned(),
         |line| format!("{line} Choose what your hero does with the Hit Point Die."),
@@ -341,7 +380,7 @@ pub(super) fn present_rest(
     let extra =
         crate::gameplay_browser::node(&document, host, "div", "aftermath-tactical-controls", "")?;
     for offer in view.offers.iter().filter(|offer| is_extra_control(offer)) {
-        crate::gameplay_browser::action_button(client, &extra, offer.clone())?;
+        crate::gameplay_browser::action_button(client, &extra, aftermath_action(offer))?;
     }
     let mounted = match &client.borrow().combat.mounted {
         Some(Mounted::Rest(surface)) => Some(Rc::clone(surface)),
@@ -412,8 +451,9 @@ fn submit(client: &Rc<RefCell<Client>>, selection: &CampfireSelection) {
 #[cfg(test)]
 mod tests {
     use super::{
-        condition, continue_label, dialogue_line, is_extra_control, own_hit_point_die_roll,
-        short_rest_benefit, short_rest_button_label,
+        aftermath_action, condition, continue_label, dialogue_line, hit_point_detail,
+        is_extra_control, own_hit_point_die_roll, roll_notice, short_rest_benefit,
+        short_rest_button_label,
     };
     use df_protocol::common as rpc;
 
@@ -527,5 +567,102 @@ mod tests {
             Some("d10: 8 + 2; healed 10; HP 13")
         );
         assert_eq!(own_hit_point_die_roll(&rpc::JourneyView::default()), None);
+    }
+
+    #[test]
+    fn aftermath_death_save_notice_waits_for_release_and_keeps_rest_roll_priority() {
+        let mut journey = rpc::JourneyView {
+            combat: Some(rpc::CombatView {
+                released_sequence: 3,
+                death_save_outcomes: vec![rpc::CombatOutcome {
+                    kind: rpc::OutcomeKind::DeathSave as i32,
+                    sequence: 4,
+                    actor_name: "Sigrun".into(),
+                    attack_die: 12,
+                    death_save_result: rpc::DeathSaveResult::Success as i32,
+                    death_successes: 1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(roll_notice(&journey), None);
+        journey.combat.as_mut().unwrap().released_sequence = 4;
+        let notice = roll_notice(&journey).unwrap();
+        assert!(notice.contains("Sigrun"));
+        assert!(notice.contains("d20 12"));
+        assert!(notice.contains("1 successes, 0 failures"));
+        journey
+            .combat
+            .as_mut()
+            .unwrap()
+            .death_save_outcomes
+            .push(rpc::CombatOutcome {
+                kind: rpc::OutcomeKind::DeathSave as i32,
+                sequence: 3,
+                actor_name: "Brakka".into(),
+                attack_die: 18,
+                death_save_result: rpc::DeathSaveResult::Success as i32,
+                death_successes: 2,
+                ..Default::default()
+            });
+        let both = roll_notice(&journey).unwrap();
+        assert!(both.find("Brakka").unwrap() < both.find("Sigrun").unwrap());
+        assert!(both.contains("d20 18"));
+        assert!(both.contains("d20 12"));
+        journey.own_character = Some(rpc::CharacterSheet {
+            facts: vec![rpc::SheetFact {
+                label: "Hit Point Die roll".into(),
+                value: "d10 8 + 2 = 10".into(),
+            }],
+            ..Default::default()
+        });
+        assert!(roll_notice(&journey).unwrap().starts_with("Hit Point Die:"));
+    }
+
+    #[test]
+    fn aftermath_hit_point_detail_shows_only_that_heros_death_save_tally() {
+        let member = rpc::PartyMemberView {
+            participant_id: vec![1],
+            hit_points: 0,
+            maximum_hit_points: 13,
+            ..Default::default()
+        };
+        let combat = rpc::CombatView {
+            death_saves: vec![rpc::DeathSaveState {
+                participant_id: vec![1],
+                successes: 1,
+                failures: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let detail = hit_point_detail(&member, Some(&combat));
+        assert!(detail.contains("HP 0 / 13"));
+        assert!(detail.contains(&super::super::combat::death_save_summary(
+            &combat.death_saves[0]
+        )));
+        assert_eq!(hit_point_detail(&member, None), "HP 0 / 13");
+    }
+
+    #[test]
+    fn aftermath_death_save_control_names_the_roll_and_preserves_the_server_offer() {
+        let offer = rpc::GameplayActionOffer {
+            action_kind: rpc::GameplayActionKind::EndTurn as i32,
+            offer_id: "current-offer".into(),
+            label: "Advance death saves".into(),
+            ..Default::default()
+        };
+        let action = aftermath_action(&offer);
+        assert_eq!(action.label, "Roll Death Saving Throw");
+        assert_eq!(action.offer_id, offer.offer_id);
+        assert_eq!(action.action_kind, offer.action_kind);
+        let rest = rpc::GameplayActionOffer {
+            action_kind: rpc::GameplayActionKind::ShortRest as i32,
+            label: "Rest here".into(),
+            ..Default::default()
+        };
+        assert_eq!(aftermath_action(&rest), rest);
     }
 }

@@ -1367,8 +1367,10 @@ struct Live {
     accepted_cells: std::collections::HashMap<String, GridCell>,
     /// A reaction the server waits on: who moves and who decides, as the latest view says.
     reaction: Option<(String, String)>,
+    reaction_seconds_remaining: Option<u32>,
     /// The prompt now shown for it.
     shown_prompt: Option<String>,
+    shown_reaction: Option<(String, String)>,
     /// When `pending_cues` last grew, so a cue stream that never arrives cannot hold the label.
     pending_at: f64,
     /// The line the conductor is playing (label, text), kept so a line that opens before the
@@ -1407,7 +1409,9 @@ thread_local! {
         pending_cues: 0,
         accepted_cells: std::collections::HashMap::new(),
         reaction: None,
+        reaction_seconds_remaining: None,
         shown_prompt: None,
+        shown_reaction: None,
         pending_at: 0.0,
         pending_caption: None,
         presented_seq: 0,
@@ -1525,6 +1529,26 @@ pub(super) fn voice_set(key: &str) -> Option<battle::VoiceSet> {
     }
 }
 
+fn member_maximum_hit_points(member: &rpc::PartyMemberView, party: &[rpc::PartyMemberView]) -> u32 {
+    let party_member = if member.participant_id.is_empty() {
+        party.iter().find(|candidate| candidate.name == member.name)
+    } else {
+        party
+            .iter()
+            .find(|candidate| candidate.participant_id == member.participant_id)
+            .or_else(|| party.iter().find(|candidate| candidate.name == member.name))
+    };
+    party_member.map_or(member.maximum_hit_points, |candidate| {
+        candidate.maximum_hit_points
+    })
+}
+
+fn reaction_prompt(mover: &str, reactor: &str, seconds_remaining: Option<u32>) -> String {
+    let countdown =
+        seconds_remaining.map_or_else(String::new, |seconds| format!(" ({seconds}s remaining)"));
+    format!("{reactor} decides: Opportunity attack as {mover} moves{countdown}")
+}
+
 fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
     let combat = view.journey.combat.as_ref()?;
     let party = view.journey.party.len();
@@ -1571,7 +1595,7 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 name: member.name.clone(),
                 side: if hero { Side::Hero } else { Side::Enemy },
                 hit_points: member.hit_points,
-                maximum_hit_points: member.maximum_hit_points,
+                maximum_hit_points: member_maximum_hit_points(member, &view.journey.party),
                 height_m: if hero {
                     1.35
                 } else {
@@ -1721,6 +1745,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
         let mut live = live.borrow_mut();
         if let Some(combat) = &view.journey.combat {
             live.latest_seq = combat.latest_sequence;
+            live.reaction_seconds_remaining = Some(combat.reaction_seconds_remaining);
             live.reaction = (!combat.reaction_participant_id.is_empty())
                 .then(|| {
                     let reactor = combat
@@ -2127,34 +2152,51 @@ fn sync(writer: &str) {
                 ));
                 // A suspended turn is shown once the attacks before it have been: who decides and
                 // what, with the camera on the two figures.
-                let prompt = live
+                let reaction = live
                     .reaction
                     .as_ref()
                     .filter(|_| live.pending_cues == 0)
-                    .map(|(_, reactor)| format!("{reactor}: Opportunity Attack?"));
+                    .cloned();
+                let prompt = reaction.as_ref().map(|(mover, reactor)| {
+                    reaction_prompt(mover, reactor, live.reaction_seconds_remaining)
+                });
                 if prompt != live.shown_prompt {
-                    if let (Some(prompt), Some((mover, reactor))) = (&prompt, &live.reaction) {
-                        let id_of = |name: &str| {
-                            stage
-                                .tokens()
-                                .find(|token| token.name == name)
-                                .map(|token| token.id.clone())
-                        };
-                        if let (Some(attacker), Some(target)) = (id_of(mover), id_of(reactor)) {
-                            if stage.stage(Beat::Approach { attacker, target }).is_ok() {
-                                stage.set_prompt_after_camera_settles(Some(prompt.clone()));
-                                live.shown_prompt = Some(prompt.clone());
+                    if let (Some(prompt), Some((mover, reactor))) = (&prompt, &reaction) {
+                        let same_reaction = live.shown_reaction.as_ref().is_some_and(
+                            |(shown_mover, shown_reactor)| {
+                                shown_mover == mover && shown_reactor == reactor
+                            },
+                        );
+                        if same_reaction {
+                            stage.set_prompt_after_camera_settles(Some(prompt.clone()));
+                            live.shown_prompt = Some(prompt.clone());
+                        } else {
+                            let id_of = |name: &str| {
+                                stage
+                                    .tokens()
+                                    .find(|token| token.name == name)
+                                    .map(|token| token.id.clone())
+                            };
+                            if let (Some(attacker), Some(target)) = (id_of(mover), id_of(reactor)) {
+                                if stage.stage(Beat::Approach { attacker, target }).is_ok() {
+                                    stage.set_prompt_after_camera_settles(Some(prompt.clone()));
+                                    live.shown_prompt = Some(prompt.clone());
+                                    live.shown_reaction = Some((mover.clone(), reactor.clone()));
+                                } else {
+                                    stage.set_prompt(None);
+                                    live.shown_prompt = None;
+                                    live.shown_reaction = None;
+                                }
                             } else {
                                 stage.set_prompt(None);
                                 live.shown_prompt = None;
+                                live.shown_reaction = None;
                             }
-                        } else {
-                            stage.set_prompt(None);
-                            live.shown_prompt = None;
                         }
                     } else {
                         stage.set_prompt(None);
                         live.shown_prompt = None;
+                        live.shown_reaction = None;
                     }
                 }
                 stage.set_tactical_highlights(live.reachable.clone(), live.targets.clone());
@@ -2625,6 +2667,35 @@ fn cell_of((col, row): GridCell) -> Option<Cell> {
 #[cfg(test)]
 mod tests {
     use super::{Cell, LIVE, has_pending, now_ms};
+    use df_protocol::common as rpc;
+
+    #[test]
+    fn battlefield_uses_the_party_maximum_for_a_hero_health_bar() {
+        let party = [rpc::PartyMemberView {
+            name: "Brakka".to_owned(),
+            maximum_hit_points: 13,
+            ..Default::default()
+        }];
+        let combat = rpc::PartyMemberView {
+            name: "Brakka".to_owned(),
+            maximum_hit_points: 11,
+            ..Default::default()
+        };
+
+        assert_eq!(super::member_maximum_hit_points(&combat, &party), 13);
+        assert_eq!(
+            crate::gameplay_browser::live_health::display_tier(Some((13, 13)), false),
+            Some(crate::health_tier::HealthTier::Healthy)
+        );
+    }
+
+    #[test]
+    fn reaction_prompt_names_the_mover_reactor_and_server_countdown() {
+        assert_eq!(
+            super::reaction_prompt("Brakka", "Sigrun", Some(7)),
+            "Sigrun decides: Opportunity attack as Brakka moves (7s remaining)"
+        );
+    }
 
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
     #[test]
@@ -2765,7 +2836,9 @@ pub(super) fn splash_caption(label: &str, text: &str, showing: bool) {
 fn reset_fight(live: &mut Live) {
     live.accepted_cells.clear();
     live.reaction = None;
+    live.reaction_seconds_remaining = None;
     live.shown_prompt = None;
+    live.shown_reaction = None;
     live.pending_caption = None;
     live.held_moves.clear();
     live.pending_cues = 0;

@@ -25,6 +25,9 @@ mod encounter_outcome;
 mod enemy_tactics;
 #[cfg(test)]
 mod fight_ending_tests;
+pub(super) mod living_scene;
+#[cfg(test)]
+mod living_scene_tests;
 mod narrative_phase;
 #[cfg(test)]
 mod narrative_runtime_tests;
@@ -32,9 +35,12 @@ mod narrative_transition;
 mod objective_outcome;
 #[cfg(test)]
 mod objective_outcome_tests;
+pub(super) mod rewards;
 #[cfg(test)]
 mod session_flow_tests;
 pub(super) mod session_machine;
+#[cfg(test)]
+mod sheet_modifier_tests;
 pub(super) mod tactical;
 #[cfg(test)]
 mod text_pack_tests;
@@ -72,6 +78,10 @@ const THREAD_EVENTS: &[(&str, &str)] = &[
     ("end-turn", THREAT_THREAD),
 ];
 pub(super) const CONTENT_ENTRIES: &[&str] = &[
+    "scene-interaction",
+    "stabilise-kit",
+    "stabilise-medicine",
+    rewards::PAID,
     "room",
     "join-room",
     "start-new-adventure",
@@ -226,6 +236,8 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let hero_hp = pack::with_creation(|rules| {
         Ok::<_, RepositoryError>(
             i64::from(rules.base_hit_points)
+                // SRD 5.2.1 p. 84: Dwarven Toughness is the largest admitted level-one bonus.
+                + i64::from(rules::HeroSpecies::Dwarf.combat_traits().hit_points_per_level)
                 + rules
                     .ability_arrays
                     .iter()
@@ -481,7 +493,28 @@ pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32
     }
     let constitution = value(state, who, "constitution")?;
     let base = pack::with_creation(|rules| rules.base_hit_points);
-    u32::try_from(i32::from(base) + rules::ability_modifier(constitution as u8)).map_err(bad)
+    let species = state
+        .characters
+        .iter()
+        .find(|character| character.entity == who)
+        .and_then(|character| {
+            character
+                .choices
+                .iter()
+                .find(|choice| choice.offer.as_str() == "species")
+        })
+        .and_then(|choice| rules::HeroSpecies::from_choice(choice.selected.as_str()))
+        .ok_or_else(|| {
+            refusal_detail::note("sheet-species-hit-points");
+            RepositoryError::InvalidCandidate
+        })?;
+    // SRD 5.2.1 p. 84: apply the accepted species' Toughness, not a shared Dwarf assumption.
+    u32::try_from(
+        i32::from(base)
+            + rules::ability_modifier(constitution as u8)
+            + i32::from(species.combat_traits().hit_points_per_level),
+    )
+    .map_err(bad)
 }
 fn weapon_display_name(item: &str) -> String {
     item.split('-')
@@ -724,6 +757,114 @@ pub(super) fn character_sheet(
         }
         .to_owned(),
     });
+    // SRD 5.2.1 pp. 47, 83-84: Fighter, Soldier and Dwarf traits belong to the accepted build.
+    for (label, value) in [
+        ("Soldier skill proficiencies", "Athletics, Intimidation".to_owned()),
+        ("Saving throw proficiencies", "Strength, Constitution".to_owned()),
+        ("Proficiency Bonus", format!("+{}", pack::with_creation(|creation| creation.proficiency_bonus))),
+        ("Speed", "30 ft".to_owned()),
+        ("Initiative", format!("{:+}", rules::ability_modifier(value(state, who, "dexterity")? as u8))),
+        ("Armor training", "Light, Medium, Heavy, Shields".to_owned()),
+        ("Weapon proficiencies", "Simple, Martial".to_owned()),
+        ("Darkvision", "120 ft".to_owned()),
+        ("Dwarven Resilience", "Resistance to Poison damage; Advantage on saves against Poisoned".to_owned()),
+        ("Stonecunning", "Tremorsense 60 ft for 10 minutes on or touching stone; Proficiency Bonus uses per Long Rest".to_owned()),
+    ] {
+        facts.push(rpc::SheetFact { label: label.to_owned(), value });
+    }
+    // SRD 5.2.1 pp. 6, 7, 47: accepted ability modifiers and Fighter save proficiencies.
+    let proficiency = i32::from(pack::with_creation(|creation| creation.proficiency_bonus));
+    for (label, ability) in [
+        ("Strength saving throw", "strength"),
+        ("Dexterity saving throw", "dexterity"),
+        ("Constitution saving throw", "constitution"),
+        ("Intelligence saving throw", "intelligence"),
+        ("Wisdom saving throw", "wisdom"),
+        ("Charisma saving throw", "charisma"),
+    ] {
+        let score = u8::try_from(value(state, who, ability)?).map_err(|_| {
+            refusal_detail::note("sheet-save-score");
+            RepositoryError::InvalidCandidate
+        })?;
+        let modifier = rules::ability_modifier(score)
+            + if matches!(ability, "strength" | "constitution") {
+                proficiency
+            } else {
+                0
+            };
+        facts.push(rpc::SheetFact {
+            label: label.to_owned(),
+            value: format!("{modifier:+}"),
+        });
+    }
+    // SRD 5.2.1 p. 9: the complete skill table. The same native modifiers drive actual checks.
+    for (label, skill) in [
+        ("Acrobatics", "acrobatics"),
+        ("Animal Handling", "animal-handling"),
+        ("Arcana", "arcana"),
+        ("Athletics", "athletics"),
+        ("Deception", "deception"),
+        ("History", "history"),
+        ("Insight", "insight"),
+        ("Intimidation", "intimidation"),
+        ("Investigation", "investigation"),
+        ("Medicine", "medicine"),
+        ("Nature", "nature"),
+        ("Perception", "perception"),
+        ("Performance", "performance"),
+        ("Persuasion", "persuasion"),
+        ("Religion", "religion"),
+        ("Sleight of Hand", "sleight-of-hand"),
+        ("Stealth", "stealth"),
+        ("Survival", "survival"),
+    ] {
+        let (ability, bonus) =
+            super::beat_script_runtime::skill_check_modifiers(state, who, skill)?;
+        let modifier = i32::from(ability) + i32::from(bonus);
+        facts.push(rpc::SheetFact {
+            label: label.to_owned(),
+            value: format!("{modifier:+}"),
+        });
+    }
+    if living_scene::has_interactions(state) || rewards::paid(state) {
+        let copper = living_scene::balance_cp(state, who)?;
+        facts.push(rpc::SheetFact {
+            label: "Coin".to_owned(),
+            value: format!("{} GP, {} CP", copper / 100, copper % 100),
+        });
+    }
+    if tactical::present(state) {
+        let battle = tactical::read(state)?;
+        let actor = battle.actor(tactical::actor_id(state, who)?).map_err(bad)?;
+        if actor.health().dead
+            && let Some(condition) = facts.iter_mut().find(|fact| fact.label == "Condition")
+        {
+            condition.value = "Dead".to_owned();
+        }
+        // SRD 5.2.1 p. 177: an Attack's equip/unequip changes the authoritative in-hand weapon.
+        for weapon in &actor.spec().weapons {
+            let label = weapon_display_name(weapon.id());
+            let value = if actor.held_weapons().contains(weapon) {
+                "Held"
+            } else if actor
+                .dropped_weapons()
+                .iter()
+                .any(|(dropped, _)| dropped == weapon)
+            {
+                "Dropped; ownership retained"
+            } else {
+                "Stowed"
+            };
+            if let Some(fact) = facts.iter_mut().find(|fact| fact.label == label) {
+                fact.value = value.to_owned();
+            } else {
+                facts.push(rpc::SheetFact {
+                    label,
+                    value: value.to_owned(),
+                });
+            }
+        }
+    }
     Ok(rpc::CharacterSheet {
         name: name(state, who)?,
         facts,
@@ -731,6 +872,7 @@ pub(super) fn character_sheet(
         maximum_hit_points: maximum_hit_points(state, who)?,
         armor_class: value(state, who, "armor-class")?,
         source_revision: model::source_revision(),
+        ..Default::default()
     })
 }
 fn beat(state: &mut GameState, next: &str) -> Result<(), RepositoryError> {
@@ -1000,7 +1142,7 @@ fn handler_offered(
             // rest is offered; forged cursors refuse here.
             prepare_short_rest(current)?;
             // The machine's rest rule decides whether the rest is offered:
-            // once per aftermath, and only while a living hero regains.
+            // once per aftermath, while a hero has at least 1 Hit Point.
             let mut result = Vec::new();
             if session_machine::rest_accepted(current)? {
                 result.push((
@@ -1130,6 +1272,9 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
 pub(super) fn accepted(
     decision: &AcceptedDecision,
 ) -> Result<rpc::AcceptedAction, RepositoryError> {
+    if let Some(accepted) = living_scene::accepted(decision)? {
+        return Ok(accepted);
+    }
     if decision.source_policy.as_str() != THREAD_POLICY {
         return Err(RepositoryError::InvalidReceipt);
     }
@@ -1349,11 +1494,20 @@ pub(super) fn combat_round(current: &Checkpoint) -> Result<u32, CombatRoundError
                     .iter()
                     .find(|event| event.id == id)
                     .ok_or(Error::Source)?;
-                if cause.operation != fact.operation
-                    || cause.revision != fact.revision
-                    || cause.ordinal >= fact.ordinal
-                    || !decision.facts.contains(&cause.id)
-                {
+                let within_decision = cause.operation == fact.operation
+                    && cause.revision == fact.revision
+                    && cause.ordinal < fact.ordinal
+                    && decision.facts.contains(&cause.id);
+                let previous_decision = fact.ordinal == 0
+                    && decision.facts.first() == Some(&fact.id)
+                    && cause.revision < fact.revision
+                    && state
+                        .facts
+                        .iter()
+                        .take_while(|earlier| earlier.id != fact.id)
+                        .last()
+                        == Some(cause);
+                if !within_decision && !previous_decision {
                     return Err(Error::Source);
                 }
             }
@@ -1819,6 +1973,26 @@ fn finish(
             ordinal,
             id,
         )?;
+        facts.push(id);
+    }
+    if let Some(heroes) = rewards::pay(&mut state)? {
+        let ordinal = u32::try_from(facts.len()).map_err(bad)?;
+        let id = make_id(ordinal)?;
+        state.facts.push(GameFact {
+            id,
+            revision: basis.revision,
+            operation,
+            ordinal,
+            cause: facts
+                .last()
+                .copied()
+                .or_else(|| current.state().facts.last().map(|fact| fact.id)),
+            audience: AudienceScope::Shared,
+            value: FactValue::ContentEvent {
+                definition: model::content(rewards::PAID)?,
+                subjects: heroes,
+            },
+        });
         facts.push(id);
     }
     if let Some((definition, actor)) = script_choice {
@@ -3188,6 +3362,41 @@ fn observe_check(
     draws: &mut Vec<ActualDraw>,
     supplier: DiceSource<'_>,
 ) -> Result<rpc::AbilityCheckResult, RepositoryError> {
+    if choices.iter().any(|(group, target)| {
+        group.as_str() == "attempt-thing"
+            && (target.as_str() == "room"
+                || [
+                    "thing-", "person-", "way-", "offer-", "pack-", "absent-", "finding-",
+                    "surface-",
+                ]
+                .iter()
+                .any(|prefix| target.as_str().starts_with(prefix)))
+    }) {
+        let plan = super::investigation::plan(current, member, choices, operation)?;
+        let die = draw(operation, 20, draws, supplier)?;
+        let resolved = super::beat_script_runtime::resolve_skill_check(
+            current.state(),
+            actor,
+            &plan.skill,
+            u8::try_from(die).map_err(|_| {
+                refusal_detail::note("investigation-die-range");
+                RepositoryError::InvalidCandidate
+            })?,
+            plan.difficulty_class,
+        )?;
+        let scope = super::beat_script_runtime::scene_scope(current.state())?;
+        return Ok(rpc::AbilityCheckResult {
+            die: u32::from(resolved.die),
+            ability_modifier: i32::from(resolved.ability_modifier),
+            proficiency_bonus: u32::from(resolved.proficiency_bonus),
+            total: i32::from(resolved.total),
+            difficulty_class: u32::from(resolved.difficulty_class),
+            succeeded: resolved.succeeded,
+            source_revision: format!("srd521-p6:{scope}:{}:{}", plan.skill, plan.detail()),
+            faces: vec![die],
+            roll_mode: 0,
+        });
+    }
     let selected_finding = choices
         .iter()
         .find(|(group, _)| group.as_str() == "finding")
@@ -3432,6 +3641,16 @@ fn stage_using(
         }
         RepositoryError::InvalidCandidate
     })?;
+    // Closing a chapter and starting another are seat acknowledgements, including after death.
+    if !matches!(
+        kind,
+        rpc::GameplayActionKind::StartNewAdventure | rpc::GameplayActionKind::ResolveErrand
+    ) && tactical::present(current.state())
+        && tactical::hero_is_dead(current.state(), *who)?
+    {
+        refusal_detail::note("dead-hero-action");
+        return Err(RepositoryError::InvalidCandidate);
+    }
     if tactical::combat_action(kind)
         && (command.basis != current.basis()
             || command.observed_revision != current.basis().revision)
@@ -3440,7 +3659,8 @@ fn stage_using(
         return Err(RepositoryError::InvalidCandidate);
     }
     if kind == rpc::GameplayActionKind::StartNewAdventure {
-        let state = session_machine::SessionState::of(current)?;
+        let state = session_machine::SessionState::of(current)
+            .inspect_err(|_| refusal_detail::note("new-adventure-machine-state"))?;
         if session_machine::next(state, session_machine::Event::NewAdventure).is_err()
             || !targets.is_empty()
             || !submitted_choices.is_empty()
@@ -3474,6 +3694,13 @@ fn stage_using(
                 script_choice: None,
             },
         );
+    }
+    if kind == rpc::GameplayActionKind::ExamineHarborSeal
+        && submitted_choices
+            .iter()
+            .any(|(group, _)| group.as_str() == "scene-option")
+    {
+        return living_scene::stage(current, command);
     }
     let selected =
         super::beat_script_runtime::select(current, kind, submitted_choices).map_err(|error| {
@@ -3646,6 +3873,7 @@ fn stage_using(
         }
         rpc::GameplayActionKind::DefendCourier => {
             if !choices.is_empty() {
+                refusal_detail::note("combat-choice-shape");
                 return Err(RepositoryError::InvalidCandidate);
             }
             enter_fight(
@@ -3656,7 +3884,8 @@ fn stage_using(
                 &mut draws,
                 &mut outcomes,
                 supplier,
-            )?;
+            )
+            .inspect_err(|_| refusal_detail::note("combat-start"))?;
         }
         rpc::GameplayActionKind::GreatswordAttack => {
             combat_transition::stage(
@@ -5055,7 +5284,12 @@ mod tests {
                 ),
                 &mut |_| panic!("creation cannot draw"),
             )
-            .expect("registered character outcome");
+            .unwrap_or_else(|error| {
+                panic!(
+                    "registered character outcome: {error:?}, step {:?}",
+                    refusal_detail::take()
+                )
+            });
         }
         current
     }

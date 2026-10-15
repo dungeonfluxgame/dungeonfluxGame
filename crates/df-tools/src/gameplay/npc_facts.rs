@@ -786,7 +786,13 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
     let lines = candidate_lines(inputs);
     let selection = select(&lines, inputs, &ask);
 
-    let emotional_profile = dossier.emotional_profile();
+    let mut emotional_profile = dossier.emotional_profile();
+    emotional_profile.feelings.retain(|feeling| {
+        !withheld.leaks_secret(&feeling.text) && !withheld.leaks_secret(&feeling.evidence)
+    });
+    emotional_profile
+        .tells
+        .retain(|tell| !withheld.leaks_secret(tell));
     let recent: Vec<Value> = inputs
         .recent
         .iter()
@@ -816,9 +822,9 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
         "npc": {
             "name": inputs.name,
             "role": dossier.role_label,
-            "voice": dossier.given.voice,
-            "manner": dossier.given.mannerism,
-            "delivery": dossier.given.delivery,
+            "voice": dossier.given.voice.as_deref().and_then(kept),
+            "manner": dossier.given.mannerism.as_deref().and_then(kept),
+            "delivery": dossier.given.delivery.as_deref().and_then(kept),
         },
         "how_you_speak": {
             "sentences": length_label(style.length),
@@ -851,7 +857,7 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
             "exchange": conversation.exchange,
             "stage": stage_of(conversation.exchange),
             "last_reply_asked": conversation.last_asked,
-            "may_say_i_dont_know": selection.answer.is_empty() && !conversation.admitted_ignorance,
+            "may_say_i_dont_know": selection.answer.is_empty(),
         },
     });
     if let Some(line) = selection.volunteer {

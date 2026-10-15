@@ -1,7 +1,9 @@
 //! Selected SRD 5.2.1 creation and normal adjacent melee mechanics.
 //! This is an explicitly bounded playable subset, not full 2024 rules coverage.
-pub const SOURCE_REVISION: &str = "SRD5.2.1-2024-local-journey-2";
-pub const SOURCE: &str = "Wizards of the Coast LLC SRD 5.2.1 English; https://media.dndbeyond.com/compendium-images/srd/5.2/SRD_CC_v5.2.1.pdf; CC BY4.0; PDF SHA256 8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87; creation pages19-22; Fighter47-48; Soldier83; Dwarf84; SavageAttacker87; Defense88; Graze90; weapons91; armor92; initiative13; attack7,14; damage16; knockout17; ShortRest187; Unconscious191; Bandit261. Selected level1 Dwarf Fighter/Soldier, Defense, Greatsword/Flail/Javelin masteries, two standard arrays, normal adjacent attack, SecondWind, nonlethal melee encounter and uninterrupted after-combat ShortRest without HitPointDice; no full-rest or general rest catalog.";
+use serde::{Deserialize, Serialize};
+
+pub const SOURCE_REVISION: &str = "SRD5.2.1-2024-local-journey-3";
+pub const SOURCE: &str = "Wizards of the Coast LLC SRD 5.2.1 English; https://media.dndbeyond.com/compendium-images/srd/5.2/SRD_CC_v5.2.1.pdf; CC BY4.0; PDF SHA256 8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87; creation pages19-22; Fighter47-48; Soldier83; species84-86; Origin feats83,87-88; Defense88; Graze90; weapons91; armor92; initiative13; attack7,14; damage16; knockout17; ShortRest187; Unconscious191; Bandit261. Selected level1 Dwarf, Halfling, or Orc Fighter/Soldier; Defense; Greatsword/Flail/Javelin or archer equipment; standard arrays; normal adjacent attack; SecondWind; nonlethal melee encounter; uninterrupted after-combat ShortRest without HitPointDice; no full-rest or general rest catalog.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JourneyRuleError {
@@ -19,6 +21,202 @@ pub enum JourneyRuleError {
     InvalidRest,
     RestIncomplete,
     RestInterrupted,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HeroSpecies {
+    Dragonborn,
+    Dwarf,
+    Elf,
+    Gnome,
+    Goliath,
+    Halfling,
+    Human,
+    Orc,
+    Tiefling,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpeciesSize {
+    Small,
+    Medium,
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpeciesCombatTraits {
+    pub size: SpeciesSize,
+    pub speed_ft: u16,
+    pub darkvision_ft: Option<u16>,
+    pub hit_points_per_level: u8,
+    pub poison_resistance: bool,
+    pub reroll_natural_ones: bool,
+    pub relentless_endurance: bool,
+}
+
+impl HeroSpecies {
+    pub fn from_choice(value: &str) -> Option<Self> {
+        Some(match value {
+            "dragonborn" => Self::Dragonborn,
+            "dwarf" => Self::Dwarf,
+            "elf" => Self::Elf,
+            "gnome" => Self::Gnome,
+            "goliath" => Self::Goliath,
+            "halfling" => Self::Halfling,
+            "human" => Self::Human,
+            "orc" => Self::Orc,
+            "tiefling" => Self::Tiefling,
+            _ => return None,
+        })
+    }
+
+    pub fn choice_id(self) -> &'static str {
+        match self {
+            Self::Dragonborn => "dragonborn",
+            Self::Dwarf => "dwarf",
+            Self::Elf => "elf",
+            Self::Gnome => "gnome",
+            Self::Goliath => "goliath",
+            Self::Halfling => "halfling",
+            Self::Human => "human",
+            Self::Orc => "orc",
+            Self::Tiefling => "tiefling",
+        }
+    }
+
+    /// Level-one combat traits from SRD 5.2.1 pp. 84-86. Lineage choices and
+    /// combat features without an implemented rules handler remain unavailable.
+    pub const fn combat_traits(self) -> SpeciesCombatTraits {
+        use SpeciesSize::{Medium, Small};
+        match self {
+            Self::Dragonborn => SpeciesCombatTraits {
+                size: Medium,
+                speed_ft: 30,
+                darkvision_ft: Some(60),
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: false,
+                relentless_endurance: false,
+            },
+            // SRD 5.2.1 p. 84: "You have Darkvision with a range of 120 feet."
+            // "Your Hit Point maximum increases by 1, and it increases by 1 again whenever you gain a level."
+            Self::Dwarf => SpeciesCombatTraits {
+                size: Medium,
+                speed_ft: 30,
+                darkvision_ft: Some(120),
+                hit_points_per_level: 1,
+                poison_resistance: true,
+                reroll_natural_ones: false,
+                relentless_endurance: false,
+            },
+            Self::Elf => SpeciesCombatTraits {
+                size: Medium,
+                speed_ft: 30,
+                darkvision_ft: Some(60),
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: false,
+                relentless_endurance: false,
+            },
+            Self::Gnome => SpeciesCombatTraits {
+                size: Small,
+                speed_ft: 30,
+                darkvision_ft: Some(60),
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: false,
+                relentless_endurance: false,
+            },
+            Self::Goliath => SpeciesCombatTraits {
+                size: Medium,
+                speed_ft: 35,
+                darkvision_ft: None,
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: false,
+                relentless_endurance: false,
+            },
+            // SRD 5.2.1 p. 86: "When you roll a 1 on the d20 of a D20 Test, you can reroll the die, and you must use the new roll."
+            Self::Halfling => SpeciesCombatTraits {
+                size: Small,
+                speed_ft: 30,
+                darkvision_ft: None,
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: true,
+                relentless_endurance: false,
+            },
+            Self::Human => SpeciesCombatTraits {
+                size: Medium,
+                speed_ft: 30,
+                darkvision_ft: None,
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: false,
+                relentless_endurance: false,
+            },
+            // SRD 5.2.1 p. 86: "You have Darkvision with a range of 120 feet."
+            Self::Orc => SpeciesCombatTraits {
+                size: Medium,
+                speed_ft: 30,
+                darkvision_ft: Some(120),
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: false,
+                relentless_endurance: true,
+            },
+            Self::Tiefling => SpeciesCombatTraits {
+                size: Medium,
+                speed_ft: 30,
+                darkvision_ft: Some(60),
+                hit_points_per_level: 0,
+                poison_resistance: false,
+                reroll_natural_ones: false,
+                relentless_endurance: false,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OriginFeat {
+    Alert,
+    MagicInitiate,
+    SavageAttacker,
+}
+
+/// SRD 5.2.1 p. 83: Acolyte/Sage list "Feat: Magic Initiate," Criminal "Feat: Alert," and Soldier "Feat: Savage Attacker."
+pub fn background_origin_feat(background: &str) -> Option<OriginFeat> {
+    Some(match background {
+        "acolyte" | "sage" => OriginFeat::MagicInitiate,
+        "criminal" => OriginFeat::Alert,
+        "soldier" => OriginFeat::SavageAttacker,
+        _ => return None,
+    })
+}
+
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChallengeRating {
+    Zero,
+    Eighth,
+    Quarter,
+    Half,
+    Whole(u8),
+}
+
+/// SRD 5.2.1 p. 256: "The number of Experience Points (XP) a monster is worth is based on its CR." CR 0 is 0 or 10 XP.
+pub fn experience_points_for_challenge_rating(cr: ChallengeRating) -> Option<u32> {
+    const WHOLE_CR_XP: [u32; 30] = [
+        200, 450, 700, 1_100, 1_800, 2_300, 2_900, 3_900, 5_000, 5_900, 7_200, 8_400, 10_000,
+        11_500, 13_000, 15_000, 18_000, 20_000, 22_000, 25_000, 33_000, 41_000, 50_000, 62_000,
+        75_000, 90_000, 105_000, 120_000, 135_000, 155_000,
+    ];
+    Some(match cr {
+        ChallengeRating::Zero => return None,
+        ChallengeRating::Eighth => 25,
+        ChallengeRating::Quarter => 50,
+        ChallengeRating::Half => 100,
+        ChallengeRating::Whole(value) => *WHOLE_CR_XP.get(usize::from(value.checked_sub(1)?))?,
+    })
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LegalCharacter {
@@ -262,7 +460,7 @@ pub const SRD_521_BASELINE: Srd521Baseline = Srd521Baseline {
             strength: 2,
             constitution: 1,
         },
-        base_hit_points: 11,
+        base_hit_points: 10,
         armor_class: 17,
         proficiency_bonus: 2,
         second_wind_uses_max: 2,
@@ -364,8 +562,15 @@ pub fn validate_character(
             .map(|(_, value)| *value)
             .ok_or(JourneyRuleError::MissingChoice)
     };
+    let species =
+        HeroSpecies::from_choice(choice("species")?).ok_or(JourneyRuleError::InvalidChoice)?;
+    if !matches!(
+        species,
+        HeroSpecies::Dwarf | HeroSpecies::Halfling | HeroSpecies::Orc
+    ) {
+        return Err(JourneyRuleError::InvalidChoice);
+    }
     for (group, expected) in [
-        ("species", "dwarf"),
         ("class", "fighter-1"),
         ("background", "soldier"),
         ("equipment", "fighter-a-soldier-a"),
@@ -406,8 +611,10 @@ pub fn validate_character(
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect(),
-        // Fighter maximum first die + Constitution modifier + Dwarven Toughness.
-        hit_points: (i32::from(rules.base_hit_points) + ability_modifier(abilities[2])) as u32,
+        // SRD 5.2.1 pp. 47, 84: Fighter's d10 maximum plus Constitution and Dwarven Toughness.
+        hit_points: (i32::from(rules.base_hit_points)
+            + ability_modifier(abilities[2])
+            + i32::from(species.combat_traits().hit_points_per_level)) as u32,
         armor_class: u32::from(rules.armor_class),
         proficiency_bonus: u32::from(rules.proficiency_bonus),
         second_wind_uses: u32::from(rules.second_wind_uses_max),
@@ -1246,6 +1453,60 @@ mod tests {
         }
     }
     #[test]
+    fn admitted_species_apply_their_own_level_one_toughness_and_unsupported_species_refuse() {
+        let mut selected = choices();
+        for (species, expected_hp) in [("dwarf", 13), ("halfling", 12), ("orc", 12)] {
+            selected[0].1 = species;
+            let character = validate_character(&CreationRules::srd_521(), "Brynn", &selected)
+                .expect("admitted species uses its own traits");
+            assert_eq!(character.hit_points, expected_hp, "{species}");
+        }
+        selected[0].1 = "dragonborn";
+        assert_eq!(
+            validate_character(&CreationRules::srd_521(), "Brynn", &selected),
+            Err(JourneyRuleError::InvalidChoice)
+        );
+    }
+    #[test]
+    fn background_origin_feats_match_the_srd_choices() {
+        assert_eq!(
+            background_origin_feat("acolyte"),
+            Some(OriginFeat::MagicInitiate)
+        );
+        assert_eq!(background_origin_feat("criminal"), Some(OriginFeat::Alert));
+        assert_eq!(
+            background_origin_feat("sage"),
+            Some(OriginFeat::MagicInitiate)
+        );
+        assert_eq!(
+            background_origin_feat("soldier"),
+            Some(OriginFeat::SavageAttacker)
+        );
+        assert_eq!(background_origin_feat("unknown"), None);
+    }
+    #[test]
+    fn srd_521_page_256_challenge_rating_xp_table_is_exact_and_cr_zero_stays_ambiguous() {
+        for (cr, xp) in [
+            (ChallengeRating::Eighth, 25),
+            (ChallengeRating::Quarter, 50),
+            (ChallengeRating::Half, 100),
+            (ChallengeRating::Whole(1), 200),
+            (ChallengeRating::Whole(3), 700),
+            (ChallengeRating::Whole(10), 5_900),
+            (ChallengeRating::Whole(30), 155_000),
+        ] {
+            assert_eq!(experience_points_for_challenge_rating(cr), Some(xp));
+        }
+        assert_eq!(
+            experience_points_for_challenge_rating(ChallengeRating::Zero),
+            None
+        );
+        assert_eq!(
+            experience_points_for_challenge_rating(ChallengeRating::Whole(31)),
+            None
+        );
+    }
+    #[test]
     fn creation_numbers_and_array_subset_change_the_character() {
         let arrays = [AbilityArray {
             id: "stalwart",
@@ -1272,7 +1533,7 @@ mod tests {
                 built.proficiency_bonus,
                 built.second_wind_uses
             ),
-            (24, 19, 4, 3)
+            (25, 19, 4, 3)
         );
         selected[3].1 = "vanguard";
         assert_eq!(

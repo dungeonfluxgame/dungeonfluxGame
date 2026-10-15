@@ -272,6 +272,9 @@ impl NotebookLedger {
     ) -> Result<Vec<EntryView>, NotebookError> {
         let scene_key = scene_name(scene.key)?;
         let scene_title = scene.title.as_str();
+        if let Some(setting) = &scene.setting {
+            self.merge_place_alias(&setting.short, &setting.name)?;
+        }
         let sheets = self
             .fact_sheet
             .iter()
@@ -441,6 +444,16 @@ impl NotebookLedger {
                 {
                     continue;
                 }
+                let name = if key == "place_short" {
+                    scene
+                        .setting
+                        .as_ref()
+                        .filter(|setting| setting.short.eq_ignore_ascii_case(name))
+                        .map(|setting| &setting.name)
+                        .unwrap_or(name)
+                } else {
+                    name
+                };
                 let detail = if key == "dest.name" {
                     self.dossiers
                         .iter()
@@ -505,7 +518,7 @@ impl NotebookLedger {
                 .iter()
                 .find_map(|sheet| sheet.facts.get("reward.line"))
             {
-                self.add_task_reward(reward)?;
+                self.add_task_hook(reward)?;
             }
         }
         if adventure_ended && scene.key == super::pack::SceneKey::Defeat {
@@ -541,16 +554,62 @@ impl NotebookLedger {
         self.update_task(|text| format!("Status: failed\n{}", task_details(text)))
     }
 
-    fn add_task_reward(&self, reward: &str) -> Result<(), NotebookError> {
-        if reward.trim().is_empty() {
+    fn merge_place_alias(&self, alias: &str, canonical: &str) -> Result<(), NotebookError> {
+        if alias.eq_ignore_ascii_case(canonical) {
+            return Ok(());
+        }
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.lock();
+        let Some(index) = state
+            .entries
+            .iter()
+            .position(|entry| entry.kind == Kind::Place && entry.title.eq_ignore_ascii_case(alias))
+        else {
+            return Ok(());
+        };
+        let mut candidate = state.entries.clone();
+        if candidate
+            .iter()
+            .any(|entry| entry.kind == Kind::Place && entry.title.eq_ignore_ascii_case(canonical))
+        {
+            candidate.remove(index);
+        } else {
+            candidate[index].title = canonical.to_owned();
+        }
+        self.write_saved(&candidate, state.next_order)?;
+        state.entries = candidate;
+        Ok(())
+    }
+
+    pub(super) fn sync_task_reward(
+        &self,
+        gold_per_hero: u32,
+        paid: bool,
+    ) -> Result<bool, NotebookError> {
+        let status = if paid { "paid" } else { "offered; not paid" };
+        let reward = format!("Reward: {gold_per_hero} GP per hero ({status}).");
+        self.update_task(|text| {
+            let details = text
+                .lines()
+                .filter(|line| !line.starts_with("Reward: "))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{details}\n{reward}")
+        })
+    }
+
+    fn add_task_hook(&self, hook: &str) -> Result<(), NotebookError> {
+        if hook.trim().is_empty() {
             return Ok(());
         }
         self.update_task(|text| {
-            if text.lines().any(|line| line == format!("Reward: {reward}")) {
-                text.to_owned()
-            } else {
-                format!("{text}\nReward: {reward}")
+            let next = format!("Next hook: {hook}");
+            let old = format!("Reward: {hook}");
+            let mut lines = text.lines().filter(|line| *line != old).collect::<Vec<_>>();
+            if !lines.iter().any(|line| *line == next) {
+                lines.push(&next);
             }
+            lines.join("\n")
         })?;
         Ok(())
     }

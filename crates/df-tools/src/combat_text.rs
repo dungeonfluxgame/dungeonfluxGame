@@ -59,6 +59,23 @@ pub(crate) fn ammunition_labels(arrows: u32, bolts: u32) -> Vec<String> {
     labels
 }
 
+pub(crate) fn opportunity_attack_prompt(mover: &str) -> String {
+    // SRD 5.2.1 p. 15: "You can make an Opportunity Attack when a creature that you can see leaves your reach."
+    format!("{mover} is running past you: make an Opportunity Attack?")
+}
+
+pub(crate) fn reaction_waiting_prompt(reactor: &str) -> String {
+    format!("Waiting for {reactor} to decide")
+}
+
+pub(crate) fn reaction_countdown(remaining_seconds: u32) -> Option<String> {
+    match remaining_seconds {
+        0 => None,
+        1 => Some("1 second remaining".to_owned()),
+        seconds => Some(format!("{seconds} seconds remaining")),
+    }
+}
+
 pub(crate) fn damage_summary(damage: u32, rolls: &[(&[u32], bool)], modifier: i32) -> String {
     if damage == 0 {
         return "No damage".to_owned();
@@ -164,6 +181,32 @@ mod tests {
         assert_eq!(ammunition_labels(20, 0), ["Arrows 20"]);
         assert_eq!(ammunition_labels(0, 0), Vec::<String>::new());
         assert_eq!(ammunition_labels(20, 10), ["Arrows 20", "Bolts 10"]);
+    }
+
+    #[test]
+    fn phone_opportunity_reaction_prompt_names_the_mover_and_asks_the_player() {
+        assert_eq!(
+            opportunity_attack_prompt("Giant Rat 1"),
+            "Giant Rat 1 is running past you: make an Opportunity Attack?"
+        );
+    }
+
+    #[test]
+    fn phone_reaction_waiting_names_the_decision_owner() {
+        assert_eq!(
+            reaction_waiting_prompt("Brakka"),
+            "Waiting for Brakka to decide"
+        );
+    }
+
+    #[test]
+    fn phone_reaction_countdown_formats_server_remaining_seconds() {
+        assert_eq!(
+            reaction_countdown(20).as_deref(),
+            Some("20 seconds remaining")
+        );
+        assert_eq!(reaction_countdown(1).as_deref(), Some("1 second remaining"));
+        assert_eq!(reaction_countdown(0), None);
     }
 
     #[test]
