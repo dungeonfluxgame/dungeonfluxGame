@@ -194,11 +194,19 @@ pub(super) fn journey_input(
         ));
     }
     if let Some(character) = &request.character {
-        if character.identity.is_some() {
-            super::refusal_detail::note("hero-identity-storage-unavailable");
-            return Err(tonic::Status::failed_precondition(
-                "Your hero's appearance and backstory could not be saved yet.",
-            ));
+        if let Some(identity) = character.identity.clone() {
+            // The identity is validated (closed menu values, bounded story text) so a bad one is
+            // refused plainly; storing it with the hero (sheet, portrait, replies) is still to
+            // come, and the log says so rather than dropping it silently.
+            let identity = super::hero_identity::Identity::from_rpc(identity).map_err(|_| {
+                super::refusal_detail::note("hero-identity-invalid");
+                tonic::Status::invalid_argument("Your hero's appearance or story was not accepted.")
+            })?;
+            eprintln!(
+                "HERO identity accepted name={:?} pronouns={} stored=no (storage pending)",
+                character.name,
+                identity.pronouns().join("/")
+            );
         }
         if character.name.len() > 48 || character.choices.len() > 16 {
             return Err(tonic::Status::invalid_argument(
@@ -399,7 +407,13 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
             description: content.creation.description.clone(),
             groups,
             source_revision: model::source_revision(),
-            ..Default::default()
+            identity_groups: super::hero_identity::menu_offer()
+                .map_err(|_| RepositoryError::InvalidCandidate)?,
+            default_identity: Some(
+                super::hero_identity::Identity::from_menus(&[])
+                    .map_err(|_| RepositoryError::InvalidCandidate)?
+                    .to_rpc(),
+            ),
         })
     })
 }
