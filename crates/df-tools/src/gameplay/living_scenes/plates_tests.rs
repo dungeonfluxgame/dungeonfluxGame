@@ -1737,12 +1737,12 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
     assert_eq!(drain(&mut queue).len(), 1);
     let cache_id = {
         let book = locked(&shared.book);
-        let cached = book.state_images.items.values().next().unwrap();
-        format!(
-            "{}:{}",
-            cached.thing.id,
-            state_images::item_revision(&cached.thing, cached.detail.as_deref())
-        )
+        book.state_images
+            .items
+            .iter()
+            .find(|(_, cached)| cached.thing.id == thing_id)
+            .map(|(cache_id, _)| cache_id.clone())
+            .expect("the requested hand item has a cache entry")
     };
     locked(&shared.book)
         .state_images
@@ -1775,7 +1775,13 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
     );
     {
         let book = locked(&shared.book);
-        let cached = book.state_images.items.get(&cache_id).unwrap();
+        let (current_cache_id, cached) = book
+            .state_images
+            .items
+            .iter()
+            .find(|(_, cached)| cached.thing.id == thing_id)
+            .expect("the current hand item keeps a cache entry");
+        assert_eq!(current_cache_id, &cache_id, "custody reuses cache identity");
         assert_eq!(cached.thing.owner_id.as_deref(), Some("merchant"));
         assert_eq!(cached.thing.holder_id.as_deref(), Some("Sigrun"));
         assert!(!cached.explicitly_shared);
