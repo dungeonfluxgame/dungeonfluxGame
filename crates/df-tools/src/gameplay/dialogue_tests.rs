@@ -743,7 +743,7 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
     let (mut inspector, inspector_connection) =
         timeout(Duration::from_secs(2), config.connect(NoTls)).await??;
     let inspector_driver = tokio::spawn(inspector_connection);
-    let mut admitted = local_demo_scope::admit_startup_with_adventure(
+    let admitted = local_demo_scope::admit_startup_with_adventure(
         &mut inspector,
         &cold,
         local_demo_scope::DemoStartupIdentity {
@@ -1066,7 +1066,7 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
             .map_err(repository_error)?;
 
         active_fence = second_fence;
-        admitted = local_demo_scope::admit_startup_with_adventure(
+        let restored_admitted = local_demo_scope::admit_startup_with_adventure(
             &mut inspector,
             &cold,
             local_demo_scope::DemoStartupIdentity {
@@ -1081,8 +1081,8 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
         )
         .await
         .map_err(repository_error)?;
-        required(admitted.restored && admitted.checkpoint == committed)?;
-        let restored_semantic = admitted
+        required(restored_admitted.restored && restored_admitted.checkpoint == committed)?;
+        let restored_semantic = restored_admitted
             .checkpoint
             .state()
             .decisions
@@ -1097,7 +1097,7 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
         running = Some(
             start_npc_event_actor(
                 &config,
-                admitted.checkpoint,
+                restored_admitted.checkpoint,
                 second_fence,
                 codec,
                 Arc::new(AtomicUsize::new(0)),
