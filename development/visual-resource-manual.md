@@ -11,7 +11,7 @@ agents. The design contracts remain in `planning/asset-engine.md`,
 | --- | --- | --- |
 | Image request identity, provider call, cache, manifest, HTTP bytes | `crates/df-tools/src/gameplay/imagery.rs` | `ImageRequest`, `ImageKey`, `ImageFailure`, `imagery.jsonl`, `GET /gameplay/imagery/<key>` |
 | Reference loading and photographic allowlist | `crates/df-tools/src/gameplay/imagery/references.rs` | `ReferenceStore::photographic`, `load_photographic`, neutral carrier policy |
-| Plate prompt and reference composition | `crates/df-tools/src/gameplay/imagery/plate_prompt.rs`, `party_sheet.rs`, `scene_prompt.rs` | `PlateReferences`, `scene_plate`, `model_plate`, graph edits |
+| Plate prompt and reference composition | `crates/df-tools/src/gameplay/imagery/plate_prompt.rs`, `photo_edit.rs`, `party_sheet.rs`, `scene_prompt.rs` | `PlateReferences`, `scene_plate`, `model_plate`, fixed-harbor photograph edit, graph edits |
 | Scene graph and shot staging | `crates/df-tools/src/gameplay/scene_graph.rs`, `shot.rs` | graph revision, camera, speaker, actor spots, props and light |
 | Plate lifecycle and timing | `crates/df-tools/src/gameplay/living_scenes/plates.rs` and `plates/` | request, render, head location, ready/failed, projection, stale result handling |
 | Generated character and place references | `assets/ui/generated/` | checked-in reviewed references; runtime output never belongs here |

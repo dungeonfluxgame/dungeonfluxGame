@@ -539,8 +539,9 @@ mod tests {
             correlation.run_id_hash.as_deref()
         );
         assert_eq!(fields["build_id"], "test-build");
-        assert!(!fields.to_string().contains("private-room"));
-        assert!(!fields.to_string().contains("private-run"));
+        let serialized = serde_json::to_string(&fields).unwrap();
+        assert!(!serialized.contains("private-room"));
+        assert!(!serialized.contains("private-run"));
         assert!(attributes.iter().all(|(_, value)| value != "private-url"));
     }
 
