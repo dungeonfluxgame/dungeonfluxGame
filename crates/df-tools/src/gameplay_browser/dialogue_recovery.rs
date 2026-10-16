@@ -45,6 +45,29 @@ const MAXIMUM_REPLY_BYTES: usize = 1024;
 /// ordinary five seconds.
 const RAW_DIALOGUE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// The recovery revision as (epoch, sequence). Tuples compare epoch first, which is the
+/// canonical recovery order. An absent component or a zero epoch cannot be ordered.
+fn ordered_revision(revision: Option<&rpc::SessionRevision>) -> Option<(u64, u64)> {
+    let revision = revision?;
+    let epoch = revision.epoch.as_ref()?.value.filter(|epoch| *epoch != 0)?;
+    Some((epoch, revision.sequence?))
+}
+
+/// A reply answers this input when it carries the same input identity and a revision at or after
+/// the one the input observed. A turn that commits state advances the revision it answers at, so
+/// the phone's own revision may already have moved on; an older or unidentified reply is refused.
+fn answers_input(input: &rpc::RawDialogueRequest, reply: &rpc::DialogueResponse) -> bool {
+    match (
+        ordered_revision(input.observed_revision.as_ref()),
+        ordered_revision(reply.revision.as_ref()),
+    ) {
+        (Some(observed), Some(answered)) => {
+            reply.input_id == input.input_id && answered >= observed
+        }
+        _ => false,
+    }
+}
+
 fn scope_change_notice(draft: &str) -> Option<&'static str> {
     (!draft.trim().is_empty()).then_some("Your draft is still here. Review it before sending.")
 }
@@ -913,18 +936,18 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                         }
                         String::new()
                     }
-                    Call::Raw(input)
-                        if reply.input_id == input.input_id
-                            && reply.revision == input.observed_revision
-                            && state.revision == input.observed_revision =>
-                    {
+                    Call::Raw(input) if answers_input(input, &reply) => {
                         match rpc::DialogueDisposition::try_from(reply.disposition) {
                             Ok(rpc::DialogueDisposition::Clarify)
                                 if reply.confirmation_required
                                     && reply.confirmation_token.len() == 32
                                     && !input.offer_id.is_empty() =>
                             {
-                                state.dialogue.ticket = Some((input.clone(), reply));
+                                // The offer was read at the revision that answered, so the ticket
+                                // is bound to that revision rather than the one the input saw.
+                                let mut bound = input.clone();
+                                bound.observed_revision = reply.revision;
+                                state.dialogue.ticket = Some((bound, reply));
                                 "Clarification required. Decline, or explicitly confirm the selected offered action.".to_owned()
                             }
                             Ok(kind)
@@ -944,7 +967,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                                     && reply.npc_reply.len() <= MAXIMUM_REPLY_BYTES
                                 {
                                     state.dialogue.exchange = Some(Exchange {
-                                        revision: input.observed_revision,
+                                        revision: reply.revision,
                                         you: input.text.clone(),
                                         disposition: None,
                                         speaker: speaker.clone(),
@@ -1216,5 +1239,74 @@ mod tests {
 
         assert_eq!(speaker, "Marek");
         assert_eq!(portrait, "/assets/concept-art/marek-avatar.webp");
+    }
+
+    use super::*;
+
+    fn revision(epoch: u64, sequence: u64) -> super::rpc::SessionRevision {
+        super::rpc::SessionRevision {
+            epoch: Some(super::rpc::RecoveryEpoch { value: Some(epoch) }),
+            sequence: Some(sequence),
+        }
+    }
+
+    fn operation(byte: u8) -> super::rpc::OperationId {
+        super::rpc::OperationId {
+            value: Some(vec![byte; 16]),
+        }
+    }
+
+    fn raw_input(byte: u8, observed: u64) -> super::rpc::RawDialogueRequest {
+        super::rpc::RawDialogueRequest {
+            input_id: Some(operation(byte)),
+            observed_revision: Some(revision(1, observed)),
+            ..Default::default()
+        }
+    }
+
+    fn reply_at(
+        byte: u8,
+        answered: Option<super::rpc::SessionRevision>,
+    ) -> super::rpc::DialogueResponse {
+        super::rpc::DialogueResponse {
+            input_id: Some(operation(byte)),
+            revision: answered,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_reply_to_the_same_input_at_a_newer_revision_is_accepted() {
+        // Arrange: the hero's line observed revision 4; the turn committed a merchant quote.
+        let input = raw_input(7, 4);
+        let committed = reply_at(7, Some(revision(1, 5)));
+
+        // Act and assert: the observed revision and a later one of the same epoch both answer it.
+        assert!(answers_input(&input, &committed));
+        assert!(answers_input(&input, &reply_at(7, Some(revision(1, 4)))));
+        assert!(answers_input(&input, &reply_at(7, Some(revision(2, 0)))));
+    }
+
+    #[test]
+    fn a_reply_to_a_different_input_is_refused_at_any_revision() {
+        let input = raw_input(7, 4);
+
+        assert!(!answers_input(&input, &reply_at(8, Some(revision(1, 5)))));
+        assert!(!answers_input(&input, &reply_at(8, Some(revision(1, 4)))));
+    }
+
+    #[test]
+    fn a_reply_at_an_older_revision_is_refused() {
+        let input = raw_input(7, 4);
+
+        assert!(!answers_input(&input, &reply_at(7, Some(revision(1, 3)))));
+        assert!(!answers_input(&input, &reply_at(7, Some(revision(0, 9)))));
+    }
+
+    #[test]
+    fn a_reply_without_a_revision_is_refused() {
+        let input = raw_input(7, 4);
+
+        assert!(!answers_input(&input, &reply_at(7, None)));
     }
 }
