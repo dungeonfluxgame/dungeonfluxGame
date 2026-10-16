@@ -363,12 +363,16 @@ pub(super) struct TuningFile {
     /// Id of the pack these numbers belong to; must equal `pack.json`'s `id`.
     pub(super) pack: String,
     pub(super) hero: HeroTuning,
+    #[serde(default)]
     pub(super) bandit: BanditTuning,
+    #[serde(default)]
     pub(super) combat: CombatTuning,
     /// Absence retains the immutable legacy adjacent-fight profile for existing packs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) tactical: Option<TacticalEncounterTuning>,
+    #[serde(default)]
     pub(super) rest: RestTuning,
+    #[serde(default)]
     pub(super) narrative: NarrativeTuning,
     /// Missing section explicitly selects the shipped presentation profile.
     #[serde(default)]
@@ -421,7 +425,7 @@ pub(super) struct WeaponTuning {
     pub(super) damage_sides: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BanditTuning {
     pub(super) hit_points: u8,
@@ -432,7 +436,7 @@ pub(super) struct BanditTuning {
     pub(super) weapon: AntagonistWeaponTuning,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AntagonistWeaponTuning {
     #[serde(rename = "label", alias = "item")]
@@ -441,7 +445,7 @@ pub(super) struct AntagonistWeaponTuning {
     pub(super) damage_sides: u8,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AbilityScores {
     pub(super) strength: u8,
@@ -452,7 +456,7 @@ pub(super) struct AbilityScores {
     pub(super) charisma: u8,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CombatTuning {
     /// Campaign ticks in one combat round.
@@ -476,13 +480,13 @@ pub(super) struct TacticalEnemy {
     pub(super) ammunition: u16,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RestTuning {
     pub(super) short_rest_seconds: u32,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NarrativeTuning {
     pub(super) intervention_budget: u8,
@@ -629,12 +633,15 @@ pub(super) struct PackFile {
     pub(super) creation: CreationPack,
     pub(super) equipment: Vec<EquipmentRow>,
     #[serde(rename = "antagonist", alias = "bandit")]
+    #[serde(default, skip_serializing_if = "BanditPack::is_absent")]
     pub(super) bandit: BanditPack,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) destination_label: Option<String>,
     pub(super) offer_labels: OfferLabels,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) courier_clue: String,
     /// Appended to scene narration after a space; contains the `{name}` placeholder once.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) escort_support_suffix: String,
     pub(super) scenes: Vec<Scene>,
     /// Phrases that give the private clue away. A listener who has not been told the clue
@@ -644,6 +651,13 @@ pub(super) struct PackFile {
     /// Who each speaking character is, by the name a scene shows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) speakers: Vec<SpeakerProfile>,
+}
+impl PackFile {
+    pub(super) fn is_freeplay(&self) -> bool {
+        self.beat_script
+            .as_ref()
+            .is_some_and(|script| script.mode == super::beat_script::ScriptMode::Freeplay)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -808,27 +822,42 @@ pub(super) struct EquipmentRow {
     pub(super) quantity: u8,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BanditPack {
     pub(super) name: String,
     #[serde(default)]
     pub(super) srd_id: Option<String>,
 }
+impl BanditPack {
+    fn is_absent(&self) -> bool {
+        self == &Self::default()
+    }
+}
 
 /// Player-facing label of each of the ten journey actions (JSON keys are kebab-case).
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Default)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(super) struct OfferLabels {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) create_character: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) begin_story: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) ask_courier: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) escort_courier: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) defend_courier: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) greatsword_attack: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) second_wind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) end_turn: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) short_rest: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(super) choose_harbor_scene: String,
 }
 
@@ -903,7 +932,7 @@ pub(super) struct Scene {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) cast: Vec<SceneCastMember>,
     /// Narration once the Short Rest has completed; present for victory and defeat only.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) narration_rested: Option<String>,
     pub(super) speaker: String,
     pub(super) dialogue: String,
@@ -1016,7 +1045,7 @@ pub(super) fn load_from_bytes(
         .unwrap_or(super::beat_script::canonical())
         .validate(&pack)
         .map_err(PackError::Script)?;
-    validate_tuning(&tuning)?;
+    validate_tuning(&tuning, pack.is_freeplay())?;
     validate_cross_references(&pack, &tuning)?;
     let mut departures = departures(&pack, &tuning);
     if tuning.tactical.is_some() {
@@ -1275,7 +1304,7 @@ fn placeholders_are_defined(text: &str, allowed: &[&str]) -> bool {
 // tuning.json validation
 // ---------------------------------------------------------------------------------------------
 
-fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
+fn validate_tuning(tuning: &TuningFile, freeplay: bool) -> Result<(), PackError> {
     if let Some(tactical) = &tuning.tactical {
         let mut total = 0_u16;
         if tactical.enemies.is_empty() || tactical.enemies.len() > 4 {
@@ -1443,6 +1472,21 @@ fn validate_tuning(tuning: &TuningFile) -> Result<(), PackError> {
         hero.weapon.damage_sides,
     )?;
 
+    if freeplay {
+        if tuning.bandit != BanditTuning::default()
+            || tuning.combat != CombatTuning::default()
+            || tuning.rest != RestTuning::default()
+            || tuning.narrative != NarrativeTuning::default()
+            || tuning.tactical.is_some()
+        {
+            return Err(malformed(
+                FILE,
+                "freeplay",
+                "creation tuning without encounter or quest sections",
+            ));
+        }
+        return Ok(());
+    }
     let bandit = &tuning.bandit;
     range(
         FILE,
@@ -1653,44 +1697,50 @@ fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
     }
     validate_creation(&pack.creation)?;
     validate_equipment(&pack.equipment)?;
-    text(FILE, "bandit.name", &pack.bandit.name, 1, 48)?;
-    if let Some(id) = &pack.bandit.srd_id {
-        if !df_rules::SRD_521_CREATURES.iter().any(|c| c.id == id) {
-            return Err(malformed(
-                FILE,
-                "antagonist.srd_id",
-                "known SRD 5.2.1 creature id",
-            ));
+    if !pack.is_freeplay() {
+        text(FILE, "bandit.name", &pack.bandit.name, 1, 48)?;
+        if let Some(id) = &pack.bandit.srd_id {
+            if !df_rules::SRD_521_CREATURES.iter().any(|c| c.id == id) {
+                return Err(malformed(
+                    FILE,
+                    "antagonist.srd_id",
+                    "known SRD 5.2.1 creature id",
+                ));
+            }
+            text(FILE, "antagonist.name", &pack.bandit.name, 1, 28)?;
         }
-        text(FILE, "antagonist.name", &pack.bandit.name, 1, 28)?;
+        if let Some(label) = &pack.destination_label {
+            text(FILE, "destination_label", label, 1, 40)?;
+        }
     }
-    if let Some(label) = &pack.destination_label {
-        text(FILE, "destination_label", label, 1, 40)?;
-    }
-    validate_offer_labels(&pack.offer_labels)?;
-    range(
-        FILE,
-        "courier_clue",
-        length(pack.courier_clue.len()),
-        1,
-        512,
-    )?;
-    text(
-        FILE,
-        "escort_support_suffix",
-        &pack.escort_support_suffix,
-        1,
-        256,
-    )?;
-    let name_placeholders = pack.escort_support_suffix.matches("{name}").count();
-    if name_placeholders != 1 || !placeholders_are_defined(&pack.escort_support_suffix, &["name"]) {
-        return Err(malformed(
+    validate_offer_labels(&pack.offer_labels, pack.is_freeplay())?;
+    if !pack.is_freeplay() {
+        range(
+            FILE,
+            "courier_clue",
+            length(pack.courier_clue.len()),
+            1,
+            512,
+        )?;
+        text(
             FILE,
             "escort_support_suffix",
-            "text with exactly one {name} placeholder and no other braces",
-        ));
+            &pack.escort_support_suffix,
+            1,
+            256,
+        )?;
+        let name_placeholders = pack.escort_support_suffix.matches("{name}").count();
+        if name_placeholders != 1
+            || !placeholders_are_defined(&pack.escort_support_suffix, &["name"])
+        {
+            return Err(malformed(
+                FILE,
+                "escort_support_suffix",
+                "text with exactly one {name} placeholder and no other braces",
+            ));
+        }
     }
-    validate_scenes(&pack.scenes)?;
+    validate_scenes(&pack.scenes, pack.is_freeplay())?;
     validate_speaking_notes(pack)
 }
 
@@ -1948,7 +1998,7 @@ fn validate_equipment(equipment: &[EquipmentRow]) -> Result<(), PackError> {
     )
 }
 
-fn validate_offer_labels(labels: &OfferLabels) -> Result<(), PackError> {
+fn validate_offer_labels(labels: &OfferLabels, freeplay: bool) -> Result<(), PackError> {
     for (path, label) in [
         ("offer_labels.create-character", &labels.create_character),
         ("offer_labels.begin-story", &labels.begin_story),
@@ -1964,7 +2014,21 @@ fn validate_offer_labels(labels: &OfferLabels) -> Result<(), PackError> {
             &labels.choose_harbor_scene,
         ),
     ] {
-        text(SourceFile::Pack, path, label, 1, LABEL_CHARACTERS_MAX)?;
+        let entry_label = matches!(
+            path,
+            "offer_labels.create-character" | "offer_labels.begin-story"
+        );
+        text(
+            SourceFile::Pack,
+            path,
+            label,
+            usize::from(!freeplay || entry_label),
+            if freeplay && !entry_label {
+                0
+            } else {
+                LABEL_CHARACTERS_MAX
+            },
+        )?;
     }
     Ok(())
 }
@@ -1974,7 +2038,7 @@ fn served_asset(path: &str) -> bool {
     SERVED_SCENE_ASSETS.contains(&path) || super::adventure::generated_asset(path)
 }
 
-fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
+fn validate_scenes(scenes: &[Scene], freeplay: bool) -> Result<(), PackError> {
     const FILE: SourceFile = SourceFile::Pack;
     for (index, scene) in scenes.iter().enumerate() {
         let at = format!("scenes[{index}]");
@@ -2127,7 +2191,19 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
             expected: "all scene settings, or legacy with no settings",
         });
     }
-    for key in SceneKey::ALL {
+    let required = if freeplay {
+        &[SceneKey::Room, SceneKey::Opening][..]
+    } else {
+        &SceneKey::ALL[..]
+    };
+    if freeplay && scenes.len() != required.len() {
+        return Err(malformed(
+            FILE,
+            "scenes",
+            "only room and opening scenes for freeplay",
+        ));
+    }
+    for key in required.iter().copied() {
         let mut matches = scenes
             .iter()
             .enumerate()
@@ -2184,7 +2260,7 @@ pub(super) fn validate_script_scene(content: &PackFile, scene: &Scene) -> Result
             )
         })?;
     *destination = scene.clone();
-    validate_scenes(&scenes)
+    validate_scenes(&scenes, content.is_freeplay())
 }
 
 fn validate_cross_references(pack: &PackFile, tuning: &TuningFile) -> Result<(), PackError> {
@@ -2412,7 +2488,12 @@ fn departures(pack: &PackFile, tuning: &TuningFile) -> Vec<String> {
     let mut departures: Vec<String> = checks
         .into_iter()
         .filter(|(differs, key)| {
-            *differs && !(tuning.tactical.is_some() && key.starts_with("bandit."))
+            *differs
+                && !(tuning.tactical.is_some() && key.starts_with("bandit."))
+                && !(pack.is_freeplay()
+                    && ["bandit.", "combat.", "rest."]
+                        .iter()
+                        .any(|prefix| key.starts_with(prefix)))
         })
         .map(|(_, key)| key.to_owned())
         .collect();
@@ -2431,6 +2512,23 @@ static ACTIVE: std::sync::RwLock<Option<std::sync::Arc<LoadedPack>>> = std::sync
 
 pub(super) fn install(loaded: LoadedPack) -> Result<(), io::Error> {
     super::journey::living_scene::clear();
+    if loaded.pack.is_freeplay() {
+        if let Some(place) = loaded
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == SceneKey::Opening)
+            .and_then(|scene| scene.setting.clone())
+        {
+            super::adventure::scene_model::install_scenes(
+                &super::adventure::setting::ChapterSettings {
+                    meeting: place.clone(),
+                    confrontation: place.clone(),
+                    destination: place,
+                },
+            );
+        }
+    }
     let setting = |key| {
         loaded
             .pack
@@ -2906,10 +3004,14 @@ pub(super) fn bandit_weapon_item() -> String {
 pub(super) fn destination_label() -> String {
     with_content(|pack| {
         pack.destination_label.clone().unwrap_or_else(|| {
-            scene(SceneKey::Inn)
-                .title
-                .trim_start_matches("The ")
-                .to_owned()
+            scene(if pack.is_freeplay() {
+                SceneKey::Opening
+            } else {
+                SceneKey::Inn
+            })
+            .title
+            .trim_start_matches("The ")
+            .to_owned()
         })
     })
 }

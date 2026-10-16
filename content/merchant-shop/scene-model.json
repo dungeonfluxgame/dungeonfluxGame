@@ -17,9 +17,7 @@
       "is_background": false,
       "present_in": [
         "room",
-        "opening",
-        "dialogue_seal",
-        "dialogue_escort"
+        "opening"
       ],
       "attitude": "friendly",
       "attitudes": {},
@@ -54,9 +52,7 @@
       "is_background": false,
       "present_in": [
         "room",
-        "opening",
-        "dialogue_seal",
-        "dialogue_escort"
+        "opening"
       ],
       "attitude": "indifferent",
       "attitudes": {},
@@ -91,9 +87,7 @@
       "is_background": false,
       "present_in": [
         "room",
-        "opening",
-        "dialogue_seal",
-        "dialogue_escort"
+        "opening"
       ],
       "attitude": "indifferent",
       "attitudes": {},

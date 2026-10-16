@@ -831,6 +831,12 @@ impl BeatScript {
                 })
             || content.reward.is_some()
             || content.campaign.is_some()
+            || content.campaign_epilogue.is_some()
+            || !content.bandit.name.is_empty()
+            || content.bandit.srd_id.is_some()
+            || !content.courier_clue.is_empty()
+            || !content.escort_support_suffix.is_empty()
+            || content.destination_label.is_some()
             || !content.scenes.iter().any(|scene| scene.key == store.scene)
         {
             return Err(refuse(&store.id, E::HandlerWiring));

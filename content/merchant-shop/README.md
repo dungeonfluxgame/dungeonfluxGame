@@ -9,6 +9,13 @@ an entry into the shop, and a repeating observation action. It opens no story th
 creates no courier, offers no combat or resolution action, and has no end card.
 Native scene interactions persist independently in the existing checkpoint journal.
 
+The serialized content contains only the room and store-entry scenes, their two
+creation/entry labels and the observation loop. Tuning contains only the schema,
+pack identity and core character creation rules. The record owns one
+`freeplay_setting`; legacy chapter settings are an internal adapter after reload.
+Story-only fields remain required for Story packs and are forbidden when populated
+in Freeplay. No unused quest, antagonist, encounter or ending content is authored.
+
 Marek (`merchant`), Corin (`shop-adventurer`) and Jessa (`shop-soldier`) keep the same
 IDs in the scene model, public cast and their role-prefixed private dossier IDs.
 Public room knowledge excludes the dossiers' trust-gated and forbidden details.

@@ -10,6 +10,20 @@ const TUNING: &[u8] = include_bytes!("../../../../../content/merchant-shop/tunin
 const MODEL: &[u8] = include_bytes!("../../../../../content/merchant-shop/scene-model.json");
 const DOSSIERS: &[u8] = include_bytes!("../../../../../content/merchant-shop/dossiers.json");
 
+pub(super) fn tuning_bytes(tuning: &pack::TuningFile) -> Result<Vec<u8>, serde_json::Error> {
+    #[derive(serde::Serialize)]
+    struct CreationTuning<'a> {
+        schema: &'a str,
+        pack: &'a str,
+        hero: &'a pack::HeroTuning,
+    }
+    serde_json::to_vec_pretty(&CreationTuning {
+        schema: &tuning.schema,
+        pack: &tuning.pack,
+        hero: &tuning.hero,
+    })
+}
+
 pub(crate) fn generate(
     seed: u64,
     rules_mode: RulesMode,
@@ -562,5 +576,60 @@ mod tests {
         assert!(!restored.fresh);
         assert_eq!(fresh.loaded.pack, restored.loaded.pack);
         assert!(fresh.documents == restored.documents);
+    }
+
+    #[test]
+    fn serialized_freeplay_documents_contain_only_the_authored_store_and_creation_rules() {
+        let generated = generate(45, RulesMode::Standard, ContentRating::default()).unwrap();
+        let documents = generated.documents(true).unwrap();
+        for bytes in [
+            PACK,
+            TUNING,
+            MODEL,
+            DOSSIERS,
+            &documents.pack,
+            &documents.tuning,
+            &documents.record,
+        ] {
+            let text = std::str::from_utf8(bytes).unwrap().to_lowercase();
+            for forbidden in [
+                "courier",
+                "harbor",
+                "eldric",
+                "sealed-packet",
+                "brass key",
+                "unused creature",
+                "antagonist",
+                "\"bandit\"",
+                "\"combat\"",
+                "\"victory\"",
+                "\"defeat\"",
+                "dialogue-seal",
+                "dialogue-escort",
+            ] {
+                assert!(
+                    !text.contains(forbidden),
+                    "standalone authored documents must not contain {forbidden}"
+                );
+            }
+        }
+        let content: serde_json::Value = serde_json::from_slice(&documents.pack).unwrap();
+        assert_eq!(content["scenes"].as_array().unwrap().len(), 2);
+        assert_eq!(content["offer_labels"].as_object().unwrap().len(), 2);
+        let tuning: serde_json::Value = serde_json::from_slice(&documents.tuning).unwrap();
+        assert_eq!(tuning.as_object().unwrap().len(), 3);
+        let record: serde_json::Value = serde_json::from_slice(&documents.record).unwrap();
+        assert!(record.get("settings").is_none());
+        assert!(record.get("freeplay_setting").is_some());
+        let (loaded, _) = super::super::record::reload(&documents).unwrap();
+        assert!(loaded.pack.is_freeplay());
+        assert!(loaded.pack.bandit.name.is_empty());
+        assert_eq!(loaded.pack.scenes.len(), 2);
+        let mut invalid = generated.pack.clone();
+        invalid.courier_clue = "An injected delivery.".into();
+        assert!(
+            pack::load_from_bytes(&serde_json::to_vec(&invalid).unwrap(), &documents.tuning)
+                .is_err()
+        );
     }
 }

@@ -12,6 +12,7 @@ use std::{
     path::Path,
 };
 const GENERATOR_VERSION: &str = "splitmix64-patterns-1";
+const FREEPLAY_AUTHORING_VERSION: &str = "authored-freeplay-1";
 const RECORD_SCHEMA: &str = "df-adventure-record/1";
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +31,9 @@ pub(crate) struct AdventureRecord {
     campaign: Option<pack::CampaignIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) settings: Option<super::setting::ChapterSettings>,
+    /// A freeplay record owns one place; the legacy three-scene adapter is runtime only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    freeplay_setting: Option<super::setting::SceneSetting>,
     /// Copies of the pack's listener-safety data, so a review of the record shows them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     secret_terms: Vec<String>,
@@ -138,8 +142,13 @@ impl GeneratedAdventure {
     ) -> Result<DemoAdventure, GenerateError> {
         let pack =
             serde_json::to_vec_pretty(&self.pack).map_err(|_| GenerateError::Serialization)?;
-        let tuning =
-            serde_json::to_vec_pretty(&self.tuning).map_err(|_| GenerateError::Serialization)?;
+        let freeplay = self.pack.is_freeplay();
+        let tuning = if freeplay {
+            super::shop::tuning_bytes(&self.tuning)
+        } else {
+            serde_json::to_vec_pretty(&self.tuning)
+        }
+        .map_err(|_| GenerateError::Serialization)?;
         let mut output = Sha256::new();
         output.update(&pack);
         output.update(&tuning);
@@ -147,7 +156,12 @@ impl GeneratedAdventure {
             schema: RECORD_SCHEMA.into(),
             seed: format!("0x{:016x}", self.seed),
             tables_revision: self.tables_revision.clone(),
-            generator_version: GENERATOR_VERSION.into(),
+            generator_version: if freeplay {
+                FREEPLAY_AUTHORING_VERSION
+            } else {
+                GENERATOR_VERSION
+            }
+            .into(),
             rules_mode: self.rules_mode,
             rolls: self.rolls.clone(),
             expression: Expression {
@@ -182,7 +196,8 @@ impl GeneratedAdventure {
                     })
                 })
                 .collect(),
-            settings: Some(self.settings.clone()),
+            settings: (!freeplay).then(|| self.settings.clone()),
+            freeplay_setting: freeplay.then(|| self.settings.meeting.clone()),
             dossiers: self.dossiers.clone(),
             // Only what the notebook reads at run time (the scene, who speaks, the named
             // facts and what the text must mention). The voice, delivery, tone, forbidden terms
@@ -287,14 +302,30 @@ pub(crate) fn reload(
     }
     let mut loaded =
         pack::load_from_bytes(&documents.pack, &documents.tuning).map_err(RecordError::Pack)?;
-    let record: AdventureRecord = serde_json::from_slice(&documents.record)
+    let mut record: AdventureRecord = serde_json::from_slice(&documents.record)
         .map_err(|_| RecordError::Invalid("adventure.json schema"))?;
+    match (loaded.pack.is_freeplay(), record.freeplay_setting.as_ref()) {
+        (true, Some(setting)) if record.settings.is_none() => {
+            record.settings = Some(super::setting::ChapterSettings {
+                meeting: setting.clone(),
+                confrontation: setting.clone(),
+                destination: setting.clone(),
+            });
+        }
+        (false, None) => {}
+        _ => return Err(RecordError::Invalid("setting mode binding")),
+    }
     let seed = super::super::startup_configuration::adventure_seed(&record.seed)
         .map_err(|_| RecordError::Invalid("seed"))?;
     let valid_hash =
         |value: &str| value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit());
     if record.schema != RECORD_SCHEMA
-        || record.generator_version != GENERATOR_VERSION
+        || record.generator_version
+            != if loaded.pack.is_freeplay() {
+                FREEPLAY_AUTHORING_VERSION
+            } else {
+                GENERATOR_VERSION
+            }
         || !matches!(
             (record.expression.source.as_str(), &record.expression.model),
             ("patterns", None) | ("model", Some(_))
@@ -508,6 +539,9 @@ impl AdventureRecord {
     }
     /// The startup summary of how the story text was written.
     pub(crate) fn prose_summary(&self) -> String {
+        if self.freeplay_setting.is_some() {
+            return "prose=authored freeplay store".into();
+        }
         match &self.expression.model {
             Some(model) => model.summary(),
             None => "prose=patterns (stored adventure uses the pattern text)".to_owned(),
@@ -652,6 +686,7 @@ mod emotional_profile_tests {
             seeded_dice: false,
             campaign: None,
             settings: None,
+            freeplay_setting: None,
             secret_terms: Vec::new(),
             speakers: Vec::new(),
             scene_cast: Vec::new(),
