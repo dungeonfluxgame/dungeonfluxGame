@@ -18,6 +18,8 @@ pub(super) struct Decision {
     pub(super) elapsed_ms: u128,
 }
 
+/// Rule-based parse of explicit names, vocatives and descriptions. Routing passes this result to
+/// Jev as an advisory hint and uses it as the addressee only when Jev cannot answer.
 pub(super) fn exact(words: &str, cast: &[rpc::SceneActor]) -> Target {
     let lowered = words.trim().to_lowercase();
     let line = lowered.strip_prefix("excuse me, ").unwrap_or(&lowered);
