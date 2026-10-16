@@ -29,6 +29,8 @@ use super::{
 /// The adapter's prompt limit, in characters.
 pub(in crate::gameplay) const MAXIMUM_PROMPT_CHARACTERS: usize = 4000;
 
+const FOCAL_CONTEXT: &str = "Keep the primary speaker or foreground goods clearly readable while preserving enough spatial context to show the counter or working surface, the named people nearby, visible goods and the usable ways out whenever those facts are supplied. Dress the established place with only its supplied objects, light, weather and time; never invent clues, ownership or hidden details.";
+
 /// Why a plate prompt could not be built. Nothing is sent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) enum PlatePromptRefusal {
@@ -403,6 +405,7 @@ fn scene_plate_with(
         Part::Fixed(FILM_LOOK),
         Part::Fixed(REFERENCE_STYLE),
         Part::Fixed(camera_phrase(spec.camera)),
+        Part::Fixed(FOCAL_CONTEXT),
         Part::Fixed(PLACE_IS),
     ];
     if let Some(place) = place {

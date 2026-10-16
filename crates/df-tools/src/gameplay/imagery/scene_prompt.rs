@@ -38,7 +38,9 @@ pub(in crate::gameplay) fn model_plate(
     assembled(
         rating,
         format!(
-            "Compose this exact place: {place}. Wide 28mm view from among the party. \
+            "Compose this exact place: {place}. Wide 28mm view from among the party, keeping the \
+primary speaker or goods clear while showing enough of the counter, nearby named people, visible \
+goods and usable ways out to make the scene legible. \
 Only the listed people, things and ways out exist; do not add extras or props from the \
 place reference. Follow each person's position and activity and each object's state. \
 Keep the identities, faces and clothing of the supplied cast portraits and party sheet. \

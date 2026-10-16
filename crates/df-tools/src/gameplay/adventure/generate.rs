@@ -751,9 +751,19 @@ pub(crate) fn generate_with_prose(
     let job = context
         .get("hook.job")
         .ok_or_else(|| GenerateError::Pattern("hook.job".into()))?;
+    let opening_dressing = context
+        .get("loc.atmos_a")
+        .map(|text| {
+            text.split_whitespace()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
     let opening_brief = format!(
-        "{} The job is to {job}. If it fails, {}.",
+        "{} {} Job: {job}. If it fails, {}.",
         template("opening_narration")?,
+        opening_dressing,
         stake.failure
     );
     let opening_line = format!("{} I'll pay you {reward_words} gold.", hook.pitch);

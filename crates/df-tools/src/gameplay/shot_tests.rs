@@ -187,6 +187,25 @@ fn public_dialogue_coverage_changes_without_a_tempo_change_and_bookends_stay_wid
 }
 
 #[test]
+fn cast_rich_scene_uses_establishing_context_for_the_primary_speaker() {
+    let others = [SPEAKER_STEMS[2], SPEAKER_STEMS[5]];
+    let scene = ShotInput {
+        others: &others,
+        ..input(
+            "inn",
+            SceneKey::DialogueSeal,
+            Some(SPEAKER_STEMS[6]),
+            &[1, 2],
+            "A public exchange begins.",
+        )
+    };
+    let spec = direct(&scene).expect("cast-rich dialogue should stage");
+    assert_eq!(spec.camera, Camera::WideEstablishing);
+    assert!(spec.speaker.is_some(), "the primary speaker remains staged");
+    assert!(!spec.others.is_empty());
+}
+
+#[test]
 fn every_plate_of_a_place_keeps_its_camera_sides_props_light_and_hour_and_no_hero_holds_another_weapon()
  {
     let heroes = [1, 2];

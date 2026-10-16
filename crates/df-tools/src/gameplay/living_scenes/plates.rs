@@ -829,8 +829,20 @@ fn record_plate_render_diagnostic(
     let image_key = image_key.map(ImageKey::as_str);
     let image_key_id = image_key.map(df_observe::presentation::local_identity);
     let failure_category = failure.map(ImageFailure::label);
+    let focus_subject = if spec.speaker.is_some() {
+        "primary-speaker"
+    } else if !spec.dressing.is_empty() {
+        "foreground-goods"
+    } else {
+        "place-context"
+    };
+    let context_scope = if spec.camera.kind() == "establishing-wide" {
+        "full-place-cast-and-goods"
+    } else {
+        "speaker-with-place-context"
+    };
     let line = format!(
-        "PLATE {status} scene_id={scene_id} revision={graph_revision} ahead={ahead} plate_id={plate_id} shot_kind={} angle={} focus_reason={} image_key={} image_key_id={} failure_category={} elapsed_ms={elapsed_ms}",
+        "PLATE {status} scene_id={scene_id} revision={graph_revision} ahead={ahead} plate_id={plate_id} shot_kind={} angle={} focus_reason={} focus_subject={focus_subject} context_scope={context_scope} image_key={} image_key_id={} failure_category={} elapsed_ms={elapsed_ms}",
         spec.camera.kind(),
         spec.camera.angle(),
         spec.camera.focus_reason(),
@@ -862,6 +874,8 @@ fn record_plate_render_diagnostic(
             "focus_reason".to_owned(),
             serde_json::json!(spec.camera.focus_reason()),
         ),
+        ("focus_subject".to_owned(), serde_json::json!(focus_subject)),
+        ("context_scope".to_owned(), serde_json::json!(context_scope)),
         (
             "failure_category".to_owned(),
             serde_json::json!(failure_category),

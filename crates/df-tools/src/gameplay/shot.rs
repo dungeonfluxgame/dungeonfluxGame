@@ -1035,6 +1035,9 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
     let camera = match (&person, input.scene_key) {
         (None, _) | (Some(_), SceneKey::Combat | SceneKey::Opening) => Camera::WideEstablishing,
         (Some(_), SceneKey::Victory) => Camera::WideEstablishing,
+        // A cast-rich arrival needs enough room for the primary speaker and the named people
+        // around them; keep the focal speaker readable through the placement rules below.
+        (Some(_), _) if input.others.len() >= 2 => Camera::WideEstablishing,
         (Some(_), SceneKey::Inn) => Camera::SpeakerClose,
         (Some(_), SceneKey::DialogueEscort) => Camera::DialogueMedium,
         (Some(_), _) => default_over_shoulder(),
