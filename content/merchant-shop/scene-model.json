@@ -135,7 +135,11 @@
       "aliases": [
         "wooden counter",
         "shop-counter"
-      ]
+      ],
+      "provenance": {
+        "kind": "authored_location",
+        "source_id": "shop-counter"
+      }
     },
     {
       "id": "folded-label",
@@ -163,7 +167,11 @@
       "aliases": [
         "folded paper label",
         "folded-label"
-      ]
+      ],
+      "provenance": {
+        "kind": "authored_location",
+        "source_id": "folded-label"
+      }
     },
     {
       "id": "blue-linen",
@@ -191,7 +199,11 @@
       "aliases": [
         "blue linen bolt",
         "blue-linen"
-      ]
+      ],
+      "provenance": {
+        "kind": "authored_location",
+        "source_id": "blue-linen"
+      }
     },
     {
       "id": "clothing-rack",
@@ -219,7 +231,11 @@
       "aliases": [
         "clothing rack",
         "clothing-rack"
-      ]
+      ],
+      "provenance": {
+        "kind": "authored_location",
+        "source_id": "clothing-rack"
+      }
     },
     {
       "id": "fitting-mirror",
@@ -247,7 +263,11 @@
       "aliases": [
         "fitting mirror",
         "fitting-mirror"
-      ]
+      ],
+      "provenance": {
+        "kind": "authored_location",
+        "source_id": "fitting-mirror"
+      }
     }
   ],
   "ways_out": [
