@@ -29,8 +29,8 @@ pub(crate) fn stem_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Visually reviewed photographic replacements for the public harbor cast and backdrops.
-/// Rejected earlier `-photo` siblings resolve to the reviewed revision as well.
+/// Visually reviewed photographic replacements for the public harbor and merchant-shop cast
+/// and backdrops. Rejected earlier `-photo` siblings resolve to the reviewed revision as well.
 pub(crate) fn photographic_stem(stem: &str) -> Option<&'static str> {
     let stem = stem
         .strip_suffix(".webp")
@@ -58,6 +58,24 @@ pub(crate) fn photographic_stem(stem: &str) -> Option<&'static str> {
         }
         "portrait-bandit" | "portrait-bandit-full" | "sprite-bandit" | "figure-bandit" => {
             Some("sprite-bandit-documentary-photo")
+        }
+        "portrait-patron-merchant" | "portrait-patron-merchant-full" => {
+            Some("portrait-patron-merchant-documentary-photo")
+        }
+        "sprite-patron-merchant" | "figure-patron-merchant" => {
+            Some("sprite-patron-merchant-documentary-photo")
+        }
+        "portrait-shop-adventurer" | "portrait-shop-adventurer-full" => {
+            Some("portrait-shop-adventurer-documentary-photo")
+        }
+        "sprite-shop-adventurer" | "figure-shop-adventurer" => {
+            Some("sprite-shop-adventurer-documentary-photo")
+        }
+        "portrait-shop-soldier" | "portrait-shop-soldier-full" => {
+            Some("portrait-shop-soldier-documentary-photo")
+        }
+        "sprite-shop-soldier" | "figure-shop-soldier" => {
+            Some("sprite-shop-soldier-documentary-photo")
         }
         "scene-lobby-harbor"
         | "scene-wharf-arrival"
@@ -93,6 +111,22 @@ mod tests {
                 photographic_stem(stem),
                 Some("sprite-courier-documentary-photo")
             );
+        }
+        for (stem, expected) in [
+            (
+                "portrait-patron-merchant",
+                "portrait-patron-merchant-documentary-photo",
+            ),
+            (
+                "sprite-shop-adventurer",
+                "sprite-shop-adventurer-documentary-photo",
+            ),
+            (
+                "portrait-shop-soldier-full",
+                "portrait-shop-soldier-documentary-photo",
+            ),
+        ] {
+            assert_eq!(photographic_stem(stem), Some(expected));
         }
         assert_eq!(
             photographic_stem("scene-courier-road"),

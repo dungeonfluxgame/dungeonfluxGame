@@ -1065,13 +1065,13 @@ fn person_description(
             "the customer",
         ),
         "adventurer" => (
-            "an adult in a weathered traveling cloak with a scuffed pack",
+            "a weathered traveling cloak with a scuffed pack",
             "examines a row of folded cloth",
             "at the shelves along the back wall",
             "the adventurer",
         ),
         "soldier" => (
-            "an adult soldier in a plain wool uniform beneath a repaired leather baldric",
+            "a plain wool uniform beneath a repaired leather baldric",
             "keeps an eye on the shop door while waiting",
             "beside the front door",
             "the soldier",
