@@ -334,6 +334,13 @@ mod tests {
             assert_eq!(checked.state().draws.len(), 1);
             let checked = native::persisted(&checked);
             let taken = interaction(&checked, 7, "folded-label", "take");
+            assert!(
+                journey::living_scene::last_line(taken.state())
+                    .unwrap()
+                    .unwrap()
+                    .contains("ask its owner first"),
+                "an owned display item cannot be taken without permission"
+            );
             let scene = runtime::scene(taken.state()).unwrap();
             assert_eq!(
                 journey::living_scene::interaction_for_line(
@@ -357,6 +364,7 @@ mod tests {
                 .find(|thing| thing.id == "folded-label")
                 .unwrap();
             assert!(label.holder_id.is_none());
+            assert_eq!(label.owner_id.as_deref(), Some("merchant"));
             assert_eq!(label.position, "on the wooden counter");
             let who = journey::player_entity(native::first(), &returned).unwrap();
             let before = journey::living_scene::balance_cp(returned.state(), who).unwrap();
@@ -902,6 +910,13 @@ mod tests {
                     ("scene-quote-id", &sell_quote.quote_id),
                     ("scene-payment", "90"),
                 ],
+            );
+            assert!(
+                journey::living_scene::coin_was_transferred(
+                    sold.state(),
+                    df_types::OperationId::from_bytes(&[49; 16]).unwrap()
+                )
+                .unwrap()
             );
             assert_eq!(
                 journey::living_scene::balance_cp(sold.state(), actor).unwrap(),

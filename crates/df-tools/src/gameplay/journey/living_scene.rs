@@ -1290,7 +1290,7 @@ pub(in crate::gameplay) fn coin_was_transferred(
         .find(|decision| decision.operation == operation)
         .ok_or_else(invalid)?;
     read(decision)?
-        .map(|entry| entry.paid_cp > 0)
+        .map(|entry| entry.paid_cp > 0 || entry.coin_credit_cp > 0)
         .ok_or_else(invalid)
 }
 
@@ -1892,6 +1892,12 @@ fn stage_inner(
                 }
                 "take" if thing.in_use || thing.holder_id.is_some() => {
                     format!("{} is being used; ask its holder first.", thing.name)
+                }
+                "take" if thing.owner_id.as_deref().is_some_and(|owner| owner != hero) => {
+                    format!(
+                        "{} belongs to someone else; ask its owner first.",
+                        thing.name
+                    )
                 }
                 "take" => {
                     let description = format!("{hero} picks up {}.", thing.name);
