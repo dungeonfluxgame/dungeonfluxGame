@@ -80,6 +80,9 @@ pub(super) struct Proposal {
     /// Assigned when the reply is appended to the public table log.
     pub(super) source_line_sequence: Option<u64>,
     pub(super) revision: String,
+    /// A deterministic, source-bound merchant price proposal. The same NPC event route validates
+    /// its public source and persists it through the inventory owner's quote journal.
+    pub(super) trade_quote: Option<super::journey::merchant_bargaining::QuoteCandidate>,
 }
 
 impl Proposal {
@@ -431,6 +434,7 @@ pub(super) fn proposal(
         source_line_id,
         source_line_sequence: None,
         revision,
+        trade_quote: None,
     })
 }
 

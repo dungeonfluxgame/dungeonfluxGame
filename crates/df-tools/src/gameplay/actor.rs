@@ -1757,6 +1757,220 @@ impl Actor {
                 current_revision.clone(),
             ));
         };
+        if let Some(quote) = proposal.trade_quote.as_ref() {
+            let hero = super::journey::player_entity(member, &current).map_err(unavailable)?;
+            let hero_id = super::journey::name(current.state(), hero).map_err(unavailable)?;
+            let terms = super::journey::living_scene::merchant_trade_terms(&current, &hero_id)
+                .map_err(unavailable)?;
+            let validated = match super::journey::merchant_bargaining::quote_candidate_for_item(
+                &terms,
+                &hero_id,
+                &proposal.actor_id,
+                quote.direction,
+                &quote.item_id,
+                &proposal.typed_words,
+                &source_text,
+            ) {
+                Ok(validated) => validated,
+                Err(reason) => {
+                    record_npc_event_status(
+                        &proposal,
+                        "rejected",
+                        reason.label(),
+                        &current_revision,
+                    );
+                    return Ok(NpcEventOutcome::status("rejected", current_revision));
+                }
+            };
+            if &validated != quote {
+                record_npc_event_status(
+                    &proposal,
+                    "rejected",
+                    "candidate_mismatch",
+                    &current_revision,
+                );
+                return Ok(NpcEventOutcome::status("rejected", current_revision));
+            }
+            let next =
+                current.basis().revision.next_sequence().map_err(|_| {
+                    tonic::Status::failed_precondition("revision sequence exhausted")
+                })?;
+            let candidate_checkpoint = match super::journey::living_scene::commit_npc_trade_quote(
+                &current,
+                super::journey::living_scene::NpcTradeQuoteProposal {
+                    operation,
+                    expected_basis: current.basis(),
+                    actor_id: proposal.actor_id.clone(),
+                    customer_id: hero_id.clone(),
+                    direction: quote.direction,
+                    item_id: quote.item_id.clone(),
+                    offer_id: quote.offer_id.clone(),
+                    price_cp: quote.price_cp,
+                    source: super::journey::living_scene::NpcInventorySource {
+                        source_line_id: proposal.source_line_id.clone(),
+                        source_revision: current.basis().revision,
+                        source_line_sequence: source_sequence,
+                        source_actor_id: proposal.actor_id.clone(),
+                        source_text,
+                    },
+                },
+            ) {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    record_npc_event_status(
+                        &proposal,
+                        "rejected",
+                        "inventory_quote_validation_rejected",
+                        &current_revision,
+                    );
+                    return Err(unavailable(error));
+                }
+            };
+            if candidate_checkpoint.basis().revision != next {
+                record_npc_event_status(
+                    &proposal,
+                    "rejected",
+                    "candidate_revision_not_single_step",
+                    &current_revision,
+                );
+                return Err(tonic::Status::failed_precondition(
+                    "merchant quote revision did not advance exactly once",
+                ));
+            }
+            let speaker = current
+                .state()
+                .characters
+                .iter()
+                .find(|character| character.owner == member)
+                .map(|character| character.entity)
+                .ok_or_else(|| tonic::Status::failed_precondition("seat has no hero"))?;
+            let input = GameInput::Game(CommandInput {
+                basis: current.basis(),
+                observed_revision: current.basis().revision,
+                operation,
+                member,
+                command: GameCommand::Speak {
+                    speaker,
+                    text: proposal.source_line_id.clone(),
+                    conversation: None,
+                },
+            });
+            let fingerprint: [u8; 32] = Sha256::digest(proposal.source_line_id.as_bytes()).into();
+            let scope = self
+                .issuer
+                .issue(
+                    credential,
+                    model::random().map_err(unavailable)?,
+                    fingerprint,
+                    input,
+                    model::pins().map_err(unavailable)?,
+                )
+                .map_err(unavailable)?;
+            let operation_context = OperationContext {
+                trace_parent: String::new(),
+                build: crate::BUILD_ID.to_owned(),
+            };
+            match self.owner.commit_owner_candidate(
+                &scope,
+                &candidate_checkpoint,
+                &operation_context,
+            ) {
+                SubmissionOutcome::Confirmed(receipt) => {
+                    super::journey::living_scene::publish(&candidate_checkpoint)
+                        .map_err(unavailable)?;
+                    let direction = match quote.direction {
+                        super::journey::merchant_bargaining::TradeDirection::HeroBuys => {
+                            "hero_buys"
+                        }
+                        super::journey::merchant_bargaining::TradeDirection::HeroSells => {
+                            "hero_sells"
+                        }
+                    };
+                    record_audit_diagnostic(
+                        "gameplay.merchant.quote",
+                        format!(
+                            "MERCHANT_QUOTE status=issued direction={direction} item={} price_cp={}",
+                            quote.item_id, quote.price_cp
+                        ),
+                        serde_json::Map::from_iter([
+                            ("status".into(), serde_json::json!("issued")),
+                            ("direction".into(), serde_json::json!(direction)),
+                            ("item_id".into(), serde_json::json!(quote.item_id)),
+                            ("price_cp".into(), serde_json::json!(quote.price_cp)),
+                            (
+                                "source_line_id".into(),
+                                serde_json::json!(proposal.source_line_id),
+                            ),
+                            (
+                                "source_line_sequence".into(),
+                                serde_json::json!(source_sequence),
+                            ),
+                            (
+                                "committed_revision".into(),
+                                serde_json::json!(revision_key(receipt.basis().revision)),
+                            ),
+                        ]),
+                        &[
+                            ("gameplay.merchant.quote.status", "issued".into()),
+                            ("gameplay.merchant.quote.direction", direction.into()),
+                        ],
+                    );
+                    if let Some(line) =
+                        super::journey::living_scene::last_line(candidate_checkpoint.state())
+                            .map_err(unavailable)?
+                    {
+                        self.table_log.push_actor(
+                            &proposal.actor_id,
+                            &canonical_actor.name,
+                            rpc::TableRole::Npc,
+                            0,
+                            rpc::TableKind::Action,
+                            &line,
+                        );
+                    }
+                    return Ok(NpcEventOutcome {
+                        status: "committed",
+                        revision: revision_key(receipt.basis().revision),
+                        operation_id: Some(super::journey::hex(operation.as_bytes())),
+                        source_line_id: Some(proposal.source_line_id),
+                        item_id: Some(quote.item_id.clone()),
+                        holder_id: None,
+                        owner_id: None,
+                        item_detail: None,
+                    });
+                }
+                SubmissionOutcome::Refused(error) => {
+                    record_npc_event_status(
+                        &proposal,
+                        "rejected",
+                        "owner_refused_candidate",
+                        &current_revision,
+                    );
+                    Err(unavailable(error))
+                }
+                SubmissionOutcome::OperationConflict => {
+                    record_npc_event_status(
+                        &proposal,
+                        "conflict",
+                        "owner_operation_conflict",
+                        &current_revision,
+                    );
+                    Err(tonic::Status::aborted("merchant quote conflict"))
+                }
+                SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                    self.fenced = true;
+                    record_npc_event_status(
+                        &proposal,
+                        "unavailable",
+                        "owner_commit_outcome_indeterminate",
+                        &current_revision,
+                    );
+                    Err(tonic::Status::unavailable(
+                        "merchant quote commit outcome unavailable",
+                    ))
+                }
+            }
+        }
         if !matches!(
             proposal.kind,
             EventKind::IntentToTake | EventKind::IntentToGive
@@ -2230,6 +2444,67 @@ impl Actor {
         }
     }
 
+    fn validate_trade_quote_source(
+        &self,
+        member: MemberId,
+        request: &rpc::SubmitActionRequest,
+    ) -> Result<(), tonic::Status> {
+        let options = request
+            .action_choices
+            .iter()
+            .filter(|choice| choice.group_id == "scene-option")
+            .map(|choice| choice.option_id.as_str())
+            .collect::<Vec<_>>();
+        let quote_ids = request
+            .action_choices
+            .iter()
+            .filter(|choice| choice.group_id == "scene-quote-id")
+            .map(|choice| choice.option_id.as_str())
+            .collect::<Vec<_>>();
+        let is_trade = options.contains(&"trade");
+        if !is_trade && quote_ids.is_empty() {
+            return Ok(());
+        }
+        if options.as_slice() != ["trade"] || quote_ids.len() != 1 {
+            return Err(tonic::Status::failed_precondition(
+                "merchant trade needs one live quote acceptance",
+            ));
+        }
+
+        let current = self.owner.checkpoint();
+        let hero = super::journey::name(
+            current.state(),
+            super::journey::player_entity(member, current).map_err(unavailable)?,
+        )
+        .map_err(unavailable)?;
+        let quote = super::journey::living_scene::pending_merchant_quote(current, &hero)
+            .map_err(unavailable)?
+            .filter(|quote| quote.quote_id == quote_ids[0])
+            .ok_or_else(|| tonic::Status::failed_precondition("merchant quote is not pending"))?;
+        let merchant_id = match quote.direction {
+            super::journey::living_scene::SceneTradeDirection::HeroBuys => &quote.seller_id,
+            super::journey::living_scene::SceneTradeDirection::HeroSells => &quote.buyer_id,
+        };
+        if quote.source_actor_id != *merchant_id
+            || quote.source_line_sequence == 0
+            || quote.source_line_id.is_empty()
+        {
+            return Err(tonic::Status::failed_precondition(
+                "merchant quote source binding is invalid",
+            ));
+        }
+        if self
+            .table_log
+            .latest_npc_speech_at(quote.source_line_sequence, &quote.source_actor_id)
+            .is_none()
+        {
+            return Err(tonic::Status::failed_precondition(
+                "merchant quote no longer matches the latest public NPC speech",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn submit(
         &mut self,
         credential: [u8; 32],
@@ -2253,6 +2528,7 @@ impl Actor {
         }
         let member = df_types::MemberId::from_bytes(&principal)
             .map_err(|_| tonic::Status::permission_denied("member binding invalid"))?;
+        self.validate_trade_quote_source(member, &request)?;
         if rpc::GameplayActionKind::try_from(request.action_kind)
             == Ok(rpc::GameplayActionKind::SetTableSetting)
         {

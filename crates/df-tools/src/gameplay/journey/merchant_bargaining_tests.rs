@@ -1,8 +1,10 @@
 use serde_json::json;
 
 use super::merchant_bargaining::{
-    QuoteDecision, QuoteRejection, TradeDirection, TradeTerms, explicit_price_cp, quote_candidate,
-    quote_decision, reply_context,
+    QuoteDecision, QuoteRejection, TradeDirection, TradeTerms, explicit_price_cp,
+    is_trade_dialogue_request, quote_candidate, quote_candidate_for_item,
+    quote_candidate_for_reply, quote_decision, referenced_item_id, reply_context,
+    reply_context_for_quote,
 };
 
 fn terms(direction: TradeDirection) -> TradeTerms {
@@ -22,8 +24,16 @@ fn terms(direction: TradeDirection) -> TradeTerms {
         item_id: "item-clothes-travelers".into(),
         item_name: "fine clothes".into(),
         aliases: vec!["traveler clothes".into(), "travelers clothes".into()],
-        minimum_price_cp: 1_000,
-        maximum_price_cp: 1_500,
+        minimum_price_cp: if direction == TradeDirection::HeroSells {
+            1
+        } else {
+            1_000
+        },
+        maximum_price_cp: if direction == TradeDirection::HeroSells {
+            1_200
+        } else {
+            1_500
+        },
         available: true,
         stock_units: 1,
         stock_revision: 1,
@@ -100,6 +110,47 @@ fn seller_quotes_are_exact_bounded_and_directional() {
     )
     .unwrap();
     assert_eq!(natural_buy.price_cp, 1_200);
+}
+
+#[test]
+fn combined_show_and_sell_uses_the_canonical_held_item() {
+    let request = "I show Marek the travelers clothes I just bought, still unworn. Marek, I want to sell these back to you for 1 GP.";
+    let sale_terms = terms(TradeDirection::HeroSells);
+    assert!(is_trade_dialogue_request(request));
+    assert_eq!(
+        referenced_item_id(&[sale_terms.clone()], "sigrun", "marek", request).as_deref(),
+        Some("item-clothes-travelers")
+    );
+    let candidate = quote_candidate_for_reply(
+        &[sale_terms],
+        "sigrun",
+        "marek",
+        request,
+        "I can pay 1 GP for the travelers clothes.",
+    )
+    .unwrap();
+    assert_eq!(candidate.direction, TradeDirection::HeroSells);
+    assert_eq!(candidate.item_id, "item-clothes-travelers");
+    assert_eq!(candidate.price_cp, 100);
+}
+
+#[test]
+fn counteroffer_keeps_the_live_quote_item_and_trade_direction() {
+    let request = "What about 11 GP?";
+    assert!(is_trade_dialogue_request(request));
+    let candidate = quote_candidate_for_item(
+        &[terms(TradeDirection::HeroSells)],
+        "sigrun",
+        "marek",
+        TradeDirection::HeroSells,
+        "item-clothes-travelers",
+        request,
+        "I can meet you at 12 GP for the travelers clothes.",
+    )
+    .unwrap();
+    assert_eq!(candidate.direction, TradeDirection::HeroSells);
+    assert_eq!(candidate.item_id, "item-clothes-travelers");
+    assert_eq!(candidate.price_cp, 1_200);
 }
 
 #[test]
@@ -368,6 +419,42 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
     let second_quote = candidate(&second);
     assert_eq!(first_quote, second_quote);
     assert_eq!(first_quote.price_cp, 1_200);
+}
+
+#[test]
+fn live_counteroffer_context_preserves_the_exact_item_and_direction() {
+    let quote = super::living_scene::SceneTradeQuote {
+        quote_id: "quote-1".into(),
+        direction: TradeDirection::HeroSells,
+        place_id: "market".into(),
+        item_id: "item-clothes-travelers".into(),
+        offer_id: None,
+        seller_id: "sigrun".into(),
+        buyer_id: "marek".into(),
+        price_cp: 1_000,
+        stock_revision: 2,
+        purse_revision: 3,
+        source_line_id: "source-1".into(),
+        source_line_sequence: 4,
+        source_revision: "revision-4".into(),
+        source_actor_id: "marek".into(),
+    };
+    let context = reply_context_for_quote(
+        &[
+            terms(TradeDirection::HeroSells),
+            terms(TradeDirection::HeroBuys),
+        ],
+        "sigrun",
+        "marek",
+        "What about 11 GP?",
+        &quote,
+        &json!({"attitude_toward_hero": "wary"}),
+    )
+    .unwrap();
+    assert_eq!(context["available_trades"].as_array().unwrap().len(), 1);
+    assert_eq!(context["available_trades"][0]["direction"], "merchant_buys");
+    assert_eq!(context["live_quote"]["price_cp"], 1_000);
+    assert_eq!(context["merchant_facts"]["attitude_toward_hero"], "wary");
 }
 
 #[test]

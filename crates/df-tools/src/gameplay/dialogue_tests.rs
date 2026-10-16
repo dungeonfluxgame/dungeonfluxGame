@@ -481,6 +481,7 @@ fn event_line_proposal(
         ),
         source_line_sequence: Some(source_line_sequence),
         revision: revision.to_owned(),
+        trade_quote: None,
     }
 }
 

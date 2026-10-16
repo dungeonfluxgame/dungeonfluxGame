@@ -121,6 +121,142 @@ pub(in crate::gameplay) fn quote_candidate(
     })
 }
 
+/// Route explicit sale and price negotiation language to the NPC conversation path before the
+/// generic physical-action classifier can treat a narrated presentation as an examination.
+pub(in crate::gameplay) fn is_trade_dialogue_request(words: &str) -> bool {
+    is_selling_request(words)
+        || (is_bargaining_request(words)
+            && (explicit_price_cp(words).is_ok()
+                || [
+                    "buy",
+                    "price",
+                    "cost",
+                    "cheaper",
+                    "discount",
+                    "haggle",
+                    "bargain",
+                    "counteroffer",
+                    "counter offer",
+                ]
+                .iter()
+                .any(|phrase| contains_phrase(words, phrase))))
+}
+
+/// Select a single item from the authenticated hero's trade terms. Named items always win; an
+/// unqualified demonstrative is allowed only when it resolves to one in-scope term.
+pub(in crate::gameplay) fn referenced_item_id(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    words: &str,
+) -> Option<String> {
+    let relevant = terms
+        .iter()
+        .filter(|term| {
+            valid_terms(term)
+                && authenticated_hero_id == hero_id_for_terms(term)
+                && addressed_merchant_id == merchant_id_for_terms(term)
+                && (term.direction == TradeDirection::HeroSells) == is_selling_request(words)
+        })
+        .collect::<Vec<_>>();
+    let named = relevant
+        .iter()
+        .copied()
+        .filter(|term| mentions_item(term, words))
+        .collect::<Vec<_>>();
+    match named.as_slice() {
+        [term] => Some(term.item_id.clone()),
+        [] if refers_to_active_item(words) && relevant.len() == 1 => {
+            Some(relevant[0].item_id.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Pick one canonical term and validate the NPC's exact line as a live offer. This prevents a
+/// pronoun in one reply from being attached to an arbitrary item when several are in scope.
+pub(in crate::gameplay) fn quote_candidate_for_reply(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    player_words: &str,
+    merchant_reply: &str,
+) -> Result<QuoteCandidate, QuoteRejection> {
+    let direction = if is_selling_request(player_words) {
+        TradeDirection::HeroSells
+    } else {
+        TradeDirection::HeroBuys
+    };
+    let relevant = terms
+        .iter()
+        .filter(|term| {
+            term.direction == direction
+                && authenticated_hero_id == hero_id_for_terms(term)
+                && addressed_merchant_id == merchant_id_for_terms(term)
+        })
+        .collect::<Vec<_>>();
+    let named = relevant
+        .iter()
+        .copied()
+        .filter(|term| mentions_item(term, player_words))
+        .collect::<Vec<_>>();
+    let selected = match named.as_slice() {
+        [term] => *term,
+        [] if refers_to_active_item(player_words) => {
+            let identified_by_reply = relevant
+                .iter()
+                .copied()
+                .filter(|term| mentions_item(term, merchant_reply))
+                .collect::<Vec<_>>();
+            match identified_by_reply.as_slice() {
+                [term] => *term,
+                [] if relevant.len() == 1 => relevant[0],
+                _ => return Err(QuoteRejection::ItemUnclear),
+            }
+        }
+        _ => return Err(QuoteRejection::ItemUnclear),
+    };
+    quote_candidate_for_item(
+        terms,
+        authenticated_hero_id,
+        addressed_merchant_id,
+        selected.direction,
+        &selected.item_id,
+        player_words,
+        merchant_reply,
+    )
+}
+
+/// Validate a merchant's counteroffer against the exact item and direction of the live quote it
+/// answers. The prior receipt supplies context when a player uses an unqualified amount such as
+/// “What about 11 gold?”.
+pub(in crate::gameplay) fn quote_candidate_for_item(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    direction: TradeDirection,
+    item_id: &str,
+    player_words: &str,
+    merchant_reply: &str,
+) -> Result<QuoteCandidate, QuoteRejection> {
+    let selected = terms
+        .iter()
+        .find(|term| {
+            term.direction == direction
+                && term.item_id == item_id
+                && authenticated_hero_id == hero_id_for_terms(term)
+                && addressed_merchant_id == merchant_id_for_terms(term)
+        })
+        .ok_or(QuoteRejection::ItemUnclear)?;
+    quote_candidate(
+        selected,
+        authenticated_hero_id,
+        addressed_merchant_id,
+        player_words,
+        merchant_reply,
+    )
+}
+
 /// Classify an explicit player response to one already-resolved live quote.
 ///
 /// A generic affirmation is meaningful only when the caller has proved there is exactly one live
@@ -132,10 +268,12 @@ pub(in crate::gameplay) fn quote_decision(words: &str, quoted_price_cp: u32) -> 
         return QuoteDecision::Unclear;
     }
     let normalized = words.to_ascii_lowercase();
-    if matches!(explicit_price_cp(words), Ok(price_cp) if price_cp != quoted_price_cp)
-        && is_explicit_counteroffer(words)
-    {
-        return QuoteDecision::Counteroffer;
+    match explicit_price_cp(words) {
+        Ok(price_cp) if price_cp != quoted_price_cp => return QuoteDecision::Counteroffer,
+        Err(QuoteRejection::AmbiguousAmount | QuoteRejection::InvalidAmount) => {
+            return QuoteDecision::Unclear;
+        }
+        _ => {}
     }
     if is_quote_decline(words) {
         return QuoteDecision::Decline;
@@ -166,8 +304,15 @@ pub(in crate::gameplay) fn quote_decision(words: &str, quoted_price_cp: u32) -> 
             "accepted",
             "agreed",
             "sounds fair",
+            "sounds good",
             "that works",
+            "that'll do",
+            "that will do",
             "sold",
+            "go ahead",
+            "let's do it",
+            "lets do it",
+            "make the deal",
             "i'll take it",
             "i will take it",
             "i take it",
@@ -177,6 +322,13 @@ pub(in crate::gameplay) fn quote_decision(words: &str, quoted_price_cp: u32) -> 
             "i'll buy",
             "i will buy",
             "i buy",
+            "i can do",
+            "i can pay",
+            "i will pay",
+            "i'll pay",
+            "i'll take it for",
+            "i will take it for",
+            "i accept",
             "i'll sell it",
             "i will sell it",
             "i sell it",
@@ -208,7 +360,49 @@ pub(in crate::gameplay) fn reply_context(
     tendered_item_id: Option<&str>,
     listener_facts: &Value,
 ) -> Option<Value> {
-    let sell_context = tendered_item_id.is_some() || is_selling_request(typed_words);
+    reply_context_with_quote(
+        terms,
+        authenticated_hero_id,
+        merchant_id,
+        typed_words,
+        tendered_item_id,
+        None,
+        listener_facts,
+    )
+}
+
+pub(in crate::gameplay) fn reply_context_for_quote(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    merchant_id: &str,
+    typed_words: &str,
+    quote: &super::living_scene::SceneTradeQuote,
+    listener_facts: &Value,
+) -> Option<Value> {
+    reply_context_with_quote(
+        terms,
+        authenticated_hero_id,
+        merchant_id,
+        typed_words,
+        Some(&quote.item_id),
+        Some(quote),
+        listener_facts,
+    )
+}
+
+fn reply_context_with_quote(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    merchant_id: &str,
+    typed_words: &str,
+    tendered_item_id: Option<&str>,
+    live_quote: Option<&super::living_scene::SceneTradeQuote>,
+    listener_facts: &Value,
+) -> Option<Value> {
+    let sell_context = live_quote.map_or_else(
+        || tendered_item_id.is_some() || is_selling_request(typed_words),
+        |quote| quote.direction == TradeDirection::HeroSells,
+    );
     let hero_buy_terms = terms
         .iter()
         .filter(|term| {
@@ -224,6 +418,9 @@ pub(in crate::gameplay) fn reply_context(
         .filter(|term| {
             hero_id_for_terms(term) == authenticated_hero_id
                 && merchant_id_for_terms(term) == merchant_id
+                && live_quote.is_none_or(|quote| {
+                    term.direction == quote.direction && term.item_id == quote.item_id
+                })
                 && match term.direction {
                     TradeDirection::HeroBuys => {
                         !sell_context
@@ -233,10 +430,17 @@ pub(in crate::gameplay) fn reply_context(
                     }
                     TradeDirection::HeroSells => {
                         sell_context
-                            && tendered_item_id.map_or_else(
-                                || mentions_item(term, typed_words),
-                                |item_id| item_id == term.item_id.as_str(),
+                            && live_quote.map_or_else(
+                                || {
+                                    tendered_item_id.map_or_else(
+                                        || mentions_item(term, typed_words),
+                                        |item_id| item_id == term.item_id.as_str(),
+                                    )
+                                },
+                                |quote| quote.item_id == term.item_id,
                             )
+                            && tendered_item_id
+                                .map_or_else(|| true, |item_id| item_id == term.item_id.as_str())
                     }
                 }
         })
@@ -286,6 +490,17 @@ pub(in crate::gameplay) fn reply_context(
     Some(json!({
         "merchant_facts": facts,
         "available_trades": inventory,
+        "live_quote": live_quote.map(|quote| json!({
+            "direction": match quote.direction {
+                TradeDirection::HeroBuys => "merchant_sells",
+                TradeDirection::HeroSells => "merchant_buys",
+            },
+            "item": available
+                .iter()
+                .find(|term| term.item_id == quote.item_id)
+                .map(|term| term.item_name.as_str()),
+            "price_cp": quote.price_cp,
+        })),
         "negotiation_rules": [
             "Use the supplied individual role, authored background and experience, competence, motive, temperament, current emotional reaction, and relationship only to shape this character's voice and willingness to engage, refuse, or counter.",
             "Mood may make this individual more or less willing to bargain, but it never sets a numeric price, skill bonus, or guaranteed outcome. Follow current in-game stock and answer only for the named item.",
@@ -530,41 +745,6 @@ fn is_quote_decline(words: &str) -> bool {
         "do not take it",
     ];
     DECLINES.iter().any(|phrase| contains_phrase(words, phrase))
-}
-
-fn is_explicit_counteroffer(words: &str) -> bool {
-    [
-        "what about",
-        "how about",
-        "what if",
-        "would you take",
-        "would you accept",
-        "would you do",
-        "can you do",
-        "could you do",
-        "i offer",
-        "i am offering",
-        "i can offer",
-        "i could offer",
-        "my offer is",
-        "i can do",
-        "i could do",
-        "i can pay",
-        "i will pay",
-        "i'll pay",
-        "i'd pay",
-        "i buy",
-        "i'll buy",
-        "i will buy",
-        "i sell",
-        "i'll sell",
-        "i will sell",
-        "counteroffer",
-        "counter offer",
-        "instead",
-    ]
-    .iter()
-    .any(|phrase| contains_phrase(words, phrase))
 }
 
 fn is_present_commitment(reply: &str) -> bool {

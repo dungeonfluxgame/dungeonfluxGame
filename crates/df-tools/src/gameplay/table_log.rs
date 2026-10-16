@@ -986,6 +986,22 @@ impl TableLog {
             .is_some()
     }
 
+    /// Returns the current latest NPC speech when its actor and sequence match. Quote receipts
+    /// retain the source-line digest and sequence, so acceptance can prove it still refers to
+    /// the same public turn without retaining or returning the speech text.
+    pub(super) fn latest_npc_speech_at(&self, sequence: u64, actor_id: &str) -> Option<String> {
+        let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        ring.lines
+            .iter()
+            .rev()
+            .find(|line| {
+                line.role == rpc::TableRole::Npc as i32
+                    && line.kind == rpc::TableKind::Speech as i32
+            })
+            .filter(|line| line.sequence == sequence && line.actor_id == actor_id)
+            .map(|line| line.text.clone())
+    }
+
     /// Returns the exact text the table displayed for the current NPC source line. Callers
     /// that journal a source-bound decision persist this value instead of model output that
     /// may contain control characters or exceed the public line limit.

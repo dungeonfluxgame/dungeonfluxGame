@@ -227,7 +227,12 @@ fn revision_key(view: &rpc::ViewMessage) -> String {
 /// elsewhere.
 pub(super) struct NpcReplyContext {
     member: MemberId,
-    scene_identity: String,
+    pub(super) scene_identity: String,
+    pub(super) npc_id: String,
+    pub(super) hero_id: String,
+    /// The unique live quote this exact turn may answer with an acceptance, decline or
+    /// counteroffer. Captured by the authoritative actor after source-line validation.
+    pub(super) pending_quote: Option<super::journey::living_scene::SceneTradeQuote>,
     publication_guard: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub(super) facts: Value,
     pub(super) speaker: String,
@@ -248,7 +253,7 @@ pub(super) struct NpcReplyContext {
     room: Option<super::adventure::scene_model::SceneNow>,
     /// The session basis observed when this reply was routed.  Event proposals are stale when
     /// the owner commits against any other basis.
-    observed_revision: String,
+    pub(super) observed_revision: String,
     /// Set when the addressed NPC has a backstory: the reply then draws on it and moves the
     /// NPC's attitude toward this hero.
     pub(super) turn: Option<Box<Turn>>,
@@ -257,6 +262,8 @@ pub(super) struct NpcReplyContext {
 /// How one exchange with an NPC that has a backstory went.
 pub(super) struct Exchange {
     pub(super) text: String,
+    /// Public NPC speech line sequence, when a line was actually shown in the table log.
+    pub(super) source_line_sequence: Option<u64>,
     pub(super) outcome: ExchangeOutcome,
     /// What the hero's words did, as the model or the keyword reader read them.
     pub(super) approach: Approach,
@@ -750,6 +757,9 @@ impl NpcReplyContext {
                 .as_ref()
                 .map(|scene| format!("{}|{}", scene.title, scene.scene_asset))
                 .unwrap_or_default(),
+            npc_id: turn_dossier.npc_id.clone(),
+            hero_id: hero.name.clone(),
+            pending_quote: None,
             publication_guard: None,
             member,
             facts,
@@ -936,6 +946,9 @@ impl NpcReplyContext {
                 .as_ref()
                 .map(|scene| format!("{}|{}", scene.title, scene.scene_asset))
                 .unwrap_or_default(),
+            npc_id: String::new(),
+            hero_id: hero.name.clone(),
+            pending_quote: None,
             publication_guard: None,
             member,
             facts,
@@ -1272,6 +1285,7 @@ impl NpcVoice {
             return None;
         }
         let private = context.private_reply && outcome == ExchangeOutcome::Spoken;
+        let mut source_line_sequence = None;
         if private {
             log.push_actor(
                 &context.actor_id,
@@ -1282,7 +1296,7 @@ impl NpcVoice {
                 &format!("murmurs to {}", context.hero_name),
             );
         } else if outcome == ExchangeOutcome::Spoken {
-            log.push_actor(
+            source_line_sequence = log.push_actor(
                 &context.actor_id,
                 &context.speaker,
                 rpc::TableRole::Npc,
@@ -1293,6 +1307,7 @@ impl NpcVoice {
         }
         let exchange = Exchange {
             text,
+            source_line_sequence,
             outcome,
             approach,
             from_model,
@@ -1879,6 +1894,7 @@ impl NpcVoice {
         }
         let exchange = Exchange {
             text,
+            source_line_sequence,
             outcome,
             approach,
             from_model,
