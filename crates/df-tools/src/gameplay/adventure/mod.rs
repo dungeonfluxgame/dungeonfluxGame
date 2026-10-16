@@ -41,7 +41,7 @@ use super::{
     pack::{PackFile, TuningFile},
     startup_configuration::ContentRating,
 };
-pub(crate) use generate::{generate, generate_with_prose};
+pub(crate) use generate::{generate, generate_with_prose, opening_dressing};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 pub(crate) use tables::{Tables, TablesError};

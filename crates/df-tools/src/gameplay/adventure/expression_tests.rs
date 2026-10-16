@@ -586,6 +586,11 @@ fn storyteller_facts_are_scoped_to_each_scene_and_unresolved_outcomes() {
             .iter()
             .any(|name| { name.as_str() == Some(baseline.pack.bandit.name.as_str()) })
     );
+    let opening_text = serde_json::to_string(opening).unwrap();
+    assert!(!opening_text.contains("knowledge"));
+    assert!(!opening_text.contains("wants"));
+    assert!(!opening_text.contains("attitudes"));
+    assert!(opening["approved_appearance"]["ways_out"].is_array());
     assert!(serde_json::to_vec(&facts).unwrap().len() <= 16 * 1024);
 }
 

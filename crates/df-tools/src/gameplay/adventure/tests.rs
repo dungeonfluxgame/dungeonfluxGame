@@ -294,6 +294,43 @@ fn longest_coherent_opening_fits_the_narration_bound() {
 }
 
 #[test]
+fn opening_dressing_uses_present_people_and_omits_empty_categories() {
+    let tables = tables();
+    let generated = generate(
+        &tables,
+        43,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let model = generated.settings.meeting.model.as_ref().unwrap();
+    let opening = model.for_scene(super::super::pack::SceneKey::Opening);
+    let dressing = super::opening_dressing(model, &generated.settings.meeting.name);
+
+    for person in &opening.people {
+        assert!(dressing.contains(&person.name));
+        assert!(dressing.contains(person.description.trim_end_matches('.')));
+        assert!(dressing.contains(&person.position));
+    }
+    for person in &model.people {
+        if !opening.people.iter().any(|present| present.id == person.id) {
+            assert!(!dressing.contains(&person.name));
+        }
+    }
+    assert!(!dressing.contains(';'));
+
+    let mut empty_context = opening.clone();
+    for thing in &mut empty_context.things {
+        thing.in_scene = false;
+    }
+    empty_context.ways_out.clear();
+    let empty_dressing = super::opening_dressing(&empty_context, "the room");
+    assert!(!empty_dressing.contains("You can see"));
+    assert!(!empty_dressing.contains("Visible goods"));
+    assert!(!empty_dressing.contains("Ways out"));
+}
+
+#[test]
 fn table_errors_name_the_source_and_json_path() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/play-g1/table-errors");

@@ -11,6 +11,38 @@ use super::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) fn opening_dressing(model: &super::scene_model::SceneModel, place_name: &str) -> String {
+    let model = model.for_scene(SceneKey::Opening);
+    let mut sentences = vec![format!(
+        "You arrive at {place_name} in the {} with {}.",
+        model.time_of_day, model.weather
+    )];
+    sentences.extend(model.people.iter().map(|person| {
+        format!(
+            "{} is {} at {}.",
+            person.name,
+            person.description.trim_end_matches('.'),
+            person.position
+        )
+    }));
+    sentences.extend(
+        model
+            .things
+            .iter()
+            .filter(|thing| thing.in_scene)
+            .take(2)
+            .map(|thing| format!("You can see {} at {}.", thing.name, thing.position)),
+    );
+    sentences.extend(
+        model
+            .ways_out
+            .iter()
+            .take(2)
+            .map(|way| format!("The {} is at {}.", way.name, way.position)),
+    );
+    sentences.join(" ")
+}
+
 trait Entry {
     fn faces(&self) -> [u8; 2];
     fn id(&self) -> &str;
@@ -525,32 +557,7 @@ pub(crate) fn generate_with_prose(
         .meeting
         .model
         .as_ref()
-        .map(|model| {
-            let model = model.for_scene(SceneKey::Opening);
-            let people = model
-                .people
-                .iter()
-                .map(|person| format!("{} the {} at {}", person.name, person.role, person.position))
-                .collect::<Vec<_>>()
-                .join("; ");
-            let goods = model
-                .things
-                .iter()
-                .filter(|thing| thing.in_scene)
-                .map(|thing| format!("{} at {}", thing.name, thing.position))
-                .collect::<Vec<_>>()
-                .join("; ");
-            let ways_out = model
-                .ways_out
-                .iter()
-                .map(|way| format!("{} {}", way.name, way.position))
-                .collect::<Vec<_>>()
-                .join("; ");
-            format!(
-                "{} in the {} with {}: {}. Visible goods: {}. Ways out: {}.",
-                settings.meeting.name, model.time_of_day, model.weather, people, goods, ways_out
-            )
-        })
+        .map(|model| opening_dressing(model, &settings.meeting.name))
         .unwrap_or_else(|| settings.meeting.name.clone());
     context.insert("pos".into(), pronouns(&patron.gender)?[2].into());
     let entrance = render::render(&hook.entrance, &context)?;

@@ -331,10 +331,17 @@ pub(in crate::gameplay) fn with_model(
             .iter()
             .filter(|other| other.position == person.position)
             .count() as u32;
+        let group_size = model
+            .people
+            .iter()
+            .filter(|other| other.position == person.position)
+            .count() as u32;
         // Keep accepted same-spot people legible in a wide composition. The model's named
-        // position remains authoritative; this bounded lateral offset only separates bodies that
+        // position remains authoritative; this centered bounded offset only separates bodies that
         // would otherwise occupy the same foreground pixels.
-        actor.anchor_x_permille = (x + neighbors * 140).min(950);
+        let centered_offset =
+            neighbors as i32 * 110 - (group_size.saturating_sub(1) as i32 * 110) / 2;
+        actor.anchor_x_permille = (x as i32 + centered_offset).clamp(50, 950) as u32;
         actor.anchor_y_permille = y;
         actor.depth_permille = depth;
         actor.pose = person.description.clone();
