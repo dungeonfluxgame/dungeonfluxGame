@@ -37,7 +37,7 @@ pub(crate) fn opening_dressing(model: &super::scene_model::SceneModel) -> String
     if activities.is_empty() {
         String::new()
     } else {
-        format!("Meanwhile, {}.", activities.join(" while "))
+        format!("Meanwhile, {}.", activities.join(" and "))
     }
 }
 
