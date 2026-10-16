@@ -144,3 +144,10 @@
 /* A held final caption keeps its original lane while the photograph dissolves underneath. */
 .tv-stage[data-plate-caption-retained] .tv-lower[data-line-state=lingering]{opacity:1;visibility:visible;transform:translate(-50%,0);transition:none}
 .tv-stage[data-plate-caption-retained] .tv-plate-bubbles{visibility:hidden}
+
+/* A restrained pointer ties a plate caption to its own measured speaker. */
+.tv-stage[data-shot=plate][data-tv-mode=scene] .tv-plate-bubbles .tv-fig-bubbles[data-tail] .tv-bubble:is([data-kind=speech],[data-kind=typed])::after{display:block;content:'';position:absolute;width:0;height:0;border:6px solid transparent;opacity:.75;transform:none;pointer-events:none}
+.tv-stage[data-shot=plate][data-tv-mode=scene] .tv-plate-bubbles .tv-fig-bubbles[data-tail=top] .tv-bubble:is([data-kind=speech],[data-kind=typed])::after{left:clamp(12px,var(--tail-x),calc(100% - 12px));right:auto;top:-12px;bottom:auto;border-bottom-color:#dfd2b8}
+.tv-stage[data-shot=plate][data-tv-mode=scene] .tv-plate-bubbles .tv-fig-bubbles[data-tail=bottom] .tv-bubble:is([data-kind=speech],[data-kind=typed])::after{left:clamp(12px,var(--tail-x),calc(100% - 12px));right:auto;top:auto;bottom:-12px;border-top-color:#dfd2b8}
+.tv-stage[data-shot=plate][data-tv-mode=scene] .tv-plate-bubbles .tv-fig-bubbles[data-tail=left] .tv-bubble:is([data-kind=speech],[data-kind=typed])::after{left:-12px;right:auto;top:clamp(12px,var(--tail-y),calc(100% - 12px));bottom:auto;border-right-color:#dfd2b8}
+.tv-stage[data-shot=plate][data-tv-mode=scene] .tv-plate-bubbles .tv-fig-bubbles[data-tail=right] .tv-bubble:is([data-kind=speech],[data-kind=typed])::after{left:auto;right:-12px;top:clamp(12px,var(--tail-y),calc(100% - 12px));bottom:auto;border-left-color:#dfd2b8}

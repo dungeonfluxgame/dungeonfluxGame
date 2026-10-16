@@ -146,6 +146,7 @@ fn clear_of(rect: &Rect, head: &Rect, avoid: &[Rect]) -> bool {
 /// starts, so the tail lines up with the head's centre. The bubble slides up or down, nearest the
 /// head's centre first, until it clears every rectangle in `avoid` and the head box, and stays
 /// inside `screen` (less its margin). `None` when no such place exists.
+#[cfg(test)]
 pub(crate) fn place_bubble(
     screen: Rect,
     head: Rect,
@@ -186,6 +187,106 @@ pub(crate) fn place_bubble(
         }
     }
     None
+}
+
+/// Compare nearby side and centred above/below positions instead of taking the first clear side.
+pub(crate) fn place_bubble_near_head(
+    screen: Rect,
+    head: Rect,
+    preferred: Side,
+    size: (f64, f64),
+    tail_offset: f64,
+    avoid: &[Rect],
+) -> Option<Placement> {
+    let (width, height) = size;
+    if !(width > 0.0 && height > 0.0) {
+        return None;
+    }
+    let margin = screen.width().min(screen.height()) * MARGIN_FRACTION;
+    let inside = Rect::new(
+        screen.left + margin,
+        screen.top + margin,
+        screen.right - margin,
+        screen.bottom - margin,
+    );
+    if width > inside.width() || height > inside.height() {
+        return None;
+    }
+    let gap = screen.width() * GAP_FRACTION;
+    let (cx, cy) = (
+        (head.left + head.right) / 2.0,
+        (head.top + head.bottom) / 2.0,
+    );
+    let mut best: Option<(f64, bool, Placement)> = None;
+    let mut consider = |placed: Placement| {
+        if !inside.contains(&placed.rect) || !clear_of(&placed.rect, &head, avoid) {
+            return;
+        }
+        let nearest_x = cx.clamp(placed.rect.left, placed.rect.right);
+        let nearest_y = cy.clamp(placed.rect.top, placed.rect.bottom);
+        let maximum = head.width().max(head.height()) + gap * 2.0;
+        if (nearest_x - cx).hypot(nearest_y - cy) > maximum {
+            return;
+        }
+        let dx = (placed.rect.left + placed.rect.right) / 2.0 - cx;
+        let dy = (placed.rect.top + placed.rect.bottom) / 2.0 - cy;
+        let score = dx * dx + dy * dy;
+        let preferred_side = placed.side == preferred;
+        if best.as_ref().is_none_or(|(known, known_preferred, _)| {
+            score < *known || score == *known && preferred_side && !known_preferred
+        }) {
+            best = Some((score, preferred_side, placed));
+        }
+    };
+    let left = (cx - width / 2.0).clamp(inside.left, inside.right - width);
+    // Below wins a genuine tie, keeping a background actor's name beside their own body.
+    for index in 0..=MAXIMUM_STEPS {
+        let shift = f64::from(index) * screen.height() * STEP_FRACTION;
+        for top in [head.bottom + gap + shift, head.top - gap - height - shift] {
+            consider(Placement {
+                rect: Rect::new(left, top, left + width, top + height),
+                side: preferred,
+            });
+        }
+    }
+    for side in [preferred, preferred.opposite()] {
+        let left = match side {
+            Side::Left => head.left - gap - width,
+            Side::Right => head.right + gap,
+        };
+        for index in 0..=2 * MAXIMUM_STEPS {
+            let shift = f64::from(index.div_ceil(2))
+                * screen.height()
+                * STEP_FRACTION
+                * if index.is_multiple_of(2) { -1.0 } else { 1.0 };
+            let top = cy - tail_offset + shift;
+            consider(Placement {
+                rect: Rect::new(left, top, left + width, top + height),
+                side,
+            });
+        }
+    }
+    best.map(|(_, _, placed)| placed)
+}
+
+impl Placement {
+    /// Which bubble edge faces its own speaker, and the head centre relative to the bubble.
+    pub(crate) fn tail(&self, head: Rect) -> (&'static str, f64, f64) {
+        let (x, y) = (
+            (head.left + head.right) / 2.0,
+            (head.top + head.bottom) / 2.0,
+        );
+        let edge = if y <= self.rect.top {
+            "top"
+        } else if y >= self.rect.bottom {
+            "bottom"
+        } else if x <= self.rect.left {
+            "left"
+        } else {
+            "right"
+        };
+        (edge, x - self.rect.left, y - self.rect.top)
+    }
 }
 
 /// A place above or below the head when neither side has room: centred on the head as far as
@@ -293,6 +394,12 @@ mod tests {
                 for side in [Side::Left, Side::Right] {
                     for size in [(480.0, 190.0), (336.0, 260.0)] {
                         if let Some(placed) = place_bubble(SCREEN, head, side, size, 50.0, &avoid) {
+                            assert_clear(&placed, &head, &avoid);
+                            placed_count += 1;
+                        }
+                        if let Some(placed) =
+                            place_bubble_near_head(SCREEN, head, side, size, 50.0, &avoid)
+                        {
                             assert_clear(&placed, &head, &avoid);
                             placed_count += 1;
                         }
@@ -405,5 +512,68 @@ mod tests {
         let (x, y) = frame.head_center(440, 460);
         assert!((x - 645.04).abs() < 0.01);
         assert!((y - 368.52).abs() < 0.01);
+    }
+    #[test]
+    fn background_bandit_bubble_prefers_own_body_below_head_over_the_couriers_torso() {
+        let screen = Rect::new(0.0, 0.0, 1460.0, 1051.33);
+        let frame = PlateFrame {
+            screen: Rect::new(0.0, -63.333, 1460.0, 987.997),
+            picture_width: 2560.0,
+            picture_height: 1440.0,
+        };
+        let bandit = frame.head_box(732, 323, 90, 127);
+        let courier = frame.head_box(550, 275, 186, 300);
+        let hud = Rect::new(30.0, 0.0, 850.0, 140.0);
+        let context = Rect::new(350.0, 850.0, 1110.0, 1000.0);
+        let avoid = [courier, hud, context];
+        for size in [(365.0, 202.7), (365.0, 139.3), (420.0, 173.0)] {
+            let placed =
+                place_bubble_near_head(screen, bandit, Side::Left, size, 36.5, &avoid).unwrap();
+            println!("PROXIMITY size={size:?} own_head={bandit:?} bubble={placed:?}");
+            assert!(!placed.rect.intersects(&courier));
+            assert!(!placed.rect.intersects(&hud));
+            assert!(!placed.rect.intersects(&context));
+            assert!(
+                placed.rect.top >= bandit.bottom,
+                "own body below the head: {placed:?}"
+            );
+            let own_x = (bandit.left + bandit.right) / 2.0;
+            assert!(((placed.rect.left + placed.rect.right) / 2.0 - own_x).abs() < 1.0);
+            assert_eq!(placed.tail(bandit).0, "top");
+        }
+    }
+
+    #[test]
+    fn proximity_candidates_still_clear_all_heads_and_interface_across_viewports() {
+        for screen in [SCREEN, Rect::new(0.0, 0.0, 1024.0, 768.0)] {
+            for x in [0.25, 0.5, 0.8] {
+                let head = Rect::new(
+                    screen.width() * x - 45.0,
+                    180.0,
+                    screen.width() * x + 45.0,
+                    280.0,
+                );
+                let avoid = [
+                    Rect::new(0.0, 0.0, screen.width(), 130.0),
+                    Rect::new(
+                        0.0,
+                        screen.height() - 120.0,
+                        screen.width(),
+                        screen.height(),
+                    ),
+                ];
+                if let Some(placed) =
+                    place_bubble_near_head(screen, head, Side::Left, (300.0, 160.0), 30.0, &avoid)
+                {
+                    assert!(screen.contains(&placed.rect));
+                    assert!(!placed.rect.intersects(&head));
+                    assert!(
+                        avoid
+                            .iter()
+                            .all(|obstacle| !placed.rect.intersects(obstacle))
+                    );
+                }
+            }
+        }
     }
 }

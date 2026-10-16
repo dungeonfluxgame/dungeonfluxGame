@@ -1587,8 +1587,34 @@ impl Figures {
             dimension(window.inner_height(), 1080.0),
         );
         let screen = Rect::new(0.0, 0.0, width, height);
+        let portal = self.plate_bubbles.get_bounding_client_rect();
+        let scale = |screen: f64, css: i32| {
+            if screen > 0.0 && css > 0 {
+                screen / f64::from(css)
+            } else {
+                1.0
+            }
+        };
+        let scale_x = scale(portal.width(), self.plate_bubbles.client_width());
+        let scale_y = scale(portal.height(), self.plate_bubbles.client_height());
+        let active_image = self.root.parent_element().and_then(|stage| {
+            let plate = stage.query_selector(".tv-plate").ok().flatten()?;
+            let active = plate.get_attribute("data-active")?.parse::<usize>().ok()?;
+            plate
+                .query_selector(&format!(
+                    ".tv-plate-frame[data-i=\"{active}\"] .tv-plate-img"
+                ))
+                .ok()
+                .flatten()
+        });
+        let image_bounds = active_image
+            .map(|image| image.get_bounding_client_rect())
+            .filter(|bounds| bounds.width() > 0.0 && bounds.height() > 0.0);
+        let picture_screen = image_bounds.map_or(screen, |bounds| {
+            Rect::new(bounds.left(), bounds.top(), bounds.right(), bounds.bottom())
+        });
         let frame = PlateFrame {
-            screen,
+            screen: picture_screen,
             picture_width,
             picture_height,
         };
@@ -1692,6 +1718,13 @@ impl Figures {
         };
         for card in &self.hud {
             if card.root.get_attribute("data-present").as_deref() == Some("true") {
+                let bounds = card.root.get_bounding_client_rect();
+                fallback_avoid.push(Rect::new(
+                    bounds.left(),
+                    bounds.top(),
+                    bounds.right(),
+                    bounds.bottom(),
+                ));
                 keep_clear(&card.root);
             }
         }
@@ -1732,14 +1765,13 @@ impl Figures {
         for narrow in [false, true] {
             flag(container, "data-narrow", narrow).ok();
             let size = (
-                f64::from(container.client_width()),
-                f64::from(container.client_height()),
+                f64::from(container.client_width()) * scale_x,
+                f64::from(container.client_height()) * scale_y,
             );
             placement = if on_card {
                 plate_layout::place_bubble_stacked(screen, head, size, &avoid)
             } else {
-                plate_layout::place_bubble(screen, head, side, size, tail_offset, &avoid)
-                    .or_else(|| plate_layout::place_bubble_stacked(screen, head, size, &avoid))
+                plate_layout::place_bubble_near_head(screen, head, side, size, tail_offset, &avoid)
             };
             if placement.is_some() {
                 break;
@@ -1748,22 +1780,37 @@ impl Figures {
         if placement.is_none() {
             // No clear place at all (a huge bubble): keep off the head and the screen edge only.
             let size = (
-                f64::from(container.client_width()),
-                f64::from(container.client_height()),
+                f64::from(container.client_width()) * scale_x,
+                f64::from(container.client_height()) * scale_y,
             );
-            placement =
-                plate_layout::place_bubble(screen, head, side, size, tail_offset, &fallback_avoid);
+            placement = plate_layout::place_bubble_near_head(
+                screen,
+                head,
+                side,
+                size,
+                tail_offset,
+                &fallback_avoid,
+            );
         }
         let Some(placed) = placement else {
             let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
             return;
         };
         let _set = container.set_attribute("data-side", placed.side.name());
+        let (edge, tail_x, tail_y) = placed.tail(head);
+        let _set = if on_card {
+            container.remove_attribute("data-tail")
+        } else {
+            container.set_attribute("data-tail", edge)
+        };
         let _set = container.set_attribute(
             "style",
             &format!(
-                "left:{:.1}px;top:{:.1}px;right:auto",
-                placed.rect.left, placed.rect.top
+                "left:{:.1}px;top:{:.1}px;right:auto;--tail-x:{:.1}px;--tail-y:{:.1}px",
+                (placed.rect.left - portal.left()) / scale_x,
+                (placed.rect.top - portal.top()) / scale_y,
+                tail_x / scale_x,
+                tail_y / scale_y
             ),
         );
     }

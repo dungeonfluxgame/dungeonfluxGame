@@ -917,6 +917,12 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     applied.and(published)
 }
 
+fn thinking_slot(pending: Option<ActorSlot>, awaiting: Option<ActorSlot>) -> Option<ActorSlot> {
+    pending
+        .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
+        .or_else(|| awaiting.filter(|slot| matches!(slot, ActorSlot::Npc(_))))
+}
+
 /// Shows the thinking mark at the speaker the server says is writing a reply, once every line
 /// before the reply has been shown, if that speaker stands in this scene; removes it otherwise.
 fn show_thinking(
@@ -928,18 +934,9 @@ fn show_thinking(
     let Some(stage) = state.live.tv.as_ref() else {
         return Ok(());
     };
-    // A reply waiting for its voice clip keeps the thinking mark until the clip starts.
-    let slot = awaiting
-        .map(super::live_stage::slot_of_index)
-        .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
-        .or_else(|| {
-            speaker.and_then(|name| {
-                stage
-                    .figures()
-                    .slot_named(name)
-                    .filter(|slot| matches!(slot, ActorSlot::Npc(_)))
-            })
-        });
+    // The server's newly selected addressee outranks an older line awaiting voice.
+    let pending = speaker.and_then(|name| stage.figures().slot_named(name));
+    let slot = thinking_slot(pending, awaiting.map(super::live_stage::slot_of_index));
     stage.figures().set_thinking(slot)
 }
 
@@ -2336,6 +2333,20 @@ mod tests {
             super::super::live_stage::slot_index(crate::presentation::ActorSlot::Npc(1))
         );
         assert!(super::npc_slot(&cast, "departed", "Courier", true).is_none());
+    }
+
+    #[test]
+    fn pending_background_speaker_outranks_an_older_focus_voice_wait() {
+        use crate::presentation::ActorSlot;
+        assert_eq!(
+            super::thinking_slot(Some(ActorSlot::Npc(1)), Some(ActorSlot::Npc(0))),
+            Some(ActorSlot::Npc(1))
+        );
+        assert_eq!(
+            super::thinking_slot(None, Some(ActorSlot::Npc(0))),
+            Some(ActorSlot::Npc(0))
+        );
+        assert_eq!(super::thinking_slot(None, Some(ActorSlot::Hero(0))), None);
     }
 
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
