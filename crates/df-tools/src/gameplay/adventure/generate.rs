@@ -620,6 +620,18 @@ pub(crate) fn generate_with_prose(
         let mut scene_context = context.clone();
         scene_context.insert("place".into(), place.name.clone());
         scene_context.insert("place_short".into(), place.short.clone());
+        // A quiet shop meeting is a social scene, not an antagonist encounter. Keep this
+        // presence fact beside the expression sheet so the narrator's required facts and the
+        // cast assembly below make the same decision.
+        let antagonist_present = matches!(scene_key, Some(SceneKey::Combat))
+            || (matches!(
+                scene_key,
+                Some(SceneKey::DialogueSeal | SceneKey::DialogueEscort)
+            ) && place.kind != super::setting::SettingKind::Shop);
+        scene_context.insert(
+            "scene.antagonist_present".into(),
+            antagonist_present.to_string(),
+        );
         if let (Some(key), Some(model)) = (scene_key, place.model.as_ref()) {
             scene_context.insert(
                 "scene.model".into(),
@@ -896,7 +908,11 @@ pub(crate) fn generate_with_prose(
             SceneKey::DialogueSeal => (
                 "roleplay",
                 template("ask_title")?.to_owned(),
-                format!("{} {foreshadow}", template("ask_narration")?),
+                if settings.meeting.kind == super::setting::SettingKind::Shop {
+                    template("ask_narration")?.to_owned()
+                } else {
+                    format!("{} {foreshadow}", template("ask_narration")?)
+                },
                 "patron",
                 hook.answer.clone(),
                 tables.asset(&patron.art)?,
@@ -904,7 +920,11 @@ pub(crate) fn generate_with_prose(
             SceneKey::DialogueEscort => (
                 "roleplay",
                 template("help_title")?.to_owned(),
-                format!("{} {foreshadow}", template("help_narration")?),
+                if settings.meeting.kind == super::setting::SettingKind::Shop {
+                    template("help_narration")?.to_owned()
+                } else {
+                    format!("{} {foreshadow}", template("help_narration")?)
+                },
                 "patron",
                 hook.accept.clone(),
                 tables.asset(&patron.art)?,
@@ -970,7 +990,11 @@ pub(crate) fn generate_with_prose(
         scene.cast = match scene.key {
             SceneKey::Opening | SceneKey::Victory => vec![patron_actor.clone()],
             SceneKey::DialogueSeal | SceneKey::DialogueEscort => {
-                vec![patron_actor.clone(), antagonist_actor.clone()]
+                let mut cast = vec![patron_actor.clone()];
+                if setting.kind != super::setting::SettingKind::Shop {
+                    cast.push(antagonist_actor.clone());
+                }
+                cast
             }
             SceneKey::Combat => vec![antagonist_actor.clone()],
             SceneKey::Inn => vec![contact_actor.clone()],

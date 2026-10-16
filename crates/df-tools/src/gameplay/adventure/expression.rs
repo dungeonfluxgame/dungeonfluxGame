@@ -509,8 +509,14 @@ fn required_story_facts(sheet: &FactSheet) -> Vec<(String, String)> {
     ) && sheet.beat == "roleplay"
         && sheet.slot == "narration"
     {
-        if let Some(antagonist) = sheet.facts.get("ant.short") {
-            required.push(("ant.short".to_owned(), antagonist.clone()));
+        let antagonist_present = sheet
+            .facts
+            .get("scene.antagonist_present")
+            .is_none_or(|present| present == "true");
+        if antagonist_present {
+            if let Some(antagonist) = sheet.facts.get("ant.short") {
+                required.push(("ant.short".to_owned(), antagonist.clone()));
+            }
         }
     }
     if sheet.beat == "resolution"

@@ -65,6 +65,43 @@ fn merchant_shop_opening_cast_includes_every_authored_background_person() {
         id.as_str().ends_with("bystander-2") && sprite.contains("sprite-shop-soldier")
     }));
     assert_eq!(cast.len(), 3);
+
+    for key in [
+        super::super::pack::SceneKey::DialogueSeal,
+        super::super::pack::SceneKey::DialogueEscort,
+    ] {
+        let scene = adventure
+            .pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == key)
+            .unwrap();
+        assert_eq!(scene.cast.len(), 3, "quiet shop cast for {key:?}");
+        assert!(
+            !scene.narration.contains(&adventure.facts["ant.short"]),
+            "quiet shop narration should not stage the antagonist in {key:?}: {}",
+            scene.narration
+        );
+        assert!(
+            scene
+                .cast
+                .iter()
+                .all(|actor| actor.role != super::super::pack::CastRole::Antagonist),
+            "quiet shop should not stage the antagonist in {key:?}"
+        );
+    }
+    assert!(
+        adventure
+            .fact_sheet
+            .iter()
+            .filter(|sheet| {
+                matches!(
+                    sheet.scene.as_deref(),
+                    Some("dialogue-seal" | "dialogue-escort")
+                ) && sheet.slot == "narration"
+            })
+            .all(|sheet| sheet.facts.get("scene.antagonist_present") == Some(&"false".to_owned()))
+    );
 }
 
 #[test]
