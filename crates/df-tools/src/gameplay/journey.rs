@@ -85,6 +85,7 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "scene-interaction",
     "npc-scene-interaction",
     "merchant-trade-quote",
+    "merchant-quote-closure",
     "stabilise-kit",
     "stabilise-medicine",
     rewards::PAID,

@@ -983,6 +983,183 @@ mod tests {
     }
 
     #[test]
+    fn merchant_quote_decline_and_withdrawal_are_durable_and_block_acceptance() {
+        let generated = generate(47, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) =
+            super::super::record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let model = runtime::scene(opening.state())
+                .unwrap()
+                .setting
+                .unwrap()
+                .model
+                .unwrap();
+            let offer = model.offer("item-clothes-travelers").unwrap().clone();
+            let merchant_id = offer.seller_id.clone();
+            let quote_checkpoint = journey::living_scene::commit_npc_trade_quote(
+                &opening,
+                journey::living_scene::NpcTradeQuoteProposal {
+                    operation: df_types::OperationId::from_bytes(&[47; 16]).unwrap(),
+                    expected_basis: opening.basis(),
+                    actor_id: merchant_id.clone(),
+                    customer_id: "Brynn".into(),
+                    direction: journey::living_scene::SceneTradeDirection::HeroBuys,
+                    item_id: offer.canonical_item_id(),
+                    offer_id: Some(offer.id.clone()),
+                    price_cp: 150,
+                    source: journey::living_scene::NpcInventorySource {
+                        source_line_id: "merchant-quote-close-1".into(),
+                        source_revision: opening.basis().revision,
+                        source_line_sequence: 1,
+                        source_actor_id: merchant_id.clone(),
+                        source_text: "I can do those clothes for 150 CP.".into(),
+                    },
+                },
+            )
+            .unwrap();
+            let quote = journey::living_scene::pending_merchant_quote(&quote_checkpoint, "Brynn")
+                .unwrap()
+                .unwrap();
+            let declined = journey::living_scene::close_merchant_quote(
+                &quote_checkpoint,
+                journey::living_scene::MerchantQuoteClosureProposal {
+                    operation: df_types::OperationId::from_bytes(&[48; 16]).unwrap(),
+                    expected_basis: quote_checkpoint.basis(),
+                    quote_id: quote.quote_id.clone(),
+                    actor_id: "Brynn".into(),
+                    customer_id: "Brynn".into(),
+                    reason: journey::living_scene::MerchantQuoteClosureReason::HeroDeclined,
+                    source: journey::living_scene::MerchantQuoteClosureSource::PlayerDecision {
+                        source_line_id: "player-declined-quote-1".into(),
+                        source_revision: quote_checkpoint.basis().revision,
+                        source_line_sequence: 2,
+                        source_actor_id: "Brynn".into(),
+                        source_text: "I decline the offer.".into(),
+                    },
+                },
+            )
+            .expect("an authenticated customer's explicit decline closes the quote");
+            let declined = native::persisted(&declined);
+            let history = journey::living_scene::merchant_quote_history(&declined).unwrap();
+            assert_eq!(
+                history[0].status,
+                journey::living_scene::MerchantQuoteStatus::Declined
+            );
+            assert_eq!(
+                history[0].close_reason,
+                Some(journey::living_scene::MerchantQuoteClosureReason::HeroDeclined)
+            );
+            assert!(
+                journey::living_scene::pending_merchant_quote(&declined, "Brynn")
+                    .unwrap()
+                    .is_none()
+            );
+            let balance = journey::living_scene::balance_cp(
+                declined.state(),
+                journey::player_entity(native::first(), &declined).unwrap(),
+            )
+            .unwrap();
+            let attempted = interaction_with_choices(
+                &declined,
+                49,
+                &quote.item_id,
+                "trade",
+                &[
+                    ("scene-quote-id", &quote.quote_id),
+                    ("scene-payment", "150"),
+                ],
+            );
+            assert_eq!(
+                journey::living_scene::balance_cp(
+                    attempted.state(),
+                    journey::player_entity(native::first(), &attempted).unwrap(),
+                )
+                .unwrap(),
+                balance,
+                "a declined quote cannot later debit the buyer"
+            );
+            assert!(
+                runtime::scene(attempted.state())
+                    .unwrap()
+                    .setting
+                    .unwrap()
+                    .model
+                    .unwrap()
+                    .offer_available(&quote.item_id)
+            );
+            assert_eq!(
+                journey::living_scene::merchant_quote_history(&attempted).unwrap()[0].status,
+                journey::living_scene::MerchantQuoteStatus::Declined
+            );
+
+            let revised = journey::living_scene::commit_npc_trade_quote(
+                &attempted,
+                journey::living_scene::NpcTradeQuoteProposal {
+                    operation: df_types::OperationId::from_bytes(&[50; 16]).unwrap(),
+                    expected_basis: attempted.basis(),
+                    actor_id: merchant_id.clone(),
+                    customer_id: "Brynn".into(),
+                    direction: journey::living_scene::SceneTradeDirection::HeroBuys,
+                    item_id: quote.item_id.clone(),
+                    offer_id: Some(offer.id),
+                    price_cp: 140,
+                    source: journey::living_scene::NpcInventorySource {
+                        source_line_id: "merchant-quote-close-2".into(),
+                        source_revision: attempted.basis().revision,
+                        source_line_sequence: 3,
+                        source_actor_id: merchant_id.clone(),
+                        source_text: "I can do those clothes for 140 CP.".into(),
+                    },
+                },
+            )
+            .unwrap();
+            let revised_quote = journey::living_scene::pending_merchant_quote(&revised, "Brynn")
+                .unwrap()
+                .unwrap();
+            let withdrawn = journey::living_scene::close_merchant_quote(
+                &revised,
+                journey::living_scene::MerchantQuoteClosureProposal {
+                    operation: df_types::OperationId::from_bytes(&[51; 16]).unwrap(),
+                    expected_basis: revised.basis(),
+                    quote_id: revised_quote.quote_id.clone(),
+                    actor_id: merchant_id,
+                    customer_id: "Brynn".into(),
+                    reason: journey::living_scene::MerchantQuoteClosureReason::MerchantWithdrew,
+                    source: journey::living_scene::MerchantQuoteClosureSource::MerchantSpeech {
+                        source_line_id: "merchant-withdrew-quote-1".into(),
+                        source_revision: revised.basis().revision,
+                        source_line_sequence: 4,
+                        source_actor_id: offer.seller_id,
+                        source_text: "I withdraw that offer.".into(),
+                    },
+                },
+            )
+            .expect("the quoted merchant can withdraw its own offer");
+            let withdrawn = native::persisted(&withdrawn);
+            let history = journey::living_scene::merchant_quote_history(&withdrawn).unwrap();
+            assert_eq!(history.len(), 2);
+            assert_eq!(
+                history[0].status,
+                journey::living_scene::MerchantQuoteStatus::Declined
+            );
+            assert_eq!(
+                history[1].status,
+                journey::living_scene::MerchantQuoteStatus::Withdrawn
+            );
+            assert_eq!(
+                history[1].close_reason,
+                Some(journey::living_scene::MerchantQuoteClosureReason::MerchantWithdrew)
+            );
+            assert!(
+                journey::living_scene::pending_merchant_quote(&withdrawn, "Brynn")
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
     fn merchant_startup_ignores_random_tables_and_resume_keeps_the_pinned_freeplay_record() {
         use crate::gameplay::startup_configuration::{AdventureMode, AdventureSettings};
         use df_persistence::local_demo_scope::AdventureStartup;

@@ -131,6 +131,8 @@ struct Interaction {
     quote_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     quote_attempt: Option<MerchantQuoteAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quote_closure: Option<MerchantQuoteClosureRecord>,
 }
 
 /// A server-authorized action proposed by the narrative/interaction layer for a named NPC.
@@ -214,6 +216,63 @@ pub(crate) struct NpcTradeQuoteProposal {
     pub(crate) source: NpcInventorySource,
 }
 
+/// Why an outstanding merchant quote was closed without a sale.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MerchantQuoteClosureReason {
+    HeroDeclined,
+    MerchantWithdrew,
+}
+
+/// Public source identity accompanying an explicit decline or merchant refusal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MerchantQuoteClosureSource {
+    PlayerDecision {
+        source_line_id: String,
+        source_revision: df_types::SessionRevision,
+        source_line_sequence: u64,
+        source_actor_id: String,
+        source_text: String,
+    },
+    MerchantSpeech {
+        source_line_id: String,
+        source_revision: df_types::SessionRevision,
+        source_line_sequence: u64,
+        source_actor_id: String,
+        source_text: String,
+    },
+}
+
+/// Fenced proposal to close one current, customer-bound quote.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MerchantQuoteClosureProposal {
+    pub(crate) operation: OperationId,
+    pub(crate) expected_basis: Basis,
+    pub(crate) quote_id: String,
+    /// The authenticated hero for `HeroDeclined`; the merchant NPC for `MerchantWithdrew`.
+    pub(crate) actor_id: String,
+    /// Authenticated player attached to the quote, for either direction.
+    pub(crate) customer_id: String,
+    pub(crate) reason: MerchantQuoteClosureReason,
+    pub(crate) source: MerchantQuoteClosureSource,
+}
+
+/// Compact durable quote closure. Exact source text is retained for journal causality, but is
+/// omitted from the read-only quote history and diagnostics.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct MerchantQuoteClosureRecord {
+    quote_id: String,
+    reason: MerchantQuoteClosureReason,
+    actor_id: String,
+    customer_id: String,
+    source_line_id: String,
+    source_revision: String,
+    source_line_sequence: u64,
+    source_actor_id: String,
+    source_text: String,
+}
+
 /// Shared candidate data for narrative pricing and the authoritative commit validator.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MerchantTradeTerms {
@@ -240,12 +299,14 @@ pub(crate) enum MerchantQuoteAttempt {
     Accepted,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MerchantQuoteStatus {
     Pending,
     Accepted,
     Stale,
+    Declined,
+    Withdrawn,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -254,6 +315,7 @@ pub(crate) struct MerchantQuoteHistoryEntry {
     pub(crate) status: MerchantQuoteStatus,
     pub(crate) attempt_count: u32,
     pub(crate) last_rejection: Option<String>,
+    pub(crate) close_reason: Option<MerchantQuoteClosureReason>,
 }
 
 /// Commits an NPC inventory proposal after validating the current scene and exact money path.
@@ -469,6 +531,7 @@ pub(crate) fn commit_npc_inventory_action(
         quote: None,
         quote_id: None,
         quote_attempt: None,
+        quote_closure: None,
     };
     finish(
         current,
@@ -672,6 +735,146 @@ pub(crate) fn commit_npc_trade_quote(
         quote: Some(quote),
         quote_id: None,
         quote_attempt: None,
+        quote_closure: None,
+    };
+    finish_interaction(current, proposal.operation, interaction)
+}
+
+/// Durably closes a pending quote after the caller validates the exact public source line.
+/// The quote/customer/actor and revision fences are repeated here so an untrusted caller cannot
+/// close another player's quote or use an old speech line as authority.
+pub(crate) fn close_merchant_quote(
+    current: &Checkpoint,
+    proposal: MerchantQuoteClosureProposal,
+) -> Result<Checkpoint, RepositoryError> {
+    if current.basis() != proposal.expected_basis
+        || proposal.quote_id.is_empty()
+        || proposal.quote_id.len() > 128
+    {
+        return Err(invalid());
+    }
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+    let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+    if !is_authenticated_hero(current.state(), &snapshot.model, &proposal.customer_id)? {
+        return Err(invalid());
+    }
+    let history = merchant_quote_history(current)?;
+    let quote = history
+        .iter()
+        .find(|entry| entry.quote.quote_id == proposal.quote_id)
+        .filter(|entry| entry.status == MerchantQuoteStatus::Pending)
+        .map(|entry| &entry.quote)
+        .ok_or_else(invalid)?;
+    let (expected_customer, expected_merchant) = match quote.direction {
+        SceneTradeDirection::HeroBuys => (&quote.buyer_id, &quote.seller_id),
+        SceneTradeDirection::HeroSells => (&quote.seller_id, &quote.buyer_id),
+    };
+    if expected_customer.as_str() != proposal.customer_id.as_str()
+        || expected_merchant != quote.source_actor_id.as_str()
+        || proposal.actor_id.as_str()
+            != match proposal.reason {
+                MerchantQuoteClosureReason::HeroDeclined => proposal.customer_id.as_str(),
+                MerchantQuoteClosureReason::MerchantWithdrew => expected_merchant.as_str(),
+            }
+    {
+        return Err(invalid());
+    }
+    let (source_line_id, source_revision, source_line_sequence, source_actor_id, source_text) =
+        match (&proposal.reason, &proposal.source) {
+            (
+                MerchantQuoteClosureReason::HeroDeclined,
+                MerchantQuoteClosureSource::PlayerDecision {
+                    source_line_id,
+                    source_revision,
+                    source_line_sequence,
+                    source_actor_id,
+                    source_text,
+                },
+            )
+            | (
+                MerchantQuoteClosureReason::MerchantWithdrew,
+                MerchantQuoteClosureSource::MerchantSpeech {
+                    source_line_id,
+                    source_revision,
+                    source_line_sequence,
+                    source_actor_id,
+                    source_text,
+                },
+            ) => (
+                source_line_id,
+                source_revision,
+                source_line_sequence,
+                source_actor_id,
+                source_text,
+            ),
+            _ => return Err(invalid()),
+        };
+    if source_line_id.trim().is_empty()
+        || source_line_id.len() > 128
+        || source_actor_id != &proposal.actor_id
+        || *source_revision != current.basis().revision
+        || *source_line_sequence == 0
+        || *source_line_sequence <= quote.source_line_sequence
+        || source_line_id == &quote.source_line_id
+        || source_text.trim().is_empty()
+        || source_text.len() > 1024
+    {
+        return Err(invalid());
+    }
+    if proposal.reason == MerchantQuoteClosureReason::MerchantWithdrew
+        && !snapshot
+            .model
+            .people
+            .iter()
+            .any(|person| person.id == proposal.actor_id && person.role != "hero")
+    {
+        return Err(invalid());
+    }
+
+    let closure = MerchantQuoteClosureRecord {
+        quote_id: proposal.quote_id.clone(),
+        reason: proposal.reason,
+        actor_id: proposal.actor_id.clone(),
+        customer_id: proposal.customer_id.clone(),
+        source_line_id: source_line_id.clone(),
+        source_revision: revision_text(*source_revision),
+        source_line_sequence: *source_line_sequence,
+        source_actor_id: source_actor_id.clone(),
+        source_text: source_text.clone(),
+    };
+    let accepted = rpc::AcceptedAction {
+        phase: phase(current)? as i32,
+        ..Default::default()
+    };
+    let interaction = Interaction {
+        place: quote.place_id.clone(),
+        hero: proposal.customer_id.clone(),
+        change: None,
+        paid_cp: 0,
+        actor: proposal.actor_id.clone(),
+        recipient: String::new(),
+        line: match proposal.reason {
+            MerchantQuoteClosureReason::HeroDeclined => {
+                "The hero declined the merchant's quote.".into()
+            }
+            MerchantQuoteClosureReason::MerchantWithdrew => {
+                "The merchant withdrew the quote.".into()
+            }
+        },
+        accepted: hex(&accepted.encode_to_vec()),
+        target: quote.item_id.clone(),
+        option: "merchant-quote-closure".into(),
+        source_line_id: Some(source_line_id.clone()),
+        source_revision: Some(revision_text(*source_revision)),
+        source_actor_id: Some(source_actor_id.clone()),
+        source_text: Some(source_text.clone()),
+        source_line_sequence: *source_line_sequence,
+        principal_id: Some(proposal.actor_id),
+        coin_credit_cp: 0,
+        quote: None,
+        quote_id: Some(proposal.quote_id),
+        quote_attempt: None,
+        quote_closure: Some(closure),
     };
     finish_interaction(current, proposal.operation, interaction)
 }
@@ -723,7 +926,56 @@ pub(crate) fn merchant_quote_history(
                 status,
                 attempt_count: 0,
                 last_rejection: None,
+                close_reason: None,
             });
+        }
+        if let Some(closure) = entry.quote_closure {
+            let history_entry = history
+                .iter_mut()
+                .find(|history_entry| history_entry.quote.quote_id == closure.quote_id)
+                .ok_or_else(invalid)?;
+            let quote = &history_entry.quote;
+            let expected_customer = match quote.direction {
+                SceneTradeDirection::HeroBuys => quote.buyer_id.as_str(),
+                SceneTradeDirection::HeroSells => quote.seller_id.as_str(),
+            };
+            let expected_merchant = quote_merchant_id(quote);
+            let expected_actor: &str = match closure.reason {
+                MerchantQuoteClosureReason::HeroDeclined => expected_customer,
+                MerchantQuoteClosureReason::MerchantWithdrew => expected_merchant,
+            };
+            if history_entry.status == MerchantQuoteStatus::Accepted {
+                return Err(invalid());
+            }
+            if entry.quote_id.as_deref() != Some(closure.quote_id.as_str())
+                || entry.hero != closure.customer_id
+                || closure.customer_id.as_str() != expected_customer
+                || closure.actor_id.as_str() != expected_actor
+                || entry.principal_id.as_deref() != Some(closure.actor_id.as_str())
+                || entry.place != quote.place_id
+                || entry.target != quote.item_id
+                || closure.source_line_id.is_empty()
+                || closure.source_line_id.len() > 128
+                || closure.source_line_id == quote.source_line_id
+                || closure.source_line_sequence <= quote.source_line_sequence
+                || closure.source_revision.is_empty()
+                || closure.source_revision.len() > 64
+                || closure.source_actor_id != closure.actor_id
+                || closure.source_text.trim().is_empty()
+                || closure.source_text.len() > 1024
+                || entry.source_line_id.as_deref() != Some(closure.source_line_id.as_str())
+                || entry.source_revision.as_deref() != Some(closure.source_revision.as_str())
+                || entry.source_actor_id.as_deref() != Some(closure.source_actor_id.as_str())
+                || entry.source_text.as_deref() != Some(closure.source_text.as_str())
+                || entry.source_line_sequence != closure.source_line_sequence
+            {
+                return Err(invalid());
+            }
+            history_entry.status = match closure.reason {
+                MerchantQuoteClosureReason::HeroDeclined => MerchantQuoteStatus::Declined,
+                MerchantQuoteClosureReason::MerchantWithdrew => MerchantQuoteStatus::Withdrawn,
+            };
+            history_entry.close_reason = Some(closure.reason);
         }
         if let Some(quote_id) = entry.quote_id
             && let Some(history_entry) = history
@@ -740,7 +992,12 @@ pub(crate) fn merchant_quote_history(
     // an older unaccepted quote even when neither stock nor purse has changed. This keeps
     // a previously spoken price from remaining actionable after the merchant revises it.
     for index in 0..history.len() {
-        if history[index].status == MerchantQuoteStatus::Accepted {
+        if matches!(
+            history[index].status,
+            MerchantQuoteStatus::Accepted
+                | MerchantQuoteStatus::Declined
+                | MerchantQuoteStatus::Withdrawn
+        ) {
             continue;
         }
         let quote = &history[index].quote;
@@ -923,6 +1180,8 @@ fn finish_interaction_with_draws(
         DecisionContent {
             entry: if interaction.quote.is_some() {
                 "merchant-trade-quote"
+            } else if interaction.quote_closure.is_some() {
+                "merchant-quote-closure"
             } else {
                 "scene-interaction"
             },
@@ -2411,6 +2670,7 @@ fn stage_inner(
         quote: None,
         quote_id: accepted_quote_id,
         quote_attempt,
+        quote_closure: None,
     };
     finish_interaction_with_draws(current, command.operation, interaction, draws)
 }
