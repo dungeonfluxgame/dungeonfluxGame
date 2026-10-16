@@ -14,6 +14,46 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-15T22:31:46-04:00 to 2026-10-16T02:22:10-04:00
+
+Range: 4a80dbb32322b829c7bbfaba473784d21ee51cee..33f5b3e51473781b300186f552bd0cad6feb10e2
+
+- b66273f7f0203c860e1df74ab8c565539e543738 — Record integrated dialogue visual and diagnostics work blocks
+- 9505c01360aa9096e031fdb5034883e63959cb8c — Constrain dialogue music to tempo and scene
+- be01ddf0cac1ddcc1aaf644fc954c90b95b7d3c6 — Compile the shared music score for native diagnostics
+- c0bdded0b1048721553c0493c93acf666e625e0a — Keep browser-only reading helper behind target cfg
+- fc2b3caadf9df13fd3b31f6f226efe46d91984c3 — Keep dialogue readable and clear fixed bubble obstacles
+- ac1304057019191b29acc772fdbd75e108d8da73 — Keep long dialogue visible and bubbles separated
+- 9bdaa4e540da2d185b6d8bf8d03c45a8060d003e — Keep dialogue visible during readable check cards
+- 2169c7c7176a24773ad692cc1a678b66cd9a42f9 — Queue check cards through readable result phases
+- ab6badce6b498fcb0c3fd1cc5ab7bc941ae33c82 — Keep reconnect context clear of dialogue HUD
+- 50134533be02647601c09af7c675a13617fa9e61 — Crossfade decoded scene plates and retain canonical photographic cast references
+- 1132df8326e0b0c8500045e09f2de7b415c13b15 — Move reconnect context into lower caption lane
+- ee6eeebe8c83cb66af071b7f9286274b636a3e31 — Keep settled plate jobs balanced after boxing identity snapshots
+- 942c20182959f9ad5c798dec76d7cfbf35e21b19 — Record dialogue readability and live layout regression baseline
+- 3ca2f4b57700dd9103c8c7801de94d261aea50a9 — Add presentation component lifecycle diagnostics
+- abee6de0b5dd63ec4e2106479cb4ae00af0a2e75 — Trace presentation element lifetimes
+- 91002add580d6645a5cbbe9483f40051de0c422d — Document live layout controls and component lifetime inspection
+- 52a92cbdba43fe61b6e2f38aba0d5fa6724ce6aa — Save SAM API feasibility and access probes for later
+- 74a7726344beacf86c41fc7df112e16eccec125a — Index layout ownership and cast continuity sources
+- 5b59a17b81821bbbcc585e93e0a448eeb34276c6 — Add authenticated live display layout controls
+- db015c5d3225926f036fcbfc2cdf82412ad56060 — Repair live layout readback and style preservation
+- fbfc587c5bee6f6e41d680e839cf1a44188c6a37 — Complete typed live layout inventory, transforms, and per-display acknowledgments
+- 4e00e958c596a3db1ef99def3a51b38a7b095c0d — Bound live layout readbacks to paginated RPC budgets and verify layout ownership
+- c0ea5b1fee2eac1d6aca460982e3fc8c2537af18 — fix(display): keep decoded plate work on the owned clock
+- 1bcb4d448b346a2f44e685e4de13f9107c843f16 — fix(display): retire check events and keep long lines readable
+- 8fd307b8f80addbf2a508647502a3851029b7111 — Record live layout acceptance and presentation lifecycle regressions
+- b6cb696d19ab1722ae7803f05684220122cd5ea8 — fix(display): refresh pinned plates for committed story beats
+- db88e3faa6b13a942733825315e7de8fffc4cb5e — Record automatic plate refresh and caption timing acceptance
+- 312aa2352189fe693c7373cc93ddaa8725834888 — Route NPC replies by canonical addressee and locate every plate actor
+- 8eec2b6b532250d8653738bf3d54fb2b8976d038 — Keep failed plate measurements transient and bounded
+- e1ec5e03045cfe2815866e17eaf9de26d514eac8 — Mirror plate head diagnostics and latch late bitmap geometry
+- 9b42661f639508ac959c24397ca5f4f267a6e74b — Distinguish absent addressees from focus and discourse in Jev routing
+- 0187f83e482680be669b7e693b877914eddedeae — Place plate captions close to their own measured speaker
+- 33f5b3e51473781b300186f552bd0cad6feb10e2 — Record Jev routing, head traces, and speaker placement acceptance
+
+Next block baseline: `33f5b3e51473781b300186f552bd0cad6feb10e2`.
+
 ## 2026-10-15T19:46:19-04:00 to 2026-10-15T22:31:46-04:00
 
 Range: 3d7cd9696743eab2db27d06f71dd7b9bf9082a22..4a80dbb32322b829c7bbfaba473784d21ee51cee
