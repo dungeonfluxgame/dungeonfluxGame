@@ -69,8 +69,6 @@ const MAXIMUM_SLOT_FORBIDDEN: usize = 24;
 const MAXIMUM_WITHHELD: usize = 160;
 const MAXIMUM_WITHHELD_CHARACTERS: usize = 240;
 const MAXIMUM_TERM_CHARACTERS: usize = 64;
-const MAXIMUM_STYLE_CHARACTERS: usize = 600;
-const MAXIMUM_GUIDANCE_CHARACTERS: usize = 4000;
 const MAXIMUM_FACTS_BYTES: usize = 16 * 1024;
 const MAXIMUM_PROMPT_BYTES: usize = 32 * 1024;
 const MAXIMUM_CACHE_FILE_BYTES: u64 = 64 * 1024;
@@ -1286,8 +1284,8 @@ fn string_fields(value: &Value) -> Option<BTreeMap<String, String>> {
         .collect()
 }
 
-/// Whether the storyteller would send this request: bounds on purpose, slots, style,
-/// guidance and facts. The dialogue tests build the real reply request for every dossier
+/// Whether the storyteller would send this request: bounds on purpose, slots and facts.
+/// The dialogue tests build the real reply request for every dossier
 /// fixture at both ratings and refuse to ship a prompt that outgrows a bound.
 pub(super) fn check_request(request: &Expression<'_>) -> Result<(), StorytellerError> {
     let invalid = StorytellerError::InvalidRequest;
@@ -1345,11 +1343,6 @@ pub(super) fn check_request(request: &Expression<'_>) -> Result<(), StorytellerE
         {
             return Err(invalid("slot withheld"));
         }
-    }
-    if request.style.chars().count() > MAXIMUM_STYLE_CHARACTERS
-        || request.profile.guidance.chars().count() > MAXIMUM_GUIDANCE_CHARACTERS
-    {
-        return Err(invalid("style"));
     }
     if !request.facts.is_object() || canonical(request.facts).len() > MAXIMUM_FACTS_BYTES {
         return Err(invalid("facts"));
