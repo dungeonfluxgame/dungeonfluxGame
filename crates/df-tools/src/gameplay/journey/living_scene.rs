@@ -345,13 +345,14 @@ pub(in crate::gameplay) fn item_for(
         if entry.place != setting.place_id || entry.hero != hero {
             continue;
         }
-        let target = if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use") {
-            format!("purchased-{}", entry.target)
-        } else if matches!(entry.option.as_str(), "examine" | "take" | "share") {
-            entry.target
-        } else {
-            continue;
-        };
+        let target =
+            if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
+                format!("purchased-{}", entry.target)
+            } else if matches!(entry.option.as_str(), "examine" | "take" | "share") {
+                entry.target
+            } else {
+                continue;
+            };
         let Some(thing) = model.things.iter().find(|thing| thing.id == target) else {
             continue;
         };
@@ -383,6 +384,27 @@ pub(in crate::gameplay) fn gift_amount(words: &str) -> Option<u32> {
         [amount] if *amount > 0 => Some(*amount),
         _ => None,
     }
+}
+
+/// One explicit coin quote for a catalog trade. Goods have no implied barter valuation.
+pub(in crate::gameplay) fn payment_amount_cp(words: &str) -> Option<u32> {
+    let tokens = words.split_whitespace().collect::<Vec<_>>();
+    let amounts = tokens
+        .windows(2)
+        .filter_map(|pair| {
+            let amount = pair[0].parse::<u32>().ok()?;
+            let currency = pair[1].trim_end_matches(['.', ',', '?']).to_lowercase();
+            match currency.as_str() {
+                "cp" | "copper" => Some(amount),
+                "gp" | "gold" => amount.checked_mul(100),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    let [amount] = amounts.as_slice() else {
+        return None;
+    };
+    (*amount > 0).then_some(*amount)
 }
 
 pub(in crate::gameplay) fn interaction_for_line(
@@ -419,6 +441,7 @@ pub(in crate::gameplay) fn interaction_for_line(
         "i open the ",
         "i close the ",
         "i buy ",
+        "i trade ",
         "i want a pint",
         "i pour myself",
         "i order a ",
@@ -434,7 +457,9 @@ pub(in crate::gameplay) fn interaction_for_line(
     if !lower.starts_with("whose ") && (!direct || lower.ends_with('?')) {
         return None;
     }
-    let option = if lower.starts_with("i return ")
+    let option = if lower.starts_with("i trade ") {
+        "trade"
+    } else if lower.starts_with("i return ")
         || lower.starts_with("i put ") && lower.contains(" back")
     {
         "return"
@@ -519,7 +544,7 @@ pub(super) fn stage(
     let option = get("scene-option").ok_or_else(invalid)?;
     let named_recipient = get("scene-recipient");
     if choices.len()
-        != if option == "gift" || option == "give" && named_recipient.is_some() {
+        != if matches!(option, "gift" | "trade") || option == "give" && named_recipient.is_some() {
             3
         } else {
             2
@@ -730,12 +755,20 @@ pub(super) fn stage(
         .iter()
         .find(|offer| offer.id == target)
     {
-        if !matches!(option, "buy" | "use" | "examine") {
+        if !matches!(option, "buy" | "use" | "trade" | "examine") {
             return Err(invalid());
         }
         let purchased_id = format!("purchased-{}", offer.id);
         if option == "examine" {
             format!("{} It costs {} CP.", offer.description, offer.cost_cp)
+        } else if option == "trade"
+            && get("scene-payment").and_then(|amount| amount.parse::<u32>().ok())
+                != Some(offer.cost_cp)
+        {
+            format!(
+                "{} costs {} CP; that trade has not been agreed.",
+                offer.name, offer.cost_cp
+            )
         } else if snapshot
             .model
             .things

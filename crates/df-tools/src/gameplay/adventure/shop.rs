@@ -150,8 +150,18 @@ mod tests {
     use df_persistence::local_demo_scope::LocalDemoRole;
 
     fn interaction(current: &Checkpoint, operation: u8, target: &str, option: &str) -> Checkpoint {
+        interaction_with_choices(current, operation, target, option, &[])
+    }
+    fn interaction_with_choices(
+        current: &Checkpoint,
+        operation: u8,
+        target: &str,
+        option: &str,
+        extra: &[(&str, &str)],
+    ) -> Checkpoint {
         let choices = [("scene-target", target), ("scene-option", option)]
             .into_iter()
+            .chain(extra.iter().copied())
             .map(|(key, value)| (model::label(key).unwrap(), model::label(value).unwrap()))
             .collect();
         journey::stage_with_supplier(
@@ -330,5 +340,155 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn quoted_coin_trade_and_owned_gift_replay_with_exact_payment_and_recipient() {
+        let generated = generate(43, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) =
+            super::super::record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let who = journey::player_entity(native::first(), &opening).unwrap();
+            let initial = journey::living_scene::balance_cp(opening.state(), who).unwrap();
+            let low_quote = interaction_with_choices(
+                &opening,
+                6,
+                "clothes-travelers",
+                "trade",
+                &[("scene-payment", "100")],
+            );
+            assert_eq!(
+                journey::living_scene::balance_cp(low_quote.state(), who).unwrap(),
+                initial
+            );
+            let traded = interaction_with_choices(
+                &low_quote,
+                7,
+                "clothes-travelers",
+                "trade",
+                &[("scene-payment", "200")],
+            );
+            assert_eq!(
+                journey::living_scene::balance_cp(traded.state(), who).unwrap(),
+                initial - 200
+            );
+            let scene = runtime::scene(traded.state()).unwrap();
+            assert_eq!(
+                journey::living_scene::recipient_for_line(
+                    &scene,
+                    "I give the travelers clothes to Corin."
+                ),
+                Some("shop-adventurer".into())
+            );
+            let given = interaction_with_choices(
+                &traded,
+                8,
+                "purchased-clothes-travelers",
+                "give",
+                &[("scene-recipient", "shop-adventurer")],
+            );
+            let given = native::persisted(&given);
+            let scene = runtime::scene(given.state()).unwrap();
+            let item = scene
+                .setting
+                .as_ref()
+                .unwrap()
+                .model
+                .as_ref()
+                .unwrap()
+                .things
+                .iter()
+                .find(|thing| thing.id == "purchased-clothes-travelers")
+                .unwrap();
+            assert_eq!(item.holder_id.as_deref(), Some("shop-adventurer"));
+            assert_eq!(item.owner_id.as_deref(), Some("shop-adventurer"));
+            let borrowed = interaction(&given, 9, "folded-label", "take");
+            let refused = interaction_with_choices(
+                &borrowed,
+                10,
+                "folded-label",
+                "give",
+                &[("scene-recipient", "shop-adventurer")],
+            );
+            assert!(
+                journey::living_scene::last_line(refused.state())
+                    .unwrap()
+                    .unwrap()
+                    .contains("belongs to someone else")
+            );
+            let returned = interaction_with_choices(
+                &refused,
+                11,
+                "folded-label",
+                "give",
+                &[("scene-recipient", "merchant")],
+            );
+            let scene = runtime::scene(returned.state()).unwrap();
+            let label = scene
+                .setting
+                .as_ref()
+                .unwrap()
+                .model
+                .as_ref()
+                .unwrap()
+                .things
+                .iter()
+                .find(|thing| thing.id == "folded-label")
+                .unwrap();
+            assert_eq!(label.owner_id.as_deref(), Some("merchant"));
+            assert_eq!(label.holder_id.as_deref(), Some("merchant"));
+            assert_eq!(
+                journey::living_scene::payment_amount_cp("I trade 2 GP for the travelers clothes."),
+                Some(200)
+            );
+            assert_eq!(
+                journey::living_scene::payment_amount_cp(
+                    "I trade my cloak for the travelers clothes."
+                ),
+                None
+            );
+        });
+    }
+
+    #[test]
+    fn merchant_startup_ignores_random_tables_and_resume_keeps_the_pinned_freeplay_record() {
+        use crate::gameplay::startup_configuration::{AdventureMode, AdventureSettings};
+        use df_persistence::local_demo_scope::AdventureStartup;
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/tmp")
+            .join(format!(
+                "standalone-shop-startup-{}-{}",
+                std::process::id(),
+                u128::from_le_bytes(model::random::<16>().unwrap())
+            ));
+        let mut settings = AdventureSettings {
+            mode: AdventureMode::MerchantShop,
+            seed: Some(44),
+            tables: root.join("intentionally-missing-tables"),
+            rules_mode: RulesMode::Standard,
+            chapter_type: None,
+        };
+        let fresh = super::super::startup::select(
+            &settings,
+            &root,
+            "df_gameplay_demo_shop_startup",
+            AdventureStartup::Fresh,
+        )
+        .unwrap();
+        assert!(fresh.fresh);
+        assert!(fresh.record.rolls.is_empty());
+        settings.mode = AdventureMode::Random;
+        settings.seed = Some(999);
+        let restored = super::super::startup::select(
+            &settings,
+            &root,
+            "df_gameplay_demo_shop_startup",
+            AdventureStartup::Stored(fresh.documents.clone()),
+        )
+        .unwrap();
+        assert!(!restored.fresh);
+        assert_eq!(fresh.loaded.pack, restored.loaded.pack);
+        assert!(fresh.documents == restored.documents);
     }
 }

@@ -297,6 +297,11 @@ impl SceneModel {
                         .iter()
                         .any(|thing| thing.id == format!("purchased-{}", offer.id))
                 })
+                .map(|offer| {
+                    let mut value = serde_json::json!(offer);
+                    value["actions"] = serde_json::json!(["look", "buy"]);
+                    value
+                })
                 .collect::<Vec<_>>()
         );
         serde_json::to_string(&contents).map_err(|_| SceneModelError::Serialization)

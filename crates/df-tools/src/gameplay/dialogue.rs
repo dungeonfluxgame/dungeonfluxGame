@@ -791,6 +791,14 @@ impl Service {
                 });
             }
         }
+        if option == "trade" {
+            let amount = journey::living_scene::payment_amount_cp(&request.text)
+                .ok_or_else(|| Status::invalid_argument("Name one coin amount for the trade."))?;
+            submit.action_choices.push(rpc::JourneyChoice {
+                group_id: "scene-payment".into(),
+                option_id: amount.to_string(),
+            });
+        }
         let (reply, receive) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Submit {
@@ -844,7 +852,7 @@ impl Service {
                 );
             }
         }
-        if matches!(option, "buy" | "use")
+        if matches!(option, "buy" | "use" | "trade")
             && journey::living_scene::coin_was_transferred(after.state(), operation)
                 .map_err(actor::unavailable)?
         {
