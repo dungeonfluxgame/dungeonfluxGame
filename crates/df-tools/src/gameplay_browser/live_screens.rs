@@ -126,6 +126,17 @@ fn join_host(url: &str) -> String {
         .to_owned()
 }
 
+fn is_fixed_harbor_dialogue(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> bool {
+    phase == rpc::JourneyPhase::Dialogue
+        && [
+            "scene-whisper-in-the-rain",
+            "scene-wharf-arrival",
+            "scene-salt-quay-arrival",
+        ]
+        .iter()
+        .any(|stem| scene.scene_asset.contains(stem))
+}
+
 fn fallback_art(
     phase: rpc::JourneyPhase,
     scene: &rpc::GameplayScene,
@@ -138,7 +149,14 @@ fn fallback_art(
     }
     match phase {
         rpc::JourneyPhase::Opening => ("scene-wharf-arrival", HARBOR_WHARF),
-        rpc::JourneyPhase::Dialogue => ("scene-whisper-in-the-rain", HARBOR_DIALOGUE),
+        rpc::JourneyPhase::Dialogue => (
+            "scene-whisper-in-the-rain",
+            if is_fixed_harbor_dialogue(phase, scene) {
+                HARBOR_DIALOGUE
+            } else {
+                HARBOR_WHARF
+            },
+        ),
         _ => ("scene-courier-road", HARBOR_WHARF),
     }
 }
@@ -182,10 +200,9 @@ impl Drop for ServerImage {
 }
 
 fn art_source(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> VisualSource {
-    let photographic_harbor = matches!(
-        phase,
-        rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening | rpc::JourneyPhase::Dialogue
-    ) && scene.destination != rpc::HarborDestination::HarborInn as i32;
+    let photographic_harbor = (matches!(phase, rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening)
+        || is_fixed_harbor_dialogue(phase, scene))
+        && scene.destination != rpc::HarborDestination::HarborInn as i32;
     if photographic_harbor {
         VisualSource::EstablishingPhoto
     } else if crate::presentation::imagery_url(&scene.live_backdrop).is_some() {
@@ -205,7 +222,7 @@ fn art(
     // photographic harbor shot when a fresh plate is unavailable.
     let source = art_source(phase, scene);
     let painting = if source == VisualSource::EstablishingPhoto {
-        if phase == rpc::JourneyPhase::Dialogue {
+        if is_fixed_harbor_dialogue(phase, scene) {
             HARBOR_DIALOGUE.to_owned()
         } else {
             HARBOR_ESTABLISHING.to_owned()
