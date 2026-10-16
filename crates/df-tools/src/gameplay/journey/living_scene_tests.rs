@@ -204,6 +204,48 @@ fn a_taken_object_and_open_door_survive_checkpoint_encoding_without_advancing_th
 }
 
 #[test]
+fn inventory_projection_uses_durable_actor_refs_for_held_items() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let thing = model
+            .things
+            .iter()
+            .find(|thing| thing.portable && !thing.in_use && thing.holder_id.is_none())
+            .unwrap();
+        let taken = interact(&current, member, 30, &thing.id, "take");
+        let now = living_scene::snapshot(taken.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let hero = taken
+            .state()
+            .characters
+            .iter()
+            .find(|character| character.owner == member)
+            .unwrap();
+        let expected = super::canonical_actor_ref(taken.state(), hero.entity).unwrap();
+        let entries = living_scene::inventory_projection(
+            taken.state(),
+            &now.model,
+            &scene.setting.as_ref().unwrap().place_id,
+        )
+        .unwrap();
+        let held = entries
+            .iter()
+            .find(|entry| entry.item_id == thing.id)
+            .unwrap();
+        assert_eq!(held.holder_id.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            held.location,
+            crate::gameplay::adventure::scene_model::SceneInventoryLocation::Held {
+                holder_id: expected,
+            }
+        );
+    });
+}
+
+#[test]
 fn explicit_steal_text_routes_to_server_inventory_interaction() {
     taproom(|| {
         let (current, _member) = opened();
