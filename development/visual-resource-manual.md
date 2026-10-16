@@ -129,6 +129,39 @@ element. Character speech still drives the camera push and smooth release.
 
 ## Inspect the complete resource path
 
+### Plate rendering indicator
+
+The display shows a small brass loading mark in its upper left corner while the
+current plate is being generated or its image is being loaded and decoded. The
+existing scene remains visible during an update. Ahead-of-story prefetch work
+does not show this indicator.
+
+`dev scene Brakka` and the view's `visual_assets` expose
+`plate_update_pending`. This is independent of `plate_state`: a ready old plate
+can remain visible while its replacement is pending. Provider failure clears the
+pending flag even when the old URL remains unchanged. Browser loading is combined
+with the server flag so image download and decode are included.
+
+The indicator is registered as `plate-loading` for `dev layout` placement. Its
+actual visibility transitions use the shared `thinking_loader` presentation
+component and fresh component IDs, allowing `dev timeline --component
+thinking_loader --last 250` to measure each appearance rather than counting every
+projection tick. Inspect server render events alongside these browser events to
+separate generation time from download/decode time.
+
+### Prompt validation before a provider call
+
+Inspect the final assembled prompt length, including cast-sheet identity legends
+and camera direction. A base prompt passing validation does not establish that
+the final request is valid. A render failure in zero or one millisecond can be a
+local validation failure before a provider request is sent.
+
+The image adapter uses the documented OpenAI Images Edit prompt contract from
+`df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS`, shared by the gameplay
+builders. The old local 4,000-character restriction was lower than the service
+contract and rejected the merchant scene's 4,574-character request. Character
+references and scene details must not be discarded to satisfy that old cap.
+
 The token is a bearer credential. Never print it into a retained log or commit.
 The following requests are read-only and return JSON:
 
