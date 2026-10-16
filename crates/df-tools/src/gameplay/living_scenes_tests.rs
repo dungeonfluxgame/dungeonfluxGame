@@ -841,6 +841,7 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     live_plate: String::new(),
                     plate_layout: None,
                     plate_state: 0,
+                    plate_update_pending: false,
                     scene_contents_json: String::new(),
                     item: None,
                 }),

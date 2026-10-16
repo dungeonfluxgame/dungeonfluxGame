@@ -2843,6 +2843,7 @@ pub mod fixture {
             }
             .to_owned(),
             speaker_portrait: String::new(),
+            plate_update_pending: false,
         };
         let journey = rpc::JourneyView {
             phase: rpc::JourneyPhase::Opening as i32,
