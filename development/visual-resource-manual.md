@@ -65,6 +65,12 @@ $env:DF_GAMEPLAY_ADVENTURE='merchant-shop'
 Normal server authority and the scene interaction journal still apply:
 background people resolve as conversation targets, while offers expose exact
 copper prices without claiming a purchase until the ordinary buy path accepts it.
+The `Shop` setting is the single canonical cloth-shop composition in the shipped
+place tables, so its adventurer and soldier background cast is intentionally
+present for ordinary shop runs as well as this explicit quickstart. A completed
+purchase is recorded through the ordinary decision journal and exposes the
+registered `SceneItemCard` for the buying hero; this fixture does not invent a
+successful purchase or bypass the existing ownership path.
 
 Copy the `DEV CONTROL` URL and token file from startup, then run the fixture
 binary. This joins both seats, creates the fixture heroes from the live offers,

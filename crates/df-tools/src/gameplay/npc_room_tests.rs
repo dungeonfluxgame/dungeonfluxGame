@@ -7,6 +7,20 @@ use crate::gameplay::{
 };
 use std::time::Duration;
 
+#[test]
+fn merchant_shop_role_vocatives_address_without_generated_names() {
+    assert!(room::addresses(
+        "Merchant, what do you sell?",
+        "Marten Vell"
+    ));
+    assert!(room::addresses("Soldier: is the road safe?", "Rusk"));
+    assert!(room::addresses(
+        "Adventurer, have you seen the road?",
+        "Mara"
+    ));
+    assert!(!room::addresses("I see the soldier by the door.", "Rusk"));
+}
+
 fn room() -> (
     super::super::adventure::GeneratedAdventure,
     Arc<SocialLedger>,

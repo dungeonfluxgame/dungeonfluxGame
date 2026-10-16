@@ -48,8 +48,17 @@ pub(super) fn facts(room: &SceneNow, dossier: &Dossier, withheld: &Withheld) -> 
 pub(super) fn addresses(words: &str, name: &str) -> bool {
     let line = words.trim().to_lowercase();
     let name = name.to_lowercase();
+    let role_vocative = [
+        "merchant,",
+        "merchant:",
+        "soldier,",
+        "soldier:",
+        "adventurer,",
+        "adventurer:",
+    ];
     line.starts_with(&format!("{name},"))
         || line.starts_with(&format!("{name}:"))
+        || role_vocative.iter().any(|prefix| line.starts_with(prefix))
         || line.starts_with("i walk over to ")
         || line.starts_with("i talk to ")
         || line.starts_with("i ask ")
