@@ -194,11 +194,29 @@ pub(super) fn journey_input(
         ));
     }
     if let Some(character) = &request.character {
-        let identity = match character.identity.clone() {
-            Some(identity) => super::hero_identity::Identity::from_rpc(identity),
-            None => super::hero_identity::Identity::from_menus(&[]),
+        if character.name.len() > 48 || character.choices.len() > 16 {
+            return Err(tonic::Status::invalid_argument(
+                "character choices exceed bound",
+            ));
         }
-        .map_err(|_| {
+        let (identity, visual_dossier) = match character.identity.clone() {
+            Some(identity) => (super::hero_identity::Identity::from_rpc(identity), None),
+            None => {
+                let mut portraits = character
+                    .choices
+                    .iter()
+                    .filter(|choice| choice.group_id == "portrait");
+                let portrait = portraits.next().ok_or_else(invalid)?;
+                if portraits.next().is_some() {
+                    return Err(invalid());
+                }
+                let (identity, dossier) =
+                    super::hero_identity::accepted_quickstart_identity(&portrait.option_id)
+                        .map_err(|_| invalid())?;
+                (Ok(identity), Some(dossier))
+            }
+        };
+        let identity = identity.map_err(|_| {
             super::refusal_detail::note("hero-identity-invalid");
             tonic::Status::invalid_argument("Your hero's appearance or story was not accepted.")
         })?;
@@ -210,9 +228,10 @@ pub(super) fn journey_input(
                 model::label(selected).map_err(|_| invalid())?,
             ));
         }
-        if character.name.len() > 48 || character.choices.len() > 16 {
-            return Err(tonic::Status::invalid_argument(
-                "character choices exceed bound",
+        if let Some(dossier) = visual_dossier {
+            choices.push((
+                model::label("identity-appearance:accepted-profile").map_err(|_| invalid())?,
+                model::label(dossier.portrait).map_err(|_| invalid())?,
             ));
         }
         let encoded_name = if character.name.is_empty() {

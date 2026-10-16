@@ -161,6 +161,24 @@ impl AssembledPrompt {
         self
     }
 
+    pub(in crate::gameplay) fn with_accepted_appearance_dossier(
+        mut self,
+        dossier: &'static str,
+    ) -> Self {
+        self.text.push_str(
+            "\nImage 2 is the approved documentary photograph of this exact accepted hero. \
+             Match its face, hair, build and costume; do not copy its background or pose. \
+             The accepted quickstart portrait defines this hero's full public physical identity. \
+             Preserve these exact details across every depiction: ",
+        );
+        self.text.push_str(dossier);
+        self.text.push_str(
+            " The approved photographic figure is an identity reference; use the accepted \
+             character package for canonical equipment.",
+        );
+        self
+    }
+
     pub(in crate::gameplay) fn with_canonical_speaker_reference(
         mut self,
         image_number: usize,

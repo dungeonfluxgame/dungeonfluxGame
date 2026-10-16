@@ -3,7 +3,7 @@
 use super::*;
 use crate::gameplay::{
     adventure::scene_model::{SceneModel, ScenePerson},
-    hero_identity::ValidatedIdentity,
+    hero_identity::{AcceptedVisualDossier, ValidatedIdentity},
     imagery::{self, HeroVisualIdentity, Lookup},
 };
 use df_model::checkpoint::{Checkpoint, EntityId};
@@ -20,6 +20,7 @@ pub(super) enum Target {
 enum Source {
     Hero {
         identity: ValidatedIdentity,
+        visual_dossier: Option<&'static AcceptedVisualDossier>,
         species: String,
         gear: Vec<&'static str>,
     },
@@ -273,6 +274,7 @@ mod tests {
         assert_ne!(selected_room_binding(&second), first_binding);
         let source = Source::Hero {
             identity: Identity::from_menus(&[]).unwrap(),
+            visual_dossier: None,
             species: "orc".to_owned(),
             gear: vec!["a greatsword"],
         };
@@ -567,6 +569,7 @@ impl Inner {
                 })
                 .collect::<Vec<_>>();
             let identity = ValidatedIdentity::from_canonical_appearance_choices(&choices);
+            let visual_dossier = ValidatedIdentity::accepted_visual_dossier_from_choices(&choices);
             let species = choices
                 .iter()
                 .find(|(field, _)| field == "species")
@@ -586,13 +589,29 @@ impl Inner {
                 "javelin" => Some(vec!["a javelin"]),
                 _ => None,
             };
-            let (Ok(identity), Some(species), Some(gear)) = (identity, species, gear) else {
+            let (Ok(identity), Ok(visual_dossier), Some(species), Some(gear)) =
+                (identity, visual_dossier, species, gear)
+            else {
                 record(
                     "gameplay.canonical_reference.invalid_identity",
                     &[("reference.entity", digest(entity.as_bytes()))],
                 );
                 continue;
             };
+            let portrait = choices
+                .iter()
+                .find(|(field, _)| field == "portrait")
+                .map(|(_, value)| value.as_str());
+            if visual_dossier.is_some_and(|dossier| {
+                !portrait.is_some_and(|portrait| dossier.agrees_with_portrait(portrait))
+                    || !dossier.agrees_with_identity(&identity)
+            }) {
+                record(
+                    "gameplay.canonical_reference.invalid_identity",
+                    &[("reference.entity", digest(entity.as_bytes()))],
+                );
+                continue;
+            }
             let revision = format!(
                 "{:?}|{:?}|{species}|{gear:?}",
                 checkpoint
@@ -609,6 +628,7 @@ impl Inner {
                 target,
                 Source::Hero {
                     identity,
+                    visual_dossier,
                     species,
                     gear,
                 },
@@ -625,7 +645,17 @@ impl Inner {
     }
 
     pub(super) async fn render_canonical(&self, work: &Work) -> Result<ImageKey, ImageFailure> {
-        let carrier = self.neutral_photographic_reference().await?;
+        let mut references = vec![self.neutral_photographic_reference().await?];
+        if let Source::Hero {
+            visual_dossier: Some(dossier),
+            ..
+        } = &work.source
+        {
+            references.push(
+                self.load_photographic(dossier.figure_reference.to_owned())
+                    .await?,
+            );
+        }
         if !locked(&self.state)
             .canonical
             .entries
@@ -637,6 +667,7 @@ impl Inner {
         let (kind, prompt, output) = match &work.source {
             Source::Hero {
                 identity,
+                visual_dossier,
                 species,
                 gear,
             } => (
@@ -648,6 +679,7 @@ impl Inner {
                         species,
                         held_gear: gear,
                     },
+                    visual_dossier.map(|dossier| dossier.description),
                     &work.binding,
                 )?,
                 OutputSpec::CUTOUT,
@@ -666,7 +698,7 @@ impl Inner {
         self.imagery
             .render(ImageRequest {
                 kind,
-                references: vec![carrier],
+                references,
                 prompt,
                 output,
             })

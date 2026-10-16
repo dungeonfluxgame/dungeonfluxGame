@@ -357,6 +357,15 @@
         ]
       },
       {
+        "id": "auburn",
+        "label": "Auburn",
+        "phrase": "auburn hair",
+        "aliases": [
+          "auburn hair",
+          "dark auburn hair"
+        ]
+      },
+      {
         "id": "grey",
         "label": "Grey",
         "phrase": "grey hair",
@@ -484,6 +493,14 @@
         ]
       },
       {
+        "id": "ear-notch",
+        "label": "Ear notch",
+        "phrase": "a small healed notch in one ear",
+        "aliases": [
+          "notched ear"
+        ]
+      },
+      {
         "id": "freckles",
         "label": "Freckles",
         "phrase": "freckles",
@@ -569,6 +586,30 @@
         "phrase": "patched work clothes",
         "aliases": [
           "work clothes"
+        ]
+      },
+      {
+        "id": "chainmail-tabard",
+        "label": "Mail and tabard",
+        "phrase": "chain mail beneath a dark blue soldier's tabard",
+        "aliases": [
+          "soldier's tabard"
+        ]
+      },
+      {
+        "id": "chainmail-pauldron",
+        "label": "Mail and leather pauldron",
+        "phrase": "chain mail, a worn leather pauldron and dark blue garment accents",
+        "aliases": [
+          "leather pauldron"
+        ]
+      },
+      {
+        "id": "archer-leathers",
+        "label": "Archer's leathers",
+        "phrase": "worn brown leather armor beneath a blue wool cloak",
+        "aliases": [
+          "archer clothing"
         ]
       }
     ]

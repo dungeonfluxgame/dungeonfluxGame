@@ -34,12 +34,17 @@ fn assembled(
 pub(in crate::gameplay) fn canonical_character(
     rating: ContentRating,
     hero: HeroVisualIdentity<'_>,
+    accepted_dossier: Option<&'static str>,
     binding: &str,
 ) -> Result<AssembledPrompt, ImageFailure> {
-    Ok(hero_portrait(rating, hero)
+    let mut prompt = hero_portrait(rating, hero)
         .map_err(|_| ImageFailure::InvalidRequest)?
         .with_neutral_reference()
-        .with_canonical_binding(binding))
+        .with_canonical_binding(binding);
+    if let Some(dossier) = accepted_dossier {
+        prompt = prompt.with_accepted_appearance_dossier(dossier);
+    }
+    Ok(prompt)
 }
 
 pub(in crate::gameplay) fn canonical_npc(
@@ -117,6 +122,7 @@ mod tests {
                 species: "halfling",
                 held_gear: &["a longbow and quiver of arrows"],
             },
+            None,
             "accepted-run-entity-revision",
         )
         .unwrap();
@@ -124,5 +130,64 @@ mod tests {
         assert!(prompt.as_str().contains("longbow"));
         assert!(!prompt.as_str().contains("PRIVATE_CHARACTER_HISTORY"));
         assert!(prompt.as_str().contains("accepted-run-entity-revision"));
+    }
+
+    #[test]
+    fn quickstart_hero_prompts_keep_the_selected_physical_dossier_and_identity_reference() {
+        let first =
+            crate::gameplay::hero_identity::accepted_visual_dossier("portrait-hero-1").unwrap();
+        let second =
+            crate::gameplay::hero_identity::accepted_visual_dossier("portrait-hero-2").unwrap();
+        let first_identity = first.identity().unwrap();
+        let second_identity = second.identity().unwrap();
+        let first_prompt = canonical_character(
+            ContentRating::Restrained,
+            HeroVisualIdentity {
+                identity: &first_identity,
+                species: "dwarf",
+                held_gear: &["a greatsword"],
+            },
+            Some(first.description),
+            "hero-one-binding",
+        )
+        .unwrap();
+        let second_prompt = canonical_character(
+            ContentRating::Restrained,
+            HeroVisualIdentity {
+                identity: &second_identity,
+                species: "dwarf",
+                held_gear: &["a greatsword"],
+            },
+            Some(second.description),
+            "hero-two-binding",
+        )
+        .unwrap();
+
+        assert!(
+            first_prompt
+                .as_str()
+                .contains("long braided beard with plain iron rings")
+        );
+        assert!(
+            first_prompt
+                .as_str()
+                .contains("approved photographic figure is an identity reference")
+        );
+        assert!(
+            second_prompt
+                .as_str()
+                .contains("small healed notch at the left ear")
+        );
+        assert_ne!(first_prompt.as_str(), second_prompt.as_str());
+        assert!(
+            !first_prompt
+                .as_str()
+                .contains("small healed notch at the left ear")
+        );
+        assert!(
+            !second_prompt
+                .as_str()
+                .contains("long braided beard with plain iron rings")
+        );
     }
 }

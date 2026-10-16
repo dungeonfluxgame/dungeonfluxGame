@@ -71,6 +71,100 @@ pub(crate) struct Identity {
     pub(crate) facts: Vec<String>,
 }
 
+/// The reviewed quickstart portrait that defines a hero when creation omits a custom identity.
+/// The dossier is public physical identity only; it carries no story or private fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AcceptedVisualDossier {
+    pub(crate) portrait: &'static str,
+    pub(crate) figure_reference: &'static str,
+    pub(crate) description: &'static str,
+    appearance_choices: &'static [(&'static str, &'static str)],
+}
+
+const QUICKSTART_HERO_ONE: AcceptedVisualDossier = AcceptedVisualDossier {
+    portrait: "portrait-hero-1",
+    figure_reference: "figure-hero-1",
+    description: "Adult male mountain dwarf, about 45, with a weathered broad face and powerful compact shoulders. He has copper-red hair and a long braided beard with plain iron rings, steady grey eyes and a scarred brow. He wears chain mail beneath a dark blue soldier's tabard.",
+    appearance_choices: &[
+        ("presentation", "masculine"),
+        ("pronouns", "he-him"),
+        ("age", "middle-aged"),
+        ("build", "broad"),
+        ("skin", "pale"),
+        ("hair", "braids-and-beard"),
+        ("hair-color", "red"),
+        ("eyes", "grey"),
+        ("mark", "scar"),
+        ("attire", "chainmail-tabard"),
+    ],
+};
+
+const QUICKSTART_HERO_TWO: AcceptedVisualDossier = AcceptedVisualDossier {
+    portrait: "portrait-hero-2",
+    figure_reference: "figure-hero-2",
+    description: "Adult female mountain dwarf, about 40, with a broad strong jaw and compact powerful build. She has dark auburn hair in tight practical warrior braids, hazel eyes and a small healed notch at the left ear. She wears chain mail, a worn leather pauldron and dark blue garment accents.",
+    appearance_choices: &[
+        ("presentation", "feminine"),
+        ("pronouns", "she-her"),
+        ("age", "middle-aged"),
+        ("build", "broad"),
+        ("skin", "pale"),
+        ("hair", "braids"),
+        ("hair-color", "auburn"),
+        ("eyes", "hazel"),
+        ("mark", "ear-notch"),
+        ("attire", "chainmail-pauldron"),
+    ],
+};
+
+const QUICKSTART_HERO_THREE: AcceptedVisualDossier = AcceptedVisualDossier {
+    portrait: "portrait-hero-3",
+    figure_reference: "figure-hero-3",
+    description: "Adult female dwarf archer with pale skin and long brown hair in two practical braids. She wears a blue wool cloak over worn brown leather armor and linen, with a longbow and quiver of arrows.",
+    appearance_choices: &[
+        ("presentation", "feminine"),
+        ("pronouns", "she-her"),
+        ("age", "adult"),
+        ("build", "wiry"),
+        ("skin", "pale"),
+        ("hair", "braids"),
+        ("hair-color", "brown"),
+        ("eyes", "blue"),
+        ("mark", "none"),
+        ("attire", "archer-leathers"),
+    ],
+};
+
+pub(crate) fn accepted_visual_dossier(portrait: &str) -> Option<&'static AcceptedVisualDossier> {
+    match portrait {
+        "portrait-hero-1" => Some(&QUICKSTART_HERO_ONE),
+        "portrait-hero-2" => Some(&QUICKSTART_HERO_TWO),
+        "portrait-hero-3" => Some(&QUICKSTART_HERO_THREE),
+        _ => None,
+    }
+}
+
+pub(crate) fn accepted_quickstart_identity(
+    portrait: &str,
+) -> Result<(ValidatedIdentity, &'static AcceptedVisualDossier), IdentityError> {
+    let dossier = accepted_visual_dossier(portrait).ok_or(IdentityError::InvalidOption)?;
+    Ok((dossier.identity()?, dossier))
+}
+
+impl AcceptedVisualDossier {
+    pub(crate) fn identity(&self) -> Result<ValidatedIdentity, IdentityError> {
+        Identity::from_menus(self.appearance_choices)
+    }
+
+    pub(crate) fn agrees_with_portrait(&self, portrait: &str) -> bool {
+        self.portrait == portrait
+    }
+
+    pub(crate) fn agrees_with_identity(&self, identity: &ValidatedIdentity) -> bool {
+        identity.canonical_appearance_choices() == self.appearance_choices
+    }
+}
+
 /// Only a checked identity may reach stored choices, story context or image prompts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedIdentity(Identity);
@@ -319,12 +413,28 @@ impl ValidatedIdentity {
         let selected = choices
             .iter()
             .filter_map(|(field, value)| {
-                field
-                    .strip_prefix("identity-appearance:")
-                    .map(|field| (field, value.as_str()))
+                let field = field.strip_prefix("identity-appearance:")?;
+                (field != "accepted-profile").then_some((field, value.as_str()))
             })
             .collect::<Vec<_>>();
         Identity::from_menus(&selected)
+    }
+
+    pub(crate) fn accepted_visual_dossier_from_choices(
+        choices: &[(String, String)],
+    ) -> Result<Option<&'static AcceptedVisualDossier>, IdentityError> {
+        let mut profiles = choices
+            .iter()
+            .filter(|(field, _)| field == "identity-appearance:accepted-profile");
+        let Some((_, selected)) = profiles.next() else {
+            return Ok(None);
+        };
+        if profiles.next().is_some() {
+            return Err(IdentityError::DuplicateField);
+        }
+        accepted_visual_dossier(selected)
+            .map(Some)
+            .ok_or(IdentityError::InvalidOption)
     }
 
     pub(crate) fn identity(&self) -> &Identity {

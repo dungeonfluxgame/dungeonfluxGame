@@ -49,6 +49,51 @@ fn defaults_do_not_invent_masculine_gender_or_a_beard() {
 }
 
 #[test]
+fn quickstart_portraits_supply_distinct_full_public_identities_when_identity_is_absent() {
+    let (first, first_dossier) = accepted_quickstart_identity("portrait-hero-1").unwrap();
+    let (second, second_dossier) = accepted_quickstart_identity("portrait-hero-2").unwrap();
+
+    assert_eq!(first_dossier.figure_reference, "figure-hero-1");
+    assert_eq!(second_dossier.figure_reference, "figure-hero-2");
+    assert_ne!(
+        first.canonical_appearance_choices(),
+        second.canonical_appearance_choices()
+    );
+    assert!(
+        first_dossier
+            .description
+            .contains("long braided beard with plain iron rings")
+    );
+    assert!(
+        second_dossier
+            .description
+            .contains("small healed notch at the left ear")
+    );
+    assert_eq!(first.identity().appearance.presentation, "masculine");
+    assert_eq!(second.identity().appearance.presentation, "feminine");
+    assert!(!first_dossier.description.contains("backstory"));
+    assert!(!second_dossier.description.contains("private"));
+
+    let mut accepted = first
+        .canonical_appearance_choices()
+        .into_iter()
+        .map(|(field, value)| (format!("identity-appearance:{field}"), value.to_owned()))
+        .collect::<Vec<_>>();
+    accepted.push((
+        "identity-appearance:accepted-profile".to_owned(),
+        first_dossier.portrait.to_owned(),
+    ));
+    assert_eq!(
+        ValidatedIdentity::accepted_visual_dossier_from_choices(&accepted),
+        Ok(Some(first_dossier))
+    );
+    assert_eq!(
+        ValidatedIdentity::from_canonical_appearance_choices(&accepted),
+        Ok(first)
+    );
+}
+
+#[test]
 fn a_pasted_story_can_use_line_breaks_without_becoming_picture_instructions() {
     let base = menus();
     let reading = read_local(
