@@ -186,11 +186,20 @@ impl Drop for ServerImage {
 
 fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (String, &'static str) {
     let (stem, fallback) = fallback_art(phase, scene);
-    let painting =
-        asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}"));
+    // The room display may carry an older generated backdrop from the server projection. Keep
+    // that stale layer out of the lobby entirely so it cannot win the CSS background stack over
+    // the photographic establishing shot.
+    let painting = if phase == rpc::JourneyPhase::Room {
+        HARBOR_ESTABLISHING.to_owned()
+    } else {
+        asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}"))
+    };
     // PLAY-L01: a server-generated re-render of the painting leads when the view carries one; the
     // authored painting stays beneath it in the CSS layers should the image fail to load.
-    let painting = match crate::presentation::imagery_url(&scene.live_backdrop) {
+    let painting = match (phase != rpc::JourneyPhase::Room)
+        .then(|| crate::presentation::imagery_url(&scene.live_backdrop))
+        .flatten()
+    {
         Some(live) => format!("{live}),url({painting}"),
         None => painting,
     };
@@ -198,7 +207,11 @@ fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (String, &'stati
 }
 
 fn lobby_art_source(scene_asset: &str, live_backdrop: &str) -> Option<String> {
-    crate::presentation::imagery_url(live_backdrop).or_else(|| asset_url(scene_asset))
+    if scene_asset.contains("scene-lobby-harbor") {
+        Some(HARBOR_ESTABLISHING.to_owned())
+    } else {
+        crate::presentation::imagery_url(live_backdrop).or_else(|| asset_url(scene_asset))
+    }
 }
 
 fn validated_join_scene_asset(scene_asset: Option<&str>) -> Option<String> {
