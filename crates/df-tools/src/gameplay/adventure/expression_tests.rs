@@ -1,10 +1,12 @@
 use super::super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
 use super::super::super::storyteller::{
-    ADVENTURE_STYLE, CallProfile, Expression, MAXIMUM_PROMPT_BYTES, ReasoningEffort,
-    build_prompt, check_request,
+    ADVENTURE_STYLE, CallProfile, Expression, MAXIMUM_PROMPT_BYTES, build_prompt as
+        build_expression_prompt,
+    check_request,
 };
 use super::super::{generate, record};
 use super::*;
+use df_providers::ReasoningEffort;
 use std::{path::Path, sync::Arc};
 
 const SEED: u64 = 0x3c6e_f378_dd81_de97;
@@ -596,7 +598,7 @@ fn merchant_opening_group_requests_pass_storyteller_validation_in_both_ratings()
             check_request(&request).unwrap_or_else(|error| {
                 panic!("{rating:?} {group:?} storyteller request rejected: {error}")
             });
-            let prompt = build_prompt(&request, None);
+            let prompt = build_expression_prompt(&request, None);
             assert!(
                 prompt.len() <= MAXIMUM_PROMPT_BYTES,
                 "{rating:?} {group:?} prompt is {} bytes",
