@@ -8,6 +8,7 @@ use super::live_exploration::{
 use super::live_lobby::{LobbyMember, LobbyModel, LobbyOfferModel, LobbyScreen};
 use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
+use df_observe::presentation::VisualSource;
 use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
 
 const HARBOR_ESTABLISHING: &str = "/assets/ui/generated/scene-salt-quay-arrival-photo";
@@ -184,30 +185,44 @@ impl Drop for ServerImage {
     }
 }
 
-fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (String, &'static str) {
-    let (stem, fallback) = fallback_art(phase, scene);
-    // The public harbor phases may carry an older generated backdrop from the server projection.
-    // Keep that stale layer out of the visible fallback stack so it cannot win over the
-    // photographic harbor shot when a fresh plate is unavailable.
+fn art_source(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> VisualSource {
     let photographic_harbor = matches!(
         phase,
         rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening | rpc::JourneyPhase::Dialogue
     ) && scene.destination != rpc::HarborDestination::HarborInn as i32;
-    let painting = if photographic_harbor {
+    if photographic_harbor {
+        VisualSource::EstablishingPhoto
+    } else if crate::presentation::imagery_url(&scene.live_backdrop).is_some() {
+        VisualSource::LiveBackdrop
+    } else {
+        VisualSource::SceneArtwork
+    }
+}
+
+fn art(
+    phase: rpc::JourneyPhase,
+    scene: &rpc::GameplayScene,
+) -> (String, &'static str, VisualSource) {
+    let (stem, fallback) = fallback_art(phase, scene);
+    // The public harbor phases may carry an older generated backdrop from the server projection.
+    // Keep that stale layer out of the visible fallback stack so it cannot win over the
+    // photographic harbor shot when a fresh plate is unavailable.
+    let source = art_source(phase, scene);
+    let painting = if source == VisualSource::EstablishingPhoto {
         HARBOR_ESTABLISHING.to_owned()
     } else {
         asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}"))
     };
     // PLAY-L01: a server-generated re-render of the painting leads when the view carries one; the
     // authored painting stays beneath it in the CSS layers should the image fail to load.
-    let painting = match (!photographic_harbor)
+    let painting = match (source == VisualSource::LiveBackdrop)
         .then(|| crate::presentation::imagery_url(&scene.live_backdrop))
         .flatten()
     {
         Some(live) => format!("{live}),url({painting}"),
         None => painting,
     };
-    (painting, fallback)
+    (painting, fallback, source)
 }
 
 fn lobby_art_source(scene_asset: &str, live_backdrop: &str) -> Option<String> {
@@ -233,7 +248,7 @@ fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
 fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     let lobby = input.phase == rpc::JourneyPhase::Room;
     let join_url = join_address(input.journey)?;
-    let (art, art_fallback) = art(input.phase, input.scene);
+    let (art, art_fallback, art_source) = art(input.phase, input.scene);
     let speaker = (!input.journey.dialogue.is_empty()).then(|| TvSpeaker {
         name: if input.journey.speaker.is_empty() {
             "Narrator".to_owned()
@@ -271,6 +286,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
             .collect(),
         art,
         art_fallback,
+        art_source,
         cast: Vec::new(),
         place: input.scene.place.clone(),
         rules_note: input.scene.rules_note.clone(),
@@ -279,6 +295,7 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         choice_hints_hidden: input.journey.choice_hints_hidden,
         family: crate::presentation::scene_family(&input.scene.scene_asset),
         scene_key: input.scene.title.clone(),
+        visual_scene_id: format!("{}|{}", input.scene.title, input.scene.scene_asset),
         home: input.journey.home.clone(),
         home_video: (!input.journey.home_video_path.is_empty())
             .then(|| input.journey.home_video_path.clone()),
@@ -970,9 +987,9 @@ fn render_scene_contents(
 mod tests {
     use super::super::rpc;
     use super::{
-        SceneInput, choice_disabled_reason, end_card_contact_ready, is_new_private_clue,
-        lobby_art_source, phone_choice_label, should_show_dialogue_composer, tv_model,
-        validated_join_scene_asset,
+        HARBOR_ESTABLISHING, SceneInput, VisualSource, art, art_source, choice_disabled_reason,
+        end_card_contact_ready, is_new_private_clue, lobby_art_source, phone_choice_label,
+        should_show_dialogue_composer, tv_model, validated_join_scene_asset,
     };
 
     #[test]
@@ -1035,6 +1052,38 @@ mod tests {
                 &live_backdrop
             ),
             Some("/assets/ui/generated/scene-salt-quay-arrival-photo".to_owned())
+        );
+    }
+
+    #[test]
+    fn scene_art_source_reports_the_candidate_selected_for_the_display() {
+        let live_backdrop = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let scene = rpc::GameplayScene {
+            destination: rpc::HarborDestination::HarborInn as i32,
+            scene_asset: "assets/ui/generated/scene-inn".to_owned(),
+            live_backdrop: live_backdrop.clone(),
+            ..Default::default()
+        };
+        let (painting, _, source) = art(rpc::JourneyPhase::Dialogue, &scene);
+        assert_eq!(source, VisualSource::LiveBackdrop);
+        assert!(painting.starts_with(&live_backdrop));
+
+        let photographic = rpc::GameplayScene {
+            scene_asset: "assets/ui/generated/scene-old-illustration".to_owned(),
+            ..Default::default()
+        };
+        let (painting, _, source) = art(rpc::JourneyPhase::Dialogue, &photographic);
+        assert_eq!(source, VisualSource::EstablishingPhoto);
+        assert_eq!(painting, HARBOR_ESTABLISHING);
+
+        let inn = rpc::GameplayScene {
+            destination: rpc::HarborDestination::HarborInn as i32,
+            scene_asset: "assets/ui/generated/scene-inn".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            art_source(rpc::JourneyPhase::Dialogue, &inn),
+            VisualSource::SceneArtwork
         );
     }
 

@@ -7,7 +7,9 @@ use std::{
     time::Duration,
 };
 
-use df_observe::presentation::{TimingBuffer, TimingEvent};
+use df_observe::presentation::{
+    TimingBuffer, TimingEvent, VisualPlateState, VisualShot, VisualSource, VisualSourceDetails,
+};
 use futures::future::{AbortHandle, Abortable};
 use wasm_bindgen::{JsCast, closure::Closure};
 
@@ -111,6 +113,37 @@ pub(super) fn media(
     };
     let mut event = TimingEvent::lifecycle(kind, reason, identity(asset), identity(scene), now);
     event.crossfade_ms = crossfade_ms;
+    displays(|capture| retain(capture, event.clone()));
+}
+
+/// Report the requested and displayed scene source using only closed categories and local hashes.
+pub(super) fn visual_source(
+    scene: &str,
+    requested: VisualSource,
+    effective: VisualSource,
+    shot: VisualShot,
+    plate_state: VisualPlateState,
+    requested_asset_id: Option<u64>,
+    effective_asset_id: Option<u64>,
+) {
+    let Some(now) = now_ms() else {
+        return;
+    };
+    let event = TimingEvent::visual_source(
+        effective_asset_id
+            .or(requested_asset_id)
+            .unwrap_or_default(),
+        identity(scene),
+        now,
+        VisualSourceDetails {
+            requested,
+            effective,
+            shot,
+            plate_state,
+            requested_asset: requested_asset_id,
+            effective_asset: effective_asset_id,
+        },
+    );
     displays(|capture| retain(capture, event.clone()));
 }
 

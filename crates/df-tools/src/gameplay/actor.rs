@@ -679,6 +679,23 @@ pub(super) fn record_audit_line(event: &'static str, line: String) {
     span.finish_unmeasured("recorded");
 }
 
+pub(super) fn record_audit_diagnostic(
+    event: &'static str,
+    line: String,
+    fields: serde_json::Map<String, serde_json::Value>,
+    attributes: &[(&'static str, String)],
+) {
+    super::dev_control::timeline::record_structured(event, &line, fields);
+    println!("{line}");
+    let context = OperationContext {
+        trace_parent: String::new(),
+        build: crate::BUILD_ID.to_owned(),
+    };
+    let mut span = df_observe::begin(&context, event);
+    span.event(event, attributes);
+    span.finish_unmeasured("recorded");
+}
+
 pub(super) fn record_enemy_turn(
     actor: &str,
     operation: &str,

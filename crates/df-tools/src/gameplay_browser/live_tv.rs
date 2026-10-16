@@ -21,6 +21,7 @@ use crate::{
     },
     stage_machines::LineState,
 };
+use df_observe::presentation::{VisualPlateState, VisualShot, VisualSource};
 use std::{
     cell::{Cell, RefCell},
     net::{IpAddr, SocketAddr},
@@ -75,6 +76,7 @@ pub(super) struct TvModel {
     pub(super) party: Vec<TvMember>,
     pub(super) art: String,
     pub(super) art_fallback: &'static str,
+    pub(super) art_source: VisualSource,
     pub(super) cast: Vec<StageActor>,
     /// The place the scene is set in, shown under its title.
     pub(super) place: String,
@@ -87,6 +89,8 @@ pub(super) struct TvModel {
     pub(super) family: SceneFamily,
     /// Names the scene for the figures: a non-player character stays until it changes.
     pub(super) scene_key: String,
+    /// Stable scene id shared with the server's content-free plate timeline.
+    pub(super) visual_scene_id: String,
     /// The lobby's home screen from the server; absent outside the lobby and for a fallback.
     pub(super) home: Option<rpc::HomeTheme>,
     /// PLAY-V10: the served loop of the lobby's home painting, once the server says it is ready.
@@ -383,14 +387,17 @@ fn mount_sound_gate(document: &Document, stage: &Element) -> Result<SoundGate, J
 /// whether the narration of the scene's entry is over. Outside a story scene the stage keeps its
 /// own picture.
 fn sync_shot(stage: &Element) -> Result<(), JsValue> {
-    let shot = if stage.get_attribute("data-tv-mode").as_deref() == Some("scene") {
+    let is_scene = stage.get_attribute("data-tv-mode").as_deref() == Some("scene");
+    let plate_state =
+        PlateState::from_name(&stage.get_attribute("data-plate-state").unwrap_or_default());
+    let shot = if is_scene {
         if stage.has_attribute("data-plate-loaded")
             && stage.get_attribute("data-shot").as_deref() == Some("plate")
         {
             crate::presentation::Shot::Plate
         } else {
             shot_of(
-                PlateState::from_name(&stage.get_attribute("data-plate-state").unwrap_or_default()),
+                plate_state,
                 stage.has_attribute("data-plate-loaded"),
                 stage.has_attribute("data-narration-over"),
             )
@@ -399,7 +406,136 @@ fn sync_shot(stage: &Element) -> Result<(), JsValue> {
         crate::presentation::Shot::Stage
     };
     stage.set_attribute("data-shot", shot.name())?;
+    if is_scene {
+        record_visual_source(stage, shot, plate_state)?;
+    }
     refresh_timing_visibility(stage);
+    Ok(())
+}
+
+fn first_art_asset(style: &str) -> Option<&str> {
+    style
+        .strip_prefix("background-image:url(")?
+        .split("),url(")
+        .next()
+        .filter(|asset| !asset.is_empty())
+}
+
+fn plate_asset_key(asset: &str) -> &str {
+    asset
+        .rsplit('/')
+        .next()
+        .filter(|key| !key.is_empty())
+        .unwrap_or(asset)
+}
+
+fn record_visual_source(
+    stage: &Element,
+    shot: crate::presentation::Shot,
+    plate_state: PlateState,
+) -> Result<(), JsValue> {
+    let art_source = match stage.get_attribute("data-art-source").as_deref() {
+        Some("live_backdrop") => VisualSource::LiveBackdrop,
+        Some("establishing_photo") => VisualSource::EstablishingPhoto,
+        _ => VisualSource::SceneArtwork,
+    };
+    let requested = if matches!(
+        plate_state,
+        PlateState::Pending | PlateState::Ready | PlateState::Failed
+    ) {
+        VisualSource::ScenePlate
+    } else {
+        art_source
+    };
+    let effective = if shot == crate::presentation::Shot::Plate {
+        VisualSource::ScenePlate
+    } else {
+        art_source
+    };
+    let shot_kind = match shot {
+        crate::presentation::Shot::Plate => VisualShot::Plate,
+        crate::presentation::Shot::Establishing => VisualShot::Establishing,
+        crate::presentation::Shot::Stage => VisualShot::Stage,
+    };
+    let diagnostic_state = match plate_state {
+        PlateState::None => VisualPlateState::None,
+        PlateState::Pending => VisualPlateState::Pending,
+        PlateState::Ready => VisualPlateState::Ready,
+        PlateState::Failed => VisualPlateState::Failed,
+        PlateState::Unavailable => VisualPlateState::Unavailable,
+    };
+    let art_asset = stage
+        .query_selector(".tv-art")
+        .ok()
+        .flatten()
+        .and_then(|art| art.get_attribute("style"))
+        .as_deref()
+        .and_then(first_art_asset)
+        .map(str::to_owned);
+    let plate_layer = stage.query_selector(".tv-plate").ok().flatten();
+    let requested_asset = if requested == VisualSource::ScenePlate {
+        plate_layer
+            .as_ref()
+            .and_then(|layer| layer.get_attribute("data-want-key"))
+            .or_else(|| {
+                plate_layer
+                    .as_ref()
+                    .and_then(|layer| layer.get_attribute("data-failed"))
+            })
+            .or_else(|| stage.get_attribute("data-plate-key"))
+    } else {
+        art_asset.clone()
+    };
+    let effective_asset = if effective == VisualSource::ScenePlate {
+        stage.get_attribute("data-plate-key")
+    } else {
+        art_asset
+    };
+    let scene = stage
+        .get_attribute("data-visual-scene-id")
+        .or_else(|| stage.get_attribute("data-scene-key"))
+        .unwrap_or_default();
+    let requested_asset_id = requested_asset.as_deref().map(|asset| {
+        super::presentation_timing::identity(if requested == VisualSource::ScenePlate {
+            plate_asset_key(asset)
+        } else {
+            asset
+        })
+    });
+    let effective_asset_id = effective_asset.as_deref().map(|asset| {
+        super::presentation_timing::identity(if effective == VisualSource::ScenePlate {
+            plate_asset_key(asset)
+        } else {
+            asset
+        })
+    });
+    let signature = format!(
+        "{}:{}:{}:{}:{}:{}:{}",
+        super::presentation_timing::identity(&scene),
+        requested.label(),
+        effective.label(),
+        shot_kind.label(),
+        diagnostic_state.label(),
+        requested_asset_id.unwrap_or_default(),
+        effective_asset_id.unwrap_or_default(),
+    );
+    if stage
+        .get_attribute("data-visual-source-signature")
+        .as_deref()
+        == Some(&signature)
+    {
+        return Ok(());
+    }
+    stage.set_attribute("data-visual-source-signature", &signature)?;
+    super::presentation_timing::visual_source(
+        &scene,
+        requested,
+        effective,
+        shot_kind,
+        diagnostic_state,
+        requested_asset_id,
+        effective_asset_id,
+    );
     Ok(())
 }
 
@@ -1692,6 +1828,10 @@ impl TvStage {
             .set_attribute("data-scene-key", &model.scene_key)?;
         self.root
             .set_attribute("data-tv-mode", if lobby { "lobby" } else { "scene" })?;
+        self.root
+            .set_attribute("data-art-source", model.art_source.label())?;
+        self.root
+            .set_attribute("data-visual-scene-id", &model.visual_scene_id)?;
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
         live_home::apply(&self.root, &self.atmosphere, model.home.as_ref())?;
         // The loop plays only in the lobby; a story scene or a fight never shows it.
@@ -2269,8 +2409,8 @@ impl TvStage {
 mod tests {
     use super::super::rpc;
     use super::{
-        PlateState, PlateView, TvStage, check_display, is_loopback_join_host,
-        scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
+        PlateState, PlateView, TvStage, check_display, first_art_asset, is_loopback_join_host,
+        plate_asset_key, scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
     };
     fn mounted_stage() -> (web_sys::Element, TvStage) {
         let document = web_sys::window().unwrap().document().unwrap();
@@ -2308,6 +2448,17 @@ mod tests {
     fn finish_stage(parent: web_sys::Element, stage: TvStage) {
         stage.dispose().unwrap();
         parent.remove();
+    }
+
+    #[test]
+    fn visual_source_hashes_match_the_selected_art_or_plate_key() {
+        let style = "background-image:url(/assets/photo.webp),url(/assets/fallback.webp)";
+        assert_eq!(first_art_asset(style), Some("/assets/photo.webp"));
+        assert_eq!(first_art_asset("none"), None);
+
+        let key = "a".repeat(64);
+        assert_eq!(plate_asset_key(&format!("/gameplay/imagery/{key}")), key);
+        assert_eq!(plate_asset_key(&key), key);
     }
 
     #[test]

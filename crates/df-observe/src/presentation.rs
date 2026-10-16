@@ -41,6 +41,7 @@ const KINDS: &[&str] = &[
     "plate-decoded",
     "plate-shown",
     "plate-kept",
+    "visual-source",
     "clip-requested",
     "clip-ready",
     "clip-shown",
@@ -69,6 +70,7 @@ const REASONS: &[&str] = &[
     "left",
     "timeout",
     "disposed",
+    "changed",
 ];
 const NUMERIC_FIELDS: &[&str] = &[
     "id",
@@ -82,7 +84,115 @@ const NUMERIC_FIELDS: &[&str] = &[
     "voice_end_ms",
     "closed_ms",
     "crossfade_ms",
+    "requested_asset",
+    "effective_asset",
 ];
+
+/// Closed scene image source labels used by the display's visual-source diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VisualSource {
+    Other,
+    ScenePlate,
+    LiveBackdrop,
+    SceneArtwork,
+    EstablishingPhoto,
+}
+
+impl VisualSource {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Other => "other",
+            Self::ScenePlate => "scene_plate",
+            Self::LiveBackdrop => "live_backdrop",
+            Self::SceneArtwork => "scene_artwork",
+            Self::EstablishingPhoto => "establishing_photo",
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "other" => Some(Self::Other),
+            "scene_plate" => Some(Self::ScenePlate),
+            "live_backdrop" => Some(Self::LiveBackdrop),
+            "scene_artwork" => Some(Self::SceneArtwork),
+            "establishing_photo" => Some(Self::EstablishingPhoto),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VisualShot {
+    Other,
+    Plate,
+    Establishing,
+    Stage,
+}
+
+impl VisualShot {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Other => "other",
+            Self::Plate => "plate",
+            Self::Establishing => "establishing",
+            Self::Stage => "stage",
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "other" => Some(Self::Other),
+            "plate" => Some(Self::Plate),
+            "establishing" => Some(Self::Establishing),
+            "stage" => Some(Self::Stage),
+            _ => None,
+        }
+    }
+}
+
+/// Closed server plate states included with a browser source observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VisualPlateState {
+    None,
+    Pending,
+    Ready,
+    Failed,
+    Unavailable,
+}
+
+impl VisualPlateState {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "none" => Some(Self::None),
+            "pending" => Some(Self::Pending),
+            "ready" => Some(Self::Ready),
+            "failed" => Some(Self::Failed),
+            "unavailable" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VisualSourceDetails {
+    pub requested: VisualSource,
+    pub effective: VisualSource,
+    pub shot: VisualShot,
+    pub plate_state: VisualPlateState,
+    /// Page-local hashes of validated local asset identifiers, never URLs.
+    pub requested_asset: Option<u64>,
+    pub effective_asset: Option<u64>,
+}
 
 /// Identifiers are page-local hashes/slots, never names, text, asset URLs or player payloads.
 /// Absent optional times mean unobserved; a missing voice end never implies successful playback.
@@ -101,6 +211,7 @@ pub struct TimingEvent {
     pub voice_end_ms: Option<u64>,
     pub closed_ms: Option<u64>,
     pub crossfade_ms: u32,
+    pub visual_source: Option<VisualSourceDetails>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,7 +245,14 @@ impl TimingEvent {
             voice_end_ms: None,
             closed_ms: None,
             crossfade_ms: 0,
+            visual_source: None,
         }
+    }
+
+    pub fn visual_source(id: u64, scene: u64, at_ms: u64, details: VisualSourceDetails) -> Self {
+        let mut event = Self::lifecycle("visual-source", "changed", id, scene, at_ms);
+        event.visual_source = Some(details);
+        event
     }
 
     fn validate(&self) -> Result<(), TimingError> {
@@ -164,6 +282,15 @@ impl TimingEvent {
                 .voice_start_ms
                 .zip(self.voice_end_ms)
                 .is_some_and(|(start, end)| end < start)
+            || (self.kind == "visual-source") != self.visual_source.is_some()
+            || self.visual_source.as_ref().is_some_and(|details| {
+                details
+                    .requested_asset
+                    .is_some_and(|id| id > i64::MAX as u64)
+                    || details
+                        .effective_asset
+                        .is_some_and(|id| id > i64::MAX as u64)
+            })
         {
             return Err(TimingError::Invalid);
         }
@@ -183,7 +310,7 @@ impl TimingEvent {
             .opened_ms
             .zip(self.closed_ms)
             .map(|(open, close)| close.saturating_sub(open));
-        format!(
+        let mut line = format!(
             "{audience} {} producer={producer} batch={batch} receive_unix_ms={receive_unix_ms} id={} scene={} slot={} at_ms={} chars={} read_ms={} opened_ms={} voice_start_ms={} voice_end_ms={} closed_ms={} held_ms={} crossfade_ms={} reason={}",
             self.kind,
             self.id,
@@ -199,7 +326,19 @@ impl TimingEvent {
             optional(held),
             self.crossfade_ms,
             self.reason,
-        )
+        );
+        if let Some(details) = &self.visual_source {
+            line.push_str(&format!(
+                " requested_source={} effective_source={} shot={} plate_state={} requested_asset_id={} effective_asset_id={}",
+                details.requested.label(),
+                details.effective.label(),
+                details.shot.label(),
+                details.plate_state.label(),
+                optional(details.requested_asset),
+                optional(details.effective_asset),
+            ));
+        }
+        line
     }
 }
 
@@ -234,6 +373,31 @@ pub fn encode(events: &[TimingEvent]) -> Result<Vec<u8>, TimingError> {
         ] {
             if let Some(value) = value {
                 attributes.push(attribute(name, Value::IntValue(value as i64)));
+            }
+        }
+        if let Some(details) = &event.visual_source {
+            attributes.extend([
+                attribute(
+                    "requested_source",
+                    Value::StringValue(details.requested.label().into()),
+                ),
+                attribute(
+                    "effective_source",
+                    Value::StringValue(details.effective.label().into()),
+                ),
+                attribute("shot", Value::StringValue(details.shot.label().into())),
+                attribute(
+                    "plate_state",
+                    Value::StringValue(details.plate_state.label().into()),
+                ),
+            ]);
+            for (name, value) in [
+                ("requested_asset", details.requested_asset),
+                ("effective_asset", details.effective_asset),
+            ] {
+                if let Some(value) = value {
+                    attributes.push(attribute(name, Value::IntValue(value as i64)));
+                }
             }
         }
         records.push(LogRecord {
@@ -289,6 +453,10 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
             .ok_or(TimingError::Invalid)?;
         let mut values = std::collections::BTreeMap::new();
         let mut reason = None;
+        let mut requested_source = None;
+        let mut effective_source = None;
+        let mut shot = None;
+        let mut plate_state = None;
         for field in &record.attributes {
             let value = field
                 .value
@@ -306,6 +474,50 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                 if reason.is_none() {
                     return Err(TimingError::Invalid);
                 }
+            } else if field.key == "requested_source" {
+                let Value::StringValue(text) = value else {
+                    return Err(TimingError::Invalid);
+                };
+                if requested_source.is_some() {
+                    return Err(TimingError::Invalid);
+                }
+                requested_source = VisualSource::from_label(text);
+                if requested_source.is_none() {
+                    return Err(TimingError::Invalid);
+                }
+            } else if field.key == "effective_source" {
+                let Value::StringValue(text) = value else {
+                    return Err(TimingError::Invalid);
+                };
+                if effective_source.is_some() {
+                    return Err(TimingError::Invalid);
+                }
+                effective_source = VisualSource::from_label(text);
+                if effective_source.is_none() {
+                    return Err(TimingError::Invalid);
+                }
+            } else if field.key == "plate_state" {
+                let Value::StringValue(text) = value else {
+                    return Err(TimingError::Invalid);
+                };
+                if plate_state.is_some() {
+                    return Err(TimingError::Invalid);
+                }
+                plate_state = VisualPlateState::from_label(text);
+                if plate_state.is_none() {
+                    return Err(TimingError::Invalid);
+                }
+            } else if field.key == "shot" {
+                let Value::StringValue(text) = value else {
+                    return Err(TimingError::Invalid);
+                };
+                if shot.is_some() {
+                    return Err(TimingError::Invalid);
+                }
+                shot = VisualShot::from_label(text);
+                if shot.is_none() {
+                    return Err(TimingError::Invalid);
+                }
             } else {
                 let Value::IntValue(value) = value else {
                     return Err(TimingError::Invalid);
@@ -318,6 +530,20 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                 }
             }
         }
+        let visual_source = match (requested_source, effective_source, shot, plate_state) {
+            (Some(requested), Some(effective), Some(shot), Some(plate_state)) => {
+                Some(VisualSourceDetails {
+                    requested,
+                    effective,
+                    shot,
+                    plate_state,
+                    requested_asset: values.get("requested_asset").copied(),
+                    effective_asset: values.get("effective_asset").copied(),
+                })
+            }
+            (None, None, None, None) => None,
+            _ => return Err(TimingError::Invalid),
+        };
         let required = |name| values.get(name).copied().ok_or(TimingError::Invalid);
         let event = TimingEvent {
             kind,
@@ -339,6 +565,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
             voice_start_ms: values.get("voice_start_ms").copied(),
             voice_end_ms: values.get("voice_end_ms").copied(),
             closed_ms: values.get("closed_ms").copied(),
+            visual_source,
         };
         event.validate()?;
         // Comparing a rebuilt record also rejects severity, body, trace, flags, timestamps,
@@ -507,6 +734,7 @@ mod tests {
             voice_end_ms: None,
             closed_ms: Some(10_000),
             crossfade_ms: 0,
+            visual_source: None,
         }
     }
 
@@ -593,6 +821,63 @@ mod tests {
         request.resource_logs[0].scope_logs[0].log_records[0].body = Some(AnyValue {
             value: Some(Value::StringValue("private".into())),
         });
+        assert_eq!(decode(&request.encode_to_vec()), Err(TimingError::Invalid));
+    }
+
+    #[test]
+    fn visual_source_round_trips_closed_sources_state_and_asset_hashes() {
+        let event = TimingEvent::visual_source(
+            17,
+            23,
+            100,
+            VisualSourceDetails {
+                requested: VisualSource::ScenePlate,
+                effective: VisualSource::SceneArtwork,
+                shot: VisualShot::Establishing,
+                plate_state: VisualPlateState::Failed,
+                requested_asset: Some(31),
+                effective_asset: Some(37),
+            },
+        );
+        let bytes = encode(std::slice::from_ref(&event)).unwrap();
+        let [decoded] = decode(&bytes).unwrap().try_into().unwrap();
+        assert_eq!(decoded, event);
+        let line = decoded.log_line("DISPLAY", 200, "producer", 3);
+        assert!(line.contains("requested_source=scene_plate"));
+        assert!(line.contains("effective_source=scene_artwork"));
+        assert!(line.contains("plate_state=failed"));
+        assert!(line.contains("requested_asset_id=31"));
+        assert!(line.contains("effective_asset_id=37"));
+    }
+
+    #[test]
+    fn visual_source_rejects_missing_or_uncatalogued_details() {
+        assert_eq!(
+            encode(&[TimingEvent::lifecycle("visual-source", "changed", 1, 2, 3,)]),
+            Err(TimingError::Invalid)
+        );
+        let event = TimingEvent::visual_source(
+            17,
+            23,
+            100,
+            VisualSourceDetails {
+                requested: VisualSource::ScenePlate,
+                effective: VisualSource::SceneArtwork,
+                shot: VisualShot::Establishing,
+                plate_state: VisualPlateState::Failed,
+                requested_asset: Some(31),
+                effective_asset: Some(37),
+            },
+        );
+        let bytes = encode(&[event]).unwrap();
+        let mut request = ExportLogsServiceRequest::decode(bytes.as_slice()).unwrap();
+        let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+        let source = record
+            .attributes
+            .iter_mut()
+            .find(|field| field.key == "effective_source")
+            .unwrap();
+        source.value.as_mut().unwrap().value = Some(Value::StringValue("private-url".into()));
         assert_eq!(decode(&request.encode_to_vec()), Err(TimingError::Invalid));
     }
 

@@ -591,17 +591,33 @@ impl Imagery {
     /// Renders `request`, or finds its cached result, and returns the key to load it by. The
     /// key is registered before any work so the route can serve it as soon as it exists.
     pub(super) async fn render(&self, request: ImageRequest) -> Result<ImageKey, ImageFailure> {
+        let started = std::time::Instant::now();
+        let key = self.key_for(&request);
+        let kind = request.kind;
+        let (line, fields, attributes) = image_request_diagnostics(&key, &request);
+        crate::gameplay::actor::record_audit_diagnostic(
+            "gameplay.imagery.render_requested",
+            line,
+            fields,
+            &attributes,
+        );
         let Mode::On { engine, .. } = &self.inner.mode else {
+            record_image_result(kind, &key, started.elapsed(), Err(&ImageFailure::Off));
             return Err(ImageFailure::Off);
         };
-        let key = self.key_for(&request);
         let format = request.output.format();
-        {
+        let failed = {
             let mut registry = locked(&self.inner.registry);
             if let Some(failure) = registry.failed.get(key.as_str()) {
-                return Err(*failure);
+                Some(*failure)
+            } else {
+                registry.register(&key, Registered { format });
+                None
             }
-            registry.register(&key, Registered { format });
+        };
+        if let Some(failure) = failed {
+            record_image_result(kind, &key, started.elapsed(), Err(&failure));
+            return Err(failure);
         }
         let outcome = engine.image(&key, request).await;
         if let Err(failure) = outcome
@@ -609,7 +625,14 @@ impl Imagery {
         {
             locked(&self.inner.registry).remember_failure(&key, failure);
         }
-        outcome.map(|()| key)
+        let result = outcome.map(|()| key.clone());
+        record_image_result(
+            kind,
+            &key,
+            started.elapsed(),
+            result.as_ref().map_err(|e| e),
+        );
+        result
     }
 
     /// The bytes of a registered key, read from the cache.
@@ -971,6 +994,118 @@ fn span_fields(
         ("gameplay.imagery.model", model.to_owned()),
         ("gameplay.imagery.references", references.to_string()),
     ]
+}
+
+fn image_request_diagnostics(
+    key: &ImageKey,
+    request: &ImageRequest,
+) -> (
+    String,
+    serde_json::Map<String, serde_json::Value>,
+    Vec<(&'static str, String)>,
+) {
+    let kind = request.kind.label();
+    let key = key.as_str();
+    let prompt_char_count = request.prompt.as_str().chars().count();
+    let reference_byte_lengths: Vec<usize> = request
+        .references
+        .iter()
+        .map(|reference| reference.bytes.len())
+        .collect();
+    let reference_bytes_total = reference_byte_lengths.iter().sum::<usize>();
+    let reference_count = reference_byte_lengths.len();
+    let line = format!(
+        "IMAGERY request kind={kind} id={key} prompt_chars={prompt_char_count} references={reference_count} reference_bytes={reference_bytes_total}"
+    );
+    let fields = serde_json::Map::from_iter([
+        ("kind".to_owned(), serde_json::json!(kind)),
+        ("image_key".to_owned(), serde_json::json!(key)),
+        (
+            "prompt_char_count".to_owned(),
+            serde_json::json!(prompt_char_count),
+        ),
+        (
+            "reference_count".to_owned(),
+            serde_json::json!(reference_count),
+        ),
+        (
+            "reference_byte_lengths".to_owned(),
+            serde_json::json!(reference_byte_lengths),
+        ),
+        (
+            "reference_bytes_total".to_owned(),
+            serde_json::json!(reference_bytes_total),
+        ),
+    ]);
+    let attributes = vec![
+        ("gameplay.imagery.kind", kind.to_owned()),
+        ("gameplay.imagery.image_key", key.to_owned()),
+        (
+            "gameplay.imagery.prompt_char_count",
+            prompt_char_count.to_string(),
+        ),
+        (
+            "gameplay.imagery.reference_count",
+            reference_count.to_string(),
+        ),
+        (
+            "gameplay.imagery.reference_byte_lengths",
+            reference_byte_lengths
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        (
+            "gameplay.imagery.reference_bytes_total",
+            reference_bytes_total.to_string(),
+        ),
+    ];
+    (line, fields, attributes)
+}
+
+fn record_image_result(
+    kind: ImageKind,
+    key: &ImageKey,
+    elapsed: Duration,
+    result: Result<&ImageKey, &ImageFailure>,
+) {
+    let (status, failure_category) = match result {
+        Ok(_) => ("ready", None),
+        Err(failure) => ("failed", Some(failure.label())),
+    };
+    let elapsed_ms = elapsed.as_millis();
+    let line = format!(
+        "IMAGERY {status} kind={} id={} ms={elapsed_ms} failure_category={}",
+        kind.label(),
+        key.as_str(),
+        failure_category.unwrap_or("none"),
+    );
+    let fields = serde_json::Map::from_iter([
+        ("kind".to_owned(), serde_json::json!(kind.label())),
+        ("image_key".to_owned(), serde_json::json!(key.as_str())),
+        ("status".to_owned(), serde_json::json!(status)),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+    ]);
+    let attributes = [
+        ("gameplay.imagery.kind", kind.label().to_owned()),
+        ("gameplay.imagery.image_key", key.as_str().to_owned()),
+        ("gameplay.imagery.status", status.to_owned()),
+        (
+            "gameplay.imagery.failure_category",
+            failure_category.unwrap_or("none").to_owned(),
+        ),
+        ("gameplay.imagery.elapsed_ms", elapsed_ms.to_string()),
+    ];
+    let event = match status {
+        "ready" => "gameplay.imagery.render_ready",
+        _ => "gameplay.imagery.render_failed",
+    };
+    crate::gameplay::actor::record_audit_diagnostic(event, line, fields, &attributes);
 }
 
 fn request_key(request: &ImageRequest, model: &str, quality: &str, rating: &str) -> ImageKey {

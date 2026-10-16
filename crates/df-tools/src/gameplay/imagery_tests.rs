@@ -1210,6 +1210,38 @@ fn span_fields_carry_only_closed_labels_never_a_prompt_or_image() {
     }
 }
 
+#[test]
+fn request_diagnostics_count_prompt_and_reference_sizes_without_content() {
+    let mut request = expression(Expression::Contemptuous);
+    request.references = vec![
+        ReferenceImage::new(
+            ImageFormat::Webp,
+            Bytes::from_static(b"PRIVATE-REFERENCE-SENTINEL"),
+        ),
+        ReferenceImage::new(ImageFormat::Jpeg, Bytes::from_static(b"second-reference")),
+    ];
+    let prompt = request.prompt.as_str().to_owned();
+    let key = ImageKey::parse(&"a".repeat(64)).unwrap();
+    let (line, fields, attributes) = image_request_diagnostics(&key, &request);
+    let diagnostics = serde_json::json!({
+        "line": line,
+        "fields": fields,
+        "attributes": attributes,
+    })
+    .to_string();
+
+    assert_eq!(fields["prompt_char_count"], prompt.chars().count());
+    assert_eq!(fields["reference_count"], 2);
+    assert_eq!(
+        fields["reference_byte_lengths"],
+        serde_json::json!([26, 16])
+    );
+    assert!(diagnostics.contains(&format!("prompt_chars={}", prompt.chars().count())));
+    assert!(!diagnostics.contains(&prompt));
+    assert!(!diagnostics.contains("PRIVATE-REFERENCE-SENTINEL"));
+    assert!(!diagnostics.contains("second-reference"));
+}
+
 // ---------------------------------------------------------------------------------------------
 // The route.
 

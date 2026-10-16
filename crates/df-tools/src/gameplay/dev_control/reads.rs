@@ -137,10 +137,38 @@ fn phase_of(journey: &rpc::JourneyView) -> i32 {
     journey.phase
 }
 
+fn visual_asset_summary(scene: &rpc::GameplayScene) -> Value {
+    let state = rpc::PlateState::try_from(scene.plate_state)
+        .map_or("unrecognized", |state| state.as_str_name());
+    let requested_source = match rpc::PlateState::try_from(scene.plate_state) {
+        Ok(rpc::PlateState::Pending | rpc::PlateState::Ready | rpc::PlateState::Failed) => {
+            "scene_plate"
+        }
+        _ => "scene_asset",
+    };
+    let (effective_source, effective_asset) =
+        if scene.plate_state == rpc::PlateState::Ready as i32 && !scene.live_plate.is_empty() {
+            ("live_plate", scene.live_plate.as_str())
+        } else if !scene.live_backdrop.is_empty() {
+            ("live_backdrop", scene.live_backdrop.as_str())
+        } else {
+            ("scene_asset", scene.scene_asset.as_str())
+        };
+    let asset_id =
+        |asset: &str| (!asset.is_empty()).then(|| df_observe::presentation::local_identity(asset));
+    json!({
+        "requested_source": requested_source,
+        "server_effective_source": effective_source,
+        "effective_asset_id": asset_id(effective_asset),
+        "plate_state": state,
+    })
+}
+
 fn scene_json(scene: &rpc::GameplayScene) -> Value {
     json!({"title": scene.title, "place": scene.place, "rules_note": scene.rules_note,
         "location_id":scene.location_id, "scene_asset":scene.scene_asset, "live_backdrop":scene.live_backdrop,
         "live_plate":scene.live_plate, "plate_state":scene.plate_state,
+        "visual_assets":visual_asset_summary(scene),
         "scene_video_state":scene.scene_video_state, "scene_video_path":scene.scene_video_path,
         "cast":scene.cast.iter().map(|actor| json!({"id":actor.id,"name":actor.name,"role":actor.role,"sprite":actor.sprite,"live_sprite":actor.live_sprite,"speaking":actor.speaking})).collect::<Vec<_>>(),
         "contents": scene.scene_contents_json,
@@ -706,7 +734,7 @@ fn describe_json() -> Value {
             {"command":"preview", "method":"POST", "path":"/dev/preview", "args":{"seat":"seat or hero name","appearance_text":"up to 1000 characters","backstory_text":"up to 4000 characters","identity":"optional current identity JSON"}, "output":"{status:previewed, identity, source, warnings}; read-only, review then create --identity"},
             {"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"},
             {"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"},
-            {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>", "args":{"last":"1..1000, default 50"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line}],dropped,capacity,scope}; line/plate/clip/check/combat audit events"},
+            {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>", "args":{"last":"1..1000, default 50"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],dropped,capacity,scope}; imagery request/ready/failure metrics, plate request/ready/failure/projection revisions and keys, browser visual-source requested/effective categories, shot, plate state and asset hashes, plus line/clip/check/combat audit events; no prompt, image bytes or asset URLs"},
             {"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates complete heroes from the live creation offer, and follows current offers; dialogue target chooses ask and stops before combat; ordinary presentation gates remain authoritative"},
             {"command": "join", "method": "POST", "path": "/dev/join",
              "args": {"seat": "1 or 2"},
@@ -792,6 +820,46 @@ mod reclaim_tests {
         assert_eq!(reclaim["method"], "POST");
         assert_eq!(reclaim["path"], "/dev/reclaim");
         assert_eq!(reclaim["args"]["seat"], "1 or 2");
+    }
+}
+
+#[cfg(test)]
+mod visual_asset_diagnostics_tests {
+    use super::*;
+
+    #[test]
+    fn scene_snapshot_shows_plate_request_and_server_fallback_source() {
+        let failed = rpc::GameplayScene {
+            scene_asset: "/assets/scenes/old-art.webp".to_owned(),
+            live_backdrop: "/gameplay/imagery/backdrop-key".to_owned(),
+            live_plate: "/gameplay/imagery/plate-key".to_owned(),
+            plate_state: rpc::PlateState::Failed as i32,
+            ..Default::default()
+        };
+        let summary = visual_asset_summary(&failed);
+        assert_eq!(summary["requested_source"], "scene_plate");
+        assert_eq!(summary["server_effective_source"], "live_backdrop");
+        assert_eq!(
+            summary["effective_asset_id"],
+            df_observe::presentation::local_identity("/gameplay/imagery/backdrop-key")
+        );
+        assert!(!summary.to_string().contains("/gameplay/imagery/"));
+        assert_eq!(summary["plate_state"], "PLATE_STATE_FAILED");
+
+        let ready = rpc::GameplayScene {
+            plate_state: rpc::PlateState::Ready as i32,
+            ..failed
+        };
+        let view = scene_json(&ready);
+        assert_eq!(view["visual_assets"]["requested_source"], "scene_plate");
+        assert_eq!(
+            view["visual_assets"]["server_effective_source"],
+            "live_plate"
+        );
+        assert_eq!(
+            view["visual_assets"]["effective_asset_id"],
+            df_observe::presentation::local_identity("/gameplay/imagery/plate-key")
+        );
     }
 }
 

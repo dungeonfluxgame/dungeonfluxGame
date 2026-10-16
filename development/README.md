@@ -156,6 +156,16 @@ dev view --as Neris                # exactly her phone view (offers, own sheet)
 dev log                            # the table log; dev checkpoint save <name> names a point
 ```
 
+`dev timeline` shows bounded structured events in `fields` as well as the readable `line`.
+Image events include the content key, prompt character count, reference count and byte lengths,
+status, failure category and elapsed time; plate events include scene id, graph revision, image
+key and request, ready, failed and projection timing. The diagnostics never include prompt text,
+image bytes, asset URLs or credentials. Browser `visual-source` events include requested and
+effective source categories, selected shot, plate state and page-local asset hashes. The command
+`dev view --as tv` includes `visual_assets`, which shows the requested plate source, the
+server-projected source, plate state and a hash of the effective asset identifier; it describes
+the server view sent to the browser without adding asset paths to the diagnostic summary.
+
 For a fast two-hero NPC dialogue setup, start a fresh local game server with
 development control enabled, then copy its URL and token-file path from the
 `DEV CONTROL` startup line into a second terminal:

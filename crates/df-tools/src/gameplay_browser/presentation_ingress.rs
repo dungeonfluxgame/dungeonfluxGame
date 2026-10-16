@@ -48,11 +48,82 @@ struct TimingUpload<'a> {
     receive_unix_ms: u64,
 }
 
+fn visual_source_fields(
+    event: &presentation::TimingEvent,
+) -> Option<(
+    serde_json::Map<String, serde_json::Value>,
+    Vec<(&'static str, String)>,
+)> {
+    let details = event.visual_source.as_ref()?;
+    let fields = serde_json::Map::from_iter([
+        ("kind".to_owned(), serde_json::json!(event.kind)),
+        ("scene_id".to_owned(), serde_json::json!(event.scene)),
+        ("asset_id".to_owned(), serde_json::json!(event.id)),
+        ("at_ms".to_owned(), serde_json::json!(event.at_ms)),
+        (
+            "requested_source".to_owned(),
+            serde_json::json!(details.requested.label()),
+        ),
+        (
+            "effective_source".to_owned(),
+            serde_json::json!(details.effective.label()),
+        ),
+        ("shot".to_owned(), serde_json::json!(details.shot.label())),
+        (
+            "plate_state".to_owned(),
+            serde_json::json!(details.plate_state.label()),
+        ),
+        (
+            "requested_asset_id".to_owned(),
+            serde_json::json!(details.requested_asset),
+        ),
+        (
+            "effective_asset_id".to_owned(),
+            serde_json::json!(details.effective_asset),
+        ),
+    ]);
+    let attributes = vec![
+        ("gameplay.presentation.kind", event.kind.to_owned()),
+        ("gameplay.presentation.scene_id", event.scene.to_string()),
+        ("gameplay.presentation.asset_id", event.id.to_string()),
+        ("gameplay.presentation.at_ms", event.at_ms.to_string()),
+        (
+            "gameplay.presentation.requested_source",
+            details.requested.label().to_owned(),
+        ),
+        (
+            "gameplay.presentation.effective_source",
+            details.effective.label().to_owned(),
+        ),
+        (
+            "gameplay.presentation.shot",
+            details.shot.label().to_owned(),
+        ),
+        (
+            "gameplay.presentation.plate_state",
+            details.plate_state.label().to_owned(),
+        ),
+        (
+            "gameplay.presentation.requested_asset_id",
+            details
+                .requested_asset
+                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+        ),
+        (
+            "gameplay.presentation.effective_asset_id",
+            details
+                .effective_asset
+                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+        ),
+    ];
+    Some((fields, attributes))
+}
+
 impl Ledger {
     fn record(
         &mut self,
         upload: TimingUpload<'_>,
-        emit: impl Fn(&'static str, String),
+        emit: impl Fn(&'static str, String, Option<presentation::TimingEvent>),
     ) -> Result<(usize, bool), Status> {
         let TimingUpload {
             binding,
@@ -113,6 +184,7 @@ impl Ledger {
                 format!(
                     "{audience} gap producer={producer} batch={sequence} receive_unix_ms={receive_ms} reason=receiver-restart-or-missing-prefix"
                 ),
+                None,
             );
         }
         for event in &events {
@@ -122,6 +194,7 @@ impl Ledger {
                     "{} {correlation}",
                     event.log_line(audience, receive_ms, &producer, sequence)
                 ),
+                Some(event.clone()),
             );
         }
         if dropped != 0 {
@@ -130,6 +203,7 @@ impl Ledger {
                 format!(
                     "{audience} gap producer={producer} batch={sequence} receive_unix_ms={receive_ms} dropped_records={dropped}"
                 ),
+                None,
             );
         }
         self.producers.insert(
@@ -227,7 +301,13 @@ impl PresentationIngress {
                 correlation: &correlation,
                 receive_unix_ms,
             },
-            actor::record_audit_line,
+            |event, line, timing| {
+                if let Some((fields, attributes)) = timing.as_ref().and_then(visual_source_fields) {
+                    actor::record_audit_diagnostic(event, line, fields, &attributes);
+                } else {
+                    actor::record_audit_line(event, line);
+                }
+            },
         )?;
         Ok(Response::new(rpc::PresentationTelemetryResponse {
             batch_sequence: request.batch_sequence,
@@ -264,7 +344,9 @@ impl rpc::presentation_telemetry_service_server::PresentationTelemetryService
 #[cfg(test)]
 mod tests {
     use super::*;
-    use df_observe::presentation::TimingEvent;
+    use df_observe::presentation::{
+        TimingEvent, VisualPlateState, VisualShot, VisualSource, VisualSourceDetails,
+    };
     use std::cell::RefCell;
 
     fn upload(bytes: &[u8]) -> TimingUpload<'_> {
@@ -281,6 +363,31 @@ mod tests {
     }
 
     #[test]
+    fn visual_source_ingress_exposes_only_closed_labels_and_hashes() {
+        let event = TimingEvent::visual_source(
+            17,
+            23,
+            100,
+            VisualSourceDetails {
+                requested: VisualSource::ScenePlate,
+                effective: VisualSource::EstablishingPhoto,
+                shot: VisualShot::Establishing,
+                plate_state: VisualPlateState::Failed,
+                requested_asset: Some(31),
+                effective_asset: Some(37),
+            },
+        );
+        let (fields, attributes) = visual_source_fields(&event).unwrap();
+        assert_eq!(fields["requested_source"], "scene_plate");
+        assert_eq!(fields["effective_source"], "establishing_photo");
+        assert_eq!(fields["shot"], "establishing");
+        assert_eq!(fields["plate_state"], "failed");
+        assert_eq!(fields["requested_asset_id"], 31);
+        assert_eq!(fields["effective_asset_id"], 37);
+        assert!(attributes.iter().all(|(_, value)| value != "private-url"));
+    }
+
+    #[test]
     fn server_timing_log_records_once_rejects_conflicts_and_excludes_private_payloads() {
         let mut ledger = Ledger::default();
         let line = TimingEvent {
@@ -292,7 +399,7 @@ mod tests {
         };
         let bytes = presentation::encode(&[line]).unwrap();
         let lines = RefCell::new(Vec::new());
-        let emit = |_, line| lines.borrow_mut().push(line);
+        let emit = |_, line, _| lines.borrow_mut().push(line);
         assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (1, false));
         assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (1, true));
         assert_eq!(lines.borrow().len(), 1);

@@ -378,12 +378,25 @@ struct Current {
     in_combat: bool,
     in_roll: bool,
     graph_revision: u64,
+    request_started: Option<std::time::Instant>,
+    last_projection: Option<PlateProjection>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlateProjection {
+    graph_revision: u64,
+    plate_graph_revision: u64,
+    plate_id: Option<String>,
+    plate_state: i32,
+    source: String,
+    asset: String,
 }
 
 struct Book {
     current: Option<Current>,
     entries: BTreeMap<String, Entry>,
     order: VecDeque<String>,
+    request_started: BTreeMap<String, std::time::Instant>,
     edit: Edit,
     direct: direct::Book,
     state_images: state_images::Book,
@@ -395,6 +408,7 @@ impl Book {
             current: None,
             entries: BTreeMap::new(),
             order: VecDeque::new(),
+            request_started: BTreeMap::new(),
             edit: Edit::Idle,
             direct: direct::Book::default(),
             state_images: state_images::Book::default(),
@@ -416,6 +430,7 @@ impl Book {
             };
             if let Some(forgotten) = self.order.remove(position) {
                 self.entries.remove(&forgotten);
+                self.request_started.remove(&forgotten);
             }
         }
     }
@@ -573,6 +588,7 @@ impl Plates {
                     self.shared.apply(&scene_key, scene).unwrap_or_default();
                 self.shared.project_scene_clip(&scene_key, scene);
                 self.shared.project_scene_contents(scene, None);
+                self.shared.record_projection(&scene_key, scene);
             }
             Some(rpc::view_message::Audience::Player(player)) => {
                 let Some(scene) = player.scene.as_mut() else {
@@ -592,6 +608,61 @@ impl Plates {
             None => {}
         }
     }
+}
+
+fn record_plate_diagnostic(
+    event: &'static str,
+    line: String,
+    fields: serde_json::Map<String, serde_json::Value>,
+) {
+    crate::gameplay::actor::record_audit_diagnostic(event, line, fields, &[]);
+}
+
+fn record_plate_render_diagnostic(
+    event: &'static str,
+    status: &'static str,
+    scene: &PlateScene,
+    plate_id: &str,
+    graph_revision: u64,
+    ahead: bool,
+    image_key: Option<&ImageKey>,
+    failure: Option<ImageFailure>,
+    elapsed_ms: u128,
+) {
+    let scene_key = format!("{}|{}", scene.title, scene.asset);
+    let scene_id = df_observe::presentation::local_identity(&scene_key);
+    let plate_id = df_observe::presentation::local_identity(plate_id);
+    let image_key = image_key.map(ImageKey::as_str);
+    let image_key_id = image_key.map(df_observe::presentation::local_identity);
+    let failure_category = failure.map(ImageFailure::label);
+    let line = format!(
+        "PLATE {status} scene_id={scene_id} revision={graph_revision} ahead={ahead} plate_id={plate_id} image_key={} image_key_id={} failure_category={} elapsed_ms={elapsed_ms}",
+        image_key.unwrap_or("none"),
+        image_key_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
+        failure_category.unwrap_or("none"),
+    );
+    let fields = serde_json::Map::from_iter([
+        ("scene_id".to_owned(), serde_json::json!(scene_id)),
+        ("plate_id".to_owned(), serde_json::json!(plate_id)),
+        (
+            "graph_revision".to_owned(),
+            serde_json::json!(graph_revision),
+        ),
+        ("ahead".to_owned(), serde_json::json!(ahead)),
+        (
+            "requested_source".to_owned(),
+            serde_json::json!("scene_plate"),
+        ),
+        ("status".to_owned(), serde_json::json!(status)),
+        ("image_key".to_owned(), serde_json::json!(image_key)),
+        ("image_key_id".to_owned(), serde_json::json!(image_key_id)),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+    ]);
+    record_plate_diagnostic(event, line, fields);
 }
 
 fn wire_side(side: shot::Side) -> i32 {
@@ -868,6 +939,7 @@ impl Shared {
             {
                 book.entries.remove(&old_id);
                 book.order.retain(|known| known != &old_id);
+                book.request_started.remove(&old_id);
             }
             if scene_changed || graph_changed {
                 book.edit = Edit::Idle;
@@ -878,12 +950,16 @@ impl Shared {
                 {
                     book.entries.remove(id);
                     book.order.retain(|known| known != id);
+                    book.request_started.remove(id);
                 }
             }
             let unplated = scene.is_none()
                 && located.as_ref().is_none_or(|located| {
                     !matches!(located.key, SceneKey::Room | SceneKey::Combat)
                 });
+            let request_started = id
+                .as_ref()
+                .and_then(|id| book.request_started.get(id).copied());
             book.current = Some(Current {
                 scene_key: view.scene_key.clone(),
                 id,
@@ -894,6 +970,8 @@ impl Shared {
                 in_combat: view.in_combat,
                 in_roll: view.in_roll,
                 graph_revision: view.graph_revision,
+                request_started,
+                last_projection: None,
             });
             // The lobby has no plate; the opening plate is requested when that scene becomes current.
             if !view.in_combat {
@@ -985,6 +1063,42 @@ impl Shared {
         let spec = match scene.stage(heroes) {
             Ok(spec) => spec,
             Err(_) => {
+                record_plate_diagnostic(
+                    "gameplay.living_scene.plate_not_planned",
+                    format!(
+                        "PLATE not_planned scene_id={} revision={} reason=invalid_stage",
+                        df_observe::presentation::local_identity(&format!(
+                            "{}|{}",
+                            scene.title, scene.asset
+                        )),
+                        graph_revision
+                    ),
+                    serde_json::Map::from_iter([
+                        (
+                            "scene_id".to_owned(),
+                            serde_json::json!(df_observe::presentation::local_identity(&format!(
+                                "{}|{}",
+                                scene.title, scene.asset
+                            ))),
+                        ),
+                        (
+                            "plate_id".to_owned(),
+                            serde_json::json!(df_observe::presentation::local_identity(&id)),
+                        ),
+                        (
+                            "graph_revision".to_owned(),
+                            serde_json::json!(graph_revision),
+                        ),
+                        (
+                            "requested_source".to_owned(),
+                            serde_json::json!("scene_plate"),
+                        ),
+                        (
+                            "failure_category".to_owned(),
+                            serde_json::json!("invalid_stage"),
+                        ),
+                    ]),
+                );
                 book.insert(id, Entry::NotPlanned);
                 return;
             }
@@ -1005,7 +1119,79 @@ impl Shared {
                 "gameplay.living_scene.plate_requested",
                 &[("scene.kind", "plate".to_owned())],
             );
+            let scene_key = format!("{}|{}", scene.title, scene.asset);
+            let scene_id = df_observe::presentation::local_identity(&scene_key);
+            let plate_id = df_observe::presentation::local_identity(&id);
+            record_plate_diagnostic(
+                "gameplay.living_scene.plate_requested",
+                format!(
+                    "PLATE requested scene_id={scene_id} revision={graph_revision} ahead={ahead} plate_id={plate_id}"
+                ),
+                serde_json::Map::from_iter([
+                    ("scene_id".to_owned(), serde_json::json!(scene_id)),
+                    ("plate_id".to_owned(), serde_json::json!(plate_id)),
+                    (
+                        "graph_revision".to_owned(),
+                        serde_json::json!(graph_revision),
+                    ),
+                    ("ahead".to_owned(), serde_json::json!(ahead)),
+                    (
+                        "requested_source".to_owned(),
+                        serde_json::json!("scene_plate"),
+                    ),
+                    ("status".to_owned(), serde_json::json!("queued")),
+                ]),
+            );
+            book.request_started
+                .insert(id.clone(), std::time::Instant::now());
+            if let Some(current) = book
+                .current
+                .as_mut()
+                .filter(|current| current.id.as_deref() == Some(id.as_str()))
+            {
+                current.request_started = book.request_started.get(&id).copied();
+                current.last_projection = None;
+            }
             book.insert(id, Entry::Pending);
+        } else {
+            record_plate_diagnostic(
+                "gameplay.living_scene.plate_queue_dropped",
+                format!(
+                    "PLATE dropped scene_id={} revision={} reason=queue_full plate_id={}",
+                    df_observe::presentation::local_identity(&format!(
+                        "{}|{}",
+                        scene.title, scene.asset
+                    )),
+                    graph_revision,
+                    df_observe::presentation::local_identity(&id),
+                ),
+                serde_json::Map::from_iter([
+                    (
+                        "scene_id".to_owned(),
+                        serde_json::json!(df_observe::presentation::local_identity(&format!(
+                            "{}|{}",
+                            scene.title, scene.asset
+                        ))),
+                    ),
+                    (
+                        "plate_id".to_owned(),
+                        serde_json::json!(df_observe::presentation::local_identity(&id)),
+                    ),
+                    (
+                        "graph_revision".to_owned(),
+                        serde_json::json!(graph_revision),
+                    ),
+                    ("ahead".to_owned(), serde_json::json!(ahead)),
+                    (
+                        "requested_source".to_owned(),
+                        serde_json::json!("scene_plate"),
+                    ),
+                    (
+                        "failure_category".to_owned(),
+                        serde_json::json!("queue_full"),
+                    ),
+                ]),
+            );
         }
     }
 
@@ -1061,6 +1247,105 @@ impl Shared {
         None
     }
 
+    fn record_projection(&self, scene_key: &str, scene: &rpc::GameplayScene) {
+        let (line, fields) = {
+            let mut book = locked(&self.book);
+            let Some(current) = book.current.as_mut() else {
+                return;
+            };
+            if current.scene_key != scene_key {
+                return;
+            }
+            let ready =
+                scene.plate_state == rpc::PlateState::Ready as i32 && !scene.live_plate.is_empty();
+            let (source, asset) = if ready {
+                ("live_plate", scene.live_plate.as_str())
+            } else if !scene.live_backdrop.is_empty() {
+                ("live_backdrop", scene.live_backdrop.as_str())
+            } else {
+                ("scene_asset", scene.scene_asset.as_str())
+            };
+            let projection = PlateProjection {
+                graph_revision: current.graph_revision,
+                plate_graph_revision: scene.live_plate_graph_revision,
+                plate_id: current.id.clone(),
+                plate_state: scene.plate_state,
+                source: source.to_owned(),
+                asset: asset.to_owned(),
+            };
+            if current.last_projection.as_ref() == Some(&projection) {
+                return;
+            }
+            current.last_projection = Some(projection);
+            let requested_source = if current.id.is_some() {
+                "scene_plate"
+            } else {
+                "scene_asset"
+            };
+            let scene_id = df_observe::presentation::local_identity(scene_key);
+            let state = rpc::PlateState::try_from(scene.plate_state)
+                .map_or("unrecognized", |state| state.as_str_name());
+            let elapsed_ms = current
+                .request_started
+                .map(|started| started.elapsed().as_millis());
+            let live_plate_key = scene
+                .live_plate
+                .strip_prefix("/gameplay/imagery/")
+                .filter(|key| key.len() == 64);
+            let image_key = ready.then_some(live_plate_key).flatten();
+            let image_key_id = image_key.map(df_observe::presentation::local_identity);
+            let plate_id = current
+                .id
+                .as_deref()
+                .map(df_observe::presentation::local_identity);
+            let effective_asset_id = df_observe::presentation::local_identity(asset);
+            let line = format!(
+                "PLATE projected scene_id={scene_id} revision={} plate_id={} state={} requested_source={} effective_source={} effective_asset_id={effective_asset_id} image_key={} image_key_id={} request_to_projection_ms={}",
+                current.graph_revision,
+                plate_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
+                state,
+                requested_source,
+                source,
+                image_key.unwrap_or("none"),
+                image_key_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
+                elapsed_ms.map_or_else(|| "none".to_owned(), |ms| ms.to_string()),
+            );
+            let fields = serde_json::Map::from_iter([
+                ("scene_id".to_owned(), serde_json::json!(scene_id)),
+                (
+                    "graph_revision".to_owned(),
+                    serde_json::json!(current.graph_revision),
+                ),
+                (
+                    "plate_graph_revision".to_owned(),
+                    serde_json::json!(scene.live_plate_graph_revision),
+                ),
+                ("plate_id".to_owned(), serde_json::json!(plate_id)),
+                ("plate_state".to_owned(), serde_json::json!(state)),
+                (
+                    "requested_source".to_owned(),
+                    serde_json::json!(requested_source),
+                ),
+                (
+                    "server_effective_source".to_owned(),
+                    serde_json::json!(source),
+                ),
+                (
+                    "effective_asset_id".to_owned(),
+                    serde_json::json!(effective_asset_id),
+                ),
+                ("image_key".to_owned(), serde_json::json!(image_key)),
+                ("image_key_id".to_owned(), serde_json::json!(image_key_id)),
+                (
+                    "request_to_projection_ms".to_owned(),
+                    serde_json::json!(elapsed_ms),
+                ),
+            ]);
+            (line, fields)
+        };
+        record_plate_diagnostic("gameplay.living_scene.plate_projected", line, fields);
+    }
+
     /// The worker: takes requests, owns every render task, and every tick looks for a lasting face
     /// to edit into the current plate.
     async fn run(self: Arc<Self>, mut queue: mpsc::Receiver<Job>) {
@@ -1107,7 +1392,9 @@ impl Shared {
                         tokio::time::sleep(AHEAD_DELAY).await;
                     }
                     let started = tokio::time::Instant::now();
-                    let result = shared.render_fresh(&scene, &spec, &heroes, &faces).await;
+                    let result = shared
+                        .render_fresh(&scene, &spec, &heroes, &faces, &id, graph_revision, ahead)
+                        .await;
                     let result = result.map(|(key, placement, locate)| {
                         // The plate is shown with its predicted layout as soon as it lands; the
                         // measured one follows. A full queue keeps the prediction.
@@ -1332,21 +1619,27 @@ impl Shared {
         spec: &ShotSpec,
         heroes: &[u8],
         faces: &[(u8, ImageKey)],
+        plate_id: &str,
+        graph_revision: u64,
+        ahead: bool,
     ) -> Result<(ImageKey, Option<PlatePlacement>, Option<Box<Locate>>), ImageFailure> {
         let started = std::time::Instant::now();
+        let mut image_key = None;
         let result = async {
             let (request, locator_face) =
                 self.fresh_request(scene, spec, heroes, faces, None).await?;
-            crate::gameplay::actor::record_audit_line(
-                "gameplay.imagery.request",
-                format!(
-                    "IMAGERY request kind=scene_plate reason={} state={}",
-                    scene.place_id,
-                    scene
-                        .snapshot
-                        .as_ref()
-                        .map_or(0, |snapshot| snapshot.changes.len()),
-                ),
+            let key = self.inner.imagery.key_for(&request);
+            image_key = Some(key.clone());
+            record_plate_render_diagnostic(
+                "gameplay.living_scene.plate_render_requested",
+                "render_requested",
+                scene,
+                plate_id,
+                graph_revision,
+                ahead,
+                Some(&key),
+                None,
+                started.elapsed().as_millis(),
             );
             let key = self.inner.imagery.render(request).await?;
             let Some(speaker) = &spec.speaker else {
@@ -1368,6 +1661,23 @@ impl Shared {
             Ok((key, Some(predicted), Some(Box::new(work))))
         }
         .await;
+        let failure = result.as_ref().err().copied();
+        let event = if failure.is_some() {
+            "gameplay.living_scene.plate_failed"
+        } else {
+            "gameplay.living_scene.plate_ready"
+        };
+        record_plate_render_diagnostic(
+            event,
+            if failure.is_some() { "failed" } else { "ready" },
+            scene,
+            plate_id,
+            graph_revision,
+            ahead,
+            image_key.as_ref(),
+            failure,
+            started.elapsed().as_millis(),
+        );
         crate::gameplay::actor::record_audit_line(
             "gameplay.imagery_complete",
             super::image_completion_line(
