@@ -19,6 +19,7 @@ use crate::{
         self, ActorSlot, Card, CombatSnapshot, CombatStage, GridCell, StageActor, TableKind,
         TableLine, TableRole, Transitions,
     },
+    scene_script::{SceneScript, SceneScriptLine},
     stage_conductor::{
         ClipOp, ClipSignal, Command, Conductor, IntentKind, IntentMark, LineId, LineTiming,
         ScriptLine, ViewPlan,
@@ -593,20 +594,6 @@ fn check_roll_script_line(
     }
 }
 
-/// The narration a view adds to the scene on stage: nothing when it is the narration already
-/// told, the appended part when the told text grew, otherwise the whole new text.
-fn added_narration(told: &str, now: &str) -> Option<String> {
-    let now = now.trim();
-    if now.is_empty() || now == told.trim() {
-        return None;
-    }
-    let appended = now
-        .strip_prefix(told.trim())
-        .map(str::trim)
-        .filter(|rest| !rest.is_empty() && !told.trim().is_empty());
-    Some(appended.unwrap_or(now).to_owned())
-}
-
 /// A table line as a line of the stage script, or `None` when no figure carries it.
 fn script_line(
     line: &TableLine,
@@ -643,7 +630,7 @@ fn script_line(
                     }
             })
             .cloned(),
-        (TableKind::Speech, TableRole::Narrator) => voice_for(voices, None, &line.text),
+        (_, TableRole::Narrator) => voice_for(voices, None, &line.text),
         _ => None,
     };
     let mut detail = LineDetail::of(line);
@@ -748,81 +735,33 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             .iter()
             .filter(|line| remember(&mut motion.seen, line.sequence))
             .collect();
-        let fresh_check = check_roll.is_some()
-            && check_voice.as_ref().is_some_and(|check| {
-                fresh
-                    .iter()
-                    .any(|line| line.sequence == check.result_sequence)
-            });
-        let scripted = fresh
-            .iter()
-            .rev()
-            .find(|line| line.scripted && line.kind == TableKind::Speech)
-            .copied();
-        // After a reload the line to leave on screen is the speaker's last answer to a hero
-        // when that is the newest thing said, otherwise the scene's own line.
-        let reply_now = lines
-            .last()
-            .filter(|line| line.kind == TableKind::Speech && line.role == TableRole::Npc);
         // A hero's typed line and what a hero did outside a fight go to the stage in order;
         // they are table talk, so they never hold an outcome back.
         let in_fight = transitions.new_roll || snapshot.stage != CombatStage::Absent;
-        let mut script: Vec<ScriptLine<Detail>> = Vec::new();
-        if restart {
-            // A reload shows the current line silently, attributed to its speaker; with no
-            // speaker line, the narration stands in the box.
-            if let (Some(check), Some(payload)) = (check_voice.as_ref(), check_roll.clone()) {
-                script.push(check_roll_script_line(check, payload, true));
-            }
-            let settled = reply_now.or(scripted.filter(|line| line.role == TableRole::Npc));
-            match settled {
-                Some(line) => script.extend(script_line(line, &cast, &voices, true, fighting)),
-                None if !narration.is_empty() => {
-                    script.push(narration_line(&narration, &voices, true));
-                }
-                None => {}
-            }
-        } else if scene_changed {
-            if !fresh_check && !narration.is_empty() {
-                script.push(narration_line(&narration, &voices, false));
-            }
-            if fresh_check && let Some(check) = check_voice.as_ref() {
-                if let Some(payload) = check_roll.clone() {
-                    script.push(check_roll_script_line(check, payload, false));
-                }
-                script.push(check_voice_script_line(check, &voices, false));
-            }
-            if let Some(line) = scripted {
-                script.extend(script_line(line, &cast, &voices, false, fighting));
-            }
-        } else {
-            // What the story adds to a scene already on stage (a look's result) is narrated once;
-            // a reply to table talk never replays the narration already told.
-            if !fresh_check
-                && !in_fight
-                && let Some(added) = added_narration(&motion.narration, &narration)
-            {
-                script.push(narration_line(&added, &voices, false));
-            }
-            if fresh_check && let Some(check) = check_voice.as_ref() {
-                if let Some(payload) = check_roll.clone() {
-                    script.push(check_roll_script_line(check, payload, false));
-                }
-                script.push(check_voice_script_line(check, &voices, false));
-            }
-            script.extend(
-                fresh
-                    .iter()
-                    .filter(|line| match line.kind {
-                        TableKind::Speech => {
-                            matches!(line.role, TableRole::Hero(_))
-                                || (line.role == TableRole::Npc && !line.scripted)
-                        }
-                        TableKind::Action => !in_fight && line.role != TableRole::Narrator,
-                    })
-                    .filter_map(|line| script_line(line, &cast, &voices, false, fighting)),
-            );
+        let script = SceneScript {
+            narration: &narration,
+            previous_narration: &motion.narration,
+            lines: &lines,
+            fresh: &fresh,
+            check: check_voice.as_ref().filter(|_| check_roll.is_some()),
+            restart,
+            scene_changed,
+            in_fight,
         }
+        .lines()
+        .into_iter()
+        .filter_map(|line| match line {
+            SceneScriptLine::Narration(text) => Some(narration_line(text, &voices, restart)),
+            SceneScriptLine::Table(line) => script_line(line, &cast, &voices, restart, fighting),
+            SceneScriptLine::CheckRoll => check_voice
+                .as_ref()
+                .zip(check_roll.clone())
+                .map(|(check, payload)| check_roll_script_line(check, payload, restart)),
+            SceneScriptLine::CheckResult => check_voice
+                .as_ref()
+                .map(|check| check_voice_script_line(check, &voices, restart)),
+        })
+        .collect();
         let healed = !transitions.new_roll
             && motion.party_hit_points.len() == hit_points.len()
             && hit_points
@@ -2557,6 +2496,59 @@ mod tests {
                 finding,
             },
         )
+    }
+
+    #[test]
+    fn committed_scene_outcome_is_voiced_and_reconnect_restores_it_silently() {
+        use crate::presentation::{TableKind, TableLine, TableRole};
+        let line = TableLine {
+            actor_id: String::new(),
+            sequence: 12,
+            speaker: "Narrator".into(),
+            role: TableRole::Narrator,
+            kind: TableKind::Action,
+            text: "Sigrun picks up folded paper label.".into(),
+            scripted: false,
+        };
+        let voices = vec![VoiceLine {
+            role: crate::voice_line::NARRATOR_ROLE.into(),
+            text: line.text.clone(),
+        }];
+        let mut conductor = Conductor::new();
+        conductor.set_sound(true);
+        let commands = conductor.restart(
+            0,
+            ViewPlan {
+                diff: Default::default(),
+                script: vec![super::script_line(&line, &[], &voices, false, false).unwrap()],
+                cast: vec![],
+            },
+        );
+        assert!(commands.iter().any(|command| {
+            matches!(command, Command::Clip { op: ClipOp::Request, detail: Detail::Line(outcome), .. }
+                if outcome.text == line.text && outcome.voice.as_ref() == voices.first())
+        }));
+        let restored = conductor.restart(
+            1,
+            ViewPlan {
+                diff: Default::default(),
+                script: vec![super::script_line(&line, &[], &voices, true, false).unwrap()],
+                cast: vec![],
+            },
+        );
+        assert!(!restored.iter().any(|command| {
+            matches!(
+                command,
+                Command::Clip {
+                    op: ClipOp::Request | ClipOp::Play,
+                    ..
+                }
+            )
+        }));
+        assert_eq!(
+            conductor.focus_line().map(|(_, state)| state),
+            Some(LineState::Lingering)
+        );
     }
 
     /// Uses the production command adapter and mounted TV, with explicit media signals and time.

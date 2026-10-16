@@ -1422,7 +1422,10 @@ pub(super) fn project_journey(
         .map(journey::accepted)
         .transpose()?
         .and_then(|accepted| accepted.check);
-    if let Some(check) = &latest_check
+    // The display stages a check's finding through its dedicated result card and voice.
+    // Keep its scene narration stable when a later interaction clears the current check.
+    if role == LocalDemoRole::Player
+        && let Some(check) = &latest_check
         && let Some(observation) = super::investigation::observation(&authored, check)
     {
         narration = observation.public_view().fallback();

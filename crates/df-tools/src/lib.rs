@@ -42,6 +42,8 @@ mod live_art;
 mod plate_layout;
 #[cfg(any(target_arch = "wasm32", test))]
 mod presentation;
+#[cfg(any(target_arch = "wasm32", test))]
+mod scene_script;
 // FIGHT-001: pure dice-face plan shared by the TV overlay and the phone mini, unit-tested.
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod dice_roll;

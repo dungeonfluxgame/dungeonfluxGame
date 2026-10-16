@@ -259,6 +259,10 @@ fn a_purchase_spends_exact_copper_and_cannot_overdraw_the_heros_purse() {
 fn the_display_receives_the_current_check_faces_outcome_and_target_without_dc_prose() {
     taproom(|| {
         let (current, member) = opened();
+        let opening = wire::journey_view(&current, LocalDemoRole::Display, member).unwrap();
+        let Some(rpc::view_message::Audience::Display(opening)) = opening.audience else {
+            panic!("display required");
+        };
         let choices = vec![
             (
                 model::label("attempt-thing").unwrap(),
@@ -283,8 +287,35 @@ fn the_display_receives_the_current_check_faces_outcome_and_target_without_dc_pr
         assert_eq!(check.faces, vec![20]);
         assert_eq!(check.roll_mode, 0);
         assert!(check.succeeded);
+        assert_eq!(display.narration, opening.narration);
         assert!(!display.narration.contains("DC"));
         assert!(!display.narration.contains("Wisdom (Perception)"));
+
+        let scene = crate::gameplay::beat_script_runtime::scene(searched.state()).unwrap();
+        let thing = scene
+            .setting
+            .as_ref()
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .things
+            .iter()
+            .find(|thing| thing.portable && !thing.in_use && thing.holder_id.is_none())
+            .unwrap();
+        let taken = interact(&searched, member, 15, &thing.id, "take");
+        let view = wire::journey_view(&taken, LocalDemoRole::Display, member).unwrap();
+        let Some(rpc::view_message::Audience::Display(after_take)) = view.audience else {
+            panic!("display required");
+        };
+        assert!(after_take.check.is_none());
+        assert_eq!(after_take.narration, opening.narration);
+        assert!(
+            living_scene::last_line(taken.state())
+                .unwrap()
+                .unwrap()
+                .contains(&thing.name)
+        );
     });
 }
 

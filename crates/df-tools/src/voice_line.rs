@@ -200,9 +200,39 @@ pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine
     if let Some(check) = check_voice_line(display) {
         lines.push(check.voice);
     }
+    lines.extend(scene_outcomes(display));
     lines.extend(conversation_reply(display));
     lines.extend(fight_lines(display));
     lines
+}
+
+/// Committed public interaction outcomes use the narrator's voice. Check rows already have
+/// their own result line, and combat outcomes keep their existing per-beat script.
+fn scene_outcomes(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine> {
+    let Some(journey) = display.journey.as_ref() else {
+        return Vec::new();
+    };
+    if journey.combat.is_some() {
+        return Vec::new();
+    }
+    let check = check_voice_line(display);
+    journey
+        .table_log
+        .iter()
+        .filter(|line| {
+            rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Narrator)
+                && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
+                && line.speaker.trim() != "Roll"
+                && !line.text.trim().is_empty()
+                && check
+                    .as_ref()
+                    .is_none_or(|check| line.sequence != check.result_sequence)
+        })
+        .map(|line| VoiceLine {
+            role: NARRATOR_ROLE.to_owned(),
+            text: line.text.trim().to_owned(),
+        })
+        .collect()
 }
 
 /// Pair the public roll with its immediately following finding row. The card displays the
@@ -694,6 +724,7 @@ mod tests {
         assert!(!check.voice.text.contains("Wisdom"));
         assert!(!check.voice.text.contains("14"));
         assert!(!check.voice.text.contains("DC"));
+        assert_eq!(display_lines(&view), [check.voice]);
     }
 
     #[test]
