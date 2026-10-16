@@ -61,6 +61,186 @@ struct Interaction {
     option: String,
 }
 
+/// A server-authorized action proposed by the narrative/interaction layer for a named NPC.
+/// It enters the same durable scene journal as a player interaction; prose alone cannot
+/// move an item. `payer` is required for purchases because NPC money is not implicit state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NpcInventoryProposal {
+    pub(crate) operation: OperationId,
+    pub(crate) expected_basis: Basis,
+    pub(crate) actor_id: String,
+    pub(crate) target_id: String,
+    pub(crate) action: NpcInventoryAction,
+    pub(crate) payer: Option<EntityId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NpcInventoryAction {
+    Take,
+    Give { recipient_id: String },
+    Purchase,
+    Steal,
+}
+
+/// Commits an NPC inventory proposal after validating the current scene and exact money path.
+/// This is intentionally separate from player command admission: a narrative director can
+/// submit an authorized proposal, but it still receives a fenced checkpoint and journal row.
+pub(crate) fn commit_npc_inventory_action(
+    current: &Checkpoint,
+    proposal: NpcInventoryProposal,
+) -> Result<Checkpoint, RepositoryError> {
+    if current.basis() != proposal.expected_basis {
+        return Err(invalid());
+    }
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+    let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+    let actor = snapshot
+        .model
+        .people
+        .iter()
+        .find(|person| person.id == proposal.actor_id)
+        .ok_or_else(invalid)?;
+    let payer = proposal.payer;
+    let mut paid_cp = 0;
+    let mut recipient = String::new();
+    let (target_id, change, line) = match proposal.action {
+        NpcInventoryAction::Take => {
+            let thing = snapshot
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == proposal.target_id)
+                .ok_or_else(invalid)?;
+            if !thing.portable || thing.holder_id.is_some() || thing.in_use {
+                return Err(invalid());
+            }
+            let line = format!("{} takes {}.", actor.name, thing.name);
+            (
+                thing.id.clone(),
+                Some(SceneChange {
+                    entity_id: thing.id.clone(),
+                    description: line.clone(),
+                    kind: SceneChangeKind::Taken {
+                        holder_id: actor.id.clone(),
+                    },
+                }),
+                line,
+            )
+        }
+        NpcInventoryAction::Give { recipient_id } => {
+            let thing = snapshot
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == proposal.target_id)
+                .ok_or_else(invalid)?;
+            let recipient_person = snapshot
+                .model
+                .people
+                .iter()
+                .find(|person| person.id == recipient_id)
+                .ok_or_else(invalid)?;
+            if thing.holder_id.as_deref() != Some(actor.id.as_str()) {
+                return Err(invalid());
+            }
+            if thing
+                .owner_id
+                .as_deref()
+                .is_some_and(|owner| owner != actor.id && owner != recipient_id)
+            {
+                return Err(invalid());
+            }
+            recipient = recipient_id.clone();
+            let line = format!(
+                "{} gives {} to {}.",
+                actor.name, thing.name, recipient_person.name
+            );
+            (
+                thing.id.clone(),
+                Some(SceneChange {
+                    entity_id: thing.id.clone(),
+                    description: line.clone(),
+                    kind: SceneChangeKind::Given {
+                        holder_id: recipient_id,
+                    },
+                }),
+                line,
+            )
+        }
+        NpcInventoryAction::Purchase => {
+            let payer = payer.clone().ok_or_else(invalid)?;
+            let offer = snapshot
+                .model
+                .offers
+                .iter()
+                .find(|offer| offer.id == proposal.target_id)
+                .ok_or_else(invalid)?;
+            if !snapshot.model.offer_available(&offer.id)
+                || balance_cp(current.state(), payer)? < u64::from(offer.cost_cp)
+            {
+                return Err(invalid());
+            }
+            paid_cp = offer.cost_cp;
+            let line = format!("{} buys {}.", actor.name, offer.name);
+            (
+                offer.id.clone(),
+                Some(SceneChange {
+                    entity_id: offer.id.clone(),
+                    description: line.clone(),
+                    kind: SceneChangeKind::Purchased {
+                        holder_id: actor.id.clone(),
+                        seller_id: offer.seller_id.clone(),
+                    },
+                }),
+                line,
+            )
+        }
+        NpcInventoryAction::Steal => {
+            // A narrator cannot award theft custody. The rules/check owner must produce a
+            // validated result before a Stolen SceneChange is accepted.
+            return Err(invalid());
+        }
+    };
+    let mut basis = current.basis();
+    basis.revision = basis.revision.next_sequence().map_err(|_| invalid())?;
+    let accepted = rpc::AcceptedAction {
+        phase: phase(current)? as i32,
+        ..Default::default()
+    };
+    let interaction = Interaction {
+        place: scene.setting.as_ref().ok_or_else(invalid)?.place_id.clone(),
+        hero: actor.id.clone(),
+        change,
+        paid_cp,
+        actor: payer.map_or_else(|| hex(actor.id.as_bytes()), |payer| hex(payer.as_bytes())),
+        recipient,
+        line,
+        accepted: hex(&accepted.encode_to_vec()),
+        target: target_id,
+        option: "npc-inventory".into(),
+    };
+    finish(
+        current,
+        basis,
+        current.state().clone(),
+        proposal.operation,
+        Vec::new(),
+        DecisionContent {
+            entry: "npc-scene-interaction",
+            semantic: Some(format!(
+                "{PREFIX}{}",
+                serde_json::to_string(&interaction).map_err(|_| invalid())?
+            )),
+            policy: POLICY,
+            audience: AudienceScope::Shared,
+            reaction: None,
+            escort_target: None,
+            objective_command: None,
+            script_choice: None,
+        },
+    )
+}
+
 fn invalid() -> RepositoryError {
     refusal_detail::note("living-scene-state");
     RepositoryError::InvalidCandidate
