@@ -287,6 +287,31 @@ fn plate_loading_timing(stage: &Element, visible: bool, scene: &str) {
     );
 }
 
+fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str) {
+    if let Some(pending) = server_pending {
+        if pending {
+            let _ = stage.set_attribute("data-plate-server-pending", "");
+        } else {
+            let _ = stage.remove_attribute("data-plate-server-pending");
+        }
+    }
+    let client_pending = stage
+        .query_selector(".tv-plate")
+        .ok()
+        .flatten()
+        .is_some_and(|plate| plate.has_attribute("data-loading"));
+    let visible = stage.has_attribute("data-plate-server-pending") || client_pending;
+    let was_visible = stage.has_attribute("data-plate-loading");
+    if visible {
+        let _ = stage.set_attribute("data-plate-loading", "");
+    } else {
+        let _ = stage.remove_attribute("data-plate-loading");
+    }
+    if was_visible != visible {
+        plate_loading_timing(stage, visible, scene);
+    }
+}
+
 fn initial(name: &str) -> String {
     name.chars()
         .next()
@@ -1641,10 +1666,9 @@ fn activate_plate_request_at(
     }
     let _set = stage.set_attribute("data-plate-loaded", "");
     let _removed = root.remove_attribute("data-loading");
-    let _removed = stage.remove_attribute("data-plate-loading");
-    plate_loading_timing(
+    sync_plate_loading(
         stage,
-        false,
+        None,
         &stage.get_attribute("data-scene-key").unwrap_or_default(),
     );
     super::presentation_timing::media(
@@ -1670,10 +1694,9 @@ fn fail_plate_request(
         return;
     }
     let _removed = root.remove_attribute("data-loading");
-    let _removed = stage.remove_attribute("data-plate-loading");
-    plate_loading_timing(
+    sync_plate_loading(
         stage,
-        false,
+        None,
         &stage.get_attribute("data-scene-key").unwrap_or_default(),
     );
     let Some(url) = image.get_attribute("data-src") else {
@@ -2040,10 +2063,9 @@ impl TvStage {
                 self.plate
                     .root
                     .set_attribute("data-request", &request.to_string())?;
-                self.root.set_attribute("data-plate-loading", "")?;
-                plate_loading_timing(
+                sync_plate_loading(
                     &self.root,
-                    true,
+                    None,
                     &self
                         .root
                         .get_attribute("data-scene-key")
@@ -3362,10 +3384,11 @@ impl TvStage {
     fn apply_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
         let layer = &self.plate;
         let current_scene = self.root.get_attribute("data-scene-key").as_deref() == Some(scene_key);
-        if plate.update_pending && current_scene {
-            self.root.set_attribute("data-plate-loading", "")?;
-            plate_loading_timing(&self.root, true, scene_key);
-        }
+        sync_plate_loading(
+            &self.root,
+            Some(plate.update_pending && current_scene),
+            scene_key,
+        );
         if layer.root.has_attribute("data-transition") {
             *layer.deferred.borrow_mut() = Some((plate.clone(), scene_key.to_owned()));
             return Ok(());
@@ -3376,8 +3399,7 @@ impl TvStage {
             layer.root.remove_attribute("data-request")?;
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-loading")?;
-            self.root.remove_attribute("data-plate-loading")?;
-            plate_loading_timing(&self.root, false, scene_key);
+            sync_plate_loading(&self.root, None, scene_key);
         }
         let failed = layer.root.get_attribute("data-failed");
         let usable = match (&plate.state, &plate.url) {
@@ -3397,8 +3419,7 @@ impl TvStage {
                 if state == PlateState::Pending
                     && self.root.get_attribute("data-scene-key").as_deref() == Some(scene_key)
                 {
-                    self.root.set_attribute("data-plate-loading", "")?;
-                    plate_loading_timing(&self.root, true, scene_key);
+                    sync_plate_loading(&self.root, Some(true), scene_key);
                 }
                 self.root.set_attribute("data-plate-state", "ready")?;
                 *layer.seen.borrow_mut() = scene_key.to_owned();
@@ -3407,8 +3428,7 @@ impl TvStage {
             if state == PlateState::Pending
                 && self.root.get_attribute("data-scene-key").as_deref() == Some(scene_key)
             {
-                self.root.set_attribute("data-plate-loading", "")?;
-                plate_loading_timing(&self.root, true, scene_key);
+                sync_plate_loading(&self.root, Some(true), scene_key);
             }
             if let Some(active_frame) = layer
                 .root
@@ -3476,8 +3496,7 @@ impl TvStage {
             self.root.remove_attribute("data-plate-layout-key")?;
             self.root.remove_attribute("data-plate-loaded")?;
             layer.root.remove_attribute("data-loading")?;
-            self.root.remove_attribute("data-plate-loading")?;
-            plate_loading_timing(&self.root, false, scene_key);
+            sync_plate_loading(&self.root, None, scene_key);
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
             layer.root.remove_attribute("data-pull")?;
@@ -3496,12 +3515,6 @@ impl TvStage {
             *layer.seen.borrow_mut() = scene_key.to_owned();
             *layer.pending_layout.borrow_mut() = None;
             self.figures.set_plate(None, None)?;
-            if state == PlateState::Pending
-                && self.root.get_attribute("data-scene-key").as_deref() == Some(scene_key)
-            {
-                self.root.set_attribute("data-plate-loading", "")?;
-                plate_loading_timing(&self.root, true, scene_key);
-            }
             return Ok(());
         };
         self.root.set_attribute("data-plate-state", "ready")?;
@@ -3564,8 +3577,7 @@ impl TvStage {
             .root
             .set_attribute("data-request", &request.to_string())?;
         layer.root.set_attribute("data-loading", "")?;
-        self.root.set_attribute("data-plate-loading", "")?;
-        plate_loading_timing(&self.root, true, scene_key);
+        sync_plate_loading(&self.root, None, scene_key);
         image.set_attribute("data-request", &request.to_string())?;
         layer.root.set_attribute("data-want-i", &next.to_string())?;
         layer.next.set(1 - next);
@@ -4512,6 +4524,7 @@ mod tests {
             state: PlateState::Pending,
             url: None,
             layout: None,
+            update_pending: true,
             ..Default::default()
         };
 
@@ -4527,6 +4540,13 @@ mod tests {
             Some("ready")
         );
         assert!(stage.root.has_attribute("data-plate-loading"));
+        let ready = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/old".to_owned()),
+            ..Default::default()
+        };
+        stage.set_plate(&ready, "new-scene", true).unwrap();
+        assert!(!stage.root.has_attribute("data-plate-loading"));
         finish_stage(parent, stage);
     }
 
