@@ -14,6 +14,149 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T11:02:55-04:00 to 2026-10-16T17:02:55-04:00
+
+Range: 8b59f6013f446c368f87e74c85e562cc924fb1c7..ee72773235293ce1e0a6fb6d7f204f7dce6ed609
+
+- 4b6028822e59ff2424799c28e7bc826d0ea35084 — Record NPC investigation playtest work block
+- 29efb9622b982ce59e0c9fdf6c5a4601c9d25311 — Add deterministic merchant shop scene quickstart
+- 6fde73acfa3560cd91abd6c125df7d52b51d533d — Record roleplay intent routing failures and merchant acceptance cases
+- 505f1647d7d30b2075ad5fb573e2982bc054c7bb — Route merchant shop role vocatives
+- f1c3c872716ac68d4f5ef1905f603b065a9ad29c — Persist purchased scene stock ownership
+- bbe4436251087597b5f0716f70608718ccbd8033 — Transfer purchased stock ownership to buyer
+- 6554880d970d895fbdbb083d1ed839ebd7a241e4 — Register merchant shop background cast
+- a2c660f18845dfb13c434b70715ef750a73cfd08 — Route explicit roleplay actions through native rules
+- 5d9c10a9304a2d3d819176e4ed6f30327ce0ed41 — Add authored Courier scene combat binding
+- b909edd61edf03c94d9f67c3c07d7c2d94196f7f — Make Courier scene assault use tactical identity
+- f2d8d6e5f100cea5a63f3cef512f10beae0166e4 — Harden roleplay target routing and action audit
+- f6c4892825ba85a833d0c37828b8438b62a483c2 — Use scene assault policy for Courier enemy turns
+- 58d335e2e7191f22476b97476c396a1819c945b7 — Keep scene assaults out of delivery rewards
+- 52b421893cda1afc835e8f82cf00ae5270a59be4 — Admit photographic merchant shop cast
+- 99a6a8d475b0e121c03e10f123f01674c0229d06 — Make typed scene interactions report truthful outcomes
+- 2435ceb576e8b8910eaa197fc70aedabbf554424 — Keep quiet shop phases free of antagonists
+- fdbeaf44ff6c427caf921f017dbbd242c1a3b7c4 — Widen scene framing and ground narrator dressing
+- 8d3e881138fef4c8701a510b6e9649392f3e51fb — Ground opening narration and retain dialogue focus
+- 809a8271c6bc833c16590583adf892e24402c3eb — Ground complete public scene facts and separate actor anchors
+- 9e216853a4b123e0de5adafb1749e248b604bf90 — Bound public scene dressing and focused framing
+- 16223705665be8419136c7989269dd214c3fc4dc — Align shop model with quiet cast
+- 3d3b1f2aa7ca49bd0c1814bb8a7b91596cf33289 — Reconcile scene presence validation during integration
+- 7538eb2e3451fd4f5ae28d9cf1f69c8f48047120 — Keep narrator facts public and preserve hero staging
+- b100454a6dee8730388d7dc63051a1c299755a44 — Format scene dressing coverage assertion
+- 1017aa89923fdba9bf708df7046403bc76b961a0 — Document focused opening scene selection contract
+- a5fc3f44b57a961eee9ad13f675bbfd5b85a3ae6 — Scope threat continuity by scene presence
+- 39a8d10d4cae78642bbecb81d0b5bc7503cdeefd — Add subtle scene plate loading status
+- c561c49b10f1928c736cab03bc2f537d77c4b5dd — Show scene plate work while provider renders
+- 8a72be97f4b235573086eb68ed2369368ce273ee — Tie plate indicator to server and browser work
+- 489e656ea5cb158e14fa3b3b9a9227781fa33292 — Make plate loading timing edge triggered
+- 61a32a9b7103e1e9068b538af7b251a9f5c6b112 — Replay purchased goods from canonical scene base
+- 6ba9ec0f87a71cecbb64e50172cc4a0a8ce72302 — Preserve authored purchased-prefix objects
+- 29275201e256f43a56b7590f373d5cfe672f462e — Complete native plate status projection and test-only dressing export
+- 06edc5b4e3195ed17474c5f9307f0f6edc8bfc95 — Add plate pending defaults to scene fixtures
+- e7961db8f2b7d0b8092490abfd7be1e10aaba1fc — trace final merchant plate prompt assembly
+- edf717764c9cc4df14f3e82b268dea03398f5fc0 — align image prompt budget with OpenAI edit contract
+- 3ca4d100acb17b950b3f85b2a8da5cec1f96a875 — name image edit prompt limit and validate full assembly
+- 8a3ddc9474c5ab61428f6d7382429d4392a1e7b6 — Make opening narration natural without an extra development cap
+- 3ef4fe65c05ce22cdfafd10195ec29cc04af30a3 — Document plate pending visibility and final prompt diagnostics
+- 4af9ddc234df852cfa937b93dd888c1907817828 — Align opening fallback regression with present activities
+- 2fd659b8d1c03a50291de44349fe6a5fe9696a97 — Smooth opening activity joiner
+- cebdd8e05d08a2b38750b6c0a374a70fcdda67f3 — use provider prompt limit in photo edit test
+- 18d47180aa0fbe7a27d09c2603ea9b1391103362 — reuse assembled prompt length in imagery diagnostics
+- a10387b5cfcddd46ce30d713056761416a604771 — alias provider image fixture in imagery regression
+- 0f106568e4935dcebecc48c79ebbcc61fe01b74d — Allow full storyteller style and guidance
+- dd6e54a154eb5d27560a122304a46dc2d9a2a162 — Cover merchant storyteller request envelopes
+- 94fd67dfc10ccfc2261c52f6f26923cd163e739a — Check merchant prompts against storyteller envelope
+- 17c6c9c3ef9094cb7c280c78ac95ef252b304fde — Fix storyteller envelope test imports
+- 27f31b791b9020202933d329b11492e75eacc331 — focus living plate on committed npc speaker
+- 0a312dfda4f674eefeb3f96beca9b4b8c73ec87f — Route omitted dev speech through action classifier
+- 24ae1a458e35d6a1c32e34c6d20d446f5e41810b — bind plate camera prompt to directed npc
+- 8d079a4c85a46602386495040cfa678ef3b6adf7 — preserve scene narration and present committed interaction outcomes
+- 2d95c07e286ca7b39aff3d47405773b06e17cd26 — restore newer npc reply ahead of an earlier check on reconnect
+- 5f282c8db7a12347bae22cbe50bfde717db6892e — load an authored freeplay cloth shop with durable native interactions
+- 7d6b17ec769db328ee05a0bfeb79f305cee92fc4 — validate explicit coin trades and cover pinned store startup and gifts
+- 7537b587e01ae597ae03ae8977a4f95b53e7668c — start freeplay without random-story summaries and share finite stock availability
+- 888dced47f846cacd238e0caf549a232c756d561 — resolve purchased goods as owned investigation targets
+- 2ebf0eaeed491b434cf3aba50701d8612eeeea41 — register the shop speaker's approved photographic asset route
+- 8200adf9e7ac49b264fa023cdacb2f1c3bc605df — keep pending authored rooms free of unrelated harbor and campfire art
+- 656e456056364066dbea4fbfd7407fbf158bff23 — preserve authoritative item selection through media projection and reconnect
+- 25664e5d36b25c0618feec48eebbcc92290a624d — Keep action hints on player devices
+- e0b71632126ed46472863e636d54157866615131 — record the freeplay entry's accepted causal source without quest progression
+- ce1cc3c1497192d0cc20fb3abaf710c73b3241d1 — remove unused harbor test import after authored-room fallback repair
+- 71ab1502fab1996a06a98493dcdcbd28ef5130f8 — decode rolled item inspections through the registered rules receipt
+- 94f8a0835fd8c90c60eb1d9217701e03fa2e79ba — keep ordinary shop greetings out of the quest notebook
+- 9ec3779e28968621fbfedccfe5dbf0508daa1d95 — Hide action hints on combat display
+- e129d423f765de53aff8a90886808aa0c2dafb16 — Generate and consume scoped canonical room and character references through owned media worker
+- 6d7829d974581806a38c6623f223969c5bc6a0d7 — reveal canonical goods through committed narrative visual focus
+- af81765bb6f625d29eb55d8525ddae23734a2062 — show taken scene items as temporary hand observations
+- dd1a2cd64cb10c74215801c650d60fdfa298457a — project all temporary hand observations
+- 9dbe4d6b5ad70ce2e0654aa8755735f3dd7b10dc — Cover canonical media jobs in existing living scene test consumers
+- f2473583bdab3b5dd48235f801affa4b232eb04c — serialize freeplay as a standalone place without legacy quest or encounter content
+- 0b03b93499e01772bfc8d06b3d237955530f8653 — use only party resources and causal entry selection in freeplay
+- 6470b883238f0fa5e0947ba90e0a646c7de64455 — use ready canonical identities for narrative goods focus
+- 214bdff7c014368ce269c0af29645734495c934e — stabilize temporary hand inventory presentation
+- 48740bed278e480783ea5770c12bc514fd147321 — Pass checkpoint revision to hand projections
+- a3dddc4c3bf30e63fc8886fcd93e1ad749a7fff1 — Fence authored room packs and expose terminal reference failures with bounded demand admission
+- 0d3be8edda71192aefbb608e5c6a5614e86352de — Prioritize current canonical room and cast within shared imagery capacity
+- 1addfcbe1abe5d7771190d25eee30db7ade276c7 — Initialize hand items in scene fixture
+- eb73ffaf1b7e75fa874e1760eb96b568b52b47fe — Exercise actual canonical room admission without destructive fixture reinitialization
+- 84dd4c5df87d833a3e790aa9a0b425042348af88 — Preserve borrowed hand ownership and visibility
+- 82d85d9bc98503dd97bbccf5aa2467b19c4b4ab9 — Add reusable NPC archetype dossier library
+- 2efcabd6e0c889464361b97bbc238e6cd1ada482 — Use archetypes in authored shop dossiers
+- 0dd87be3e208dd807a7d6df837a3369d7c260ac5 — Borrow hero name when checking ownership
+- f6fd5fc7ab143f078cd448b5d05c36fe49094897 — Fix archetype aliases and cover full library loading
+- ff8130fd1e940c8533f19a207c0b38a825510a6b — align Story scene variants with authored places and expose regression context
+- f74d8227fee7e7a2c119fba5c515118a31c47ea2 — feat: control component visibility through layout CLI
+- b3e8b9d37d180522b476c30d45f778a1bcae7901 — feat: control component visibility through layout CLI
+- 2236fa33281e41a353b3a8ed470c6b7f3dea53f8 — Remove stale TV choices menu toggle
+- f6be3c9ce843ecb42ec16dc3af52129fca512feb — fix: split dev describe command JSON
+- 3d054cbe2cc09fc701ea572e4e11574fc123f39a — test: cover live layout visibility recovery
+- 0805f762c13cf5b9b436a46314fd027e618364d5 — Align canonical room revision with its photo source
+- 43544dc58c62dc5bf7cb56b41916dfa83d3b7a5b — Reconcile hand observation cards and image cache
+- 73cdb0f579bfaa4a79ab281abe195ff66c373363 — test: pass owned layout parser flags
+- 04ae02296ad7d02e9fde2405303792bab66330af — Keep narrative goods and plate focus canonical
+- dd5a0fa3da4ce16744b57b6feac7bb72d20be6b3 — Keep hand image cache test on public boundary
+- aa3afaff51f272751c6c04b92783f4a16f27d966 — add canonical location inventory state and theft action
+- 7951ad546a663604ab96c8f496f4ac89339dc376 — preserve generated item identity through inventory transfers
+- 4c025bf59cde0c98649a1cf6019a69f65cadeac3 — add authorized NPC inventory transaction entrypoint
+- 6212fe8be460e3bddfb33f60107331f26ba72a62 — Authorize actor-funded NPC inventory transactions
+- 4f97dd915d5b0776ebe2b3da1fe5a1d256157dff — Fence NPC custody and persist theft intent
+- fd417d7871c2af700757ed2cd7e95c730654df75 — Materialize stable merchant stock for NPC loans
+- 9ca14b879d94394a92f405ccfb61bbab14846f49 — Fix scene model commerce compile errors
+- 7bac72cb7cdb10ad75d59834d9f8012d0d8479d3 — Validate materialized stock identity and public scene contents
+- cd345ba27a6bcc52c4c01bfde61805cc74747a64 — Add provenance to authored merchant shop items
+- a4b6234fde5881b06d1de14d08d8d762540e8038 — Migrate legacy scene inventory models at load boundaries
+- 15e816726dade3b7f1187e19135b194ca6e65f64 — Add quoted merchant trades and adjudicated theft
+- 0c4a60cbefc5bf20d87eb9d9e45f203d287ec744 — Expire superseded merchant quotes
+- 43f6fe0cb9c9ebb95210a7d5cc0efdd37fe01198 — Resolve canonical plates by authored scene key
+- 397dde41fe307debbab70ffea5531d791077a52a — classify NPC replies into validated event proposals
+- de30c39c842972c34f277dde24d2171a05455f81 — Route NPC Jev proposals through authoritative scene commits
+- 20eba969152596bdf4c4541960328f946926965e — Bind NPC events to canonical speaker lines
+- 1b04db85a66eb2c848b72846b68c4405d191c630 — Bind NPC inventory events to the spoken line
+- fe5a27cdfc7f1005431e71610cdf49b37853311e — Complete canonical room test person fixture
+- f0f4b70603f9c62767bd52834e4c64fa7e502f22 — Fix NPC event integration compile errors
+- aabca299fbd218aa14997e973331587a561b1cf1 — Fix inventory compile regressions
+- 3f088fae264cef5c9997646875007c210c54fcaa — Fix inventory change validation borrow
+- 8621de35a0e1f2c97e0c234fb1850bcb24be197f — Keep NPC event restart fixture ownership intact
+- 5cdd1a499a927083e4b98364b7f78132457c90df — Expose stable actor refs for inventory projections
+- 222710b0f8912f0f94b9ac155b46b82c446f87ff — Test stable inventory actor projections
+- 3b0c7c26d174c71cb0d5d122de6a9ebc25c67893 — Preserve accepted quickstart hero identities
+- d385ddda7b48e5376e6dea38e811331cc77e5ccb — Recover dev seat reads after phone reclaim
+- e0ac92f5e66e429db437d3d560e3f05505542bba — Document fresh merchant shop roleplay run
+- 83aed86fb090b84e7d5db6205d7a42f6a88685db — Use canonical NPC attribution in phone replies
+- f744013be68d33586f69b3e56fb7992479012d82 — Project permanent and temporary phone inventory
+- dfd02e946705517c131162e95a25fa618df624ff — Add source-bound merchant bargaining validator
+- 5e24e19b4101e46bf62f73aa6ad07fc1c13b43c8 — Bind bargaining context to authenticated hero
+- 017e30a7b5db6dd0544f274be62032e30424de9c — Expose stockouts in merchant dialogue context
+- 369fe61fdfdd75f1692d149483fd4f1917808221 — Classify natural merchant sale questions
+- c0a925b825a056d6fabf2aff2c2aff0d6e66b7fc — Integrate source-bound merchant bargaining
+- ea2fa49ebfa32032be8ad6c400b00a7f8b208fcb — Register durable scene transaction events
+- 75e8f174b2da832773ddf4e52b519e0d94ad2a30 — Snapshot canonical jobs before test completion
+- e623c8db027076aeb04b7288db5d398d8c79a90b — Repair integrated merchant quote caller errors
+- ee72773235293ce1e0a6fb6d7f204f7dce6ed609 — Fix consumer tests after inventory projection
+
+Next block baseline: `ee72773235293ce1e0a6fb6d7f204f7dce6ed609`.
+
+Runtime acceptance remains incomplete. This block integrates the standalone shop, character references, item custody and phone inventory, and merchant quote paths. Retained playtest logs record creation, text-trade, image, and fixture failures; source integration does not imply successful roleplay acceptance. The bookkeeping commit is captured in the next block.
+
 ## 2026-10-16T10:33:59-04:00 to 2026-10-16T11:02:55-04:00
 
 Range: 994b39044549af9c15682958ab83b5083c7160fd..8b59f6013f446c368f87e74c85e562cc924fb1c7
