@@ -152,6 +152,36 @@ impl PlateScene {
         })
     }
 
+    /// The committed NPC reply is the canonical runtime focus for the next plate. Authored
+    /// scenes start on their patron, but a later directed reply must promote that exact cast ID
+    /// so the camera and locator can keep the addressed person readable.
+    fn for_view(view: &View, scene: &pack::Scene) -> Option<Self> {
+        let mut plate = Self::of(scene)?;
+        let Some(story) = view.story.as_ref() else {
+            return Some(plate);
+        };
+        let actor_id = story
+            .actor_id
+            .strip_prefix("npc:")
+            .unwrap_or(&story.actor_id);
+        let Some(actor) = scene.cast.iter().find(|actor| actor.id == actor_id) else {
+            return Some(plate);
+        };
+        plate.speaker = Some(Speaker {
+            id: actor.id.clone(),
+            sprite: actor.sprite.clone(),
+            gender: actor.gender,
+            age: actor.age,
+        });
+        plate.others = scene
+            .cast
+            .iter()
+            .filter(|other| other.id != actor.id)
+            .map(|other| other.sprite.clone())
+            .collect();
+        Some(plate)
+    }
+
     fn locator_actors(&self) -> Vec<(String, String)> {
         self.identity_cast
             .iter()
@@ -180,8 +210,13 @@ impl PlateScene {
             .map(|(art, key)| format!("{art}{}", &key.as_str()[..8]))
             .collect();
         format!(
-            "{}|{}|{:?}|{party}|{hurt}",
-            self.title, self.place_id, self.key,
+            "{}|{}|{:?}|speaker={}|{party}|{hurt}",
+            self.title,
+            self.place_id,
+            self.key,
+            self.speaker
+                .as_ref()
+                .map_or("none", |speaker| speaker.id.as_str()),
         )
     }
 
@@ -1447,7 +1482,10 @@ impl Shared {
     /// [`Self::observe`] with the pack's scene and its successors given, so tests need no pack.
     fn observe_with(&self, view: &View, located: Option<pack::Scene>, next: Vec<pack::Scene>) {
         let mut book = locked(&self.book);
-        if let Some(scene) = located.as_ref().and_then(PlateScene::of) {
+        if let Some(scene) = located
+            .as_ref()
+            .and_then(|scene| PlateScene::for_view(view, scene))
+        {
             state_images::observe(&mut book, view, &scene, self.inner.now());
         } else {
             state_images::reset_scene(&mut book, view);
@@ -1464,6 +1502,17 @@ impl Shared {
             .current
             .as_ref()
             .is_some_and(|current| current.graph_revision != view.graph_revision);
+        let runtime_speaker = located
+            .as_ref()
+            .and_then(|scene| PlateScene::for_view(view, scene))
+            .and_then(|scene| scene.speaker.map(|speaker| speaker.id));
+        let speaker_changed = book.current.as_ref().is_some_and(|current| {
+            current
+                .scene
+                .as_ref()
+                .and_then(|scene| scene.speaker.as_ref().map(|speaker| speaker.id.as_str()))
+                != runtime_speaker.as_deref()
+        });
         let combat_changed = book
             .current
             .as_ref()
@@ -1478,16 +1527,19 @@ impl Shared {
         // background every line, with a new composition and the figures gone (the owner,
         // 2026-10-14: "changes background too often where all the characters disappear").
         // Visible changes to a modelled scene's state are settled edits (state_images).
-        if scene_changed || party_changed {
-            let mut scene = located.as_ref().and_then(PlateScene::of).or_else(|| {
-                (!scene_changed && !party_changed)
-                    .then(|| {
-                        book.current
-                            .as_ref()
-                            .and_then(|current| current.scene.clone())
-                    })
-                    .flatten()
-            });
+        if scene_changed || party_changed || speaker_changed {
+            let mut scene = located
+                .as_ref()
+                .and_then(|scene| PlateScene::for_view(view, scene))
+                .or_else(|| {
+                    (!scene_changed && !party_changed)
+                        .then(|| {
+                            book.current
+                                .as_ref()
+                                .and_then(|current| current.scene.clone())
+                        })
+                        .flatten()
+                });
             if let Some(scene) = scene.as_mut() {
                 scene.hero_names = view
                     .hero_names
@@ -1561,7 +1613,7 @@ impl Shared {
                     for mut next in next
                         .iter()
                         .take(MAXIMUM_SUCCESSORS)
-                        .filter_map(PlateScene::of)
+                        .filter_map(|next| PlateScene::for_view(view, next))
                     {
                         next.hero_names = view
                             .hero_names
@@ -1586,7 +1638,10 @@ impl Shared {
             current.in_combat = view.in_combat;
             current.in_roll = view.in_roll;
             current.graph_revision = view.graph_revision;
-            if let Some(mut scene) = located.as_ref().and_then(PlateScene::of) {
+            if let Some(mut scene) = located
+                .as_ref()
+                .and_then(|scene| PlateScene::for_view(view, scene))
+            {
                 scene.hero_names = view
                     .hero_names
                     .iter()
