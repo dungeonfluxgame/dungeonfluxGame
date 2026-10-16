@@ -94,6 +94,18 @@ impl CheckDisplay {
     }
 }
 
+/// Keep the finding visible long enough to read after the roll phase has finished. The finding
+/// fades in around 62% of the card animation, so the duration scales with its actual reading
+/// budget instead of cutting every result off at a fixed eight seconds.
+fn check_result_duration_ms(finding: &str) -> u32 {
+    let read_ms = crate::stage_machines::reading_time_ms(finding);
+    read_ms
+        .saturating_mul(100)
+        .saturating_div(38)
+        .saturating_add(1_000)
+        .max(8_000)
+}
+
 /// Which part of the display the figures are standing in.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum StageMode {
@@ -879,10 +891,11 @@ impl Figures {
             self.place_bubble(figure);
             return Ok(());
         }
-        for other in &self.figures {
-            if let Some(panel) = other.bubbles.query_selector(".tv-check-result")? {
-                panel.remove();
-            }
+        // A rapid second-seat check must not erase the first card while its finding is still
+        // readable. Replacing a result on the same hero is safe; cards on other figures remain
+        // in their own bubble containers until their timed fade completes.
+        if let Some(panel) = figure.bubbles.query_selector(".tv-check-result")? {
+            panel.remove();
         }
         figure.bubbles.set_text_content(None);
         let panel = node(
@@ -893,6 +906,13 @@ impl Figures {
             "",
         )?;
         panel.set_attribute("data-check-signature", &signature)?;
+        panel.set_attribute(
+            "style",
+            &format!(
+                "--check-duration:{}ms",
+                check_result_duration_ms(&check.finding)
+            ),
+        )?;
         panel.set_attribute("data-roll-mode", &check.roll_mode.to_string())?;
         panel.set_attribute(
             "data-succeeded",

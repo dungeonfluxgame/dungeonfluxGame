@@ -2899,12 +2899,10 @@ mod tests {
     }
 
     #[test]
-    fn check_result_replaces_the_action_bubble_and_lower_third() {
+    fn check_result_replaces_only_the_action_bubble_and_keeps_dialogue_visible() {
         let css = include_str!("live_stage.css");
-        assert!(css.contains(
-            ".tv-stage[data-check-active] :is(.tv-bubble,.tv-lower-third){display:none!important}"
-        ));
         assert!(css.contains(".tv-check-result"));
+        assert!(!css.contains("[data-check-active] :is(.tv-bubble,.tv-lower-third)"));
     }
 
     #[test]
