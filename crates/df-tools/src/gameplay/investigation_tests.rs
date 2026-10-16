@@ -771,3 +771,57 @@ fn scene_names_accept_ordinary_synonyms_without_matching_nearby_objects() {
     );
     assert_eq!(local_target("I examine the mug.", &options).id, mug_id);
 }
+
+#[test]
+fn jev_skill_choice_wins_over_listen_and_sleight_of_hand_keywords() {
+    // Arrange: the keyword reader would pick perception, then sleight-of-hand, for these words.
+    // Act and assert: Jev's chosen skill is the reading, so the keywords do not override it.
+    assert_eq!(
+        skill(
+            "I listen at the door for the rustle of coins.",
+            Some("insight")
+        ),
+        "insight"
+    );
+    assert_eq!(
+        skill("I palm the coin while I listen.", Some("perception")),
+        "perception"
+    );
+}
+
+#[test]
+fn keyword_skill_applies_only_when_jev_gave_no_skill() {
+    // Jev unavailable: the keyword reader's skill is today's result for these words.
+    assert_eq!(skill("I listen at the door.", None), "perception");
+    assert_eq!(skill("I palm the coin.", None), "sleight-of-hand");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jev_absent_answer_is_not_replaced_by_an_alias_match() {
+    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
+    let options = room();
+    // The absent option follows every scene name, so its choice label is one past the last name.
+    let absent_choice = format!("o{}", options.len() + 1);
+    let endpoint = FakeEndpoint::start(vec![Reply::Status(
+        200,
+        json!({"answers": {"q1": {"type": "choice", "choice": absent_choice, "confidence": 0.9}},
+            "model": "jev-1.13.0", "usage": {"input_tokens": 10, "output_tokens": 1}}),
+    )]);
+    let provider = SystemOneChoiceProvider::new(
+        "jev-fixture-sentinel".into(),
+        &format!("http://{}", endpoint.address),
+    )
+    .unwrap();
+    // "tankards" is a scene alias, so only Jev's absent answer keeps it out of the scene.
+    let selected = resolve_target(Some(&provider), "I examine the tankards.", &options).await;
+    assert!(!selected.present);
+    assert!(selected.id.starts_with("absent-"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn without_jev_the_keyword_reader_resolves_the_named_target() {
+    let options = room();
+    let selected = resolve_target(None, "I examine the tankards.", &options).await;
+    assert_eq!(selected, local_target("I examine the tankards.", &options));
+    assert_eq!(selected.id, "tankards");
+}
