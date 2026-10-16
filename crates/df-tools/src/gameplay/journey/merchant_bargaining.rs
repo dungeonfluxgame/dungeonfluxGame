@@ -202,6 +202,7 @@ pub(in crate::gameplay) fn quote_decision(words: &str, quoted_price_cp: u32) -> 
 /// Do not pass a raw dossier, private ledger, or unfiltered character record here.
 pub(in crate::gameplay) fn reply_context(
     terms: &[TradeTerms],
+    authenticated_hero_id: &str,
     merchant_id: &str,
     typed_words: &str,
     tendered_item_id: Option<&str>,
@@ -211,7 +212,8 @@ pub(in crate::gameplay) fn reply_context(
     let available: Vec<&TradeTerms> = terms
         .iter()
         .filter(|term| {
-            merchant_id_for_terms(term) == merchant_id
+            hero_id_for_terms(term) == authenticated_hero_id
+                && merchant_id_for_terms(term) == merchant_id
                 && term.available
                 && term.stock_units > 0
                 && match term.direction {

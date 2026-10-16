@@ -306,6 +306,7 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
     });
     let first_context = reply_context(
         &[terms(TradeDirection::HeroBuys)],
+        "sigrun",
         "marek",
         "How much for the fine clothes?",
         None,
@@ -314,6 +315,7 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
     .unwrap();
     let second_context = reply_context(
         &[terms(TradeDirection::HeroBuys)],
+        "sigrun",
         "marek",
         "How much for the fine clothes?",
         None,
@@ -346,6 +348,7 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
     let candidate = |facts: &serde_json::Value| {
         let _prompt_context = reply_context(
             &[terms(TradeDirection::HeroBuys)],
+            "sigrun",
             "marek",
             "How much for the fine clothes?",
             None,
@@ -378,6 +381,7 @@ fn prompt_context_keeps_only_listener_safe_facts_and_excludes_private_authority(
     });
     let context = reply_context(
         &[terms(TradeDirection::HeroBuys)],
+        "sigrun",
         "marek",
         "Could I buy the fine clothes?",
         None,
@@ -409,6 +413,7 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
 
     let buying = reply_context(
         &[terms(TradeDirection::HeroBuys), owned_item.clone()],
+        "sigrun",
         "marek",
         "How much for the fine clothes?",
         None,
@@ -421,6 +426,7 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
 
     let selling = reply_context(
         &[terms(TradeDirection::HeroBuys), owned_item],
+        "sigrun",
         "marek",
         "What would you pay for my silver brooch?",
         None,
@@ -430,6 +436,19 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
     assert_eq!(selling["available_trades"].as_array().unwrap().len(), 1);
     assert_eq!(selling["available_trades"][0]["direction"], "merchant_buys");
     assert_eq!(selling["available_trades"][0]["item"], "silver brooch");
+
+    let other_hero_view = reply_context(
+        &[
+            terms(TradeDirection::HeroBuys),
+            terms(TradeDirection::HeroSells),
+        ],
+        "another-hero",
+        "marek",
+        "What would you pay for my item?",
+        None,
+        &facts,
+    );
+    assert!(other_hero_view.is_none());
 }
 
 #[test]
