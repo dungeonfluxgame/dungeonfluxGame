@@ -437,6 +437,14 @@ impl NpcReplyContext {
         };
         let target = match super::npc_target::exact(typed, cast) {
             super::npc_target::Target::Actor(id) => Some(id),
+            super::npc_target::Target::Description | super::npc_target::Target::PossibleAddress
+                if social.is_active() =>
+            {
+                // This test adapter also exercises room aliases and ordinary compound speech.
+                // The lexical cast precheck cannot resolve either; use the same dossier/room
+                // constructor that production calls after its separate routing stage.
+                return Self::with_dossier(view, member, typed, story, social, scene, None);
+            }
             super::npc_target::Target::Ambiguous
             | super::npc_target::Target::Absent
             | super::npc_target::Target::Description
@@ -2626,7 +2634,9 @@ mod tests {
         let text = voice.converse(context, &TableLog::new()).await.unwrap();
         assert_eq!(text, format!("I'm Courier. {scripted}"));
         assert_eq!(endpoint.connections(), 0);
-        std::fs::remove_dir_all(cache).unwrap();
+        if let Err(error) = std::fs::remove_dir_all(cache) {
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        }
     }
 
     #[tokio::test]
@@ -2678,7 +2688,9 @@ mod tests {
         stale.publication_guard = Some(Arc::new(|| false));
         assert!(voice.converse_report(stale, &log).await.is_none());
         assert!(log.lines().is_empty());
-        std::fs::remove_dir_all(cache).unwrap();
+        if let Err(error) = std::fs::remove_dir_all(cache) {
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        }
     }
 
     #[tokio::test]
@@ -2857,30 +2869,36 @@ mod tests {
         ];
         let cast = scene.clone();
         let log = TableLog::new();
-        for (id, name) in [("bandit", "Bandit"), ("courier", "Courier")] {
-            let context = NpcReplyContext::from_view_target(
-                &told,
-                member(1),
-                &format!("{name}, who sent you?"),
-                &listed_story(),
-                Some(id),
-            )
-            .unwrap();
-            assert!(voice.converse(context, &log).await.is_some());
-            let line = log.lines().last().unwrap().clone();
-            assert_eq!(line.actor_id, id);
-            assert_eq!(line.speaker, name);
-            let display = rpc::DisplayGameplayView {
-                scene: Some(cast.clone()),
-                journey: Some(rpc::JourneyView {
-                    table_log: vec![line],
+        for (words, from_model) in [("who sent you?", false), ("Speak to me.", true)] {
+            for (id, name) in [("bandit", "Bandit"), ("courier", "Courier")] {
+                let context = NpcReplyContext::from_view_target(
+                    &told,
+                    member(1),
+                    &format!("{name}, {words}"),
+                    &listed_story(),
+                    Some(id),
+                )
+                .unwrap();
+                assert!(voice.converse(context, &log).await.is_some());
+                let line = log.lines().last().unwrap().clone();
+                assert_eq!(line.actor_id, id);
+                assert_eq!(line.speaker, name);
+                if !from_model {
+                    assert_eq!(line.text, "I can't give you a clear answer to that.");
+                }
+                let display = rpc::DisplayGameplayView {
+                    scene: Some(cast.clone()),
+                    journey: Some(rpc::JourneyView {
+                        table_log: vec![line],
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            };
-            let voices = crate::voice_line::display_lines(&display);
-            assert_eq!(voices.last().unwrap().actor_id(), Some(id));
-            assert_eq!(voices.last().unwrap().speaker(), Some(name));
+                };
+                let voices = crate::voice_line::display_lines(&display);
+                assert_eq!(voices.last().unwrap().actor_id(), Some(id));
+                assert_eq!(voices.last().unwrap().speaker(), Some(name));
+            }
+            assert_eq!(endpoint.connections(), if from_model { 2 } else { 0 });
         }
         assert_eq!(endpoint.connections(), 2);
         let bodies = endpoint.bodies();
