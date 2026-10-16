@@ -30,7 +30,9 @@ The current narrator path is:
 2. `roll_dossiers` resolves the cast role and persists the composed profile.
 3. `dossier_render::render_dossier` shows the source ID/version and resolved flavor for author inspection.
 4. `npc_facts::public_role_archetype` projects safe cues into `NpcReplyContext.facts.role_archetype`.
-5. The NPC reply rules tell the narrator to use this block for characterization only. Every serialized string is checked against this listener's withheld secrets; a profile containing a withheld term is omitted from that listener's prompt.
+5. The NPC reply rules use instincts, priorities, boundaries, and voice for characterization. A direct broad-practice question may be answered from a matching knowledge domain as cautious general advice; domains never establish specific facts. Every serialized string is checked against this listener's withheld secrets; a profile containing a withheld term is omitted from that listener's prompt.
+
+The fixed freeplay store bypasses `roll_dossiers`. Its authored snapshots in `content/merchant-shop/dossiers.json` bind Marek to `cloth-merchant`, Corin to `adventurer`, and Jessa to `soldier`. `shop::generate` checks those snapshots against the current library and includes the archetype source in the store revision. Corin's six years guiding mule trains are paired with the authored `seasoned` and `skilled` flavors; his road-wear domain is available in his actual NPC reply facts.
 
 The library does not replace the separate private/public knowledge tiers. It contains reusable public role guidance, not a character's secret biography. It does not change identity, ownership, party knowledge, or server-authoritative state.
 

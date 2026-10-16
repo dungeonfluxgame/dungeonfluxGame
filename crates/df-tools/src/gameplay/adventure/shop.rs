@@ -9,6 +9,19 @@ const PACK: &[u8] = include_bytes!("../../../../../content/merchant-shop/pack.js
 const TUNING: &[u8] = include_bytes!("../../../../../content/merchant-shop/tuning.json");
 const MODEL: &[u8] = include_bytes!("../../../../../content/merchant-shop/scene-model.json");
 const DOSSIERS: &[u8] = include_bytes!("../../../../../content/merchant-shop/dossiers.json");
+const ARCHETYPES: &[u8] =
+    include_bytes!("../../../../../content/adventure-tables/npc-archetypes.json");
+
+/// Stable shop personas use authored role snapshots from the reusable library. Keep this
+/// mapping on canonical dossier IDs, never cast order or display name.
+fn expected_archetype(npc_id: &str) -> Option<&'static str> {
+    match npc_id {
+        "patron:merchant" => Some("cloth-merchant"),
+        "bystander:shop-adventurer" => Some("adventurer"),
+        "bystander:shop-soldier" => Some("soldier"),
+        _ => None,
+    }
+}
 
 pub(super) fn tuning_bytes(tuning: &pack::TuningFile) -> Result<Vec<u8>, serde_json::Error> {
     #[derive(serde::Serialize)]
@@ -36,6 +49,18 @@ pub(crate) fn generate(
     model.validate_structure()?;
     let dossiers: Vec<Dossier> =
         serde_json::from_slice(DOSSIERS).map_err(|_| GenerateError::Serialization)?;
+    let archetypes = super::dossier_archetypes::ArchetypeLibrary::from_bytes(ARCHETYPES)
+        .map_err(|_| GenerateError::Serialization)?;
+    for dossier in &dossiers {
+        let expected = expected_archetype(&dossier.npc_id).ok_or(GenerateError::Serialization)?;
+        let profile = dossier
+            .archetype_profile
+            .as_ref()
+            .ok_or(GenerateError::Serialization)?;
+        if profile.source_id != expected || archetypes.validate_snapshot(profile).is_err() {
+            return Err(GenerateError::Serialization);
+        }
+    }
     loaded.pack.id = format!("adv-{seed:016x}");
     loaded.tuning.pack = loaded.pack.id.clone();
     for scene in &mut loaded.pack.scenes {
@@ -57,7 +82,7 @@ pub(crate) fn generate(
     };
     validate_cast(&loaded.pack, &dossiers).map_err(|_| GenerateError::Serialization)?;
     let mut revision = Sha256::new();
-    for bytes in [PACK, TUNING, MODEL, DOSSIERS] {
+    for bytes in [PACK, TUNING, MODEL, DOSSIERS, ARCHETYPES] {
         revision.update(bytes);
     }
     Ok(GeneratedAdventure {
@@ -199,6 +224,20 @@ mod tests {
         let (loaded, record) = super::super::record::reload(&documents).unwrap();
         assert!(record.rolls.is_empty());
         assert_eq!(record.dossiers.len(), 3);
+        assert_eq!(record.dossiers, generated.dossiers);
+        for (npc_id, expected) in [
+            ("patron:merchant", "cloth-merchant"),
+            ("bystander:shop-adventurer", "adventurer"),
+            ("bystander:shop-soldier", "soldier"),
+        ] {
+            let profile = record
+                .dossiers
+                .iter()
+                .find(|dossier| dossier.npc_id == npc_id)
+                .and_then(|dossier| dossier.archetype_profile.as_ref())
+                .expect("authored shop cast has a role profile");
+            assert_eq!(profile.source_id, expected);
+        }
         let notebook = crate::gameplay::notebook::NotebookLedger::open(
             &record.seed,
             record.dossiers.clone(),
@@ -266,6 +305,30 @@ mod tests {
                         .contains("private watch passphrase")
                 );
             }
+            let road_clothes_question = "Corin, I am choosing road clothes. You look as though you travel often. What wears out first on a long journey?";
+            let corin = NpcReplyContext::for_target(
+                &view,
+                native::first(),
+                road_clothes_question,
+                &story,
+                &social,
+                "Opening",
+                Some("shop-adventurer"),
+            )
+            .unwrap();
+            let role = &corin.facts["role_archetype"];
+            assert_eq!(role["provenance"]["source_id"], "adventurer");
+            assert_eq!(role["experience"]["id"], "seasoned");
+            assert_eq!(role["competence"]["id"], "skilled");
+            assert!(
+                role["knowledge_domains"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains("Road wear")
+            );
+            assert_eq!(corin.facts["player"]["exact_words"], road_clothes_question);
+            assert!(corin.facts["answer_from"].as_array().unwrap().is_empty());
+            assert!(!corin.facts.to_string().contains("private watch passphrase"));
             let checked = native::act(&opening, native::first(), 6, "look-around");
             assert_eq!(checked.state().draws.len(), 1);
             let checked = native::persisted(&checked);

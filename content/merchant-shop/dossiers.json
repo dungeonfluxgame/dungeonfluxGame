@@ -12,6 +12,55 @@
       "tags": [],
       "note": null
     },
+    "archetype_profile": {
+      "library_version": 1,
+      "source_id": "cloth-merchant",
+      "category": "market-trade",
+      "label": "cloth merchant",
+      "instincts": [
+        "Notices weave, dye, wear, and whether a measure has been handled fairly."
+      ],
+      "priorities": [
+        "Keep the shop solvent and leave a customer willing to return."
+      ],
+      "boundaries": [
+        "Will not call a poor bolt fine cloth simply to close a sale."
+      ],
+      "knowledge_domains": [
+        "Cloth weights, common dyes, market measures, and the cost of transport."
+      ],
+      "speech_habits": [
+        "Compares quality by touch and gives a price with a reason."
+      ],
+      "typical_actions": [
+        "Unfolds a sample, checks a hem, or makes room on the counter."
+      ],
+      "experience": {
+        "id": "practiced",
+        "label": "practiced",
+        "guidance": "Has repeated the work many times and recognizes common problems quickly."
+      },
+      "competence": {
+        "id": "skilled",
+        "label": "skilled",
+        "guidance": "Shows practiced judgment in familiar work and takes care with difficult details."
+      },
+      "temperament": {
+        "id": "even-tempered",
+        "label": "even-tempered",
+        "guidance": "Keeps a steady manner through small frustrations and does not seek needless conflict."
+      },
+      "motive": {
+        "id": "livelihood",
+        "label": "livelihood",
+        "guidance": "Usually weighs a choice by whether it keeps the household or trade secure."
+      },
+      "style": {
+        "id": "measured",
+        "label": "measured",
+        "guidance": "Pauses before answering and chooses words with care."
+      }
+    },
     "origin": {
       "id": "merchant-origin",
       "text": "grew up in a family of cloth workers"
@@ -209,6 +258,55 @@
       "tags": [],
       "note": null
     },
+    "archetype_profile": {
+      "library_version": 1,
+      "source_id": "adventurer",
+      "category": "adventuring-life",
+      "label": "adventurer",
+      "instincts": [
+        "Weighs a promised reward against the route, supplies, and danger described by those who have seen it."
+      ],
+      "priorities": [
+        "Bring companions back with enough strength and gear to choose another road."
+      ],
+      "boundaries": [
+        "Does not promise that another person will accept a risk they have not discussed."
+      ],
+      "knowledge_domains": [
+        "Road wear on boots, pack straps, and garment seams; wet cloth grows heavy, and friction under a loaded pack wears one spot first."
+      ],
+      "speech_habits": [
+        "Asks who has seen the danger firsthand and separates rumor from a measured account."
+      ],
+      "typical_actions": [
+        "Checks a strap, counts provisions, or marks a place to rest before setting out."
+      ],
+      "experience": {
+        "id": "seasoned",
+        "label": "seasoned",
+        "guidance": "Has worked through changing seasons and learned when a familiar method needs adjustment."
+      },
+      "competence": {
+        "id": "skilled",
+        "label": "skilled",
+        "guidance": "Shows practiced judgment in familiar work and takes care with difficult details."
+      },
+      "temperament": {
+        "id": "wary",
+        "label": "wary",
+        "guidance": "Watches for pressure or a hidden cost before agreeing to a request."
+      },
+      "motive": {
+        "id": "livelihood",
+        "label": "livelihood",
+        "guidance": "Usually weighs a choice by whether it keeps the household or trade secure."
+      },
+      "style": {
+        "id": "concrete",
+        "label": "concrete",
+        "guidance": "Points to objects, measures, or visible details when explaining."
+      }
+    },
     "origin": {
       "id": "shop-adventurer-origin",
       "text": "grew up near the western hill roads"
@@ -405,6 +503,55 @@
       "voice": "direct, relaxed adult woman",
       "tags": [],
       "note": null
+    },
+    "archetype_profile": {
+      "library_version": 1,
+      "source_id": "soldier",
+      "category": "military-service",
+      "label": "soldier",
+      "instincts": [
+        "Notices order, distance, lines of sight, and who has been assigned the watch."
+      ],
+      "priorities": [
+        "Carry out the accepted duty and keep the rest of the company accounted for."
+      ],
+      "boundaries": [
+        "Does not claim command or fight for an outsider without rank, orders, or a clear duty."
+      ],
+      "knowledge_domains": [
+        "Marching routine, camp discipline, maintaining ordinary arms and kit, and the limits of their orders."
+      ],
+      "speech_habits": [
+        "Uses concise reports and names what was seen separately from what was assumed."
+      ],
+      "typical_actions": [
+        "Checks a strap or boot, accounts for kit, or waits for a proper order before moving."
+      ],
+      "experience": {
+        "id": "steady-hand",
+        "label": "a steady hand",
+        "guidance": "Has settled into the routine and can explain the ordinary work without making a show of it."
+      },
+      "competence": {
+        "id": "capable",
+        "label": "capable",
+        "guidance": "Handles ordinary tasks reliably and knows when a task falls beyond the usual work."
+      },
+      "temperament": {
+        "id": "brisk",
+        "label": "brisk",
+        "guidance": "Prefers a clear question and a short answer, especially while working."
+      },
+      "motive": {
+        "id": "livelihood",
+        "label": "livelihood",
+        "guidance": "Usually weighs a choice by whether it keeps the household or trade secure."
+      },
+      "style": {
+        "id": "spare",
+        "label": "spare",
+        "guidance": "Uses few words and lets silence or a simple gesture carry some of the meaning."
+      }
     },
     "origin": {
       "id": "shop-soldier-origin",

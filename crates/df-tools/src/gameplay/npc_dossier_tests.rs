@@ -307,6 +307,7 @@ fn reply_guidance_allows_only_broad_role_practice_from_archetypes() {
     let guidance = npc_dossier::profile(ContentRating::Restrained).guidance;
     assert!(guidance.contains("general rule of thumb"));
     assert!(guidance.contains("directly asked"));
+    assert!(guidance.contains("instead of deflecting"));
     assert!(guidance.contains("specific item"));
     assert!(guidance.contains("catalog item or price"));
     assert!(guidance.contains("grant no skill"));

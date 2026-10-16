@@ -220,6 +220,51 @@ impl ArchetypeLibrary {
         )))
     }
 
+    /// Checks an authored or saved-in-source snapshot against the exact library version and
+    /// flavor entries it claims to use. Generated persisted snapshots do not need to be
+    /// revalidated on reload; this is for current compiled authored content such as the shop.
+    pub(super) fn validate_snapshot(&self, snapshot: &ResolvedArchetype) -> Result<(), String> {
+        if snapshot.library_version != self.version {
+            return Err("snapshot uses a different archetype library version".to_owned());
+        }
+        let profile = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id == snapshot.source_id)
+            .ok_or_else(|| "snapshot source id is absent from the archetype library".to_owned())?;
+        if snapshot.category != profile.category
+            || snapshot.label != profile.label
+            || snapshot.instincts != profile.instincts
+            || snapshot.priorities != profile.priorities
+            || snapshot.boundaries != profile.boundaries
+            || snapshot.knowledge_domains != profile.knowledge_domains
+            || snapshot.speech_habits != profile.speech_habits
+            || snapshot.typical_actions != profile.typical_actions
+        {
+            return Err("snapshot role cues differ from the archetype library".to_owned());
+        }
+        for (name, axis, selected) in [
+            ("experience", &self.flavors.experience, &snapshot.experience),
+            ("competence", &self.flavors.competence, &snapshot.competence),
+            (
+                "temperament",
+                &self.flavors.temperament,
+                &snapshot.temperament,
+            ),
+            ("motive", &self.flavors.motive, &snapshot.motive),
+            ("style", &self.flavors.style, &snapshot.style),
+        ] {
+            if !axis.entries.iter().any(|entry| {
+                entry.id == selected.id
+                    && entry.label == selected.label
+                    && entry.guidance == selected.guidance
+            }) {
+                return Err(format!("snapshot {name} is not a library flavor entry"));
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn archetype_count(&self) -> usize {
         self.profiles.len()
@@ -373,6 +418,28 @@ mod tests {
             assert!(!profile.experience.guidance.is_empty());
             assert!(!profile.competence.guidance.is_empty());
         }
+    }
+
+    #[test]
+    fn authored_snapshots_must_match_the_versioned_role_and_flavor_sources() {
+        let library = library();
+        let snapshot = library
+            .compose("adventurer", "adventurer", 4, "bystander:shop-adventurer")
+            .unwrap()
+            .unwrap()
+            .0;
+        assert!(library.validate_snapshot(&snapshot).is_ok());
+
+        let mut stale_role = snapshot.clone();
+        stale_role.knowledge_domains[0].push_str(" invented source material");
+        assert!(library.validate_snapshot(&stale_role).is_err());
+
+        let mut stale_flavor = snapshot;
+        stale_flavor
+            .experience
+            .guidance
+            .push_str(" altered guidance");
+        assert!(library.validate_snapshot(&stale_flavor).is_err());
     }
 
     #[test]
