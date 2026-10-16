@@ -20,7 +20,7 @@ pub(super) mod courier_reaction;
 #[cfg(test)]
 #[path = "creation_tests.rs"]
 mod creation_tests;
-mod encounter_admission;
+pub(super) mod encounter_admission;
 mod encounter_outcome;
 mod enemy_tactics;
 #[cfg(test)]
@@ -65,6 +65,7 @@ const THREAD_EVENTS: &[(&str, &str)] = &[
     ("escort-courier", PACKET_THREAD),
     ("harbor-inn", PACKET_THREAD),
     ("defend-courier", THREAT_THREAD),
+    ("scene-npc-assault", THREAT_THREAD),
     ("greatsword-attack", THREAT_THREAD),
     ("second-wind", THREAT_THREAD),
     ("move", THREAT_THREAD),
@@ -97,6 +98,7 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "courier-answer-escort",
     "private-courier-note",
     "defend-courier",
+    "scene-npc-assault",
     "combat",
     "complete",
     "choose-harbor-scene",
@@ -122,6 +124,7 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "combat-victory",
     "combat-defeat",
     "scimitar",
+    "club",
     "normal-nonlethal-melee",
     "tactical-srd521-cover-policy",
     "fighter-a-soldier-a",
@@ -462,6 +465,11 @@ pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, Repositor
     if who == entity(BANDIT)? {
         return Ok(pack::with_content(|pack| pack.bandit.name.clone()));
     }
+    if state.entities.iter().any(|candidate| {
+        candidate.id == who && candidate.definition.entry.as_str() == "lantern-wharf-courier"
+    }) {
+        return Ok("Courier".to_owned());
+    }
     let character = state
         .characters
         .iter()
@@ -473,6 +481,41 @@ pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, Repositor
         .find(|choice| choice.offer.as_str() == "name")
         .map(|choice| choice.selected.as_str().to_owned())
         .ok_or(RepositoryError::InvalidCandidate)
+}
+
+/// Returns the single non-party participant for the legacy journey encounter.
+/// The fixed Bandit remains the fallback for pre-binding checkpoints; a scene
+/// assault resolves the canonical Courier entity instead.
+pub(super) fn combat_enemy(state: &GameState) -> Result<EntityId, RepositoryError> {
+    if let Some(encounter) = state.encounters.first() {
+        if let Some(enemy) = encounter.participants.iter().copied().find(|candidate| {
+            !state
+                .characters
+                .iter()
+                .any(|character| character.entity == *candidate)
+        }) {
+            return Ok(enemy);
+        }
+    }
+    entity(BANDIT)
+}
+
+pub(super) fn combat_creature(state: &GameState, who: EntityId) -> &'static df_rules::SrdCreature {
+    if state.entities.iter().any(|candidate| {
+        candidate.id == who && candidate.definition.entry.as_str() == "lantern-wharf-courier"
+    }) {
+        &df_rules::SCENE_COMMONER
+    } else {
+        &df_rules::SRD_521_CREATURES[0]
+    }
+}
+
+pub(super) fn combat_weapon_item(state: &GameState, who: EntityId) -> String {
+    if combat_creature(state, who).id == "commoner" {
+        "club".to_owned()
+    } else {
+        pack::bandit_weapon_item()
+    }
 }
 pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32, RepositoryError> {
     if tactical::present(state) {
@@ -2857,20 +2900,27 @@ fn attack(
     if value(state, who, "unconscious")? != 0 || value(state, target, "unconscious")? != 0 {
         return Err(RepositoryError::InvalidCandidate);
     }
-    let monster = who == entity(BANDIT)?;
-    let bandit = pack::bandit();
+    let monster = state
+        .encounters
+        .first()
+        .is_some_and(|encounter| encounter.participants.contains(&who))
+        && !state
+            .characters
+            .iter()
+            .any(|character| character.entity == who);
+    let creature = combat_creature(state, who);
     let weapon = if monster {
-        bandit.weapon
+        creature.rules.weapon
     } else {
         pack::hero_weapon()
     };
     let ability = if monster {
-        bandit.damage_modifier
+        creature.rules.damage_modifier
     } else {
         rules::ability_modifier(value(state, who, "strength")? as u8)
     };
     let modifier = if monster {
-        bandit.attack_bonus
+        creature.rules.attack_bonus
     } else {
         ability + pack::with_creation(|rules| i32::from(rules.proficiency_bonus))
     };
@@ -2941,12 +2991,17 @@ fn finish_combat(state: &mut GameState) -> Result<bool, RepositoryError> {
         return Err(RepositoryError::InvalidCandidate);
     };
     if state.characters.len() != 2
-        || encounter.objectives != [model::content("defend-courier")?]
+        || !matches!(
+            encounter.objectives.as_slice(),
+            [objective]
+                if *objective == model::content("defend-courier")?
+                    || *objective == model::content("scene-npc-assault")?
+        )
         || encounter.active_turn.is_none()
     {
         return Err(RepositoryError::InvalidCandidate);
     }
-    let enemy = entity(BANDIT)?;
+    let enemy = combat_enemy(state)?;
     let all_players_down = state
         .characters
         .iter()
@@ -3015,7 +3070,7 @@ fn enemy_turn(
     if finish_combat(state)? {
         return Ok(());
     }
-    let monster = entity(BANDIT)?;
+    let monster = combat_enemy(state)?;
     if state
         .encounters
         .first()
@@ -3065,23 +3120,36 @@ fn start_combat(
     supplier: DiceSource<'_>,
 ) -> Result<(), RepositoryError> {
     let operation = command.operation;
-    let monster = entity(BANDIT)?;
-    state.entities.push(WorldEntity {
-        id: monster,
-        definition: model::content("bandit")?,
-        location: Some(room_entity()?),
-        position: Some(Position { x: 0, y: 0, z: 0 }),
-        identity_revision: model::label("srd521-bandit-1")?,
-    });
+    let scene_binding = encounter_admission::scene_attack_target(current, command)?;
+    let monster = scene_binding.map_or(entity(BANDIT)?, |binding| binding.entity);
+    let creature =
+        scene_binding.map_or(&df_rules::SRD_521_CREATURES[0], |binding| binding.creature);
+    if scene_binding.is_some() {
+        let courier = state
+            .entities
+            .iter_mut()
+            .find(|candidate| candidate.id == monster)
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        courier.location = Some(room_entity()?);
+        courier.position = Some(Position { x: 0, y: 0, z: 0 });
+    } else {
+        state.entities.push(WorldEntity {
+            id: monster,
+            definition: model::content("bandit")?,
+            location: Some(room_entity()?),
+            position: Some(Position { x: 0, y: 0, z: 0 }),
+            identity_revision: model::label("srd521-bandit-1")?,
+        });
+    }
     for (key, value) in [
-        ("hit-points", i64::from(pack::bandit().hit_points)),
-        ("armor-class", i64::from(pack::bandit().armor_class)),
-        ("strength", i64::from(pack::bandit().abilities[0])),
-        ("dexterity", i64::from(pack::bandit().abilities[1])),
-        ("constitution", i64::from(pack::bandit().abilities[2])),
-        ("intelligence", i64::from(pack::bandit().abilities[3])),
-        ("wisdom", i64::from(pack::bandit().abilities[4])),
-        ("charisma", i64::from(pack::bandit().abilities[5])),
+        ("hit-points", i64::from(creature.rules.hit_points)),
+        ("armor-class", i64::from(creature.rules.armor_class)),
+        ("strength", i64::from(creature.rules.abilities[0])),
+        ("dexterity", i64::from(creature.rules.abilities[1])),
+        ("constitution", i64::from(creature.rules.abilities[2])),
+        ("intelligence", i64::from(creature.rules.abilities[3])),
+        ("wisdom", i64::from(creature.rules.abilities[4])),
+        ("charisma", i64::from(creature.rules.abilities[5])),
         ("second-wind", 0),
         ("unconscious", 0),
         ("prone", 0),
@@ -3092,9 +3160,14 @@ fn start_combat(
         add_resource(state, monster, key, value)?;
     }
     let weapon = held_weapon_id(monster)?;
+    let weapon_item = if scene_binding.is_some() {
+        "club".to_owned()
+    } else {
+        pack::bandit_weapon_item()
+    };
     state.entities.push(WorldEntity {
         id: weapon,
-        definition: model::content(&pack::bandit_weapon_item())?,
+        definition: model::content(&weapon_item)?,
         location: Some(monster),
         position: None,
         identity_revision: model::label("source-held-scimitar-1")?,
@@ -3104,7 +3177,7 @@ fn start_combat(
         owner: monster,
         quantity: 1,
         source: rule()?,
-        origin: model::content(&pack::bandit_weapon_item())?,
+        origin: model::content(&weapon_item)?,
         attunement_owner: None,
     });
     let participants = state
@@ -3174,12 +3247,18 @@ fn start_combat(
         participants,
         turn_order: order,
         active_turn: Some(active),
-        objectives: vec![model::content("defend-courier")?],
+        objectives: vec![model::content(
+            scene_binding.map_or("defend-courier", |binding| binding.objective),
+        )?],
         combat_policy: model::content("normal-nonlethal-melee")?,
         tactical: None,
     });
     beat(state, "combat")?;
-    enemy_turn(current, state, operation, draws, outcomes, supplier)
+    if scene_binding.is_some() {
+        Ok(())
+    } else {
+        enemy_turn(current, state, operation, draws, outcomes, supplier)
+    }
 }
 fn accept_character(
     state: &mut GameState,
@@ -3872,7 +3951,8 @@ fn stage_using(
             private = enter_conversation(current, input, &mut state, kind)?;
         }
         rpc::GameplayActionKind::DefendCourier => {
-            if !choices.is_empty() {
+            let scene_attack = encounter_admission::scene_attack_target(current, command)?;
+            if scene_attack.is_none() && !choices.is_empty() {
                 refusal_detail::note("combat-choice-shape");
                 return Err(RepositoryError::InvalidCandidate);
             }
@@ -4010,18 +4090,21 @@ fn stage_using(
         refusal_detail::note("receipt-too-large");
         return Err(RepositoryError::Capacity);
     }
+    let scene_attack = encounter_admission::scene_attack_target(current, &command)?.is_some();
     let entry = if pure_target.is_some() {
         super::beat_script_runtime::STEP
     } else if selected.effect == super::beat_script::BeatEffect::ThirdApproach {
         "escort-courier"
     } else if private {
         "private-courier-note"
+    } else if scene_attack {
+        "scene-npc-assault"
     } else if kind == rpc::GameplayActionKind::ChooseHarborScene {
         "harbor-inn"
     } else {
         action.entry.as_str()
     };
-    let reaction = if kind == rpc::GameplayActionKind::DefendCourier {
+    let reaction = if kind == rpc::GameplayActionKind::DefendCourier && !scene_attack {
         courier_reaction::propose_on_defend(current, *who)?
     } else {
         None

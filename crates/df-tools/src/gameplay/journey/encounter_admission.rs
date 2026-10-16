@@ -15,6 +15,73 @@ use super::{
 };
 use df_protocol::common as rpc;
 
+/// Authored scene-to-combat identity. This is intentionally a closed table:
+/// an NPC becomes a combatant only after content binds its stable scene ID to
+/// an approved rules profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct SceneCombatBinding {
+    pub(super) scene_person_id: &'static str,
+    pub(super) entity: EntityId,
+    pub(super) creature: &'static df_rules::SrdCreature,
+    pub(super) objective: &'static str,
+}
+
+/// The fixed harbor pack currently authorizes only its canonical Courier.
+/// The entity and identity are already persisted by `courier_reaction`; this
+/// function only exposes the additional authored combat binding.
+pub(in crate::gameplay) fn scene_combat_binding(
+    current: &Checkpoint,
+    scene_person_id: &str,
+) -> Result<Option<SceneCombatBinding>, RepositoryError> {
+    if !scene_person_id.eq_ignore_ascii_case("courier")
+        || !super::super::beat_script_runtime::scene(current.state())?
+            .cast
+            .iter()
+            .any(|person| person.id == "courier" && person.name == "Courier")
+    {
+        return Ok(None);
+    }
+    let courier = super::courier_reaction::courier()?;
+    let definition = model::content("lantern-wharf-courier")?;
+    let revision = model::label("lantern-wharf-courier-1")?;
+    if !current.state().entities.iter().any(|entity| {
+        entity.id == courier
+            && entity.definition == definition
+            && entity.identity_revision == revision
+    }) {
+        return Ok(None);
+    }
+    Ok(Some(SceneCombatBinding {
+        scene_person_id: "courier",
+        entity: courier,
+        creature: &df_rules::SCENE_COMMONER,
+        objective: "scene-npc-assault",
+    }))
+}
+
+pub(super) fn scene_attack_target(
+    current: &Checkpoint,
+    command: &CommandInput,
+) -> Result<Option<SceneCombatBinding>, RepositoryError> {
+    let GameCommand::ProposeAction {
+        action, choices, ..
+    } = &command.command
+    else {
+        return Ok(None);
+    };
+    if *action != model::content("defend-courier")? {
+        return Ok(None);
+    }
+    let Some(target) = choices
+        .iter()
+        .find(|(group, _)| group.as_str() == "scene-target")
+        .map(|(_, value)| value.as_str())
+    else {
+        return Ok(None);
+    };
+    scene_combat_binding(current, target)
+}
+
 struct CurrentJourney<'a> {
     current: &'a Checkpoint,
     command: &'a CommandInput,
@@ -42,11 +109,12 @@ impl ParticipantOwner for CurrentJourney<'_> {
         else {
             return Err(RepositoryError::InvalidCandidate);
         };
+        let scene_attack = scene_attack_target(self.current, self.command)?.is_some();
         if self.command.observed_revision != current.revision
             || *actor != player_entity(self.command.member, self.current)?
             || *action != model::content("defend-courier")?
             || !targets.is_empty()
-            || !choices.is_empty()
+            || (!scene_attack && !choices.is_empty())
             || !offered(self.current, self.command.member)?
                 .iter()
                 .any(|(kind, _)| *kind == rpc::GameplayActionKind::DefendCourier)
@@ -106,7 +174,7 @@ impl ParticipantOwner for CurrentJourney<'_> {
                 source = true;
             }
         }
-        if !source {
+        if !scene_attack && !source {
             return Err(RepositoryError::InvalidCandidate);
         }
         if !self.current.state().encounters.is_empty()
@@ -136,7 +204,12 @@ impl ParticipantOwner for CurrentJourney<'_> {
         else {
             return Ok(ParticipantStatus::Unknown);
         };
-        let monster = entity(BANDIT)?;
+        let scene_attack = scene_attack_target(self.current, self.command)?.is_some();
+        let monster = if scene_attack {
+            super::courier_reaction::courier()?
+        } else {
+            entity(BANDIT)?
+        };
         // Existing joined character identities are already exposed by the shared party view.
         // The only new disclosed identity here is the pinned authored Defend Courier Bandit.
         if super::tactical::enabled()
@@ -152,6 +225,18 @@ impl ParticipantOwner for CurrentJourney<'_> {
                     .entities
                     .iter()
                     .any(|entity| entity.id == *actor)
+            {
+                return Ok(ParticipantStatus::Undisclosed);
+            }
+        } else if scene_attack && *actor == monster {
+            let courier_definition = model::content("lantern-wharf-courier")?;
+            if !self
+                .current
+                .state()
+                .entities
+                .iter()
+                .any(|entity| entity.id == monster && entity.definition == courier_definition)
+                || candidate.position != Some(Position { x: 0, y: 0, z: 0 })
             {
                 return Ok(ParticipantStatus::Undisclosed);
             }
@@ -256,6 +341,11 @@ pub(super) fn admission<'a>(
                 .into_iter()
                 .map(|(id, _, _)| Ok(id))
                 .collect::<Vec<_>>()
+        } else if scene_attack_target(current, command)
+            .map_err(ParticipantError::Owner)?
+            .is_some()
+        {
+            vec![super::courier_reaction::courier().map_err(ParticipantError::Owner)]
         } else {
             vec![entity(BANDIT).map_err(ParticipantError::Owner)]
         })

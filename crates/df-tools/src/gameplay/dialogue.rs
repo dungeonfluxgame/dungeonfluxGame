@@ -864,6 +864,66 @@ impl Service {
         let scene =
             super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
         if action.kind == super::approach_model::PhysicalActionKind::Attack
+            && !journey::tactical::present(current.state())
+            && journey::encounter_admission::scene_combat_binding(&current, &action.target)
+                .map_err(actor::unavailable)?
+                .is_some()
+        {
+            let submit = rpc::SubmitActionRequest {
+                session_id: request.session_id.clone(),
+                run_id: request.run_id.clone(),
+                observed_revision: request.observed_revision.clone(),
+                operation_id: request.input_id.clone(),
+                offer_id: journey::offer_id(&current, rpc::GameplayActionKind::DefendCourier),
+                action_kind: rpc::GameplayActionKind::DefendCourier as i32,
+                action_choices: vec![rpc::JourneyChoice {
+                    group_id: "scene-target".to_owned(),
+                    option_id: action.target.clone(),
+                }],
+                ..Default::default()
+            };
+            let (reply, wait) = oneshot::channel();
+            self.actor
+                .try_submit(actor::Call::Submit {
+                    credential,
+                    request: submit,
+                    reply,
+                })
+                .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+            let response = tokio::time::timeout(super::timing::active().reply, wait)
+                .await
+                .map_err(|_| Status::deadline_exceeded("retain the attack operation for lookup"))?
+                .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+            let Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) =
+                response.outcome
+            else {
+                return Err(Status::failed_precondition("attack was not committed"));
+            };
+            if !matches!(
+                receipt.outcome,
+                Some(rpc::decision_receipt::Outcome::Accepted(_))
+            ) {
+                return Err(Status::failed_precondition("attack was refused"));
+            }
+            actor::record_audit_line(
+                "gameplay.physical_action_resolved",
+                format!(
+                    "ACTION verb=attack target={:?} disposition=action resolution=scene-npc-assault initiative=started opening_attack=false",
+                    action.target
+                ),
+            );
+            return Ok(DialogueReply::Raw(
+                rpc::DialogueResponse {
+                    input_id: request.input_id.clone(),
+                    disposition: rpc::DialogueDisposition::Action as i32,
+                    revision: receipt.revision,
+                    npc_reply: format!("You attack {}.", action.target),
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
+        if action.kind == super::approach_model::PhysicalActionKind::Attack
             && journey::tactical::present(current.state())
         {
             let (member_reply, member_wait) = oneshot::channel();

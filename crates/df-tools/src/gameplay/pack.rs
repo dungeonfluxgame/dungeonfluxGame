@@ -54,6 +54,7 @@ pub(super) const COMPILED_ITEMS: &[&str] = &[
     "travelers-clothes",
     "gold-piece",
     "scimitar",
+    "club",
     "studded-leather-armor",
     "longbow",
     "shortsword",
@@ -66,6 +67,7 @@ const COMPILED_WEAPONS: &[&str] = &[
     "spear",
     "shortbow",
     "scimitar",
+    "club",
 ];
 /// Scene art the gameplay server serves (`public_assets.rs`), without the leading slash.
 pub(super) const SERVED_SCENE_ASSETS: &[&str] = &[

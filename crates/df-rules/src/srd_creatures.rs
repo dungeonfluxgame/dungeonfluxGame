@@ -301,6 +301,32 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
     },
 ];
 
+/// Authored scene-NPC profile used only by an explicit scene combat binding.
+/// Source: official SRD v5.2.1 (CC-BY-4.0), Wizards of the Coast,
+/// https://www.dndbeyond.com/srd. Commoner is kept separate from the generated
+/// antagonist table because it is not a generated adventure antagonist.
+pub const SCENE_COMMONER: SrdCreature = SrdCreature {
+    id: "commoner",
+    name: "Commoner",
+    page: 0,
+    challenge_rating: ChallengeRating::Zero,
+    languages: "Common",
+    exact: true,
+    attacks_unconscious: false,
+    weapon_label: "club",
+    rules: BanditRules {
+        hit_points: 4,
+        armor_class: 10,
+        abilities: [10, 10, 10, 10, 10, 10],
+        attack_bonus: 2,
+        damage_modifier: 0,
+        weapon: WeaponRules {
+            damage_dice: 1,
+            damage_sides: 4,
+        },
+    },
+};
+
 /// Where an SRD 5.2.1 stat-block feature stands in the tactical rules.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeatureStatus {

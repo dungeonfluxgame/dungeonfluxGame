@@ -13,7 +13,10 @@ use df_model::checkpoint::{
 use df_session::submission::RepositoryError;
 use df_types::OperationId;
 
-use super::{BANDIT, ENCOUNTER, ENTITIES, entity, held_weapon_id, model, room_entity, rule, rules};
+use super::{
+    ENCOUNTER, ENTITIES, combat_creature, combat_enemy, combat_weapon_item, entity, held_weapon_id,
+    model, room_entity, rule, rules,
+};
 
 struct NativeObservation {
     basis: Basis,
@@ -73,7 +76,7 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
         self.current
             .validate_resume(*current.basis, current.pins)
             .map_err(|_| RepositoryError::InvalidCandidate)?;
-        let monster = entity(BANDIT)?;
+        let monster = combat_enemy(self.staged)?;
         let [encounter] = self.staged.encounters.as_slice() else {
             return Err(RepositoryError::InvalidCandidate);
         };
@@ -113,9 +116,12 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
                     .count()
                     != 1
             })
-            || !encounter
+            || !(encounter
                 .objectives
                 .contains(&model::content("defend-courier")?)
+                || encounter
+                    .objectives
+                    .contains(&model::content("scene-npc-assault")?))
         {
             return Err(RepositoryError::InvalidCandidate);
         }
@@ -125,14 +131,21 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
             .iter()
             .find(|actor| actor.id == monster)
             .ok_or(RepositoryError::InvalidCandidate)?;
-        if actor.definition != model::content("bandit")?
-            || actor.identity_revision != model::label("srd521-bandit-1")?
+        let scene_assault = encounter
+            .objectives
+            .contains(&model::content("scene-npc-assault")?);
+        if (!scene_assault && actor.definition != model::content("bandit")?)
+            || (!scene_assault && actor.identity_revision != model::label("srd521-bandit-1")?)
+            || (scene_assault
+                && (actor.definition != model::content("lantern-wharf-courier")?
+                    || actor.identity_revision != model::label("lantern-wharf-courier-1")?))
             || actor.location != Some(room_entity()?)
             || actor.position != Some(Position { x: 0, y: 0, z: 0 })
             || self.resource(monster, "unconscious")? != 0
             || self.resource(monster, "hit-points")? == 0
             || self.resource(monster, "prone")? != 0
-            || self.resource(monster, "dexterity")? != u32::from(super::pack::bandit().abilities[1])
+            || self.resource(monster, "dexterity")?
+                != u32::from(combat_creature(self.staged, monster).rules.abilities[1])
         {
             return Err(RepositoryError::InvalidCandidate);
         }
@@ -147,7 +160,7 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
     ) -> Result<bool, RepositoryError> {
         if offer.actor != observation.actor
             || offer.weapon != held_weapon_id(observation.actor)?
-            || offer.action != model::content(&super::pack::bandit_weapon_item())?
+            || offer.action != model::content(&combat_weapon_item(self.staged, observation.actor))?
             || offer.source != rule()?
         {
             return Err(RepositoryError::InvalidCandidate);
@@ -279,7 +292,7 @@ pub(super) fn select(
         pins: current.pins(),
     };
     let policy = model::content("normal-nonlethal-melee")?;
-    let actor = entity(BANDIT)?;
+    let actor = combat_enemy(staged)?;
     let observation = NativeObservation {
         basis,
         actor,
@@ -299,7 +312,7 @@ pub(super) fn select(
                 actor,
                 target: entity(target)?,
                 weapon: held_weapon_id(actor)?,
-                action: model::content(&super::pack::bandit_weapon_item())?,
+                action: model::content(&combat_weapon_item(staged, actor))?,
                 source: rule()?,
             })
         })
@@ -374,7 +387,7 @@ pub(super) fn select(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        MEMBERS, accepted, enemy_turn, set, stage_with_supplier,
+        BANDIT, MEMBERS, accepted, enemy_turn, set, stage_with_supplier,
         tests::{input, opening_story},
         value,
     };

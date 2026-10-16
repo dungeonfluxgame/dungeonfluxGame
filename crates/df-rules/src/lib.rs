@@ -16,8 +16,8 @@ pub mod local_journey;
 
 mod srd_creatures;
 pub use srd_creatures::{
-    CreatureFeature, FeatureKind, FeatureStatus, SRD_521_CREATURE_FEATURES, SRD_521_CREATURES,
-    SrdCreature, missing_features,
+    CreatureFeature, FeatureKind, FeatureStatus, SCENE_COMMONER, SRD_521_CREATURE_FEATURES,
+    SRD_521_CREATURES, SrdCreature, missing_features,
 };
 
 /// Source-pinned, pure grid combat subset; game integration is a separate milestone.
