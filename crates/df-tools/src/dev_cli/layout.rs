@@ -209,6 +209,12 @@ mod tests {
         assert_eq!(id, "subtitle");
         assert!(visible);
         assert!(parse(&words(&["layout", "hide"]), &[]).is_err());
-        assert!(parse(&words(&["layout", "show", "subtitle"]), &[("--x", "1")]).is_err());
+        assert!(
+            parse(
+                &words(&["layout", "show", "subtitle"]),
+                &flags(&[("--x", "1")])
+            )
+            .is_err()
+        );
     }
 }
