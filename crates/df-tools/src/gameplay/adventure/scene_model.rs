@@ -519,6 +519,15 @@ impl SceneModel {
         let things = self
             .things
             .iter()
+            .filter(|thing| {
+                thing.in_scene
+                    && (thing.holder_id.is_none()
+                        || thing.publicly_visible
+                            && thing
+                                .holder_id
+                                .as_deref()
+                                .is_some_and(|holder| visible_people.contains(holder)))
+            })
             .map(|thing| {
                 serde_json::json!({
                     "id": thing.id, "name": thing.name, "look": thing.picture_description,
@@ -692,7 +701,7 @@ impl SceneModel {
         if self
             .things
             .iter()
-            .filter_map(|thing| {
+            .flat_map(|thing| {
                 thing
                     .owner_id
                     .as_deref()
@@ -1029,6 +1038,7 @@ impl SceneModel {
         if let Some((holder_id, _seller_id, npc_cost)) = purchase {
             let offer = self
                 .offer(&change.entity_id)
+                .cloned()
                 .ok_or(SceneModelError::UnknownEntity)?;
             if offer.seller_id != *_seller_id {
                 return Err(SceneModelError::Contradiction);
@@ -1059,7 +1069,7 @@ impl SceneModel {
                     .checked_sub(cost_cp)
                     .ok_or(SceneModelError::Contradiction)?;
             }
-            let item = self.generated_offer_thing(offer, holder_id, holder_id, &seller_name);
+            let item = self.generated_offer_thing(&offer, holder_id, holder_id, &seller_name);
             self.things.push(item);
             return Ok(());
         }
