@@ -599,6 +599,92 @@ mod tests {
     }
 
     #[test]
+    fn merchant_can_lend_the_same_catalog_item_for_inspection_and_replay_the_custody() {
+        let generated = generate(45, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) =
+            super::super::record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let scene = runtime::scene(opening.state()).unwrap();
+            let model = scene
+                .setting
+                .as_ref()
+                .and_then(|setting| setting.model.as_ref())
+                .expect("shop opening has its canonical location model");
+            let offer = model
+                .offer("item-clothes-travelers")
+                .expect("the stable clothes item resolves in stock");
+            let seller_id = offer.seller_id.clone();
+            let source_revision = opening.basis().revision;
+            let proposal = journey::living_scene::NpcInventoryProposal {
+                operation: df_types::OperationId::from_bytes(&[45; 16]).unwrap(),
+                expected_basis: opening.basis(),
+                actor_id: seller_id.clone(),
+                target_id: offer.canonical_item_id(),
+                action: journey::living_scene::NpcInventoryAction::Give {
+                    recipient_id: "shop-adventurer".into(),
+                    transfer_ownership: false,
+                    owner_consent_id: None,
+                },
+                source: Some(journey::living_scene::NpcInventorySource {
+                    source_line_id: "merchant-inspection-loan-1".into(),
+                    source_revision,
+                    source_actor_id: seller_id.clone(),
+                    source_text: "Marek lends the traveler's clothes for inspection.".into(),
+                }),
+            };
+
+            let mut unbound = proposal.clone();
+            unbound.source = None;
+            assert!(journey::living_scene::commit_npc_inventory_action(&opening, unbound).is_err());
+            let mut stale = proposal.clone();
+            stale.source.as_mut().unwrap().source_revision =
+                source_revision.next_sequence().unwrap();
+            assert!(journey::living_scene::commit_npc_inventory_action(&opening, stale).is_err());
+
+            let borrowed = journey::living_scene::commit_npc_inventory_action(&opening, proposal)
+                .expect("the seller can hand stock to a present character for inspection");
+            let semantic = borrowed
+                .state()
+                .decisions
+                .last()
+                .and_then(|decision| decision.semantic_output.as_deref())
+                .expect("the accepted event stores its source-bound transaction");
+            assert!(semantic.contains("merchant-inspection-loan-1"));
+            assert!(semantic.contains("Marek lends the traveler's clothes for inspection."));
+
+            let borrowed = native::persisted(&borrowed);
+            let scene = runtime::scene(borrowed.state()).unwrap();
+            let model = scene
+                .setting
+                .as_ref()
+                .and_then(|setting| setting.model.as_ref())
+                .expect("the persisted shop scene replays its item state");
+            let item = model
+                .things
+                .iter()
+                .find(|thing| thing.id == "item-clothes-travelers")
+                .expect("the catalog identity survives replay");
+            assert_eq!(item.owner_id.as_deref(), Some(seller_id.as_str()));
+            assert_eq!(item.holder_id.as_deref(), Some("shop-adventurer"));
+            assert_eq!(item.provenance.source_id, "clothes-travelers");
+            assert_eq!(
+                item.provenance.seller_id.as_deref(),
+                Some(seller_id.as_str())
+            );
+            assert!(!model.offer_available("item-clothes-travelers"));
+            assert_eq!(
+                model
+                    .inventory()
+                    .iter()
+                    .filter(|entry| entry.item_id == "item-clothes-travelers")
+                    .count(),
+                1
+            );
+        });
+    }
+
+    #[test]
     fn merchant_startup_ignores_random_tables_and_resume_keeps_the_pinned_freeplay_record() {
         use crate::gameplay::startup_configuration::{AdventureMode, AdventureSettings};
         use df_persistence::local_demo_scope::AdventureStartup;

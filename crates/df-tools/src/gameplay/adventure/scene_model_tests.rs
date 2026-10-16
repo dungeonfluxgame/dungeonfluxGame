@@ -196,6 +196,102 @@ fn location_inventory_keeps_stock_identity_separate_from_custody() {
 }
 
 #[test]
+fn giving_catalog_stock_materializes_the_same_item_as_a_temporary_loan() {
+    let model = merchant_shop();
+    let offer = model
+        .offer("item-clothes-travelers")
+        .expect("the catalog resolves by its stable item ID");
+    let seller_id = offer.seller_id.clone();
+    let item_id = offer.canonical_item_id();
+    let recipient_id = "cloth-shop-bystander-1";
+
+    let snapshot = model
+        .as_it_is_now(
+            super::super::pack::SceneKey::Opening,
+            &[SceneChange {
+                entity_id: item_id.clone(),
+                description: "Marek lends the traveler's clothes for inspection.".into(),
+                kind: SceneChangeKind::Given {
+                    holder_id: recipient_id.into(),
+                    owner_id: None,
+                },
+            }],
+        )
+        .expect("catalog stock can be materialized for an inspection loan");
+    let snapshot: super::scene_model::SceneNow =
+        serde_json::from_str(&snapshot).expect("scene snapshot JSON");
+    let item = snapshot
+        .model
+        .things
+        .iter()
+        .find(|thing| thing.id == item_id)
+        .expect("loaned catalog item is materialized once");
+    assert_eq!(item.owner_id.as_deref(), Some(seller_id.as_str()));
+    assert_eq!(item.holder_id.as_deref(), Some(recipient_id));
+    assert_eq!(item.provenance.source_id, "clothes-travelers");
+    assert_eq!(
+        item.provenance.seller_id.as_deref(),
+        Some(seller_id.as_str())
+    );
+    assert!(!snapshot.model.offer_available(&item_id));
+
+    let inventory = snapshot.model.inventory();
+    let entry = inventory
+        .iter()
+        .find(|entry| entry.item_id == item_id)
+        .expect("the canonical inventory reflects the holder");
+    assert_eq!(entry.owner_id.as_deref(), Some(seller_id.as_str()));
+    assert_eq!(entry.holder_id.as_deref(), Some(recipient_id));
+    assert!(matches!(
+        entry.location,
+        super::scene_model::SceneInventoryLocation::Held { .. }
+    ));
+    assert_eq!(
+        inventory
+            .iter()
+            .filter(|entry| entry.item_id == item_id)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn generated_offer_item_ids_are_canonical_and_legacy_stock_resolves() {
+    let mut model = merchant_shop();
+    model
+        .validate_structure()
+        .expect("fallback IDs are canonical");
+
+    let mut wrong_id = model.clone();
+    wrong_id.offers[0].item_id = "item-invented-stock".into();
+    assert_eq!(
+        wrong_id.validate_structure(),
+        Err(super::scene_model::SceneModelError::InvalidShape)
+    );
+
+    let mut collision = merchant_shop();
+    collision.offers[0].item_id = collision.things[0].id.clone();
+    assert_eq!(
+        collision.validate_structure(),
+        Err(super::scene_model::SceneModelError::DuplicateId)
+    );
+
+    let mut serialized = serde_json::to_value(&model).expect("model JSON");
+    serialized["offers"][0]
+        .as_object_mut()
+        .expect("offer object")
+        .remove("item_id");
+    model = serde_json::from_value(serialized).expect("legacy offer row loads");
+    let entry = model
+        .inventory()
+        .into_iter()
+        .find(|entry| entry.source_id == "clothes-travelers")
+        .expect("legacy stock resolves to a concrete item ID");
+    assert_eq!(entry.item_id, "item-clothes-travelers");
+    assert!(model.offer_available(&entry.item_id));
+}
+
+#[test]
 fn npc_purchase_uses_actor_purse_and_promotes_same_stock_item() {
     let model = merchant_shop();
     let snapshot = model
@@ -354,6 +450,11 @@ fn structured_scene_model_accepts_grounded_data_and_rejects_untrusted_claims() {
     let original = taproom();
     let schema = SceneModel::schema().expect("scene model schema is valid JSON");
     assert_eq!(schema["additionalProperties"], false);
+    assert!(
+        schema["properties"]["offers"]["items"]["required"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field == "item_id"))
+    );
     assert!(schema["required"].as_array().is_some_and(|fields| {
         fields.iter().any(|field| field == "people")
             && fields.iter().any(|field| field == "things")

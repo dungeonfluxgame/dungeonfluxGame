@@ -59,6 +59,14 @@ struct Interaction {
     target: String,
     #[serde(default)]
     option: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_line_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_actor_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_text: Option<String>,
 }
 
 /// A server-authorized action proposed by the narrative/interaction layer for a named NPC.
@@ -72,6 +80,16 @@ pub(crate) struct NpcInventoryProposal {
     pub(crate) actor_id: String,
     pub(crate) target_id: String,
     pub(crate) action: NpcInventoryAction,
+    pub(crate) source: Option<NpcInventorySource>,
+}
+
+/// Exact public NPC speech that authorized a narrative transaction proposal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NpcInventorySource {
+    pub(crate) source_line_id: String,
+    pub(crate) source_revision: df_types::SessionRevision,
+    pub(crate) source_actor_id: String,
+    pub(crate) source_text: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -96,6 +114,18 @@ pub(crate) fn commit_npc_inventory_action(
     proposal: NpcInventoryProposal,
 ) -> Result<Checkpoint, RepositoryError> {
     if current.basis() != proposal.expected_basis {
+        return Err(invalid());
+    }
+    let Some(source) = proposal.source.as_ref() else {
+        return Err(invalid());
+    };
+    if source.source_line_id.is_empty()
+        || source.source_line_id.len() > 128
+        || source.source_actor_id != proposal.actor_id
+        || source.source_revision != current.basis().revision
+        || source.source_text.trim().is_empty()
+        || source.source_text.len() > 1024
+    {
         return Err(invalid());
     }
     let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
@@ -148,40 +178,56 @@ pub(crate) fn commit_npc_inventory_action(
                 .model
                 .things
                 .iter()
-                .find(|thing| thing.id == proposal.target_id)
-                .ok_or_else(invalid)?;
+                .find(|thing| thing.id == proposal.target_id);
+            let stock = snapshot.model.offer(&proposal.target_id);
             let recipient_person = snapshot
                 .model
                 .people
                 .iter()
                 .find(|person| person.id == recipient_id)
                 .ok_or_else(invalid)?;
-            if thing.holder_id.as_deref() != Some(actor.id.as_str()) {
-                return Err(invalid());
-            }
-            if let Some(owner) = thing.owner_id.as_deref() {
-                if owner != actor.id && owner_consent_id.as_deref() != Some(owner) {
-                    return Err(invalid());
+            let (item_id, item_name, canonical_owner) = match (thing, stock) {
+                (Some(thing), _) => {
+                    if thing.holder_id.as_deref() != Some(actor.id.as_str()) {
+                        return Err(invalid());
+                    }
+                    (thing.id.clone(), thing.name.clone(), thing.owner_id.clone())
                 }
-                if transfer_ownership
-                    && owner != actor.id
-                    && owner_consent_id.as_deref() != Some(owner)
-                {
-                    return Err(invalid());
+                (None, Some(offer)) => {
+                    let item_id = offer.canonical_item_id();
+                    if offer.seller_id != actor.id || !snapshot.model.offer_available(&item_id) {
+                        return Err(invalid());
+                    }
+                    (item_id, offer.name.clone(), Some(offer.seller_id.clone()))
                 }
-            } else if transfer_ownership && owner_consent_id.is_some() {
-                return Err(invalid());
+                (None, None) => return Err(invalid()),
+            };
+            match canonical_owner.as_deref() {
+                Some(owner) if owner == actor.id => {
+                    if owner_consent_id.is_some() {
+                        return Err(invalid());
+                    }
+                }
+                Some(owner) => {
+                    // A holder may return a borrowed item to its owner. A consent string
+                    // supplied by the classifier is not itself proof of an owner's grant.
+                    if recipient_id != owner || transfer_ownership || owner_consent_id.is_some() {
+                        return Err(invalid());
+                    }
+                }
+                None if owner_consent_id.is_some() => return Err(invalid()),
+                None => {}
             }
             recipient = recipient_id.clone();
             let owner_id = transfer_ownership.then(|| recipient_id.clone());
             let line = format!(
                 "{} gives {} to {}.",
-                actor.name, thing.name, recipient_person.name
+                actor.name, item_name, recipient_person.name
             );
             (
-                thing.id.clone(),
+                item_id.clone(),
                 Some(SceneChange {
-                    entity_id: thing.id.clone(),
+                    entity_id: item_id,
                     description: line.clone(),
                     kind: SceneChangeKind::Given {
                         holder_id: recipient_id,
@@ -194,19 +240,18 @@ pub(crate) fn commit_npc_inventory_action(
         NpcInventoryAction::Purchase => {
             let offer = snapshot
                 .model
-                .offers
-                .iter()
-                .find(|offer| offer.id == proposal.target_id)
+                .offer(&proposal.target_id)
                 .ok_or_else(invalid)?;
-            if !snapshot.model.offer_available(&offer.id) || actor.coin_cp < offer.cost_cp {
+            let item_id = offer.canonical_item_id();
+            if !snapshot.model.offer_available(&item_id) || actor.coin_cp < offer.cost_cp {
                 return Err(invalid());
             }
             paid_cp = offer.cost_cp;
             let line = format!("{} buys {}.", actor.name, offer.name);
             (
-                offer.id.clone(),
+                item_id.clone(),
                 Some(SceneChange {
-                    entity_id: offer.id.clone(),
+                    entity_id: item_id,
                     description: line.clone(),
                     kind: SceneChangeKind::NpcPurchased {
                         holder_id: actor.id.clone(),
@@ -258,6 +303,14 @@ pub(crate) fn commit_npc_inventory_action(
         accepted: hex(&accepted.encode_to_vec()),
         target: target_id,
         option: "npc-inventory".into(),
+        source_line_id: Some(source.source_line_id.clone()),
+        source_revision: Some(format!(
+            "{}:{}",
+            source.source_revision.epoch().get(),
+            source.source_revision.sequence()
+        )),
+        source_actor_id: Some(source.source_actor_id.clone()),
+        source_text: Some(source.source_text.clone()),
     };
     finish(
         current,
@@ -577,10 +630,8 @@ pub(in crate::gameplay) fn item_for(
             }
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
                 model
-                    .offers
-                    .iter()
-                    .find(|offer| offer.id == entry.target)
-                    .map_or(entry.target, |offer| offer.item_id.clone())
+                    .offer(&entry.target)
+                    .map_or(entry.target, |offer| offer.canonical_item_id())
             } else if matches!(
                 entry.option.as_str(),
                 "examine" | "take" | "steal" | "share"
@@ -882,6 +933,7 @@ pub(super) fn stage(
     let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
     let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
     let hero = name(current.state(), *who)?;
+    let mut durable_target = target.to_owned();
     let mut change = None;
     let mut paid_cp = 0;
     let mut recipient = String::new();
@@ -1097,12 +1149,9 @@ pub(super) fn stage(
             "examine" => format!("{} leads to {}.", way.name, way.beyond),
             _ => return Err(invalid()),
         }
-    } else if let Some(offer) = snapshot
-        .model
-        .offers
-        .iter()
-        .find(|offer| offer.id == target)
-    {
+    } else if let Some(offer) = snapshot.model.offer(target) {
+        let item_id = offer.canonical_item_id();
+        durable_target = item_id.clone();
         if !matches!(option, "buy" | "use" | "trade" | "examine") {
             return Err(invalid());
         }
@@ -1116,7 +1165,7 @@ pub(super) fn stage(
                 "{} costs {} CP; that trade has not been agreed.",
                 offer.name, offer.cost_cp
             )
-        } else if !snapshot.model.offer_available(&offer.id) {
+        } else if !snapshot.model.offer_available(&item_id) {
             format!("{} is already sold.", offer.name)
         } else if balance_cp(current.state(), *who)? < u64::from(offer.cost_cp) {
             format!(
@@ -1135,7 +1184,7 @@ pub(super) fn stage(
                 return Err(invalid());
             }
             change = Some(SceneChange {
-                entity_id: offer.id.clone(),
+                entity_id: item_id,
                 description: format!("{buyer} buys {}.", offer.name),
                 kind: SceneChangeKind::Purchased {
                     holder_id: buyer.to_owned(),
@@ -1236,8 +1285,12 @@ pub(super) fn stage(
         recipient,
         line,
         accepted: hex(&accepted.encode_to_vec()),
-        target: target.to_owned(),
+        target: durable_target,
         option: option.to_owned(),
+        source_line_id: None,
+        source_revision: None,
+        source_actor_id: None,
+        source_text: None,
     };
     let mut basis = current.basis();
     basis.revision = basis.revision.next_sequence().map_err(|_| invalid())?;

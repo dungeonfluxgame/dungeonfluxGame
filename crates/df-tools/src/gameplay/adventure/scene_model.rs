@@ -159,10 +159,27 @@ pub(crate) struct SceneThing {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SceneItemProvenance {
-    pub(crate) kind: String,
+    pub(crate) kind: SceneItemProvenanceKind,
     pub(crate) source_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) seller_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SceneItemProvenanceKind {
+    #[default]
+    AuthoredLocation,
+    GeneratedOffer,
+}
+
+impl SceneItemProvenanceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthoredLocation => "authored_location",
+            Self::GeneratedOffer => "generated_offer",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
@@ -210,6 +227,7 @@ pub(crate) struct SceneOffer {
     pub(crate) id: String,
     /// The concrete item instance represented by this finite stock offer. It exists
     /// before purchase in the inventory projection and is never replaced by a clone.
+    #[serde(default)]
     pub(crate) item_id: String,
     pub(crate) seller_id: String,
     pub(crate) name: String,
@@ -217,6 +235,18 @@ pub(crate) struct SceneOffer {
     pub(crate) description: String,
     /// Exact copper-piece price from the SRD price table.
     pub(crate) cost_cp: u32,
+}
+
+impl SceneOffer {
+    /// Older checkpoints predate explicit offer item IDs. Resolve those rows to the
+    /// deterministic identity used by current generation while preserving saved IDs.
+    pub(crate) fn canonical_item_id(&self) -> String {
+        if self.item_id.is_empty() {
+            format!("item-{}", self.id)
+        } else {
+            self.item_id.clone()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -345,16 +375,21 @@ impl std::fmt::Display for SceneModelError {
 impl std::error::Error for SceneModelError {}
 
 impl SceneModel {
-    /// Finite catalog stock survives in authoring for replay/refusal; a committed purchase
-    /// consumes that offer by creating its canonical owned thing.
-    pub(crate) fn offer_available(&self, id: &str) -> bool {
-        self.offers.iter().any(|offer| offer.id == id)
-            && !self.things.iter().any(|thing| {
-                self.offers
-                    .iter()
-                    .find(|offer| offer.id == id)
-                    .is_some_and(|offer| thing.id == offer.item_id)
-            })
+    /// Resolve a public/catalog handle or a canonical concrete item ID to its source offer.
+    /// New transaction callers must use `item_id`; accepting `id` here preserves stored
+    /// player interactions from older checkpoints during replay.
+    pub(crate) fn offer(&self, target_id: &str) -> Option<&SceneOffer> {
+        self.offers
+            .iter()
+            .find(|offer| offer.canonical_item_id() == target_id || offer.id == target_id)
+    }
+
+    /// Finite stock is available until the same concrete item is materialized as a thing.
+    pub(crate) fn offer_available(&self, target_id: &str) -> bool {
+        self.offer(target_id).is_some_and(|offer| {
+            let item_id = offer.canonical_item_id();
+            !self.things.iter().any(|thing| thing.id == item_id)
+        })
     }
 
     /// Returns the canonical, audience-safe inventory for this location. Offers are
@@ -376,11 +411,7 @@ impl SceneModel {
                 SceneInventoryEntry {
                     item_id: thing.id.clone(),
                     source_id,
-                    provenance_kind: if thing.provenance.kind.is_empty() {
-                        "authored_location".into()
-                    } else {
-                        thing.provenance.kind.clone()
-                    },
+                    provenance_kind: thing.provenance.kind.as_str().into(),
                     owner_id: thing.owner_id.clone(),
                     holder_id: thing.holder_id.clone(),
                     location: thing.holder_id.as_ref().map_or_else(
@@ -399,11 +430,11 @@ impl SceneModel {
         entries.extend(
             self.offers
                 .iter()
-                .filter(|offer| self.offer_available(&offer.id))
+                .filter(|offer| self.offer_available(&offer.canonical_item_id()))
                 .map(|offer| SceneInventoryEntry {
-                    item_id: offer.item_id.clone(),
+                    item_id: offer.canonical_item_id(),
                     source_id: offer.id.clone(),
-                    provenance_kind: "generated_offer".into(),
+                    provenance_kind: SceneItemProvenanceKind::GeneratedOffer.as_str().into(),
                     owner_id: Some(offer.seller_id.clone()),
                     holder_id: None,
                     location: SceneInventoryLocation::Stock,
@@ -446,9 +477,10 @@ impl SceneModel {
         contents["offers"] = serde_json::json!(
             self.offers
                 .iter()
-                .filter(|offer| self.offer_available(&offer.id))
+                .filter(|offer| self.offer_available(&offer.canonical_item_id()))
                 .map(|offer| {
                     let mut value = serde_json::json!(offer);
+                    value["item_id"] = serde_json::json!(offer.canonical_item_id());
                     value["actions"] = serde_json::json!(["look", "buy"]);
                     value
                 })
@@ -606,18 +638,7 @@ impl SceneModel {
                 || thing.aliases.len() > 8
                 || thing.aliases.iter().any(|alias| !valid_text(alias, 64))
                 || !(2..=4).contains(&sentence_count(&thing.detail))
-                || thing
-                    .owner_id
-                    .as_ref()
-                    .is_some_and(|id| !ids.contains(id.as_str()))
-                || (!thing.provenance.kind.is_empty()
-                    && (!valid_text(&thing.provenance.kind, 48)
-                        || !valid_text(&thing.provenance.source_id, 96)
-                        || thing
-                            .provenance
-                            .seller_id
-                            .as_ref()
-                            .is_some_and(|id| !ids.contains(id.as_str()))))
+                || !valid_text(&thing.provenance.source_id, 96)
             {
                 return Err(SceneModelError::InvalidBounds);
             }
@@ -645,11 +666,15 @@ impl SceneModel {
             // authoring, but both must be unique in the canonical scene graph. A purchase
             // promotes this item ID into `things`; rejecting collisions here prevents a
             // second stock entry or an authored object from shadowing that identity.
-            if !ids.insert(offer.item_id.as_str()) {
+            let item_id = offer.canonical_item_id();
+            if !ids.insert(item_id.as_str()) {
                 return Err(SceneModelError::DuplicateId);
             }
+            if item_id != format!("item-{}", offer.id) {
+                return Err(SceneModelError::InvalidShape);
+            }
             if !valid_text(&offer.id, 96)
-                || !valid_text(&offer.item_id, 96)
+                || !valid_text(&item_id, 96)
                 || !valid_text(&offer.seller_id, 96)
                 || !valid_text(&offer.name, 64)
                 || !valid_text(&offer.description, 120)
@@ -667,14 +692,37 @@ impl SceneModel {
         if self
             .things
             .iter()
-            .filter_map(|thing| thing.owner_id.as_deref())
-            .any(|owner| !person_ids.contains(owner))
+            .filter_map(|thing| {
+                thing
+                    .owner_id
+                    .as_deref()
+                    .into_iter()
+                    .chain(thing.holder_id.as_deref())
+                    .chain(thing.provenance.seller_id.as_deref())
+            })
+            .any(|actor| !person_ids.contains(actor))
             || self
                 .offers
                 .iter()
                 .any(|offer| !person_ids.contains(offer.seller_id.as_str()))
         {
             return Err(SceneModelError::UnknownPerson);
+        }
+        if self.things.iter().any(|thing| match thing.provenance.kind {
+            SceneItemProvenanceKind::AuthoredLocation => thing.provenance.seller_id.is_some(),
+            SceneItemProvenanceKind::GeneratedOffer => thing
+                .provenance
+                .seller_id
+                .as_deref()
+                .is_none_or(|seller_id| {
+                    !self.offers.iter().any(|offer| {
+                        offer.canonical_item_id() == thing.id
+                            && offer.id == thing.provenance.source_id
+                            && offer.seller_id == seller_id
+                    })
+                }),
+        }) {
+            return Err(SceneModelError::InvalidShape);
         }
         Ok(())
     }
@@ -690,11 +738,13 @@ impl SceneModel {
         let mut model: Self =
             serde_json::from_value(value).map_err(|_| SceneModelError::InvalidShape)?;
         for thing in &mut model.things {
-            if thing.provenance.kind.is_empty() {
-                thing.provenance.kind = "authored_location".into();
-            }
             if thing.provenance.source_id.is_empty() {
                 thing.provenance.source_id = thing.id.clone();
+            }
+        }
+        for offer in &mut model.offers {
+            if offer.item_id.is_empty() {
+                offer.item_id = format!("item-{}", offer.id);
             }
         }
         model.validate_structure()?;
@@ -773,6 +823,51 @@ impl SceneModel {
             changes: descriptions,
         };
         serde_json::to_string(&snapshot).map_err(|_| SceneModelError::Serialization)
+    }
+
+    fn generated_offer_thing(
+        &self,
+        offer: &SceneOffer,
+        holder_id: &str,
+        owner_id: &str,
+        seller_name: &str,
+    ) -> SceneThing {
+        let detail = format!(
+            "{}. It was acquired from {}.",
+            offer.description.trim_end_matches('.'),
+            seller_name
+        );
+        SceneThing {
+            id: offer.canonical_item_id(),
+            name: offer.name.clone(),
+            short: offer.name.clone(),
+            detail: detail.clone(),
+            picture_description: offer.description.clone(),
+            closer_look: detail,
+            skill: FindingSkill::Investigation,
+            dc: 10,
+            finding_id: None,
+            clue_fact_id: None,
+            portable: true,
+            value_cp: Some(offer.cost_cp),
+            use_effect: format!("Uses {}.", offer.description.trim_end_matches('.')),
+            position: format!("held by {holder_id}"),
+            owner_id: Some(owner_id.to_owned()),
+            in_use: false,
+            in_scene: true,
+            publicly_visible: true,
+            holder_id: Some(holder_id.to_owned()),
+            open: false,
+            lit: false,
+            broken: false,
+            searched_by: Vec::new(),
+            aliases: offer.aliases.clone(),
+            provenance: SceneItemProvenance {
+                kind: SceneItemProvenanceKind::GeneratedOffer,
+                source_id: offer.id.clone(),
+                seller_id: Some(offer.seller_id.clone()),
+            },
+        }
     }
 
     pub(crate) fn resolve_target(&self, line: &str) -> Option<ResolvedTarget> {
@@ -861,10 +956,27 @@ impl SceneModel {
                 SceneChangeKind::Purchased { .. } | SceneChangeKind::NpcPurchased { .. } => {
                     return Err(SceneModelError::Contradiction);
                 }
-                SceneChangeKind::Taken { holder_id }
-                | SceneChangeKind::Stolen { holder_id } => {
+                SceneChangeKind::Taken { holder_id } => {
+                    if !thing.portable
+                        || thing.in_use
+                        || thing.holder_id.is_some()
+                        || thing
+                            .owner_id
+                            .as_deref()
+                            .is_some_and(|owner_id| owner_id != holder_id)
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
                     thing.holder_id = Some(holder_id.clone());
                     thing.in_scene = person_ids.contains(holder_id.as_str());
+                    thing.position = format!("held by {holder_id}");
+                }
+                SceneChangeKind::Stolen { holder_id } => {
+                    if !thing.portable || thing.in_use || thing.holder_id.is_some() {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    thing.holder_id = Some(holder_id.clone());
+                    thing.in_scene = true;
                     thing.position = format!("held by {holder_id}");
                 }
                 SceneChangeKind::Given {
@@ -916,14 +1028,12 @@ impl SceneModel {
         };
         if let Some((holder_id, _seller_id, npc_cost)) = purchase {
             let offer = self
-                .offers
-                .iter()
-                .find(|offer| offer.id == change.entity_id)
+                .offer(&change.entity_id)
                 .ok_or(SceneModelError::UnknownEntity)?;
             if offer.seller_id != *_seller_id {
                 return Err(SceneModelError::Contradiction);
             }
-            let item_id = offer.item_id.clone();
+            let item_id = offer.canonical_item_id();
             if self.things.iter().any(|thing| thing.id == item_id) {
                 return Err(SceneModelError::Contradiction);
             }
@@ -931,8 +1041,8 @@ impl SceneModel {
                 .people
                 .iter()
                 .find(|person| person.id.as_str() == _seller_id.as_str())
-                .map(|person| person.name.as_str())
-                .unwrap_or("the seller");
+                .map(|person| person.name.clone())
+                .unwrap_or_else(|| "the seller".into());
             if let Some(cost_cp) = npc_cost {
                 if cost_cp != offer.cost_cp {
                     return Err(SceneModelError::Contradiction);
@@ -949,47 +1059,42 @@ impl SceneModel {
                     .checked_sub(cost_cp)
                     .ok_or(SceneModelError::Contradiction)?;
             }
-            let detail = format!(
-                "{}. It was bought from {}.",
-                offer.description.trim_end_matches('.'),
-                seller_name
+            let item = self.generated_offer_thing(offer, holder_id, holder_id, &seller_name);
+            self.things.push(item);
+            return Ok(());
+        }
+        if let Some((holder_id, owner_id)) = match &change.kind {
+            SceneChangeKind::Given {
+                holder_id,
+                owner_id,
+            } => Some((holder_id, owner_id.as_deref())),
+            _ => None,
+        } {
+            let offer = self
+                .offer(&change.entity_id)
+                .ok_or(SceneModelError::UnknownEntity)?;
+            let item_id = offer.canonical_item_id();
+            if owner_id.is_some_and(|owner| owner != holder_id.as_str())
+                || self.things.iter().any(|thing| thing.id == item_id)
+            {
+                return Err(SceneModelError::Contradiction);
+            }
+            let seller_id = offer.seller_id.clone();
+            let source_id = offer.id.clone();
+            let seller_name = self
+                .people
+                .iter()
+                .find(|person| person.id == seller_id)
+                .map(|person| person.name.clone())
+                .unwrap_or_else(|| "the seller".into());
+            let item = self.generated_offer_thing(
+                offer,
+                holder_id,
+                owner_id.unwrap_or(seller_id.as_str()),
+                &seller_name,
             );
-            self.things.push(SceneThing {
-                id: item_id,
-                name: offer.name.clone(),
-                short: offer.name.clone(),
-                detail: detail.clone(),
-                picture_description: offer.description.clone(),
-                closer_look: detail,
-                skill: FindingSkill::Investigation,
-                // Purchased goods are not findings, but the durable SceneThing schema still
-                // requires its bounded investigation DC. Keep the neutral catalog value within
-                // that schema range so ownership validation can admit the item.
-                dc: 10,
-                finding_id: None,
-                clue_fact_id: None,
-                portable: true,
-                value_cp: Some(offer.cost_cp),
-                use_effect: format!("Uses {}.", offer.description.trim_end_matches('.')),
-                position: format!("held by {holder_id}"),
-                // Ownership transfers to the buyer; seller_id remains in the
-                // durable purchase change as provenance for the transaction.
-                owner_id: Some(holder_id.clone()),
-                in_use: false,
-                in_scene: true,
-                publicly_visible: true,
-                holder_id: Some(holder_id.clone()),
-                open: false,
-                lit: false,
-                broken: false,
-                searched_by: Vec::new(),
-                aliases: offer.aliases.clone(),
-                provenance: SceneItemProvenance {
-                    kind: "generated_offer".into(),
-                    source_id: offer.id.clone(),
-                    seller_id: Some(_seller_id.clone()),
-                },
-            });
+            debug_assert_eq!(item.provenance.source_id, source_id);
+            self.things.push(item);
             return Ok(());
         }
         if let Some(person) = self
@@ -2002,7 +2107,7 @@ fn things(
                     std::mem::take(&mut aliases)
                 },
                 provenance: SceneItemProvenance {
-                    kind: "authored_location".into(),
+                    kind: SceneItemProvenanceKind::AuthoredLocation,
                     source_id: format!("{}-thing-{}", setting.place_id, index + 1),
                     seller_id: None,
                 },
