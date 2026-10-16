@@ -185,6 +185,65 @@ There are three additional coverage gaps to account for during diagnosis:
   Once preparation succeeds, the clip key is the SHA-256 of the prepared still,
   model, prompt, duration, and recipe.
 
+## Move display elements live through the agent CLI
+
+The development layout surface is enabled by `DF_GAMEPLAY_DEV_CONTROL=on`.
+After installing a build containing it, changing an element uses the existing
+authenticated CLI and does not require recompilation, a server restart, a page
+reload, or a gameplay action.
+
+```powershell
+$fixture='.\artifacts\build\play\debug\df-transport-fixture.exe'
+& $fixture dev layout list
+& $fixture dev layout get scene-context
+& $fixture dev layout transform scene-context --translate-y -24 --unit px
+& $fixture dev layout transform scene-context --scale 0.96 --rotate 0
+& $fixture dev layout get scene-context
+& $fixture dev layout reset scene-context
+```
+
+Use the server URL and token-file environment variables from the quick-start
+section. Never paste a bearer token into commands, screenshots, or reports.
+`layout list` discovers the current game DOM inventory. Stable semantic aliases
+include `scene-context`, `dm-overlay`, `narration`, `subtitle`, `background`,
+`plate`, `choices`, `hud`, and `item-card` when those elements exist. Other nodes
+receive runtime IDs; inspect their classes, owner metadata, and measured bounds
+before selecting one. The registry also covers descendants such as individual
+images, labels, figures, cards, loaders, and controls. A composed photograph is
+one image; people painted into its pixels are not independent DOM elements.
+
+`transform` accepts translation, uniform or separate-axis scale, and rotation in
+degrees. Translation units are `px` or `percent` (percentage of that element's
+own size). `move <id> --x <n> --y <n> --unit px|percent` sets the translation
+offset from the element's natural layout; it is not a world-coordinate move.
+Partial updates compose with the existing override. Omitting an ID from
+`layout reset` clears every override. Reset removes only layout-owned rules and
+reveals the application's current styles and animations.
+
+An accepted command is pending until the browser reports the matching layout
+revision. `layout get` returns per-display measured rectangles, viewport,
+configured and effective transforms, sample/revision, and applied/absent/stale
+status. Re-read it after a command and inspect a real screenshot. Layout revision
+is independent of gameplay revision. Runtime overrides survive connection
+recovery in the same server process; they are development settings rather than
+saved campaign state. Missing nodes stay explicit instead of pretending they
+moved. The inventory and overrides have fixed capacities and report overflow;
+unknown or stale IDs, unknown flags, and invalid geometry are refused.
+
+Layout changes and browser acknowledgments use the existing structured timeline.
+Inspect `dev timeline --type browser_media` for `gameplay.layout.*` records.
+Component lifetimes can be filtered separately, for example:
+
+```powershell
+& $fixture dev timeline --last 1000 --component speech_bubble
+& $fixture dev timeline --last 1000 --component check_card
+& $fixture dev timeline --last 1000 --component plate_incoming
+```
+
+Component records distinguish requested/opened/readable/closing/hidden phases,
+effective visibility, and measured visible duration. A logical speaking state or
+a mounted node alone does not prove that a person could see its text.
+
 ## Visual review loop
 
 After every browser interaction, take a screenshot and record the current URL,
