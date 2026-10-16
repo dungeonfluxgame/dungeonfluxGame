@@ -2645,7 +2645,12 @@ mod tests {
         let (voice, cache) = voice(&endpoint, "harbor-withholding");
         let log = TableLog::new();
         let wake = log.subscribe();
-        for words in ["Why do you want the packet?", "Who sent you?"] {
+        for words in [
+            "Why do you want the packet?",
+            "Who sent you?",
+            "Bandit, why are you following the Courier?",
+            "Why he's following the courier?",
+        ] {
             let context = harbor_question("bandit", words, false);
             let reply = {
                 let _pending = log.reply_pending(&context.speaker);

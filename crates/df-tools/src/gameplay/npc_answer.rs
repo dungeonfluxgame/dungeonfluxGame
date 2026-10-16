@@ -23,6 +23,8 @@ pub(super) struct Answer {
 fn subject(part: &str) -> Option<QuestionSubject> {
     let part = part.to_lowercase().replace('’', "'");
     let has = |phrases: &[&str]| phrases.iter().any(|phrase| part.contains(phrase));
+    let following_question = part.trim_start().starts_with("why he's following ")
+        || part.trim_start().starts_with("why is he following ");
     if has(&[
         "how do you know",
         "how did you know",
@@ -86,19 +88,23 @@ fn subject(part: &str) -> Option<QuestionSubject> {
         "your injuries",
     ]) {
         Some(QuestionSubject::Condition)
-    } else if has(&[
-        "why do you want",
-        "why do you need",
-        "why want",
-        "why are you after",
-        "why are you chasing",
-        "why are you pursuing",
-        "what do you want",
-        "what's in it for you",
-        "what is in it for you",
-        "your motive",
-        "why does this matter to you",
-    ]) {
+    } else if following_question
+        || has(&[
+            "why do you want",
+            "why do you need",
+            "why want",
+            "why are you after",
+            "why are you chasing",
+            "why are you following",
+            "why do you follow",
+            "why are you pursuing",
+            "what do you want",
+            "what's in it for you",
+            "what is in it for you",
+            "your motive",
+            "why does this matter to you",
+        ])
+    {
         Some(QuestionSubject::Motive)
     } else if has(&[
         "who are you",
@@ -255,4 +261,27 @@ pub(super) fn prepare(context: &NpcReplyContext, approach: Approach) -> Option<A
         keys,
         withheld,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn following_motive_requires_a_question_instead_of_an_ordinary_mention() {
+        for question in [
+            "Bandit, why are you following the Courier?",
+            "Why he's following the courier?",
+            "Why he’s following the courier?",
+            "Why is he following the courier?",
+        ] {
+            assert_eq!(subject(question), Some(QuestionSubject::Motive));
+        }
+        for statement in [
+            "He's following the Courier.",
+            "I know why he's following the Courier.",
+        ] {
+            assert_eq!(subject(statement), None);
+        }
+    }
 }
