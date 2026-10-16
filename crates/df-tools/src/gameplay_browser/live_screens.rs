@@ -1137,9 +1137,9 @@ fn render_scene_contents(
 mod tests {
     use super::super::rpc;
     use super::{
-        HARBOR_ESTABLISHING, SceneInput, VisualSource, art, art_source, choice_disabled_reason,
-        end_card_contact_ready, is_new_private_clue, lobby_art_source, phone_choice_label,
-        should_show_dialogue_composer, tv_model, validated_join_scene_asset,
+        SceneInput, VisualSource, art, art_source, choice_disabled_reason, end_card_contact_ready,
+        is_new_private_clue, lobby_art_source, phone_choice_label, should_show_dialogue_composer,
+        tv_model, validated_join_scene_asset,
     };
 
     #[test]
