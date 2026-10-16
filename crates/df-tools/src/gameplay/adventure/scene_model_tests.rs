@@ -154,6 +154,16 @@ fn merchant_shop_has_named_interactable_background_people_and_stock() {
 }
 
 #[test]
+fn authored_purchased_prefix_object_survives_without_a_purchase_journal() {
+    let mut model = merchant_shop();
+    model.things[0].id = "purchased-authored-cloth".into();
+    let snapshot = model
+        .as_it_is_now(super::super::pack::SceneKey::DialogueSeal, &[])
+        .expect("authored purchased-prefixed object remains valid");
+    assert!(snapshot.contains("purchased-authored-cloth"));
+}
+
+#[test]
 fn legacy_scene_setting_without_a_model_still_loads() {
     let mut legacy = serde_json::to_value(inn()).expect("scene setting serializes");
     legacy
