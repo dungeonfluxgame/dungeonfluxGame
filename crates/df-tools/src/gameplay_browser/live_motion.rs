@@ -2860,6 +2860,90 @@ mod tests {
     }
 
     #[test]
+    fn managed_check_dom_reveal_and_dm_open_do_not_restart_the_card_entrance() {
+        use wasm_bindgen::JsCast;
+
+        fn entrances(panel: &web_sys::Element) -> Vec<wasm_bindgen::JsValue> {
+            let get: js_sys::Function =
+                js_sys::Reflect::get(panel.as_ref(), &"getAnimations".into())
+                    .unwrap()
+                    .dyn_into()
+                    .unwrap();
+            js_sys::Array::from(&get.call0(panel.as_ref()).unwrap())
+                .iter()
+                .filter(|animation| {
+                    js_sys::Reflect::get(animation, &"animationName".into())
+                        .unwrap()
+                        .as_string()
+                        .as_deref()
+                        == Some("df-check-card-in")
+                })
+                .collect()
+        }
+
+        fn assert_entrance_stays_finished(
+            panel: &web_sys::Element,
+            original: &wasm_bindgen::JsValue,
+        ) {
+            let style = web_sys::window()
+                .unwrap()
+                .get_computed_style(panel)
+                .unwrap()
+                .unwrap();
+            assert_eq!(style.get_property_value("opacity").unwrap(), "1");
+            // Browsers may omit finished animations or retain the completed object. A new one
+            // or a changed play state means the DOM placement replayed the entrance.
+            for animation in entrances(panel) {
+                assert_eq!(&animation, original);
+                assert_eq!(
+                    js_sys::Reflect::get(&animation, &"playState".into())
+                        .unwrap()
+                        .as_string()
+                        .as_deref(),
+                    Some("finished")
+                );
+            }
+        }
+
+        let (check, payload) = check_pair(42);
+        let script = vec![
+            check_roll_script_line(&check, payload.clone(), false),
+            check_voice_script_line(&check, std::slice::from_ref(&check.voice), false),
+        ];
+        let mut fixture = CheckDom::new(script, true, 1_000, false);
+        let panel = fixture.panel(42).unwrap();
+        let entrance = entrances(&panel)
+            .into_iter()
+            .next()
+            .expect("mounted card has an entrance");
+        let finish: js_sys::Function = js_sys::Reflect::get(&entrance, &"finish".into())
+            .unwrap()
+            .dyn_into()
+            .unwrap();
+        finish.call0(&entrance).unwrap();
+        assert_entrance_stays_finished(&panel, &entrance);
+
+        fixture.run_to(5_200);
+        fixture.assert_result_visible(42);
+        assert_entrance_stays_finished(&panel, &entrance);
+        fixture
+            .client
+            .borrow()
+            .live
+            .tv
+            .as_ref()
+            .unwrap()
+            .begin_check(&payload, false)
+            .unwrap();
+        assert_entrance_stays_finished(&panel, &entrance);
+        fixture.run_to(5_400);
+        assert_eq!(fixture.plays, [(5_400, 42)]);
+        let current = fixture.panel(42).unwrap();
+        assert!(panel.is_same_node(Some(current.as_ref())));
+        assert_entrance_stays_finished(&panel, &entrance);
+    }
+
+    #[test]
     fn managed_check_dom_holds_long_clues_and_voice_and_then_presents_the_second_hero() {
         for long_voice in [false, true] {
             let (mut first, mut first_payload) = check_pair(50);

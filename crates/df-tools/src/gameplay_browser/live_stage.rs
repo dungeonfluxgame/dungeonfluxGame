@@ -1623,7 +1623,13 @@ impl Figures {
             return;
         };
         let host = &speaker.bubbles;
-        let _moved = self.plate_bubbles.append_child(host);
+        // Re-appending the same host restarts its card entrance at result reveal and DM opening.
+        if !host
+            .parent_element()
+            .is_some_and(|parent| parent.is_same_node(Some(self.plate_bubbles.as_ref())))
+        {
+            let _moved = self.plate_bubbles.append_child(host);
+        }
         let _shown = host.remove_attribute("hidden");
         let _tail = host.remove_attribute("data-tail");
         let _reason = host.set_attribute("data-anchor-fallback", "named-check-panel");
