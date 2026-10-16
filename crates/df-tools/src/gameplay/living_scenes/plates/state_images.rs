@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::gameplay::{
-    adventure::scene_model::{SceneNow, SceneThing},
+    adventure::scene_model::{SceneItemProvenance, SceneNow, SceneThing},
     imagery::{item_picture, state_edit},
     narrative_focus::{self, Dialogue, NarrativeFocus, Presentation, Stage},
 };
+use serde_json::Value;
 
 const SETTLE: Duration = Duration::from_secs(3);
 const BAKE_INTERVAL: Duration = Duration::from_secs(10);
@@ -195,17 +196,11 @@ fn enrich_item_card(card: &mut rpc::SceneItemCard, item: &Item) {
 }
 
 fn item_card_matches(card: &rpc::SceneItemCard, item: &Item) -> bool {
-    let holder = item.thing.holder_id.as_deref().unwrap_or_default();
-    let observation_only = item
-        .thing
-        .holder_id
-        .as_deref()
-        .is_some_and(|holder| item.thing.owner_id.as_deref() != Some(holder));
     card.thing_id == item.thing.id
         && card.name == item.thing.name
         && card.detail == item.thing.detail
-        && card.holder == holder
-        && card.observation_only == observation_only
+        && (card.picture_description.is_empty()
+            || card.picture_description == item.thing.picture_description)
 }
 
 pub(super) enum Job {
@@ -575,7 +570,14 @@ impl Shared {
                 .max_by_key(|item| item.requested_at),
         };
         if hero.is_some() {
-            if let (Some(card), Some(item)) = (scene.item.as_mut(), item) {
+            if let Some(card) = scene.item.as_mut()
+                && let Some(item) = book
+                    .state_images
+                    .items
+                    .values()
+                    .filter(|item| item_card_matches(card, item))
+                    .max_by_key(|item| item.requested_at)
+            {
                 enrich_item_card(card, item);
             }
             for card in &mut scene.hand_items {
@@ -602,26 +604,63 @@ impl Shared {
                 enrich_item_card(card, item);
             }
         }
-        scene.item = item.map(|item| rpc::SceneItemCard {
-            thing_id: item.thing.id.clone(),
-            name: item.thing.name.clone(),
-            detail: item.detail.as_ref().map_or_else(
-                || item.thing.detail.clone(),
-                |trace| format!("{}\n{trace}", item.thing.detail),
-            ),
-            image_path: item.key.as_ref().map(ImageKey::path).unwrap_or_default(),
-            image_state: if item.key.is_some() {
-                rpc::PlateState::Ready
-            } else if item.failed {
-                rpc::PlateState::Failed
-            } else {
-                rpc::PlateState::Pending
-            } as i32,
-            state_revision: item_revision(&item.thing, item.detail.as_deref()),
-            observation_only: item.thing.holder_id.is_some()
-                && item.thing.owner_id.as_deref() != item.thing.holder_id.as_deref(),
-            holder: item.thing.holder_id.clone().unwrap_or_default(),
+        scene.item = item.map(|item| {
+            let mut card = scene
+                .hand_items
+                .iter()
+                .find(|card| card.thing_id == item.thing.id)
+                .cloned()
+                .or_else(|| {
+                    scene
+                        .item
+                        .as_ref()
+                        .filter(|card| card.thing_id == item.thing.id)
+                        .cloned()
+                })
+                .unwrap_or_else(|| {
+                    let (owner_id, holder_id) =
+                        inventory_custody(&scene.scene_contents_json, &item.thing.id);
+                    rpc::SceneItemCard {
+                        thing_id: item.thing.id.clone(),
+                        name: item.thing.name.clone(),
+                        detail: item.detail.as_ref().map_or_else(
+                            || item.thing.detail.clone(),
+                            |trace| format!("{}\n{trace}", item.thing.detail),
+                        ),
+                        image_path: String::new(),
+                        image_state: rpc::PlateState::Pending as i32,
+                        state_revision: item_revision(&item.thing, item.detail.as_deref()),
+                        observation_only: if owner_id.is_empty() || holder_id.is_empty() {
+                            item.thing.holder_id.is_some()
+                                && item.thing.owner_id.as_deref() != item.thing.holder_id.as_deref()
+                        } else {
+                            owner_id != holder_id
+                        },
+                        holder: item.thing.holder_id.clone().unwrap_or_default(),
+                        owner_id,
+                        holder_id,
+                        picture_description: item.thing.picture_description.clone(),
+                    }
+                });
+            enrich_item_card(&mut card, item);
+            card.state_revision = item_revision(&item.thing, item.detail.as_deref());
+            card
         });
+    }
+
+    pub(super) fn project_item_cards(&self, cards: &mut [rpc::SceneItemCard]) {
+        let book = locked(&self.book);
+        for card in cards {
+            if let Some(item) = book
+                .state_images
+                .items
+                .values()
+                .filter(|item| item_card_matches(card, item))
+                .max_by_key(|item| item.requested_at)
+            {
+                enrich_item_card(card, item);
+            }
+        }
     }
 
     pub(super) fn poll_state_images(&self) {
@@ -1156,10 +1195,12 @@ fn item_revision(thing: &SceneThing, detail: Option<&str>) -> u64 {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(
         format!(
-            "{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}",
             thing.id,
+            thing.name,
             thing.picture_description,
             thing.detail,
+            thing.closer_look,
             thing.open,
             thing.lit,
             thing.broken,
@@ -1172,6 +1213,27 @@ fn item_revision(thing: &SceneThing, detail: Option<&str>) -> u64 {
     u64::from_be_bytes(bytes)
 }
 
+fn inventory_custody(scene_contents_json: &str, item_id: &str) -> (String, String) {
+    let Some(row) = serde_json::from_str::<Value>(scene_contents_json)
+        .ok()
+        .and_then(|contents| contents.get("inventory").and_then(Value::as_array).cloned())
+        .and_then(|entries| {
+            entries
+                .into_iter()
+                .find(|entry| entry.get("item_id").and_then(Value::as_str) == Some(item_id))
+        })
+    else {
+        return (String::new(), String::new());
+    };
+    let id = |key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    (id("owner_id"), id("holder_id"))
+}
+
 impl Plates {
     /// Called only for a committed examination/take/share. The detail must already be listener-safe.
     pub(in crate::gameplay) fn request_item(
@@ -1181,43 +1243,109 @@ impl Plates {
         detail: Option<String>,
         shared: bool,
     ) -> Result<(), &'static str> {
-        self.request_item_with_visibility(hero, thing_id, detail, shared, shared)
+        self.request_item_with_visibility(hero, thing_id, None, detail, shared, shared)
+    }
+
+    /// Uses the authoritative post-commit Thing. Generated stock becomes a canonical
+    /// SceneThing only after a purchase, so resolving it through the authored plate snapshot
+    /// would incorrectly report that it is absent from the scene.
+    pub(in crate::gameplay) fn request_committed_item(
+        &self,
+        hero: &str,
+        thing: &SceneThing,
+        detail: Option<String>,
+        shared: bool,
+    ) -> Result<(), &'static str> {
+        self.request_item_with_visibility(
+            hero,
+            &thing.id,
+            Some(thing.clone()),
+            detail,
+            shared,
+            shared,
+        )
     }
 
     /// Makes an image available for a current hand projection without treating the projection
     /// itself as an explicit share action.
     pub(in crate::gameplay) fn request_hand_item(
         &self,
-        hero: &str,
-        thing_id: &str,
+        card: &rpc::SceneItemCard,
         shared: bool,
+        scene_contents_json: &str,
     ) -> Result<(), &'static str> {
-        self.request_item_with_visibility(hero, thing_id, None, shared, false)
+        let mut book = locked(&self.shared.book);
+        let now = self.shared.inner.now();
+        let cached = book
+            .state_images
+            .items
+            .iter()
+            .filter(|(_, item)| {
+                item.thing.id == card.thing_id
+                    && item.thing.name == card.name
+                    && item.thing.detail == card.detail
+                    && (card.picture_description.is_empty()
+                        || item.thing.picture_description == card.picture_description)
+            })
+            .max_by_key(|(_, item)| item.requested_at)
+            .map(|(id, _)| id.clone());
+        if let Some(id) = cached {
+            if let Some(item) = book.state_images.items.get_mut(&id) {
+                item.shared |= shared;
+                if shared {
+                    item.requested_at = now;
+                }
+            }
+            book.state_images
+                .latest_items
+                .insert(card.holder.clone(), id);
+            drop(book);
+            self.shared.wake();
+            return Ok(());
+        }
+        drop(book);
+        let thing = self
+            .authored_or_projected_item(card, scene_contents_json)
+            .ok_or("object image details are unavailable in the current scene projection")?;
+        self.request_item_with_visibility(
+            &card.holder,
+            &card.thing_id,
+            Some(thing),
+            None,
+            shared,
+            false,
+        )
     }
 
     fn request_item_with_visibility(
         &self,
         hero: &str,
         thing_id: &str,
+        committed_thing: Option<SceneThing>,
         detail: Option<String>,
         shared: bool,
         explicitly_shared: bool,
     ) -> Result<(), &'static str> {
         let mut book = locked(&self.shared.book);
-        let thing = book
-            .current
-            .as_ref()
-            .and_then(|current| current.scene.as_ref())
-            .and_then(|scene| scene.snapshot.as_ref())
-            .and_then(|snapshot| {
-                snapshot
-                    .model
-                    .things
-                    .iter()
-                    .find(|thing| thing.id == thing_id)
+        let thing = committed_thing
+            .or_else(|| {
+                book.current
+                    .as_ref()
+                    .and_then(|current| current.scene.as_ref())
+                    .and_then(|scene| scene.snapshot.as_ref())
+                    .and_then(|snapshot| {
+                        snapshot
+                            .model
+                            .things
+                            .iter()
+                            .find(|thing| thing.id == thing_id)
+                    })
+                    .cloned()
             })
-            .cloned()
             .ok_or("object is not in the current scene")?;
+        if thing.id != thing_id {
+            return Err("committed object identity does not match the request");
+        }
         let state = item_revision(&thing, detail.as_deref());
         let id = format!("{}:{state}", thing.id);
         let now = self.shared.inner.now();
@@ -1278,4 +1406,95 @@ impl Plates {
             }
         }
     }
+
+    fn authored_or_projected_item(
+        &self,
+        card: &rpc::SceneItemCard,
+        scene_contents_json: &str,
+    ) -> Option<SceneThing> {
+        let book = locked(&self.shared.book);
+        let authored = book
+            .current
+            .as_ref()
+            .and_then(|current| current.scene.as_ref())
+            .and_then(|scene| scene.snapshot.as_ref())
+            .and_then(|snapshot| {
+                snapshot
+                    .model
+                    .things
+                    .iter()
+                    .find(|thing| thing.id == card.thing_id)
+            })
+            .cloned();
+        if let Some(thing) = authored {
+            return Some(thing);
+        }
+        let contents: Value = serde_json::from_str(scene_contents_json).ok()?;
+        let visible = contents
+            .get("things")
+            .and_then(Value::as_array)
+            .and_then(|things| {
+                things
+                    .iter()
+                    .find(|thing| thing.get("id").and_then(Value::as_str) == Some(&card.thing_id))
+            });
+        let picture_description = visible
+            .and_then(|thing| thing.get("look"))
+            .and_then(Value::as_str)
+            .filter(|description| !description.trim().is_empty())
+            .map(str::to_owned)
+            .or_else(|| nonempty(&card.picture_description))?;
+        let owner_id = nonempty(&card.owner_id);
+        let holder_id = nonempty(&card.holder_id);
+        Some(SceneThing {
+            id: card.thing_id.clone(),
+            name: card.name.clone(),
+            short: card.name.clone(),
+            detail: card.detail.clone(),
+            picture_description,
+            closer_look: String::new(),
+            skill: crate::gameplay::pack::FindingSkill::Perception,
+            dc: 0,
+            finding_id: None,
+            clue_fact_id: None,
+            portable: true,
+            value_cp: None,
+            use_effect: String::new(),
+            position: visible
+                .and_then(|thing| thing.get("position"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            owner_id,
+            in_use: false,
+            in_scene: visible
+                .and_then(|thing| thing.get("in_scene"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            publicly_visible: visible
+                .and_then(|thing| thing.get("publicly_visible"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            holder_id,
+            open: visible
+                .and_then(|thing| thing.get("open"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            lit: visible
+                .and_then(|thing| thing.get("lit"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            broken: visible
+                .and_then(|thing| thing.get("broken"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            searched_by: Vec::new(),
+            aliases: Vec::new(),
+            provenance: SceneItemProvenance::default(),
+        })
+    }
+}
+
+fn nonempty(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
 }

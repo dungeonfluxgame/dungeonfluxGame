@@ -826,8 +826,11 @@ impl Plates {
                 let Some(scene) = display.scene.as_mut() else {
                     return;
                 };
+                if let Some(item) = scene.item.as_ref() {
+                    let _ = self.request_hand_item(item, true, &scene.scene_contents_json);
+                }
                 for item in scene.hand_items.clone() {
-                    let _ = self.request_hand_item(&item.holder, &item.thing_id, true);
+                    let _ = self.request_hand_item(&item, true, &scene.scene_contents_json);
                 }
                 let (scene_key, _) = scene_identity(&display.scene_asset, scene);
                 display.live_plate_graph_revision =
@@ -841,8 +844,20 @@ impl Plates {
                 let Some(scene) = player.scene.as_mut() else {
                     return;
                 };
+                if let Some(item) = scene.item.as_ref() {
+                    let _ = self.request_hand_item(item, false, &scene.scene_contents_json);
+                }
                 for item in scene.hand_items.clone() {
-                    let _ = self.request_hand_item(&item.holder, &item.thing_id, false);
+                    let _ = self.request_hand_item(&item, false, &scene.scene_contents_json);
+                }
+                let owned_items = player
+                    .journey
+                    .as_ref()
+                    .and_then(|journey| journey.own_character.as_ref())
+                    .map(|sheet| sheet.owned_items.clone())
+                    .unwrap_or_default();
+                for item in &owned_items {
+                    let _ = self.request_hand_item(item, false, &scene.scene_contents_json);
                 }
                 let (scene_key, _) = scene_identity("", scene);
                 let _revision = self.shared.apply(&scene_key, scene);
@@ -854,6 +869,13 @@ impl Plates {
                     .and_then(|journey| journey.own_character.as_ref())
                     .map(|hero| hero.name.as_str());
                 self.shared.project_scene_contents(scene, hero);
+                if let Some(sheet) = player
+                    .journey
+                    .as_mut()
+                    .and_then(|journey| journey.own_character.as_mut())
+                {
+                    self.shared.project_item_cards(&mut sheet.owned_items);
+                }
             }
             None => {}
         }

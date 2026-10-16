@@ -255,7 +255,27 @@ fn sections(sheet: &rpc::CharacterSheet) -> Vec<OwnedSection> {
         "Feature or trait",
         &mut used,
     ));
-    let equipment = labelled_rows("equipment", sheet, &EQUIPMENT, "Carried gear", &mut used);
+    let mut equipment = labelled_rows("equipment", sheet, &EQUIPMENT, "Carried gear", &mut used);
+    equipment.extend(sheet.owned_items.iter().map(|item| {
+        let holder_status = if item.holder_id.is_empty() {
+            "Owned · current place".to_owned()
+        } else if item.holder == sheet.name {
+            "Owned · with you".to_owned()
+        } else {
+            format!("Owned · held by {}", nonblank(&item.holder))
+        };
+        let detail = if item.detail.trim().is_empty() {
+            holder_status.clone()
+        } else {
+            format!("{} · {holder_status}", item.detail)
+        };
+        OwnedRow {
+            key: format!("equipment-item-{}", item.thing_id),
+            title: nonblank(&item.name).to_owned(),
+            value: detail,
+            summary: "Permanently owned item; holder is shown separately",
+        }
+    }));
     let other: Vec<OwnedRow> = sheet
         .facts
         .iter()
@@ -658,6 +678,15 @@ pub(in crate::gameplay_browser) fn mount_inline(
         "live-hero-line",
         &format!("Armor Class {}", sheet.armor_class),
     )?;
+    if let Some(coin) = fact(sheet, "Coin") {
+        node(
+            &document,
+            &meta,
+            "span",
+            "live-hero-line live-coin-balance",
+            &format!("Coin · {}", nonblank(coin)),
+        )?;
+    }
     node(&document, &section, "h2", "", SHEET_ABILITIES_AND_SAVES)?;
     let grid = node(&document, &section, "div", "live-abilities", "")?;
     for (short, long) in ABILITIES {
@@ -713,11 +742,32 @@ pub(in crate::gameplay_browser) fn mount_inline(
         proficiencies.push(("Languages", languages));
     }
     list(client, &section, "Other proficiencies", &proficiencies)?;
-    let gear: Vec<(&str, String)> = EQUIPMENT
+    let mut gear: Vec<(String, String)> = EQUIPMENT
         .iter()
-        .filter_map(|label| fact(sheet, label).map(|value| (*label, value.to_owned())))
+        .filter_map(|label| fact(sheet, label).map(|value| ((*label).to_owned(), value.to_owned())))
         .collect();
-    list(client, &section, SHEET_EQUIPMENT, &gear)?;
+    gear.extend(sheet.owned_items.iter().map(|item| {
+        let mut value = item.detail.clone();
+        if !item.holder_id.is_empty() {
+            let holder = if item.holder == sheet.name {
+                "with you".to_owned()
+            } else {
+                format!("held by {}", nonblank(&item.holder))
+            };
+            if value.is_empty() {
+                value = holder;
+            } else {
+                value.push_str(" · ");
+                value.push_str(&holder);
+            }
+        }
+        (item.name.clone(), value)
+    }));
+    let gear_rows: Vec<(&str, String)> = gear
+        .iter()
+        .map(|(label, value)| (label.as_str(), value.clone()))
+        .collect();
+    list(client, &section, SHEET_EQUIPMENT, &gear_rows)?;
     let features: Vec<(&str, String)> = [
         "Origin feat",
         "Masteries",

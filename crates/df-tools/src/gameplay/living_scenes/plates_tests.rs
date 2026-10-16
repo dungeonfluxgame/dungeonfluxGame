@@ -1822,6 +1822,137 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
 }
 
 #[tokio::test]
+async fn committed_stock_items_and_reconnected_cards_rebuild_the_canonical_image_cache() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(381);
+    let mut scene = scene(SceneKey::Opening, "Marek’s cloth shop", Some("Marek"));
+    scene.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &scene, &[], &[1]);
+    drain(&mut queue);
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    let mut purchased = scene
+        .setting
+        .as_ref()
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap()
+        .things[0]
+        .clone();
+    purchased.id = "item-clothes-travelers".into();
+    purchased.name = "traveler’s clothes".into();
+    purchased.detail = "A practical set of traveler’s clothes. It was acquired from Marek.".into();
+    purchased.picture_description = "neatly folded wool and linen traveler’s clothes".into();
+    purchased.owner_id = Some("Brakka".into());
+    purchased.holder_id = Some("Brakka".into());
+    assert!(
+        scene
+            .setting
+            .as_ref()
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .things
+            .iter()
+            .all(|thing| thing.id != purchased.id)
+    );
+
+    plates
+        .request_committed_item("Brakka", &purchased, None, false)
+        .expect("the committed Thing is sufficient even though the authored plate is stale");
+    assert_eq!(drain(&mut queue).len(), 1);
+    let committed_cache_id = locked(&shared.book)
+        .state_images
+        .items
+        .keys()
+        .find(|id| id.starts_with("item-clothes-travelers:"))
+        .cloned()
+        .expect("the canonical purchased item has an image request");
+
+    // A fresh cache after reconnect has only the phone card and current public scene snapshot.
+    let (reconnected, mut reconnect_queue) = shared(16);
+    observe(&reconnected, &scene, &[], &[1]);
+    drain(&mut reconnect_queue);
+    let reconnect_plates = Plates {
+        shared: reconnected.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    let card = rpc::SceneItemCard {
+        thing_id: purchased.id.clone(),
+        name: purchased.name.clone(),
+        detail: purchased.detail.clone(),
+        picture_description: purchased.picture_description.clone(),
+        holder: "Brakka".into(),
+        owner_id: "Brakka".into(),
+        holder_id: "Brakka".into(),
+        ..Default::default()
+    };
+    let scene_contents = serde_json::json!({
+        "things": [{
+            "id": purchased.id.clone(),
+            "name": purchased.name.clone(),
+            "look": purchased.picture_description.clone(),
+            "position": "held by Brakka",
+            "in_scene": true,
+            "publicly_visible": true,
+            "open": false,
+            "lit": false,
+            "broken": false
+        }]
+    })
+    .to_string();
+    reconnect_plates
+        .request_hand_item(&card, false, &scene_contents)
+        .expect("the current projection can reconstruct the image request after reconnect");
+    assert_eq!(drain(&mut reconnect_queue).len(), 1);
+    let first_reconnect_cache_id = locked(&reconnected.book)
+        .state_images
+        .items
+        .keys()
+        .next()
+        .cloned()
+        .unwrap();
+    assert!(first_reconnect_cache_id.starts_with("item-clothes-travelers:"));
+
+    let changed_card = rpc::SceneItemCard {
+        detail: "The same clothes, now patched at one sleeve.".into(),
+        picture_description: "folded wool and linen clothes with a patched sleeve".into(),
+        ..card
+    };
+    let changed_contents = serde_json::json!({
+        "things": [{
+            "id": changed_card.thing_id.clone(),
+            "name": changed_card.name.clone(),
+            "look": changed_card.picture_description.clone(),
+            "position": "held by Brakka",
+            "in_scene": true,
+            "publicly_visible": true,
+            "open": false,
+            "lit": false,
+            "broken": false
+        }]
+    })
+    .to_string();
+    reconnect_plates
+        .request_hand_item(&changed_card, false, &changed_contents)
+        .expect("a canonical detail change starts a fresh image revision");
+    assert_eq!(drain(&mut reconnect_queue).len(), 1);
+    let reconnect_cache_ids = locked(&reconnected.book)
+        .state_images
+        .items
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(reconnect_cache_ids.len(), 2);
+    assert_ne!(first_reconnect_cache_id, reconnect_cache_ids[1]);
+    assert!(committed_cache_id.starts_with("item-clothes-travelers:"));
+}
+
+#[tokio::test]
 async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_projection() {
     let generated = crate::gameplay::npc_dossier_tests::adventure(39);
     let mut scene = scene(SceneKey::Opening, "The Cloth Shop", Some("Marek"));
@@ -1830,6 +1961,7 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
     let thing_id = thing.id.clone();
     let thing_name = thing.name.clone();
     let thing_detail = thing.detail.clone();
+    let picture_description = thing.picture_description.clone();
     thing.owner_id = Some("merchant".to_owned());
     thing.holder_id = Some("Marek".to_owned());
     thing.publicly_visible = true;
@@ -1842,7 +1974,29 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
         shared: shared.clone(),
         _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
     };
-    plates.request_hand_item("Marek", &thing_id, true).unwrap();
+    let hand_card = rpc::SceneItemCard {
+        thing_id: thing_id.clone(),
+        name: thing_name.clone(),
+        detail: thing_detail.clone(),
+        picture_description: picture_description.clone(),
+        holder: "Marek".into(),
+        owner_id: "merchant".into(),
+        holder_id: "Marek".into(),
+        observation_only: true,
+        ..Default::default()
+    };
+    let contents = scene
+        .setting
+        .as_ref()
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap()
+        .public_contents()
+        .unwrap();
+    plates
+        .request_hand_item(&hand_card, true, &contents)
+        .unwrap();
     assert_eq!(drain(&mut queue).len(), 1);
     let cache_id = {
         let book = locked(&shared.book);
@@ -1877,7 +2031,33 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
             .unwrap();
         thing.holder_id = Some("Sigrun".to_owned());
     }
-    plates.request_hand_item("Sigrun", &thing_id, true).unwrap();
+    let refreshed_card = rpc::SceneItemCard {
+        thing_id: thing_id.clone(),
+        name: thing_name.clone(),
+        detail: thing_detail.clone(),
+        picture_description: picture_description.clone(),
+        holder: "Sigrun".into(),
+        owner_id: "merchant".into(),
+        holder_id: "Sigrun".into(),
+        observation_only: true,
+        ..Default::default()
+    };
+    let refreshed_contents = locked(&shared.book)
+        .current
+        .as_ref()
+        .unwrap()
+        .scene
+        .as_ref()
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .model
+        .public_contents()
+        .unwrap();
+    plates
+        .request_hand_item(&refreshed_card, true, &refreshed_contents)
+        .unwrap();
     assert!(
         drain(&mut queue).is_empty(),
         "custody reuses the object image"
@@ -1891,8 +2071,7 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
             .find(|(_, cached)| cached.thing.id == thing_id)
             .expect("the current hand item keeps a cache entry");
         assert_eq!(current_cache_id, &cache_id, "custody reuses cache identity");
-        assert_eq!(cached.thing.owner_id.as_deref(), Some("merchant"));
-        assert_eq!(cached.thing.holder_id.as_deref(), Some("Sigrun"));
+        assert_eq!(cached.key.as_ref(), Some(&key('a')));
         assert!(!cached.explicitly_shared);
     }
 
@@ -1900,10 +2079,13 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
         thing_id: thing_id.clone(),
         name: thing_name.clone(),
         detail: detail.to_owned(),
+        picture_description: picture_description.clone(),
         image_state: rpc::PlateState::Pending as i32,
         state_revision: 1,
         observation_only: true,
         holder: holder.to_owned(),
+        owner_id: "merchant".into(),
+        holder_id: holder.to_owned(),
         ..Default::default()
     };
     let mut phone = rpc::GameplayScene {
@@ -1945,8 +2127,26 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
         thing.holder_id = Some("Vale".to_owned());
         thing.publicly_visible = false;
     }
-    plates.request_hand_item("Vale", &thing_id, false).unwrap();
-    plates.request_hand_item("Vale", &thing_id, false).unwrap();
+    let private_card = hand_card("Vale", &thing_detail);
+    let private_contents = locked(&shared.book)
+        .current
+        .as_ref()
+        .unwrap()
+        .scene
+        .as_ref()
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .model
+        .public_contents()
+        .unwrap();
+    plates
+        .request_hand_item(&private_card, false, &private_contents)
+        .unwrap();
+    plates
+        .request_hand_item(&private_card, false, &private_contents)
+        .unwrap();
     assert!(
         drain(&mut queue).is_empty(),
         "reconnect reuses the item image"
@@ -1989,7 +2189,23 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
             .unwrap();
         thing.detail.push_str(" The seam is newly described.");
     }
-    plates.request_hand_item("Vale", &thing_id, false).unwrap();
+    let changed_private_card = hand_card("Vale", &detailed_detail);
+    let changed_private_contents = locked(&shared.book)
+        .current
+        .as_ref()
+        .unwrap()
+        .scene
+        .as_ref()
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .model
+        .public_contents()
+        .unwrap();
+    plates
+        .request_hand_item(&changed_private_card, false, &changed_private_contents)
+        .unwrap();
     assert_eq!(
         drain(&mut queue).len(),
         1,

@@ -816,6 +816,44 @@ mod tests {
                 5_140
             );
             let item_id = buy_quote.item_id.clone();
+            let bought_view =
+                wire::journey_view(&bought, LocalDemoRole::Player, native::first()).unwrap();
+            let Some(rpc::view_message::Audience::Player(bought_player)) = bought_view.audience
+            else {
+                panic!("player projection");
+            };
+            let bought_sheet = bought_player
+                .journey
+                .as_ref()
+                .and_then(|journey| journey.own_character.as_ref())
+                .expect("the buyer phone shows the current character sheet");
+            assert!(
+                bought_sheet
+                    .owned_items
+                    .iter()
+                    .any(|item| item.thing_id == item_id),
+                "a successful purchase appears in permanent inventory"
+            );
+            assert!(
+                bought_player
+                    .scene
+                    .as_ref()
+                    .unwrap()
+                    .hand_items
+                    .iter()
+                    .all(|item| item.thing_id != item_id),
+                "an owned purchase is not rendered as an observation-only hand item"
+            );
+            let bought_coin = bought_sheet
+                .facts
+                .iter()
+                .find(|fact| fact.label == "Coin")
+                .expect("the phone sheet shows current coin");
+            let bought_balance = journey::living_scene::balance_cp(bought.state(), actor).unwrap();
+            assert_eq!(
+                bought_coin.value,
+                format!("{} GP, {} CP", bought_balance / 100, bought_balance % 100)
+            );
             let sell_terms = journey::living_scene::merchant_trade_terms(&bought, "Brynn")
                 .unwrap()
                 .into_iter()
@@ -878,6 +916,42 @@ mod tests {
                 .unwrap();
             assert_eq!(item.owner_id.as_deref(), Some(merchant_id.as_str()));
             assert_eq!(item.holder_id.as_deref(), Some(merchant_id.as_str()));
+            let sold_view =
+                wire::journey_view(&sold, LocalDemoRole::Player, native::first()).unwrap();
+            let Some(rpc::view_message::Audience::Player(sold_player)) = sold_view.audience else {
+                panic!("player projection");
+            };
+            let sold_sheet = sold_player
+                .journey
+                .as_ref()
+                .and_then(|journey| journey.own_character.as_ref())
+                .expect("the seller phone shows the current character sheet");
+            assert!(
+                sold_sheet
+                    .owned_items
+                    .iter()
+                    .all(|owned| owned.thing_id != item_id),
+                "a sold item is removed from permanent inventory"
+            );
+            assert_ne!(
+                sold_player
+                    .scene
+                    .as_ref()
+                    .and_then(|scene| scene.item.as_ref())
+                    .map(|card| card.thing_id.as_str()),
+                Some(item_id.as_str()),
+                "a sold item is not left as the phone's current item card"
+            );
+            let sold_coin = sold_sheet
+                .facts
+                .iter()
+                .find(|fact| fact.label == "Coin")
+                .expect("the phone sheet shows current coin after the sale");
+            let sold_balance = journey::living_scene::balance_cp(sold.state(), actor).unwrap();
+            assert_eq!(
+                sold_coin.value,
+                format!("{} GP, {} CP", sold_balance / 100, sold_balance % 100)
+            );
             let history = journey::living_scene::merchant_quote_history(&sold).unwrap();
             assert_eq!(history.len(), 3);
             assert_eq!(

@@ -1171,10 +1171,13 @@ fn item_card_state(item: &rpc::SceneItemCard) -> String {
         item.thing_id.as_str(),
         item.name.as_str(),
         item.detail.as_str(),
+        item.picture_description.as_str(),
         item.image_path.as_str(),
         image_state.as_str(),
         observation_only.as_str(),
         item.holder.as_str(),
+        item.owner_id.as_str(),
+        item.holder_id.as_str(),
     ]
     .into_iter()
     .map(|part| format!("{}:{part}", part.len()))

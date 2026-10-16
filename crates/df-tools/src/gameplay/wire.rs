@@ -1425,14 +1425,36 @@ pub(super) fn project_journey(
         .as_ref()
         .map(|setting| setting.place_id.clone())
         .unwrap_or_default();
-    if let Some(room) = stage(
+    let room = stage(
         "view-room-snapshot",
         journey::living_scene::snapshot(state, &authored),
-    )? {
+    )?;
+    if let Some(room) = room.as_ref() {
         scene.scene_contents_json = room.model.public_contents().map_err(|_| {
             super::refusal_detail::note("view-room-contents");
             RepositoryError::InvalidCandidate
         })?;
+    }
+    if role == LocalDemoRole::Player
+        && let (Some(room), Some(sheet)) = (room.as_ref(), journey.own_character.as_mut())
+    {
+        let who = stage(
+            "view-player-entity",
+            journey::player_entity(principal, current),
+        )?;
+        if let Some(setting) = authored.setting.as_ref() {
+            let owner_id = journey::canonical_actor_ref(state, who)?;
+            sheet.owned_items = stage(
+                "view-player-owned-items",
+                journey::living_scene::owned_items(
+                    state,
+                    &room.model,
+                    &setting.place_id,
+                    &owner_id,
+                    current.basis().revision.sequence(),
+                ),
+            )?;
+        }
     }
     if role == LocalDemoRole::Player
         && let Some(hero) = journey.own_character.as_ref()

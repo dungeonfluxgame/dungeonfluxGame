@@ -1197,6 +1197,19 @@ impl LivingScenes {
             .request_item(hero, thing_id, detail, shared)
     }
 
+    pub(super) fn request_committed_item(
+        &self,
+        hero: &str,
+        thing: &crate::gameplay::adventure::scene_model::SceneThing,
+        detail: Option<String>,
+        shared: bool,
+    ) -> Result<(), &'static str> {
+        self.plates
+            .as_ref()
+            .ok_or("scene pictures are unavailable")?
+            .request_committed_item(hero, thing, detail, shared)
+    }
+
     /// Notes a display view the server is sending: its scene, cast, tempo, revision and the
     /// health of the party and the cast. Player views are ignored.
     pub(super) fn observe(&self, message: &rpc::ViewMessage) {

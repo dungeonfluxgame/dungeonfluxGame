@@ -1306,6 +1306,7 @@ pub(in crate::gameplay) fn item_for(
         return Ok(None);
     };
     let model = &snapshot.model;
+    let inventory = inventory_projection(state, model, &setting.place_id)?;
     let scope = crate::gameplay::beat_script_runtime::scene_scope(state)?;
     let mut projected = scene.clone();
     if let Some(setting) = projected.setting.as_mut() {
@@ -1314,6 +1315,7 @@ pub(in crate::gameplay) fn item_for(
     let mut retired_targets = std::collections::BTreeSet::new();
     for decision in state.decisions.iter().rev() {
         let mut was_take = false;
+        let mut was_paid_trade = false;
         let target = if let Some(entry) = read(decision)? {
             if entry.place != setting.place_id || entry.hero != hero {
                 continue;
@@ -1323,6 +1325,7 @@ pub(in crate::gameplay) fn item_for(
                 continue;
             }
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
+                was_paid_trade = entry.option == "trade";
                 model
                     .offer(&entry.target)
                     .map_or(entry.target, |offer| offer.canonical_item_id())
@@ -1375,6 +1378,12 @@ pub(in crate::gameplay) fn item_for(
         let Some(thing) = model.things.iter().find(|thing| thing.id == target) else {
             continue;
         };
+        if was_paid_trade && thing.holder_id.as_deref() != Some(hero) {
+            // A sale is a committed trade too. The item remains in the canonical
+            // inventory under its new holder, but it is no longer a phone hand card.
+            retired_targets.insert(thing.id.clone());
+            continue;
+        }
         if retired_targets.contains(&thing.id) {
             continue;
         }
@@ -1384,6 +1393,19 @@ pub(in crate::gameplay) fn item_for(
         if was_take && thing.holder_id.as_deref() != Some(hero) {
             continue;
         }
+        let custody = inventory.iter().find(|entry| entry.item_id == thing.id);
+        let owner_id = custody
+            .and_then(|entry| entry.owner_id.clone())
+            .or_else(|| thing.owner_id.clone());
+        let holder_id = custody
+            .and_then(|entry| entry.holder_id.clone())
+            .or_else(|| thing.holder_id.clone());
+        let holder = thing
+            .holder_id
+            .as_deref()
+            .and_then(|id| model.people.iter().find(|person| person.id == id))
+            .map(|person| person.name.clone())
+            .unwrap_or_else(|| thing.holder_id.clone().unwrap_or_default());
         return Ok(Some(rpc::SceneItemCard {
             thing_id: thing.id.clone(),
             name: thing.name.clone(),
@@ -1392,8 +1414,11 @@ pub(in crate::gameplay) fn item_for(
             image_state: rpc::PlateState::Failed as i32,
             state_revision: decision.revision.sequence(),
             observation_only: thing.holder_id.as_deref() == Some(hero)
-                && thing.owner_id.as_deref() != Some(hero),
-            holder: thing.holder_id.clone().unwrap_or_default(),
+                && owner_id.as_deref() != holder_id.as_deref(),
+            holder,
+            owner_id: owner_id.unwrap_or_default(),
+            holder_id: holder_id.unwrap_or_default(),
+            picture_description: thing.picture_description.clone(),
         }));
     }
     Ok(None)
@@ -1411,6 +1436,10 @@ pub(in crate::gameplay) fn hand_items(
     let Some(snapshot) = snapshot(state, scene)? else {
         return Ok(Vec::new());
     };
+    let Some(setting) = scene.setting.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let inventory = inventory_projection(state, &snapshot.model, &setting.place_id)?;
     Ok(snapshot
         .model
         .things
@@ -1423,6 +1452,18 @@ pub(in crate::gameplay) fn hand_items(
                 && holder.is_none_or(|expected| thing.holder_id.as_deref() == Some(expected))
         })
         .map(|thing| rpc::SceneItemCard {
+            // SceneInventoryEntry carries stable actor references. The Thing retains local IDs
+            // for transaction replay, while `holder` stays readable on the device.
+            owner_id: inventory
+                .iter()
+                .find(|entry| entry.item_id == thing.id)
+                .and_then(|entry| entry.owner_id.clone())
+                .unwrap_or_default(),
+            holder_id: inventory
+                .iter()
+                .find(|entry| entry.item_id == thing.id)
+                .and_then(|entry| entry.holder_id.clone())
+                .unwrap_or_default(),
             thing_id: thing.id.clone(),
             name: thing.name.clone(),
             detail: thing.detail.clone(),
@@ -1430,7 +1471,59 @@ pub(in crate::gameplay) fn hand_items(
             image_state: rpc::PlateState::Failed as i32,
             state_revision,
             observation_only: true,
-            holder: thing.holder_id.clone().unwrap_or_default(),
+            holder: thing
+                .holder_id
+                .as_deref()
+                .and_then(|id| snapshot.model.people.iter().find(|person| person.id == id))
+                .map(|person| person.name.clone())
+                .unwrap_or_else(|| thing.holder_id.clone().unwrap_or_default()),
+            picture_description: thing.picture_description.clone(),
+        })
+        .collect())
+}
+
+/// Projects current-place property for the phone's permanent inventory. Held observations
+/// belong in `hand_items`; this list is reserved for concrete Things owned by this hero.
+pub(in crate::gameplay) fn owned_items(
+    state: &GameState,
+    model: &crate::gameplay::adventure::scene_model::SceneModel,
+    place_id: &str,
+    owner_id: &str,
+    state_revision: u64,
+) -> Result<Vec<rpc::SceneItemCard>, RepositoryError> {
+    Ok(inventory_projection(state, model, place_id)?
+        .into_iter()
+        .filter(|entry| {
+            entry.owner_id.as_deref() == Some(owner_id)
+                && !matches!(
+                    &entry.location,
+                    crate::gameplay::adventure::scene_model::SceneInventoryLocation::Stock
+                )
+        })
+        .filter_map(|entry| {
+            let thing = model
+                .things
+                .iter()
+                .find(|thing| thing.id == entry.item_id)?;
+            let holder = thing
+                .holder_id
+                .as_deref()
+                .and_then(|id| model.people.iter().find(|person| person.id == id))
+                .map(|person| person.name.clone())
+                .unwrap_or_else(|| thing.holder_id.clone().unwrap_or_default());
+            Some(rpc::SceneItemCard {
+                thing_id: thing.id.clone(),
+                name: thing.name.clone(),
+                detail: thing.detail.clone(),
+                picture_description: thing.picture_description.clone(),
+                image_path: String::new(),
+                image_state: rpc::PlateState::Failed as i32,
+                state_revision,
+                observation_only: false,
+                holder,
+                owner_id: entry.owner_id.unwrap_or_default(),
+                holder_id: entry.holder_id.unwrap_or_default(),
+            })
         })
         .collect())
 }

@@ -711,6 +711,63 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
         assert_eq!(owned.holder_id.as_deref(), Some("Brynn"));
         assert_eq!(owned.owner_id.as_deref(), Some("Brynn"));
         assert!(owned.in_scene);
+        let phone = wire::journey_view(&after, LocalDemoRole::Player, member).unwrap();
+        let Some(rpc::view_message::Audience::Player(phone)) = phone.audience else {
+            panic!("player view");
+        };
+        let sheet = phone
+            .journey
+            .as_ref()
+            .and_then(|journey| journey.own_character.as_ref())
+            .expect("the buyer's phone includes their character sheet");
+        let owned_card = sheet
+            .owned_items
+            .iter()
+            .find(|item| item.thing_id == owned_id)
+            .expect("the purchase appears in permanent inventory");
+        let actor_ref =
+            super::canonical_actor_ref(after.state(), player_entity(member, &after).unwrap())
+                .unwrap();
+        assert_eq!(owned_card.owner_id, actor_ref);
+        assert_eq!(owned_card.holder_id, actor_ref);
+        assert!(!owned_card.observation_only);
+        assert!(
+            phone
+                .scene
+                .as_ref()
+                .unwrap()
+                .hand_items
+                .iter()
+                .all(|item| item.thing_id != owned_id),
+            "owned property is not mislabeled as a temporary hand observation"
+        );
+        let coin = sheet
+            .facts
+            .iter()
+            .find(|fact| fact.label == "Coin")
+            .expect("the current coin balance remains on the phone sheet");
+        let balance =
+            living_scene::balance_cp(after.state(), player_entity(member, &after).unwrap())
+                .unwrap();
+        assert_eq!(
+            coin.value,
+            format!("{} GP, {} CP", balance / 100, balance % 100)
+        );
+        let other = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let other_phone = wire::journey_view(&after, LocalDemoRole::Player, other).unwrap();
+        let Some(rpc::view_message::Audience::Player(other_phone)) = other_phone.audience else {
+            panic!("other player view");
+        };
+        assert!(
+            other_phone
+                .journey
+                .as_ref()
+                .and_then(|journey| journey.own_character.as_ref())
+                .unwrap()
+                .owned_items
+                .iter()
+                .all(|item| item.thing_id != owned_id)
+        );
         let codec = df_persistence::NativeCodecLimits {
             maximum_document_bytes: 2 * 1024 * 1024,
             maximum_allocated_bytes: 2 * 1024 * 1024,
