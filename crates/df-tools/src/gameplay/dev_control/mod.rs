@@ -513,10 +513,7 @@ pub(super) fn is_stale_seat_binding(error: &(StatusCode, Json<Value>)) -> bool {
     error.1.0.get("code").and_then(Value::as_str) == Some("seat_binding_stale")
 }
 
-pub(super) fn seat_credential(
-    seats: &Seats,
-    seat: usize,
-) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
+fn seat_credential(seats: &Seats, seat: usize) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
     if let Some(credential) = seats.seats[seat].credential {
         return Ok(credential);
     }
