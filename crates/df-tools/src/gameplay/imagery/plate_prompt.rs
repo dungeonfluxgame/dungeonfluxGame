@@ -115,6 +115,8 @@ const HEROES_INTRO: [&str; 4] = [
 ];
 const HEROES_IDENTITY: &str = "Image 1 is the party sheet (the heroes on plain grey): keep each hero's exact face, \
     hair, build, costume and weapon, in new poses and viewpoint.";
+const HEROES_WITHOUT_REFERENCE: &str = "No photographic hero reference is available: show the heroes only as small, \
+    anonymous figures from behind or in profile, following the staged slots and activities.";
 const HERO_NUMBER: [&str; 3] = ["Hero 1", "Hero 2", "Hero 3"];
 const SHEET_POSITION: [&str; 3] = [
     "(first figure on the sheet)",
@@ -123,6 +125,7 @@ const SHEET_POSITION: [&str; 3] = [
 ];
 const HERO_IS: &str = "is";
 const HERO_FROM_SHEET: &str = "the exact hero shown in Image 1";
+const HERO_FROM_STAGE: &str = "the staged hero in this slot";
 const HERO_ACTIVITY: &str = "Their activity is";
 const SPEAKER_IS: &str = "The speaker is";
 const SPEAKER_REFERENCE: [&str; 5] = [
@@ -361,11 +364,16 @@ fn scene_plate_with(
     references: PlateReferences,
     heroes: Option<&[HeroVisualIdentity<'_>]>,
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
-    let reference_count = [references.party_sheet, references.speaker, references.place]
-        .into_iter()
-        .filter(|present| *present)
-        .count();
-    if reference_count > 4 || references.party_sheet != !spec.heroes.is_empty() {
+    let reference_count = [
+        references.party_sheet,
+        references.speaker,
+        references.speaker_face,
+        references.place,
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if reference_count > 4 || (references.party_sheet && spec.heroes.is_empty()) {
         return Err(PlatePromptRefusal::References);
     }
     if heroes.is_some_and(|heroes| heroes.len() != spec.heroes.len()) {
@@ -391,7 +399,11 @@ fn scene_plate_with(
     }
     if !spec.heroes.is_empty() {
         parts.push(Part::Fixed(HEROES_INTRO[spec.heroes.len().min(3)]));
-        parts.push(Part::Fixed(HEROES_IDENTITY));
+        parts.push(Part::Fixed(if references.party_sheet {
+            HEROES_IDENTITY
+        } else {
+            HEROES_WITHOUT_REFERENCE
+        }));
         for (ordinal, hero) in spec.heroes.iter().enumerate() {
             let sheet = sheet_position(&spec.heroes, hero.art).min(2);
             parts.extend([
@@ -408,7 +420,11 @@ fn scene_plate_with(
                         .description()
                         .map_err(|_| PlatePromptRefusal::HeroIdentity)?,
                 )),
-                None => parts.push(Part::Fixed(HERO_FROM_SHEET)),
+                None => parts.push(Part::Fixed(if references.party_sheet {
+                    HERO_FROM_SHEET
+                } else {
+                    HERO_FROM_STAGE
+                })),
             }
             parts.extend([
                 Part::Fixed("."),
@@ -551,8 +567,10 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         INTERIOR,
         EXTERIOR,
         HEROES_IDENTITY,
+        HEROES_WITHOUT_REFERENCE,
         HERO_IS,
         HERO_FROM_SHEET,
+        HERO_FROM_STAGE,
         HERO_ACTIVITY,
         SPEAKER_IS,
         SPEAKER_STAGING,

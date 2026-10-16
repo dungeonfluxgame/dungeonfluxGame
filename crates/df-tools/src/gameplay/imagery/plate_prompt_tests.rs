@@ -242,15 +242,15 @@ fn the_references_are_numbered_in_the_order_they_are_sent() {
 }
 
 #[test]
-fn a_party_without_a_party_sheet_or_too_many_references_is_refused() {
-    let spec = spec_for("inn", SceneKey::Opening, SPEAKERS[2], &[1, 2], "T").unwrap();
+fn a_party_sheet_without_heroes_is_refused() {
+    let spec = spec_for("inn", SceneKey::Opening, SPEAKERS[2], &[], "T").unwrap();
     assert_eq!(
         scene_plate(
             ContentRating::Mature,
             &spec,
             None,
             PlateReferences {
-                party_sheet: false,
+                party_sheet: true,
                 speaker: true,
                 speaker_face: false,
                 place: true,
@@ -259,6 +259,31 @@ fn a_party_without_a_party_sheet_or_too_many_references_is_refused() {
         .unwrap_err(),
         PlatePromptRefusal::References
     );
+}
+
+#[test]
+fn a_plate_can_stage_heroes_without_painted_references() {
+    let spec = spec_for("inn", SceneKey::Opening, None, &[1, 2], "T").unwrap();
+    let prompt = scene_plate(
+        ContentRating::Mature,
+        &spec,
+        None,
+        PlateReferences {
+            party_sheet: false,
+            speaker: false,
+            speaker_face: false,
+            place: false,
+        },
+    )
+    .expect("a photographic plate can omit painted references");
+    assert!(
+        prompt
+            .as_str()
+            .contains("No photographic hero reference is available")
+    );
+    assert!(prompt.as_str().contains("the staged hero in this slot"));
+    assert!(!prompt.as_str().contains("Image 1 is the party sheet"));
+    assert!(prompt.as_str().chars().count() <= MAXIMUM_PROMPT_CHARACTERS);
 }
 
 #[test]

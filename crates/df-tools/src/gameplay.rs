@@ -1453,7 +1453,7 @@ async fn serve_run(
     )?;
     let living = living_scenes::LivingScenes::start(
         imagery.clone(),
-        imagery::ReferenceStore::new(std::path::Path::new(&asset_root).join("generated")),
+        imagery::ReferenceStore::photographic(std::path::Path::new(&asset_root).join("generated")),
         social.clone(),
         rating,
         living_scenes::Timing::from_interval(living_interval),

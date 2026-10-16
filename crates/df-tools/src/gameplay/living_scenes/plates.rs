@@ -1181,12 +1181,16 @@ impl Shared {
             format!("figure-{name}"),
             stem.to_owned(),
         ] {
-            if let Ok(art) = self.inner.load(candidate).await {
+            if let Ok(art) = self.inner.load_plate_reference(candidate).await {
                 figure = Some(art);
                 break;
             }
         }
-        let face = self.inner.load(format!("portrait-{name}")).await.ok();
+        let face = self
+            .inner
+            .load_plate_reference(format!("portrait-{name}"))
+            .await
+            .ok();
         (figure, face)
     }
 
@@ -1199,11 +1203,24 @@ impl Shared {
         direction: Option<&str>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
         let mut references = Vec::new();
+        let mut has_party_sheet = false;
         let mut sorted = heroes.to_vec();
         sorted.sort_unstable();
         if !sorted.is_empty() {
             let mut figures = Vec::with_capacity(sorted.len());
             for art in &sorted {
+                if self.inner.references.photographic_only() {
+                    let Ok(figure) = self
+                        .inner
+                        .load_plate_reference(format!("figure-hero-{art}"))
+                        .await
+                    else {
+                        figures.clear();
+                        break;
+                    };
+                    figures.push(figure);
+                    continue;
+                }
                 // A hurt hero stands in the plate as the cut-out stage shows them: their health
                 // variant, taken only from what is already made and cached.
                 let variant = match faces.iter().find(|(known, _)| known == art) {
@@ -1218,11 +1235,14 @@ impl Shared {
                     None => self.inner.load(format!("figure-hero-{art}")).await?,
                 });
             }
-            let sheet = tokio::task::spawn_blocking(move || party_sheet(&figures))
-                .await
-                .map_err(|_| ImageFailure::Interrupted)?
-                .map_err(|_| ImageFailure::InvalidRequest)?;
-            references.push(sheet);
+            if figures.len() == sorted.len() {
+                let sheet = tokio::task::spawn_blocking(move || party_sheet(&figures))
+                    .await
+                    .map_err(|_| ImageFailure::Interrupted)?
+                    .map_err(|_| ImageFailure::InvalidRequest)?;
+                references.push(sheet);
+                has_party_sheet = true;
+            }
         }
         // The cast's art leads: the full-length figure and a close portrait of the face. Both
         // go into every plate that shows the speaker, because a figure alone let the same person
@@ -1238,7 +1258,11 @@ impl Shared {
         if has_speaker_face {
             references.extend(face);
         }
-        let place = self.inner.load(scene.asset.clone()).await.ok();
+        let place = self
+            .inner
+            .load_plate_reference(scene.asset.clone())
+            .await
+            .ok();
         let has_place = place.is_some();
         references.extend(place);
         // Keep the remaining cast figures only while the provider's reference limit allows them.
@@ -1265,7 +1289,7 @@ impl Shared {
                 spec,
                 scene.place.as_ref(),
                 PlateReferences {
-                    party_sheet: !sorted.is_empty(),
+                    party_sheet: has_party_sheet,
                     speaker: has_speaker_art,
                     speaker_face: has_speaker_face,
                     place: has_place,

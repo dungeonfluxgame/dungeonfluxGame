@@ -48,13 +48,29 @@ pub(in crate::gameplay) enum ReferenceError {
 #[derive(Clone, Debug)]
 pub(in crate::gameplay) struct ReferenceStore {
     directory: PathBuf,
+    photographic_only: bool,
 }
 
 impl ReferenceStore {
     pub(in crate::gameplay) fn new(generated_directory: PathBuf) -> Self {
         Self {
             directory: generated_directory,
+            photographic_only: false,
         }
+    }
+
+    /// Creates a store for scene plate references. Base generated art was authored as painted
+    /// concept art, so it must never be sent to a photographic plate request. Re-rendered live
+    /// variants use the same stem with a `-photo` or `-film` suffix.
+    pub(in crate::gameplay) fn photographic(generated_directory: PathBuf) -> Self {
+        Self {
+            directory: generated_directory,
+            photographic_only: true,
+        }
+    }
+
+    pub(in crate::gameplay) fn photographic_only(&self) -> bool {
+        self.photographic_only
     }
 
     /// Reads the generated art named by `path`: a served path such as
@@ -63,6 +79,19 @@ impl ReferenceStore {
     /// used, and it must be lowercase letters, digits, `-` and `_` with an optional `.webp` or
     /// `.png`.
     pub(in crate::gameplay) fn load(&self, path: &str) -> Result<ReferenceImage, ReferenceError> {
+        self.load_named(path, &[])
+    }
+
+    /// Reads only a generated photographic variant. The base stem is deliberately not a
+    /// fallback: its existing bytes may be painterly and would contaminate the plate.
+    pub(in crate::gameplay) fn load_photographic(
+        &self,
+        path: &str,
+    ) -> Result<ReferenceImage, ReferenceError> {
+        self.load_named(path, &["-photo", "-film"])
+    }
+
+    fn load_named(&self, path: &str, suffixes: &[&str]) -> Result<ReferenceImage, ReferenceError> {
         let name = path.rsplit('/').next().unwrap_or_default();
         let (stem, extension) = match name.rsplit_once('.') {
             Some((stem, extension @ ("webp" | "png"))) => (stem, Some(extension)),
@@ -77,24 +106,30 @@ impl ReferenceStore {
         {
             return Err(ReferenceError::Name);
         }
-        let candidates: &[&str] = match extension {
+        let extensions: &[&str] = match extension {
             Some("png") => &["png"],
             Some(_) => &["webp"],
             None => &["webp", "png"],
         };
-        for extension in candidates {
-            let file = self.directory.join(format!("{stem}.{extension}"));
-            match read_file(&file) {
-                Ok(bytes) => {
-                    let format = if *extension == "png" {
-                        ImageFormat::Png
-                    } else {
-                        ImageFormat::Webp
-                    };
-                    return Ok(ReferenceImage::new(format, bytes));
+        let suffixes = suffixes
+            .iter()
+            .copied()
+            .chain(suffixes.is_empty().then_some(""));
+        for suffix in suffixes {
+            for extension in extensions {
+                let file = self.directory.join(format!("{stem}{suffix}.{extension}"));
+                match read_file(&file) {
+                    Ok(bytes) => {
+                        let format = if *extension == "png" {
+                            ImageFormat::Png
+                        } else {
+                            ImageFormat::Webp
+                        };
+                        return Ok(ReferenceImage::new(format, bytes));
+                    }
+                    Err(ReferenceError::Missing) => {}
+                    Err(error) => return Err(error),
                 }
-                Err(ReferenceError::Missing) => {}
-                Err(error) => return Err(error),
             }
         }
         Err(ReferenceError::Missing)
@@ -115,4 +150,32 @@ fn read_file(path: &Path) -> Result<Bytes, ReferenceError> {
     std::fs::read(path)
         .map(Bytes::from)
         .map_err(|_| ReferenceError::Unusable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn photographic_references_do_not_fall_back_to_the_painted_base_stem() {
+        let directory = std::env::temp_dir().join(format!(
+            "dungeonflux-photo-reference-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("temporary reference directory");
+        std::fs::write(directory.join("scene-place-test.webp"), b"painted base")
+            .expect("painted base fixture");
+        let store = ReferenceStore::photographic(directory.clone());
+        assert!(matches!(
+            store.load_photographic("scene-place-test"),
+            Err(ReferenceError::Missing)
+        ));
+        std::fs::write(directory.join("scene-place-test-photo.webp"), b"live photo")
+            .expect("photographic variant fixture");
+        let photo = store
+            .load_photographic("scene-place-test")
+            .expect("photographic variant");
+        assert_eq!(&photo.bytes[..], b"live photo");
+        std::fs::remove_dir_all(directory).expect("remove temporary reference directory");
+    }
 }

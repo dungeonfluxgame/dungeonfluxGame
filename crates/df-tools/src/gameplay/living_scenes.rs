@@ -1435,6 +1435,22 @@ impl Inner {
             .map_err(|_| ImageFailure::InvalidRequest)
     }
 
+    async fn load_photographic(&self, name: String) -> Result<ReferenceImage, ImageFailure> {
+        let references = self.references.clone();
+        tokio::task::spawn_blocking(move || references.load_photographic(&name))
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?
+            .map_err(|_| ImageFailure::InvalidRequest)
+    }
+
+    async fn load_plate_reference(&self, name: String) -> Result<ReferenceImage, ImageFailure> {
+        if self.references.photographic_only() {
+            self.load_photographic(name).await
+        } else {
+            self.load(name).await
+        }
+    }
+
     async fn render_hero_cutout(
         &self,
         index: usize,
