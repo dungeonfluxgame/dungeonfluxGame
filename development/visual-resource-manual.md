@@ -142,14 +142,19 @@ For an empty or suspicious plate, check in this order:
    expected source category?
 4. Browser screenshot and network-visible image dimensions: did the requested
    image load, and did the stage activate it after decode?
-5. `imagery.jsonl` and the cache: was the result a cache hit, a provider result,
-   or a failure? Check reference hashes and prompt size without copying prompts
-   or image bytes into agent output.
+5. Provenance and cache: when the run uses a generated adventure, inspect its
+   run directory's `imagery.jsonl` for cache-hit/provider-result status, reference
+   hashes, and prompt size. A fixed `--harbor` run may have no `imagery.jsonl`:
+   `gameplay.rs` passes a manifest directory only when a prepared generated
+   adventure exists. For fixed harbor, use the timeline's image key and inspect
+   that key's cache file and `<key>.layout.json` sidecar instead. Do not copy
+   prompts or image bytes into agent output.
 
 For a CGI or illustrated regression, inspect the actual bytes named by the
-provenance entry with an image viewer. A filename containing `photo` is not proof
-of photographic content. Confirm the selected reference files are the reviewed
-documentary variants. `ReferenceStore::load_photographic` accepts the explicit
+provenance entry, or by the timeline image key for fixed harbor, with an image
+viewer. A filename containing `photo` is not proof of photographic content.
+Confirm the selected reference files are the reviewed documentary variants.
+`ReferenceStore::load_photographic` accepts the explicit
 `-documentary-photo` suffix and deliberately does not fall back to a painted base
 or older nominal photo stem. Do not reintroduce an illustrated fallback to hide a
 provider failure; keep the failed/pending state visible and retain the previous
@@ -172,15 +177,21 @@ therefore creates a new key; an old byte remains valid for an older run/referenc
 The plate layout note lives beside the image as `<key>.layout.json`.
 
 Runtime generated output belongs under `artifacts/` or the explicit
-`DF_GAMEPLAY_IMAGERY_CACHE` directory. It is registered from the run-local
-`imagery.jsonl` manifest on startup, so a fresh server can serve retained keys
-without regenerating them. Checked-in source references under `assets/` are
-immutable project inputs and should not be cleaned as cache.
+`DF_GAMEPLAY_IMAGERY_CACHE` directory. For a generated-adventure run, the
+prepared adventure directory can also contain the run-local `imagery.jsonl`
+provenance manifest; startup uses that manifest to re-register retained keys.
+Fixed `--harbor` runs currently pass no manifest directory, so absence of
+`imagery.jsonl` is expected. Their diagnostic source is `/dev/timeline` plus the
+cache key and `<key>.layout.json` sidecar. Scene plates are JPEG cache files;
+other image kinds may use WebP or PNG according to their output specification.
+Checked-in source references under `assets/` are immutable project inputs and
+should not be cleaned as cache.
 
 To clear one stopped run's disposable imagery cache, resolve and verify the exact
-directory first, then remove only that directory. Keep the manifest when its
-provenance is needed for review; remove it only as part of intentionally retiring
-the same run. Never clear an active run or a broad `artifacts/` parent.
+directory first, then remove only that directory. Keep `imagery.jsonl` when a
+generated-adventure run has one and its provenance is needed for review; remove it
+only as part of intentionally retiring the same run. Fixed harbor runs have no
+manifest to preserve. Never clear an active run or a broad `artifacts/` parent.
 
 ## Safe stop and retained evidence
 
