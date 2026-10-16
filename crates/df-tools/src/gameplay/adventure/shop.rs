@@ -188,6 +188,7 @@ mod tests {
     };
     use df_model::checkpoint::Checkpoint;
     use df_persistence::local_demo_scope::LocalDemoRole;
+    use df_protocol::common as rpc;
 
     fn interaction(current: &Checkpoint, operation: u8, target: &str, option: &str) -> Checkpoint {
         interaction_with_choices(current, operation, target, option, &[])

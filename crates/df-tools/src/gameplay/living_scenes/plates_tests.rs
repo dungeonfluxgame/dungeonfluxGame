@@ -1833,11 +1833,11 @@ async fn committed_stock_items_and_reconnected_cards_rebuild_the_canonical_image
     let generated = crate::gameplay::npc_dossier_tests::adventure(381);
     let mut scene = scene(SceneKey::Opening, "Marek’s cloth shop", Some("Marek"));
     scene.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
-    let (shared, mut queue) = shared(16);
-    observe(&shared, &scene, &[], &[1]);
+    let (plate_shared, mut queue) = shared(16);
+    observe(&plate_shared, &scene, &[], &[1]);
     drain(&mut queue);
     let plates = Plates {
-        shared: shared.clone(),
+        shared: plate_shared.clone(),
         _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
     };
     let mut purchased = scene
@@ -1872,7 +1872,7 @@ async fn committed_stock_items_and_reconnected_cards_rebuild_the_canonical_image
         .request_committed_item("Brakka", &purchased, None, false)
         .expect("the committed Thing is sufficient even though the authored plate is stale");
     assert_eq!(drain(&mut queue).len(), 1);
-    let committed_cache_id = locked(&shared.book)
+    let committed_cache_id = locked(&plate_shared.book)
         .state_images
         .items
         .keys()
@@ -2196,6 +2196,7 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
             .unwrap();
         thing.detail.push_str(" The seam is newly described.");
     }
+    let detailed_detail = format!("{thing_detail} The seam is newly described.");
     let changed_private_card = hand_card("Vale", &detailed_detail);
     let changed_private_contents = locked(&shared.book)
         .current
@@ -2218,7 +2219,6 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
         1,
         "new details get their own image"
     );
-    let detailed_detail = format!("{thing_detail} The seam is newly described.");
     let detailed_card = hand_card("Vale", &detailed_detail);
     let mut detailed_phone = rpc::GameplayScene {
         title: scene.title.clone(),
