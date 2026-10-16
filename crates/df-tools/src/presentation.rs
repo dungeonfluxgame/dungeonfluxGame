@@ -960,8 +960,9 @@ pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
     pending_reply_speaker(journey?, scene)
 }
 
-/// Whether the server currently marks a reply as pending. The marker is published before its
-/// answer line, so an earlier line from the same speaker cannot answer a newer turn.
+/// Whether a reply to the hero's newest line is still pending for this scene. The server marks the
+/// reply before its answer is logged, and the mark can outlive the answer; once the marked
+/// speaker's spoken line is logged after the hero's newest turn, the reply is no longer pending.
 pub(crate) fn scene_reply_pending(
     journey: &rpc::JourneyView,
     scene: Option<&rpc::GameplayScene>,
@@ -969,6 +970,9 @@ pub(crate) fn scene_reply_pending(
     pending_reply_speaker(journey, scene).is_some()
 }
 
+/// The speaker of a reply still awaiting its answer, with the speaker's display name. The server
+/// marker alone is not enough: an answer logged after the hero's newest turn ends the reply even
+/// while the marker is still set, so neither the thinking indicator nor the caption outlives it.
 fn pending_reply_speaker(
     journey: &rpc::JourneyView,
     scene: Option<&rpc::GameplayScene>,
@@ -982,7 +986,29 @@ fn pending_reply_speaker(
         crate::voice_line::SceneSpeaker::Missing => speaker,
         crate::voice_line::SceneSpeaker::Ambiguous => return None,
     };
+    if answered_after_latest_hero_turn(journey, speaker) {
+        return None;
+    }
     Some(speaker.to_owned())
+}
+
+/// Whether `speaker` has a spoken line logged after the hero's newest turn. An older answer from
+/// the same speaker cannot satisfy a newer question. Before any hero turn, only the speaker's
+/// line as the newest row answers, so an earlier line under later narration never resurfaces.
+fn answered_after_latest_hero_turn(journey: &rpc::JourneyView, speaker: &str) -> bool {
+    let spoken_by_speaker = |line: &rpc::TableLine| {
+        rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Npc)
+            && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Speech)
+            && crate::voice_line::speaker_names_match(&line.speaker, speaker)
+            && !line.text.trim().is_empty()
+    };
+    match latest_hero_turn(journey) {
+        Some(turn) => journey
+            .table_log
+            .iter()
+            .any(|line| line.sequence > turn && spoken_by_speaker(line)),
+        None => journey.table_log.last().is_some_and(spoken_by_speaker),
+    }
 }
 
 fn latest_hero_turn(journey: &rpc::JourneyView) -> Option<u64> {
@@ -998,6 +1024,19 @@ fn latest_hero_turn(journey: &rpc::JourneyView) -> Option<u64> {
         })
         .map(|line| line.sequence)
         .max()
+}
+
+/// The hero's newest typed or acted line, the one a pending reply answers, if it has words.
+pub(crate) fn newest_hero_line(journey: &rpc::JourneyView) -> Option<(u64, &str, &str)> {
+    journey.table_log.iter().rev().find_map(|line| {
+        (rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
+            && matches!(
+                rpc::TableKind::try_from(line.kind),
+                Ok(rpc::TableKind::Speech | rpc::TableKind::Action)
+            )
+            && !line.text.trim().is_empty())
+        .then_some((line.sequence, line.speaker.as_str(), line.text.trim()))
+    })
 }
 
 /// The newest public reply from the scene's speaker, if the accepted table log has one.
@@ -2512,7 +2551,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_in_progress_is_named_until_the_server_clears_its_marker() {
+    fn a_reply_in_progress_is_named_until_the_speaker_answers_the_newest_turn() {
         assert_eq!(replying_speaker(&talk_view(1, "", None)), None);
         let asked = server_line(
             1,
@@ -2523,9 +2562,11 @@ mod tests {
             "Who sent you?",
         );
         assert_eq!(
-            replying_speaker(&talk_view(2, "Courier", Some(asked))).as_deref(),
+            replying_speaker(&talk_view(2, "Courier", Some(asked.clone()))).as_deref(),
             Some("Courier")
         );
+        // The marker can outlive the answer: once Courier answers the newest hero turn, the
+        // thinking indicator stops even though the marker is still set.
         let answered = server_line(
             2,
             "Courier",
@@ -2534,11 +2575,34 @@ mod tests {
             rpc::TableKind::Speech,
             "Keep your voice down.",
         );
-        assert_eq!(
-            replying_speaker(&talk_view(3, "Courier", Some(answered))),
-            Some("Courier".to_owned())
+        let mut shown = journey(rpc::JourneyPhase::Opening, false, vec![]);
+        shown.presentation_sequence = 3;
+        shown.reply_speaker = "Courier".to_owned();
+        shown.table_log = vec![asked.clone(), answered];
+        assert_eq!(replying_speaker(&view(shown)), None);
+        // An older answer, from before the newest hero line, does not clear a newer question.
+        let older_answer = server_line(
+            1,
+            "Courier",
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Speech,
+            "Keep your voice down.",
         );
-        assert_eq!(replying_speaker(&talk_view(4, "", None)), None);
+        let newest_question = server_line(
+            2,
+            "Brakka",
+            rpc::TableRole::Hero,
+            0,
+            rpc::TableKind::Speech,
+            "Who sent you?",
+        );
+        let mut shown = journey(rpc::JourneyPhase::Opening, false, vec![]);
+        shown.presentation_sequence = 4;
+        shown.reply_speaker = "Courier".to_owned();
+        shown.table_log = vec![older_answer, newest_question];
+        assert_eq!(replying_speaker(&view(shown)).as_deref(), Some("Courier"));
+        assert_eq!(replying_speaker(&talk_view(5, "", None)), None);
     }
 
     #[test]

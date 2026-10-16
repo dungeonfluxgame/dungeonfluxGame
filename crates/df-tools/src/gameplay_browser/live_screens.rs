@@ -640,7 +640,10 @@ fn exploration_speech<'a>(
     scene: &'a rpc::GameplayScene,
 ) -> Option<(Option<u64>, &'a str, &'a str)> {
     if crate::presentation::scene_reply_pending(journey, Some(scene)) {
-        return None;
+        // The hero's own newest line stands in until the answer is logged. The scene's opening
+        // narration and older replies never do, so the caption cannot fall back to them.
+        return crate::presentation::newest_hero_line(journey)
+            .map(|(sequence, name, line)| (Some(sequence), name, line));
     }
     crate::presentation::newest_scene_speech(journey)
         .map(|(sequence, name, line)| (Some(sequence), name, line))
@@ -1358,7 +1361,12 @@ mod tests {
         ];
         let scene = rpc::GameplayScene::default();
 
-        assert_eq!(exploration_speech(&journey, &scene), None);
+        // While the reply is pending, the hero's newest line holds the caption; the purchase
+        // narration and the older answer do not.
+        assert_eq!(
+            exploration_speech(&journey, &scene),
+            Some((Some(3), "Brakka", "Could I inspect the other fine clothes?"))
+        );
 
         journey.table_log.push(rpc::TableLine {
             sequence: 4,
@@ -1417,7 +1425,11 @@ mod tests {
             text: "Could I inspect the other fine clothes?".into(),
             ..Default::default()
         });
-        assert_eq!(exploration_speech(&journey, &scene), None);
+        // The new hero line replaces the purchase narration while the answer is still pending.
+        assert_eq!(
+            exploration_speech(&journey, &scene),
+            Some((Some(9), "Brakka", "Could I inspect the other fine clothes?"))
+        );
 
         journey.table_log.push(rpc::TableLine {
             sequence: 10,
@@ -1427,7 +1439,15 @@ mod tests {
             text: "Marek shows Brakka the remaining wool coats.".into(),
             ..Default::default()
         });
-        assert_eq!(exploration_speech(&journey, &scene), None);
+        // The logged answer is shown at once, even though the server's marker is still set.
+        assert_eq!(
+            exploration_speech(&journey, &scene),
+            Some((
+                Some(10),
+                "Marek",
+                "Marek shows Brakka the remaining wool coats."
+            ))
+        );
 
         journey.reply_speaker.clear();
         assert_eq!(
