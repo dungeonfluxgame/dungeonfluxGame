@@ -530,7 +530,7 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
         let art = u8::try_from(hero.index + 1).ok()?;
         let fallback_art = match art {
             1 | 2 => format!("/assets/ui/generated/figure-hero-{art}-photo.png"),
-            _ => format!("/assets/ui/generated/figure-hero-{art}.webp"),
+            _ => format!("/assets/ui/generated/figure-hero-{art}-photo"),
         };
         let live_art = state
             .and_then(|state| state.hero_cutouts.get(&hero.name))
@@ -546,7 +546,11 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
         ));
     }
     for actor in &stage.cast {
-        let fallback_art = stage_asset(&actor.sprite);
+        let fallback_art = match actor.sprite.rsplit('/').next().unwrap_or_default() {
+            "sprite-courier" => "/assets/ui/generated/sprite-courier-photo".to_owned(),
+            "sprite-bandit" => "/assets/ui/generated/sprite-bandit-photo".to_owned(),
+            _ => stage_asset(&actor.sprite),
+        };
         let overlay = state
             .and_then(|state| state.health_sprites.get(&actor.id))
             .or_else(|| state.and_then(|state| state.sprites.get(&actor.id)))

@@ -14,6 +14,7 @@ pub(super) fn generated_asset_url(stem: &str) -> String {
     let photographic = match stem {
         "portrait-hero-1" | "portrait-hero-1-full" => Some("figure-hero-1-photo"),
         "portrait-hero-2" | "portrait-hero-2-full" => Some("figure-hero-2-photo"),
+        "portrait-hero-3" | "portrait-hero-3-full" => Some("figure-hero-3-photo"),
         _ => None,
     };
     photographic.map_or_else(
