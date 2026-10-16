@@ -1751,21 +1751,31 @@ pub(in crate::gameplay) fn attack_option_for_target(
     weapon: Option<&str>,
 ) -> Result<Option<String>, RepositoryError> {
     let actor = actor_id(state, entity)?;
-    let target = target.to_lowercase();
-    let weapon = weapon.map(str::to_lowercase);
-    Ok(
-        options(state, actor, rpc::GameplayActionKind::GreatswordAttack)?
-            .into_iter()
-            .find(|(_, _, label)| {
-                let label = label.to_lowercase();
-                label.contains(&target)
-                    && weapon
-                        .as_ref()
-                        .is_none_or(|weapon| label.starts_with(weapon))
-                    && !label.contains(" · ")
-            })
-            .map(|(id, _, _)| id),
-    )
+    let target = target.trim();
+    let weapon = weapon.map(str::trim).filter(|value| !value.is_empty());
+    let mut matches = Vec::new();
+    for (id, action, _) in options(state, actor, rpc::GameplayActionKind::GreatswordAttack)? {
+        let Action::Attack {
+            target: target_id,
+            weapon: use_weapon,
+            ..
+        } = action
+        else {
+            continue;
+        };
+        let target_entity = canonical(state, target_id)?;
+        let target_name = super::name(state, target_entity)?;
+        if !target_name.eq_ignore_ascii_case(target) {
+            continue;
+        }
+        if weapon.is_some_and(|wanted| !use_weapon.weapon.id().eq_ignore_ascii_case(wanted)) {
+            continue;
+        }
+        matches.push(id);
+    }
+    // Multiple legal choices require the caller to provide a more specific
+    // target/weapon; silently choosing the first label can retarget an action.
+    Ok((matches.len() == 1).then(|| matches.remove(0)))
 }
 pub(in crate::gameplay) fn groups(
     current: &Checkpoint,

@@ -3250,7 +3250,11 @@ fn start_combat(
         objectives: vec![model::content(
             scene_binding.map_or("defend-courier", |binding| binding.objective),
         )?],
-        combat_policy: model::content("normal-nonlethal-melee")?,
+        combat_policy: model::content(if scene_binding.is_some() {
+            "tactical-srd521-cover-policy"
+        } else {
+            "normal-nonlethal-melee"
+        })?,
         tactical: None,
     });
     beat(state, "combat")?;

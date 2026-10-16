@@ -1014,12 +1014,27 @@ fn record_physical_classification(
         PhysicalActionKind::Trade => "trade",
         PhysicalActionKind::Use => "use",
     };
-    super::actor::record_audit_line(
+    let mut fields = serde_json::Map::new();
+    fields.insert("source".to_owned(), json!(source));
+    fields.insert("verb".to_owned(), json!(verb));
+    fields.insert("target".to_owned(), json!(action.target));
+    fields.insert("disposition".to_owned(), json!("proposal"));
+    fields.insert("resolution".to_owned(), json!(resolution));
+    fields.insert("reason".to_owned(), json!(reason));
+    fields.insert("elapsed_ms".to_owned(), json!(elapsed_ms));
+    super::actor::record_audit_diagnostic(
         "gameplay.physical_action_classified",
         format!(
-            "ACTION source={source} verb={verb} target={:?} disposition=action resolution={resolution} reason={reason:?} elapsed_ms={elapsed_ms}",
+            "ACTION source={source} verb={verb} target={:?} disposition=proposal resolution={resolution} elapsed_ms={elapsed_ms}",
             action.target
         ),
+        fields,
+        &[
+            ("gameplay.action.source", source.to_owned()),
+            ("gameplay.action.verb", verb.to_owned()),
+            ("gameplay.action.disposition", "proposal".to_owned()),
+            ("gameplay.action.resolution", resolution.to_owned()),
+        ],
     );
 }
 

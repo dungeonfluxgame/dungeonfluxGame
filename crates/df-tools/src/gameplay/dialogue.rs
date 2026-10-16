@@ -24,6 +24,36 @@ const NOTE_COMMAND_OVERHEAD_BYTES: usize = "write down ".len();
 const MAXIMUM_PENDING_MEMBERS: usize = 32;
 const MAXIMUM_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
+fn record_physical_action_event(
+    event: &'static str,
+    verb: &str,
+    target: &str,
+    disposition: &str,
+    resolution: &str,
+    reason: Option<&str>,
+) {
+    let mut fields = serde_json::Map::new();
+    fields.insert("verb".to_owned(), serde_json::json!(verb));
+    fields.insert("target".to_owned(), serde_json::json!(target));
+    fields.insert("disposition".to_owned(), serde_json::json!(disposition));
+    fields.insert("resolution".to_owned(), serde_json::json!(resolution));
+    fields.insert("reason".to_owned(), serde_json::json!(reason));
+    actor::record_audit_diagnostic(
+        event,
+        format!(
+            "ACTION verb={verb} target={target:?} disposition={disposition} resolution={resolution}{}",
+            reason.map_or_else(String::new, |value| format!(" reason={value:?}")),
+        ),
+        fields,
+        &[
+            ("gameplay.action.verb", verb.to_owned()),
+            ("gameplay.action.target", target.to_owned()),
+            ("gameplay.action.disposition", disposition.to_owned()),
+            ("gameplay.action.resolution", resolution.to_owned()),
+        ],
+    );
+}
+
 pub(super) enum DialogueRequest {
     SyncNotes,
     Raw(Vec<u8>),
@@ -905,12 +935,13 @@ impl Service {
             ) {
                 return Err(Status::failed_precondition("attack was refused"));
             }
-            actor::record_audit_line(
+            record_physical_action_event(
                 "gameplay.physical_action_resolved",
-                format!(
-                    "ACTION verb=attack target={:?} disposition=action resolution=scene-npc-assault initiative=started opening_attack=false",
-                    action.target
-                ),
+                "attack",
+                &action.target,
+                "action",
+                "scene-npc-assault initiative=started opening_attack=false",
+                None,
             );
             return Ok(DialogueReply::Raw(
                 rpc::DialogueResponse {
@@ -948,12 +979,13 @@ impl Service {
             )
             .map_err(actor::unavailable)?
             else {
-                actor::record_audit_line(
+                record_physical_action_event(
                     "gameplay.physical_action_unavailable",
-                    format!(
-                        "ACTION verb=attack target={:?} disposition=action resolution=unavailable reason=not-offered-tactical-target",
-                        action.target
-                    ),
+                    "attack",
+                    &action.target,
+                    "unavailable",
+                    "unavailable",
+                    Some("not-offered-tactical-target"),
                 );
                 return Err(Status::failed_precondition(
                     "attack unavailable: target is not a current canonical combat offer",
@@ -995,12 +1027,13 @@ impl Service {
             ) {
                 return Err(Status::failed_precondition("attack was refused"));
             }
-            actor::record_audit_line(
+            record_physical_action_event(
                 "gameplay.physical_action_resolved",
-                format!(
-                    "ACTION verb=attack target={:?} disposition=action resolution=tactical-choice",
-                    action.target
-                ),
+                "attack",
+                &action.target,
+                "action",
+                "tactical-choice",
+                None,
             );
             return Ok(DialogueReply::Raw(
                 rpc::DialogueResponse {
@@ -1016,12 +1049,13 @@ impl Service {
         if let Some((target, option)) =
             journey::living_scene::interaction_for_line(&scene, &request.text)
         {
-            actor::record_audit_line(
+            record_physical_action_event(
                 "gameplay.physical_action_resolved",
-                format!(
-                    "ACTION verb={verb} target={:?} disposition=action resolution=scene-interaction option={option:?}",
-                    action.target
-                ),
+                verb,
+                &action.target,
+                "action",
+                &format!("scene-interaction option={option:?}"),
+                None,
             );
             return self
                 .interaction_call(credential, request, &target, option)
@@ -1044,12 +1078,13 @@ impl Service {
                 "target is not a registered usable scene object"
             }
         };
-        actor::record_audit_line(
+        record_physical_action_event(
             "gameplay.physical_action_unavailable",
-            format!(
-                "ACTION verb={verb} target={:?} disposition=action resolution=unavailable reason={reason:?}",
-                action.target
-            ),
+            verb,
+            &action.target,
+            "unavailable",
+            "unavailable",
+            Some(reason),
         );
         Err(Status::failed_precondition(format!(
             "action unavailable: {reason}"
