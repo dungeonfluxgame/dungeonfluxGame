@@ -217,6 +217,43 @@ fn same_seed_gives_identical_dossiers() {
     let other = roll_dossiers(&tables, &facts, generated.seed ^ 1).unwrap();
     assert_ne!(first, other);
 }
+
+#[test]
+fn generated_dossiers_keep_archetype_provenance_and_narrative_flavor() {
+    let chapter = chapter_tables();
+    let tables = dossier_tables();
+    let generated = adventure(&chapter, seed(31));
+    let facts = facts_from(&chapter, &generated);
+    let dossiers = roll_dossiers(&tables, &facts, generated.seed).unwrap();
+    let dossier = dossiers
+        .iter()
+        .find(|dossier| dossier.role == NpcRole::Patron)
+        .unwrap();
+    let profile = dossier
+        .archetype_profile
+        .as_ref()
+        .expect("patron role is covered by the curated library");
+
+    assert_eq!(profile.library_version, 1);
+    assert!(!profile.source_id.is_empty());
+    assert_eq!(
+        dossier
+            .rolls
+            .iter()
+            .filter(|roll| roll.table.starts_with("dossier.archetype."))
+            .count(),
+        5
+    );
+    let profile_value = serde_json::to_value(profile).unwrap();
+    for mechanical_key in ["bonus", "skill", "ability", "progression", "stat"] {
+        assert!(profile_value.get(mechanical_key).is_none());
+    }
+    let rendered = render_dossier(dossier);
+    assert!(rendered.contains("ROLE ARCHETYPE (narrative flavor only; no mechanics)"));
+    assert!(rendered.contains(&profile.source_id));
+    assert!(rendered.contains(&profile.experience.label));
+    assert!(rendered.contains(&profile.competence.label));
+}
 #[test]
 fn different_npc_ids_roll_on_independent_streams() {
     let chapter = chapter_tables();

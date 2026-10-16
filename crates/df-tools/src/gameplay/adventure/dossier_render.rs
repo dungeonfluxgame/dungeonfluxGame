@@ -49,6 +49,37 @@ pub(crate) fn render_dossier(dossier: &Dossier) -> String {
         "Speech: {:?} sentences; {}; tic: {} (opens \"{}\", closes \"{}\").",
         style.length, style.vocabulary, style.tic, style.opener, style.closer
     );
+    if let Some(profile) = &dossier.archetype_profile {
+        let _ = writeln!(
+            out,
+            "\nROLE ARCHETYPE (narrative flavor only; no mechanics):"
+        );
+        let _ = writeln!(
+            out,
+            "  Source: {} v{} ({})",
+            profile.source_id, profile.library_version, profile.category
+        );
+        let _ = writeln!(out, "  Role: {}", profile.label);
+        for (label, cues) in [
+            ("Instincts", &profile.instincts),
+            ("Priorities", &profile.priorities),
+            ("Boundaries", &profile.boundaries),
+            ("Knowledge domains", &profile.knowledge_domains),
+            ("Speech habits", &profile.speech_habits),
+            ("Typical actions", &profile.typical_actions),
+        ] {
+            let _ = writeln!(out, "  {label}: {}", cues.join("; "));
+        }
+        for (label, flavor) in [
+            ("Experience", &profile.experience),
+            ("Competence", &profile.competence),
+            ("Temperament", &profile.temperament),
+            ("Motive", &profile.motive),
+            ("Style", &profile.style),
+        ] {
+            let _ = writeln!(out, "  {label}: {} — {}", flavor.label, flavor.guidance);
+        }
+    }
     let tie = &dossier.story_tie;
     let _ = writeln!(
         out,

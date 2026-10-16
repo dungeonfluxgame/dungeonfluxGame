@@ -594,6 +594,7 @@ mod emotional_profile_tests {
                 tags: Vec::new(),
                 note: None,
             },
+            archetype_profile: None,
             origin: trait_value("origin", "grew up in a mill town"),
             past_trade: trait_value("trade", "worked as a baker"),
             formative_event: trait_value("event", "lost a friend in a fire"),

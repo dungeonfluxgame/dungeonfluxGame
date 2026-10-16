@@ -10,7 +10,10 @@ use serde_json::{Value, json};
 use super::{
     adventure::{
         ForcedEntries, GenerateOptions, GeneratedAdventure, Tables,
-        dossier::{Attitude, Dossier, Effect, EmotionalProfile, NpcRole, Topic, mentions_term},
+        dossier::{
+            Attitude, Dossier, Effect, EmotionalProfile, NpcRole, ResolvedFlavor, Topic,
+            mentions_term,
+        },
         generate,
     },
     npc_dossier::{
@@ -145,6 +148,168 @@ fn facts_for(
         },
     })
     .0
+}
+
+#[test]
+fn generated_archetypes_reach_the_npc_context_and_respect_listener_secrets() {
+    let adventure = adventure(37);
+    let (index, dossier) = adventure
+        .dossiers
+        .iter()
+        .enumerate()
+        .find(|(_, dossier)| dossier.role == NpcRole::Patron && dossier.archetype_profile.is_some())
+        .expect("generated speaking cast has a curated role profile");
+    let profile = dossier.archetype_profile.as_ref().unwrap();
+    let question = format!("{}: Who are you?", dossier.name);
+    let ledger = SocialLedger::open(adventure.dossiers.clone(), "archetype-public", None).unwrap();
+    let npc_context = context(&adventure, &ledger, SceneKey::Opening, &question);
+    let role = &npc_context.facts["role_archetype"];
+    assert_eq!(
+        role["provenance"]["library_version"],
+        profile.library_version
+    );
+    assert_eq!(role["provenance"]["source_id"], profile.source_id);
+    assert_eq!(role["experience"]["id"], profile.experience.id);
+    assert_eq!(role["competence"]["id"], profile.competence.id);
+    assert!(
+        role["scope"]
+            .as_str()
+            .unwrap()
+            .contains("general practice within listed domains")
+    );
+    let secret_terms = secrets_only(&adventure, dossier);
+    for text in strings_of(&npc_context.facts) {
+        assert!(
+            !secret_terms.leaks(&text),
+            "withheld NPC secret reached context: {text}"
+        );
+    }
+
+    let saved = serde_json::to_vec(dossier).unwrap();
+    let reloaded: Dossier = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(&reloaded, dossier);
+    let mut reloaded_dossiers = adventure.dossiers.clone();
+    reloaded_dossiers[index] = reloaded;
+    let reloaded_ledger =
+        SocialLedger::open(reloaded_dossiers, "archetype-reloaded", None).unwrap();
+    let reloaded_context = context(&adventure, &reloaded_ledger, SceneKey::Opening, &question);
+    assert_eq!(reloaded_context.facts["role_archetype"], *role);
+
+    let hidden_term = dossier
+        .knowledge
+        .never_says
+        .iter()
+        .flat_map(|item| &item.terms)
+        .find(|term| !term.trim().is_empty())
+        .expect("generated dossier has a withheld term")
+        .clone();
+    let mut hidden_dossiers = adventure.dossiers.clone();
+    let mut hidden_dossier = dossier.clone();
+    hidden_dossier.archetype_profile.as_mut().unwrap().instincts[0]
+        .push_str(&format!(" {hidden_term}"));
+    hidden_dossiers[index] = hidden_dossier;
+    let hidden_ledger = SocialLedger::open(hidden_dossiers, "archetype-withheld", None).unwrap();
+    let hidden_context = context(&adventure, &hidden_ledger, SceneKey::Opening, &question);
+    assert!(hidden_context.facts.get("role_archetype").is_none());
+    assert!(!hidden_context.facts.to_string().contains(&hidden_term));
+}
+
+#[test]
+fn novice_and_veteran_archetype_flavors_reach_the_real_reply_context() {
+    let adventure = adventure(37);
+    let (index, dossier) = adventure
+        .dossiers
+        .iter()
+        .enumerate()
+        .find(|(_, dossier)| dossier.archetype_profile.is_some())
+        .expect("generated speaking cast has a curated role profile");
+    let mut novice = adventure.clone();
+    novice.dossiers[index]
+        .archetype_profile
+        .as_mut()
+        .expect("profile exists")
+        .experience = ResolvedFlavor {
+        id: "new-to-the-work".to_owned(),
+        label: "new to the work".to_owned(),
+        guidance: "Has only recently taken up this role; checks unfamiliar work carefully."
+            .to_owned(),
+    };
+    novice.dossiers[index]
+        .archetype_profile
+        .as_mut()
+        .unwrap()
+        .competence = ResolvedFlavor {
+        id: "struggling".to_owned(),
+        label: "struggling".to_owned(),
+        guidance: "Has trouble with some ordinary parts of the role and may seek help.".to_owned(),
+    };
+
+    let mut veteran = adventure.clone();
+    veteran.dossiers[index]
+        .archetype_profile
+        .as_mut()
+        .expect("profile exists")
+        .experience = ResolvedFlavor {
+        id: "veteran".to_owned(),
+        label: "a veteran of the work".to_owned(),
+        guidance: "Has long experience while treating new conditions as new.".to_owned(),
+    };
+    veteran.dossiers[index]
+        .archetype_profile
+        .as_mut()
+        .unwrap()
+        .competence = ResolvedFlavor {
+        id: "skilled".to_owned(),
+        label: "skilled".to_owned(),
+        guidance:
+            "Shows practiced judgment in familiar work and takes care with difficult details."
+                .to_owned(),
+    };
+
+    let question = "What wears out first on a long journey?";
+    let novice_ledger = SocialLedger::open(novice.dossiers.clone(), "archetype-novice", None)
+        .expect("novice dossier ledger");
+    let novice_context = context(&novice, &novice_ledger, SceneKey::Opening, question);
+    let veteran_ledger = SocialLedger::open(veteran.dossiers.clone(), "archetype-veteran", None)
+        .expect("veteran dossier ledger");
+    let veteran_context = context(&veteran, &veteran_ledger, SceneKey::Opening, question);
+    let novice_role = &novice_context.facts["role_archetype"];
+    let veteran_role = &veteran_context.facts["role_archetype"];
+
+    assert_eq!(novice_role["experience"]["id"], "new-to-the-work");
+    assert_eq!(novice_role["competence"]["id"], "struggling");
+    assert_eq!(veteran_role["experience"]["id"], "veteran");
+    assert_eq!(veteran_role["competence"]["id"], "skilled");
+    assert_eq!(
+        novice_role["knowledge_domains"],
+        veteran_role["knowledge_domains"]
+    );
+    assert_ne!(novice_role["experience"], veteran_role["experience"]);
+    assert_ne!(novice_role["competence"], veteran_role["competence"]);
+    for role in [novice_role, veteran_role] {
+        assert_eq!(
+            role["provenance"]["source_id"],
+            dossier.archetype_profile.as_ref().unwrap().source_id
+        );
+        assert!(role.get("skills").is_none());
+        assert!(role.get("bonus").is_none());
+        assert!(role.get("authority").is_none());
+        assert!(
+            role["knowledge_domains"]
+                .as_array()
+                .is_some_and(|domains| !domains.is_empty())
+        );
+    }
+}
+
+#[test]
+fn reply_guidance_allows_only_broad_role_practice_from_archetypes() {
+    let guidance = npc_dossier::profile(ContentRating::Restrained).guidance;
+    assert!(guidance.contains("general rule of thumb"));
+    assert!(guidance.contains("directly asked"));
+    assert!(guidance.contains("specific item"));
+    assert!(guidance.contains("catalog item or price"));
+    assert!(guidance.contains("grant no skill"));
 }
 
 fn every_standing() -> [Standing; 4] {

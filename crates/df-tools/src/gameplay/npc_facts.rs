@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use super::{
-    adventure::dossier::{Dossier, Knowledge, Length, Topic},
+    adventure::dossier::{Dossier, Knowledge, Length, ResolvedArchetype, Topic},
     npc_dossier::Withheld,
     social::{Conversation, Standing, classify_keywords, topic_of},
     speech_text::{normalised, sentences, shared_words, words},
@@ -769,6 +769,42 @@ fn who_would_know(dossier: &Dossier, withheld: &Withheld) -> Option<String> {
         .map(|item| item.text.clone())
 }
 
+/// The curated role snapshot permits general practice answers within its domains, never specific
+/// claims about current items, people, events, state, or outcomes. Check every serialized string
+/// against this listener's withheld terms before adding it to the model context.
+fn public_role_archetype(profile: &ResolvedArchetype, withheld: &Withheld) -> Option<Value> {
+    fn leaks(value: &Value, withheld: &Withheld) -> bool {
+        match value {
+            Value::String(text) => withheld.leaks_secret(text),
+            Value::Array(items) => items.iter().any(|item| leaks(item, withheld)),
+            Value::Object(fields) => fields.values().any(|item| leaks(item, withheld)),
+            _ => false,
+        }
+    }
+
+    let value = json!({
+        "provenance": {
+            "library_version": profile.library_version,
+            "source_id": profile.source_id,
+            "category": profile.category,
+        },
+        "role": profile.label,
+        "instincts": profile.instincts,
+        "priorities": profile.priorities,
+        "boundaries": profile.boundaries,
+        "knowledge_domains": profile.knowledge_domains,
+        "speech_habits": profile.speech_habits,
+        "typical_actions": profile.typical_actions,
+        "experience": profile.experience,
+        "competence": profile.competence,
+        "temperament": profile.temperament,
+        "motive": profile.motive,
+        "style": profile.style,
+        "scope": "narrative guidance and general practice within listed domains; not evidence of specific facts, mechanics, authority, or current actions",
+    });
+    (!leaks(&value, withheld)).then_some(value)
+}
+
 /// What the model is shown about the NPC and the hero, the lines this reply offers, and
 /// every line already said to this hero, uncapped. The offered lines count as said once the
 /// reply is recorded and uses them. See the module documentation for how lines are chosen;
@@ -862,6 +898,13 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
     });
     if let Some(line) = selection.volunteer {
         facts["volunteer"] = json!(line.text);
+    }
+    if let Some(profile) = dossier
+        .archetype_profile
+        .as_ref()
+        .and_then(|profile| public_role_archetype(profile, withheld))
+    {
+        facts["role_archetype"] = profile;
     }
     if let Some(line) = selection.nearest {
         facts["nearest_you_know"] = json!(line.text);

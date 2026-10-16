@@ -15,6 +15,7 @@ pub(crate) mod campaign_tables;
 mod campaign_tests;
 pub(crate) mod cli;
 pub(crate) mod dossier;
+pub(crate) mod dossier_archetypes;
 mod dossier_cast;
 pub(crate) mod dossier_render;
 pub(crate) mod dossier_tables;

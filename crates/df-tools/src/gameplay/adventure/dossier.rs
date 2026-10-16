@@ -472,6 +472,34 @@ pub(crate) struct SpeechStyle {
     pub(crate) closer: String,
     pub(crate) tags: Vec<String>,
 }
+/// A selected reusable flavor axis copied into the dossier for stable replay and reload.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolvedFlavor {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) guidance: String,
+}
+/// Snapshot of a library role and independently seeded narrative-only flavor selections.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolvedArchetype {
+    pub(crate) library_version: u16,
+    pub(crate) source_id: String,
+    pub(crate) category: String,
+    pub(crate) label: String,
+    pub(crate) instincts: Vec<String>,
+    pub(crate) priorities: Vec<String>,
+    pub(crate) boundaries: Vec<String>,
+    pub(crate) knowledge_domains: Vec<String>,
+    pub(crate) speech_habits: Vec<String>,
+    pub(crate) typical_actions: Vec<String>,
+    pub(crate) experience: ResolvedFlavor,
+    pub(crate) competence: ResolvedFlavor,
+    pub(crate) temperament: ResolvedFlavor,
+    pub(crate) motive: ResolvedFlavor,
+    pub(crate) style: ResolvedFlavor,
+}
 /// A complete backstory, persisted with the adventure record.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -482,6 +510,9 @@ pub(crate) struct Dossier {
     pub(crate) role_label: String,
     pub(crate) tables_revision: String,
     pub(crate) given: GivenTraits,
+    /// Missing for older records and for roles outside the curated library.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) archetype_profile: Option<ResolvedArchetype>,
     pub(crate) origin: Trait,
     pub(crate) past_trade: Trait,
     pub(crate) formative_event: Trait,
@@ -1237,6 +1268,19 @@ fn roll_one(
         tags: context.given_tags.iter().cloned().collect(),
         note: given_note(context),
     };
+    let (archetype_profile, mut archetype_rolls) =
+        match base
+            .tables
+            .archetypes
+            .compose(&member.archetype, &member.role_label, seed, npc)?
+        {
+            Some((profile, rolls)) => (Some(profile), rolls),
+            None => (None, Vec::new()),
+        };
+    for roll in &mut archetype_rolls {
+        roll.n = roller.rolls.len() + 1;
+        roller.rolls.push(roll.clone());
+    }
     let render_trait = |profile: &Profile, name: &str| -> Result<Trait, DossierError> {
         Ok(trait_of(
             profile,
@@ -1264,6 +1308,7 @@ fn roll_one(
         role_label: member.role_label.clone(),
         tables_revision: tables.revision.clone(),
         given,
+        archetype_profile,
         origin: render_trait(origin, "origin")?,
         past_trade: render_trait(trade, "past_trade")?,
         formative_event: render_trait(event, "formative_event")?,

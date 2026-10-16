@@ -23,13 +23,14 @@ use std::{
 };
 
 /// Files in revision order.
-pub(crate) const FILES: [&str; 6] = [
+pub(crate) const FILES: [&str; 7] = [
     "npc-background.json",
     "npc-character.json",
     "npc-ties.json",
     "npc-knowledge.json",
     "npc-social.json",
     "npc-personal.json",
+    super::dossier_archetypes::FILE,
 ];
 const SCHEMA: &str = "df-npc-tables/1";
 const DICE: [u8; 6] = [4, 6, 8, 10, 12, 20];
@@ -371,6 +372,7 @@ pub(crate) struct DossierTables {
     pub(super) knowledge: KnowledgeTables,
     pub(super) social: Social,
     pub(super) personal: Personal,
+    pub(super) archetypes: super::dossier_archetypes::ArchetypeLibrary,
 }
 
 fn invalid(file: &str, path: &str, reason: impl Into<String>) -> TablesError {
@@ -620,7 +622,7 @@ fn requires_campaign(slots: &[&str]) -> bool {
 }
 
 impl DossierTables {
-    /// Read and validate the six restrained dossier files from a directory.
+    /// Read and validate the restrained dossier files and versioned archetype library.
     pub(crate) fn load(directory: &Path) -> Result<Self, TablesError> {
         Self::load_variant(directory, None)
     }
@@ -669,6 +671,12 @@ impl DossierTables {
             knowledge: document(files, FILES[3])?,
             social: document(files, FILES[4])?,
             personal: document(files, FILES[5])?,
+            archetypes: super::dossier_archetypes::ArchetypeLibrary::from_bytes(
+                files
+                    .get(FILES[6])
+                    .ok_or_else(|| invalid(FILES[6], ".", "file missing"))?,
+            )
+            .map_err(|reason| invalid(FILES[6], ".", reason))?,
         };
         tables.validate()?;
         Ok(tables)
