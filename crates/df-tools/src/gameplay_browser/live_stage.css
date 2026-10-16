@@ -307,6 +307,9 @@
 /* the victory card keeps its text clear of the figures: a left column, wrapped whole */
 .tv-stage .df-aftermath .aftermath-narrative,.tv-stage .df-aftermath .aftermath-lower{max-width:58%!important;margin-right:auto;text-align:left}
 
+/* A line that cannot fit safely beside its head uses the existing named subtitle lane. */
+.tv-stage[data-unplaced-line] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
+.tv-stage[data-unplaced-line] .tv-scene-context{opacity:0;visibility:hidden}
 /* A typed line whose hero has no scene figure uses the named lower-third strip. */
 .tv-stage[data-typed-strip] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
 .tv-stage[data-typed-strip][data-typed-strip-closing] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering],[data-line-state=closing]){opacity:0;visibility:hidden;transform:translate(-50%,calc(var(--u)*1));transition:opacity .18s ease,transform .18s ease,visibility 0s .18s}

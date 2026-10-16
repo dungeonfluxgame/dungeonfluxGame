@@ -620,7 +620,7 @@ pub(super) fn refresh_timing_visibility(stage: &Element) {
                     &scene,
                     &image.get_attribute("data-src").unwrap_or_default(),
                     "ready",
-                    1200,
+                    1000,
                 );
             }
         }
@@ -867,7 +867,7 @@ pub(super) fn check_display(
         .ok_or_else(|| JsValue::from_str("display check kept die is absent"))?;
     let (ability, skill) = check_skill_label(&check.source_revision)
         .ok_or_else(|| JsValue::from_str("display check skill is unknown"))?;
-    let roller_index = journey
+    let roller = journey
         .table_log
         .iter()
         .rev()
@@ -876,9 +876,9 @@ pub(super) fn check_display(
                 && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
                 && line.speaker == "Roll"
         })
-        .map(|line| line.hero_index)
-        .and_then(|index| usize::try_from(index).ok())
         .ok_or_else(|| JsValue::from_str("display check roller is absent"))?;
+    let roller_index = usize::try_from(roller.hero_index)
+        .map_err(|_| JsValue::from_str("display check roller is invalid"))?;
     let hero_name = journey
         .party
         .get(roller_index)
@@ -895,6 +895,7 @@ pub(super) fn check_display(
         return Err(JsValue::from_str("display check finding is absent"));
     }
     Ok(live_stage::CheckDisplay {
+        sequence: roller.sequence,
         hero_name,
         ability_skill: format!("{ability} ({skill})"),
         faces: check

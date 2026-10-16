@@ -126,6 +126,7 @@ fn report_removed_presentation_component(element: &Element, reason: &'static str
 }
 
 pub(super) struct CheckDisplay {
+    pub(super) sequence: u64,
     pub(super) hero_name: String,
     pub(super) ability_skill: String,
     pub(super) faces: Vec<(u32, bool)>,
@@ -139,7 +140,8 @@ pub(super) struct CheckDisplay {
 impl CheckDisplay {
     fn signature(&self) -> String {
         format!(
-            "{}|{}|{:?}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
+            self.sequence,
             self.hero_name,
             self.ability_skill,
             self.faces,
@@ -329,6 +331,7 @@ struct Figure {
     art: Rc<RefCell<ArtState>>,
     error: Closure<dyn FnMut(Event)>,
     name_text: RefCell<String>,
+    last_check: Cell<Option<u64>>,
 }
 
 /// One entry of the HUD: the compact name and health plate of a hero, or of the foe.
@@ -481,6 +484,7 @@ impl Figures {
                 art,
                 error,
                 name_text: RefCell::new(String::new()),
+                last_check: Cell::new(None),
             });
         }
         // Thin air in front of the far and mid figures, behind the near ones.
@@ -605,6 +609,9 @@ impl Figures {
         flag(&self.root, "data-wet", staging.wet)?;
         if *self.scene.borrow() != scene {
             self.clear_bubbles()?;
+            for figure in &self.figures {
+                figure.last_check.set(None);
+            }
             *self.scene.borrow_mut() = scene.to_owned();
         }
         // Non-player figures that do not hold the stage stand back, in the cast's order.
@@ -1008,10 +1015,10 @@ impl Figures {
             .ok_or_else(|| JsValue::from_str("check hero figure is absent"))?;
         let signature = check.signature();
         let component_id = super::presentation_timing::identity(&signature);
-        if let Some(panel) = figure.bubbles.query_selector(".tv-check-result")?
-            && panel.get_attribute("data-check-signature").as_deref() == Some(&signature)
-        {
-            self.place_bubble(figure);
+        if figure.last_check.get() == Some(check.sequence) {
+            if figure.bubbles.query_selector(".tv-check-result")?.is_some() {
+                self.place_bubble(figure);
+            }
             return Ok(());
         }
         // A rapid second-seat check must not erase the first card while its finding is still
@@ -1048,6 +1055,7 @@ impl Figures {
             "",
         )?;
         panel.set_attribute("data-check-signature", &signature)?;
+        figure.last_check.set(Some(check.sequence));
         panel.set_attribute("data-component-id", &component_id.to_string())?;
         panel.set_attribute("data-component-scene", &scene)?;
         panel.set_attribute("data-component-type", "check_card")?;
@@ -1848,6 +1856,12 @@ impl Figures {
         state: LineState,
         bubble: &LineBubble<'_>,
     ) -> Result<bool, JsValue> {
+        if matches!(
+            state,
+            LineState::Closing | LineState::Done | LineState::Cancelled
+        ) {
+            self.set_unplaced_line_strip(id, state, false)?;
+        }
         let component_type = PresentationComponent::SpeechBubble;
         let phase = line_component_phase(state);
         let reason = line_component_reason(state);
@@ -1983,6 +1997,13 @@ impl Figures {
             LineState::Done => element.remove(),
             _ => {}
         }
+        if matches!(
+            state,
+            LineState::Opening | LineState::Speaking | LineState::Lingering
+        ) {
+            self.place_bubble(figure);
+        }
+        self.set_unplaced_line_strip(id, state, figure.bubbles.has_attribute("hidden"))?;
         super::presentation_timing::line(
             id,
             state,
@@ -2039,6 +2060,34 @@ impl Figures {
             );
         }
         Ok(opened)
+    }
+
+    /// A line that cannot fit safely beside its head remains readable in the named lane.
+    fn set_unplaced_line_strip(
+        &self,
+        id: u64,
+        state: LineState,
+        unplaced: bool,
+    ) -> Result<(), JsValue> {
+        let Some(stage) = self.root.parent_element() else {
+            return Ok(());
+        };
+        let identity = id.to_string();
+        let owns_strip = stage.get_attribute("data-unplaced-line").as_deref() == Some(&identity);
+        if matches!(
+            state,
+            LineState::Opening | LineState::Speaking | LineState::Lingering
+        ) {
+            if unplaced {
+                stage.set_attribute("data-unplaced-line", &identity)?;
+            } else {
+                // The newly placed line replaces any predecessor's fallback lane.
+                stage.remove_attribute("data-unplaced-line")?;
+            }
+        } else if owns_strip {
+            stage.remove_attribute("data-unplaced-line")?;
+        }
+        Ok(())
     }
 
     fn set_typed_line_strip(&self, id: u64, state: LineState) -> Result<bool, JsValue> {
@@ -2129,6 +2178,9 @@ impl Figures {
     }
 
     pub(super) fn clear_bubbles(&self) -> Result<(), JsValue> {
+        if let Some(stage) = self.root.parent_element() {
+            stage.remove_attribute("data-unplaced-line")?;
+        }
         for (position, figure) in self.figures.iter().enumerate() {
             self.clear_figure_components(figure, position, "scene-change")?;
         }
@@ -2229,6 +2281,133 @@ mod tests {
         check_result_phase_ms, line_component_phase, typed_line_anchor,
     };
     use df_observe::presentation::ComponentPhase;
+
+    #[test]
+    fn retired_check_does_not_replay_or_replace_the_next_line_but_new_roll_does() {
+        use super::{BubbleKind, CheckDisplay, Figures, LineBubble};
+        use crate::stage_machines::LineState;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        let hero = &figures.figures[0];
+        hero.root.set_attribute("data-present", "true").unwrap();
+        *hero.name_text.borrow_mut() = "Brakka".to_owned();
+        let mut check = CheckDisplay {
+            sequence: 5,
+            hero_name: "Brakka".to_owned(),
+            ability_skill: "Intelligence (Investigation)".to_owned(),
+            faces: vec![(18, true)],
+            roll_mode: 0,
+            modifier: 0,
+            total: 18,
+            succeeded: true,
+            finding: "Courier is here.".to_owned(),
+        };
+        figures.set_check(Some(&check)).unwrap();
+        hero.bubbles
+            .query_selector(".tv-check-result")
+            .unwrap()
+            .unwrap()
+            .remove();
+        let line = LineBubble {
+            kind: BubbleKind::Typed,
+            speaker: "Brakka",
+            text: "Tell me about the seal.",
+            voiced: false,
+        };
+        figures.set_line(0, 3, LineState::Opening, &line).unwrap();
+        figures.set_check(Some(&check)).unwrap();
+        assert!(
+            hero.bubbles
+                .query_selector(".tv-check-result")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            hero.bubbles
+                .query_selector("[data-line-id='3']")
+                .unwrap()
+                .is_some()
+        );
+        // An identical outcome at a later authoritative Roll sequence is a new event.
+        check.sequence = 8;
+        figures.set_check(Some(&check)).unwrap();
+        assert!(
+            hero.bubbles
+                .query_selector(".tv-check-result")
+                .unwrap()
+                .is_some()
+        );
+        check.sequence = 9;
+        figures.set_check(Some(&check)).unwrap();
+        assert_eq!(
+            hero.bubbles
+                .query_selector_all(".tv-check-result")
+                .unwrap()
+                .length(),
+            2
+        );
+        figures.dispose();
+        parent.remove();
+    }
+
+    #[test]
+    fn unplaceable_plate_line_uses_named_lane_and_next_fitting_line_restores_host() {
+        use super::{BubbleKind, Figures, LineBubble};
+        use crate::{plate_layout::Side, presentation::PlateGeometry, stage_machines::LineState};
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        parent.set_attribute("data-shot", "plate").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        let hero = &figures.figures[0];
+        hero.root.set_attribute("data-present", "true").unwrap();
+        *hero.name_text.borrow_mut() = "Brakka".to_owned();
+        figures
+            .set_plate(
+                Some(PlateGeometry {
+                    bubble_side: Side::Right,
+                    head_x: 500,
+                    head_y: 200,
+                    head_width: 100,
+                    head_height: 100,
+                    heroes: vec![],
+                }),
+                Some((1920.0, 1080.0)),
+            )
+            .unwrap();
+        hero.bubbles
+            .set_attribute("style", "width:10000px;height:10000px")
+            .unwrap();
+        let line = LineBubble {
+            kind: BubbleKind::Typed,
+            speaker: "Brakka",
+            text: "A long question must remain readable.",
+            voiced: false,
+        };
+        figures.set_line(0, 3, LineState::Opening, &line).unwrap();
+        assert!(hero.bubbles.has_attribute("hidden"));
+        assert_eq!(
+            parent.get_attribute("data-unplaced-line").as_deref(),
+            Some("3")
+        );
+        figures.set_line(0, 3, LineState::Lingering, &line).unwrap();
+        assert_eq!(
+            parent.get_attribute("data-unplaced-line").as_deref(),
+            Some("3")
+        );
+        figures.set_line(0, 3, LineState::Done, &line).unwrap();
+        assert!(!parent.has_attribute("data-unplaced-line"));
+        hero.bubbles
+            .set_attribute("style", "width:100px;height:40px")
+            .unwrap();
+        figures.set_line(0, 4, LineState::Opening, &line).unwrap();
+        assert!(!hero.bubbles.has_attribute("hidden"));
+        assert!(!parent.has_attribute("data-unplaced-line"));
+        figures.dispose();
+        parent.remove();
+    }
 
     #[test]
     fn line_completion_waits_for_observed_dom_closure() {
