@@ -265,10 +265,15 @@ pub(crate) enum SceneChangeKind {
     Stolen {
         holder_id: String,
     },
+    /// Durable intent only. Rules adjudication must replace this with `Stolen` before
+    /// custody changes; recording the attempt preserves witnesses and replay context.
+    StealAttempt {
+        actor_id: String,
+    },
     Given {
         holder_id: String,
-        /// Present only when the giver is the current owner. A borrowed observation
-        /// changes hands without minting ownership for the recipient.
+        /// Ownership only changes when the authority explicitly approves a sale/gift.
+        /// Ordinary handoffs (including loans) preserve the existing owner.
         #[serde(default)]
         owner_id: Option<String>,
     },
@@ -417,6 +422,11 @@ impl SceneModel {
     pub(crate) fn public_contents(&self) -> Result<String, SceneModelError> {
         let mut contents: Value = serde_json::from_str(&self.picture_state()?)
             .map_err(|_| SceneModelError::Serialization)?;
+        let visible_people = self
+            .people
+            .iter()
+            .map(|person| person.id.as_str())
+            .collect::<BTreeSet<_>>();
         if let Some(things) = contents.get_mut("things").and_then(Value::as_array_mut) {
             for (view, thing) in things.iter_mut().zip(&self.things) {
                 view["short"] = Value::String(thing.short.clone());
@@ -425,7 +435,12 @@ impl SceneModel {
                 } else {
                     vec!["look", "use"]
                 });
-                view["owner"] = serde_json::json!(thing.owner_id);
+                view["owner"] = serde_json::json!(
+                    thing
+                        .owner_id
+                        .as_deref()
+                        .filter(|owner| visible_people.contains(owner))
+                );
             }
         }
         contents["offers"] = serde_json::json!(
@@ -439,7 +454,21 @@ impl SceneModel {
                 })
                 .collect::<Vec<_>>()
         );
-        contents["inventory"] = self.inventory_json()?;
+        // The canonical inventory remains available to the authoritative phone/device
+        // projection. Shared scene contents omit held entries whose actor is outside this
+        // scene, preventing private remote custody from leaking through a public plate.
+        let public_inventory = self
+            .inventory()
+            .into_iter()
+            .filter(|entry| {
+                entry
+                    .holder_id
+                    .as_deref()
+                    .is_none_or(|holder| visible_people.contains(holder))
+            })
+            .collect::<Vec<_>>();
+        contents["inventory"] =
+            serde_json::to_value(public_inventory).map_err(|_| SceneModelError::Serialization)?;
         serde_json::to_string(&contents).map_err(|_| SceneModelError::Serialization)
     }
 
@@ -849,6 +878,7 @@ impl SceneModel {
                     thing.in_scene = person_ids.contains(holder_id.as_str());
                     thing.position = format!("held by {holder_id}");
                 }
+                SceneChangeKind::StealAttempt { .. } => {}
                 SceneChangeKind::Returned { position } => {
                     thing.holder_id = None;
                     thing.in_scene = true;
@@ -890,6 +920,9 @@ impl SceneModel {
                 .iter()
                 .find(|offer| offer.id == change.entity_id)
                 .ok_or(SceneModelError::UnknownEntity)?;
+            if offer.seller_id != *_seller_id {
+                return Err(SceneModelError::Contradiction);
+            }
             let item_id = offer.item_id.clone();
             if self.things.iter().any(|thing| thing.id == item_id) {
                 return Err(SceneModelError::Contradiction);

@@ -77,7 +77,13 @@ pub(crate) struct NpcInventoryProposal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum NpcInventoryAction {
     Take,
-    Give { recipient_id: String },
+    Give {
+        recipient_id: String,
+        /// `true` is an explicit sale/gift; `false` is a temporary handoff/loan.
+        transfer_ownership: bool,
+        /// Required when the acting NPC is not the canonical owner.
+        owner_consent_id: Option<String>,
+    },
     Purchase,
     Steal,
 }
@@ -110,7 +116,14 @@ pub(crate) fn commit_npc_inventory_action(
                 .iter()
                 .find(|thing| thing.id == proposal.target_id)
                 .ok_or_else(invalid)?;
-            if !thing.portable || thing.holder_id.is_some() || thing.in_use {
+            if !thing.portable
+                || thing.holder_id.is_some()
+                || thing.in_use
+                || thing
+                    .owner_id
+                    .as_deref()
+                    .is_some_and(|owner| owner != actor.id)
+            {
                 return Err(invalid());
             }
             let line = format!("{} takes {}.", actor.name, thing.name);
@@ -126,7 +139,11 @@ pub(crate) fn commit_npc_inventory_action(
                 line,
             )
         }
-        NpcInventoryAction::Give { recipient_id } => {
+        NpcInventoryAction::Give {
+            recipient_id,
+            transfer_ownership,
+            owner_consent_id,
+        } => {
             let thing = snapshot
                 .model
                 .things
@@ -142,14 +159,21 @@ pub(crate) fn commit_npc_inventory_action(
             if thing.holder_id.as_deref() != Some(actor.id.as_str()) {
                 return Err(invalid());
             }
-            if thing
-                .owner_id
-                .as_deref()
-                .is_some_and(|owner| owner != actor.id && owner != recipient_id)
-            {
+            if let Some(owner) = thing.owner_id.as_deref() {
+                if owner != actor.id && owner_consent_id.as_deref() != Some(owner) {
+                    return Err(invalid());
+                }
+                if transfer_ownership
+                    && owner != actor.id
+                    && owner_consent_id.as_deref() != Some(owner)
+                {
+                    return Err(invalid());
+                }
+            } else if transfer_ownership && owner_consent_id.is_some() {
                 return Err(invalid());
             }
             recipient = recipient_id.clone();
+            let owner_id = transfer_ownership.then(|| recipient_id.clone());
             let line = format!(
                 "{} gives {} to {}.",
                 actor.name, thing.name, recipient_person.name
@@ -161,6 +185,7 @@ pub(crate) fn commit_npc_inventory_action(
                     description: line.clone(),
                     kind: SceneChangeKind::Given {
                         holder_id: recipient_id,
+                        owner_id,
                     },
                 }),
                 line,
@@ -193,9 +218,27 @@ pub(crate) fn commit_npc_inventory_action(
             )
         }
         NpcInventoryAction::Steal => {
-            // A narrator cannot award theft custody. The rules/check owner must produce a
-            // validated result before a Stolen SceneChange is accepted.
-            return Err(invalid());
+            let thing = snapshot
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == proposal.target_id)
+                .ok_or_else(invalid)?;
+            if !thing.portable || thing.holder_id.is_some() || thing.in_use {
+                return Err(invalid());
+            }
+            let line = format!("{} attempts to steal {}.", actor.name, thing.name);
+            (
+                thing.id.clone(),
+                Some(SceneChange {
+                    entity_id: thing.id.clone(),
+                    description: line.clone(),
+                    kind: SceneChangeKind::StealAttempt {
+                        actor_id: actor.id.clone(),
+                    },
+                }),
+                line,
+            )
         }
     };
     let mut basis = current.basis();
@@ -908,10 +951,20 @@ pub(super) fn stage(
                 "steal" if thing.holder_id.is_some() => {
                     format!("{} is already being held.", thing.name)
                 }
-                "steal" => format!(
-                    "Stealing {} requires an adjudicated check before custody can change.",
-                    thing.name
-                ),
+                "steal" => {
+                    let description = format!(
+                        "{hero} attempts to steal {}. An adjudicated check is required before custody can change.",
+                        thing.name
+                    );
+                    change = Some(SceneChange {
+                        entity_id: thing.id.clone(),
+                        description: description.clone(),
+                        kind: SceneChangeKind::StealAttempt {
+                            actor_id: hero.clone(),
+                        },
+                    });
+                    description
+                }
                 "open" | "close" => {
                     let description = format!(
                         "{hero} {} {}.",

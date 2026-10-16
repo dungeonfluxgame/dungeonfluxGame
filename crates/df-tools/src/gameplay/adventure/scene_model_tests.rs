@@ -231,6 +231,23 @@ fn npc_purchase_uses_actor_purse_and_promotes_same_stock_item() {
 }
 
 #[test]
+fn purchase_change_cannot_claim_a_different_seller() {
+    let model = merchant_shop();
+    let result = model.as_it_is_now(
+        super::super::pack::SceneKey::Opening,
+        &[SceneChange {
+            entity_id: "clothes-travelers".into(),
+            description: "Corin buys traveler clothes.".into(),
+            kind: SceneChangeKind::Purchased {
+                holder_id: "cloth-shop-bystander-1".into(),
+                seller_id: "invented-seller".into(),
+            },
+        }],
+    );
+    assert!(result.is_err());
+}
+
+#[test]
 fn theft_moves_custody_without_rewriting_owner() {
     let mut model = merchant_shop();
     model.things[0].owner_id = Some("patron".into());
@@ -576,6 +593,41 @@ fn giving_a_borrowed_observation_changes_holder_without_minting_ownership() {
         .expect("tankard remains in the scene snapshot");
     assert_eq!(tankard["holder_id"], "hero-sigrun");
     assert!(tankard["owner_id"].is_null());
+}
+
+#[test]
+fn ordinary_given_handoff_preserves_canonical_owner() {
+    let mut model = taproom();
+    let thing = model
+        .things
+        .iter_mut()
+        .find(|thing| thing.portable)
+        .expect("taproom has portable thing");
+    let thing_id = thing.id.clone();
+    thing.owner_id = Some("patron".into());
+    thing.holder_id = Some("hero-brakka".into());
+    let snapshot = model
+        .as_it_is_now(
+            super::super::pack::SceneKey::Opening,
+            &[SceneChange {
+                entity_id: thing_id.clone(),
+                description: "Brakka loans the item to Sigrun.".into(),
+                kind: SceneChangeKind::Given {
+                    holder_id: "hero-sigrun".into(),
+                    owner_id: None,
+                },
+            }],
+        )
+        .expect("handoff remains a valid scene change");
+    let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+    let thing = snapshot["model"]["things"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|thing| thing["id"] == thing_id)
+        .unwrap();
+    assert_eq!(thing["holder_id"], "hero-sigrun");
+    assert_eq!(thing["owner_id"], "patron");
 }
 
 fn canonical_facts(model: &SceneModel) -> BTreeMap<String, String> {
