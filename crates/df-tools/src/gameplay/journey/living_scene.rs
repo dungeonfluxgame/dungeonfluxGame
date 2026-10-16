@@ -318,6 +318,28 @@ pub(crate) struct MerchantQuoteHistoryEntry {
     pub(crate) close_reason: Option<MerchantQuoteClosureReason>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MerchantItemTransactionDirection {
+    MerchantSoldToHero,
+    HeroSoldToMerchant,
+}
+
+/// A committed, replay-derived transaction for one exact item and merchant/customer pair.
+/// This projection deliberately excludes source dialogue so it can be safely narrowed into
+/// listener context without exposing unrelated conversation history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MerchantItemTransaction {
+    pub(crate) place_id: String,
+    pub(crate) item_id: String,
+    pub(crate) merchant_id: String,
+    pub(crate) hero_id: String,
+    pub(crate) direction: MerchantItemTransactionDirection,
+    pub(crate) price_cp: u32,
+    pub(crate) revision: df_types::SessionRevision,
+    pub(crate) operation_id: OperationId,
+    pub(crate) quote_id: Option<String>,
+}
+
 /// Commits an NPC inventory proposal after validating the current scene and exact money path.
 /// This is intentionally separate from player command admission: a narrative director can
 /// submit an authorized proposal, but it still receives a fenced checkpoint and journal row.
@@ -1009,6 +1031,86 @@ pub(crate) fn merchant_quote_history(
         }
     }
     Ok(history)
+}
+
+/// Returns the latest committed trade for one canonical item, merchant, hero and place.
+/// `AcceptedDecision.revision` supplies durable ordering; rejected quote attempts and
+/// narrative-only dialogue have no matching committed item change and are ignored.
+pub(crate) fn latest_merchant_item_transaction(
+    current: &Checkpoint,
+    place_id: &str,
+    item_id: &str,
+    merchant_id: &str,
+    hero_id: &str,
+) -> Result<Option<MerchantItemTransaction>, RepositoryError> {
+    let mut latest = None;
+    for decision in &current.state().decisions {
+        let Some(entry) = read(decision)? else {
+            continue;
+        };
+        if entry.place != place_id || entry.hero != hero_id {
+            continue;
+        }
+        let Some(change) = entry.change.as_ref() else {
+            continue;
+        };
+        if change.entity_id != item_id {
+            continue;
+        }
+        let transaction = match &change.kind {
+            SceneChangeKind::Purchased {
+                seller_id,
+                cost_cp,
+                quote_id,
+                ..
+            } if seller_id == merchant_id => {
+                let price_cp = if *cost_cp == 0 {
+                    entry.paid_cp
+                } else {
+                    *cost_cp
+                };
+                if price_cp == 0 || (entry.paid_cp != 0 && entry.paid_cp != price_cp) {
+                    return Err(invalid());
+                }
+                Some((
+                    MerchantItemTransactionDirection::MerchantSoldToHero,
+                    price_cp,
+                    quote_id.clone(),
+                ))
+            }
+            SceneChangeKind::Sold {
+                seller_id,
+                buyer_id,
+                price_cp,
+                quote_id,
+            } if seller_id == hero_id
+                && buyer_id == merchant_id
+                && entry.coin_credit_cp == *price_cp
+                && *price_cp > 0 =>
+            {
+                Some((
+                    MerchantItemTransactionDirection::HeroSoldToMerchant,
+                    *price_cp,
+                    Some(quote_id.clone()),
+                ))
+            }
+            _ => None,
+        };
+        if let Some((direction, price_cp, quote_id)) = transaction {
+            latest = Some(MerchantItemTransaction {
+                place_id: entry.place,
+                item_id: change.entity_id.clone(),
+                merchant_id: merchant_id.to_owned(),
+                hero_id: hero_id.to_owned(),
+                direction,
+                price_cp,
+                revision: decision.revision,
+                operation_id: decision.operation,
+                quote_id,
+            });
+        }
+    }
+    Ok(latest)
 }
 
 fn same_quote_channel(left: &SceneTradeQuote, right: &SceneTradeQuote) -> bool {

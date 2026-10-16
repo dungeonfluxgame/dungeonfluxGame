@@ -439,7 +439,10 @@ mod tests {
             assert!(!runtime::ended(repeated.state()).unwrap());
             assert!(repeated.state().narrative.open_threads.is_empty());
             let mut checked = repeated;
-            for (operation, target) in [(13, "thing-clothes-travelers"), (14, "thing-folded-label")]
+            for (operation, target) in [
+                (13, "thing-item-clothes-travelers"),
+                (14, "thing-folded-label"),
+            ]
             {
                 let choices = [
                     (runtime::CHOICE_GROUP, "look-around"),
@@ -541,7 +544,7 @@ mod tests {
             let given = interaction_with_choices(
                 &traded,
                 8,
-                "clothes-travelers",
+                "item-clothes-travelers",
                 "give",
                 &[("scene-recipient", "shop-adventurer")],
             );
@@ -794,8 +797,8 @@ mod tests {
             );
 
             let bought = interaction_with_choices(
-                &buy_quote_checkpoint,
-                47,
+                &stale_attempt,
+                51,
                 &buy_quote.item_id,
                 "trade",
                 &[
@@ -806,6 +809,33 @@ mod tests {
             assert_eq!(
                 journey::living_scene::balance_cp(bought.state(), actor).unwrap(),
                 initial_balance - 140
+            );
+            let item_id = buy_quote.item_id.clone();
+            let purchase = journey::living_scene::latest_merchant_item_transaction(
+                &bought,
+                &runtime::scene(bought.state())
+                    .unwrap()
+                    .setting
+                    .as_ref()
+                    .unwrap()
+                    .place_id,
+                &item_id,
+                &merchant_id,
+                "Brynn",
+            )
+            .unwrap()
+            .expect("an accepted merchant sale is available from the durable journal");
+            assert_eq!(
+                purchase.direction,
+                journey::living_scene::MerchantItemTransactionDirection::MerchantSoldToHero
+            );
+            assert_eq!(purchase.price_cp, 140);
+            assert_eq!(purchase.item_id, item_id);
+            assert_eq!(purchase.merchant_id, merchant_id);
+            assert_eq!(purchase.hero_id, "Brynn");
+            assert_eq!(
+                purchase.revision,
+                bought.state().decisions.last().unwrap().revision
             );
             let bought_scene = runtime::scene(bought.state()).unwrap();
             let bought_model = bought_scene
@@ -824,7 +854,6 @@ mod tests {
                     .coin_cp,
                 5_140
             );
-            let item_id = buy_quote.item_id.clone();
             let bought_view =
                 wire::journey_view(&bought, LocalDemoRole::Player, native::first()).unwrap();
             let Some(rpc::view_message::Audience::Player(bought_player)) = bought_view.audience
@@ -912,6 +941,21 @@ mod tests {
                     ("scene-payment", "90"),
                 ],
             );
+            let buyback = journey::living_scene::latest_merchant_item_transaction(
+                &sold,
+                &sell_quote.place_id,
+                &item_id,
+                &merchant_id,
+                "Brynn",
+            )
+            .unwrap()
+            .expect("the committed buyback is replay-derived for the exact item");
+            assert_eq!(
+                buyback.direction,
+                journey::living_scene::MerchantItemTransactionDirection::HeroSoldToMerchant
+            );
+            assert_eq!(buyback.price_cp, 90);
+            assert_ne!(buyback.revision, purchase.revision);
             assert!(
                 journey::living_scene::coin_was_transferred(
                     sold.state(),
