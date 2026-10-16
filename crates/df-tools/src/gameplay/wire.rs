@@ -1436,6 +1436,7 @@ pub(super) fn project_journey(
             live_plate_graph_revision: 0,
             check: latest_check.clone(),
             encounter_xp,
+            ..Default::default()
         }),
         LocalDemoRole::Player => rpc::view_message::Audience::Player(rpc::PlayerGameplayView {
             offer_id: String::new(),

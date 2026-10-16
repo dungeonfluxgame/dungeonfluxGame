@@ -723,6 +723,7 @@ message dungeonflux.public.v1.PresentedRequest
 message dungeonflux.public.v1.PresentedResponse
 field dungeonflux.public.v1.PresentedRequest 1 sequence type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PresentedRequest 2 display_instance type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentedRequest 3 layout_readback_json type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PresentedResponse 1 released_sequence type=4 label=1 presence=false target=- oneof=-
 method dungeonflux.public.v1.SessionService ReportPresented .dungeonflux.public.v1.PresentedRequest .dungeonflux.public.v1.PresentedResponse client-stream=false server-stream=false
 # SES-04: additive room-code-only away-seat discovery and credential replacement.
@@ -859,4 +860,6 @@ method dungeonflux.public.v1.PresentationTelemetryService Upload .dungeonflux.pu
 enum-value dungeonflux.public.v1.GameplayActionKind 24 HELP_ATTACK
 field dungeonflux.public.v1.CombatView 22 reaction_seconds_remaining type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DisplayGameplayView 8 encounter_xp type=13 label=1 presence=true target=- oneof=_encounter_xp
+field dungeonflux.public.v1.DisplayGameplayView 9 layout_json type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 10 layout_revision type=4 label=1 presence=false target=- oneof=-
 oneof dungeonflux.public.v1.DisplayGameplayView _encounter_xp

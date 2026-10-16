@@ -117,6 +117,7 @@ use tonic::{Request, Response, Status};
 #[derive(Clone)]
 struct Service {
     actor: InboxHandle<actor::Call>,
+    display_credential: [u8; 32],
     updates: watch::Receiver<df_model::checkpoint::Checkpoint>,
     streams: Arc<Semaphore>,
     voice: voice::Voice,
@@ -128,6 +129,7 @@ struct Service {
     social: Arc<social::SocialLedger>,
     /// Follows the story's mood with generated scene art; presentation only.
     living: living_scenes::LivingScenes,
+    layout: dev_control::layout::LayoutState,
 }
 fn credential<T>(request: &Request<T>) -> Result<[u8; 32], Status> {
     let value = request
@@ -169,13 +171,13 @@ impl Service {
         }
         // Living scenes watch the display's view and then add their published art to it; the
         // art is presentation only and nothing else in the view changes.
-        viewed.map(|(role, mut message)| {
-            self.living.observe(&message);
-            self.living.apply(&mut message);
-            // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
-            home_video::apply(&mut message);
-            (role, message)
-        })
+        let (role, mut message) = viewed?;
+        self.living.observe(&message);
+        self.living.apply(&mut message);
+        // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
+        home_video::apply(&mut message);
+        self.layout.attach(&mut message).await;
+        Ok((role, message))
     }
 }
 #[tonic::async_trait]
@@ -248,6 +250,8 @@ impl rpc::session_service_server::SessionService for Service {
                 .subscribe()
                 .unwrap_or_else(home_video::wake_subscribe),
         );
+        let mut layout = self.layout.subscribe();
+        layout.borrow_and_update();
         if let Some(art) = art.as_mut() {
             art.borrow_and_update();
         }
@@ -261,6 +265,7 @@ impl rpc::session_service_server::SessionService for Service {
                 updates,
                 table_lines,
                 art,
+                layout,
                 service,
                 request,
                 credential,
@@ -271,6 +276,7 @@ impl rpc::session_service_server::SessionService for Service {
                 mut updates,
                 mut table_lines,
                 mut art,
+                mut layout,
                 service,
                 request,
                 credential,
@@ -284,6 +290,7 @@ impl rpc::session_service_server::SessionService for Service {
                     let ended = tokio::select! {
                         changed = updates.changed() => changed.is_err(),
                         changed = table_lines.changed() => changed.is_err(),
+                        changed = layout.changed() => changed.is_err(),
                         () = scene_art_changed(&mut art) => false,
                         () = tokio::time::sleep(Duration::from_secs(5)) => false,
                     };
@@ -315,6 +322,7 @@ impl rpc::session_service_server::SessionService for Service {
                         },
                         table_lines,
                         art,
+                        layout,
                         service,
                         request,
                         credential,
@@ -335,6 +343,9 @@ impl rpc::session_service_server::SessionService for Service {
     ) -> Result<Response<rpc::PresentedResponse>, Status> {
         let credential = credential(&request)?;
         let request = request.into_inner();
+        if !request.layout_readback_json.is_empty() && credential == self.display_credential {
+            let _ = self.layout.readback(&request.layout_readback_json).await;
+        }
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Presented {
@@ -1605,6 +1616,7 @@ async fn serve_run(
     let mut restart_updates = receiver.clone();
     let service = Service {
         actor: sender.clone(),
+        display_credential,
         updates: receiver,
         streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
         voice: voice.clone(),
@@ -1615,6 +1627,7 @@ async fn serve_run(
         table_log: table_log.clone(),
         social: social.clone(),
         living,
+        layout: dev_control::layout::LayoutState::new(),
     };
     // DEVCTL-001: the agent control surface. Off by default: with the setting
     // off this returns no routes and touches nothing (no file, no behaviour).
@@ -1626,6 +1639,7 @@ async fn serve_run(
         &std::env::current_dir()?,
         dev_recovery,
         dev_bundle.clone(),
+        service.layout.clone(),
     )?;
     let (incoming_sender, incoming) =
         NativeIncoming::bounded(NonZeroUsize::new(4).ok_or("invalid native incoming bound")?)?;

@@ -977,15 +977,37 @@ fn display_instance() -> u64 {
 
 /// Sends one presentation report; returns the server's released sequence after it.
 async fn send_report(client: &Rc<RefCell<Client>>, sequence: u64) -> Option<u64> {
-    let (sessions, credential) = {
+    let (sessions, credential, layout_readback) = {
         let state = client.borrow();
-        (state.sessions.clone()?, state.credential.clone())
+        let layout_readback = if state.role == "display" {
+            state
+                .root
+                .query_selector(".tv-stage")
+                .ok()
+                .flatten()
+                .map(|stage| {
+                    let revision = stage
+                        .get_attribute("data-layout-revision")
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or_default();
+                    super::layout::readback(&stage, revision)
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        (
+            state.sessions.clone()?,
+            state.credential.clone(),
+            layout_readback,
+        )
     };
     let mut sessions = sessions;
     let mut call = request(
         rpc::PresentedRequest {
             sequence,
             display_instance: display_instance(),
+            layout_readback_json: layout_readback,
         },
         &credential,
     )

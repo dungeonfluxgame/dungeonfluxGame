@@ -1,6 +1,7 @@
 //! Thin server-projected room, creation, dialogue and combat clients.
 mod dialogue_recovery;
 mod hero_creator;
+mod layout;
 mod live_battlefield;
 mod live_chrome;
 mod live_combat;
@@ -2228,7 +2229,21 @@ fn render_dead_hero_notice(
 
 /// Only admitted snapshots or a local redraw of the retained snapshot reach rendering.
 fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), JsValue> {
+    let display_layout = match &view.audience {
+        Some(rpc::view_message::Audience::Display(display)) => {
+            Some((display.layout_json.clone(), display.layout_revision))
+        }
+        _ => None,
+    };
     render_view(client, view)?;
+    if let Some((json, revision)) = display_layout {
+        if !json.is_empty() {
+            let root = client.borrow().root.clone();
+            if let Some(stage) = root.query_selector(".tv-stage")? {
+                layout::apply(&stage, &json, revision)?;
+            }
+        }
+    }
     phone_controls::bind(client)?;
     presentation_timing::paint(client);
     Ok(())

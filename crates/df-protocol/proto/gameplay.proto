@@ -10,7 +10,7 @@ service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage
 // across a page reload): the server keeps the newest report per instance and the slowest
 // fresh instance governs, so a display that goes away stops governing when its report ages
 // out. Zero is the legacy unknown instance.
-message PresentedRequest { uint64 sequence = 1; uint64 display_instance = 2; }
+message PresentedRequest { uint64 sequence = 1; uint64 display_instance = 2; string layout_readback_json = 3; }
 message PresentedResponse { uint64 released_sequence = 1; }
 enum GameplayActionKind { GAMEPLAY_ACTION_KIND_UNSPECIFIED = 0; EXAMINE_HARBOR_SEAL = 1; CHOOSE_HARBOR_SCENE = 2; CREATE_CHARACTER = 3; BEGIN_STORY = 4; ASK_COURIER = 5; ESCORT_COURIER = 6; DEFEND_COURIER = 7; GREATSWORD_ATTACK = 8; SECOND_WIND = 9; END_TURN = 10; SHORT_REST = 11; MOVE = 12; DASH = 13; DODGE = 14; DISENGAGE = 15; OPPORTUNITY_ATTACK = 16; DECLINE_REACTION = 17; STAND = 18; PICK_UP_WEAPON = 19; RESOLVE_ERRAND = 20; START_NEW_ADVENTURE = 21; STABILISE_WITH_HEALERS_KIT = 22; STABILISE_MEDICINE = 23; HELP_ATTACK = 24; SET_TABLE_SETTING = 40; }
 enum RejectionCode { REJECTION_CODE_UNSPECIFIED = 0; STALE_OFFER = 1; WRONG_TURN = 2; INVALID_SELECTION = 3; PAUSED = 4; RESOURCE_MISSING = 5; CAPABILITY_UNAVAILABLE = 6; RECOVERY_REQUIRED = 7; REVISION_CONFLICT = 8; OPERATION_CONFLICT = 9; OPERATION_EXPIRED = 10; }
@@ -23,7 +23,7 @@ message AbilityCheckResult { uint32 die = 1; sint32 ability_modifier = 2; uint32
 message DecisionReceipt { OperationId operation_id = 1; SessionRevision revision = 2; SessionId session_id = 3; RunId run_id = 4; bool replayed = 5; oneof outcome { AcceptedAction accepted = 6; Rejection rejected = 7; } }
 message WatchViewRequest { SessionId session_id = 1; RunId run_id = 2; ClientBindingId client_binding_id = 3; SessionRevision after_revision = 4; }
 message PlayerGameplayView { string offer_id = 1; string narration = 2; AbilityCheckResult check = 3; string private_clue = 4; bool action_available = 5; repeated GameplayActionOffer offers = 6; GameplayScene scene = 7; JourneyView journey = 8; }
-message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; }
+message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; string layout_json = 9; uint64 layout_revision = 10; }
 message ViewMessage { SessionRevision revision = 1; oneof audience { PlayerGameplayView player = 2; DisplayGameplayView display = 3; } }
 message OperationObservation { RejectionCode code = 1; }
 message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decision = 1; OperationObservation operation_observation = 2; } }

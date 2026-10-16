@@ -38,6 +38,7 @@ pub(super) mod direct;
 pub(super) mod directions;
 pub(crate) mod history;
 mod jumps;
+pub(super) mod layout;
 mod notebook;
 mod parse;
 mod reads;
@@ -65,6 +66,7 @@ struct Shared {
     shutdown: watch::Sender<bool>,
     seats: Arc<Mutex<Seats>>,
     overrides: Arc<Mutex<Vec<Value>>>,
+    pub(super) layout: layout::LayoutState,
     /// Admitted references for candidate rebuilds (milestones 2/3).
     recovery: df_persistence::NativeRecoverySource,
     /// Back/forward ring shared with the owner's publication hook.
@@ -140,6 +142,7 @@ pub(super) fn setup(
     run_root: &std::path::Path,
     recovery: df_persistence::NativeRecoverySource,
     bundle: Bundle,
+    layout: layout::LayoutState,
 ) -> Result<Control, io::Error> {
     let (shutdown_send, shutdown_receive) = watch::channel(false);
     if !setting_on(listen)? {
@@ -168,6 +171,7 @@ pub(super) fn setup(
         seat_file,
         shutdown: shutdown_send,
         overrides: Arc::new(Mutex::new(Vec::new())),
+        layout,
         recovery,
         history: bundle.history,
         table: bundle.table,
@@ -192,6 +196,10 @@ pub(super) fn setup(
         .route("/dev/feelings", get(reads::feelings))
         .route("/dev/log", get(reads::game_log))
         .route("/dev/timeline", get(reads::timeline))
+        .route("/dev/layout", get(layout::list))
+        .route("/dev/layout/transform", post(layout::transform))
+        .route("/dev/layout/move", post(layout::move_to))
+        .route("/dev/layout/reset", post(layout::reset))
         .route("/dev/notes", get(notebook::read))
         .route("/dev/note", post(notebook::add))
         .route("/dev/checkpoint", post(reads::save_checkpoint))
