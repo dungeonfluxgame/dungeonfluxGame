@@ -14,6 +14,155 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-15T19:46:19-04:00 to 2026-10-15T22:31:46-04:00
+
+Range: 3d7cd9696743eab2db27d06f71dd7b9bf9082a22..4a80dbb32322b829c7bbfaba473784d21ee51cee
+
+- 5da6068965d5bfd2d022c7a31c531566e3f40154 — Fix paid credential imports in gameplay launcher
+- d8f16998d7774dc20d81e802d37e69440e762a04 — Keep display speech clear of wrapped choice labels
+- 45e33a1c0574bc33e226af2d552ac04ca3ebb9f3 — Make display voice media observable and attached
+- 79b7bbd895867b06b5526b905f3b60405662d989 — Test second-player archer creation flow
+- a2327cddd054eed92d6ca2c0c7cbe6e53fcb7fd4 — Enable generated plates for harbor scenes
+- dae5b98b69773c7ae9e8e208d4ec6bff19345119 — Keep scene plate requests within provider reference limit
+- 1800cf5e6f058934e7f799ce0001e6aa5dc22b2f — Mute display music output immediately
+- 37ace03e8be0199b207a42fadf0a164644716c83 — Keep scene cast visible outside the battle lifecycle
+- b9eb4f0cd71cd90880fb96b301c85cc860353254 — Keep local rejection receipts within the shared bound
+- e7a713117daf823186e416492eff3cf8c0dc1737 — Make dialogue play quick-start create valid heroes
+- f2ac4ed5b3364a3506846379b6ea99550158dad7 — Record dialogue quickstart and display regression findings
+- 589afa713ea27b5141597a68bf8c54dc5f18c7f2 — Make scene plate references style neutral
+- a6cdf22c5670eb10bdf4681d31729e64da7ca06d — Exclude painted art from photographic plate references
+- 6002bb15c4f9351c2fd91b97c52f49f3e88afabd — Fix photographic plates without identity references
+- 614fade5a901c90bb746f6118a6705c1f354bd2b — Use photographic scene and hero fallbacks
+- b766b8342a04013bedd35cee212444a5cf723d16 — Keep existing fallback for hero three
+- 9fc47616d9e00ceb10d92d0c4f29c6394842ac44 — Serve photographic fallbacks through generated routes
+- bce05f717fa05c4d7a1b20acc5b9c02a31f431ad — Route all dialogue cast art to photographic variants
+- 6ce95f95b6aa17c33ce6f2330ce1e7d41dbb0557 — Prefer photographic art in the lobby
+- 179e9c85a5105c3f7a235f292b42c57e5de2c3f3 — Keep dialogue fallback photographic
+- 7b08c2574b4996b234f22408080558654368f349 — Use medieval photographic sprites and harbor
+- a3ecd0f87a5e79bc954a990895562a0dd4ae8ab1 — Prefer photographic sprites in the live stage
+- eb4ba5bcf0fa3e639fcba63af958708bddc306a2 — Remove illustrated stage fallback candidates
+- bbe08771dc2660f098844b7668528f5a3711949e — Fix browser photo candidate type
+- fb50e7a3e8f9dc058b3f307589ad9b7113cca8d5 — Direct plates toward candid cinematography
+- 67cf0d8b30ff6aadfda7f599571b3fd91a6fe251 — Add visual pipeline diagnostics
+- 790bbd10c398acc76d749545472a5d70a6b55c6c — Use display plate revision in diagnostics
+- 1e6d0d5007bc796d6911bb93617c23f2316f0ebd — Replace polished CGI references with documentary photographs
+- 97f88c5651faf16a8ab03a06572d5ed2c76fba80 — Scope documentary cast fallback to its harbor scene
+- c0dbaad1e66db2f10d963b58b78f4b121e5a5b02 — Document visual resource inspection workflow
+- b0dcecefd3eb0476c53c663d18958929477a2aa2 — Clarify conditional imagery provenance
+- bd8643c87e8122df2f515dc1c98a54dd64bf564f — Document visual trace identity gap
+- 337ec64ee0b535b76601fb3dcf02ad5bc2f3848a — Add correlated runtime resource timeline
+- 02e8e656eecfe3d1ed0e63f73c91c2515332bbd4 — Edit the candid harbor photograph as the runtime plate base
+- ee633e73eff4f91d0aba4882852c5242b6630d13 — Document resource timeline filters and gaps
+- 196d72e18156e6a92d7467001c53606287e57c85 — Repair diagnostics test and index photo edit source
+- a45dcca99bbb2520e97edfddb1759be80ad19a81 — Link visual resource manual from repository overview
+- a7d0c6365eda1ba52cf7cb9b5e93079826571774 — Keep both heroes in the photographic harbor edit
+- 4a80dbb32322b829c7bbfaba473784d21ee51cee — Record photographic plate acceptance and cast continuity gap
+
+Next block baseline: `4a80dbb32322b829c7bbfaba473784d21ee51cee`.
+
+## 2026-10-14T20:33:27-04:00 to 2026-10-14T21:23:21-04:00
+
+Range: 5e52f893f54fa146673dc9a9e6c18e875f66d818..3d7cd9696743eab2db27d06f71dd7b9bf9082a22
+
+- 67d54be14387950b5352cf35c6a9acf461fc1981 — Integrate the day's remaining work: characters who know their room, a reachable ending with reward and XP, heroes defined by menus or text, SRD rules, the TV at a person's pace
+- c1bfa27745866298f995883a8b96cc4cef5b2d2d — Backlog: a full session on the pushed build (painterly pictures from painted references, the opening narration repeated, a search that describes nothing, a true answer thrown away, exploring buried on the phone, the item card without its picture)
+- ac877f29612d28b48ca4b25862613e69b3895777 — CRE-10: the phone's hero creator loads again and a described hero can be confirmed
+- 10d63be2a30799973601a969d8ec17f47eefd7bb — Backlog: the rest of the session (the promised gold is not paid, stock sentences repeat, the named kobold never fights, a subtitle on the wrong person, an honest rest label, the contact not knowing her part)
+- 8af367769194fe92e824283c7d51a8153a966555 — Backlog: the scene picture never changes (every plate edit refused as invalid_request; the picture budget spent on health cut-outs)
+- 5c3ea45d5aa79fd251ea2eae287f02fda40a539a — Backlog: genre-specific loaders and spinners (the waits the game has and which loader fits each)
+- 024f395214880a6c5fc2aebeabab2613cae18abe — Backlog: a benchmark of NPC dialogue and scene exploration (the story model's budget runs out after about ten replies, slow replies end in stock lines, questions about things get their cards, check cards flash past under quick play)
+- 3c54ca999d4e30398c8ad998af0b14fcad4d0c22 — No default spend or rate limits: characters keep answering after the tenth reply
+- 3d7cd9696743eab2db27d06f71dd7b9bf9082a22 — Backlog: the TV shows no text while a check card is up; DLG-11 and DLG-12 fixed by removing the limits
+
+Next block baseline: `3d7cd9696743eab2db27d06f71dd7b9bf9082a22`.
+
+## 2026-10-14T13:38:07-04:00 to 2026-10-14T16:53:08-04:00
+
+Range: 27d0e2f127476f8011df25982f1bb707f5ea4811..5e52f893f54fa146673dc9a9e6c18e875f66d818
+
+- 58cf6e4b507dbe17be2a81fb6c62e90c1b101566 — Triage: a fight and ending from the phone on HEAD (the fight turn is a form; the ending turns the errand round; no reward on the end card; the epilogue's contact drawn twice)
+- 64560aede20217b24cce4d958c0fb9fa83d75ca3 — Triage: the hourly independent review's rules findings (TV and phone hit points disagree; a rest promised but not offered; range wording)
+- 5ef2b09229da483f7c19cf034350164d1618d47b — Triage: the phone's hero sheet, notebook and menu (a hook in the reward's place, one place twice, sheets that block the tab bar, no saves listed)
+- f1794dbfa75757afc92481244e923c1241a4aea8 — Filmic, not painterly: one shared film look for every picture, clip and screen
+- c855bcfdddc0a15dc2225bbe8b119e80332de4d2 — PHN-12: the phone and TV show 'Setting the tableâ€¦' from the first paint instead of a blank black page
+- a6385f4aa1894a6159d0f10272a1a5587be975be — DEV-11 (part), PIC-16: picture and voice timings in the server log, line timings kept on the TV, no cut-out drawn over its own picture
+- 675020f058170a083f2f7143d6d43e3169b0a23e — SYN-10, RUN-04, SYN-12, SYN-13 (guard), SYN-08 (part): the TV fight frames both fighters, asks for a reaction only when they are in view, and plays one fanfare
+- 1af7806e3061dbdb0f08755f067db8e200fc6c84 — DEV-09, SES-09 (part): a burst of watchers no longer closes the TV's and phones' view streams
+- 5e52f893f54fa146673dc9a9e6c18e875f66d818 — STO-01, STO-02, FLO-05, OBS-17, FLO-02 (part): the generated plot names its job, stake and reward, and only a threat the players have heard of is fought
+
+Next block baseline: `5e52f893f54fa146673dc9a9e6c18e875f66d818`.
+
+## 2026-10-14T06:28:57-04:00 to 2026-10-14T11:09:59-04:00
+
+Range: 126dde132f0b3e6cabdd1e9a645c28e84606c68e..27d0e2f127476f8011df25982f1bb707f5ea4811
+
+- 5d6c96fb08a9f6efe8cc61cc053c0cfa7d5929d5 — ENV-06, ENV-07, PIC-13, MOT-02 (rendering side): the picture is drawn from the scene model and redrawn once per settled change
+- 221511f9f63852ba6e3ced158e687f6b81fc3eb3 — SES-05, SES-06 (part): story text is not refused for a forbidden term inside another word, and a slow group no longer holds back the rest
+- b44a9198be118cc43bbdb08b33ecef4d1c9b8a09 — RUL-23 (part), DTH-04 (part): Hit Point Dice per hero, spend-or-keep at a Short Rest, a dead hero takes no aftermath turn
+- d5d76e2abd8427f1f940ac7989696be724ae346d — TLK-08, TLK-11 to TLK-22, ENV-05, ENV-11, RUL-19, RWD-01 (part): characters answer from this adventure's facts
+- ae3f2ffe88fddb7e3534d644161fff86d518b7fa — RUL-04, RUL-16, OBS-44, FGT-10: the phone's fight panel and roll card tell the truth
+- 4562905a6b2422610b6d499bfd451ece5380dfdb — Triage: a played session at human pace (ten rows: a dead end after a won fight, unreadable lines, the background replaced every line, feelings that change too often, the check read by no one, silent fights); AGENTS.md: measure scene and interaction timing
+- 7ba7ba976fc7400f9d39a0146e7c4cacb3aadd8b — Triage: play-through at human pace from the phone (ten rows: hero creation cannot define a hero, the phone's send button under the tab bar, a blank first load, sound off by default, the patron not knowing his errand)
+- 95b58798a7f32bfcffd8ad38b32004c7b0e5e6c7 — STO-04 (part): the storyteller grounds who is present and any injury in the scene's facts
+- 0b86bba345685263396518f8f1ed85784fcf5811 — INV-07 (TV side), END-06, TVX-06, TVX-07, PIC-07: the TV shows a check as a roll, ends on one composed card, and keeps its bubbles clear
+- 43e3251c1239f2b4a211d7306436c0995f9b5739 — HNT-25, B17 audit: every creature's core stat block pinned to SRD 5.2.1, and what is not modelled is disclosed
+- 38826ea2c355b2757de2676f74dd1362e91aa271 — Triage: play-through on Q01 and Q02's work (Ilsa knows her room; a search with no target still rolls; the TV's check card names the wrong hero; a late TV has no context; a purchase reads like a log)
+- 151709c547d4a8d120aabc609483eb217bc10cb3 — Triage: ENV-12 is a recorded improvement, not a severity-1 fault
+- 8d09c41f264e3a405fa97576928f4c27b50db3f3 — TVX-10, PIC-14 (part), AUD-01 (pacing): lines are read and heard in full, one background per scene, figures stay
+- 27d0e2f127476f8011df25982f1bb707f5ea4811 — DTH-01, DTH-05, FGT-03, FGT-04, FGT-06, FGT-08: the phone shows the fight's rulings as they happen
+
+Next block baseline: `27d0e2f127476f8011df25982f1bb707f5ea4811`.
+
+## 2026-10-14T00:53:42-04:00 to 2026-10-14T05:39:59-04:00
+
+Range: 1ad51941a0603222b0ed11f5905750594b3f206d..126dde132f0b3e6cabdd1e9a645c28e84606c68e
+
+- b4e06d086351aa4f4c398c23e9460fef7f701dbd — RUL-14, RUL-17 (part): the latest enemy policy approaches instead of dodging, and a goblin keeps its shield
+- 4c919660a35a226e91aa44e02a05ba39bd344c83 — HNT-14 (server half): cancelling a spoken line stops the transcription
+- 59ee1ebafed5632080046b3daebdd258d61422af — STO-07, STO-08, RUL-09 (part): the story's own words
+- 85ed4b4ff3db21f03ecc6767c0df2d74c6906142 — SYN-13, SYN-14: the TV's health cards never go back, and headings are not replayed
+- 6299d7f20265d9d00b59b3062a6b9ffcf7c308ea — INV-03, PHN-11 (part): looking, searching and watching do something, with Jev reading the line
+- 3729111d04aa7616fbc180bf94d335b192128dba — Triage: investigation after the first fix, six rows (INV-04 to INV-09)
+- 4705e2f0228e9f71fb948e4a2a99e4f241b54a11 — SCA-12: a server that refuses a game stored by an older rules build says how to go on
+- 14f2157bb461cc6e95a5859d678d11b58ce46068 — Triage: the speaker does not know her own room; items refused; four rows
+- b2f9c4b5a1d3022051841e658a1dfe5fa4f14e03 — FPX-01, OBS-42 (part): the dice are seen landing and stay long enough to read
+- 68130965ba74cf38a145f350ffce3def2f04e14d — SES-06 (part): a story text retry tells the model every refused slot's reason
+- 9668deca55ae07d8444dae3e687db81baa89f9e7 — NTE-03, NTE-04, NTE-06 (part), FGT-10: the notebook and the table log read like a game
+- df97598092695de012bb92917c805cf2c7a8ca38 — MOT-02 (part): every scene picture can become a short looping video of ambient life
+- 5fe971bcbd683e6f295995c481d124dc90d930a5 — EMO-01 (part): characters have an emotional life, written by the models and grounded in their history
+- d487302e43bef1dd44c529f7bdd8f5223a5e0a6f — HNT-14 (phone half), PHN-04: cancelling a spoken line stops the server too; the send button reads 'Say it'
+- b1ab3ea0363fc29cb8499b11b056247a0b870230 — RUL-17, RUL-12: a goblin shoots its shortbow with its shield on; the javelin's Slow is proven
+- 14a3611e99181d984fca278be848eafa9db3ecf1 — ENV-01, ENV-06, ENV-09 (part): every scene has one model of its people, things and ways out
+- c6d7248200543d9231c64d93bba27d81fdbb4a6c — MOT-03 step 2 (part): the scene graph and a layered stage on the TV
+- 66f36415b12aa51813f345c6d89934b577cf0f8d — Fill the scene clip fields in two scene literals so the committed tree builds
+- b0040be7bb907d991a490d32d6568e95e44d88d0 — Name the new outcome and setting fields in three test literals so the committed tests build
+- d9d6befebfc3bbcb64549ee2462125c672310433 — The server starts again: a scene's setting is bound to the record's by everything but its model
+- a41f5c0678721cd5b6a30268374ff0895b44ca6a — CRE-01, CRE-03: making a hero reads like a game, not a developer form
+- 79efebe3007dfd09be7449ab12228054bd7deb24 — INV-04 to INV-09 (part): an investigation module that binds every attempt to its target
+- da7beec03e1d1ea704ff4c4da0f93d24768c6782 — The eighth failing test: retained courier wire witnesses no longer collide between test processes
+- a64fee3a46dc31bd3cb443c144325f655793c8b0 — PHN-10, PHN-11: the phone says plainly what it did with your line
+- ad6ed69297d0862116331e96b264088acc0f49de — Triage: HNT-14 fixed by 4c919660
+- 7f4b9a30ef68eae6a653d920c706064c5486a961 — FPX-08, FPX-09, RUN-04 (part): upright initiative numbers, labelled status pips, no stars over a fallen hero
+- 126dde132f0b3e6cabdd1e9a645c28e84606c68e — A generated adventure up to 1 MiB is stored: the 256 KiB bound refused the grown pack
+
+Next block baseline: `126dde132f0b3e6cabdd1e9a645c28e84606c68e`.
+
+## 2026-10-13T21:24:34-04:00 to 2026-10-13T22:40:03-04:00
+
+Range: 06e7a7e4a618890ec6677566fee5c64db5a2718b..1ad51941a0603222b0ed11f5905750594b3f206d
+
+- fa616c01ce9febe46722ee1f9e8afd94bf098ebd — Changelog: 24 commits from the afternoon and evening of 2026-10-13
+- bc36f3b5471ea89244d2e3741fb46e6bc17afbcb — END-06 (part): the TV's end line has no scroll bar
+- 90e8d6021d9b11ca3268946263d6fd92f200deda — Triage: anything and anyone in the scene (the owner's direction), six rows
+- 68c1b48f5bce28387d7edcd983cc27e0dac0066d — Triage: scene state, items in detail with clues, pointing at the picture (the owner's direction)
+- f8d7a95dd71a715b0d1080a5628112083e7b7406 — Triage: the emotional model of characters and enemies (the owner's direction)
+- f43d3fa767eb5245399e9f5b1735b89c38d44a92 — TV scenes: a living camera (layer 1 of more motion in the scenes)
+- 32767710bfd061f9d2bf34e61d158e26ebb623c9 — Triage: motion in the scenes (the owner's direction), three rows
+- 3002c60b4d83a78a3a0fc987dbf9838dde07984f — Plan: scene rendering engine v2, a layered stage with baked frames
+- 1ad51941a0603222b0ed11f5905750594b3f206d — Triage: MOT-03 points at the scene rendering plan
+
+Next block baseline: `1ad51941a0603222b0ed11f5905750594b3f206d`.
+
 Integration history through 2026-10-11T15:25:07.071270-04:00, reconstructed from Git at this session close. Six-hour blocks use first-parent integration timestamps; each newly reachable branch commit is listed once in topological order. This history records commits and does not replace task acceptance. Empty intervals contain no commits. The bookkeeping commit writing this record belongs to the next block.
 
 Integration history from 2026-10-11T15:24:05-04:00 through 2026-10-12T04:33:02-04:00 on the integration branch `claude/playable-20261011`, generated from Git by revision range: six-hour blocks by first-parent commit time, each newly reachable commit listed once. The last block is open and shorter than six hours; the work session is still running.
