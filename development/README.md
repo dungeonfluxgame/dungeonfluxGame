@@ -1,5 +1,7 @@
 # Development plans and durable operational data
 
+For the visual/media inspection workflow, see [Visual resource operations manual](visual-resource-manual.md).
+
 `workflow.sqlite3` contains the source-backed whole-project planning corpus using
 five tables: features, tasks, dependencies, attempts and append-only devlog.
 These are plans and review evidence; no Rust game or automated coordinator exists.
