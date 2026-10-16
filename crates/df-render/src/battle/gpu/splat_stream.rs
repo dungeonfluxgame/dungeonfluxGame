@@ -332,9 +332,17 @@ async fn run(
                 .get(file as usize)
                 .map(|chunk| chunk.folder.clone())
                 .ok_or(StreamError::Index)?;
-            if load_chunk(core, shared, chunk_layout, &index, &config.index_url, &folder, file)
-                .await
-                .is_err()
+            if load_chunk(
+                core,
+                shared,
+                chunk_layout,
+                &index,
+                &config.index_url,
+                &folder,
+                file,
+            )
+            .await
+            .is_err()
             {
                 unavailable.insert(file);
                 if shared.borrow().chunks.is_empty() && unavailable.len() > 64 {
