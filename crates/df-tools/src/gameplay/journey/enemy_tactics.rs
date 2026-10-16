@@ -80,6 +80,9 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
         let [encounter] = self.staged.encounters.as_slice() else {
             return Err(RepositoryError::InvalidCandidate);
         };
+        let scene_assault = encounter
+            .objectives
+            .contains(&model::content("scene-npc-assault")?);
         let party = super::participants(self.current)
             .into_iter()
             .map(|link| link.character.ok_or(RepositoryError::InvalidCandidate))
@@ -96,7 +99,12 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
                 .is_none_or(|elapsed| {
                     elapsed != 0 && elapsed != u64::from(super::pack::combat().round_ticks)
                 })
-            || observation.policy != model::content("normal-nonlethal-melee")?
+            || observation.policy
+                != model::content(if scene_assault {
+                    "tactical-srd521-cover-policy"
+                } else {
+                    "normal-nonlethal-melee"
+                })?
             || self.staged.members != self.current.state().members
             || self.staged.characters != self.current.state().characters
             || party.as_slice() != [entity(ENTITIES[0])?, entity(ENTITIES[1])?]
@@ -131,16 +139,17 @@ impl LegalOfferOwner for CurrentNativeTurn<'_> {
             .iter()
             .find(|actor| actor.id == monster)
             .ok_or(RepositoryError::InvalidCandidate)?;
-        let scene_assault = encounter
-            .objectives
-            .contains(&model::content("scene-npc-assault")?);
         if (!scene_assault && actor.definition != model::content("bandit")?)
             || (!scene_assault && actor.identity_revision != model::label("srd521-bandit-1")?)
             || (scene_assault
                 && (actor.definition != model::content("lantern-wharf-courier")?
                     || actor.identity_revision != model::label("lantern-wharf-courier-1")?))
             || actor.location != Some(room_entity()?)
-            || actor.position != Some(Position { x: 0, y: 0, z: 0 })
+            || (if scene_assault {
+                actor.position.is_none()
+            } else {
+                actor.position != Some(Position { x: 0, y: 0, z: 0 })
+            })
             || self.resource(monster, "unconscious")? != 0
             || self.resource(monster, "hit-points")? == 0
             || self.resource(monster, "prone")? != 0
@@ -291,7 +300,17 @@ pub(super) fn select(
         basis: &basis,
         pins: current.pins(),
     };
-    let policy = model::content("normal-nonlethal-melee")?;
+    let scene_assault = staged.encounters.first().is_some_and(|encounter| {
+        encounter
+            .objectives
+            .iter()
+            .any(|objective| objective.entry.as_str() == "scene-npc-assault")
+    });
+    let policy = model::content(if scene_assault {
+        "tactical-srd521-cover-policy"
+    } else {
+        "normal-nonlethal-melee"
+    })?;
     let actor = combat_enemy(staged)?;
     let observation = NativeObservation {
         basis,
