@@ -36,7 +36,8 @@
           "statement": "Corin and Jessa are customers here today."
         }
       ],
-      "wants": "Sell suitable clothing at a fair price."
+      "wants": "Sell suitable clothing at a fair price.",
+      "coin_cp": 5000
     },
     {
       "id": "shop-adventurer",

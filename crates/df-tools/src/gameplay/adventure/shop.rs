@@ -630,6 +630,7 @@ mod tests {
                 source: Some(journey::living_scene::NpcInventorySource {
                     source_line_id: "merchant-inspection-loan-1".into(),
                     source_revision,
+                    source_line_sequence: 1,
                     source_actor_id: seller_id.clone(),
                     source_text: "Marek lends the traveler's clothes for inspection.".into(),
                 }),
@@ -682,6 +683,160 @@ mod tests {
                     .count(),
                 1
             );
+        });
+    }
+
+    #[test]
+    fn merchant_quotes_buy_and_buyback_exactly_once_with_conserved_copper() {
+        let generated = generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) =
+            super::super::record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let actor = journey::player_entity(native::first(), &opening).unwrap();
+            let initial_balance =
+                journey::living_scene::balance_cp(opening.state(), actor).unwrap();
+            let scene = runtime::scene(opening.state()).unwrap();
+            let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+            let offer = model.offer("item-clothes-travelers").unwrap();
+            let merchant_id = offer.seller_id.clone();
+            let buy_source = journey::living_scene::NpcInventorySource {
+                source_line_id: "merchant-quote-buy-1".into(),
+                source_revision: opening.basis().revision,
+                source_line_sequence: 1,
+                source_actor_id: merchant_id.clone(),
+                source_text: "I can do those clothes for 150 CP.".into(),
+            };
+            let buy_quote_checkpoint = journey::living_scene::commit_npc_trade_quote(
+                &opening,
+                journey::living_scene::NpcTradeQuoteProposal {
+                    operation: df_types::OperationId::from_bytes(&[46; 16]).unwrap(),
+                    expected_basis: opening.basis(),
+                    actor_id: merchant_id.clone(),
+                    customer_id: "Brynn".into(),
+                    direction: journey::living_scene::SceneTradeDirection::HeroBuys,
+                    item_id: offer.canonical_item_id(),
+                    offer_id: Some(offer.id.clone()),
+                    price_cp: 150,
+                    source: buy_source,
+                },
+            )
+            .expect("the seller can issue a bounded exact quote");
+            let buy_quote =
+                journey::living_scene::pending_merchant_quote(&buy_quote_checkpoint, "Brynn")
+                    .unwrap()
+                    .expect("the quote is pending for its player buyer");
+            assert_eq!(
+                buy_quote.direction,
+                journey::living_scene::SceneTradeDirection::HeroBuys
+            );
+            assert_eq!(buy_quote.price_cp, 150);
+            assert_eq!(
+                journey::living_scene::merchant_quote_history(&buy_quote_checkpoint).unwrap()[0]
+                    .status,
+                journey::living_scene::MerchantQuoteStatus::Pending
+            );
+
+            let bought = interaction_with_choices(
+                &buy_quote_checkpoint,
+                47,
+                &buy_quote.item_id,
+                "trade",
+                &[
+                    ("scene-quote-id", &buy_quote.quote_id),
+                    ("scene-payment", "150"),
+                ],
+            );
+            assert_eq!(
+                journey::living_scene::balance_cp(bought.state(), actor).unwrap(),
+                initial_balance - 150
+            );
+            let bought_scene = runtime::scene(bought.state()).unwrap();
+            let bought_model = bought_scene
+                .setting
+                .as_ref()
+                .unwrap()
+                .model
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                bought_model
+                    .people
+                    .iter()
+                    .find(|person| person.id == merchant_id)
+                    .unwrap()
+                    .coin_cp,
+                5_150
+            );
+            let item_id = buy_quote.item_id.clone();
+            let sell_terms = journey::living_scene::merchant_trade_terms(&bought, "Brynn")
+                .unwrap()
+                .into_iter()
+                .find(|terms| {
+                    terms.direction == journey::living_scene::SceneTradeDirection::HeroSells
+                        && terms.item_id == item_id
+                        && terms.buyer_id == merchant_id
+                })
+                .expect("the hero may offer the exact owned and held instance");
+            assert_eq!(sell_terms.maximum_price_cp, 100);
+            let sell_quote_checkpoint = journey::living_scene::commit_npc_trade_quote(
+                &bought,
+                journey::living_scene::NpcTradeQuoteProposal {
+                    operation: df_types::OperationId::from_bytes(&[48; 16]).unwrap(),
+                    expected_basis: bought.basis(),
+                    actor_id: merchant_id.clone(),
+                    customer_id: "Brynn".into(),
+                    direction: journey::living_scene::SceneTradeDirection::HeroSells,
+                    item_id: item_id.clone(),
+                    offer_id: None,
+                    price_cp: 90,
+                    source: journey::living_scene::NpcInventorySource {
+                        source_line_id: "merchant-quote-buyback-1".into(),
+                        source_revision: bought.basis().revision,
+                        source_line_sequence: 2,
+                        source_actor_id: merchant_id.clone(),
+                        source_text: "I can buy those back for nine silver pieces.".into(),
+                    },
+                },
+            )
+            .expect("the merchant purse bounds an exact buyback quote");
+            let sell_quote =
+                journey::living_scene::pending_merchant_quote(&sell_quote_checkpoint, "Brynn")
+                    .unwrap()
+                    .expect("HeroSells quotes are pending for the authenticated seller");
+            assert_eq!(
+                sell_quote.direction,
+                journey::living_scene::SceneTradeDirection::HeroSells
+            );
+            let sold = interaction_with_choices(
+                &sell_quote_checkpoint,
+                49,
+                &item_id,
+                "trade",
+                &[
+                    ("scene-quote-id", &sell_quote.quote_id),
+                    ("scene-payment", "90"),
+                ],
+            );
+            assert_eq!(
+                journey::living_scene::balance_cp(sold.state(), actor).unwrap(),
+                initial_balance - 60
+            );
+            let sold_scene = runtime::scene(sold.state()).unwrap();
+            let sold_model = sold_scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+            let item = sold_model
+                .things
+                .iter()
+                .find(|thing| thing.id == item_id)
+                .unwrap();
+            assert_eq!(item.owner_id.as_deref(), Some(merchant_id.as_str()));
+            assert_eq!(item.holder_id.as_deref(), Some(merchant_id.as_str()));
+            let history = journey::living_scene::merchant_quote_history(&sold).unwrap();
+            assert_eq!(history.len(), 2);
+            assert!(history.iter().all(|entry| {
+                entry.status == journey::living_scene::MerchantQuoteStatus::Accepted
+                    && entry.attempt_count == 1
+            }));
         });
     }
 

@@ -278,6 +278,45 @@ pub(crate) struct SceneChange {
     pub(crate) kind: SceneChangeKind,
 }
 
+/// Auditable normal d20 check receipt for a successful scene theft. The resolver is repeated
+/// during replay so prose, a fabricated boolean, or a failed roll cannot move custody.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SceneStealAdjudication {
+    pub(crate) operation_id: String,
+    pub(crate) source_revision: String,
+    pub(crate) actor_id: String,
+    pub(crate) die: u8,
+    pub(crate) ability_modifier: i8,
+    pub(crate) proficiency_bonus: u8,
+    pub(crate) difficulty_class: u8,
+}
+
+fn valid_steal_adjudication(
+    adjudication: &SceneStealAdjudication,
+    actor_id: &str,
+    item_id: &str,
+    expected_success: bool,
+) -> bool {
+    adjudication.actor_id == actor_id
+        && adjudication.operation_id.len() == 32
+        && adjudication
+            .operation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        && adjudication.source_revision.starts_with("srd521-p6:")
+        && adjudication
+            .source_revision
+            .ends_with(&format!(":sleight-of-hand:target-thing-{item_id}"))
+        && df_rules::ability_check::resolve(df_rules::ability_check::AbilityCheckInput {
+            die: adjudication.die,
+            ability_modifier: adjudication.ability_modifier,
+            proficiency_bonus: adjudication.proficiency_bonus,
+            difficulty_class: adjudication.difficulty_class,
+        })
+        .is_ok_and(|check| check.succeeded == expected_success)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum SceneChangeKind {
@@ -286,11 +325,23 @@ pub(crate) enum SceneChangeKind {
     Purchased {
         holder_id: String,
         seller_id: String,
+        #[serde(default)]
+        cost_cp: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quote_id: Option<String>,
     },
     NpcPurchased {
         holder_id: String,
         seller_id: String,
         cost_cp: u32,
+    },
+    /// A merchant buys a player-owned item. The exact price is charged to the NPC purse
+    /// and the same canonical instance changes both owner and holder on replay.
+    Sold {
+        seller_id: String,
+        buyer_id: String,
+        price_cp: u32,
+        quote_id: String,
     },
     Taken {
         holder_id: String,
@@ -299,11 +350,15 @@ pub(crate) enum SceneChangeKind {
     /// ordinary NPC interaction once the theft is witnessed or discovered.
     Stolen {
         holder_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adjudication: Option<SceneStealAdjudication>,
     },
     /// Durable intent only. Rules adjudication must replace this with `Stolen` before
     /// custody changes; recording the attempt preserves witnesses and replay context.
     StealAttempt {
         actor_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adjudication: Option<SceneStealAdjudication>,
     },
     Given {
         holder_id: String,
@@ -770,7 +825,7 @@ impl SceneModel {
         let person_ids = self
             .people
             .iter()
-            .map(|person| person.id.as_str())
+            .map(|person| person.id.clone())
             .collect::<BTreeSet<_>>();
         if self
             .things
@@ -1055,6 +1110,34 @@ impl SceneModel {
                 SceneChangeKind::Purchased { .. } | SceneChangeKind::NpcPurchased { .. } => {
                     return Err(SceneModelError::Contradiction);
                 }
+                SceneChangeKind::Sold {
+                    seller_id,
+                    buyer_id,
+                    price_cp,
+                    ..
+                } => {
+                    if !thing.portable
+                        || thing.in_use
+                        || *price_cp == 0
+                        || thing.holder_id.as_deref() != Some(seller_id)
+                        || thing.owner_id.as_deref() != Some(seller_id)
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    let buyer = self
+                        .people
+                        .iter_mut()
+                        .find(|person| person.id == *buyer_id)
+                        .ok_or(SceneModelError::UnknownPerson)?;
+                    buyer.coin_cp = buyer
+                        .coin_cp
+                        .checked_sub(*price_cp)
+                        .ok_or(SceneModelError::Contradiction)?;
+                    thing.owner_id = Some(buyer_id.clone());
+                    thing.holder_id = Some(buyer_id.clone());
+                    thing.position = format!("held by {buyer_id}");
+                    thing.in_scene = person_ids.contains(buyer_id);
+                }
                 SceneChangeKind::Taken { holder_id } => {
                     if !thing.portable
                         || thing.in_use
@@ -1067,11 +1150,24 @@ impl SceneModel {
                         return Err(SceneModelError::Contradiction);
                     }
                     thing.holder_id = Some(holder_id.clone());
-                    thing.in_scene = person_ids.contains(holder_id.as_str());
+                    thing.in_scene = person_ids.contains(holder_id);
                     thing.position = format!("held by {holder_id}");
                 }
-                SceneChangeKind::Stolen { holder_id } => {
-                    if !thing.portable || thing.in_use || thing.holder_id.is_some() {
+                SceneChangeKind::Stolen {
+                    holder_id,
+                    adjudication,
+                } => {
+                    if !thing.portable
+                        || thing.in_use
+                        || thing.holder_id.is_some()
+                        || thing
+                            .owner_id
+                            .as_deref()
+                            .is_none_or(|owner_id| owner_id == holder_id)
+                        || adjudication.as_ref().is_none_or(|adjudication| {
+                            !valid_steal_adjudication(adjudication, holder_id, &thing.id, true)
+                        })
+                    {
                         return Err(SceneModelError::Contradiction);
                     }
                     thing.holder_id = Some(holder_id.clone());
@@ -1086,8 +1182,14 @@ impl SceneModel {
                     if let Some(owner_id) = owner_id {
                         thing.owner_id = Some(owner_id.clone());
                     }
-                    thing.in_scene = person_ids.contains(holder_id.as_str());
+                    thing.in_scene = person_ids.contains(holder_id);
                     thing.position = format!("held by {holder_id}");
+                }
+                SceneChangeKind::StealAttempt {
+                    actor_id,
+                    adjudication: Some(adjudication),
+                } if !valid_steal_adjudication(adjudication, actor_id, &thing.id, false) => {
+                    return Err(SceneModelError::Contradiction);
                 }
                 SceneChangeKind::StealAttempt { .. } => {}
                 SceneChangeKind::Returned { position } => {
@@ -1117,15 +1219,17 @@ impl SceneModel {
             SceneChangeKind::Purchased {
                 holder_id,
                 seller_id,
-            } => Some((holder_id, seller_id, None)),
+                cost_cp,
+                ..
+            } => Some((holder_id, seller_id, *cost_cp, false)),
             SceneChangeKind::NpcPurchased {
                 holder_id,
                 seller_id,
                 cost_cp,
-            } => Some((holder_id, seller_id, Some(*cost_cp))),
+            } => Some((holder_id, seller_id, *cost_cp, true)),
             _ => None,
         };
-        if let Some((holder_id, _seller_id, npc_cost)) = purchase {
+        if let Some((holder_id, _seller_id, cost_cp, npc_purchase)) = purchase {
             let offer = self
                 .offer(&change.entity_id)
                 .cloned()
@@ -1143,7 +1247,7 @@ impl SceneModel {
                 .find(|person| person.id.as_str() == _seller_id.as_str())
                 .map(|person| person.name.clone())
                 .unwrap_or_else(|| "the seller".into());
-            if let Some(cost_cp) = npc_cost {
+            if npc_purchase {
                 if cost_cp != offer.cost_cp {
                     return Err(SceneModelError::Contradiction);
                 }
@@ -1159,9 +1263,63 @@ impl SceneModel {
                     .checked_sub(cost_cp)
                     .ok_or(SceneModelError::Contradiction)?;
             }
+            let seller = self
+                .people
+                .iter_mut()
+                .find(|person| person.id == *_seller_id)
+                .ok_or(SceneModelError::UnknownPerson)?;
+            seller.coin_cp = seller
+                .coin_cp
+                .checked_add(cost_cp)
+                .ok_or(SceneModelError::InvalidBounds)?;
             let item = self.generated_offer_thing(&offer, holder_id, holder_id, &seller_name);
             self.things.push(item);
             return Ok(());
+        }
+        if let Some(offer) = self.offer(&change.entity_id).cloned() {
+            let item_id = offer.canonical_item_id();
+            if change.entity_id != item_id {
+                return Err(SceneModelError::Contradiction);
+            }
+            match &change.kind {
+                SceneChangeKind::Stolen {
+                    holder_id,
+                    adjudication: Some(adjudication),
+                } => {
+                    if !self.offer_available(&item_id)
+                        || !valid_steal_adjudication(adjudication, holder_id, &item_id, true)
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    let seller_name = self
+                        .people
+                        .iter()
+                        .find(|person| person.id == offer.seller_id)
+                        .map(|person| person.name.clone())
+                        .unwrap_or_else(|| "the seller".into());
+                    let item = self.generated_offer_thing(
+                        &offer,
+                        holder_id,
+                        &offer.seller_id,
+                        &seller_name,
+                    );
+                    self.things.push(item);
+                    return Ok(());
+                }
+                SceneChangeKind::StealAttempt {
+                    actor_id,
+                    adjudication: Some(adjudication),
+                } => {
+                    if !valid_steal_adjudication(adjudication, actor_id, &item_id, false) {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    return Ok(());
+                }
+                SceneChangeKind::StealAttempt {
+                    adjudication: None, ..
+                } => return Ok(()),
+                _ => {}
+            }
         }
         if let Some((holder_id, owner_id)) = match &change.kind {
             SceneChangeKind::Given {

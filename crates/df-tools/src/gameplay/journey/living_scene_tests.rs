@@ -88,6 +88,18 @@ fn interact(
     target: &str,
     option: &str,
 ) -> Checkpoint {
+    let roll = (option == "steal").then_some(1);
+    interact_with_roll(current, member, op, target, option, roll)
+}
+
+fn interact_with_roll(
+    current: &Checkpoint,
+    member: MemberId,
+    op: u8,
+    target: &str,
+    option: &str,
+    roll: Option<u32>,
+) -> Checkpoint {
     let choices = vec![
         (
             model::label("scene-target").unwrap(),
@@ -101,7 +113,11 @@ fn interact(
     stage_with_supplier(
         current,
         &input(current, member, op, "script-choice", choices),
-        &mut |_| panic!("ordinary scene interaction must not roll"),
+        &mut |sides| match roll {
+            Some(face) if sides == 20 => Ok(face),
+            Some(_) => panic!("theft uses one d20"),
+            None => panic!("ordinary scene interaction must not roll"),
+        },
     )
     .unwrap_or_else(|error| {
         panic!(
@@ -196,7 +212,12 @@ fn explicit_steal_text_routes_to_server_inventory_interaction() {
         let thing = model
             .things
             .iter()
-            .find(|thing| thing.portable && !thing.in_use && thing.holder_id.is_none())
+            .find(|thing| {
+                thing.portable
+                    && !thing.in_use
+                    && thing.holder_id.is_none()
+                    && thing.owner_id.is_some()
+            })
             .unwrap();
         assert_eq!(
             living_scene::interaction_for_line(&scene, &format!("I steal the {}.", thing.name),),
@@ -220,8 +241,45 @@ fn explicit_steal_text_routes_to_server_inventory_interaction() {
             living_scene::last_line(attempted.state())
                 .unwrap()
                 .unwrap()
-                .contains("requires an adjudicated check")
+                .contains("fails to steal")
         );
+        assert_eq!(attempted.state().draws.last().unwrap().value, 1);
+    });
+}
+
+#[test]
+fn a_successful_rules_theft_changes_custody_and_preserves_the_owner() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let thing = model
+            .things
+            .iter()
+            .find(|thing| {
+                thing.portable
+                    && !thing.in_use
+                    && thing.holder_id.is_none()
+                    && thing
+                        .owner_id
+                        .as_deref()
+                        .is_some_and(|owner| owner != "Brynn")
+            })
+            .expect("the room has an owned portable object");
+        let owner = thing.owner_id.clone();
+        let stolen = interact_with_roll(&current, member, 21, &thing.id, "steal", Some(20));
+        let after = living_scene::snapshot(stolen.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let result = after
+            .model
+            .things
+            .iter()
+            .find(|candidate| candidate.id == thing.id)
+            .unwrap();
+        assert_eq!(result.owner_id, owner);
+        assert_eq!(result.holder_id.as_deref(), Some("Brynn"));
+        assert_eq!(stolen.state().draws.last().unwrap().value, 20);
     });
 }
 

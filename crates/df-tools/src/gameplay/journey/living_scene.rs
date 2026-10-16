@@ -1,11 +1,12 @@
 //! Committed scene interactions. Presentation caches are rebuilt from this checkpoint journal.
 use super::*;
 use crate::gameplay::adventure::scene_model::{
-    SceneChange, SceneChangeKind, SceneNow, ScenePerson, StartingAttitude,
+    SceneChange, SceneChangeKind, SceneNow, ScenePerson, SceneStealAdjudication, StartingAttitude,
 };
 use serde::{Deserialize, Serialize};
 
-const PREFIX: &str = "living-scene-1:";
+const PREFIX: &str = "living-scene-2:";
+const LEGACY_PREFIX: &str = "living-scene-1:";
 const POLICY: &str = "living-scene-1";
 static MODELS: std::sync::OnceLock<
     std::sync::Mutex<
@@ -67,6 +68,18 @@ struct Interaction {
     source_actor_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_text: Option<String>,
+    #[serde(default)]
+    source_line_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    principal_id: Option<String>,
+    #[serde(default)]
+    coin_credit_cp: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quote: Option<SceneTradeQuote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quote_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quote_attempt: Option<MerchantQuoteAttempt>,
 }
 
 /// A server-authorized action proposed by the narrative/interaction layer for a named NPC.
@@ -88,6 +101,7 @@ pub(crate) struct NpcInventoryProposal {
 pub(crate) struct NpcInventorySource {
     pub(crate) source_line_id: String,
     pub(crate) source_revision: df_types::SessionRevision,
+    pub(crate) source_line_sequence: u64,
     pub(crate) source_actor_id: String,
     pub(crate) source_text: String,
 }
@@ -104,6 +118,91 @@ pub(crate) enum NpcInventoryAction {
     },
     Purchase,
     Steal,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SceneTradeDirection {
+    HeroBuys,
+    HeroSells,
+}
+
+/// Durable, source-bound merchant terms. A quote is only an offer; it does not move
+/// stock or money until the authenticated player accepts it through `stage`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SceneTradeQuote {
+    pub(crate) quote_id: String,
+    pub(crate) direction: SceneTradeDirection,
+    pub(crate) place_id: String,
+    pub(crate) item_id: String,
+    pub(crate) offer_id: Option<String>,
+    pub(crate) seller_id: String,
+    pub(crate) buyer_id: String,
+    pub(crate) price_cp: u32,
+    pub(crate) stock_revision: u64,
+    pub(crate) purse_revision: u64,
+    pub(crate) source_line_id: String,
+    pub(crate) source_line_sequence: u64,
+    pub(crate) source_revision: String,
+    pub(crate) source_actor_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NpcTradeQuoteProposal {
+    pub(crate) operation: OperationId,
+    pub(crate) expected_basis: Basis,
+    /// The NPC merchant issuing the price: seller for `HeroBuys`, buyer for `HeroSells`.
+    pub(crate) actor_id: String,
+    /// Authenticated player hero: buyer for `HeroBuys`, seller for `HeroSells`.
+    pub(crate) customer_id: String,
+    pub(crate) direction: SceneTradeDirection,
+    pub(crate) item_id: String,
+    pub(crate) offer_id: Option<String>,
+    pub(crate) price_cp: u32,
+    pub(crate) source: NpcInventorySource,
+}
+
+/// Shared candidate data for narrative pricing and the authoritative commit validator.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MerchantTradeTerms {
+    pub(crate) direction: SceneTradeDirection,
+    pub(crate) item_id: String,
+    pub(crate) item_name: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) offer_id: Option<String>,
+    pub(crate) seller_id: String,
+    pub(crate) buyer_id: String,
+    pub(crate) minimum_price_cp: u32,
+    pub(crate) maximum_price_cp: u32,
+    pub(crate) available: bool,
+    /// This model represents each offer as exactly one finite unit (zero or one).
+    pub(crate) stock_units: u8,
+    pub(crate) stock_revision: u64,
+    pub(crate) purse_revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MerchantQuoteAttempt {
+    Rejected { reason: String },
+    Accepted,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MerchantQuoteStatus {
+    Pending,
+    Accepted,
+    Stale,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MerchantQuoteHistoryEntry {
+    pub(crate) quote: SceneTradeQuote,
+    pub(crate) status: MerchantQuoteStatus,
+    pub(crate) attempt_count: u32,
+    pub(crate) last_rejection: Option<String>,
 }
 
 /// Commits an NPC inventory proposal after validating the current scene and exact money path.
@@ -123,6 +222,7 @@ pub(crate) fn commit_npc_inventory_action(
         || source.source_line_id.len() > 128
         || source.source_actor_id != proposal.actor_id
         || source.source_revision != current.basis().revision
+        || source.source_line_sequence == 0
         || source.source_text.trim().is_empty()
         || source.source_text.len() > 1024
     {
@@ -280,6 +380,7 @@ pub(crate) fn commit_npc_inventory_action(
                     description: line.clone(),
                     kind: SceneChangeKind::StealAttempt {
                         actor_id: actor.id.clone(),
+                        adjudication: None,
                     },
                 }),
                 line,
@@ -311,6 +412,12 @@ pub(crate) fn commit_npc_inventory_action(
         )),
         source_actor_id: Some(source.source_actor_id.clone()),
         source_text: Some(source.source_text.clone()),
+        source_line_sequence: source.source_line_sequence,
+        principal_id: Some(actor.id.clone()),
+        coin_credit_cp: 0,
+        quote: None,
+        quote_id: None,
+        quote_attempt: None,
     };
     finish(
         current,
@@ -334,6 +441,431 @@ pub(crate) fn commit_npc_inventory_action(
     )
 }
 
+/// Returns server-derived trade options for this authenticated hero. Price bounds and finite
+/// stock state are shared with quote commit validation so dialogue cannot invent its own math.
+pub(crate) fn merchant_trade_terms(
+    current: &Checkpoint,
+    hero_id: &str,
+) -> Result<Vec<MerchantTradeTerms>, RepositoryError> {
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+    let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+    let model = &snapshot.model;
+    if !is_authenticated_hero(current.state(), model, hero_id)? {
+        return Err(invalid());
+    }
+    let place_id = scene
+        .setting
+        .as_ref()
+        .ok_or_else(invalid)?
+        .place_id
+        .as_str();
+    let mut terms = Vec::new();
+    for offer in &model.offers {
+        let item_id = offer.canonical_item_id();
+        let available = model.offer_available(&item_id);
+        terms.push(MerchantTradeTerms {
+            direction: SceneTradeDirection::HeroBuys,
+            item_id: item_id.clone(),
+            item_name: offer.name.clone(),
+            aliases: offer.aliases.clone(),
+            offer_id: Some(offer.id.clone()),
+            seller_id: offer.seller_id.clone(),
+            buyer_id: hero_id.to_owned(),
+            minimum_price_cp: offer.cost_cp / 2 + offer.cost_cp % 2,
+            maximum_price_cp: offer.cost_cp,
+            available,
+            stock_units: u8::from(available),
+            stock_revision: item_stock_revision(current.state(), place_id, &item_id)?,
+            purse_revision: purse_revision(current.state(), place_id, &offer.seller_id)?,
+        });
+    }
+    let merchants = model
+        .offers
+        .iter()
+        .map(|offer| offer.seller_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for merchant_id in merchants {
+        let Some(merchant) = model.people.iter().find(|person| person.id == merchant_id) else {
+            continue;
+        };
+        for thing in &model.things {
+            if !thing.portable
+                || thing.in_use
+                || !thing.in_scene
+                || thing.owner_id.as_deref() != Some(hero_id)
+                || thing.holder_id.as_deref() != Some(hero_id)
+            {
+                continue;
+            }
+            let Some(value_cp) = thing.value_cp else {
+                continue;
+            };
+            let maximum_price_cp = (value_cp / 2).min(merchant.coin_cp);
+            let available = maximum_price_cp > 0;
+            terms.push(MerchantTradeTerms {
+                direction: SceneTradeDirection::HeroSells,
+                item_id: thing.id.clone(),
+                item_name: thing.name.clone(),
+                aliases: thing.aliases.clone(),
+                offer_id: None,
+                seller_id: hero_id.to_owned(),
+                buyer_id: merchant_id.to_owned(),
+                minimum_price_cp: 1,
+                maximum_price_cp,
+                available,
+                stock_units: u8::from(available),
+                stock_revision: item_stock_revision(current.state(), place_id, &thing.id)?,
+                purse_revision: purse_revision(current.state(), place_id, merchant_id)?,
+            });
+        }
+    }
+    terms.sort_by(|left, right| {
+        (left.direction as u8, &left.item_id, &left.buyer_id).cmp(&(
+            right.direction as u8,
+            &right.item_id,
+            &right.buyer_id,
+        ))
+    });
+    Ok(terms)
+}
+
+/// Commits one NPC-issued merchant quote to the durable decision journal.
+pub(crate) fn commit_npc_trade_quote(
+    current: &Checkpoint,
+    proposal: NpcTradeQuoteProposal,
+) -> Result<Checkpoint, RepositoryError> {
+    if current.basis() != proposal.expected_basis
+        || !valid_npc_source(current, &proposal.actor_id, &proposal.source)
+    {
+        return Err(invalid());
+    }
+    let terms = merchant_trade_terms(current, &proposal.customer_id)?;
+    let expected = terms
+        .iter()
+        .find(|terms| match proposal.direction {
+            SceneTradeDirection::HeroBuys => {
+                terms.direction == proposal.direction
+                    && terms.item_id == proposal.item_id
+                    && terms.offer_id == proposal.offer_id
+                    && terms.seller_id == proposal.actor_id
+                    && terms.buyer_id == proposal.customer_id
+            }
+            SceneTradeDirection::HeroSells => {
+                terms.direction == proposal.direction
+                    && terms.item_id == proposal.item_id
+                    && terms.offer_id == proposal.offer_id
+                    && terms.seller_id == proposal.customer_id
+                    && terms.buyer_id == proposal.actor_id
+            }
+        })
+        .filter(|terms| {
+            terms.available
+                && proposal.price_cp >= terms.minimum_price_cp
+                && proposal.price_cp <= terms.maximum_price_cp
+        })
+        .ok_or_else(invalid)?;
+    let quote_id = format!("merchant-quote-{}", hex(proposal.operation.as_bytes()));
+    if merchant_quote_history(current)?
+        .iter()
+        .any(|entry| entry.quote.quote_id == quote_id)
+    {
+        return Err(invalid());
+    }
+    let (seller_id, buyer_id) = match proposal.direction {
+        SceneTradeDirection::HeroBuys => (proposal.actor_id.clone(), proposal.customer_id.clone()),
+        SceneTradeDirection::HeroSells => (proposal.customer_id.clone(), proposal.actor_id.clone()),
+    };
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+    let place_id = scene.setting.as_ref().ok_or_else(invalid)?.place_id.clone();
+    let quote = SceneTradeQuote {
+        quote_id,
+        direction: proposal.direction,
+        place_id: place_id.clone(),
+        item_id: proposal.item_id.clone(),
+        offer_id: proposal.offer_id.clone(),
+        seller_id,
+        buyer_id,
+        price_cp: proposal.price_cp,
+        stock_revision: expected.stock_revision,
+        purse_revision: expected.purse_revision,
+        source_line_id: proposal.source.source_line_id.clone(),
+        source_line_sequence: proposal.source.source_line_sequence,
+        source_revision: revision_text(proposal.source.source_revision),
+        source_actor_id: proposal.source.source_actor_id.clone(),
+    };
+    let accepted = rpc::AcceptedAction {
+        phase: phase(current)? as i32,
+        ..Default::default()
+    };
+    let interaction = Interaction {
+        place: place_id,
+        hero: proposal.customer_id,
+        change: None,
+        paid_cp: 0,
+        actor: String::new(),
+        recipient: String::new(),
+        line: format!(
+            "{} offers {} for {} CP.",
+            proposal.actor_id, expected.item_name, proposal.price_cp
+        ),
+        accepted: hex(&accepted.encode_to_vec()),
+        target: proposal.item_id,
+        option: "merchant-quote".into(),
+        source_line_id: Some(proposal.source.source_line_id),
+        source_revision: Some(revision_text(proposal.source.source_revision)),
+        source_actor_id: Some(proposal.source.source_actor_id.clone()),
+        source_text: Some(proposal.source.source_text),
+        source_line_sequence: proposal.source.source_line_sequence,
+        principal_id: Some(proposal.actor_id),
+        coin_credit_cp: 0,
+        quote: Some(quote),
+        quote_id: None,
+        quote_attempt: None,
+    };
+    finish_interaction(current, proposal.operation, interaction)
+}
+
+/// Current unconsumed terms for an authenticated player. A changed item or merchant purse
+/// closes the quote as stale even if the table has advanced through unrelated interactions.
+pub(crate) fn pending_merchant_quote(
+    current: &Checkpoint,
+    hero_id: &str,
+) -> Result<Option<SceneTradeQuote>, RepositoryError> {
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+    let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+    if !is_authenticated_hero(current.state(), &snapshot.model, hero_id)? {
+        return Err(invalid());
+    }
+    let history = merchant_quote_history(current)?;
+    Ok(history
+        .into_iter()
+        .rev()
+        .find(|entry| {
+            entry.status == MerchantQuoteStatus::Pending
+                && match entry.quote.direction {
+                    SceneTradeDirection::HeroBuys => entry.quote.buyer_id == hero_id,
+                    SceneTradeDirection::HeroSells => entry.quote.seller_id == hero_id,
+                }
+        })
+        .map(|entry| entry.quote))
+}
+
+/// Read-only transaction history; it intentionally omits raw dialogue/source text.
+pub(crate) fn merchant_quote_history(
+    current: &Checkpoint,
+) -> Result<Vec<MerchantQuoteHistoryEntry>, RepositoryError> {
+    let mut history = Vec::<MerchantQuoteHistoryEntry>::new();
+    for decision in &current.state().decisions {
+        let Some(entry) = read(decision)? else {
+            continue;
+        };
+        if let Some(quote) = entry.quote {
+            let status = if quote_was_accepted(current.state(), &quote.quote_id)? {
+                MerchantQuoteStatus::Accepted
+            } else if quote_is_stale(current.state(), &quote)? {
+                MerchantQuoteStatus::Stale
+            } else {
+                MerchantQuoteStatus::Pending
+            };
+            history.push(MerchantQuoteHistoryEntry {
+                quote,
+                status,
+                attempt_count: 0,
+                last_rejection: None,
+            });
+        }
+        if let Some(quote_id) = entry.quote_id
+            && let Some(history_entry) = history
+                .iter_mut()
+                .find(|history_entry| history_entry.quote.quote_id == quote_id)
+        {
+            history_entry.attempt_count = history_entry.attempt_count.saturating_add(1);
+            if let Some(MerchantQuoteAttempt::Rejected { reason }) = entry.quote_attempt {
+                history_entry.last_rejection = Some(reason);
+            }
+        }
+    }
+    Ok(history)
+}
+
+fn valid_npc_source(current: &Checkpoint, actor_id: &str, source: &NpcInventorySource) -> bool {
+    !source.source_line_id.is_empty()
+        && source.source_line_id.len() <= 128
+        && source.source_actor_id == actor_id
+        && source.source_revision == current.basis().revision
+        && source.source_line_sequence > 0
+        && !source.source_text.trim().is_empty()
+        && source.source_text.len() <= 1024
+}
+
+fn revision_text(revision: df_types::SessionRevision) -> String {
+    format!("{}:{}", revision.epoch().get(), revision.sequence())
+}
+
+fn is_authenticated_hero(
+    state: &GameState,
+    model: &crate::gameplay::adventure::scene_model::SceneModel,
+    hero_id: &str,
+) -> Result<bool, RepositoryError> {
+    let Some(person) = model.people.iter().find(|person| person.id == hero_id) else {
+        return Ok(false);
+    };
+    if person.role != "hero" || person.is_background {
+        return Ok(false);
+    }
+    for character in &state.characters {
+        if name(state, character.entity)? == person.name && person.id == person.name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn item_stock_revision(
+    state: &GameState,
+    place_id: &str,
+    item_id: &str,
+) -> Result<u64, RepositoryError> {
+    let mut revision = 0u64;
+    for decision in &state.decisions {
+        let Some(entry) = read(decision)? else {
+            continue;
+        };
+        if entry.place != place_id || entry.target != item_id {
+            continue;
+        }
+        if entry.change.as_ref().is_some_and(|change| {
+            matches!(
+                change.kind,
+                SceneChangeKind::Taken { .. }
+                    | SceneChangeKind::Stolen { .. }
+                    | SceneChangeKind::Given { .. }
+                    | SceneChangeKind::Returned { .. }
+                    | SceneChangeKind::Purchased { .. }
+                    | SceneChangeKind::NpcPurchased { .. }
+                    | SceneChangeKind::Sold { .. }
+            )
+        }) {
+            revision = revision.checked_add(1).ok_or_else(invalid)?;
+        }
+    }
+    Ok(revision)
+}
+
+fn purse_revision(
+    state: &GameState,
+    place_id: &str,
+    person_id: &str,
+) -> Result<u64, RepositoryError> {
+    let mut revision = 0u64;
+    for decision in &state.decisions {
+        let Some(entry) = read(decision)? else {
+            continue;
+        };
+        if entry.place != place_id {
+            continue;
+        }
+        let Some(change) = entry.change.as_ref() else {
+            continue;
+        };
+        let mutation = match &change.kind {
+            SceneChangeKind::Purchased {
+                holder_id,
+                seller_id,
+                ..
+            } => holder_id == person_id || seller_id == person_id,
+            SceneChangeKind::NpcPurchased {
+                holder_id,
+                seller_id,
+                ..
+            } => holder_id == person_id || seller_id == person_id,
+            SceneChangeKind::Sold {
+                seller_id,
+                buyer_id,
+                ..
+            } => seller_id == person_id || buyer_id == person_id,
+            _ => false,
+        };
+        if mutation {
+            revision = revision.checked_add(1).ok_or_else(invalid)?;
+        }
+    }
+    Ok(revision)
+}
+
+fn quote_is_stale(state: &GameState, quote: &SceneTradeQuote) -> Result<bool, RepositoryError> {
+    let current_place = crate::gameplay::beat_script_runtime::scene(state)?
+        .setting
+        .map(|setting| setting.place_id);
+    Ok(current_place.as_deref() != Some(quote.place_id.as_str())
+        || item_stock_revision(state, &quote.place_id, &quote.item_id)? != quote.stock_revision
+        || purse_revision(state, &quote.place_id, quote_merchant_id(quote))?
+            != quote.purse_revision)
+}
+
+fn quote_merchant_id(quote: &SceneTradeQuote) -> &str {
+    match quote.direction {
+        SceneTradeDirection::HeroBuys => &quote.seller_id,
+        SceneTradeDirection::HeroSells => &quote.buyer_id,
+    }
+}
+
+fn quote_was_accepted(state: &GameState, quote_id: &str) -> Result<bool, RepositoryError> {
+    for decision in &state.decisions {
+        let Some(entry) = read(decision)? else {
+            continue;
+        };
+        if entry.quote_id.as_deref() == Some(quote_id)
+            && matches!(entry.quote_attempt, Some(MerchantQuoteAttempt::Accepted))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn finish_interaction(
+    current: &Checkpoint,
+    operation: OperationId,
+    interaction: Interaction,
+) -> Result<Checkpoint, RepositoryError> {
+    finish_interaction_with_draws(current, operation, interaction, Vec::new())
+}
+
+fn finish_interaction_with_draws(
+    current: &Checkpoint,
+    operation: OperationId,
+    interaction: Interaction,
+    draws: Vec<ActualDraw>,
+) -> Result<Checkpoint, RepositoryError> {
+    let mut basis = current.basis();
+    basis.revision = basis.revision.next_sequence().map_err(|_| invalid())?;
+    finish(
+        current,
+        basis,
+        current.state().clone(),
+        operation,
+        draws,
+        DecisionContent {
+            entry: if interaction.quote.is_some() {
+                "merchant-trade-quote"
+            } else {
+                "scene-interaction"
+            },
+            semantic: Some(format!(
+                "{PREFIX}{}",
+                serde_json::to_string(&interaction).map_err(|_| invalid())?
+            )),
+            policy: POLICY,
+            audience: AudienceScope::Shared,
+            reaction: None,
+            escort_target: None,
+            objective_command: None,
+            script_choice: None,
+        },
+    )
+}
+
 fn invalid() -> RepositoryError {
     refusal_detail::note("living-scene-state");
     RepositoryError::InvalidCandidate
@@ -343,11 +875,12 @@ fn read(decision: &AcceptedDecision) -> Result<Option<Interaction>, RepositoryEr
     if decision.source_policy.as_str() != POLICY {
         return Ok(None);
     }
-    let text = decision
-        .semantic_output
-        .as_deref()
-        .and_then(|text| text.strip_prefix(PREFIX))
-        .ok_or_else(invalid)?;
+    let Some(text) = decision.semantic_output.as_deref().and_then(|text| {
+        text.strip_prefix(PREFIX)
+            .or_else(|| text.strip_prefix(LEGACY_PREFIX))
+    }) else {
+        return Err(invalid());
+    };
     serde_json::from_str(text).map(Some).map_err(|_| invalid())
 }
 
@@ -440,8 +973,37 @@ pub(in crate::gameplay) fn snapshot(
     for decision in &state.decisions {
         if let Some(interaction) = read(decision)?
             && interaction.place == setting.place_id
-            && let Some(change) = interaction.change
+            && let Some(mut change) = interaction.change
         {
+            let adjudication = match &change.kind {
+                SceneChangeKind::Stolen {
+                    adjudication: Some(adjudication),
+                    ..
+                }
+                | SceneChangeKind::StealAttempt {
+                    adjudication: Some(adjudication),
+                    ..
+                } => Some(adjudication),
+                _ => None,
+            };
+            if let Some(adjudication) = adjudication {
+                validate_steal_receipt(
+                    state,
+                    decision,
+                    &setting.place_id,
+                    &interaction.hero,
+                    &change.entity_id,
+                    adjudication,
+                )?;
+            }
+            // Older v1 purchases recorded the debit on the interaction but not the price
+            // inside the scene change. Recover it during replay so the seller purse is
+            // credited once and the purchase still uses its original exact amount.
+            if let SceneChangeKind::Purchased { cost_cp, .. } = &mut change.kind
+                && *cost_cp == 0
+            {
+                *cost_cp = interaction.paid_cp;
+            }
             changes.push(change);
         }
     }
@@ -461,6 +1023,58 @@ pub(in crate::gameplay) fn snapshot(
         }
     }
     Ok(Some(snapshot))
+}
+
+fn validate_steal_receipt(
+    state: &GameState,
+    decision: &AcceptedDecision,
+    place_id: &str,
+    hero_id: &str,
+    item_id: &str,
+    receipt: &SceneStealAdjudication,
+) -> Result<(), RepositoryError> {
+    let current_place = crate::gameplay::beat_script_runtime::scene(state)?
+        .setting
+        .map(|setting| setting.place_id);
+    let scope = crate::gameplay::beat_script_runtime::scene_scope(state)?;
+    let source_revision = format!("srd521-p6:{scope}:sleight-of-hand:target-thing-{item_id}");
+    let operation_id = hex(decision.operation.as_bytes());
+    let Some(draw) = state
+        .draws
+        .iter()
+        .find(|draw| draw.operation == decision.operation && draw.ordinal == 0 && draw.sides == 20)
+    else {
+        return Err(invalid());
+    };
+    if current_place.as_deref() != Some(place_id)
+        || decision.draws.as_slice() != [0]
+        || receipt.operation_id != operation_id
+        || receipt.source_revision != source_revision
+        || receipt.actor_id != hero_id
+        || receipt.die != u8::try_from(draw.value).map_err(|_| invalid())?
+        || draw.source != super::rule()?
+    {
+        return Err(invalid());
+    }
+    let actor = state
+        .characters
+        .iter()
+        .find(|character| name(state, character.entity).is_ok_and(|name| name == hero_id))
+        .map(|character| character.entity)
+        .ok_or_else(invalid)?;
+    let result = crate::gameplay::beat_script_runtime::resolve_skill_check(
+        state,
+        actor,
+        "sleight-of-hand",
+        receipt.die,
+        receipt.difficulty_class,
+    )?;
+    if result.ability_modifier != receipt.ability_modifier
+        || result.proficiency_bonus != receipt.proficiency_bonus
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 pub(in crate::gameplay) fn publish(current: &Checkpoint) -> Result<(), RepositoryError> {
@@ -497,11 +1111,17 @@ pub(in crate::gameplay) fn balance_cp(
                     paid.checked_add(if owns { u64::from(entry.paid_cp) } else { 0 })
                         .ok_or_else(invalid)?,
                     received
-                        .checked_add(if entry.recipient == actor {
-                            u64::from(entry.paid_cp)
-                        } else {
-                            0
-                        })
+                        .checked_add(
+                            (if entry.recipient == actor {
+                                u64::from(entry.paid_cp)
+                            } else {
+                                0
+                            }) + if owns {
+                                u64::from(entry.coin_credit_cp)
+                            } else {
+                                0
+                            },
+                        )
                         .ok_or_else(invalid)?,
                 ))
             })?;
@@ -815,6 +1435,7 @@ pub(in crate::gameplay) fn interaction_for_line(
         "i open the ",
         "i close the ",
         "i buy ",
+        "i sell ",
         "i trade ",
         "i want a pint",
         "i pour myself",
@@ -831,7 +1452,7 @@ pub(in crate::gameplay) fn interaction_for_line(
     if !lower.starts_with("whose ") && (!direct || lower.ends_with('?')) {
         return None;
     }
-    let option = if lower.starts_with("i trade ") {
+    let option = if lower.starts_with("i trade ") || lower.starts_with("i sell ") {
         "trade"
     } else if lower.starts_with("i return ")
         || lower.starts_with("i put ") && lower.contains(" back")
@@ -872,7 +1493,12 @@ pub(in crate::gameplay) fn interaction_for_line(
         return None;
     };
     let resolved = model.resolve_target(words)?;
-    let id = resolved.ids.first()?.clone();
+    let resolved_id = resolved.ids.first()?;
+    let id = if resolved.kind == crate::gameplay::adventure::scene_model::SceneTargetKind::Offer {
+        model.offer(resolved_id)?.canonical_item_id()
+    } else {
+        resolved_id.clone()
+    };
     Some((id, option))
 }
 
@@ -894,6 +1520,90 @@ pub(super) fn stage(
     current: &Checkpoint,
     command: &CommandInput,
 ) -> Result<Checkpoint, RepositoryError> {
+    stage_inner(current, command, None, Vec::new())
+}
+
+pub(super) fn stage_with_supplier(
+    current: &Checkpoint,
+    command: &CommandInput,
+    draws: &mut Vec<ActualDraw>,
+    supplier: super::DiceSource<'_>,
+) -> Result<Checkpoint, RepositoryError> {
+    let GameCommand::ProposeAction { actor, choices, .. } = &command.command else {
+        return Err(invalid());
+    };
+    let selected = |group: &str| {
+        choices
+            .iter()
+            .find(|(key, _)| key.as_str() == group)
+            .map(|(_, value)| value.as_str())
+    };
+    let adjudication = if selected("scene-option") == Some("steal") {
+        let target = selected("scene-target").ok_or_else(invalid)?;
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+        let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+        let (item_id, owner_id, portable, in_use, held, dc) = if let Some(thing) = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.id == target)
+        {
+            (
+                thing.id.clone(),
+                thing.owner_id.clone(),
+                thing.portable,
+                thing.in_use,
+                thing.holder_id.is_some(),
+                thing.dc,
+            )
+        } else if let Some(offer) = snapshot.model.offer(target) {
+            let item_id = offer.canonical_item_id();
+            (
+                item_id,
+                Some(offer.seller_id.clone()),
+                true,
+                false,
+                !snapshot.model.offer_available(&offer.canonical_item_id()),
+                10,
+            )
+        } else {
+            return stage_inner(current, command, None, std::mem::take(draws));
+        };
+        let hero = name(current.state(), *actor)?;
+        if !portable || in_use || held || owner_id.as_deref().is_none_or(|owner| owner == hero) {
+            return stage_inner(current, command, None, std::mem::take(draws));
+        }
+        let face = super::draw(command.operation, 20, draws, supplier)?;
+        let result = crate::gameplay::beat_script_runtime::resolve_skill_check(
+            current.state(),
+            *actor,
+            "sleight-of-hand",
+            u8::try_from(face).map_err(|_| invalid())?,
+            dc,
+        )?;
+        let scope = crate::gameplay::beat_script_runtime::scene_scope(current.state())?;
+        let adjudication = SceneStealAdjudication {
+            operation_id: hex(command.operation.as_bytes()),
+            source_revision: format!("srd521-p6:{scope}:sleight-of-hand:target-thing-{item_id}"),
+            actor_id: hero,
+            die: result.die,
+            ability_modifier: result.ability_modifier,
+            proficiency_bonus: result.proficiency_bonus,
+            difficulty_class: result.difficulty_class,
+        };
+        Some(adjudication)
+    } else {
+        None
+    };
+    stage_inner(current, command, adjudication, std::mem::take(draws))
+}
+
+fn stage_inner(
+    current: &Checkpoint,
+    command: &CommandInput,
+    steal_adjudication: Option<SceneStealAdjudication>,
+    draws: Vec<ActualDraw>,
+) -> Result<Checkpoint, RepositoryError> {
     let GameCommand::ProposeAction {
         actor: who,
         choices,
@@ -907,7 +1617,7 @@ pub(super) fn stage(
         || command.observed_revision != current.basis().revision
         || !targets.is_empty()
         || !available(current, command.member)?
-        || !(2..=3).contains(&choices.len())
+        || !(2..=4).contains(&choices.len())
     {
         return Err(invalid());
     }
@@ -919,23 +1629,51 @@ pub(super) fn stage(
     let target = get("scene-target").ok_or_else(invalid)?;
     let option = get("scene-option").ok_or_else(invalid)?;
     let named_recipient = get("scene-recipient");
-    if choices.len()
-        != if matches!(option, "gift" | "trade")
-            || matches!(option, "buy" | "give") && named_recipient.is_some()
-        {
-            3
-        } else {
-            2
-        }
+    let quoted_id = get("scene-quote-id");
+    let payment = get("scene-payment");
+    let expected_choices = 2
+        + usize::from(named_recipient.is_some())
+        + usize::from(payment.is_some())
+        + usize::from(quoted_id.is_some());
+    if choices.len() != expected_choices
+        || (matches!(option, "gift") && named_recipient.is_some())
+        || (named_recipient.is_some() && !matches!(option, "buy" | "give"))
+        || (payment.is_some() && !matches!(option, "buy" | "trade"))
+        || (matches!(option, "trade") && payment.is_none())
+        || (quoted_id.is_some() && option != "trade")
+        || (quoted_id.is_some() && named_recipient.is_some())
     {
         return Err(invalid());
     }
     let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
     let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
     let hero = name(current.state(), *who)?;
+    let stored_quote = quoted_id
+        .map(|quote_id| {
+            merchant_quote_history(current).map(|history| {
+                history
+                    .into_iter()
+                    .find(|entry| entry.quote.quote_id == quote_id)
+            })
+        })
+        .transpose()?
+        .flatten();
+    if quoted_id.is_some()
+        && stored_quote
+            .as_ref()
+            .is_none_or(|entry| match entry.quote.direction {
+                SceneTradeDirection::HeroBuys => entry.quote.buyer_id != hero,
+                SceneTradeDirection::HeroSells => entry.quote.seller_id != hero,
+            })
+    {
+        return Err(invalid());
+    }
     let mut durable_target = target.to_owned();
     let mut change = None;
     let mut paid_cp = 0;
+    let mut coin_credit_cp = 0;
+    let mut accepted_quote_id = None;
+    let mut quote_attempt = None;
     let mut recipient = String::new();
     let line = if option == "examine"
         && (target.starts_with("absent-") || target.starts_with("surface-"))
@@ -1004,16 +1742,41 @@ pub(super) fn stage(
                     format!("{} is already being held.", thing.name)
                 }
                 "steal" => {
-                    let description = format!(
-                        "{hero} attempts to steal {}. An adjudicated check is required before custody can change.",
-                        thing.name
-                    );
+                    let adjudication = steal_adjudication
+                        .clone()
+                        .filter(|check| check.actor_id == hero);
+                    let succeeded = adjudication.as_ref().is_some_and(|check| {
+                        df_rules::ability_check::resolve(
+                            df_rules::ability_check::AbilityCheckInput {
+                                die: check.die,
+                                ability_modifier: check.ability_modifier,
+                                proficiency_bonus: check.proficiency_bonus,
+                                difficulty_class: check.difficulty_class,
+                            },
+                        )
+                        .is_ok_and(|result| result.succeeded)
+                    });
+                    let (description, kind) = if succeeded {
+                        (
+                            format!("{hero} steals {}.", thing.name),
+                            SceneChangeKind::Stolen {
+                                holder_id: hero.clone(),
+                                adjudication,
+                            },
+                        )
+                    } else {
+                        (
+                            format!("{hero} fails to steal {}.", thing.name),
+                            SceneChangeKind::StealAttempt {
+                                actor_id: hero.clone(),
+                                adjudication,
+                            },
+                        )
+                    };
                     change = Some(SceneChange {
                         entity_id: thing.id.clone(),
                         description: description.clone(),
-                        kind: SceneChangeKind::StealAttempt {
-                            actor_id: hero.clone(),
-                        },
+                        kind,
                     });
                     description
                 }
@@ -1112,6 +1875,87 @@ pub(super) fn stage(
                     "You must name a recipient before giving {} away.",
                     thing.name
                 ),
+                "trade" if quoted_id.is_some() => {
+                    let receipt = &stored_quote.as_ref().ok_or_else(invalid)?.quote;
+                    let exact_payment = payment.and_then(|amount| amount.parse::<u32>().ok());
+                    let current_place = scene
+                        .setting
+                        .as_ref()
+                        .ok_or_else(invalid)?
+                        .place_id
+                        .as_str();
+                    let valid_target = target == receipt.item_id
+                        && receipt.direction == SceneTradeDirection::HeroSells
+                        && receipt.place_id == current_place
+                        && receipt.item_id == thing.id
+                        && receipt.seller_id == hero
+                        && thing.owner_id.as_deref() == Some(hero.as_str())
+                        && thing.holder_id.as_deref() == Some(hero.as_str())
+                        && thing.portable
+                        && !thing.in_use;
+                    if !valid_target {
+                        quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                            reason: "item_or_party_mismatch".into(),
+                        });
+                        accepted_quote_id = Some(receipt.quote_id.clone());
+                        "That offer does not match the item you currently own and hold.".into()
+                    } else if quote_is_stale(current.state(), receipt)?
+                        || stored_quote
+                            .as_ref()
+                            .is_some_and(|entry| entry.status != MerchantQuoteStatus::Pending)
+                    {
+                        quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                            reason: "stale_quote".into(),
+                        });
+                        accepted_quote_id = Some(receipt.quote_id.clone());
+                        "That merchant offer has expired because the item or purse changed.".into()
+                    } else if exact_payment != Some(receipt.price_cp) {
+                        quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                            reason: "payment_mismatch".into(),
+                        });
+                        accepted_quote_id = Some(receipt.quote_id.clone());
+                        format!(
+                            "The offer is {} CP; that payment does not match.",
+                            receipt.price_cp
+                        )
+                    } else {
+                        let merchant = snapshot
+                            .model
+                            .people
+                            .iter()
+                            .find(|person| person.id == receipt.buyer_id)
+                            .ok_or_else(invalid)?;
+                        if merchant.coin_cp < receipt.price_cp
+                            || purse_revision(current.state(), current_place, &receipt.buyer_id)?
+                                != receipt.purse_revision
+                        {
+                            quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                                reason: "merchant_funds_changed".into(),
+                            });
+                            accepted_quote_id = Some(receipt.quote_id.clone());
+                            format!("{} no longer has enough coin to buy it.", merchant.name)
+                        } else {
+                            coin_credit_cp = receipt.price_cp;
+                            accepted_quote_id = Some(receipt.quote_id.clone());
+                            quote_attempt = Some(MerchantQuoteAttempt::Accepted);
+                            let description = format!(
+                                "{} buys {} from {hero} for {} CP.",
+                                merchant.name, thing.name, receipt.price_cp
+                            );
+                            change = Some(SceneChange {
+                                entity_id: thing.id.clone(),
+                                description: description.clone(),
+                                kind: SceneChangeKind::Sold {
+                                    seller_id: hero.clone(),
+                                    buyer_id: merchant.id.clone(),
+                                    price_cp: receipt.price_cp,
+                                    quote_id: receipt.quote_id.clone(),
+                                },
+                            });
+                            description
+                        }
+                    }
+                }
                 "join" => {
                     let description = format!("{hero} sits beside {}.", thing.name);
                     change = Some(SceneChange {
@@ -1152,70 +1996,167 @@ pub(super) fn stage(
     } else if let Some(offer) = snapshot.model.offer(target) {
         let item_id = offer.canonical_item_id();
         durable_target = item_id.clone();
-        if !matches!(option, "buy" | "use" | "trade" | "examine") {
+        if !matches!(option, "buy" | "use" | "trade" | "examine" | "steal") {
             return Err(invalid());
         }
         if option == "examine" {
             format!("{} It costs {} CP.", offer.description, offer.cost_cp)
-        } else if option == "trade"
-            && get("scene-payment").and_then(|amount| amount.parse::<u32>().ok())
-                != Some(offer.cost_cp)
-        {
-            format!(
-                "{} costs {} CP; that trade has not been agreed.",
-                offer.name, offer.cost_cp
-            )
-        } else if !snapshot.model.offer_available(&item_id) {
-            format!("{} is already sold.", offer.name)
-        } else if balance_cp(current.state(), *who)? < u64::from(offer.cost_cp) {
-            format!(
-                "{} costs {} CP; you do not have enough coin.",
-                offer.name, offer.cost_cp
-            )
-        } else {
-            paid_cp = offer.cost_cp;
-            let buyer = named_recipient.unwrap_or(&hero);
-            if !snapshot
-                .model
-                .people
-                .iter()
-                .any(|person| person.id == buyer)
-            {
-                return Err(invalid());
-            }
+        } else if option == "steal" {
+            let adjudication = steal_adjudication
+                .clone()
+                .filter(|check| check.actor_id == hero);
+            let succeeded = adjudication.as_ref().is_some_and(|check| {
+                df_rules::ability_check::resolve(df_rules::ability_check::AbilityCheckInput {
+                    die: check.die,
+                    ability_modifier: check.ability_modifier,
+                    proficiency_bonus: check.proficiency_bonus,
+                    difficulty_class: check.difficulty_class,
+                })
+                .is_ok_and(|result| result.succeeded)
+            });
+            let (description, kind) = if succeeded && snapshot.model.offer_available(&item_id) {
+                (
+                    format!("{hero} steals {}.", offer.name),
+                    SceneChangeKind::Stolen {
+                        holder_id: hero.clone(),
+                        adjudication,
+                    },
+                )
+            } else {
+                (
+                    format!("{hero} fails to steal {}.", offer.name),
+                    SceneChangeKind::StealAttempt {
+                        actor_id: hero.clone(),
+                        adjudication,
+                    },
+                )
+            };
             change = Some(SceneChange {
                 entity_id: item_id,
-                description: format!("{buyer} buys {}.", offer.name),
-                kind: SceneChangeKind::Purchased {
-                    holder_id: buyer.to_owned(),
-                    seller_id: offer.seller_id.clone(),
-                },
+                description: description.clone(),
+                kind,
             });
-            let seller = snapshot
-                .model
-                .people
-                .iter()
-                .find(|person| person.id == offer.seller_id)
-                .ok_or_else(invalid)?;
-            let ale = offer.name.to_lowercase().contains("ale");
-            let server = if ale {
-                snapshot
-                    .model
-                    .people
-                    .iter()
-                    .find(|person| person.is_background && person.role == "serving woman")
-                    .unwrap_or(seller)
+            description
+        } else {
+            let is_quoted = quoted_id.is_some();
+            let receipt = stored_quote.as_ref().map(|entry| &entry.quote);
+            let current_place = scene
+                .setting
+                .as_ref()
+                .ok_or_else(invalid)?
+                .place_id
+                .as_str();
+            let requested_payment = payment.and_then(|amount| amount.parse::<u32>().ok());
+            let quoted_valid = receipt.is_some_and(|receipt| {
+                target == item_id
+                    && receipt.direction == SceneTradeDirection::HeroBuys
+                    && receipt.place_id == current_place
+                    && receipt.item_id == item_id
+                    && receipt.offer_id.as_deref() == Some(offer.id.as_str())
+                    && receipt.seller_id == offer.seller_id
+                    && receipt.buyer_id == hero
+            });
+            if is_quoted && !quoted_valid {
+                let quote = receipt.ok_or_else(invalid)?;
+                quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                    reason: "item_or_party_mismatch".into(),
+                });
+                accepted_quote_id = Some(quote.quote_id.clone());
+                "That offer does not match this item or buyer.".into()
+            } else if is_quoted
+                && (quote_is_stale(current.state(), receipt.ok_or_else(invalid)?)?
+                    || stored_quote
+                        .as_ref()
+                        .is_some_and(|entry| entry.status != MerchantQuoteStatus::Pending))
+            {
+                let quote = receipt.ok_or_else(invalid)?;
+                quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                    reason: "stale_quote".into(),
+                });
+                accepted_quote_id = Some(quote.quote_id.clone());
+                "That merchant offer has expired because the item or purse changed.".into()
+            } else if is_quoted && requested_payment != receipt.map(|quote| quote.price_cp) {
+                let quote = receipt.ok_or_else(invalid)?;
+                quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                    reason: "payment_mismatch".into(),
+                });
+                accepted_quote_id = Some(quote.quote_id.clone());
+                format!(
+                    "The offer is {} CP; that payment does not match.",
+                    quote.price_cp
+                )
+            } else if !is_quoted && payment.is_some() && requested_payment != Some(offer.cost_cp) {
+                format!(
+                    "{} costs {} CP; that payment does not match.",
+                    offer.name, offer.cost_cp
+                )
+            } else if !snapshot.model.offer_available(&item_id) {
+                format!("{} is already sold.", offer.name)
             } else {
-                seller
-            };
-            let serving = if ale { "pours" } else { "hands over" };
-            format!(
-                "{} {serving} {} for {hero}, who pays {} {} CP.",
-                server.name,
-                offer.description.trim_end_matches('.'),
-                seller.name,
-                offer.cost_cp
-            )
+                let cost_cp = receipt.map_or(offer.cost_cp, |quote| quote.price_cp);
+                if balance_cp(current.state(), *who)? < u64::from(cost_cp) {
+                    if let Some(quote) = receipt {
+                        accepted_quote_id = Some(quote.quote_id.clone());
+                        quote_attempt = Some(MerchantQuoteAttempt::Rejected {
+                            reason: "buyer_funds_insufficient".into(),
+                        });
+                    }
+                    format!(
+                        "{} costs {} CP; you do not have enough coin.",
+                        offer.name, cost_cp
+                    )
+                } else {
+                    paid_cp = cost_cp;
+                    let buyer = named_recipient.unwrap_or(&hero);
+                    if !snapshot
+                        .model
+                        .people
+                        .iter()
+                        .any(|person| person.id == buyer)
+                    {
+                        return Err(invalid());
+                    }
+                    if let Some(quote) = receipt {
+                        accepted_quote_id = Some(quote.quote_id.clone());
+                        quote_attempt = Some(MerchantQuoteAttempt::Accepted);
+                    }
+                    change = Some(SceneChange {
+                        entity_id: item_id.clone(),
+                        description: format!("{buyer} buys {}.", offer.name),
+                        kind: SceneChangeKind::Purchased {
+                            holder_id: buyer.to_owned(),
+                            seller_id: offer.seller_id.clone(),
+                            cost_cp,
+                            quote_id: accepted_quote_id.clone(),
+                        },
+                    });
+                    let seller = snapshot
+                        .model
+                        .people
+                        .iter()
+                        .find(|person| person.id == offer.seller_id)
+                        .ok_or_else(invalid)?;
+                    let ale = offer.name.to_lowercase().contains("ale");
+                    let server = if ale {
+                        snapshot
+                            .model
+                            .people
+                            .iter()
+                            .find(|person| person.is_background && person.role == "serving woman")
+                            .unwrap_or(seller)
+                    } else {
+                        seller
+                    };
+                    let serving = if ale { "pours" } else { "hands over" };
+                    format!(
+                        "{} {serving} {} for {hero}, who pays {} {} CP.",
+                        server.name,
+                        offer.description.trim_end_matches('.'),
+                        seller.name,
+                        cost_cp
+                    )
+                }
+            }
         }
     } else if let Some(person) = snapshot
         .model
@@ -1278,7 +2219,7 @@ pub(super) fn stage(
     };
     let interaction = Interaction {
         place: scene.setting.as_ref().ok_or_else(invalid)?.place_id.clone(),
-        hero,
+        hero: hero.clone(),
         change,
         paid_cp,
         actor: hex(who.as_bytes()),
@@ -1291,27 +2232,12 @@ pub(super) fn stage(
         source_revision: None,
         source_actor_id: None,
         source_text: None,
+        source_line_sequence: 0,
+        principal_id: Some(hero),
+        coin_credit_cp,
+        quote: None,
+        quote_id: accepted_quote_id,
+        quote_attempt,
     };
-    let mut basis = current.basis();
-    basis.revision = basis.revision.next_sequence().map_err(|_| invalid())?;
-    finish(
-        current,
-        basis,
-        current.state().clone(),
-        command.operation,
-        Vec::new(),
-        DecisionContent {
-            entry: "scene-interaction",
-            semantic: Some(format!(
-                "{PREFIX}{}",
-                serde_json::to_string(&interaction).map_err(|_| invalid())?
-            )),
-            policy: POLICY,
-            audience: AudienceScope::Shared,
-            reaction: None,
-            escort_target: None,
-            objective_command: None,
-            script_choice: None,
-        },
-    )
+    finish_interaction_with_draws(current, command.operation, interaction, draws)
 }

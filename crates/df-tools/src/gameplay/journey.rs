@@ -3823,7 +3823,8 @@ fn stage_using(
             .iter()
             .any(|(group, _)| group.as_str() == "scene-option")
     {
-        return living_scene::stage(current, command);
+        let mut scene_draws = Vec::new();
+        return living_scene::stage_with_supplier(current, command, &mut scene_draws, supplier);
     }
     let selected =
         super::beat_script_runtime::select(current, kind, submitted_choices).map_err(|error| {

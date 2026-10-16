@@ -219,6 +219,8 @@ fn location_inventory_keeps_stock_identity_separate_from_custody() {
                 kind: SceneChangeKind::Purchased {
                     holder_id: "Brynn".into(),
                     seller_id: "patron".into(),
+                    cost_cp: 200,
+                    quote_id: None,
                 },
             }],
         )
@@ -568,6 +570,13 @@ fn npc_purchase_uses_actor_purse_and_promotes_same_stock_item() {
         .find(|person| person["id"] == "cloth-shop-bystander-1")
         .unwrap();
     assert_eq!(patron["coin_cp"], 300);
+    let merchant = snapshot["model"]["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|person| person["id"] == "patron")
+        .unwrap();
+    assert_eq!(merchant["coin_cp"], 5_200);
     let item = snapshot["model"]["things"]
         .as_array()
         .unwrap()
@@ -589,6 +598,8 @@ fn purchase_change_cannot_claim_a_different_seller() {
             kind: SceneChangeKind::Purchased {
                 holder_id: "cloth-shop-bystander-1".into(),
                 seller_id: "invented-seller".into(),
+                cost_cp: 200,
+                quote_id: None,
             },
         }],
     );
@@ -614,6 +625,18 @@ fn theft_moves_custody_without_rewriting_owner() {
                 description: "Brynn steals the object.".into(),
                 kind: SceneChangeKind::Stolen {
                     holder_id: "Brynn".into(),
+                    adjudication: Some(super::scene_model::SceneStealAdjudication {
+                        operation_id: "01010101010101010101010101010101".into(),
+                        source_revision: format!(
+                            "srd521-p6:test:sleight-of-hand:target-thing-{}",
+                            target.id
+                        ),
+                        actor_id: "Brynn".into(),
+                        die: 20,
+                        ability_modifier: 0,
+                        proficiency_bonus: 0,
+                        difficulty_class: 10,
+                    }),
                 },
             }],
         )
