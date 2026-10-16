@@ -25,7 +25,7 @@ use crate::{
     },
     stage_director::{StageState, ViewDiff},
     stage_machines::{ActorState, BattleState, ClipState, LineState, SceneState, reading_time_ms},
-    voice_line::{CheckVoiceLine, VoiceLine, check_voice_line, display_lines},
+    voice_line::{CheckVoiceLine, VoiceLine, check_voice_line, display_lines, speaker_names_match},
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -401,7 +401,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
             };
             let named = cast
                 .iter()
-                .find(|actor| actor.name == speaker)
+                .find(|actor| speaker_names_match(&actor.name, &speaker))
                 .and_then(|actor| super::live_stage::slot_index(actor.slot));
             let slot = named
                 .or_else(|| {
@@ -469,7 +469,16 @@ fn npc_slot(cast: &[StageActor], actor_id: &str, name: &str, anywhere: bool) -> 
             .and_then(|actor| super::live_stage::slot_index(actor.slot));
     }
     let npc = |actor: &&StageActor| matches!(actor.slot, ActorSlot::Npc(_));
-    let named = cast.iter().filter(npc).find(|actor| actor.name == name);
+    let mut matches = cast
+        .iter()
+        .filter(npc)
+        .filter(|actor| speaker_names_match(&actor.name, name));
+    let named = matches.next();
+    if let Some(actor) = named
+        && matches.any(|other| other.actor_id != actor.actor_id)
+    {
+        return None;
+    }
     let chosen = if anywhere {
         named
             .or_else(|| cast.iter().filter(npc).find(|actor| actor.speaking))
@@ -484,7 +493,14 @@ fn npc_slot(cast: &[StageActor], actor_id: &str, name: &str, anywhere: bool) -> 
 fn voice_for(voices: &[VoiceLine], speaker: Option<&str>, text: &str) -> Option<VoiceLine> {
     voices
         .iter()
-        .find(|voice| voice.speaker() == speaker && voice.text.trim() == text.trim())
+        .find(|voice| {
+            voice.text.trim() == text.trim()
+                && match (voice.speaker(), speaker) {
+                    (Some(actual), Some(expected)) => speaker_names_match(actual, expected),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
         .cloned()
 }
 
@@ -607,7 +623,9 @@ fn script_line(
             .find(|voice| {
                 voice.text.trim() == line.text.trim()
                     && if line.actor_id.is_empty() {
-                        voice.speaker() == Some(line.speaker.as_str())
+                        voice
+                            .speaker()
+                            .is_some_and(|speaker| speaker_names_match(speaker, &line.speaker))
                     } else {
                         voice.actor_id() == Some(line.actor_id.as_str())
                     }
@@ -2557,10 +2575,11 @@ mod tests {
         let events: Vec<(LineState, Option<u64>, String)> = commands
             .iter()
             .filter_map(|command| match command {
-                Command::Line { state, detail, .. } => match detail {
-                    Detail::Line(line) => Some((*state, line.check_sequence, line.text.clone())),
-                    _ => None,
-                },
+                Command::Line {
+                    state,
+                    detail: Detail::Line(line),
+                    ..
+                } => Some((*state, line.check_sequence, line.text.clone())),
                 _ => None,
             })
             .collect();
@@ -2759,6 +2778,85 @@ mod tests {
             super::super::live_stage::slot_index(crate::presentation::ActorSlot::Npc(1))
         );
         assert!(super::npc_slot(&cast, "departed", "Courier", true).is_none());
+    }
+
+    #[test]
+    fn authored_courier_caption_requests_its_registered_canonical_voice() {
+        use df_protocol::common as rpc;
+
+        for speaker in ["Courier", "courier", "COURIER"] {
+            let display = rpc::DisplayGameplayView {
+                journey: Some(rpc::JourneyView {
+                    speaker: speaker.into(),
+                    dialogue: "The crest belongs to a ship that never appears on the ledger. I think someone aboard followed me.".into(),
+                    ..Default::default()
+                }),
+                scene: Some(rpc::GameplayScene {
+                    cast: vec![rpc::SceneActor {
+                        id: "courier".into(),
+                        name: "Courier".into(),
+                        speaking: true,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let voices = super::display_lines(&display);
+            let view = rpc::ViewMessage {
+                audience: Some(rpc::view_message::Audience::Display(display)),
+                ..Default::default()
+            };
+            let cast = crate::presentation::scene_cast(&view);
+            let caption = crate::presentation::table_lines(&view).pop().unwrap();
+            let expected = voices.first().unwrap();
+            let mut conductor = Conductor::new();
+            conductor.set_sound(true);
+            let commands = conductor.restart(
+                0,
+                ViewPlan {
+                    diff: Default::default(),
+                    script: vec![
+                        super::script_line(&caption, &cast, &voices, false, false).unwrap(),
+                    ],
+                    cast: super::cast_slots(&cast),
+                },
+            );
+            assert!(
+                commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        Command::Clip {
+                            op: ClipOp::Request,
+                            detail: Detail::Line(line),
+                            ..
+                        } if line.voice.as_ref() == Some(expected)
+                    )
+                }),
+                "{speaker}"
+            );
+
+            let restored = conductor.restart(
+                1,
+                ViewPlan {
+                    diff: Default::default(),
+                    script: vec![
+                        super::script_line(&caption, &cast, &voices, true, false).unwrap(),
+                    ],
+                    cast: super::cast_slots(&cast),
+                },
+            );
+            assert!(!restored.iter().any(|command| {
+                matches!(
+                    command,
+                    Command::Clip {
+                        op: ClipOp::Request | ClipOp::Play,
+                        ..
+                    }
+                )
+            }));
+            assert!(conductor.has_settled_silent_line());
+        }
     }
 
     #[test]

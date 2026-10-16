@@ -29,6 +29,40 @@ pub(crate) struct CheckVoiceLine {
     pub(crate) voice: VoiceLine,
 }
 
+/// A missing cast identity permits legacy name routing; an ambiguous name permits none.
+pub(crate) enum SceneSpeaker<'a> {
+    Matched(&'a rpc::SceneActor),
+    Missing,
+    Ambiguous,
+}
+
+/// Human speaker names ignore case; canonical actor IDs and spoken text do not.
+pub(crate) fn speaker_names_match(left: &str, right: &str) -> bool {
+    left.trim().to_lowercase() == right.trim().to_lowercase()
+}
+
+/// Resolve a public name once, retaining the cast's canonical spelling and exact actor ID.
+pub(crate) fn scene_speaker<'a>(
+    scene: Option<&'a rpc::GameplayScene>,
+    name: &str,
+) -> SceneSpeaker<'a> {
+    let Some(scene) = scene else {
+        return SceneSpeaker::Missing;
+    };
+    let mut matches = scene
+        .cast
+        .iter()
+        .filter(|actor| speaker_names_match(&actor.name, name));
+    let Some(actor) = matches.next() else {
+        return SceneSpeaker::Missing;
+    };
+    if matches.any(|other| other.id != actor.id) {
+        SceneSpeaker::Ambiguous
+    } else {
+        SceneSpeaker::Matched(actor)
+    }
+}
+
 impl VoiceLine {
     /// Lowercase hexadecimal SHA-256 of `role`, a newline and `text`.
     pub(crate) fn key(&self) -> String {
@@ -143,15 +177,25 @@ pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine
     if let Some(journey) = display.journey.as_ref()
         && !journey.dialogue.trim().is_empty()
     {
-        let role = if journey.speaker.trim().is_empty() {
-            NARRATOR_ROLE.to_owned()
+        let speaker = journey.speaker.trim();
+        let role = if speaker.is_empty() {
+            Some(NARRATOR_ROLE.to_owned())
         } else {
-            format!("{NPC_ROLE_PREFIX}{}", journey.speaker)
+            match scene_speaker(display.scene.as_ref(), speaker) {
+                SceneSpeaker::Matched(actor) if !actor.id.is_empty() => {
+                    Some(format!("npc-id:{}|{}", actor.id, actor.name))
+                }
+                SceneSpeaker::Matched(actor) => Some(format!("{NPC_ROLE_PREFIX}{}", actor.name)),
+                SceneSpeaker::Missing => Some(format!("{NPC_ROLE_PREFIX}{speaker}")),
+                SceneSpeaker::Ambiguous => None,
+            }
         };
-        lines.push(VoiceLine {
-            role,
-            text: journey.dialogue.clone(),
-        });
+        if let Some(role) = role {
+            lines.push(VoiceLine {
+                role,
+                text: journey.dialogue.clone(),
+            });
+        }
     }
     if let Some(check) = check_voice_line(display) {
         lines.push(check.voice);
@@ -264,17 +308,26 @@ fn conversation_reply(display: &rpc::DisplayGameplayView) -> Option<VoiceLine> {
     let spoken_by_npc = rpc::TableRole::try_from(last.role) == Ok(rpc::TableRole::Npc)
         && rpc::TableKind::try_from(last.kind) == Ok(rpc::TableKind::Speech);
     let (speaker, text) = (last.speaker.trim(), last.text.trim());
-    if !last.actor_id.is_empty()
-        && !display
+    if !spoken_by_npc || speaker.is_empty() || text.is_empty() {
+        return None;
+    }
+    let speaker = if last.actor_id.is_empty() {
+        match scene_speaker(display.scene.as_ref(), speaker) {
+            SceneSpeaker::Matched(actor) => actor.name.as_str(),
+            SceneSpeaker::Missing => speaker,
+            SceneSpeaker::Ambiguous => return None,
+        }
+    } else {
+        display
             .scene
             .as_ref()?
             .cast
             .iter()
-            .any(|actor| actor.id == last.actor_id && actor.name == speaker)
-    {
-        return None;
-    }
-    (spoken_by_npc && !speaker.is_empty() && !text.is_empty()).then(|| VoiceLine {
+            .find(|actor| actor.id == last.actor_id && speaker_names_match(&actor.name, speaker))?
+            .name
+            .as_str()
+    };
+    Some(VoiceLine {
         role: if last.actor_id.is_empty() {
             format!("{NPC_ROLE_PREFIX}{speaker}")
         } else {
@@ -298,6 +351,150 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    fn courier_display(speaker: &str) -> rpc::DisplayGameplayView {
+        let mut shown = display(
+            "",
+            speaker,
+            "The crest belongs to a ship that never appears on the ledger. I think someone aboard followed me.",
+        );
+        shown.scene = Some(rpc::GameplayScene {
+            title: "The Broken Seal".into(),
+            cast: vec![rpc::SceneActor {
+                id: "courier".into(),
+                name: "Courier".into(),
+                speaking: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        shown
+    }
+
+    #[test]
+    fn scripted_speaker_case_preserves_canonical_caption_voice_and_sequence() {
+        let mut identity = None;
+        for speaker in ["Courier", "courier", "COURIER"] {
+            let mut shown = courier_display(speaker);
+            let voice = display_lines(&shown).pop().unwrap();
+            let view = rpc::ViewMessage {
+                audience: Some(rpc::view_message::Audience::Display(shown.clone())),
+                ..Default::default()
+            };
+            let caption = crate::presentation::table_lines(&view).pop().unwrap();
+            assert_eq!(caption.actor_id, "courier");
+            assert_eq!(caption.speaker, "Courier");
+            assert_eq!(voice.actor_id(), Some(caption.actor_id.as_str()));
+            assert_eq!(voice.speaker(), Some(caption.speaker.as_str()));
+            assert_eq!(voice.text, caption.text);
+            let current = (caption.sequence, voice.key());
+            assert_eq!(identity.get_or_insert_with(|| current.clone()), &current);
+
+            shown
+                .journey
+                .as_mut()
+                .unwrap()
+                .table_log
+                .push(rpc::TableLine {
+                    actor_id: "courier".into(),
+                    speaker: speaker.into(),
+                    text: voice.text.clone(),
+                    role: rpc::TableRole::Npc as i32,
+                    kind: rpc::TableKind::Speech as i32,
+                    ..Default::default()
+                });
+            assert_eq!(conversation_reply(&shown).unwrap().key(), voice.key());
+        }
+    }
+
+    #[test]
+    fn scripted_speaker_without_canonical_id_keeps_legacy_name_voice() {
+        let mut shown = courier_display("courier");
+        shown.scene.as_mut().unwrap().cast[0].id.clear();
+        let voice = display_lines(&shown).pop().unwrap();
+        assert_eq!(voice.role, "npc:Courier");
+        assert_eq!(voice.actor_id(), None);
+
+        shown.scene.as_mut().unwrap().cast.clear();
+        assert_eq!(display_lines(&shown).pop().unwrap().role, "npc:courier");
+        shown.scene = None;
+        assert_eq!(display_lines(&shown).pop().unwrap().role, "npc:courier");
+    }
+
+    #[test]
+    fn ambiguous_folded_speaker_names_are_not_voiced_or_projected() {
+        let mut shown = courier_display("COURIER");
+        shown.scene.as_mut().unwrap().cast.push(rpc::SceneActor {
+            id: "other-courier".into(),
+            name: "courier".into(),
+            ..Default::default()
+        });
+        shown.journey.as_mut().unwrap().reply_speaker = "courier".into();
+        assert!(display_lines(&shown).is_empty());
+        let view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(shown)),
+            ..Default::default()
+        };
+        assert!(crate::presentation::table_lines(&view).is_empty());
+        assert!(crate::presentation::replying_speaker(&view).is_none());
+    }
+
+    #[test]
+    fn canonical_reply_rejects_wrong_actor_id_or_name_even_with_case_matching() {
+        for (actor_id, speaker) in [
+            ("departed", "courier"),
+            ("COURIER", "Courier"),
+            ("courier", "Bandit"),
+        ] {
+            let mut shown = courier_display("Courier");
+            shown
+                .journey
+                .as_mut()
+                .unwrap()
+                .table_log
+                .push(rpc::TableLine {
+                    actor_id: actor_id.into(),
+                    speaker: speaker.into(),
+                    text: "Give me the packet.".into(),
+                    role: rpc::TableRole::Npc as i32,
+                    kind: rpc::TableKind::Speech as i32,
+                    ..Default::default()
+                });
+            assert!(conversation_reply(&shown).is_none(), "{actor_id}/{speaker}");
+        }
+    }
+
+    #[test]
+    fn pending_speaker_name_and_answer_match_ignore_case() {
+        let mut shown = courier_display("courier");
+        shown.journey.as_mut().unwrap().reply_speaker = "COURIER".into();
+        let mut view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(shown)),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::presentation::replying_speaker(&view).as_deref(),
+            Some("Courier")
+        );
+        let Some(rpc::view_message::Audience::Display(shown)) = view.audience.as_mut() else {
+            panic!("display view");
+        };
+        let journey = shown.journey.as_mut().unwrap();
+        journey.table_log.push(rpc::TableLine {
+            sequence: 1,
+            actor_id: "courier".into(),
+            speaker: "cOuRiEr".into(),
+            text: "Stay close.".into(),
+            role: rpc::TableRole::Npc as i32,
+            kind: rpc::TableKind::Speech as i32,
+            ..Default::default()
+        });
+        assert_eq!(
+            crate::presentation::newest_scene_speech(journey).unwrap().2,
+            "Stay close."
+        );
+        assert!(crate::presentation::replying_speaker(&view).is_none());
     }
 
     #[test]

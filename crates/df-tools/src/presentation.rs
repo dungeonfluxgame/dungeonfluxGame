@@ -917,16 +917,22 @@ fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) ->
         return None;
     }
     let title = scene.map_or("", |scene| scene.title.as_str());
-    let (speaker, role) = if journey.speaker.is_empty() {
-        ("", TableRole::Narrator)
+    let (speaker, actor_id, role) = if journey.speaker.trim().is_empty() {
+        ("", "", TableRole::Narrator)
     } else {
-        (journey.speaker.as_str(), TableRole::Npc)
+        match crate::voice_line::scene_speaker(scene, &journey.speaker) {
+            crate::voice_line::SceneSpeaker::Matched(actor) => {
+                (actor.name.as_str(), actor.id.as_str(), TableRole::Npc)
+            }
+            crate::voice_line::SceneSpeaker::Missing => {
+                (journey.speaker.trim(), "", TableRole::Npc)
+            }
+            crate::voice_line::SceneSpeaker::Ambiguous => return None,
+        }
     };
     Some(TableLine {
         sequence: fnv(&[title.as_bytes(), speaker.as_bytes(), text.as_bytes()]),
-        actor_id: scene
-            .and_then(|scene| scene.cast.iter().find(|actor| actor.name == speaker))
-            .map_or_else(String::new, |actor| actor.id.clone()),
+        actor_id: actor_id.to_owned(),
         speaker: speaker.to_owned(),
         role,
         kind: TableKind::Speech,
@@ -938,18 +944,28 @@ fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) ->
 /// Who is writing a reply to a hero's typed words right now, as the server says, unless that
 /// speaker's answer is already the last thing logged (the mark can outlive the line by a moment).
 pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
-    let journey = match view.audience.as_ref()? {
-        rpc::view_message::Audience::Display(display) => display.journey.as_ref(),
-        rpc::view_message::Audience::Player(player) => player.journey.as_ref(),
-    }?;
+    let (journey, scene) = match view.audience.as_ref()? {
+        rpc::view_message::Audience::Display(display) => {
+            (display.journey.as_ref(), display.scene.as_ref())
+        }
+        rpc::view_message::Audience::Player(player) => {
+            (player.journey.as_ref(), player.scene.as_ref())
+        }
+    };
+    let journey = journey?;
     let speaker = journey.reply_speaker.trim();
     if speaker.is_empty() {
         return None;
     }
+    let speaker = match crate::voice_line::scene_speaker(scene, speaker) {
+        crate::voice_line::SceneSpeaker::Matched(actor) => actor.name.as_str(),
+        crate::voice_line::SceneSpeaker::Missing => speaker,
+        crate::voice_line::SceneSpeaker::Ambiguous => return None,
+    };
     let answered = journey.table_log.last().is_some_and(|last| {
         rpc::TableRole::try_from(last.role) == Ok(rpc::TableRole::Npc)
             && rpc::TableKind::try_from(last.kind) == Ok(rpc::TableKind::Speech)
-            && last.speaker.trim() == speaker
+            && crate::voice_line::speaker_names_match(&last.speaker, speaker)
     });
     (!answered).then(|| speaker.to_owned())
 }
@@ -972,7 +988,7 @@ pub(crate) fn newest_scene_speech(journey: &rpc::JourneyView) -> Option<(u64, &s
     journey.table_log.iter().rev().find_map(|line| {
         (rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Npc)
             && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Speech)
-            && line.speaker.trim() == speaker
+            && crate::voice_line::speaker_names_match(&line.speaker, speaker)
             && line.sequence > scene_start
             && !line.text.trim().is_empty())
         .then_some((line.sequence, line.speaker.as_str(), line.text.trim()))

@@ -1439,6 +1439,61 @@ mod tests {
         assert_eq!(casting.voice_for(&stale).voice_id, "neutral");
     }
 
+    #[tokio::test]
+    async fn scripted_courier_view_registers_canonical_voice_and_reuses_it_after_case_change() {
+        let cache = scratch("scripted-courier");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let mut courier = speaker("Courier", Gender::She, Some(Age::Adult), "warm");
+        courier.actor_ids = vec!["courier".into()];
+        let voice = voice_cast(&fake, configuration(&cache, 1000), &[courier], "0x7");
+        let mut display = rpc::DisplayGameplayView {
+            journey: Some(rpc::JourneyView {
+                speaker: "courier".into(),
+                dialogue: "The crest belongs to a ship that never appears on the ledger.".into(),
+                ..Default::default()
+            }),
+            scene: Some(rpc::GameplayScene {
+                cast: vec![rpc::SceneActor {
+                    id: "courier".into(),
+                    name: "Courier".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let line = crate::voice_line::display_lines(&display).pop().unwrap();
+        for speaker in ["courier", "COURIER", "Courier"] {
+            display.journey.as_mut().unwrap().speaker = speaker.into();
+            voice.register_view(&rpc::ViewMessage {
+                audience: Some(rpc::view_message::Audience::Display(display.clone())),
+                ..Default::default()
+            });
+            assert_eq!(
+                crate::voice_line::display_lines(&display)
+                    .pop()
+                    .unwrap()
+                    .key(),
+                line.key()
+            );
+            assert_eq!(
+                voice.audio(&line.key()).await,
+                Lookup::Audio(Bytes::from_static(AUDIO))
+            );
+        }
+        assert_eq!(fake.calls(), 1);
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice should be on");
+        };
+        let chosen = synthesis.casting.voice_for(&line);
+        assert!(!chosen.fallback);
+        assert_eq!(roster_voice_gender(&chosen.voice_id), Some(Gender::She));
+        assert!(
+            fake.targets.lock().unwrap()[0]
+                .contains(&format!("/v1/text-to-speech/{}/stream", chosen.voice_id))
+        );
+    }
+
     fn speaker(name: &str, gender: Gender, age: Option<Age>, tone: &str) -> SpeakerCasting {
         SpeakerCasting {
             actor_ids: Vec::new(),
