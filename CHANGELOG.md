@@ -14,6 +14,30 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T18:11:31-04:00 to 2026-10-16T19:59:24-04:00
+
+Range: de410db1c92735315682fa0cc1420bf10d2357c2..8c5f7d8145c48a32885800e56b345a06f7f97ada
+
+- 49b6c3eb2282688870f39ad478e72fb7e6442001 — Record Sigrun merchant assessment work block
+- ad5fee7092c33018ac678fb80b15fd462b9e24de — Accept dialogue replies answered at a newer revision
+- 00d33cb5ddfc91a7485711ec8d7247832bfbf840 — Keep pending captions on the hero's line and clear them once answered
+- d1cb7ef7473e54efa4b4e0bb3ea7c631a12fe82f — Name the merchant in committed quote rows
+- 1b804a559440e340e4712d885a53b03e4f6e5689 — Add dev ledger and checkpoint reads for phone-owned heroes
+- 9b37a43ff235029b0f7c1b04745c0c9e06b5d684 — Let Jev decide intent, addressee and subject before keyword rules
+- 8c5f7d8145c48a32885800e56b345a06f7f97ada — Trust Jev's skill and absent target in investigation
+
+Fresh merchant run FURABO (build merchant-limits-49b6c3eb) with display and two
+phones. Server bounds held for every limit case (floor, buyback ceiling, sold
+out, selling another hero's item, rule-override injection); the purchase moved
+exactly 200 CP once. Defects found live: phone rejected committed trade replies
+and glued drafts, stale captions, the quote row named the internal id, Marek
+never countered or used a stated price, and no CLI read of phone-owned heroes.
+The fixes above were verified on a clean HEAD overlay (focused tests, wasm32 and
+binary checks; the 28 remaining failures in those filters also fail at HEAD).
+Not yet live-retested. The machine rebooted at 19:45; work resumed. In progress,
+uncommitted: Jev trade intent (merchant_bargaining/dialogue/actor) and NPC reply
+comprehension (npc_*). HELP_ATTACK has rules but no df-tools wiring.
+
 ## 2026-10-16T18:03:02-04:00 to 2026-10-16T18:11:31-04:00
 
 Range: c0a18abb0cbad37a084e2e5996d115cc686f65d8..de410db1c92735315682fa0cc1420bf10d2357c2
