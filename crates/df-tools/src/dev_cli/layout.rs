@@ -8,6 +8,7 @@ enum Command {
     Transform(TransformRequest),
     Move(MoveRequest),
     Reset(Option<String>),
+    Visibility { id: String, visible: bool },
 }
 fn parse(positional: &[String], options: &[(String, String)]) -> Result<Command, String> {
     let action = positional.get(1).map(String::as_str).unwrap_or("list");
@@ -16,7 +17,7 @@ fn parse(positional: &[String], options: &[(String, String)]) -> Result<Command,
         return Err("layout received too many arguments".into());
     }
     let allowed: &[&str] = match action {
-        "list" | "get" | "reset" => &[],
+        "list" | "get" | "reset" | "hide" | "show" => &[],
         "transform" => &[
             "--translate-x",
             "--translate-y",
@@ -29,7 +30,7 @@ fn parse(positional: &[String], options: &[(String, String)]) -> Result<Command,
         "move" => &["--x", "--y", "--translate-x", "--translate-y", "--unit"],
         _ => {
             return Err(
-                "layout needs list, get [id], move <id>, transform <id> or reset [id]".into(),
+                "layout needs list, get [id], move <id>, transform <id>, hide <id>, show <id> or reset [id]".into(),
             );
         }
     };
@@ -73,6 +74,10 @@ fn parse(positional: &[String], options: &[(String, String)]) -> Result<Command,
         }
         "get" => Ok(Command::Get(id)),
         "reset" => Ok(Command::Reset(id)),
+        "hide" | "show" => Ok(Command::Visibility {
+            id: id.ok_or_else(|| format!("layout {action} needs ID"))?,
+            visible: action == "show",
+        }),
         "move" => {
             if flags.contains_key("--x") && flags.contains_key("--translate-x")
                 || flags.contains_key("--y") && flags.contains_key("--translate-y")
@@ -134,6 +139,14 @@ pub(super) async fn run(
             Ok(body) => post(client, "/dev/layout/transform", &body).await,
             Err(_) => client.print_error("layout transform encoding failed"),
         },
+        Command::Visibility { id, visible } => {
+            post(
+                client,
+                "/dev/layout/visibility",
+                &json!({"id": id, "visible": visible}),
+            )
+            .await
+        }
     }
 }
 #[cfg(test)]
@@ -178,5 +191,24 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn hide_and_show_are_strict_component_commands() {
+        let Command::Visibility { id, visible } =
+            parse(&words(&["layout", "hide", "subtitle"]), &[]).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(id, "subtitle");
+        assert!(!visible);
+        let Command::Visibility { id, visible } =
+            parse(&words(&["layout", "show", "subtitle"]), &[]).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(id, "subtitle");
+        assert!(visible);
+        assert!(parse(&words(&["layout", "hide"]), &[]).is_err());
+        assert!(parse(&words(&["layout", "show", "subtitle"]), &[("--x", "1")]).is_err());
     }
 }

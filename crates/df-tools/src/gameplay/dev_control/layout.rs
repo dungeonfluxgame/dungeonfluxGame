@@ -2,7 +2,7 @@
 use super::{Outcome, Shared, authorized, bad_request};
 use crate::layout_contract::{
     self as contract, ElementStatus, LayoutDocument, LayoutError, LayoutPage, LayoutReadback,
-    MoveRequest, ResetRequest, Transform, TransformRequest,
+    MoveRequest, ResetRequest, Transform, TransformRequest, VisibilityRequest,
 };
 use axum::{
     extract::{Query, State as AxumState},
@@ -101,6 +101,7 @@ impl LayoutState {
         }).collect();
         if let Some(id) = id
             && !state.document.overrides.contains_key(id)
+            && !state.document.visibility.contains_key(id)
             && !state
                 .clients
                 .values()
@@ -115,8 +116,14 @@ impl LayoutState {
             .iter()
             .filter(|(key, _)| id.is_none_or(|id| id == key.as_str()))
             .collect();
+        let visibility: BTreeMap<_, _> = state
+            .document
+            .visibility
+            .iter()
+            .filter(|(key, _)| id.is_none_or(|id| id == key.as_str()))
+            .collect();
         Ok(
-            json!({"revision":state.document.revision,"status":if clients.is_empty(){"pending"}else if clients.iter().all(|c|c["status"]=="applied"){"applied"}else{"pending"},"overrides":overrides,"clients":clients,"capacity":contract::MAX_ELEMENTS,"pending_pages":pending_pages}),
+            json!({"revision":state.document.revision,"status":if clients.is_empty(){"pending"}else if clients.iter().all(|c|c["status"]=="applied"){"applied"}else{"pending"},"overrides":overrides,"visibility":visibility,"clients":clients,"capacity":contract::MAX_ELEMENTS,"pending_pages":pending_pages}),
         )
     }
     pub(crate) async fn readback(&self, instance: u64, text: &str) -> Result<(), LayoutError> {
@@ -247,11 +254,24 @@ impl LayoutState {
         }
         if report.revision == state.document.revision {
             for element in &report.elements {
-                if element.configured.as_ref() != state.document.overrides.get(&element.id) {
+                if element.configured.as_ref() != state.document.overrides.get(&element.id)
+                    || element.visibility
+                        != state
+                            .document
+                            .visibility
+                            .get(&element.id)
+                            .copied()
+                            .unwrap_or_default()
+                {
                     return Err(LayoutError::Shape);
                 }
             }
             for id in state.document.overrides.keys() {
+                if !report.elements.iter().any(|e| e.id == *id) {
+                    return Err(LayoutError::Shape);
+                }
+            }
+            for id in state.document.visibility.keys() {
                 if !report.elements.iter().any(|e| e.id == *id) {
                     return Err(LayoutError::Shape);
                 }
@@ -271,12 +291,12 @@ impl LayoutState {
                     .report
                     .elements
                     .iter()
-                    .map(|e| (&e.id, e.status, &e.configured))
+                    .map(|e| (&e.id, e.status, &e.configured, e.visibility))
                     .collect::<Vec<_>>()
                     != report
                         .elements
                         .iter()
-                        .map(|e| (&e.id, e.status, &e.configured))
+                        .map(|e| (&e.id, e.status, &e.configured, e.visibility))
                         .collect::<Vec<_>>()
         });
         let applied: Vec<_> = report
@@ -360,6 +380,7 @@ impl LayoutState {
         let mut state = self.state.lock().await;
         if let Some(id) = id
             && !state.document.overrides.contains_key(id)
+            && !state.document.visibility.contains_key(id)
             && !state.clients.values().any(|c| {
                 c.seen.elapsed() <= INVENTORY_LIFETIME
                     && c.report.elements.iter().any(|e| e.id == id)
@@ -374,13 +395,62 @@ impl LayoutState {
             .ok_or(LayoutError::Limit)?;
         if let Some(id) = id {
             state.document.overrides.remove(id);
+            state.document.visibility.remove(id);
         } else {
             state.document.overrides.clear();
+            state.document.visibility.clear();
         }
         state.document.revision = revision;
         self.changed.send_replace(revision);
         drop(state);
         event("gameplay.layout.reset", revision, id, "pending");
+        Ok(revision)
+    }
+    async fn set_visibility(&self, body: &VisibilityRequest) -> Result<u64, LayoutError> {
+        contract::validate_id(&body.id)?;
+        let mut state = self.state.lock().await;
+        let admitted = state.clients.values().any(|client| {
+            client.seen.elapsed() <= INVENTORY_LIFETIME
+                && client
+                    .report
+                    .elements
+                    .iter()
+                    .any(|e| e.id == body.id && e.status == ElementStatus::Applied)
+        });
+        if !admitted {
+            return Err(LayoutError::UnknownId);
+        }
+        if !state.document.visibility.contains_key(&body.id)
+            && state.document.visibility.len() >= contract::MAX_OVERRIDES
+        {
+            return Err(LayoutError::Limit);
+        }
+        let revision = state
+            .document
+            .revision
+            .checked_add(1)
+            .ok_or(LayoutError::Limit)?;
+        if body.visible {
+            state.document.visibility.remove(&body.id);
+        } else {
+            state
+                .document
+                .visibility
+                .insert(body.id.clone(), contract::ElementVisibility::Hidden);
+        }
+        state.document.revision = revision;
+        self.changed.send_replace(revision);
+        drop(state);
+        event(
+            if body.visible {
+                "gameplay.layout.shown"
+            } else {
+                "gameplay.layout.hidden"
+            },
+            revision,
+            Some(&body.id),
+            "pending",
+        );
         Ok(revision)
     }
 }
@@ -475,6 +545,27 @@ pub(super) async fn reset(
         Json(json!({"status":"pending","id":body.id,"revision":revision})),
     ))
 }
+pub(super) async fn visibility(
+    AxumState(state): AxumState<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(body): Json<VisibilityRequest>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let revision = state
+        .layout
+        .set_visibility(&body)
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "pending",
+            "id": body.id,
+            "visibility": if body.visible { "visible" } else { "hidden" },
+            "revision": revision
+        })),
+    ))
+}
 
 #[cfg(test)]
 mod tests {
@@ -513,6 +604,7 @@ mod tests {
                     height: 100.0,
                 }),
                 status: ElementStatus::Applied,
+                visibility: contract::ElementVisibility::Visible,
             }],
         }
     }
@@ -591,6 +683,55 @@ mod tests {
             state.snapshot(None).await.unwrap()["clients"][1]["status"],
             "applied"
         );
+    }
+    #[tokio::test]
+    async fn visibility_round_trips_without_resetting_transforms() {
+        let state = LayoutState::new();
+        state.enable();
+        admit(&state, 1, &report(0, 1, "dm-overlay", None))
+            .await
+            .unwrap();
+        state
+            .mutate(
+                "dm-overlay",
+                Transform {
+                    translate_y: Some(crate::layout_contract::Distance {
+                        value: 24.0,
+                        unit: crate::layout_contract::Unit::Px,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let hidden_revision = state
+            .set_visibility(&VisibilityRequest {
+                id: "dm-overlay".into(),
+                visible: false,
+            })
+            .await
+            .unwrap();
+        let mut hidden = report(hidden_revision, 2, "dm-overlay", None);
+        hidden.elements[0].visibility = contract::ElementVisibility::Hidden;
+        admit(&state, 1, &hidden).await.unwrap();
+        let snapshot = state.snapshot(Some("dm-overlay")).await.unwrap();
+        assert_eq!(snapshot["visibility"]["dm-overlay"], "hidden");
+        assert_eq!(
+            snapshot["overrides"]["dm-overlay"]["translate_y"]["value"],
+            24.0
+        );
+        let shown_revision = state
+            .set_visibility(&VisibilityRequest {
+                id: "dm-overlay".into(),
+                visible: true,
+            })
+            .await
+            .unwrap();
+        let shown = report(shown_revision, 3, "dm-overlay", None);
+        admit(&state, 1, &shown).await.unwrap();
+        let snapshot = state.snapshot(Some("dm-overlay")).await.unwrap();
+        assert_eq!(snapshot["visibility"], serde_json::json!({}));
+        assert_eq!(snapshot["status"], "applied");
     }
     #[tokio::test]
     async fn vanished_ids_and_future_or_malformed_readbacks_do_not_fabricate_success() {

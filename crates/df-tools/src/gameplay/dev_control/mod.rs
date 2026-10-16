@@ -210,6 +210,10 @@ pub(super) fn setup(
             "/dev/layout/reset",
             post(layout::reset).layer(axum::extract::DefaultBodyLimit::max(4096)),
         )
+        .route(
+            "/dev/layout/visibility",
+            post(layout::visibility).layer(axum::extract::DefaultBodyLimit::max(4096)),
+        )
         .route("/dev/notes", get(notebook::read))
         .route("/dev/note", post(notebook::add))
         .route("/dev/checkpoint", post(reads::save_checkpoint))

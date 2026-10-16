@@ -338,6 +338,8 @@ $fixture='.\artifacts\build\play\debug\df-transport-fixture.exe'
 & $fixture dev layout get scene-context
 & $fixture dev layout transform scene-context --translate-y -24 --unit px
 & $fixture dev layout transform scene-context --scale 0.96 --rotate 0
+& $fixture dev layout hide choices
+& $fixture dev layout show choices
 & $fixture dev layout get scene-context
 & $fixture dev layout reset scene-context
 ```
@@ -359,6 +361,13 @@ offset from the element's natural layout; it is not a world-coordinate move.
 Partial updates compose with the existing override. Omitting an ID from
 `layout reset` clears every override. Reset removes only layout-owned rules and
 reveals the application's current styles and animations.
+
+`layout hide <id>` and `layout show <id>` control the same registered component
+inventory without rebuilding or reloading the page. Hidden components use an
+owned `display:none` rule, disable pointer interaction and are marked
+`aria-hidden`; showing restores the component and leaves its transform override
+intact. The visibility map is part of the layout revision, survives reconnects
+in the same server process, and is reported by `layout get` as `visibility`.
 
 An accepted command is pending until the browser reports the matching layout
 revision. `layout get` returns per-display measured rectangles, viewport,

@@ -172,6 +172,8 @@ impl Transform {
 pub(crate) struct LayoutDocument {
     pub(crate) revision: u64,
     pub(crate) overrides: BTreeMap<String, Transform>,
+    #[serde(default)]
+    pub(crate) visibility: BTreeMap<String, ElementVisibility>,
 }
 impl LayoutDocument {
     #[cfg(any(target_arch = "wasm32", test))]
@@ -183,15 +185,46 @@ impl LayoutDocument {
         if document.overrides.len() > MAX_OVERRIDES {
             return Err(LayoutError::Limit);
         }
+        if document.visibility.len() > MAX_OVERRIDES {
+            return Err(LayoutError::Limit);
+        }
         for (id, t) in &document.overrides {
             validate_id(id)?;
             t.validate()?;
+        }
+        for id in document.visibility.keys() {
+            validate_id(id)?;
         }
         Ok(document)
     }
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn stylesheet(&self) -> Result<String, LayoutError> {
-        self.overrides.iter().map(|(id, t)| t.rule(id)).collect()
+        let transforms = self.overrides.iter().map(|(id, t)| t.rule(id));
+        let visibility = self
+            .visibility
+            .iter()
+            .map(|(id, visibility)| visibility.rule(id));
+        transforms.chain(visibility).collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ElementVisibility {
+    #[default]
+    Visible,
+    Hidden,
+}
+impl ElementVisibility {
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn rule(self, id: &str) -> Result<String, LayoutError> {
+        validate_id(id)?;
+        Ok(match self {
+            Self::Visible => String::new(),
+            Self::Hidden => format!(
+                "[data-layout-id=\"{id}\"]{{display:none!important;visibility:hidden!important;pointer-events:none!important;}}"
+            ),
+        })
     }
 }
 
@@ -274,6 +307,13 @@ impl MoveRequest {
 pub(crate) struct ResetRequest {
     pub(crate) id: Option<String>,
 }
+#[cfg(any(not(target_arch = "wasm32"), test))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VisibilityRequest {
+    pub(crate) id: String,
+    pub(crate) visible: bool,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -320,6 +360,8 @@ pub(crate) struct ElementReadback {
     pub(crate) effective: Option<EffectiveTransform>,
     pub(crate) rect: Option<Bounds>,
     pub(crate) status: ElementStatus,
+    #[serde(default)]
+    pub(crate) visibility: ElementVisibility,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -554,6 +596,18 @@ mod tests {
         assert!(!css.contains("left:"));
         assert!(t.rule("x\"]{display:none}").is_err());
         assert_eq!(LayoutDocument::default().stylesheet().unwrap(), "");
+        assert!(
+            LayoutDocument {
+                visibility: BTreeMap::from([(
+                    String::from("dm-overlay"),
+                    ElementVisibility::Hidden
+                )]),
+                ..Default::default()
+            }
+            .stylesheet()
+            .unwrap()
+            .contains("display:none")
+        );
     }
     #[test]
     fn maximum_inventory_pages_fit_the_existing_rpc_limit_with_worst_allowed_utf8_metadata() {
@@ -581,6 +635,7 @@ mod tests {
                     height: 100.0,
                 }),
                 status: ElementStatus::Applied,
+                visibility: ElementVisibility::Visible,
             })
             .collect();
         let report = LayoutReadback {

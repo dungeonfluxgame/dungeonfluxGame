@@ -2,8 +2,8 @@
 //! and pending metadata request; gameplay owns every original style and animation.
 use super::{Client, request, rpc};
 use crate::layout_contract::{
-    self as contract, Bounds, EffectiveTransform, ElementReadback, ElementStatus, LayoutDocument,
-    LayoutReadback, Viewport, VisualOwner,
+    self as contract, Bounds, EffectiveTransform, ElementReadback, ElementStatus,
+    ElementVisibility, LayoutDocument, LayoutReadback, Viewport, VisualOwner,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -39,6 +39,16 @@ struct Controller {
 impl Drop for Controller {
     fn drop(&mut self) {
         self.clock.take();
+        for element in self.registry.values() {
+            if let Some(original) = element.get_attribute("data-layout-original-aria-hidden") {
+                if original.is_empty() {
+                    let _ = element.remove_attribute("aria-hidden");
+                } else {
+                    let _ = element.set_attribute("aria-hidden", &original);
+                }
+                let _ = element.remove_attribute("data-layout-original-aria-hidden");
+            }
+        }
         self.stylesheet.remove();
     }
 }
@@ -165,6 +175,27 @@ fn annotate_owner(element: &Element) -> Result<(), JsValue> {
     Ok(())
 }
 impl Controller {
+    fn apply_visibility(&self, id: &str, element: &Element) -> Result<(), JsValue> {
+        let hidden = self.document.visibility.get(id) == Some(&ElementVisibility::Hidden);
+        if hidden {
+            if !element.has_attribute("data-layout-original-aria-hidden") {
+                let original = element.get_attribute("aria-hidden");
+                element.set_attribute(
+                    "data-layout-original-aria-hidden",
+                    original.as_deref().unwrap_or(""),
+                )?;
+            }
+            element.set_attribute("aria-hidden", "true")?;
+        } else if let Some(original) = element.get_attribute("data-layout-original-aria-hidden") {
+            if original.is_empty() {
+                element.remove_attribute("aria-hidden")?;
+            } else {
+                element.set_attribute("aria-hidden", &original)?;
+            }
+            element.remove_attribute("data-layout-original-aria-hidden")?;
+        }
+        Ok(())
+    }
     fn refresh(&mut self) -> Result<(), JsValue> {
         let before: BTreeSet<_> = self.registry.keys().cloned().collect();
         self.root.set_attribute("data-layout-id", "game-root")?;
@@ -238,6 +269,7 @@ impl Controller {
                     id
                 }
             };
+            self.apply_visibility(&id, &element)?;
             self.registry.insert(id, element);
         }
         self.overflow = overflow;
@@ -303,6 +335,12 @@ impl Controller {
                     height: rect.height(),
                 }),
                 status: ElementStatus::Applied,
+                visibility: self
+                    .document
+                    .visibility
+                    .get(id)
+                    .copied()
+                    .unwrap_or_default(),
             });
         }
         for (id, configured) in &self.document.overrides {
@@ -316,6 +354,26 @@ impl Controller {
                     effective: None,
                     rect: None,
                     status: ElementStatus::Absent,
+                    visibility: *self
+                        .document
+                        .visibility
+                        .get(id)
+                        .unwrap_or(&ElementVisibility::Hidden),
+                });
+            }
+        }
+        for (id, visibility) in &self.document.visibility {
+            if !self.registry.contains_key(id) && !self.document.overrides.contains_key(id) {
+                elements.push(ElementReadback {
+                    id: id.clone(),
+                    tag: "absent".into(),
+                    classes: String::new(),
+                    owner: None,
+                    configured: None,
+                    effective: None,
+                    rect: None,
+                    status: ElementStatus::Absent,
+                    visibility: *visibility,
                 });
             }
         }
