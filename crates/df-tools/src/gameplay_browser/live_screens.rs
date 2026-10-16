@@ -968,39 +968,7 @@ fn render_item_card(
         if same {
             return Ok(());
         }
-        if let (Some(id), Some(scene)) = (
-            previous
-                .get_attribute("data-component-id")
-                .and_then(|id| id.parse::<u64>().ok()),
-            previous.get_attribute("data-component-scene"),
-        ) {
-            super::presentation_timing::component(
-                Some(&previous),
-                df_observe::presentation::PresentationComponent::ItemCard,
-                id,
-                &scene,
-                df_observe::presentation::ComponentPhase::Closing,
-                "successor",
-                0,
-            );
-        }
-        previous.remove();
-        if let (Some(id), Some(scene)) = (
-            previous
-                .get_attribute("data-component-id")
-                .and_then(|id| id.parse::<u64>().ok()),
-            previous.get_attribute("data-component-scene"),
-        ) {
-            super::presentation_timing::component(
-                Some(&previous),
-                df_observe::presentation::PresentationComponent::ItemCard,
-                id,
-                &scene,
-                df_observe::presentation::ComponentPhase::Hidden,
-                "successor",
-                0,
-            );
-        }
+        close_item_card(&previous, "successor");
     }
     let Some(item) = item else {
         return Ok(());
@@ -1113,12 +1081,65 @@ fn render_hand_items(
     display: bool,
 ) -> Result<(), JsValue> {
     if let Some(previous) = parent.query_selector(".live-scene-hand-inventory")? {
+        let state = items
+            .iter()
+            .map(|item| {
+                format!(
+                    "{}:{}:{}:{}:{}",
+                    item.thing_id,
+                    item.state_revision,
+                    item.holder,
+                    item.image_path,
+                    item.image_state
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        if previous.get_attribute("data-hand-state").as_deref() == Some(state.as_str()) {
+            return Ok(());
+        }
+        for card in previous.query_selector_all(".live-scene-item")? {
+            if let Some(card) = card.dyn_ref::<web_sys::Element>() {
+                close_item_card(card, "successor");
+            }
+        }
         previous.remove();
     }
     if items.is_empty() {
         return Ok(());
     }
     let section = node(document, parent, "section", "live-scene-hand-inventory", "")?;
+    let state = items
+        .iter()
+        .map(|item| {
+            format!(
+                "{}:{}:{}:{}:{}",
+                item.thing_id, item.state_revision, item.holder, item.image_path, item.image_state
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    section.set_attribute("data-hand-state", &state)?;
+    if display {
+        node(
+            document,
+            &section,
+            "h2",
+            "live-scene-hand-inventory-title",
+            "Held observations",
+        )?;
+        let list = node(document, &section, "ul", "live-scene-hand-summary", "")?;
+        for item in items {
+            node(
+                document,
+                &list,
+                "li",
+                "live-scene-hand-summary-item",
+                &format!("{} · {}'s hand · observation only", item.name, item.holder),
+            )?;
+        }
+        return Ok(());
+    }
     node(
         document,
         &section,
@@ -1131,6 +1152,38 @@ fn render_hand_items(
         render_item_card(document, &host, Some(item), display)?;
     }
     Ok(())
+}
+
+fn close_item_card(card: &Element, reason: &'static str) {
+    let Some(id) = card
+        .get_attribute("data-component-id")
+        .and_then(|id| id.parse::<u64>().ok())
+    else {
+        card.remove();
+        return;
+    };
+    let scene = card
+        .get_attribute("data-component-scene")
+        .unwrap_or_default();
+    super::presentation_timing::component(
+        Some(card),
+        df_observe::presentation::PresentationComponent::ItemCard,
+        id,
+        &scene,
+        df_observe::presentation::ComponentPhase::Closing,
+        reason,
+        0,
+    );
+    super::presentation_timing::component(
+        Some(card),
+        df_observe::presentation::PresentationComponent::ItemCard,
+        id,
+        &scene,
+        df_observe::presentation::ComponentPhase::Hidden,
+        reason,
+        0,
+    );
+    card.remove();
 }
 
 fn render_scene_contents(

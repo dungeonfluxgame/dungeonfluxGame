@@ -662,7 +662,8 @@ fn hand_inventory_lists_each_current_observation_and_clears_only_the_returned_it
             "another hero cannot review Brynn's private hand collection"
         );
 
-        let returned = interact(&second, member, 43, &targets[0], "return");
+        let examined = interact(&second, member, 43, &targets[0], "examine");
+        let returned = interact(&examined, member, 44, &targets[0], "return");
         let remaining = living_scene::hand_items(returned.state(), &scene, Some("Brynn")).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].thing_id, targets[1]);

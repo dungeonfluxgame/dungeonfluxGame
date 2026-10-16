@@ -810,6 +810,9 @@ impl Plates {
                 let Some(scene) = display.scene.as_mut() else {
                     return;
                 };
+                for item in scene.hand_items.clone() {
+                    let _ = self.request_item(&item.holder, &item.thing_id, None, true);
+                }
                 let (scene_key, _) = scene_identity(&display.scene_asset, scene);
                 display.live_plate_graph_revision =
                     self.shared.apply(&scene_key, scene).unwrap_or_default();
@@ -822,6 +825,9 @@ impl Plates {
                 let Some(scene) = player.scene.as_mut() else {
                     return;
                 };
+                for item in scene.hand_items.clone() {
+                    let _ = self.request_item(&item.holder, &item.thing_id, None, false);
+                }
                 let (scene_key, _) = scene_identity("", scene);
                 let _revision = self.shared.apply(&scene_key, scene);
                 scene.scene_video_state = rpc::HomeVideoState::None as i32;

@@ -343,10 +343,15 @@ pub(in crate::gameplay) fn item_for(
     if let Some(setting) = projected.setting.as_mut() {
         setting.model = Some(model.clone());
     }
+    let mut retired_targets = std::collections::BTreeSet::new();
     for decision in state.decisions.iter().rev() {
         let mut was_take = false;
         let target = if let Some(entry) = read(decision)? {
             if entry.place != setting.place_id || entry.hero != hero {
+                continue;
+            }
+            if matches!(entry.option.as_str(), "return" | "drop" | "give") {
+                retired_targets.insert(entry.target.clone());
                 continue;
             }
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
@@ -397,6 +402,9 @@ pub(in crate::gameplay) fn item_for(
         let Some(thing) = model.things.iter().find(|thing| thing.id == target) else {
             continue;
         };
+        if retired_targets.contains(&thing.id) {
+            continue;
+        }
         // A stale take receipt must not keep an object in the phone's hand after a
         // return, drop, or give. A later examine can still deliberately select it
         // for review from its new location.
@@ -435,7 +443,8 @@ pub(in crate::gameplay) fn hand_items(
         .things
         .iter()
         .filter(|thing| {
-            thing.holder_id.is_some()
+            thing.in_scene
+                && thing.holder_id.is_some()
                 && thing.owner_id.as_deref() != thing.holder_id.as_deref()
                 && holder.is_none_or(|expected| thing.holder_id.as_deref() == Some(expected))
         })

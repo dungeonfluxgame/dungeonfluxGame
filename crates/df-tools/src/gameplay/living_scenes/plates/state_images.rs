@@ -488,7 +488,36 @@ impl Shared {
             if let (Some(card), Some(item)) = (scene.item.as_mut(), item) {
                 enrich_item_card(card, item);
             }
+            for card in &mut scene.hand_items {
+                if let Some(item) = book
+                    .state_images
+                    .items
+                    .values()
+                    .filter(|item| {
+                        item.thing.id == card.thing_id
+                            && item.thing.holder_id.as_deref() == Some(card.holder.as_str())
+                    })
+                    .max_by_key(|item| item.requested_at)
+                {
+                    enrich_item_card(card, item);
+                }
+            }
             return;
+        }
+        for card in &mut scene.hand_items {
+            if let Some(item) = book
+                .state_images
+                .items
+                .values()
+                .filter(|item| {
+                    item.shared
+                        && item.thing.id == card.thing_id
+                        && item.thing.holder_id.as_deref() == Some(card.holder.as_str())
+                })
+                .max_by_key(|item| item.requested_at)
+            {
+                enrich_item_card(card, item);
+            }
         }
         scene.item = item.map(|item| rpc::SceneItemCard {
             thing_id: item.thing.id.clone(),
