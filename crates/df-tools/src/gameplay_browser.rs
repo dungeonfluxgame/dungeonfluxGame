@@ -1227,35 +1227,6 @@ fn prepare(
         table_setting: None,
     })
 }
-/// A seated player's request to show or hide the choice chips on the shared display. It names no
-/// offer; the server checks the seat and the value.
-fn table_setting(
-    client: &Rc<RefCell<Client>>,
-    choice_hints_hidden: bool,
-) -> Result<rpc::SubmitActionRequest, String> {
-    let state = client.borrow();
-    if state.busy || (!state.last_confirmed && state.last_request.is_some()) {
-        return Err("Confirm the current operation before making a new choice.".to_owned());
-    }
-    Ok(rpc::SubmitActionRequest {
-        session_id: state.session.clone(),
-        run_id: state.run.clone(),
-        observed_revision: state.revision,
-        operation_id: Some(operation()?),
-        offer_id: String::new(),
-        action_kind: rpc::GameplayActionKind::SetTableSetting as i32,
-        destination: rpc::HarborDestination::Unspecified as i32,
-        character: None,
-        savage_attacker: false,
-        graze: false,
-        action_choices: Vec::new(),
-        table_setting: Some(rpc::TableSettingChange {
-            value: Some(rpc::table_setting_change::Value::ChoiceHintsHidden(
-                choice_hints_hidden,
-            )),
-        }),
-    })
-}
 fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: bool) {
     let prepared = (|| -> Result<_, String> {
         let mut state = client.borrow_mut();

@@ -389,21 +389,9 @@ pub(super) fn prompt(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Whether the table has hidden the choice chips, as the current view says. A view without a
-/// journey (none is shown then) keeps the chips shown.
-fn choice_hints_hidden(state: &Client) -> bool {
-    let current = state.views.as_ref().and_then(|views| views.current());
-    let journey = match current.and_then(|view| view.audience.as_ref()) {
-        Some(rpc::view_message::Audience::Player(player)) => player.journey.as_ref(),
-        Some(rpc::view_message::Audience::Display(display)) => display.journey.as_ref(),
-        None => None,
-    };
-    journey.is_some_and(|journey| journey.choice_hints_hidden)
-}
-
 /// Rebuilds the player's menu items for the current state; the display has no menu.
 pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, needs, confirm_strike, body, hero, hidden) = {
+    let (document, needs, confirm_strike, body, hero) = {
         let state = client.borrow();
         let Some(mounted) = state.chrome.mounted.as_ref() else {
             return Ok(());
@@ -417,7 +405,6 @@ pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             },
             mounted.body.clone(),
             mounted.hero.clone(),
-            choice_hints_hidden(&state),
         )
     };
     body.set_text_content(None);
@@ -446,27 +433,6 @@ pub(super) fn fill_menu(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         close_menu(&client);
         leave_saved_game(client);
     })?;
-    // The table's settings: any seated player may change them, from the lobby or during play.
-    node(&document, &body, "h3", "", "Table settings")?;
-    // The label names the state the table is in; pressing it asks for the other state.
-    let shown = !hidden;
-    let hidden_after_press = !hidden;
-    let toggle = button(
-        client,
-        &body,
-        &format!(
-            "Show choices on the TV: {}",
-            if shown { "on" } else { "off" }
-        ),
-        move |client| {
-            close_menu(&client);
-            match table_setting(&client, hidden_after_press) {
-                Ok(request) => send(client, request, false),
-                Err(error) => feedback(&client.borrow(), &error),
-            }
-        },
-    )?;
-    toggle.set_attribute("aria-pressed", if shown { "true" } else { "false" })?;
     let credits = node(&document, &body, "a", "live-credits", "Credits")?;
     credits.set_attribute("href", CREDITS_PATH)?;
     // The hero tab appears only when another screen provides the character sheet section.
