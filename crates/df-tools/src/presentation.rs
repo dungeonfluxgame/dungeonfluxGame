@@ -947,8 +947,7 @@ fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) ->
     })
 }
 
-/// Who is writing a reply to a hero's typed words right now, as the server says, unless that
-/// speaker's answer is already the last thing logged (the mark can outlive the line by a moment).
+/// Who the server currently marks as writing a reply to a hero's typed words.
 pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
     let (journey, scene) = match view.audience.as_ref()? {
         rpc::view_message::Audience::Display(display) => {
@@ -961,9 +960,8 @@ pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
     pending_reply_speaker(journey?, scene)
 }
 
-/// Whether the server's reply marker still describes an unanswered turn for this scene. The
-/// marker can remain on the view for a moment after its answer is committed, so the last accepted
-/// table row remains the authority for whether the reply is still pending.
+/// Whether the server currently marks a reply as pending. The marker is published before its
+/// answer line, so an earlier line from the same speaker cannot answer a newer turn.
 pub(crate) fn scene_reply_pending(
     journey: &rpc::JourneyView,
     scene: Option<&rpc::GameplayScene>,
@@ -984,12 +982,7 @@ fn pending_reply_speaker(
         crate::voice_line::SceneSpeaker::Missing => speaker,
         crate::voice_line::SceneSpeaker::Ambiguous => return None,
     };
-    let answered = journey.table_log.last().is_some_and(|last| {
-        rpc::TableRole::try_from(last.role) == Ok(rpc::TableRole::Npc)
-            && rpc::TableKind::try_from(last.kind) == Ok(rpc::TableKind::Speech)
-            && crate::voice_line::speaker_names_match(&last.speaker, speaker)
-    });
-    (!answered).then(|| speaker.to_owned())
+    Some(speaker.to_owned())
 }
 
 fn latest_hero_turn(journey: &rpc::JourneyView) -> Option<u64> {
@@ -2519,7 +2512,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_in_progress_is_named_until_that_speaker_has_answered() {
+    fn a_reply_in_progress_is_named_until_the_server_clears_its_marker() {
         assert_eq!(replying_speaker(&talk_view(1, "", None)), None);
         let asked = server_line(
             1,
@@ -2543,8 +2536,9 @@ mod tests {
         );
         assert_eq!(
             replying_speaker(&talk_view(3, "Courier", Some(answered))),
-            None
+            Some("Courier".to_owned())
         );
+        assert_eq!(replying_speaker(&talk_view(4, "", None)), None);
     }
 
     #[test]

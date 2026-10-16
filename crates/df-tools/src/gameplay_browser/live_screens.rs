@@ -639,12 +639,17 @@ fn exploration_speech<'a>(
     journey: &'a rpc::JourneyView,
     scene: &'a rpc::GameplayScene,
 ) -> Option<(Option<u64>, &'a str, &'a str)> {
+    if crate::presentation::scene_reply_pending(journey, Some(scene)) {
+        return None;
+    }
     crate::presentation::newest_scene_speech(journey)
         .map(|(sequence, name, line)| (Some(sequence), name, line))
         .or_else(|| {
-            (!crate::presentation::scene_reply_pending(journey, Some(scene))
-                && !journey.dialogue.trim().is_empty())
-            .then_some((None, journey.speaker.as_str(), journey.dialogue.as_str()))
+            (!journey.dialogue.trim().is_empty()).then_some((
+                None,
+                journey.speaker.as_str(),
+                journey.dialogue.as_str(),
+            ))
         })
 }
 
@@ -1318,7 +1323,7 @@ mod tests {
     };
 
     #[test]
-    fn phone_caption_waits_for_the_new_answer_instead_of_falling_back_to_the_purchase_line() {
+    fn scene_caption_waits_for_the_new_answer_instead_of_falling_back_to_the_purchase_line() {
         let mut journey = rpc::JourneyView {
             speaker: "Marek".into(),
             dialogue: "Marek hands over the fine clothes for 200 copper.".into(),
@@ -1363,10 +1368,72 @@ mod tests {
             text: "Marek shows Brakka the remaining wool coats.".into(),
             ..Default::default()
         });
+        journey.reply_speaker.clear();
         assert_eq!(
             exploration_speech(&journey, &scene),
             Some((
                 Some(4),
+                "Marek",
+                "Marek shows Brakka the remaining wool coats."
+            ))
+        );
+    }
+
+    #[test]
+    fn pending_reply_hides_old_narration_before_the_new_hero_line_is_logged() {
+        let mut journey = rpc::JourneyView {
+            speaker: "Marek".into(),
+            dialogue: "Marek hands over the fine clothes for 200 copper.".into(),
+            reply_speaker: "Marek".into(),
+            ..Default::default()
+        };
+        journey.table_log = vec![
+            rpc::TableLine {
+                sequence: 7,
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                speaker: "Marek".into(),
+                text: "The tailor folds the purchased clothes into paper.".into(),
+                ..Default::default()
+            },
+            rpc::TableLine {
+                sequence: 8,
+                role: rpc::TableRole::Narrator as i32,
+                kind: rpc::TableKind::Action as i32,
+                speaker: "Narrator".into(),
+                text: "Marek hands over the fine clothes for 200 copper.".into(),
+                ..Default::default()
+            },
+        ];
+        let scene = rpc::GameplayScene::default();
+
+        assert_eq!(exploration_speech(&journey, &scene), None);
+
+        journey.table_log.push(rpc::TableLine {
+            sequence: 9,
+            role: rpc::TableRole::Hero as i32,
+            kind: rpc::TableKind::Speech as i32,
+            speaker: "Brakka".into(),
+            text: "Could I inspect the other fine clothes?".into(),
+            ..Default::default()
+        });
+        assert_eq!(exploration_speech(&journey, &scene), None);
+
+        journey.table_log.push(rpc::TableLine {
+            sequence: 10,
+            role: rpc::TableRole::Npc as i32,
+            kind: rpc::TableKind::Speech as i32,
+            speaker: "Marek".into(),
+            text: "Marek shows Brakka the remaining wool coats.".into(),
+            ..Default::default()
+        });
+        assert_eq!(exploration_speech(&journey, &scene), None);
+
+        journey.reply_speaker.clear();
+        assert_eq!(
+            exploration_speech(&journey, &scene),
+            Some((
+                Some(10),
                 "Marek",
                 "Marek shows Brakka the remaining wool coats."
             ))
