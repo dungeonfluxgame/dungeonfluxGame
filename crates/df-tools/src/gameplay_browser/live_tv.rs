@@ -886,17 +886,19 @@ pub(super) fn check_display(
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| JsValue::from_str("display check roller is absent"))?;
+    let intention = roll_intention(&roller.text);
     let modifier = check
         .ability_modifier
         .checked_add(proficiency_modifier)
         .ok_or_else(|| JsValue::from_str("display check modifier is invalid"))?;
-    let finding = crate::presentation::first_sentence(finding);
+    let finding = finding.trim().to_owned();
     if finding.is_empty() {
         return Err(JsValue::from_str("display check finding is absent"));
     }
     Ok(live_stage::CheckDisplay {
         sequence: roller.sequence,
         hero_name,
+        intention,
         ability_skill: format!("{ability} ({skill})"),
         faces: check
             .faces
@@ -911,6 +913,12 @@ pub(super) fn check_display(
         succeeded: check.succeeded,
         finding,
     })
+}
+
+fn roll_intention(text: &str) -> String {
+    let text = text.trim();
+    text.rsplit_once(": ")
+        .map_or_else(|| text.to_owned(), |(purpose, _)| purpose.trim().to_owned())
 }
 
 fn mount_lower_third(document: &Document, parent: &Element) -> Result<LowerThird, JsValue> {
@@ -4491,6 +4499,7 @@ mod tests {
                 role: rpc::TableRole::Narrator as i32,
                 kind: rpc::TableKind::Action as i32,
                 speaker: "Roll".to_owned(),
+                text: "Brakka searches the room: Wisdom (Perception) 16 + 3 = 19.".to_owned(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -4502,12 +4511,13 @@ mod tests {
         )
         .expect("a complete check has a display projection");
         assert_eq!(shown.hero_name, "Brakka");
+        assert_eq!(shown.intention, "Brakka searches the room");
         assert_eq!(shown.ability_skill, "Wisdom (Perception)");
         assert_eq!(shown.faces, [(16, true), (4, false)]);
         assert_eq!(shown.modifier, 3);
         assert_eq!(shown.total, 19);
         assert!(shown.succeeded);
-        assert_eq!(shown.finding, "The bronze ledger bears a seal.");
+        assert_eq!(shown.finding, "The bronze ledger bears a seal. More text.");
     }
 
     #[test]
@@ -4545,6 +4555,7 @@ mod tests {
                     hero_index: 1,
                     kind: rpc::TableKind::Action as i32,
                     speaker: "Roll".to_owned(),
+                    text: "Sigrun studies the seal: Wisdom (Perception) 4 - 1 = 3.".to_owned(),
                     ..Default::default()
                 },
             ],
@@ -4553,6 +4564,7 @@ mod tests {
         let shown = check_display(&check, &journey, "Nothing new comes to light.")
             .expect("a complete check has a display projection");
         assert_eq!(shown.hero_name, "Sigrun");
+        assert_eq!(shown.intention, "Sigrun studies the seal");
         assert_eq!(shown.faces, [(16, false), (4, true)]);
         assert_eq!(shown.roll_mode, -1);
         assert_eq!(shown.modifier, -1);
@@ -4576,6 +4588,22 @@ mod tests {
                 Some((ability, label))
             );
         }
+    }
+
+    #[test]
+    fn roll_intention_keeps_public_action_clause_and_full_text_without_separator() {
+        assert_eq!(
+            roll_intention("Brakka searches the room: Wisdom (Perception) 13 + 1 = 14."),
+            "Brakka searches the room"
+        );
+        assert_eq!(
+            roll_intention("Inspect the rune — no metadata separator."),
+            "Inspect the rune — no metadata separator."
+        );
+        assert_eq!(
+            roll_intention("Brakka checks the ward: source: public"),
+            "Brakka checks the ward: source"
+        );
     }
 
     #[test]

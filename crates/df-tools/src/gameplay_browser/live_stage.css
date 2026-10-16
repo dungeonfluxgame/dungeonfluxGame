@@ -224,6 +224,7 @@
    readable while the result card is on screen. */
 .tv-check-result{box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;gap:calc(var(--u)*.42);width:min(100%,calc(var(--u)*27));max-inline-size:100%;min-width:0;padding:calc(var(--u)*.62) calc(var(--u)*.78);border:1px solid #c9a35f;background:linear-gradient(135deg,#0b1623f2,#101b26eb);border-radius:calc(var(--u)*.38);box-shadow:0 calc(var(--u)*.35) calc(var(--u)*1.2) #000b;text-align:left;color:#f7efdc;animation:df-check-result-out var(--check-fade-duration,500ms) ease var(--check-close-delay,10s) both}
 .tv-check-hero{font:600 max(18px,calc(var(--u)*1.25))/1.1 var(--serif);color:#f3d595;overflow-wrap:anywhere}
+.tv-check-intention{width:100%;margin:0;font:500 var(--fs-label)/1.25 var(--serif);color:#f1dfbc;overflow-wrap:anywhere}
 .tv-check-skill{font:400 var(--fs-label)/1.25 var(--serif);color:#ded5c2;overflow-wrap:anywhere}
 .tv-check-mode{font:700 max(16px,calc(var(--u)*.78))/1.15 system-ui,sans-serif;letter-spacing:.08em;color:#9ec7de}
 .tv-check-roll{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--u)*.42);min-width:0}

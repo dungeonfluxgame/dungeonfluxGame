@@ -2516,6 +2516,7 @@ mod tests {
             super::super::live_stage::CheckDisplay {
                 sequence,
                 hero_name: "Brakka".into(),
+                intention: format!("Finding for check {sequence}"),
                 ability_skill: "Wisdom (Perception)".into(),
                 faces: vec![(12, true)],
                 roll_mode: 0,

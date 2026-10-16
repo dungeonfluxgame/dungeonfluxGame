@@ -132,6 +132,7 @@ fn report_removed_presentation_component(element: &Element, reason: &'static str
 pub(super) struct CheckDisplay {
     pub(super) sequence: u64,
     pub(super) hero_name: String,
+    pub(super) intention: String,
     pub(super) ability_skill: String,
     pub(super) faces: Vec<(u32, bool)>,
     pub(super) roll_mode: i32,
@@ -147,6 +148,7 @@ impl CheckDisplay {
             "{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
             self.sequence,
             self.hero_name,
+            self.intention,
             self.ability_skill,
             self.faces,
             self.roll_mode,
@@ -1226,6 +1228,15 @@ impl Figures {
             "tv-check-hero",
             &check.hero_name,
         )?;
+        if !check.intention.trim().is_empty() {
+            node(
+                &self.document,
+                &panel,
+                "p",
+                "tv-check-intention",
+                &check.intention,
+            )?;
+        }
         node(
             &self.document,
             &panel,
@@ -2817,6 +2828,7 @@ mod tests {
             .set_check(Some(&CheckDisplay {
                 sequence: 5,
                 hero_name: "Brakka".into(),
+                intention: "Search the sealed room".into(),
                 ability_skill: "Investigation".into(),
                 faces: vec![(8, true)],
                 roll_mode: 0,
@@ -2846,6 +2858,15 @@ mod tests {
                 .text_content()
                 .as_deref(),
             Some("Brakka")
+        );
+        assert_eq!(
+            panel
+                .query_selector(".tv-check-intention")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .as_deref(),
+            Some("Search the sealed room")
         );
         assert_eq!(
             panel
@@ -2887,6 +2908,7 @@ mod tests {
         let mut first = CheckDisplay {
             sequence: 5,
             hero_name: "Brakka".into(),
+            intention: "Inspect the seal".into(),
             ability_skill: "Investigation".into(),
             faces: vec![(8, true)],
             roll_mode: 0,
@@ -2961,6 +2983,7 @@ mod tests {
         let mut check = CheckDisplay {
             sequence: 5,
             hero_name: "Brakka".to_owned(),
+            intention: "Look for a courier".to_owned(),
             ability_skill: "Intelligence (Investigation)".to_owned(),
             faces: vec![(18, true)],
             roll_mode: 0,
