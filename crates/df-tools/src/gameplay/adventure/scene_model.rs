@@ -595,8 +595,8 @@ impl SceneModel {
             return None;
         }
         let object_action = [
-            "take", "pick up", "examine", "look at", "use", "open", "read", "sit", "warm",
-            "return", "put", "drop", "give",
+            "take", "pick up", "examine", "inspect", "look at", "use", "open", "read", "sit",
+            "warm", "return", "put", "drop", "give",
         ]
         .iter()
         .any(|action| contains_phrase(&line, action));

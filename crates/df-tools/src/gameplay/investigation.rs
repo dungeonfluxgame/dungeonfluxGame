@@ -141,7 +141,11 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
                 entry.aliases.extend(way.aliases.clone());
                 options.push(entry);
             }
-            for offer in &model.offers {
+            for offer in model
+                .offers
+                .iter()
+                .filter(|offer| model.offer_available(&offer.id))
+            {
                 let mut entry = target(&offer.name, &offer.description, false);
                 entry.id = format!("offer-{}", offer.id);
                 entry.aliases.extend(offer.aliases.clone());

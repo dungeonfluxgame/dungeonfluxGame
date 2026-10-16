@@ -32,8 +32,8 @@ pub(crate) mod scene_model;
 mod scene_model_tests;
 mod schema;
 pub(crate) mod setting;
-pub(crate) mod startup;
 pub(crate) mod shop;
+pub(crate) mod startup;
 mod tables;
 #[cfg(test)]
 mod tests;
