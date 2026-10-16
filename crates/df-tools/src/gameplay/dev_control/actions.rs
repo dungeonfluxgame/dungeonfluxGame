@@ -1170,7 +1170,7 @@ fn attack_option(
 
 /// `POST /dev/say {"hero": "Brynn", "text": "..."}`: speaks one line to the
 /// scene through the owner's dialogue path, exactly as a typed phone line.
-/// With providers off the authored fallback answers. A clarification ticket
+/// Omitted context uses the normal classifier/execution path. With providers off the authored fallback answers. A clarification ticket
 /// (confirmation-required) is reported, not auto-confirmed: confirming a
 /// choice is what `act` is for.
 pub(super) async fn say(
@@ -1193,8 +1193,9 @@ pub(super) async fn say(
     let context = match body
         .get("context")
         .and_then(Value::as_str)
-        .unwrap_or("question")
+        .unwrap_or("unspecified")
     {
+        "unspecified" => rpc::DialogueContext::Unspecified,
         "question" => rpc::DialogueContext::Question,
         "social" => rpc::DialogueContext::Social,
         "plan" => rpc::DialogueContext::PlanOnly,
@@ -1203,7 +1204,7 @@ pub(super) async fn say(
         "clarify" => rpc::DialogueContext::Clarify,
         _ => {
             return Err(bad_request(
-                "context must be question, social, plan, meta, joke or clarify",
+                "context must be unspecified, question, social, plan, meta, joke or clarify",
             ));
         }
     };

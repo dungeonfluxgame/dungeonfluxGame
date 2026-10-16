@@ -882,7 +882,7 @@ fn describe_json() -> Value {
                      "cell": "c5r6 for move", "target": "foe or hero name for attack", "weapon": "optional weapon name", "option": "explicit option id or label"},
              "output": "{status: accepted|refused|unavailable|ambiguous|observation, revision, ...}; illegal selections are submitted so the server's refusal is reported"},
             {"command": "say", "method": "POST", "path": "/dev/say",
-             "args": {"hero": "seat or hero name", "text": "1-4096 chars", "context": "question (default)|social|plan|meta|joke|clarify"},
+             "args": {"hero": "seat or hero name", "text": "1-4096 chars", "context": "unspecified (default; classifier/execution)|question|social|plan|meta|joke|clarify"},
              "output": "{status: said, disposition, npc_reply, confirmation_required, revision}"},
             {"command": "direct plate <text> [--keep] [--wait]", "method": "POST", "path": "/dev/direct",
              "args": {"kind": "plate|clear", "text": "1-1000 characters", "keep": "false by default"},
