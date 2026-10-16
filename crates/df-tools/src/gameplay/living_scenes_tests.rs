@@ -150,7 +150,8 @@ fn refresh_jobs(jobs: &[Job]) -> Vec<(Look, RefreshReason)> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Refresh { look, reason, .. } => Some((*look, *reason)),
-            Job::HeroCutout { .. }
+            Job::Canonical(_)
+            | Job::HeroCutout { .. }
             | Job::Expression { .. }
             | Job::Warm { .. }
             | Job::Peek { .. } => None,
@@ -162,9 +163,11 @@ fn face_jobs(jobs: &[Job]) -> Vec<Face> {
     jobs.iter()
         .filter_map(|job| match job {
             Job::Expression { face, .. } => Some(*face),
-            Job::HeroCutout { .. } | Job::Refresh { .. } | Job::Warm { .. } | Job::Peek { .. } => {
-                None
-            }
+            Job::Canonical(_)
+            | Job::HeroCutout { .. }
+            | Job::Refresh { .. }
+            | Job::Warm { .. }
+            | Job::Peek { .. } => None,
         })
         .collect()
 }
@@ -371,6 +374,7 @@ fn hurt_stage(revision: u64, in_combat: bool, hero_hp: u32, foe_hp: u32) -> Stag
 fn job_labels(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .map(|job| match job {
+            Job::Canonical(_) => "canonical-reference".to_owned(),
             Job::HeroCutout { name, .. } => format!("hero-cutout {name}"),
             Job::Warm { character, tier } => format!("warm {} {}", character.art, tier.label()),
             Job::Peek { character } => format!("peek {}", character.art),
