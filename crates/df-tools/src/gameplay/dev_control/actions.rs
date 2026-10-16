@@ -143,7 +143,7 @@ pub(super) async fn reclaim_seat(
             axum::http::StatusCode::OK,
             Json(json!({
                 "status": "refused", "reason": format!("{reason:?}"),
-                "message": "That hero is being played on another phone."
+                "message": "No seat changed. Reclaim is accepted only for an away seat after 30 seconds; an active phone is never displaced."
             })),
         )),
     }
@@ -365,9 +365,7 @@ pub(super) async fn create_hero(
     let index = super::seat_index(seat).map_err(bad_request)?;
     let credential = {
         let seats = state.seats.lock().await;
-        seats.seats[index]
-            .credential
-            .ok_or_else(|| bad_request(format!("seat{} has not joined yet", index + 1)))?
+        super::seat_credential(&seats, index)?
     };
     let (revision, offers) = seat_offers(&state, index).await?;
     let offer = offers
@@ -428,9 +426,10 @@ pub(super) async fn preview_identity(
         let seats = state.seats.lock().await;
         super::resolve_hero(&seats, hero).map_err(bad_request)?
     };
-    let credential = state.seats.lock().await.seats[index]
-        .credential
-        .ok_or_else(|| bad_request("join this seat first"))?;
+    let credential = {
+        let seats = state.seats.lock().await;
+        super::seat_credential(&seats, index)?
+    };
     let member = state.seats.lock().await.seats[index]
         .member
         .clone()
@@ -644,9 +643,10 @@ pub(super) async fn act(
             let seats = state.seats.lock().await;
             super::resolve_hero(&seats, hero).map_err(bad_request)?
         };
-        let credential = state.seats.lock().await.seats[index]
-            .credential
-            .ok_or_else(|| bad_request("join this seat first"))?;
+        let credential = {
+            let seats = state.seats.lock().await;
+            super::seat_credential(&seats, index)?
+        };
         let (revision, _) = seat_view(&state, index).await?;
         let current = state.service.updates.borrow().clone();
         let target = body
@@ -698,9 +698,7 @@ pub(super) async fn act(
     };
     let credential = {
         let seats = state.seats.lock().await;
-        seats.seats[index]
-            .credential
-            .ok_or_else(|| bad_request(format!("seat{} has not joined yet", index + 1)))?
+        super::seat_credential(&seats, index)?
     };
     if action == parse::PlayAction::TableSetting {
         let hidden = body
@@ -826,9 +824,10 @@ pub(super) async fn cancel_dialogue(
         let seats = state.seats.lock().await;
         super::resolve_hero(&seats, hero).map_err(bad_request)?
     };
-    let credential = state.seats.lock().await.seats[index]
-        .credential
-        .ok_or_else(|| bad_request("join this seat first"))?;
+    let credential = {
+        let seats = state.seats.lock().await;
+        super::seat_credential(&seats, index)?
+    };
     let mut request = tonic::Request::new(rpc::CancelDialogueRequest {
         input_id: Some(rpc::OperationId {
             value: Some(proof_bytes(&body, "input_id", 16)?),
@@ -1214,9 +1213,7 @@ pub(super) async fn say(
     };
     let credential = {
         let seats = state.seats.lock().await;
-        seats.seats[index]
-            .credential
-            .ok_or_else(|| bad_request(format!("seat{} has not joined yet", index + 1)))?
+        super::seat_credential(&seats, index)?
     };
     let (revision, _) = seat_view(&state, index).await?;
     let scope = state.seats.lock().await;

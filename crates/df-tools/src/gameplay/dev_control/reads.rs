@@ -28,8 +28,8 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
     let journey = display_journey(&display);
     let mut seats = Vec::new();
     for index in 0..2 {
-        if seat_joined(state, index).await {
-            seats.push(seat_json(state, index).await?);
+        if let Some(seat) = seat_json(state, index).await? {
+            seats.push(seat);
         }
     }
     let overrides = state.overrides.lock().await;
@@ -56,17 +56,27 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
     }))
 }
 
-async fn seat_joined(state: &Shared, index: usize) -> bool {
-    state.seats.lock().await.seats[index].credential.is_some()
-}
-
 async fn seat_json(
     state: &Shared,
     index: usize,
-) -> Result<Value, (axum::http::StatusCode, Json<Value>)> {
-    let hero = state.seats.lock().await.seats[index].hero.clone();
-    let member = state.seats.lock().await.seats[index].member.clone();
-    let (_, view) = seat_view(state, index).await?;
+) -> Result<Option<Value>, (axum::http::StatusCode, Json<Value>)> {
+    let (hero, member) = {
+        let seats = state.seats.lock().await;
+        (
+            seats.seats[index].hero.clone(),
+            seats.seats[index].member.clone(),
+        )
+    };
+    if member.is_none() {
+        return Ok(None);
+    }
+    let (_, view) = match seat_view(state, index).await {
+        Ok(view) => view,
+        Err(error) if super::is_stale_seat_binding(&error) => {
+            return Ok(Some(stale_seat_json(index, hero.as_deref(), &error.1.0)));
+        }
+        Err(error) => return Err(error),
+    };
     let Some(rpc::view_message::Audience::Player(player)) = view.audience.as_ref() else {
         return Err(super::failed("player view required"));
     };
@@ -78,9 +88,10 @@ async fn seat_json(
         .and_then(|bytes| df_types::MemberId::from_bytes(bytes).ok())
         .map(|member| state.social.voiced_for(member))
         .unwrap_or_default();
-    Ok(json!({
+    Ok(Some(json!({
         "seat": index + 1,
         "hero": hero,
+        "binding_status": "active",
         "offer_id": player.offer_id,
         "action_available": player.action_available,
         "offers": player.offers.iter().map(|offer| json!({
@@ -94,7 +105,18 @@ async fn seat_json(
             "attitude": attitude_name(standing.attitude),
         })).collect::<Vec<_>>()).unwrap_or_default(),
         "told": told.iter().map(|(npc, keys)| json!({"npc": npc, "voiced": keys})).collect::<Vec<_>>(),
-    }))
+    })))
+}
+
+fn stale_seat_json(index: usize, hero: Option<&str>, error: &Value) -> Value {
+    json!({
+        "seat": index + 1,
+        "hero": hero,
+        "binding_status": "rejoin_required",
+        "rejoin_command": error.get("rejoin_command"),
+        "credential_cache": error.get("credential_cache"),
+        "message": error.get("message"),
+    })
 }
 
 fn display_journey(view: &rpc::ViewMessage) -> HashMap<String, Value> {
@@ -862,10 +884,10 @@ fn describe_json() -> Value {
         .collect::<Vec<_>>();
     json!({
         "auth": "every request carries Authorization: Bearer <token from the run's dev-control-token file>",
-        "envelope": "domain outcomes (accepted/refused/unavailable/ambiguous/said/saved) arrive with HTTP 200; malformed dev requests are HTTP 400 JSON {error}; server failures are HTTP 502/500 JSON {error}",
+        "envelope": "domain outcomes (accepted/refused/unavailable/ambiguous/said/saved) arrive with HTTP 200; malformed dev requests are HTTP 400 JSON {error}; a revoked local seat binding is HTTP 409 rejoin_required; server failures are HTTP 502/500 JSON {error}",
         "refusals": "a refused action reports the server's own reason code: stale-offer, wrong-turn, invalid-selection, paused, resource-missing, capability-unavailable, recovery-required, revision-conflict, operation-conflict, operation-expired",
         "phases": ["room", "creation", "opening", "dialogue", "combat", "complete", "ended (adventure_ended)"],
-        "views": ["tv", "each joined seat or hero name"],
+        "views": ["tv", "each joined seat or hero name; a revoked local binding returns an explicit rejoin_required result and never falls back to another audience"],
         "actions": actions,
         "selection": "act <hero> <offer label or id>, or act <hero> choose --option <offer label or id>; --choice group=id repeatable / --choices JSON sets every input group; uses live server offers",
         "commands": describe_commands(),
@@ -888,14 +910,14 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"layout show <id>", "method":"POST", "path":"/dev/layout/visibility", "args":"stable registered visual ID", "output":"{status:pending,id,visibility:visible,revision}; restores the component and its prior transform"}),
         json!({"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates complete heroes from the live creation offer, and follows current offers; dialogue target chooses ask and stops before combat; ordinary presentation gates remain authoritative"}),
         json!({"command": "join", "method": "POST", "path": "/dev/join", "args": {"seat": "1 or 2"}, "output": "{status: joined|refused, seat, receipt?}"}),
-        json!({"command": "reclaim", "method": "POST", "path": "/dev/reclaim", "args": {"seat": "1 or 2"}, "output": "{status: joined|refused, seat?, receipt?, reason?}; replaces an away hero's phone after 30 seconds"}),
+        json!({"command": "reclaim", "method": "POST", "path": "/dev/reclaim", "args": {"seat": "1 or 2"}, "output": "{status: joined|refused, seat?, receipt?, reason?}; explicit rejoin request that succeeds only after 30 seconds away and never displaces an active phone"}),
         json!({"command": "create", "method": "POST", "path": "/dev/create", "args": {"seat": "1 or 2", "name": "hero name, 1-48 chars", "choices":"group-id to option-id object (or --choice group=id)","identity":"optional validated identity JSON","identity_choices":"optional identity menu group-id to option-id object"}, "output": "{status: accepted|refused|unavailable, ...}; mechanical choices use server validation; a supplied identity requires canonical storage support"}),
         json!({"command": "act", "method": "POST", "path": "/dev/act", "args": {"hero": "seat or hero name", "action": "begin|ask|escort|defend|move|attack|second-wind|end-turn|dash|dodge|disengage|stand|pick-up|short-rest|inn|resolve", "cell": "c5r6 for move", "target": "foe or hero name for attack", "weapon": "optional weapon name", "option": "explicit option id or label"}, "output": "{status: accepted|refused|unavailable|ambiguous|observation, revision, ...}; illegal selections are submitted so the server's refusal is reported"}),
         json!({"command": "say", "method": "POST", "path": "/dev/say", "args": {"hero": "seat or hero name", "text": "1-4096 chars", "context": "unspecified (default; classifier/execution)|question|social|plan|meta|joke|clarify"}, "output": "{status: said, disposition, npc_reply, confirmation_required, revision}"}),
         json!({"command": "direct plate <text> [--keep] [--wait]", "method": "POST", "path": "/dev/direct", "args": {"kind": "plate|clear", "text": "1-1000 characters", "keep": "false by default"}, "output": "{kind:plate, scene, key, state:pending|ready|failed, reason?:closed image failure}; --wait uses --timeout (60 seconds default, max 600)"}),
         json!({"command": "direct clear", "method": "POST", "path": "/dev/direct", "args": {"kind": "clear"}, "output": "{status:cleared}"}),
-        json!({"command": "state", "method": "GET", "path": "/dev/state", "args": {}, "output": "{revision, room, phase, scene, seats[{seat, hero, offers, sheet, standings, told[{npc, voiced}]}], party, combat{round, active_actor, participants, reachable_cells, legal_targets}, edited}"}),
-        json!({"command": "view", "method": "GET", "path": "/dev/view?as=tv|<hero>", "args": {"as": "tv or hero name"}, "output": "{as, revision, view}: exactly the view that screen is being sent"}),
+        json!({"command": "state", "method": "GET", "path": "/dev/state", "args": {}, "output": "{revision, room, phase, scene, seats[{seat, hero, binding_status, offers, sheet, standings, told[{npc, voiced}]}], party, combat{round, active_actor, participants, reachable_cells, legal_targets}, edited}; a revoked local binding is listed as rejoin_required without private fields, while the public state remains readable"}),
+        json!({"command": "view", "method": "GET", "path": "/dev/view?as=tv|<hero>", "args": {"as": "tv or hero name"}, "output": "{as, revision, view}: exactly the view that screen is being sent; a revoked local binding returns rejoin_required with an explicit dev reclaim command and no substitute audience"}),
         json!({"command": "notes", "method": "GET", "path": "/dev/notes?hero=<name>", "args": {"hero": "seat or hero name"}, "output": "{hero, entries[{kind, title, text, scene, order, owner, author}]}: private clues are filtered to that hero"}),
         json!({"command": "note", "method": "POST", "path": "/dev/note", "args": {"hero": "seat or hero name", "text": "1-4096 UTF-8 bytes"}, "output": "{status: added, hero, scene, order}: adds one shared party note"}),
         json!({"command": "log", "method": "GET", "path": "/dev/log?since=<sequence>", "args": {"since": "optional table sequence number"}, "output": "{revision, lines[{sequence, speaker, role, kind, text}], overrides}"}),
@@ -913,6 +935,39 @@ fn describe_commands() -> Vec<Value> {
 }
 
 #[cfg(test)]
+mod stale_seat_projection_tests {
+    use super::*;
+
+    #[test]
+    fn state_reports_stale_seat_without_falling_back_to_private_or_display_data() {
+        let error = super::super::stale_seat_binding(0, Some("Brakka"), "cleared");
+        assert!(super::super::is_stale_seat_binding(&error));
+
+        let seat = stale_seat_json(0, Some("Brakka"), &error.1.0);
+
+        assert_eq!(seat["seat"], 1);
+        assert_eq!(seat["hero"], "Brakka");
+        assert_eq!(seat["binding_status"], "rejoin_required");
+        assert_eq!(seat["rejoin_command"], "dev reclaim 1");
+        assert_eq!(seat["credential_cache"], "cleared");
+        assert!(seat.get("offers").is_none());
+        assert!(seat.get("sheet").is_none());
+        assert!(seat.get("private_clue").is_none());
+        assert!(seat.get("audience").is_none());
+    }
+
+    #[test]
+    fn non_permission_owner_failures_are_not_downgraded_to_stale_seats() {
+        let error = (
+            axum::http::StatusCode::BAD_GATEWAY,
+            Json(json!({"error": "gameplay authority unavailable"})),
+        );
+
+        assert!(!super::super::is_stale_seat_binding(&error));
+    }
+}
+
+#[cfg(test)]
 mod reclaim_tests {
     #[test]
     fn describe_advertises_reclaim_for_an_existing_seat() {
@@ -926,6 +981,11 @@ mod reclaim_tests {
         assert_eq!(reclaim["method"], "POST");
         assert_eq!(reclaim["path"], "/dev/reclaim");
         assert_eq!(reclaim["args"]["seat"], "1 or 2");
+        assert!(
+            reclaim["output"]
+                .as_str()
+                .is_some_and(|output| output.contains("never displaces an active phone"))
+        );
     }
 }
 

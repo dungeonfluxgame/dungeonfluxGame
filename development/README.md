@@ -158,6 +158,12 @@ dev view --as Neris                # exactly her phone view (offers, own sheet)
 dev log                            # the table log; dev checkpoint save <name> names a point
 ```
 
+If `/dev/state` finds that a browser reclaimed a hero and the CLI's cached seat binding was
+revoked, it still returns the public table state and marks that seat `rejoin_required`; that
+seat's private projection is omitted. `dev view --as <hero>` returns the same explicit status
+and a suggested command. Use `dev reclaim <seat>` only when you intend to take the hero back:
+the server permits it after 30 seconds away and refuses to displace an active phone.
+
 `dev timeline` is a bounded, structured resource timeline. Filter it by type or ask for counts
 only:
 

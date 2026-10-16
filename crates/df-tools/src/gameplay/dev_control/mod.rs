@@ -379,7 +379,9 @@ async fn display_view(
         }),
         after_revision: None,
     };
-    owner_view(state, state.display_credential, request).await
+    owner_view(state, state.display_credential, request)
+        .await
+        .map_err(owner_view_failure)
 }
 
 /// Calls the owner for the exact player view one seat is being sent.
@@ -387,29 +389,144 @@ async fn seat_view(
     state: &Shared,
     seat: usize,
 ) -> Result<(rpc::SessionRevision, rpc::ViewMessage), (StatusCode, Json<Value>)> {
-    let seats = state.seats.lock().await;
-    let (session_id, run_id) = scope_of(&seats)?;
-    let member = seats.seats[seat]
-        .member
-        .clone()
-        .ok_or_else(|| bad_request(format!("seat{} has not joined yet", seat + 1)))?;
-    let credential = seats.seats[seat]
-        .credential
-        .ok_or_else(|| bad_request(format!("seat{} has not joined yet", seat + 1)))?;
-    drop(seats);
-    let request = rpc::WatchViewRequest {
-        session_id: Some(rpc::SessionId {
-            value: Some(session_id),
-        }),
-        run_id: Some(rpc::RunId {
-            value: Some(run_id),
-        }),
-        client_binding_id: Some(rpc::ClientBindingId {
-            value: Some(member),
-        }),
-        after_revision: None,
-    };
-    owner_view(state, credential, request).await
+    for attempt in 0..2 {
+        let (session_id, run_id, member, credential, hero) = {
+            let seats = state.seats.lock().await;
+            let (session_id, run_id) = scope_of(&seats)?;
+            let local_seat = &seats.seats[seat];
+            let member = local_seat
+                .member
+                .clone()
+                .ok_or_else(|| bad_request(format!("seat{} has not joined yet", seat + 1)))?;
+            (
+                session_id,
+                run_id,
+                member,
+                local_seat.credential,
+                local_seat.hero.clone(),
+            )
+        };
+        let Some(credential) = credential else {
+            return Err(stale_seat_binding(seat, hero.as_deref(), "already_cleared"));
+        };
+        let request = rpc::WatchViewRequest {
+            session_id: Some(rpc::SessionId {
+                value: Some(session_id),
+            }),
+            run_id: Some(rpc::RunId {
+                value: Some(run_id),
+            }),
+            client_binding_id: Some(rpc::ClientBindingId {
+                value: Some(member),
+            }),
+            after_revision: None,
+        };
+        match owner_view(state, credential, request).await {
+            Ok(view) => return Ok(view),
+            Err(status) if status.code() == tonic::Code::PermissionDenied => {
+                match clear_rejected_seat_credential(state, seat, credential).await {
+                    SeatCredentialClear::Replaced if attempt == 0 => continue,
+                    SeatCredentialClear::Replaced => {
+                        return Err(seat_binding_changed(seat));
+                    }
+                    clear => {
+                        return Err(stale_seat_binding(seat, hero.as_deref(), clear.as_str()));
+                    }
+                }
+            }
+            Err(status) => return Err(owner_view_failure(status)),
+        }
+    }
+    Err(seat_binding_changed(seat))
+}
+
+enum SeatCredentialClear {
+    Cleared,
+    ClearedInMemory,
+    AlreadyCleared,
+    Replaced,
+}
+
+impl SeatCredentialClear {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Cleared => "cleared",
+            Self::ClearedInMemory => "cleared_in_memory_persistence_failed",
+            Self::AlreadyCleared => "already_cleared",
+            Self::Replaced => "replaced",
+        }
+    }
+}
+
+async fn clear_rejected_seat_credential(
+    state: &Shared,
+    seat: usize,
+    rejected: [u8; 32],
+) -> SeatCredentialClear {
+    let mut seats = state.seats.lock().await;
+    match seats.seats[seat].credential {
+        Some(current) if current != rejected => return SeatCredentialClear::Replaced,
+        None => return SeatCredentialClear::AlreadyCleared,
+        Some(_) => {}
+    }
+    seats.seats[seat].credential = None;
+    if persist_seats(state, &seats).is_ok() {
+        SeatCredentialClear::Cleared
+    } else {
+        SeatCredentialClear::ClearedInMemory
+    }
+}
+
+fn stale_seat_binding(
+    seat: usize,
+    hero: Option<&str>,
+    credential_cache: &str,
+) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "status": "rejoin_required",
+            "code": "seat_binding_stale",
+            "seat": seat + 1,
+            "hero": hero,
+            "credential_cache": credential_cache,
+            "rejoin_command": format!("dev reclaim {}", seat + 1),
+            "message": "The saved local seat binding is no longer accepted. Reclaim is an explicit request; the server will refuse an active phone and permits reclaim only after the seat has been away for 30 seconds."
+        })),
+    )
+}
+
+fn seat_binding_changed(seat: usize) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "status": "retry",
+            "code": "seat_binding_changed",
+            "seat": seat + 1,
+            "message": "The local seat binding changed during this read; retry dev state or dev view."
+        })),
+    )
+}
+
+pub(super) fn is_stale_seat_binding(error: &(StatusCode, Json<Value>)) -> bool {
+    error.1.0.get("code").and_then(Value::as_str) == Some("seat_binding_stale")
+}
+
+pub(super) fn seat_credential(
+    seats: &Seats,
+    seat: usize,
+) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
+    if let Some(credential) = seats.seats[seat].credential {
+        return Ok(credential);
+    }
+    if seats.seats[seat].member.is_some() {
+        return Err(stale_seat_binding(
+            seat,
+            seats.seats[seat].hero.as_deref(),
+            "already_cleared",
+        ));
+    }
+    Err(bad_request(format!("seat{} has not joined yet", seat + 1)))
 }
 
 fn display_scope(basis: df_model::checkpoint::Basis) -> (Vec<u8>, Vec<u8>) {
@@ -431,19 +548,17 @@ async fn owner_view(
     state: &Shared,
     credential: [u8; 32],
     request: rpc::WatchViewRequest,
-) -> Result<(rpc::SessionRevision, rpc::ViewMessage), (StatusCode, Json<Value>)> {
-    let (_, view) = state
-        .service
-        .view(credential, request)
-        .await
-        .map_err(|status| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error":status.message()})),
-            )
-        })?;
+) -> Result<(rpc::SessionRevision, rpc::ViewMessage), tonic::Status> {
+    let (_, view) = state.service.view(credential, request).await?;
     let revision = view.revision.unwrap_or_default();
     Ok((revision, view))
+}
+
+fn owner_view_failure(status: tonic::Status) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({"error": status.message()})),
+    )
 }
 
 /// Submits one player action through the owner's full admission path and maps
@@ -655,5 +770,35 @@ mod display_scope_tests {
             .expect("uncertain reclaim proof restored");
         assert_eq!(pending.operation, [5; 16]);
         assert_eq!(pending.token, [6; 32]);
+    }
+
+    #[test]
+    fn revoked_local_binding_returns_explicit_reclaim_without_player_data() {
+        let seats = Seats {
+            session_id: Some(vec![1; 16]),
+            run_id: Some(vec![2; 16]),
+            seats: [
+                Seat {
+                    reclaim: None,
+                    credential: None,
+                    member: Some(vec![4; 16]),
+                    hero: Some("Brakka".to_owned()),
+                },
+                Seat::empty(),
+            ],
+        };
+
+        let (status, Json(document)) = seat_credential(&seats, 0).expect_err("stale binding");
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(document["status"], "rejoin_required");
+        assert_eq!(document["code"], "seat_binding_stale");
+        assert_eq!(document["hero"], "Brakka");
+        assert_eq!(document["rejoin_command"], "dev reclaim 1");
+        assert_eq!(document["credential_cache"], "already_cleared");
+        assert!(document.get("offers").is_none());
+        assert!(document.get("sheet").is_none());
+        assert!(document.get("member").is_none());
+        assert!(document.get("token").is_none());
     }
 }
