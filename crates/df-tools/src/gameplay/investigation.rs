@@ -50,7 +50,7 @@ fn target(name: &str, description: &str, person: bool) -> Target {
     }
 }
 
-/// V06 supplies canonical entities here; legacy plates/narration supply options until then.
+/// V06 supplies canonical entities here; legacy plates and setting prose supply migration options.
 /// Replacing the catalog does not change resolution, check or expression contracts.
 pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> {
     let room_description = scene
@@ -249,7 +249,8 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
         }
         noun_options(&setting.short, &mut options);
     }
-    noun_options(&scene.narration, &mut options);
+    // Narration is prose, not an object catalog. Only authored setting/model
+    // entities and explicit scene affordances may become investigation targets.
     // Authored findings without bindings remain accessible only through their explicit offer.
     for finding in &scene.findings {
         if !options

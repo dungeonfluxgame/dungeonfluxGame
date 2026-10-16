@@ -705,6 +705,27 @@ fn looking_around_the_taproom_does_not_select_the_lodging_offer_named_room() {
 }
 
 #[test]
+fn narration_sentence_is_not_promoted_to_an_investigation_target() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
+    let mut scene = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == pack::SceneKey::Opening)
+        .unwrap()
+        .clone();
+    scene.narration = "The courier presses the packet against his chest.".into();
+    scene.setting = Some(generated.settings.meeting);
+    let options = targets(&scene, &[]);
+    let target = local_target(
+        "I inspect the courier presses the packet against his.",
+        &options,
+    );
+    assert!(!target.present);
+    assert!(target.id.starts_with("absent-"));
+}
+
+#[test]
 fn searching_an_absent_satchel_does_not_search_its_owners_face() {
     let mut options = room();
     options.push(Target {
