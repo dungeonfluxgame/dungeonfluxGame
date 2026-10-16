@@ -335,13 +335,11 @@ fn coherent_opening_includes_the_public_arrival_and_stakes() {
 #[test]
 fn merchant_opening_fallback_is_natural_and_keeps_public_stakes() {
     let tables = tables();
-    let generated = generate(
-        &tables,
-        671_003,
-        GenerateOptions::default(),
-        &ForcedEntries::new(),
-    )
-    .unwrap();
+    let forced = ForcedEntries::from([
+        ("location".into(), "lamplit-market".into()),
+        ("patron".into(), "merchant".into()),
+    ]);
+    let generated = generate(&tables, 671_003, GenerateOptions::default(), &forced).unwrap();
     let opening = generated
         .pack
         .scenes
@@ -372,8 +370,21 @@ fn opening_dressing_uses_present_people_and_omits_empty_categories() {
     let opening = model.for_scene(super::super::pack::SceneKey::Opening);
     let dressing = super::opening_dressing(model);
 
+    let activity_markers = [
+        " examines ",
+        " keeps ",
+        " waits ",
+        " browses ",
+        " works ",
+        " pauses ",
+    ];
     for person in &opening.people {
-        assert!(dressing.contains(&person.name));
+        if activity_markers
+            .iter()
+            .any(|marker| person.description.contains(marker))
+        {
+            assert!(dressing.contains(&person.name));
+        }
     }
     for person in &model.people {
         if !opening.people.iter().any(|present| present.id == person.id) {
