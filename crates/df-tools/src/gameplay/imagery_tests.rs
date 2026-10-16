@@ -135,6 +135,7 @@ fn merchant_seed_full_cast_plate_preserves_every_identity_in_final_assembly() {
         &["Brakka".into(), "Sigrun".into()],
     )
     .expect("the merchant model plate prompt")
+    .with_focus_actor("place-cloth-shop-bystander-2", "Jessa")
     .with_cast_sheet(
         2,
         "slot 1 = merchant; slot 2 = shop-adventurer; slot 3 = shop-soldier; identity revision 671003",
@@ -143,6 +144,12 @@ fn merchant_seed_full_cast_plate_preserves_every_identity_in_final_assembly() {
     for id in ["merchant", "shop-adventurer", "shop-soldier"] {
         assert!(prompt.as_str().contains(id), "missing cast identity {id}");
     }
+    assert!(
+        prompt
+            .as_str()
+            .contains("canonical actor id place-cloth-shop-bystander-2")
+    );
+    assert!(prompt.as_str().contains("named Jessa"));
     let references = [EditReferenceImage {
         format: ImageFormat::Png,
         bytes: b"merchant-scene-fixture",

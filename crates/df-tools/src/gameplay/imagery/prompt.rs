@@ -151,6 +151,19 @@ impl AssembledPrompt {
         self
     }
 
+    /// Bind the camera's conversational focus to the canonical actor selected by the story
+    /// record. The complete cast remains in the scene; this only identifies who must be readable.
+    pub(in crate::gameplay) fn with_focus_actor(
+        mut self,
+        actor_id: &str,
+        actor_name: &str,
+    ) -> Self {
+        self.text.push_str(&format!(
+            "\nConversational camera focus: canonical actor id {actor_id}, named {actor_name}. Keep this exact cast member readable in the lit mid-ground with their face and upper body fully inside the frame; all other canonical cast members remain present in their established positions."
+        ));
+        self
+    }
+
     /// Character count after all request fragments have been appended.
     pub(in crate::gameplay) fn character_count(&self) -> usize {
         self.text.chars().count()

@@ -2302,6 +2302,16 @@ impl Shared {
         } else {
             prompt
         };
+        let prompt = if let Some(speaker) = &scene.speaker {
+            let identity = scene.identity_cast.iter().find(|identity| {
+                identity.id.strip_prefix("npc:").unwrap_or(&identity.id) == speaker.id
+            });
+            identity.map_or(prompt.clone(), |identity| {
+                prompt.with_focus_actor(&speaker.id, &identity.name)
+            })
+        } else {
+            prompt
+        };
         let prompt = prompt.with_cast_sheet(2, &legend);
         let prompt = match direction {
             Some(direction) => prompt.with_development_direction(direction),
@@ -2471,6 +2481,16 @@ impl Shared {
             prompt.with_neutral_reference()
         } else if photographic_style_reference {
             prompt.with_photographic_style_reference()
+        } else {
+            prompt
+        };
+        let prompt = if let Some(speaker) = &scene.speaker {
+            let identity = scene.identity_cast.iter().find(|identity| {
+                identity.id.strip_prefix("npc:").unwrap_or(&identity.id) == speaker.id
+            });
+            identity.map_or(prompt.clone(), |identity| {
+                prompt.with_focus_actor(&speaker.id, &identity.name)
+            })
         } else {
             prompt
         };
