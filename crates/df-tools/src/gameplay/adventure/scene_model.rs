@@ -688,15 +688,29 @@ impl SceneModel {
             if self.things.iter().any(|thing| thing.id == item_id) {
                 return Err(SceneModelError::Contradiction);
             }
+            let seller_name = self
+                .people
+                .iter()
+                .find(|person| person.id.as_str() == _seller_id.as_str())
+                .map(|person| person.name.as_str())
+                .unwrap_or("the seller");
+            let detail = format!(
+                "{}. It was bought from {}.",
+                offer.description.trim_end_matches('.'),
+                seller_name
+            );
             self.things.push(SceneThing {
                 id: item_id,
                 name: offer.name.clone(),
                 short: offer.name.clone(),
-                detail: offer.description.clone(),
+                detail: detail.clone(),
                 picture_description: offer.description.clone(),
-                closer_look: offer.description.clone(),
+                closer_look: detail,
                 skill: FindingSkill::Investigation,
-                dc: 0,
+                // Purchased goods are not findings, but the durable SceneThing schema still
+                // requires its bounded investigation DC. Keep the neutral catalog value within
+                // that schema range so ownership validation can admit the item.
+                dc: 10,
                 finding_id: None,
                 clue_fact_id: None,
                 portable: true,

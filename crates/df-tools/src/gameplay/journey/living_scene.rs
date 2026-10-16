@@ -96,16 +96,22 @@ pub(in crate::gameplay) fn snapshot(
     let Some(setting) = &scene.setting else {
         return Ok(None);
     };
-    let Some(mut model) = setting.model.clone().or_else(|| {
-        MODELS
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&setting.place_id)
-            .cloned()
-    }) else {
+    let Some(mut model) = MODELS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&setting.place_id)
+        .cloned()
+        .or_else(|| setting.model.clone())
+    else {
         return Ok(None);
     };
+    // Some presentation paths feed the latest published model back into the scene before the
+    // journal is replayed. Purchased things are journal projections, so discard only those
+    // projections here; otherwise replaying the same purchase is mistaken for a duplicate.
+    model
+        .things
+        .retain(|thing| !thing.id.starts_with("purchased-"));
     for character in &state.characters {
         let hero = name(state, character.entity)?;
         if !model.people.iter().any(|person| person.id == hero) {
