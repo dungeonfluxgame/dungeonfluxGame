@@ -19,7 +19,7 @@ use df_types::MemberId;
 use serde_json::{Value, json};
 
 use super::{
-    adventure::dossier::{Attitude, Dossier, NpcRole, mentions_term},
+    adventure::dossier::{Attitude, Dossier, NpcRole, QuestionSubject, mentions_term},
     approach_model::ApproachModel,
     npc_dossier::{self, Clue, Inputs, Turn, Withheld, released_terms},
     pack::{Age, PackFile, SceneKey, SpeakerProfile},
@@ -36,6 +36,8 @@ use super::{
     table_log::TableLog,
 };
 
+#[path = "npc_answer.rs"]
+mod answer;
 #[path = "npc_room.rs"]
 mod room;
 
@@ -140,9 +142,40 @@ fn asks_about_private_clue(words: &str) -> bool {
         "whisper",
         "what did you tell me",
         "what did you say to me",
+        "what you told me quietly",
+        "tell me quietly",
     ]
     .iter()
     .any(|phrase| contains_whole_word(&lowered, phrase))
+}
+
+fn private_question(words: &str, story: &StoryFacts) -> bool {
+    let lowered = words.to_lowercase();
+    let destination_question = [
+        "where is the packet going",
+        "where does the packet go",
+        "where do i take",
+        "where do we take",
+        "where should i take",
+        "where should we take",
+        "where to deliver",
+        "its destination",
+        "where exactly",
+    ]
+    .iter()
+    .any(|phrase| contains_whole_word(&lowered, phrase));
+    asks_about_private_clue(words)
+        || destination_question
+        || story
+            .secret_terms
+            .iter()
+            .filter(|term| {
+                !story
+                    .public_names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(term))
+            })
+            .any(|term| mentions_term(words, term))
 }
 
 fn private_clue_refusal(turn: &Turn) -> (String, String) {
@@ -193,6 +226,9 @@ pub(super) struct NpcReplyContext {
     known_names: Vec<String>,
     /// The public appearance facts the hero's own sheet lets another character perceive.
     hero_visible: Value,
+    withheld_subjects: Vec<QuestionSubject>,
+    private_reply: bool,
+    private_terms: Vec<String>,
     room: Option<super::adventure::scene_model::SceneNow>,
     /// Set when the addressed NPC has a backstory: the reply then draws on it and moves the
     /// NPC's attitude toward this hero.
@@ -202,6 +238,7 @@ pub(super) struct NpcReplyContext {
 /// How one exchange with an NPC that has a backstory went.
 pub(super) struct Exchange {
     pub(super) text: String,
+    pub(super) outcome: ExchangeOutcome,
     /// What the hero's words did, as the model or the keyword reader read them.
     pub(super) approach: Approach,
     /// False when the dossier's prepared answer replied instead of the text model.
@@ -211,6 +248,64 @@ pub(super) struct Exchange {
     pub(super) shift: Option<Shift>,
     /// The reply spoke of what was whispered to this hero alone, so only this hero was shown it.
     pub(super) private: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ExchangeOutcome {
+    Spoken,
+    Withheld,
+    Unavailable,
+}
+
+impl ExchangeOutcome {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Spoken => "spoken",
+            Self::Withheld => "withheld",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+impl Exchange {
+    fn observe(&self) {
+        let operation = df_observe::OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        let mut span = df_observe::begin(&operation, "gameplay.social.exchange");
+        span.event(
+            "social.exchange",
+            &[
+                ("social.approach", self.approach.label().to_owned()),
+                (
+                    "social.source",
+                    if self.outcome == ExchangeOutcome::Unavailable {
+                        "unavailable"
+                    } else if self.outcome == ExchangeOutcome::Withheld {
+                        "withheld"
+                    } else if self.from_model {
+                        "model"
+                    } else {
+                        "prepared"
+                    }
+                    .to_owned(),
+                ),
+                ("social.shift", format!("{:?}", self.shift)),
+                ("social.private", self.private.to_string()),
+                ("social.outcome", self.outcome.label().to_owned()),
+            ],
+        );
+        // One line per fallback, closed vocabulary, never reply text: today nothing records
+        // why a prepared line spoke instead of the model.
+        if let Some(reason) = self.fallback {
+            span.event(
+                "social.fallback",
+                &[("social.reason", reason.label().to_owned())],
+            );
+        }
+        span.finish_unmeasured(self.outcome.label());
+    }
 }
 
 /// Why a model reply never spoke. Closed vocabulary for the one server line each fallback
@@ -500,7 +595,8 @@ impl NpcReplyContext {
         let standing = social.standing(member, dossier);
         let told =
             gave_clue && !player.private_clue.is_empty() && standing.attitude != Attitude::Hostile;
-        let released = if told {
+        let answering_private = told && private_question(&words, story);
+        let released = if answering_private {
             // Names the scenes say aloud are not the clue's to give: the table already hears them.
             let clue_terms: Vec<String> = story
                 .secret_terms
@@ -517,9 +613,9 @@ impl NpcReplyContext {
         } else {
             Vec::new()
         };
-        let clue = if told {
+        let clue = if answering_private {
             Clue::Told(player.private_clue.as_str())
-        } else if gave_clue {
+        } else if gave_clue && !told {
             Clue::Kept
         } else {
             Clue::Absent
@@ -600,6 +696,18 @@ impl NpcReplyContext {
             .position(|party_member| party_member.name == hero.name)
             .and_then(|position| u32::try_from(position).ok())
             .unwrap_or(0);
+        let mut turn_dossier = dossier.clone();
+        if let Some(profile) = story
+            .speakers
+            .iter()
+            .find(|profile| profile.name == actor.name)
+        {
+            for subject in &profile.withheld_subjects {
+                if !turn_dossier.withheld_subjects.contains(subject) {
+                    turn_dossier.withheld_subjects.push(*subject);
+                }
+            }
+        }
         Some(Self {
             scene_identity: player
                 .scene
@@ -617,10 +725,13 @@ impl NpcReplyContext {
             public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
             hero_visible: visible_hero(hero),
+            withheld_subjects: turn_dossier.withheld_subjects.clone(),
+            private_reply: false,
+            private_terms: Vec::new(),
             room,
             turn: Some(Box::new(Turn {
                 ledger: social.clone(),
-                dossier: dossier.clone(),
+                dossier: turn_dossier,
                 scene: scene_key.to_owned(),
                 standing,
                 withheld,
@@ -628,6 +739,7 @@ impl NpcReplyContext {
                 said,
                 conversation,
                 answer_offered,
+                later_lines,
             })),
         })
     }
@@ -738,16 +850,36 @@ impl NpcReplyContext {
         facts["forbidden"] = json!(unheard_secret_terms(story, &public));
         let clue_speaker =
             focus && actor.is_none_or(|actor| actor.role == rpc::SceneRole::Patron as i32);
-        if player.private_clue.is_empty() || !clue_speaker {
+        let told = !player.private_clue.is_empty() && clue_speaker;
+        let private_terms: Vec<String> = if !player.private_clue.is_empty() {
+            unheard_secret_terms(story, &public)
+                .into_iter()
+                .filter(|term| mentions_term(&player.private_clue, term))
+                .filter(|term| {
+                    !story
+                        .public_names
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(term))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let private_reply = told && private_question(&words, story);
+        if private_reply {
+            facts["secret_clue_this_player_was_privately_told"] = json!(player.private_clue);
+            facts["forbidden"] = json!(
+                unheard_secret_terms(story, &public)
+                    .into_iter()
+                    .filter(|term| !private_terms.contains(term))
+                    .collect::<Vec<_>>()
+            );
             facts["listener_knowledge"] = json!(
-                "This hero has NOT been told the secret. Never reveal it or hint at the \
-                 forbidden terms; deflect questions about them in character."
+                "Answer only this hero in private about the clue they were told. Do not add facts to it."
             );
         } else {
-            facts["secret_clue_this_player_was_privately_told"] = json!(player.private_clue);
             facts["listener_knowledge"] = json!(
-                "This hero knows your secret; others are listening, so allude to it without \
-                 stating it. Never use the forbidden terms."
+                "This is public table talk. Never reveal or hint at the private clue or forbidden terms."
             );
         }
         let hero_index = journey
@@ -773,6 +905,11 @@ impl NpcReplyContext {
             public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
             hero_visible: visible_hero(hero),
+            withheld_subjects: profile
+                .map(|profile| profile.withheld_subjects.clone())
+                .unwrap_or_default(),
+            private_reply,
+            private_terms,
             turn: None,
             room: None,
         })
@@ -787,7 +924,7 @@ impl NpcReplyContext {
         }
         let spoken = match &self.turn {
             Some(turn) => turn.withheld.hide_released(shown),
-            None => shown.to_owned(),
+            None => npc_dossier::redact_terms(shown, &self.private_terms),
         };
         log.push(
             &self.hero_name,
@@ -1058,36 +1195,82 @@ impl NpcVoice {
         context: NpcReplyContext,
         log: &TableLog,
     ) -> Option<String> {
-        let speaker = context.speaker.clone();
-        let actor_id = context.actor_id.clone();
-        let guard = context.publication_guard.clone();
-        let reply = self.reply(context).await?;
-        if guard.as_ref().is_some_and(|guard| !guard()) {
-            super::actor::record_audit_diagnostic(
-                "gameplay.npc_target",
-                "NPC reply publication suppressed: stale scene or actor".into(),
-                serde_json::Map::from_iter([
-                    ("resource_type".into(), json!("state")),
-                    ("stage".into(), json!("npc_reply_publication")),
-                    ("status".into(), json!("stale")),
-                    ("actor_id".into(), json!(actor_id)),
-                ]),
-                &[
-                    ("gameplay.resource.type", "state".into()),
-                    ("routing.validation", "stale_publication".into()),
-                ],
-            );
+        let exchange = self.reply_in_public_report(context, log).await?;
+        (exchange.outcome != ExchangeOutcome::Unavailable).then_some(exchange.text)
+    }
+
+    async fn reply_in_public_report(
+        &self,
+        context: NpcReplyContext,
+        log: &TableLog,
+    ) -> Option<Exchange> {
+        let approach = super::social::classify_keywords(&context.typed_words);
+        let bounded = answer::prepare(&context, approach);
+        let (text, outcome, from_model, fallback) = if let Some(answer) = bounded {
+            let outcome = if answer.withheld && answer.text.is_empty() {
+                ExchangeOutcome::Withheld
+            } else {
+                ExchangeOutcome::Spoken
+            };
+            (answer.text, outcome, false, None)
+        } else {
+            match self.model_public(&context).await {
+                Ok(text) => (text, ExchangeOutcome::Spoken, true, None),
+                Err(reason) => (
+                    String::new(),
+                    ExchangeOutcome::Unavailable,
+                    false,
+                    Some(reason),
+                ),
+            }
+        };
+        if !context.publication_current() {
             return None;
         }
-        log.push_actor(
-            &actor_id,
-            &speaker,
-            rpc::TableRole::Npc,
-            0,
-            rpc::TableKind::Speech,
-            &reply,
-        );
-        Some(reply)
+        let private = context.private_reply && outcome == ExchangeOutcome::Spoken;
+        if private {
+            log.push_actor(
+                &context.actor_id,
+                &context.speaker,
+                rpc::TableRole::Npc,
+                context.hero_index,
+                rpc::TableKind::Action,
+                &format!("murmurs to {}", context.hero_name),
+            );
+        } else if outcome == ExchangeOutcome::Spoken {
+            log.push_actor(
+                &context.actor_id,
+                &context.speaker,
+                rpc::TableRole::Npc,
+                context.hero_index,
+                rpc::TableKind::Speech,
+                &text,
+            );
+        }
+        let exchange = Exchange {
+            text,
+            outcome,
+            approach,
+            from_model,
+            fallback,
+            shift: None,
+            private,
+        };
+        exchange.observe();
+        Some(exchange)
+    }
+
+    /// The same publication path with a closed outcome for native diagnostics and the CLI.
+    pub(super) async fn converse_report(
+        &self,
+        context: NpcReplyContext,
+        log: &TableLog,
+    ) -> Option<Exchange> {
+        if context.turn.is_none() {
+            self.reply_in_public_report(context, log).await
+        } else {
+            self.converse_in_character(context, log).await
+        }
     }
 
     /// Answers a typed line for the table. An NPC without a backstory answers as before (`None`
@@ -1104,37 +1287,6 @@ impl NpcVoice {
             return self.reply_in_public(context, log).await;
         }
         let exchange = self.converse_in_character(context, log).await?;
-        let operation = df_observe::OperationContext {
-            trace_parent: String::new(),
-            build: crate::BUILD_ID.to_owned(),
-        };
-        let mut span = df_observe::begin(&operation, "gameplay.social.exchange");
-        span.event(
-            "social.exchange",
-            &[
-                ("social.approach", exchange.approach.label().to_owned()),
-                (
-                    "social.source",
-                    if exchange.from_model {
-                        "model"
-                    } else {
-                        "prepared"
-                    }
-                    .to_owned(),
-                ),
-                ("social.shift", format!("{:?}", exchange.shift)),
-                ("social.private", exchange.private.to_string()),
-            ],
-        );
-        // One line per fallback, closed vocabulary, never reply text: today nothing records
-        // why a prepared line spoke instead of the model.
-        if let Some(reason) = exchange.fallback {
-            span.event(
-                "social.fallback",
-                &[("social.reason", reason.label().to_owned())],
-            );
-        }
-        span.finish_unmeasured("replied");
         Some(exchange.text)
     }
 
@@ -1364,10 +1516,12 @@ impl NpcVoice {
                 reaction_note = Some(current.perceived_line(&context.speaker, &context.hero_name));
             }
         }
-        let room_answer = (approach == Approach::Question)
+        let bounded_answer = answer::prepare(&context, approach);
+        let room_answer = (approach == Approach::Question && bounded_answer.is_none())
             .then(|| room::answer(&context))
             .flatten();
-        let subject_answer = if approach == Approach::Intimidation
+        let subject_answer = if bounded_answer.is_some()
+            || approach == Approach::Intimidation
             || private_clue_withheld
             || (influence_request
                 && matches!(
@@ -1435,6 +1589,8 @@ impl NpcVoice {
         super::npc_facts::trim_background_facts(&mut context.facts);
         let modeled = if done_now || never_forgive_now || unwilling_now || hesitant_now {
             Err(FallbackReason::ReplyRejected)
+        } else if let Some(answer) = &bounded_answer {
+            Ok((answer.text.clone(), None))
         } else {
             self.model_dialogue(&context).await
         };
@@ -1504,12 +1660,27 @@ impl NpcVoice {
                 (answer, Some(reason))
             }
         };
-        let from_model = fallback.is_none();
+        let from_model = bounded_answer.is_none() && fallback.is_none();
+        let outcome = if text.is_empty()
+            && bounded_answer
+                .as_ref()
+                .is_some_and(|answer| answer.withheld)
+        {
+            ExchangeOutcome::Withheld
+        } else {
+            ExchangeOutcome::Spoken
+        };
         // What was whispered to this hero alone is answered to this hero alone: the table sees
         // that the speaker murmured, not the words.
-        let private = !turn.withheld.released().is_empty()
+        let private = outcome == ExchangeOutcome::Spoken
+            && !turn.withheld.released().is_empty()
             && !(done_now || never_forgive_now || unwilling_now || hesitant_now);
-        if private {
+        if outcome == ExchangeOutcome::Withheld {
+            super::actor::record_audit_line(
+                "gameplay.social.withheld",
+                format!("NPC REPLY outcome=withheld npc={}", turn.dossier.npc_id),
+            );
+        } else if private {
             log.push_actor(
                 &context.actor_id,
                 &context.speaker,
@@ -1544,6 +1715,11 @@ impl NpcVoice {
             .map(|line| line.key.clone())
             .collect();
         let mut used = used;
+        if fallback.is_none()
+            && let Some(answer) = &bounded_answer
+        {
+            used.extend(answer.keys.iter().cloned());
+        }
         if let Some((_, key)) = &subject_answer {
             used.push(key.clone());
         }
@@ -1553,7 +1729,9 @@ impl NpcVoice {
             Some(shift @ Shift::Level { .. }) => Some(shift_line(shift, &context.hero_name)),
             _ => None,
         });
-        if let Some(note) = reaction_note {
+        if outcome == ExchangeOutcome::Spoken
+            && let Some(note) = reaction_note
+        {
             log.push_actor(
                 &context.actor_id,
                 &context.speaker,
@@ -1577,14 +1755,17 @@ impl NpcVoice {
             );
             span.finish_unmeasured("save_failed");
         }
-        Some(Exchange {
+        let exchange = Exchange {
             text,
+            outcome,
             approach,
             from_model,
             fallback,
             shift: recorded.shift,
             private,
-        })
+        };
+        exchange.observe();
+        Some(exchange)
     }
 
     /// The display version of the hero's line (see `line_cleanup`): the model's tidy-up when it
@@ -1653,12 +1834,24 @@ impl NpcVoice {
         Ok((reply, approach))
     }
 
+    #[cfg(test)]
     pub(super) async fn reply(&self, context: NpcReplyContext) -> Option<String> {
+        self.model_public(&context).await.ok()
+    }
+
+    async fn model_public(&self, context: &NpcReplyContext) -> Result<String, FallbackReason> {
         let rating = content_rating();
         if !self.storyteller.is_on() {
-            return None;
+            return Err(FallbackReason::ModelOff);
         }
-        let slots = [Slot::new("reply", REPLY_CHARACTERS)];
+        let forbidden = context.facts["forbidden"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        let slots = [Slot::new("reply", REPLY_CHARACTERS).withholding(forbidden)];
         let values = self
             .storyteller
             .express(&Expression {
@@ -1669,9 +1862,27 @@ impl NpcVoice {
                 profile: CallProfile::short_reply(rating),
             })
             .await
-            .ok()?;
-        let reply = strip_outer_quotes(values.get("reply")?);
-        (!reply.is_empty()).then_some(reply)
+            .map_err(|error| match error {
+                StorytellerError::Off => FallbackReason::ModelOff,
+                StorytellerError::BudgetExhausted => FallbackReason::BudgetExhausted,
+                StorytellerError::Rejected { .. } => FallbackReason::ReplyRejected,
+                StorytellerError::InvalidRequest(label) => FallbackReason::RequestInvalid(label),
+                StorytellerError::DeadlineExceeded | StorytellerError::Provider(_) => {
+                    FallbackReason::CallFailed
+                }
+            })?;
+        let reply = values
+            .get("reply")
+            .map(|text| strip_outer_quotes(text))
+            .filter(|text| !text.is_empty())
+            .ok_or(FallbackReason::EmptyReply)?;
+        // A recipient grant never authorizes those terms in a public provider reply.
+        if !context.private_reply
+            && npc_dossier::redact_terms(&reply, &context.private_terms) != reply
+        {
+            return Err(FallbackReason::ReplyRejected);
+        }
+        Ok(reply)
     }
 }
 
@@ -1893,6 +2104,7 @@ mod tests {
                     age: None,
                     role: "a frightened courier carrying a sealed packet".to_owned(),
                     voice: "hurried and anxious".to_owned(),
+                    withheld_subjects: Vec::new(),
                 },
                 SpeakerProfile {
                     name: "Bandit".to_owned(),
@@ -1900,6 +2112,7 @@ mod tests {
                     age: None,
                     role: "a hostile bandit fighting the heroes".to_owned(),
                     voice: "sneering and rough".to_owned(),
+                    withheld_subjects: Vec::new(),
                 },
             ],
             scene_lines: Vec::new(),
@@ -2222,11 +2435,9 @@ mod tests {
         let context =
             NpcReplyContext::from_view(&told, member(1), "Where exactly?", &story()).unwrap();
 
-        // Table talk is public: the secret's terms stay forbidden for the asker who holds it.
-        assert_eq!(
-            context.facts["forbidden"],
-            json!(["Vell", "Harbor Inn", "Inn"])
-        );
+        // An explicitly private follow-up uses the actual recipient grant.
+        assert_eq!(context.facts["forbidden"], json!([]));
+        assert!(context.private_reply);
         assert_eq!(
             context.facts["secret_clue_this_player_was_privately_told"],
             "The packet is addressed to Vell at the Harbor Inn."
@@ -2260,7 +2471,7 @@ mod tests {
             facts["listener_knowledge"]
                 .as_str()
                 .unwrap()
-                .contains("NOT been told")
+                .contains("public table talk")
         );
     }
 
@@ -2279,9 +2490,9 @@ mod tests {
             context.facts["listener_knowledge"]
                 .as_str()
                 .unwrap()
-                .contains("others are listening, so allude to it without stating it")
+                .contains("only this hero in private")
         );
-        assert_eq!(context.facts["forbidden"], json!(["Vell", "Harbor Inn"]));
+        assert_eq!(context.facts["forbidden"], json!([]));
     }
 
     #[test]
@@ -2345,6 +2556,232 @@ mod tests {
 
     fn question(words: &str) -> NpcReplyContext {
         NpcReplyContext::from_view(&view("", "Courier"), member(1), words, &story()).unwrap()
+    }
+
+    fn harbor_question(target: &str, words: &str, told: bool) -> NpcReplyContext {
+        let pack: PackFile =
+            serde_json::from_str(include_str!("../../../../content/harbor-journey/pack.json"))
+                .unwrap();
+        let scene = pack
+            .scenes
+            .iter()
+            .find(|scene| scene.key == SceneKey::DialogueSeal)
+            .unwrap();
+        let mut projected = view(if told { &pack.courier_clue } else { "" }, &scene.speaker);
+        let Some(rpc::view_message::Audience::Player(player)) = projected.audience.as_mut() else {
+            panic!("player")
+        };
+        player.narration = scene.narration.clone();
+        player.scene = Some(rpc::GameplayScene {
+            title: scene.title.clone(),
+            cast: super::super::wire::scene_cast(scene),
+            ..Default::default()
+        });
+        player.journey.as_mut().unwrap().dialogue = scene.dialogue.clone();
+        let context = NpcReplyContext::for_target(
+            &projected,
+            member(1),
+            words,
+            &StoryFacts::from_pack(&pack),
+            &SocialLedger::none(),
+            "DialogueSeal",
+            Some(target),
+        )
+        .unwrap();
+        assert!(
+            context.turn.is_none(),
+            "the shipped harbor has no generated dossiers"
+        );
+        context
+    }
+
+    #[tokio::test]
+    async fn harbor_without_dossiers_never_invents_the_observed_personal_claims() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(
+            json!({"reply": "I SAW it. I wasn’t hurt. Nobody sent me."}),
+        )]);
+        let (voice, cache) = voice(&endpoint, "harbor-personal-authority");
+        for words in [
+            "Are you hurt?",
+            "Have you made this delivery before?",
+            "What payment was promised?",
+            "Were you paid?",
+            "How do you know the seal was broken before port?",
+        ] {
+            let context = harbor_question("courier", words, false);
+            let exchange = voice
+                .converse_report(context, &TableLog::new())
+                .await
+                .unwrap();
+            assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
+            assert_eq!(exchange.text, "I can't give you a clear answer to that.");
+            assert_eq!(exchange.fallback, None);
+            assert!(!exchange.from_model);
+        }
+        let context = harbor_question("courier", "Who are you and what happened?", false);
+        let scripted = context.facts["npc_current_scripted_line"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let text = voice.converse(context, &TableLog::new()).await.unwrap();
+        assert_eq!(text, format!("I'm Courier. {scripted}"));
+        assert_eq!(endpoint.connections(), 0);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test]
+    async fn harbor_withholding_uses_the_normal_wrapper_and_closes_pending_without_tts_source() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Status(500, json!({"error": {}}))]);
+        let (voice, cache) = voice(&endpoint, "harbor-withholding");
+        let log = TableLog::new();
+        let wake = log.subscribe();
+        for words in ["Why do you want the packet?", "Who sent you?"] {
+            let context = harbor_question("bandit", words, false);
+            let reply = {
+                let _pending = log.reply_pending(&context.speaker);
+                voice.converse(context, &log).await
+            };
+            assert_eq!(reply.as_deref(), Some(""));
+            let exchange = voice
+                .converse_report(harbor_question("bandit", words, false), &log)
+                .await
+                .unwrap();
+            assert_eq!(exchange.outcome, ExchangeOutcome::Withheld);
+            assert_eq!(exchange.fallback, None);
+            assert!(!exchange.from_model && exchange.text.is_empty());
+        }
+        let mut shown = view("", "Courier");
+        log.attach(&mut shown);
+        let Some(rpc::view_message::Audience::Player(player)) = shown.audience else {
+            panic!("player")
+        };
+        assert!(player.journey.unwrap().reply_speaker.is_empty());
+        assert!(wake.has_changed().unwrap());
+        assert!(
+            log.lines().is_empty(),
+            "no NPC caption or voice line exists for silence"
+        );
+        assert_eq!(endpoint.connections(), 0);
+        let off = NpcVoice::silent()
+            .converse_report(harbor_question("courier", "Hello?", false), &log)
+            .await
+            .unwrap();
+        assert_eq!(off.outcome, ExchangeOutcome::Unavailable);
+        assert_eq!(off.fallback, Some(FallbackReason::ModelOff));
+        let failed = voice
+            .converse_report(harbor_question("courier", "Hello?", false), &log)
+            .await
+            .unwrap();
+        assert_eq!(failed.outcome, ExchangeOutcome::Unavailable);
+        assert_eq!(failed.fallback, Some(FallbackReason::CallFailed));
+        let mut stale = harbor_question("bandit", "Who sent you?", false);
+        stale.publication_guard = Some(Arc::new(|| false));
+        assert!(voice.converse_report(stale, &log).await.is_none());
+        assert!(log.lines().is_empty());
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test]
+    async fn harbor_empty_provider_text_is_unavailable_and_never_intentional_silence() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"reply": "\"\""}))]);
+        let (voice, cache) = voice(&endpoint, "harbor-empty-outcome");
+        let log = TableLog::new();
+        let exchange = voice
+            .converse_report(harbor_question("courier", "Hello?", false), &log)
+            .await
+            .unwrap();
+        assert_eq!(exchange.outcome, ExchangeOutcome::Unavailable);
+        assert_eq!(exchange.fallback, Some(FallbackReason::EmptyReply));
+        assert!(log.lines().is_empty());
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test]
+    async fn harbor_public_provider_reply_cannot_echo_a_recipients_private_destination() {
+        let leak = "The packet goes to Vell at the Harbor Inn.";
+        let endpoint = FakeEndpoint::start(vec![
+            Reply::Output(json!({"reply": leak})),
+            Reply::Output(json!({"reply": leak})),
+            Reply::Output(json!({"reply": "Mind the rain."})),
+        ]);
+        let (voice, cache) = voice(&endpoint, "harbor-public-provider-leak");
+        let context = harbor_question("courier", "Hello?", true);
+        assert!(context.turn.is_none() && !context.private_reply);
+        assert!(
+            context
+                .private_terms
+                .iter()
+                .any(|term| term == "Harbor Inn")
+        );
+        assert!(
+            context
+                .facts
+                .get("secret_clue_this_player_was_privately_told")
+                .is_none()
+        );
+        let log = TableLog::new();
+        let rejected = voice.converse_report(context, &log).await.unwrap();
+        assert_eq!(rejected.outcome, ExchangeOutcome::Unavailable);
+        assert_eq!(rejected.fallback, Some(FallbackReason::ReplyRejected));
+        assert!(rejected.text.is_empty() && !rejected.private);
+        assert!(
+            log.lines().is_empty(),
+            "a provider echo never becomes a public caption or TTS source"
+        );
+        assert_eq!(
+            endpoint.connections(),
+            2,
+            "only the established bounded repair attempt runs"
+        );
+        let public = voice
+            .converse_report(harbor_question("courier", "Hello?", true), &log)
+            .await
+            .unwrap();
+        assert_eq!(public.outcome, ExchangeOutcome::Spoken);
+        assert_eq!(public.text, "Mind the rain.");
+        assert_eq!(public.fallback, None);
+        assert!(
+            log.lines()
+                .iter()
+                .all(|line| !line.text.contains("Vell") && !line.text.contains("Harbor Inn"))
+        );
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test]
+    async fn harbor_private_followup_and_next_public_reply_keep_their_own_audiences() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(
+            json!({"reply": "The packet is addressed to Vell at the Harbor Inn."}),
+        )]);
+        let (voice, cache) = voice(&endpoint, "harbor-private-scope");
+        let log = TableLog::new();
+        let context = harbor_question("courier", "Where is the packet going?", true);
+        assert!(context.private_reply);
+        let private = voice.converse_report(context, &log).await.unwrap();
+        assert!(private.private);
+        assert!(private.text.contains("Vell"));
+        let public_context = harbor_question("courier", "Who are you?", true);
+        assert!(!public_context.private_reply);
+        assert!(
+            public_context
+                .facts
+                .get("secret_clue_this_player_was_privately_told")
+                .is_none()
+        );
+        let public = voice.converse_report(public_context, &log).await.unwrap();
+        assert!(!public.private);
+        assert_eq!(public.text, "I'm Courier.");
+        assert!(
+            log.lines()
+                .iter()
+                .any(|line| line.kind == rpc::TableKind::Speech as i32 && line.text == public.text)
+        );
+        assert!(
+            log.lines()
+                .iter()
+                .all(|line| !line.text.contains("Vell") && !line.text.contains("Harbor Inn"))
+        );
+        std::fs::remove_dir_all(cache).unwrap();
     }
 
     mod approach_model {
@@ -2501,7 +2938,7 @@ mod tests {
         }
 
         // The holder asks; the model leaks, so only the player's own line is public.
-        let first = holder_question("Where exactly does it go?");
+        let first = holder_question("What can you say aloud?");
         first.publish_typed_line(&log, &first.typed_words);
         assert_eq!(voice.reply_in_public(first, &log).await, None);
         // A second question is answered discreetly.
@@ -2542,7 +2979,7 @@ mod tests {
                     "Brannoch",
                     rpc::TableRole::Hero as i32,
                     rpc::TableKind::Speech as i32,
-                    "Where exactly does it go?"
+                    "What can you say aloud?"
                 ),
                 (
                     "Brannoch",
@@ -2553,8 +2990,8 @@ mod tests {
                 (
                     "Courier",
                     rpc::TableRole::Npc as i32,
-                    rpc::TableKind::Speech as i32,
-                    "You know where it must go. Keep your voice down."
+                    rpc::TableKind::Action as i32,
+                    "murmurs to Brannoch"
                 ),
                 (
                     "Brannoch",
@@ -2576,7 +3013,7 @@ mod tests {
         // The model was told the secret's terms are forbidden even though the asker holds it.
         let sent = endpoint.bodies()[0]["input"].as_str().unwrap().to_owned();
         assert!(sent.contains("\"forbidden\":[\"Vell\",\"Harbor Inn\"]"));
-        assert!(sent.contains("allude to it without stating it"));
+        assert!(sent.contains("public table talk"));
         std::fs::remove_dir_all(cache).unwrap();
     }
 

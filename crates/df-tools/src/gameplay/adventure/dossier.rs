@@ -171,6 +171,29 @@ pub(crate) struct SubjectAnswer {
     pub(crate) text: String,
     pub(crate) restatement: String,
 }
+
+/// Questions whose answers require a specific authored fact, including its original polarity.
+/// Ordinary conversation still uses `AnswerSubject`; these never infer a fact from shared words.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum QuestionSubject {
+    Identity,
+    Condition,
+    DeliveryHistory,
+    Payment,
+    Motive,
+    Employer,
+    Evidence,
+}
+
+/// A reference to an existing authored answer. The server speaks its exact text, so a positive
+/// fact cannot authorize a negative answer, a new motive, or a fabricated witnessing history.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum QuestionAuthority {
+    Knowledge(String),
+    Subject(AnswerSubject),
+}
 impl Topic {
     pub(crate) const ALL: [Self; 9] = [
         Self::WhoAreYou,
@@ -482,6 +505,12 @@ pub(crate) struct Dossier {
     /// Source-bound answers prepared from the adventure's facts. Missing in older stored records.
     #[serde(default)]
     pub(crate) subject_answers: BTreeMap<AnswerSubject, SubjectAnswer>,
+    /// Exact fact references for the bounded personal questions. Missing references stay unknown.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) question_answers: BTreeMap<QuestionSubject, QuestionAuthority>,
+    /// Authored subjects this NPC chooses not to discuss. This is a social outcome, not failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) withheld_subjects: Vec<QuestionSubject>,
     /// Short in-character lines for a Hostile NPC when no text model answers; they reveal
     /// nothing.
     pub(crate) curt_answers: Vec<String>,
@@ -1212,6 +1241,17 @@ fn roll_one(
             require(context.render(&profile.text), npc, name)?,
         ))
     };
+    let question_answers = knowledge
+        .says_freely
+        .iter()
+        .find(|item| item.source == "motive_line")
+        .map(|item| {
+            BTreeMap::from([(
+                QuestionSubject::Motive,
+                QuestionAuthority::Knowledge(item.id.clone()),
+            )])
+        })
+        .unwrap_or_default();
     Ok(Dossier {
         npc_id: member.id.clone(),
         name: member.name.clone(),
@@ -1253,6 +1293,8 @@ fn roll_one(
         },
         prepared_answers,
         subject_answers: BTreeMap::new(),
+        question_answers,
+        withheld_subjects: Vec::new(),
         curt_answers,
         rolls: roller.rolls,
     })
@@ -1521,7 +1563,7 @@ fn knowledge_tiers(
                 topic,
                 source: source.into(),
                 text: spoken(context, entry, table)?,
-                id: String::new(),
+                id: format!("dossier:{table}:{}", entry.id),
                 about: None,
             });
         }

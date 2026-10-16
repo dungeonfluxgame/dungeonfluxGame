@@ -81,6 +81,7 @@ pub(super) fn speakers(
             name: field("patron.first"),
             role: format!("{} who asks the heroes for help", field("patron.desc")),
             voice: field("patron.voice"),
+            withheld_subjects: Vec::new(),
         },
         SpeakerProfile {
             gender: traits("contact").0,
@@ -91,6 +92,7 @@ pub(super) fn speakers(
                 field("contact.desc")
             ),
             voice: field("contact.voice"),
+            withheld_subjects: Vec::new(),
         },
     ];
     if antagonist.speaks {
@@ -103,6 +105,7 @@ pub(super) fn speakers(
                 antagonist.noun
             ),
             voice: antagonist.voice.clone(),
+            withheld_subjects: Vec::new(),
         });
     }
     profiles

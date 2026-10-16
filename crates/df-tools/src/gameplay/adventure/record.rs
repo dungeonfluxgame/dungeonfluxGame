@@ -596,6 +596,8 @@ mod emotional_profile_tests {
             },
             prepared_answers: Default::default(),
             subject_answers: Default::default(),
+            question_answers: Default::default(),
+            withheld_subjects: Vec::new(),
             curt_answers: Vec::new(),
             rolls: Vec::new(),
         }

@@ -692,6 +692,18 @@ impl Withheld {
 }
 
 /// `words` with each span replaced by an ellipsis.
+pub(super) fn redact_terms(words: &str, terms: &[String]) -> String {
+    let spoken = tokens(words);
+    mask(
+        words,
+        terms
+            .iter()
+            .flat_map(|term| Term::new(term).spans(&spoken))
+            .collect(),
+    )
+}
+
+/// `words` with each span replaced by an ellipsis.
 fn mask(words: &str, mut spans: Vec<(usize, usize)>) -> String {
     if spans.is_empty() {
         return words.to_owned();
@@ -731,6 +743,7 @@ pub(super) struct Turn {
     pub(super) conversation: Conversation,
     /// Whether the facts held a line that answers the hero, so a reply may not open on a denial.
     pub(super) answer_offered: bool,
+    pub(super) later_lines: Vec<String>,
 }
 
 /// The multi-word phrases of the speaker's tic, opener and closer. They shape the voice and are

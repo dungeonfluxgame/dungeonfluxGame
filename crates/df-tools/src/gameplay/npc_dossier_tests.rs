@@ -462,7 +462,7 @@ async fn earning_friendship_through_kindness_opens_the_trusted_tier_in_the_next_
     let log = TableLog::new();
 
     for words in [
-        "Who are you?",
+        "Tell me about your past.",
         "Thank you, we will help you.",
         "I am sorry for your trouble, truly.",
         "What are you hiding from us?",
@@ -533,7 +533,12 @@ async fn a_secret_reply_is_refused(tag: &str) {
     let endpoint = FakeEndpoint::start(vec![reply(&leak, "question"), reply(&leak, "question")]);
     let (voice, cache) = voice(&endpoint, &format!("dossier-leak-{tag}"));
     let log = TableLog::new();
-    let ask = context(&adventure, &ledger, SceneKey::Opening, "Who are you?");
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Tell me about your past.",
+    );
     let offered = ask.turn.as_ref().unwrap().offered.clone();
     let expected = fallback_of(
         &dossier,
@@ -541,7 +546,7 @@ async fn a_secret_reply_is_refused(tag: &str) {
             attitude: Attitude::Indifferent,
             trust: 0,
         },
-        "Who are you?",
+        "Tell me about your past.",
         Approach::Question,
         &withheld_of(&adventure, &dossier),
         &offered,
@@ -657,8 +662,12 @@ async fn with_the_text_model_off_every_line_still_gets_the_dossiers_answer_by_to
         let offered = ask.turn.as_ref().unwrap().offered.clone();
         let answer = voice.converse(ask, &log).await.unwrap();
         // The lines chosen to answer this hero are what the dossier says without a model.
-        assert!(!offered.is_empty(), "{words}");
-        assert!(answer.starts_with(&offered[0].text), "{words}: {answer}");
+        if words == "Who are you?" {
+            assert_eq!(answer, format!("I'm {}.", adventure.dossiers[0].name));
+        } else {
+            assert!(!offered.is_empty(), "{words}");
+            assert!(answer.starts_with(&offered[0].text), "{words}: {answer}");
+        }
         answers.push(answer);
     }
     assert_eq!(answers.len(), 3);
@@ -678,7 +687,12 @@ async fn with_the_text_model_off_every_line_still_gets_the_dossiers_answer_by_to
         ledger.standing(member(1), &dossier).attitude,
         Attitude::Hostile
     );
-    let ask = context(&adventure, &ledger, SceneKey::Opening, "Who are you?");
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Tell me about your past.",
+    );
     let hostile = voice.converse(ask, &log).await.unwrap();
     assert!(dossier.curt_answers.contains(&hostile), "{hostile}");
 }
@@ -2325,4 +2339,364 @@ async fn emotional_profile_prompt_receives_the_dossier_and_attraction_instructio
     assert!(request_text.contains(&dossier.origin.text));
     assert!(request_text.contains("output_schema"));
     assert!(request_text.contains("attraction"));
+}
+
+fn without_personal_authority(ask: &mut NpcReplyContext) {
+    let turn = ask.turn.as_mut().unwrap();
+    turn.dossier.question_answers.clear();
+    turn.dossier
+        .subject_answers
+        .remove(&super::adventure::dossier::AnswerSubject::Reward);
+}
+
+fn authorize_personal_fact(
+    ask: &mut NpcReplyContext,
+    subject: super::adventure::dossier::QuestionSubject,
+    text: &str,
+) {
+    use super::adventure::dossier::{Knowledge, QuestionAuthority};
+    let turn = ask.turn.as_mut().unwrap();
+    let id = format!("authored:{subject:?}");
+    turn.dossier.knowledge.says_freely.push(Knowledge {
+        topic: Topic::WhyThisMatters,
+        source: "authored_line".to_owned(),
+        id: id.clone(),
+        text: text.to_owned(),
+        about: None,
+    });
+    turn.dossier
+        .question_answers
+        .insert(subject, QuestionAuthority::Knowledge(id));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unrelated_selected_words_never_authorize_personal_facts_or_evidence_history() {
+    use super::npc_reply::ExchangeOutcome;
+    let adventure = adventure(1);
+    let endpoint = FakeEndpoint::start(vec![reply(
+        "I SAW IT. I wasn’t hurt. I was paid.",
+        "question",
+    )]);
+    let (voice, cache) = voice(&endpoint, "bounded-unknown-facts");
+    for (words, irrelevant) in [
+        ("Are you hurt?", "The windy wharf is busy."),
+        (
+            "Have you made this delivery before?",
+            "The packet must reach port before arrivals begin.",
+        ),
+        ("What payment was promised?", "I need the packet delivered."),
+        ("Why do you want the packet?", "I need the packet."),
+        ("Who sent you?", "The packet needs delivery."),
+        (
+            "How do you know the seal was broken before port?",
+            "The seal was broken before arrival.",
+        ),
+    ] {
+        let ledger =
+            SocialLedger::open(adventure.dossiers.clone(), "bounded-unknown", None).unwrap();
+        let mut ask = context(&adventure, &ledger, SceneKey::Opening, words);
+        without_personal_authority(&mut ask);
+        ask.facts["answer_from"] = json!([irrelevant]);
+        let log = TableLog::new();
+        let exchange = voice.converse_in_character(ask, &log).await.unwrap();
+        assert_eq!(
+            exchange.text, "I can't give you a clear answer to that.",
+            "{words}"
+        );
+        assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
+        assert!(!exchange.from_model);
+        assert_eq!(exchange.fallback, None);
+        assert_eq!(
+            log.lines()
+                .iter()
+                .filter(|line| line.role == rpc::TableRole::Npc as i32)
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        endpoint.connections(),
+        0,
+        "unsupported claims never reach reply generation"
+    );
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exact_question_authority_preserves_positive_negative_and_nonmonetary_facts() {
+    use super::adventure::dossier::QuestionSubject;
+    let adventure = adventure(1);
+    let voice = NpcVoice::silent();
+    for (subject, question, fact) in [
+        (
+            QuestionSubject::Motive,
+            "Why do you want the packet?",
+            "I am protecting my friend.",
+        ),
+        (
+            QuestionSubject::Payment,
+            "What payment was promised?",
+            "I was promised three silver crowns.",
+        ),
+        (
+            QuestionSubject::Payment,
+            "What payment was promised?",
+            "I was promised nothing.",
+        ),
+        (QuestionSubject::Condition, "Are you hurt?", "I am hurt."),
+        (QuestionSubject::Condition, "Are you hurt?", "I'm not hurt."),
+        (
+            QuestionSubject::DeliveryHistory,
+            "Have you made this delivery before?",
+            "I have made this delivery before.",
+        ),
+        (
+            QuestionSubject::DeliveryHistory,
+            "Have you made this delivery before?",
+            "I haven’t made this delivery before.",
+        ),
+        (
+            QuestionSubject::Employer,
+            "Who sent you?",
+            "No one sent me.",
+        ),
+        (
+            QuestionSubject::Evidence,
+            "How do you know the seal broke?",
+            "I saw the seal break.",
+        ),
+    ] {
+        let ledger =
+            SocialLedger::open(adventure.dossiers.clone(), "bounded-polarity", None).unwrap();
+        let mut ask = context(&adventure, &ledger, SceneKey::Opening, question);
+        without_personal_authority(&mut ask);
+        authorize_personal_fact(&mut ask, subject, fact);
+        ask.facts["answer_from"] = json!(["I want what it's worth."]);
+        let exchange = voice
+            .converse_in_character(ask, &TableLog::new())
+            .await
+            .unwrap();
+        assert_eq!(exchange.text, fact);
+        assert!(!exchange.from_model);
+        assert_eq!(exchange.fallback, None);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn question_fact_references_require_the_exact_fact_and_its_current_audience() {
+    use super::adventure::dossier::{Knowledge, QuestionAuthority, QuestionSubject};
+    let mut adventure = adventure(1);
+    for trusted in [false, true] {
+        adventure.dossiers[0].starting_attitude = if trusted {
+            Attitude::Friendly
+        } else {
+            Attitude::Indifferent
+        };
+        let ledger =
+            SocialLedger::open(adventure.dossiers.clone(), "bounded-authority", None).unwrap();
+        let mut ask = context(
+            &adventure,
+            &ledger,
+            SceneKey::Opening,
+            "What payment was promised?",
+        );
+        without_personal_authority(&mut ask);
+        let turn = ask.turn.as_mut().unwrap();
+        turn.dossier.question_answers.insert(
+            QuestionSubject::Payment,
+            QuestionAuthority::Knowledge("reward:exact".into()),
+        );
+        turn.dossier.knowledge.says_freely.push(Knowledge {
+            topic: Topic::WhyThisMatters,
+            source: "reward".into(),
+            id: "reward:other".into(),
+            text: "I was promised nothing.".into(),
+            about: None,
+        });
+        turn.dossier.knowledge.says_when_trusted.push(Knowledge {
+            topic: Topic::WhyThisMatters,
+            source: "reward".into(),
+            id: "reward:exact".into(),
+            text: "I was promised three silver crowns.".into(),
+            about: None,
+        });
+        turn.standing = Standing {
+            attitude: if trusted {
+                Attitude::Friendly
+            } else {
+                Attitude::Indifferent
+            },
+            trust: 0,
+        };
+        turn.conversation.exchange = 3;
+        let exchange = NpcVoice::silent()
+            .converse_in_character(ask, &TableLog::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            exchange.text,
+            if trusted {
+                "I was promised three silver crowns."
+            } else {
+                "I can't give you a clear answer to that."
+            }
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn compound_identity_keeps_the_other_known_answer_and_does_not_invent_a_private_name() {
+    let adventure = adventure(1);
+    let ledger = SocialLedger::open(adventure.dossiers.clone(), "bounded-identity", None).unwrap();
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Who are you and what happened?",
+    );
+    let name = ask.speaker.clone();
+    ask.facts["answer_from"] = json!([]);
+    ask.facts["your_opening_words"] = json!("The seal was broken before arrival.");
+    let exchange = NpcVoice::silent()
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        exchange.text,
+        format!("I'm {name}. The seal was broken before arrival.")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn authored_silence_is_terminal_and_clears_thinking_without_caption_or_speech() {
+    use super::{adventure::dossier::QuestionSubject, npc_reply::ExchangeOutcome, pack::PackFile};
+    let pack: PackFile =
+        serde_json::from_str(include_str!("../../../../content/harbor-journey/pack.json")).unwrap();
+    let bandit = pack
+        .speakers
+        .iter()
+        .find(|speaker| speaker.name == "Bandit")
+        .unwrap();
+    assert_eq!(
+        bandit.withheld_subjects,
+        [QuestionSubject::Motive, QuestionSubject::Employer]
+    );
+    let adventure = adventure(1);
+    for words in ["Why do you want the packet?", "Who sent you?"] {
+        let ledger =
+            SocialLedger::open(adventure.dossiers.clone(), "bounded-silence", None).unwrap();
+        let mut configured_pack = adventure.pack.clone();
+        let name = &adventure.dossiers[0].name;
+        configured_pack
+            .speakers
+            .iter_mut()
+            .find(|speaker| &speaker.name == name)
+            .unwrap()
+            .withheld_subjects = bandit.withheld_subjects.clone();
+        let story = StoryFacts::from_pack(&configured_pack);
+        let ask = NpcReplyContext::for_cast(
+            &view(&adventure, SceneKey::Opening, "Brannoch"),
+            member(1),
+            words,
+            &story,
+            &ledger,
+            "Opening",
+        )
+        .unwrap();
+        let log = TableLog::new();
+        let pending = log.reply_pending(&ask.speaker);
+        let mut shown = view(&adventure, SceneKey::Opening, "Brannoch");
+        log.attach(&mut shown);
+        let exchange = NpcVoice::silent()
+            .converse_in_character(ask, &log)
+            .await
+            .unwrap();
+        assert_eq!(exchange.outcome, ExchangeOutcome::Withheld);
+        assert_eq!(exchange.fallback, None);
+        assert!(!exchange.from_model && !exchange.private && exchange.text.is_empty());
+        assert!(
+            log.lines().is_empty(),
+            "silence never creates an NPC caption or TTS source"
+        );
+        drop(pending);
+        log.attach(&mut shown);
+        let Some(rpc::view_message::Audience::Player(player)) = shown.audience else {
+            panic!("player view")
+        };
+        assert!(player.journey.unwrap().reply_speaker.is_empty());
+    }
+    let ledger = SocialLedger::open(adventure.dossiers.clone(), "bounded-off", None).unwrap();
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Tell me about your past.",
+    );
+    let exchange = NpcVoice::silent()
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+    assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
+    assert_eq!(
+        exchange.fallback,
+        Some(super::npc_reply::FallbackReason::ModelOff)
+    );
+    assert!(!exchange.text.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_private_topic_does_not_poison_the_next_public_answer() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let term = clue_only_terms(&adventure).first().unwrap().clone();
+    let endpoint = FakeEndpoint::start(vec![reply(
+        &format!("It all comes down to {term}, friend."),
+        "question",
+    )]);
+    let (voice, cache) = voice(&endpoint, "bounded-public-after-private");
+    let log = TableLog::new();
+    let make = |words: &str| {
+        NpcReplyContext::for_cast(
+            &view_with_clue(&adventure, true),
+            member(1),
+            words,
+            &story(&adventure),
+            &ledger,
+            "Opening",
+        )
+        .unwrap()
+    };
+    let private = voice
+        .converse_in_character(make(&format!("Is it {term}?")), &log)
+        .await
+        .unwrap();
+    assert!(private.private);
+    let ask = make("Who are you?");
+    assert!(ask.facts.get("you_told_this_hero_in_private").is_none());
+    assert!(ask.turn.as_ref().unwrap().withheld.leaks_secret(&term));
+    assert!(!ask.facts.to_string().contains(&term));
+    let public = voice.converse_in_character(ask, &log).await.unwrap();
+    assert!(!public.private);
+    assert!(
+        log.lines()
+            .iter()
+            .any(|line| line.text == public.text && line.kind == rpc::TableKind::Speech as i32)
+    );
+    assert!(log.lines().iter().all(|line| !line.text.contains(&term)));
+    assert_eq!(endpoint.connections(), 1);
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[test]
+fn old_dossiers_and_speakers_default_to_no_new_fact_or_disclosure_authority() {
+    use super::pack::SpeakerProfile;
+    let mut value = serde_json::to_value(&adventure(1).dossiers[0]).unwrap();
+    let fields = value.as_object_mut().unwrap();
+    fields.remove("question_answers");
+    fields.remove("withheld_subjects");
+    let dossier: Dossier = serde_json::from_value(value).unwrap();
+    assert!(dossier.question_answers.is_empty() && dossier.withheld_subjects.is_empty());
+    let speaker: SpeakerProfile =
+        serde_json::from_value(json!({"name": "Speaker", "role": "contact", "voice": "plain"}))
+            .unwrap();
+    assert!(speaker.withheld_subjects.is_empty());
 }

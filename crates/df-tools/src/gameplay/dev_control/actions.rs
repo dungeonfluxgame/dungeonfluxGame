@@ -1244,6 +1244,8 @@ pub(super) async fn say(
         .submit_line(credential, request)
         .await
         .map_err(|status| failed(status.message()))?;
+    let mut npc_outcome = None;
+    let mut npc_fallback = None;
     let result = match answer {
         super::super::dialogue::DialogueReply::Raw(response, npc) => {
             let npc_reply = match npc {
@@ -1252,21 +1254,34 @@ pub(super) async fn say(
                     let shown = state.service.npc_voice.display_line(&context).await;
                     context.publish_typed_line(&state.service.table_log, &shown);
                     let _thinking = state.service.table_log.reply_pending(&context.speaker);
-                    state
+                    match state
                         .service
                         .npc_voice
-                        .converse(context, &state.service.table_log)
+                        .converse_report(context, &state.service.table_log)
                         .await
-                        .unwrap_or_default()
+                    {
+                        Some(exchange) => {
+                            npc_outcome = Some(exchange.outcome);
+                            npc_fallback = exchange.fallback.map(|reason| reason.label());
+                            exchange.text
+                        }
+                        None => String::new(),
+                    }
                 }
                 None => response.npc_reply.clone(),
             };
             Ok((
                 axum::http::StatusCode::OK,
                 Json(json!({
-                    "status": "said",
+                    "status": match npc_outcome {
+                        Some(super::super::npc_reply::ExchangeOutcome::Withheld) => "withheld",
+                        Some(super::super::npc_reply::ExchangeOutcome::Unavailable) => "unavailable",
+                        Some(super::super::npc_reply::ExchangeOutcome::Spoken) | None => "said",
+                    },
                     "disposition": disposition_name(response.disposition),
                     "npc_reply": npc_reply,
+                    "npc_outcome": npc_outcome.map(|outcome| outcome.label()).unwrap_or("no_reply"),
+                    "npc_fallback": npc_fallback,
                     "npc_actor_id": response.npc_actor_id,
                     "npc_speaker": response.npc_speaker,
                     "confirmation_required": response.confirmation_required,

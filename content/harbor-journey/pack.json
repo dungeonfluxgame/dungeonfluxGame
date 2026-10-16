@@ -439,6 +439,7 @@
       "name": "Bandit",
       "role": "a dockside bandit who attacks the heroes to take the packet",
       "voice": "sneering and rough",
+      "withheld_subjects": ["motive", "employer"],
       "gender": "he",
       "age": "adult"
     }

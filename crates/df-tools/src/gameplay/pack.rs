@@ -735,6 +735,9 @@ pub(super) struct SpeakerProfile {
     pub(super) role: String,
     /// How the character sounds, in a short phrase.
     pub(super) voice: String,
+    /// Story-authored refusal subjects; no motive or employer fact is implied by withholding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) withheld_subjects: Vec<super::adventure::dossier::QuestionSubject>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
