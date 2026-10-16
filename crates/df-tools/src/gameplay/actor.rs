@@ -2648,6 +2648,11 @@ impl Actor {
                                 let selections = character
                                     .choices
                                     .iter()
+                                    .filter(|choice| {
+                                        super::hero_identity::is_character_pack_validation_choice(
+                                            &choice.group_id,
+                                        )
+                                    })
                                     .map(|choice| {
                                         (choice.group_id.as_str(), choice.option_id.as_str())
                                     })

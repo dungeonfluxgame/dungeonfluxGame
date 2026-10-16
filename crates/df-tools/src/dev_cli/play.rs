@@ -454,6 +454,23 @@ mod tests {
     }
 
     #[test]
+    fn non_tactical_creation_defaults_still_select_distinct_accepted_portraits() {
+        let view = json!({"journey":{"creation":{"groups":[
+            {"group_id":"species","options":[{"option_id":"dwarf"}]},
+            {"group_id":"portrait","options":[
+                {"option_id":"portrait-hero-1","requires_group":"","requires_options":[]},
+                {"option_id":"portrait-hero-2","requires_group":"","requires_options":[]}
+            ]}
+        ]}}});
+
+        let first = default_creation_choices(&view, 1).unwrap();
+        let second = default_creation_choices(&view, 2).unwrap();
+
+        assert_eq!(first["portrait"], "portrait-hero-1");
+        assert_eq!(second["portrait"], "portrait-hero-2");
+    }
+
+    #[test]
     fn dialogue_target_chooses_ask_even_when_the_combat_offer_comes_first() {
         let view = json!({"offers":[
             {"action":"defend","offer_id":"defend-courier","input_groups":[]},

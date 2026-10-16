@@ -613,8 +613,7 @@ pub(super) fn character_sheet(
         .choices
         .iter()
         .filter(|choice| {
-            choice.offer.as_str() != "name"
-                && !choice.offer.as_str().starts_with("identity-appearance:")
+            super::hero_identity::is_character_pack_validation_choice(choice.offer.as_str())
         })
         .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
         .collect::<Vec<_>>();
@@ -3342,7 +3341,7 @@ fn accept_character(
     let options = choices
         .iter()
         .filter(|(group, _)| {
-            group.as_str() != "name" && !group.as_str().starts_with("identity-appearance:")
+            super::hero_identity::is_character_pack_validation_choice(group.as_str())
         })
         .map(|(group, option)| (group.as_str(), option.as_str()))
         .collect::<Vec<_>>();
@@ -5209,7 +5208,13 @@ mod tests {
             observed_revision: Some(super::super::wire::revision(basis.revision)),
             offer_id: offer_id(&current, rpc::GameplayActionKind::CreateCharacter),
             action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
-            character: Some(rpc::CharacterSelection::default()),
+            character: Some(rpc::CharacterSelection {
+                choices: vec![rpc::JourneyChoice {
+                    group_id: "portrait".to_owned(),
+                    option_id: "portrait-hero-1".to_owned(),
+                }],
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let converted = super::super::wire::journey_input(&request, member, &current)

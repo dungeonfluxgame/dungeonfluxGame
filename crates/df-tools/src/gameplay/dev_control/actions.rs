@@ -1579,7 +1579,7 @@ mod creation_selection_tests {
     }
 
     #[test]
-    fn creation_defaults_follow_the_live_offer_and_validate_for_both_seats() {
+    fn creation_defaults_include_accepted_portraits_and_validate_for_both_seats() {
         let offer = super::super::super::wire::creation_offer().unwrap();
         let first = selected_creation_choices(&json!({}), 1).unwrap();
         let second = selected_creation_choices(&json!({}), 2).unwrap();
@@ -1608,10 +1608,25 @@ mod creation_selection_tests {
         for choices in [&first, &second] {
             let borrowed = choices
                 .iter()
+                .filter(|choice| {
+                    crate::gameplay::hero_identity::is_character_pack_validation_choice(
+                        &choice.group_id,
+                    )
+                })
                 .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
                 .collect::<Vec<_>>();
             crate::gameplay::pack::validate_character("Brakka", &borrowed)
                 .expect("the current creation offer has valid defaults");
+            let portrait = choices
+                .iter()
+                .find(|choice| choice.group_id == "portrait")
+                .expect("null-identity creation needs an offered portrait");
+            assert!(
+                crate::gameplay::hero_identity::accepted_visual_dossier(&portrait.option_id)
+                    .is_some(),
+                "{} is an accepted quickstart portrait",
+                portrait.option_id
+            );
         }
         for (group_a, group_b) in [("language-1", "language-2"), ("skill-1", "skill-2")] {
             fn selected<'a>(choices: &'a [rpc::JourneyChoice], group: &str) -> Option<&'a str> {
@@ -1633,6 +1648,56 @@ mod creation_selection_tests {
         ) {
             assert_ne!(first_package.option_id, second_package.option_id);
         }
+    }
+
+    #[test]
+    fn non_tactical_shop_creation_offers_and_submits_accepted_hero_portraits() {
+        let loaded = crate::gameplay::pack::load_from_bytes(
+            include_bytes!("../../../../../content/merchant-shop/pack.json"),
+            include_bytes!("../../../../../content/merchant-shop/tuning.json"),
+        )
+        .expect("merchant shop pack loads");
+        crate::gameplay::pack::with_test_pack(loaded, || {
+            let offer = super::super::super::wire::creation_offer().expect("creation offer");
+            let portrait = offer
+                .groups
+                .iter()
+                .find(|group| group.group_id == "portrait")
+                .expect("quickstart portrait group is offered");
+            assert!(
+                offer
+                    .groups
+                    .iter()
+                    .all(|group| group.group_id != "build-package")
+            );
+            assert_eq!(portrait.options.len(), 2);
+            assert!(
+                portrait
+                    .options
+                    .iter()
+                    .all(|option| option.requires_group.is_empty())
+            );
+
+            for (seat, expected) in [(1, "portrait-hero-1"), (2, "portrait-hero-2")] {
+                let choices = selected_creation_choices(&json!({}), seat).unwrap();
+                let selected = choices
+                    .iter()
+                    .find(|choice| choice.group_id == "portrait")
+                    .expect("null identity receives an accepted portrait");
+                assert_eq!(selected.option_id, expected);
+                let pack_choices = choices
+                    .iter()
+                    .filter(|choice| {
+                        crate::gameplay::hero_identity::is_character_pack_validation_choice(
+                            &choice.group_id,
+                        )
+                    })
+                    .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
+                    .collect::<Vec<_>>();
+                crate::gameplay::pack::validate_character("Brakka", &pack_choices)
+                    .expect("portrait metadata remains validated with the build");
+            }
+        });
     }
 
     #[test]

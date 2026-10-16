@@ -223,6 +223,10 @@ fn assert_player_offers_are_accepted(current: &Checkpoint, member: MemberId) {
                 choices: crate::gameplay::beat_script_tests::build("Newhero")
                     .into_iter()
                     .filter(|(group, _)| group.as_str() != "name")
+                    .chain([(
+                        model::label("portrait").expect("portrait group"),
+                        model::label("portrait-hero-1").expect("accepted quickstart portrait"),
+                    )])
                     .map(|(group, option)| rpc::JourneyChoice {
                         group_id: group.as_str().to_owned(),
                         option_id: option.as_str().to_owned(),

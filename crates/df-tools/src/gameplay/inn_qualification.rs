@@ -188,6 +188,7 @@ fn create(checkpoint: &Checkpoint, operation: u8) -> rpc::SubmitActionRequest {
         identity: None,
         name: "Inn-Fighter".to_owned(),
         choices: [
+            ("portrait", "portrait-hero-1"),
             ("species", "dwarf"),
             ("class", "fighter-1"),
             ("background", "soldier"),

@@ -54,6 +54,13 @@ pub(super) fn first() -> MemberId {
 pub(super) fn second() -> MemberId {
     MemberId::from_bytes(&[0x62; 16]).unwrap()
 }
+fn quickstart_portrait(member: MemberId) -> &'static str {
+    if member == first() {
+        "portrait-hero-1"
+    } else {
+        "portrait-hero-2"
+    }
+}
 fn loaded(bytes: &[u8]) -> pack::LoadedPack {
     let mut content: pack::PackFile = serde_json::from_slice(PACK).unwrap();
     content.beat_script = Some(serde_json::from_slice(bytes).unwrap());
@@ -201,6 +208,10 @@ fn request(
                 choices: build(if member == first() { "Brynn" } else { "Vale" })
                     .into_iter()
                     .filter(|(group, _)| group.as_str() != "name")
+                    .chain([(
+                        model::label("portrait").unwrap(),
+                        model::label(quickstart_portrait(member)).unwrap(),
+                    )])
                     .map(|(group, option)| rpc::JourneyChoice {
                         group_id: group.as_str().into(),
                         option_id: option.as_str().into(),

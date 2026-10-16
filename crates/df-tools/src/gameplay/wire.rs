@@ -384,49 +384,69 @@ pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, Repository
                 }
             }
         }
-        if tactical {
+        let package_ids = if tactical {
             let packages = pack::build_packages().map_err(|_| RepositoryError::InvalidCandidate)?;
-            let package_ids: Vec<String> =
-                packages.iter().map(|package| package.id.clone()).collect();
-            {
-                groups.push(rpc::JourneyGroup {
-                    group_id: "build-package".to_owned(),
-                    label: "Starting package".to_owned(),
-                    options: packages
-                        .into_iter()
-                        .map(|package| rpc::JourneyOption {
-                            description: package.abilities_text(),
-                            option_id: package.id,
-                            label: package.label,
-                            ..Default::default()
-                        })
-                        .collect(),
-                });
-            }
+            let package_ids = packages
+                .iter()
+                .map(|package| package.id.clone())
+                .collect::<Vec<_>>();
             groups.push(rpc::JourneyGroup {
-                group_id: "portrait".to_owned(),
-                label: "How your hero looks".to_owned(),
-                options: [
-                    ("portrait-hero-1", "Greatsword hero"),
-                    ("portrait-hero-2", "Second hero"),
-                    ("portrait-hero-3", "Woman with a bow"),
-                ]
-                .into_iter()
-                .map(|(id, label)| rpc::JourneyOption {
-                    option_id: id.to_owned(),
-                    label: label.to_owned(),
-                    description: String::new(),
-                    // An appearance is offered only with the packages it may be chosen with.
-                    requires_group: "build-package".to_owned(),
-                    requires_options: package_ids
+                group_id: "build-package".to_owned(),
+                label: "Starting package".to_owned(),
+                options: packages
+                    .into_iter()
+                    .map(|package| rpc::JourneyOption {
+                        description: package.abilities_text(),
+                        option_id: package.id,
+                        label: package.label,
+                        ..Default::default()
+                    })
+                    .collect(),
+            });
+            package_ids
+        } else {
+            Vec::new()
+        };
+        let portraits: &[(&str, &str)] = if tactical {
+            &[
+                ("portrait-hero-1", "Red-bearded dwarf fighter"),
+                ("portrait-hero-2", "Auburn-braided dwarf fighter"),
+                ("portrait-hero-3", "Brown-braided dwarf archer"),
+            ]
+        } else {
+            &[
+                ("portrait-hero-1", "Red-bearded dwarf fighter"),
+                ("portrait-hero-2", "Auburn-braided dwarf fighter"),
+            ]
+        };
+        groups.push(rpc::JourneyGroup {
+            group_id: "portrait".to_owned(),
+            label: "Hero appearance".to_owned(),
+            options: portraits
+                .iter()
+                .filter_map(|(id, label)| {
+                    let requires_options = package_ids
                         .iter()
                         .filter(|package| pack::appearance_fits_package(id, package))
                         .cloned()
-                        .collect(),
+                        .collect::<Vec<_>>();
+                    (package_ids.is_empty() || !requires_options.is_empty()).then(|| {
+                        rpc::JourneyOption {
+                            option_id: (*id).to_owned(),
+                            label: (*label).to_owned(),
+                            description: String::new(),
+                            // Tactical appearances are limited to compatible build packages.
+                            requires_group: if package_ids.is_empty() {
+                                String::new()
+                            } else {
+                                "build-package".to_owned()
+                            },
+                            requires_options,
+                        }
+                    })
                 })
                 .collect(),
-            });
-        }
+        });
         Ok(rpc::CharacterCreationOffer {
             description: content.creation.description.clone(),
             groups,

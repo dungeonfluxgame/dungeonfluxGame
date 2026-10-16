@@ -1217,8 +1217,9 @@ pub(super) fn start(
             .choices
             .iter()
             .filter(|choice| {
-                choice.offer.as_str() != "name"
-                    && !choice.offer.as_str().starts_with("identity-appearance:")
+                super::super::hero_identity::is_character_pack_validation_choice(
+                    choice.offer.as_str(),
+                )
             })
             .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
             .collect::<Vec<_>>();

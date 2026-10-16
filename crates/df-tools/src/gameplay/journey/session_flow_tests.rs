@@ -354,6 +354,15 @@ fn action(
             choices: tests::build(["Brynn", "Vale"][index])
                 .into_iter()
                 .filter(|(key, _)| key.as_str() != "name")
+                .chain([(
+                    model::label("portrait").expect("portrait group"),
+                    model::label(if index == 0 {
+                        "portrait-hero-1"
+                    } else {
+                        "portrait-hero-2"
+                    })
+                    .expect("accepted quickstart portrait"),
+                )])
                 .map(|(key, value)| rpc::JourneyChoice {
                     group_id: key.as_str().to_owned(),
                     option_id: value.as_str().to_owned(),
