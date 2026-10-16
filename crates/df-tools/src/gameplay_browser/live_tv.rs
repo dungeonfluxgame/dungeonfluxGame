@@ -3513,7 +3513,8 @@ mod tests {
     use super::super::rpc;
     use super::{
         PlateState, PlateView, TvStage, check_display, first_art_asset, is_loopback_join_host,
-        plate_asset_key, scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
+        plate_asset_key, roll_intention, scene_clip_needs_frame_swap, scene_plate_media_ready,
+        scene_video_url,
     };
     use crate::stage_machines::LineState;
     use wasm_bindgen::JsCast;

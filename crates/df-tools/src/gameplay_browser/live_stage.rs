@@ -145,7 +145,7 @@ pub(super) struct CheckDisplay {
 impl CheckDisplay {
     fn signature(&self) -> String {
         format!(
-            "{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
             self.sequence,
             self.hero_name,
             self.intention,
