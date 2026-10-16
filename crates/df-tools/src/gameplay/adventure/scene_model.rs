@@ -1099,7 +1099,7 @@ impl SceneModel {
         let person_ids = self
             .people
             .iter()
-            .map(|person| person.id.as_str())
+            .map(|person| person.id.clone())
             .collect::<BTreeSet<_>>();
         if let Some(thing) = self
             .things
