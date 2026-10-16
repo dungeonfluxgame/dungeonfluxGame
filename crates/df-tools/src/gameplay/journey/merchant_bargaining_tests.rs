@@ -329,7 +329,7 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
     );
     assert_eq!(
         quote_candidate(
-            &terms(TradeDirection::HeroBuys),
+            &two_gp_terms,
             "sigrun",
             "marek",
             "How much for the fine clothes?",
