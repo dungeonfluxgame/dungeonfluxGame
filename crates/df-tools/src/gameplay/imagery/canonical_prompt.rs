@@ -7,6 +7,7 @@ use crate::gameplay::{
     adventure::scene_model::{SceneModel, ScenePerson},
     startup_configuration::ContentRating,
 };
+use serde_json::{Value, json};
 
 fn assembled(
     rating: ContentRating,
@@ -56,23 +57,44 @@ pub(in crate::gameplay) fn canonical_npc(
     )
 }
 
+/// The room reference's complete public source. Keep its revision and its prompt tied to the
+/// same projection so changing cast metadata cannot invalidate an image that contains no cast.
+pub(in crate::gameplay) fn canonical_room_content(
+    model: &SceneModel,
+) -> Result<(String, Vec<Value>), ImageFailure> {
+    let mut empty = model.clone();
+    empty.people.clear();
+    let layout = empty
+        .picture_state()
+        .map_err(|_| ImageFailure::InvalidRequest)?;
+    let goods = model
+        .offers
+        .iter()
+        .map(|offer| {
+            json!({
+                "id": offer.id,
+                "seller_id": offer.seller_id,
+                "name": offer.name,
+                "description": offer.description,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok((layout, goods))
+}
+
 pub(in crate::gameplay) fn canonical_room(
     rating: ContentRating,
     model: &SceneModel,
     place: &str,
     binding: &str,
 ) -> Result<AssembledPrompt, ImageFailure> {
-    let mut empty = model.clone();
-    empty.people.clear();
-    let public = empty
-        .picture_state()
-        .map_err(|_| ImageFailure::InvalidRequest)?;
-    let goods = model.offers.iter().map(|offer| serde_json::json!({"id": offer.id, "seller_id": offer.seller_id, "name": offer.name, "description": offer.description})).collect::<Vec<_>>();
+    let (layout, goods) = canonical_room_content(model)?;
     assembled(
         rating,
         format!(
-            "Empty-room architectural reference photograph of canonical place {place}. Wide establishing view showing the exact authored spatial arrangement, fixed goods, objects and usable ways out in this JSON: {public}. Authored goods displayed for sale (JSON): {}. No people, faces, silhouettes or text. Never infer hidden facts. Preserve this room's geometry and materials for every later scene photograph.",
-            serde_json::json!(goods)
+            "Empty-room architectural reference photograph of canonical place {place}. Wide establishing view showing the exact authored spatial arrangement, fixed goods, objects and usable ways out in this JSON: {}. Authored goods displayed for sale (JSON): {}. No people, faces, silhouettes or text. Never infer hidden facts. Preserve this room's geometry and materials for every later scene photograph.",
+            layout,
+            json!(goods)
         ),
         binding,
     )

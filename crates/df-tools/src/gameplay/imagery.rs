@@ -25,7 +25,9 @@ mod plate_prompt;
 mod prompt;
 mod references;
 mod scene_prompt;
-pub(super) use canonical_prompt::{canonical_character, canonical_npc, canonical_room};
+pub(super) use canonical_prompt::{
+    canonical_character, canonical_npc, canonical_room, canonical_room_content,
+};
 pub(super) use scene_prompt::{graph_edit, item_picture, model_plate, state_edit, story_beat_edit};
 
 use std::{

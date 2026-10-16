@@ -409,6 +409,33 @@ mod tests {
     }
 
     #[test]
+    fn room_reference_revision_ignores_cast_absent_from_the_room_prompt() {
+        let original = model();
+        let mut changed_cast = original.clone();
+        changed_cast.people.push(ScenePerson {
+            id: "merchant".to_owned(),
+            name: "Marek".to_owned(),
+            role: "cloth merchant".to_owned(),
+            description: "Marek folds blue linen behind the counter.".to_owned(),
+            relation_to_speaker: "shopkeeper".to_owned(),
+            position: "behind the wooden counter".to_owned(),
+            aliases: vec!["Marek".to_owned()],
+            is_background: false,
+            present_in: vec!["room".to_owned()],
+            attitude: crate::gameplay::adventure::scene_model::StartingAttitude::Friendly,
+            attitudes: Default::default(),
+            knowledge: Vec::new(),
+            wants: "Sell suitable clothing at a fair price.".to_owned(),
+        });
+
+        assert_eq!(
+            room_revision(&original),
+            room_revision(&changed_cast),
+            "cast changes belong to character references; the canonical room is empty"
+        );
+    }
+
+    #[test]
     fn actual_room_admission_preserves_terminal_provider_outcomes_on_reobservation() {
         for failure in [
             ImageFailure::Provider,
@@ -786,8 +813,12 @@ impl Inner {
 }
 
 pub(super) fn room_revision(model: &SceneModel) -> Option<String> {
-    let layout = model.picture_state().ok()?;
-    Some(digest(serde_json::json!({"layout": layout, "goods": model.offers.iter().map(|offer| (&offer.id, &offer.description)).collect::<Vec<_>>()}).to_string().as_bytes()))
+    let (layout, goods) = imagery::canonical_room_content(model).ok()?;
+    Some(digest(
+        serde_json::json!({"layout": layout, "goods": goods})
+            .to_string()
+            .as_bytes(),
+    ))
 }
 
 impl References {
