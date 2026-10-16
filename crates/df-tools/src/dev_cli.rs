@@ -204,7 +204,7 @@ fn print_help() {
          note <hero> <text>           add a shared party note\n\
          scene <hero>                current contents and item card\n\
          feelings <npc>               current development-only NPC diagnostic\n\
-         timeline [--last <n>] [--type <resource>] [--summary]  bounded correlated resource events and counts\n\
+         timeline [--last <n>] [--type <resource>] [--component <kind>] [--summary]  bounded resource and presentation lifecycles\n\
          play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
@@ -369,6 +369,10 @@ async fn dispatch(
             if let Some(resource_type) = flag("--type") {
                 path.push_str("&type=");
                 path.push_str(&url_escape(&resource_type));
+            }
+            if let Some(component) = flag("--component") {
+                path.push_str("&component=");
+                path.push_str(&url_escape(&component));
             }
             if flag("--summary").as_deref() == Some("true") {
                 path.push_str("&summary=true");

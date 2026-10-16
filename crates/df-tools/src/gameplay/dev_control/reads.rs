@@ -711,6 +711,14 @@ pub(super) async fn timeline(
     if resource_type.is_some_and(|value| !super::timeline::RESOURCE_TYPES.contains(&value)) {
         return Err(bad_request("type must be a known resource type"));
     }
+    let component = params.get("component").map(String::as_str);
+    if component.is_some_and(|value| {
+        df_observe::presentation::PresentationComponent::from_label(value).is_none()
+    }) {
+        return Err(bad_request(
+            "component must be a known presentation component",
+        ));
+    }
     let summary_only = params
         .get("summary")
         .map(|value| value.parse::<bool>())
@@ -719,7 +727,12 @@ pub(super) async fn timeline(
         .unwrap_or(false);
     Ok((
         axum::http::StatusCode::OK,
-        Json(super::timeline::snapshot(last, resource_type, summary_only)),
+        Json(super::timeline::snapshot(
+            last,
+            resource_type,
+            component,
+            summary_only,
+        )),
     ))
 }
 
@@ -843,7 +856,7 @@ fn describe_json() -> Value {
             {"command":"preview", "method":"POST", "path":"/dev/preview", "args":{"seat":"seat or hero name","appearance_text":"up to 1000 characters","backstory_text":"up to 4000 characters","identity":"optional current identity JSON"}, "output":"{status:previewed, identity, source, warnings}; read-only, review then create --identity"},
             {"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"},
             {"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"},
-            {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"},
+            {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&component=<component>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "component":"subtitle|speech_bubble|thinking_loader|intent_loader|check_card|item_card|title_card|scene_card|plate_incoming|plate_outgoing", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status,component_count,by_component,by_component_phase,by_visibility},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"},
             {"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates complete heroes from the live creation offer, and follows current offers; dialogue target chooses ask and stops before combat; ordinary presentation gates remain authoritative"},
             {"command": "join", "method": "POST", "path": "/dev/join",
              "args": {"seat": "1 or 2"},

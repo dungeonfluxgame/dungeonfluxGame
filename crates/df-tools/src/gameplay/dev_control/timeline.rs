@@ -82,6 +82,7 @@ impl Timeline {
         &self,
         last: usize,
         resource_filter: Option<&str>,
+        component_filter: Option<&str>,
         summary_only: bool,
     ) -> serde_json::Value {
         let matched = self
@@ -90,6 +91,8 @@ impl Timeline {
             .filter(|event| {
                 resource_filter.is_none_or(|filter| {
                     event.fields.get("resource_type").and_then(Value::as_str) == Some(filter)
+                }) && component_filter.is_none_or(|filter| {
+                    event.fields.get("component_type").and_then(Value::as_str) == Some(filter)
                 })
             })
             .collect::<Vec<_>>();
@@ -103,6 +106,11 @@ impl Timeline {
         let mut by_stage = std::collections::BTreeMap::<String, usize>::new();
         let mut by_status = std::collections::BTreeMap::<String, usize>::new();
         let mut identities = std::collections::BTreeSet::<(String, String)>::new();
+        let mut component_identities =
+            std::collections::BTreeSet::<(String, String, String, String)>::new();
+        let mut by_component = std::collections::BTreeMap::<String, usize>::new();
+        let mut by_component_phase = std::collections::BTreeMap::<String, usize>::new();
+        let mut by_visibility = std::collections::BTreeMap::<String, usize>::new();
         for event in window {
             if let Some(value) = event.fields.get("resource_type").and_then(Value::as_str) {
                 *by_type.entry(value.to_owned()).or_default() += 1;
@@ -127,6 +135,45 @@ impl Timeline {
             if let Some(value) = event.fields.get("status").and_then(Value::as_str) {
                 *by_status.entry(value.to_owned()).or_default() += 1;
             }
+            if let Some(component) = event.fields.get("component_type").and_then(Value::as_str) {
+                *by_component.entry(component.to_owned()).or_default() += 1;
+                if let Some(id) = event
+                    .fields
+                    .get("resource_id")
+                    .and_then(|value| match value {
+                        Value::String(id) => Some(id.clone()),
+                        Value::Number(id) => Some(id.to_string()),
+                        _ => None,
+                    })
+                {
+                    let producer = event
+                        .fields
+                        .get("page_producer_hash")
+                        .and_then(Value::as_str)
+                        .unwrap_or("none");
+                    let scene = event
+                        .fields
+                        .get("scene_id")
+                        .and_then(|value| match value {
+                            Value::String(id) => Some(id.clone()),
+                            Value::Number(id) => Some(id.to_string()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| "none".to_owned());
+                    component_identities.insert((
+                        component.to_owned(),
+                        id,
+                        producer.to_owned(),
+                        scene,
+                    ));
+                }
+            }
+            if let Some(value) = event.fields.get("component_phase").and_then(Value::as_str) {
+                *by_component_phase.entry(value.to_owned()).or_default() += 1;
+            }
+            if let Some(value) = event.fields.get("visibility").and_then(Value::as_str) {
+                *by_visibility.entry(value.to_owned()).or_default() += 1;
+            }
         }
         serde_json::json!({
             "events": events,
@@ -137,8 +184,12 @@ impl Timeline {
                 "by_resource_type": by_type,
                 "by_stage": by_stage,
                 "by_status": by_status,
+                "component_count": component_identities.len(),
+                "by_component": by_component,
+                "by_component_phase": by_component_phase,
+                "by_visibility": by_visibility,
             },
-            "filter": {"resource_type": resource_filter, "summary_only": summary_only},
+            "filter": {"resource_type": resource_filter, "component": component_filter, "summary_only": summary_only},
             "dropped": self.next - 1 - self.events.len() as u64,
             "capacity": CAPACITY,
             "scope":"current server process; browser events require a connected display"
@@ -290,13 +341,14 @@ pub(in crate::gameplay) fn record_structured(event: &str, line: &str, fields: Ma
 pub(super) fn snapshot(
     last: usize,
     resource_filter: Option<&str>,
+    component_filter: Option<&str>,
     summary_only: bool,
 ) -> serde_json::Value {
     TIMELINE
         .get_or_init(|| Mutex::new(Timeline::new()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .snapshot(last, resource_filter, summary_only)
+        .snapshot(last, resource_filter, component_filter, summary_only)
 }
 
 #[cfg(test)]
@@ -308,7 +360,7 @@ mod tests {
         for _ in 0..CAPACITY + 2 {
             timeline.push("line.open", "synthetic public line", Map::new());
         }
-        let snapshot = timeline.snapshot(3, None, false);
+        let snapshot = timeline.snapshot(3, None, None, false);
         let events = snapshot["events"].as_array().unwrap();
         assert_eq!(events.len(), 3);
         assert_eq!(snapshot["dropped"], 2);
@@ -337,7 +389,7 @@ mod tests {
             fields,
         );
 
-        let event = &timeline.snapshot(1, None, false)["events"][0];
+        let event = &timeline.snapshot(1, None, None, false)["events"][0];
         assert_eq!(event["fields"]["prompt_char_count"], 3978);
         assert_eq!(
             event["fields"]["reference_byte_lengths"],
@@ -378,7 +430,7 @@ mod tests {
             )]),
         );
 
-        let filtered = timeline.snapshot(20, Some("image"), false);
+        let filtered = timeline.snapshot(20, Some("image"), None, false);
         let events = filtered["events"].as_array().unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0]["fields"]["resource_id"], "image-key-42");
@@ -387,7 +439,7 @@ mod tests {
         assert_eq!(filtered["summary"]["by_status"]["failed"], 1);
         assert_eq!(filtered["summary"]["by_status"]["ready"], 1);
 
-        let summary = timeline.snapshot(20, Some("image"), true);
+        let summary = timeline.snapshot(20, Some("image"), None, true);
         assert_eq!(summary["events"].as_array().unwrap().len(), 0);
         assert_eq!(summary["matched"], 2);
     }
@@ -403,9 +455,80 @@ mod tests {
                 ("status".to_owned(), Value::String("projected".to_owned())),
             ]),
         );
-        let snapshot = timeline.snapshot(10, Some("music"), false);
+        let snapshot = timeline.snapshot(10, Some("music"), None, false);
         assert_eq!(snapshot["matched"], 1);
         assert_eq!(snapshot["events"][0]["fields"]["resource_type"], "music");
         assert_eq!(snapshot["events"][0]["fields"]["status"], "projected");
+    }
+
+    #[test]
+    fn component_filter_correlates_lifetimes_and_reports_effective_visibility() {
+        let mut timeline = Timeline::new();
+        for (phase, visibility, at_ms, held, reason) in [
+            ("opened", "visible", 100, 0, "ready"),
+            ("readable", "visible", 250, 0, "ready"),
+            ("readable", "occluded", 900, 650, "visibility-lost"),
+            ("hidden", "hidden", 1_100, 650, "successor"),
+        ] {
+            timeline.push(
+                "gameplay.presentation",
+                "DISPLAY component content-free lifecycle",
+                Map::from_iter([
+                    (
+                        "resource_type".to_owned(),
+                        Value::String("browser_media".to_owned()),
+                    ),
+                    ("resource_id".to_owned(), Value::from(42)),
+                    ("scene_id".to_owned(), Value::from(7)),
+                    (
+                        "page_producer_hash".to_owned(),
+                        Value::String("sha256:page".to_owned()),
+                    ),
+                    (
+                        "component_type".to_owned(),
+                        Value::String("speech_bubble".to_owned()),
+                    ),
+                    (
+                        "component_phase".to_owned(),
+                        Value::String(phase.to_owned()),
+                    ),
+                    (
+                        "visibility".to_owned(),
+                        Value::String(visibility.to_owned()),
+                    ),
+                    ("visible_held_ms".to_owned(), Value::from(held)),
+                    ("at_ms".to_owned(), Value::from(at_ms)),
+                    ("reason".to_owned(), Value::String(reason.to_owned())),
+                ]),
+            );
+        }
+        timeline.push(
+            "gameplay.presentation",
+            "DISPLAY component content-free lifecycle",
+            Map::from_iter([
+                (
+                    "resource_type".to_owned(),
+                    Value::String("browser_media".to_owned()),
+                ),
+                (
+                    "component_type".to_owned(),
+                    Value::String("check_card".to_owned()),
+                ),
+            ]),
+        );
+
+        let filtered = timeline.snapshot(20, Some("browser_media"), Some("speech_bubble"), false);
+        assert_eq!(filtered["matched"], 4);
+        assert_eq!(filtered["summary"]["component_count"], 1);
+        assert_eq!(filtered["summary"]["by_component"]["speech_bubble"], 4);
+        assert_eq!(filtered["summary"]["by_component_phase"]["hidden"], 1);
+        assert_eq!(filtered["summary"]["by_visibility"]["occluded"], 1);
+        assert_eq!(filtered["events"][3]["fields"]["reason"], "successor");
+        assert_eq!(filtered["events"][2]["fields"]["visible_held_ms"], 650);
+        assert!(filtered["events"].to_string().find("transcript").is_none());
+
+        let summary = timeline.snapshot(20, Some("browser_media"), Some("speech_bubble"), true);
+        assert_eq!(summary["events"].as_array().unwrap().len(), 0);
+        assert_eq!(summary["matched"], 4);
     }
 }

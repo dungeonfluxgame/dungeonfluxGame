@@ -99,6 +99,7 @@ struct TimingUpload<'a> {
 fn presentation_fields(
     event: &presentation::TimingEvent,
     correlation: &ScopeCorrelation,
+    page_producer_hash: &str,
 ) -> (
     serde_json::Map<String, serde_json::Value>,
     Vec<(&'static str, String)>,
@@ -112,7 +113,17 @@ fn presentation_fields(
         | "clip-failed" => "video",
         _ => "browser_media",
     };
-    let stage = match event.kind {
+    let component_stage = event.component_phase.map(|phase| match phase {
+        presentation::ComponentPhase::Requested => "requested",
+        presentation::ComponentPhase::Queued => "queued",
+        presentation::ComponentPhase::Opened | presentation::ComponentPhase::Activated => {
+            "projected"
+        }
+        presentation::ComponentPhase::Readable => "played",
+        presentation::ComponentPhase::Closing | presentation::ComponentPhase::Hidden => "hidden",
+        presentation::ComponentPhase::Failed => "failed",
+    });
+    let stage = component_stage.unwrap_or_else(|| match event.kind {
         "line-open" | "figure" | "figure-mounted" | "figure-shown" | "scene" | "plate-shown"
         | "plate-kept" | "visual-source" | "check-shown" | "paint" | "paint-opportunity" => {
             "projected"
@@ -123,22 +134,34 @@ fn presentation_fields(
         "plate-loaded" | "plate-decoded" | "clip-ready" | "usable" => "ready",
         "figure-hidden" | "clip-hidden" | "check-hidden" => "hidden",
         _ => "observed",
-    };
-    let status = match (event.reason, stage) {
-        ("failed", _) => "failed",
-        (_, "requested") => "requested",
-        (_, "ready") => "ready",
-        (_, "played")
-            if event.reason == "read"
-                || event.reason == "voice-ended"
-                || event.reason == "ended" =>
-        {
-            "played"
-        }
-        (_, "played") => "partial",
-        (_, "projected") => "projected",
-        (_, "hidden") => "cancelled",
-        _ => "observed",
+    });
+    let status = match (event.component_phase, event.reason, stage) {
+        (Some(presentation::ComponentPhase::Failed), _, _) => "failed",
+        (Some(presentation::ComponentPhase::Hidden), _, _) => "cancelled",
+        (Some(presentation::ComponentPhase::Readable), _, _) => "played",
+        (_, "failed", _) => "failed",
+        (_, _, "requested") => "requested",
+        (_, _, "queued") => "queued",
+        (_, _, "ready") => "ready",
+        (_, _, "played") => "partial",
+        (_, _, "projected") => "projected",
+        (_, _, "hidden") => "cancelled",
+        (_, _, _) => match (event.reason, stage) {
+            ("failed", _) => "failed",
+            (_, "requested") => "requested",
+            (_, "ready") => "ready",
+            (_, "played")
+                if event.reason == "read"
+                    || event.reason == "voice-ended"
+                    || event.reason == "ended" =>
+            {
+                "played"
+            }
+            (_, "played") => "partial",
+            (_, "projected") => "projected",
+            (_, "hidden") => "cancelled",
+            _ => "observed",
+        },
     };
     let mut fields = serde_json::Map::from_iter([
         ("resource_type".to_owned(), serde_json::json!(resource_type)),
@@ -165,6 +188,10 @@ fn presentation_fields(
             "crossfade_ms".to_owned(),
             serde_json::json!(event.crossfade_ms),
         ),
+        (
+            "page_producer_hash".to_owned(),
+            serde_json::json!(page_producer_hash),
+        ),
     ]);
     fields.insert(
         "room_id_hash".to_owned(),
@@ -178,6 +205,26 @@ fn presentation_fields(
         "build_id".to_owned(),
         serde_json::json!(correlation.build_id.as_str()),
     );
+    if let (Some(component), Some(phase), Some(visibility)) =
+        (event.component, event.component_phase, event.visibility)
+    {
+        fields.insert(
+            "component_type".to_owned(),
+            serde_json::json!(component.label()),
+        );
+        fields.insert(
+            "component_phase".to_owned(),
+            serde_json::json!(phase.label()),
+        );
+        fields.insert(
+            "visibility".to_owned(),
+            serde_json::json!(visibility.label()),
+        );
+        fields.insert(
+            "visible_held_ms".to_owned(),
+            serde_json::json!(event.visible_held_ms),
+        );
+    }
     let mut attributes = vec![
         (
             "gameplay.presentation.resource_type",
@@ -212,7 +259,35 @@ fn presentation_fields(
             "gameplay.presentation.build_id",
             correlation.build_id.clone(),
         ),
+        (
+            "gameplay.presentation.page_producer_hash",
+            page_producer_hash.to_owned(),
+        ),
     ];
+    if let (Some(component), Some(phase), Some(visibility)) =
+        (event.component, event.component_phase, event.visibility)
+    {
+        attributes.extend([
+            (
+                "gameplay.presentation.component_type",
+                component.label().to_owned(),
+            ),
+            (
+                "gameplay.presentation.component_phase",
+                phase.label().to_owned(),
+            ),
+            (
+                "gameplay.presentation.visibility",
+                visibility.label().to_owned(),
+            ),
+        ]);
+        if let Some(visible_held_ms) = event.visible_held_ms {
+            attributes.push((
+                "gameplay.presentation.visible_held_ms",
+                visible_held_ms.to_string(),
+            ));
+        }
+    }
     if let Some(details) = &event.visual_source {
         let requested_asset_id = details
             .requested_asset
@@ -274,7 +349,7 @@ impl Ledger {
     fn record(
         &mut self,
         upload: TimingUpload<'_>,
-        emit: impl Fn(&'static str, String, Option<presentation::TimingEvent>),
+        emit: impl Fn(&'static str, String, Option<presentation::TimingEvent>, &str),
     ) -> Result<(usize, bool), Status> {
         let TimingUpload {
             binding,
@@ -334,6 +409,7 @@ impl Ledger {
                     "{audience} gap producer={producer} batch={sequence} receive_unix_ms={receive_ms} reason=receiver-restart-or-missing-prefix"
                 ),
                 None,
+                &producer,
             );
         }
         for event in &events {
@@ -345,6 +421,7 @@ impl Ledger {
                     correlation.log_suffix(),
                 ),
                 Some(event.clone()),
+                &producer,
             );
         }
         if dropped != 0 {
@@ -354,6 +431,7 @@ impl Ledger {
                     "{audience} gap producer={producer} batch={sequence} receive_unix_ms={receive_ms} dropped_records={dropped}"
                 ),
                 None,
+                &producer,
             );
         }
         self.producers.insert(
@@ -434,9 +512,10 @@ impl PresentationIngress {
                 correlation: &correlation,
                 receive_unix_ms,
             },
-            |event, line, timing| {
+            |event, line, timing, page_producer_hash| {
                 if let Some(timing) = timing.as_ref() {
-                    let (fields, attributes) = presentation_fields(timing, &correlation);
+                    let (fields, attributes) =
+                        presentation_fields(timing, &correlation, page_producer_hash);
                     actor::record_audit_diagnostic(event, line, fields, &attributes);
                 } else {
                     actor::record_audit_line(event, line);
@@ -479,7 +558,8 @@ impl rpc::presentation_telemetry_service_server::PresentationTelemetryService
 mod tests {
     use super::*;
     use df_observe::presentation::{
-        TimingEvent, VisualPlateState, VisualShot, VisualSource, VisualSourceDetails,
+        ComponentPhase, EffectiveVisibility, PresentationComponent, TimingEvent, VisualPlateState,
+        VisualShot, VisualSource, VisualSourceDetails,
     };
     use std::cell::RefCell;
     use std::sync::OnceLock;
@@ -520,7 +600,7 @@ mod tests {
         );
         let correlation =
             scope_correlation(Some(b"private-room"), Some(b"private-run"), "test-build");
-        let (fields, attributes) = presentation_fields(&event, &correlation);
+        let (fields, attributes) = presentation_fields(&event, &correlation, "sha256:test-page");
         assert_eq!(fields["resource_type"], "browser_media");
         assert_eq!(fields["stage"], "projected");
         assert_eq!(fields["resource_id"], 17);
@@ -543,6 +623,50 @@ mod tests {
         assert!(!serialized.contains("private-room"));
         assert!(!serialized.contains("private-run"));
         assert!(attributes.iter().all(|(_, value)| value != "private-url"));
+    }
+
+    #[test]
+    fn component_ingress_carries_phase_visibility_and_page_correlation_without_content() {
+        let mut event = TimingEvent::component_lifecycle(
+            17,
+            23,
+            8_500,
+            PresentationComponent::SpeechBubble,
+            ComponentPhase::Readable,
+            EffectiveVisibility::Hidden,
+            "visibility-lost",
+        );
+        event.opened_ms = Some(2_000);
+        event.closed_ms = Some(8_500);
+        event.read_ms = 5_000;
+        event.visible_held_ms = Some(3_200);
+        let correlation =
+            scope_correlation(Some(b"private-room"), Some(b"private-run"), "test-build");
+        let (fields, attributes) = presentation_fields(&event, &correlation, "sha256:a1b2c3");
+        assert_eq!(fields["resource_type"], "browser_media");
+        assert_eq!(fields["resource_id"], 17);
+        assert_eq!(fields["scene_id"], 23);
+        assert_eq!(fields["component_type"], "speech_bubble");
+        assert_eq!(fields["component_phase"], "readable");
+        assert_eq!(fields["visibility"], "hidden");
+        assert_eq!(fields["visible_held_ms"], 3_200);
+        assert_eq!(fields["page_producer_hash"], "sha256:a1b2c3");
+        assert_eq!(
+            fields["room_id_hash"].as_str(),
+            correlation.room_id_hash.as_deref()
+        );
+        assert_eq!(fields["build_id"], "test-build");
+        let serialized = serde_json::to_string(&fields).unwrap();
+        assert!(!serialized.contains("private-room"));
+        assert!(!serialized.contains("private-run"));
+        assert!(!serialized.contains("private-page-id"));
+        assert!(!serialized.contains("transcript"));
+        assert!(attributes.iter().any(|(name, value)| {
+            *name == "gameplay.presentation.component_type" && value == "speech_bubble"
+        }));
+        assert!(attributes.iter().any(|(name, value)| {
+            *name == "gameplay.presentation.visibility" && value == "hidden"
+        }));
     }
 
     #[test]
@@ -581,7 +705,7 @@ mod tests {
         };
         let bytes = presentation::encode(&[line]).unwrap();
         let lines = RefCell::new(Vec::new());
-        let emit = |_, line, _| lines.borrow_mut().push(line);
+        let emit = |_, line, _, _| lines.borrow_mut().push(line);
         assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (1, false));
         assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (1, true));
         assert_eq!(lines.borrow().len(), 1);

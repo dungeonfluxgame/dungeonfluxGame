@@ -8,7 +8,8 @@ use std::{
 };
 
 use df_observe::presentation::{
-    TimingBuffer, TimingEvent, VisualPlateState, VisualShot, VisualSource, VisualSourceDetails,
+    ComponentClock, ComponentPhase, EffectiveVisibility, PresentationComponent, TimingBuffer,
+    TimingEvent, VisualPlateState, VisualShot, VisualSource, VisualSourceDetails,
 };
 use futures::future::{AbortHandle, Abortable};
 use wasm_bindgen::{JsCast, closure::Closure};
@@ -31,10 +32,19 @@ struct Capture {
     buffer: TimingBuffer,
     lines: HashMap<u64, TimingEvent>,
     closed_lines: VecDeque<TimingEvent>,
+    components: HashMap<(PresentationComponent, u64, u64), ActiveComponent>,
     abort: Option<AbortHandle>,
     usable: bool,
     painted: bool,
     frames: Vec<PaintFrame>,
+}
+
+struct ActiveComponent {
+    clock: ComponentClock,
+    read_ms: u32,
+    phase: ComponentPhase,
+    visibility: EffectiveVisibility,
+    element: Option<web_sys::Element>,
 }
 
 impl Drop for Capture {
@@ -240,6 +250,207 @@ pub(super) fn close_reason(id: u64, reason: &'static str) {
     });
 }
 
+/// Record one real presentation-component transition after the UI applies it. The element is
+/// sampled for computed style, viewport intersection and occlusion; a mounted DOM node alone
+/// never counts as readable.
+pub(super) fn component(
+    element: Option<&web_sys::Element>,
+    component: PresentationComponent,
+    id: u64,
+    scene: &str,
+    phase: ComponentPhase,
+    reason: &'static str,
+    read_ms: u32,
+) {
+    let Some(now) = now_ms() else {
+        return;
+    };
+    let scene = identity(scene);
+    let visibility = effective_visibility(element);
+    displays(|capture| {
+        let key = (component, id, scene);
+        let closing = matches!(phase, ComponentPhase::Hidden | ComponentPhase::Failed);
+        if !capture.components.contains_key(&key) && !closing {
+            if capture.components.len() >= 256 {
+                capture.buffer.report_loss(1);
+                web_sys::console::warn_1(&"Presentation timing active component capacity".into());
+                return;
+            }
+            capture.components.insert(
+                key,
+                ActiveComponent {
+                    clock: ComponentClock::default(),
+                    read_ms,
+                    phase,
+                    visibility,
+                    element: element.cloned(),
+                },
+            );
+        }
+        let event = if let Some(active) = capture.components.get_mut(&key) {
+            active.read_ms = read_ms.max(active.read_ms);
+            active.phase = phase;
+            active.visibility = visibility;
+            if element.is_some() {
+                active.element = element.cloned();
+            }
+            let visible_held_ms = active.clock.observe(now, phase, visibility);
+            let mut event = TimingEvent::component_lifecycle(
+                id, scene, now, component, phase, visibility, reason,
+            );
+            event.read_ms = active.read_ms;
+            event.opened_ms = active.clock.opened_ms();
+            event.visible_held_ms = Some(visible_held_ms);
+            if closing {
+                event.closed_ms = Some(now);
+            }
+            event
+        } else {
+            let mut event = TimingEvent::component_lifecycle(
+                id, scene, now, component, phase, visibility, reason,
+            );
+            event.read_ms = read_ms;
+            if closing {
+                event.closed_ms = Some(now);
+                event.visible_held_ms = Some(0);
+            }
+            event
+        };
+        if closing {
+            capture.components.remove(&key);
+        }
+        retain(capture, event);
+    });
+}
+
+/// Re-sample tracked elements after a display overlay or scene transition. This emits only when
+/// effective visibility changed, so a logically active speech bubble hidden behind a card shows
+/// up explicitly in the same timeline.
+pub(super) fn refresh_component_visibility() {
+    let Some(now) = now_ms() else {
+        return;
+    };
+    displays(|capture| {
+        let mut changed = Vec::new();
+        for ((component, id, scene), active) in &mut capture.components {
+            let visibility = effective_visibility(active.element.as_ref());
+            if visibility == active.visibility {
+                continue;
+            }
+            active.visibility = visibility;
+            let visible_held_ms = active.clock.observe(now, active.phase, visibility);
+            let mut event = TimingEvent::component_lifecycle(
+                *id,
+                *scene,
+                now,
+                *component,
+                active.phase,
+                visibility,
+                if visibility == EffectiveVisibility::Visible {
+                    "changed"
+                } else {
+                    "visibility-lost"
+                },
+            );
+            event.read_ms = active.read_ms;
+            event.opened_ms = active.clock.opened_ms();
+            event.visible_held_ms = Some(visible_held_ms);
+            changed.push(event);
+        }
+        for event in changed {
+            retain(capture, event);
+        }
+    });
+}
+
+fn effective_visibility(element: Option<&web_sys::Element>) -> EffectiveVisibility {
+    let Some(element) = element else {
+        return EffectiveVisibility::Unknown;
+    };
+    if !element.is_connected() {
+        return EffectiveVisibility::Hidden;
+    }
+    let Some(window) = web_sys::window() else {
+        return EffectiveVisibility::Unknown;
+    };
+    let Some(document) = element.owner_document() else {
+        return EffectiveVisibility::Unknown;
+    };
+    let mut opacity = 1.0_f64;
+    let mut current = Some(element.clone());
+    while let Some(node) = current {
+        let Ok(style) = window.get_computed_style(&node) else {
+            return EffectiveVisibility::Unknown;
+        };
+        let Some(style) = style else {
+            return EffectiveVisibility::Unknown;
+        };
+        let display = style.get_property_value("display").unwrap_or_default();
+        let visibility = style.get_property_value("visibility").unwrap_or_default();
+        let content_visibility = style
+            .get_property_value("content-visibility")
+            .unwrap_or_default();
+        if display == "none"
+            || visibility == "hidden"
+            || visibility == "collapse"
+            || content_visibility == "hidden"
+        {
+            return EffectiveVisibility::Hidden;
+        }
+        if let Ok(value) = style.get_property_value("opacity")
+            && let Ok(value) = value.parse::<f64>()
+        {
+            opacity *= value.clamp(0.0, 1.0);
+        }
+        current = node.parent_element();
+    }
+    if opacity < 0.95 {
+        return EffectiveVisibility::Transparent;
+    }
+    let rect = element.get_bounding_client_rect();
+    if rect.width() <= 1.0 || rect.height() <= 1.0 {
+        return EffectiveVisibility::Hidden;
+    }
+    let (Ok(viewport_width), Ok(viewport_height)) = (window.inner_width(), window.inner_height())
+    else {
+        return EffectiveVisibility::Unknown;
+    };
+    let (Some(viewport_width), Some(viewport_height)) =
+        (viewport_width.as_f64(), viewport_height.as_f64())
+    else {
+        return EffectiveVisibility::Unknown;
+    };
+    if rect.right() <= 0.0
+        || rect.bottom() <= 0.0
+        || rect.left() >= viewport_width
+        || rect.top() >= viewport_height
+    {
+        return EffectiveVisibility::Offscreen;
+    }
+    // `pointer-events:none` is common for decorative text layers; in that case a hit-test cannot
+    // distinguish a visible node from an overlay, so report computed visibility only.
+    if let Ok(style) = window.get_computed_style(element)
+        && style
+            .and_then(|style| style.get_property_value("pointer-events").ok())
+            .is_some_and(|value| value == "none")
+    {
+        return EffectiveVisibility::Visible;
+    }
+    let x = (rect.left() + rect.right()) / 2.0;
+    let y = (rect.top() + rect.bottom()) / 2.0;
+    let Some(hit) = document.element_from_point(x, y) else {
+        return EffectiveVisibility::Unknown;
+    };
+    let mut hit = Some(hit);
+    while let Some(node) = hit {
+        if node.is_same_node(Some(element.as_ref())) {
+            return EffectiveVisibility::Visible;
+        }
+        hit = node.parent_element();
+    }
+    EffectiveVisibility::Occluded
+}
+
 /// Preserve the timestamp captured at the actual callback even when its line mounts later.
 pub(super) fn voice_at(id: u64, state: ClipState, now: u64) {
     displays(|capture| {
@@ -328,6 +539,7 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
                 buffer: TimingBuffer::default(),
                 lines: HashMap::new(),
                 closed_lines: VecDeque::new(),
+                components: HashMap::new(),
                 abort: None,
                 usable: false,
                 painted: false,

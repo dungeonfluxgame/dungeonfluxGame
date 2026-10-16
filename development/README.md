@@ -163,12 +163,21 @@ only:
 
 ```sh
 df-transport-fixture dev timeline --last 100 --type image
-df-transport-fixture dev timeline --last 100 --type video --summary
+df-transport-fixture dev timeline --last 100 --type browser_media --component speech_bubble
+df-transport-fixture dev timeline --last 100 --type browser_media --component check_card --summary
 ```
 
 Types are `text_model`, `speech_input`, `voice`, `music`, `image`, `plate`, `video`, `browser_media` and
 `state`. The response keeps the event sequence and timestamps, shows counts by resource type,
-stage and status, and reports the number of distinct resource ids in the selected window. Request,
+stage and status, and reports the number of distinct resource ids in the selected window. Use
+`--component` to narrow browser presentation events to `subtitle`, `speech_bubble`,
+`thinking_loader`, `intent_loader`, `check_card`, `item_card`, `title_card`, `scene_card`,
+`plate_incoming` or `plate_outgoing`. Component events carry a page-local id, scene id, hashed
+page producer, open/read budget/close times, visible held time, lifecycle phase and effective
+visibility (`visible`, `hidden`, `occluded`, `offscreen`, `transparent` or `unknown`). The agent can
+compare logical speaking/readable state with effective visibility; a hidden or occluded component
+is not counted as readable. Summary output includes unique component count, phase counts and
+visibility counts. Request,
 queue, ready, failure, media delivery, browser played and projected events share content-free ids
 where the server exposes them; scene and graph revisions are included where available. This lets
 an agent compare a failed render with a later ready result and then check whether the browser

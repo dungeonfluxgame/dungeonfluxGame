@@ -42,6 +42,7 @@ const KINDS: &[&str] = &[
     "plate-shown",
     "plate-kept",
     "visual-source",
+    "component",
     "clip-requested",
     "clip-ready",
     "clip-shown",
@@ -71,6 +72,9 @@ const REASONS: &[&str] = &[
     "timeout",
     "disposed",
     "changed",
+    "successor",
+    "decode-fail",
+    "visibility-lost",
 ];
 const NUMERIC_FIELDS: &[&str] = &[
     "id",
@@ -86,7 +90,201 @@ const NUMERIC_FIELDS: &[&str] = &[
     "crossfade_ms",
     "requested_asset",
     "effective_asset",
+    "visible_held_ms",
 ];
+
+/// Closed catalog of display components whose lifecycle may be reported to the agent timeline.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum PresentationComponent {
+    Subtitle,
+    SpeechBubble,
+    ThinkingLoader,
+    IntentLoader,
+    CheckCard,
+    ItemCard,
+    TitleCard,
+    SceneCard,
+    PlateIncoming,
+    PlateOutgoing,
+}
+
+impl PresentationComponent {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Subtitle => "subtitle",
+            Self::SpeechBubble => "speech_bubble",
+            Self::ThinkingLoader => "thinking_loader",
+            Self::IntentLoader => "intent_loader",
+            Self::CheckCard => "check_card",
+            Self::ItemCard => "item_card",
+            Self::TitleCard => "title_card",
+            Self::SceneCard => "scene_card",
+            Self::PlateIncoming => "plate_incoming",
+            Self::PlateOutgoing => "plate_outgoing",
+        }
+    }
+
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Subtitle,
+            Self::SpeechBubble,
+            Self::ThinkingLoader,
+            Self::IntentLoader,
+            Self::CheckCard,
+            Self::ItemCard,
+            Self::TitleCard,
+            Self::SceneCard,
+            Self::PlateIncoming,
+            Self::PlateOutgoing,
+        ]
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|component| component.label() == label)
+    }
+}
+
+/// Closed lifecycle phases. `readable` is emitted only after the browser confirms effective
+/// visibility; it is not inferred from a node merely existing in the DOM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentPhase {
+    Requested,
+    Queued,
+    Opened,
+    Readable,
+    Closing,
+    Activated,
+    Hidden,
+    Failed,
+}
+
+impl ComponentPhase {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::Queued => "queued",
+            Self::Opened => "opened",
+            Self::Readable => "readable",
+            Self::Closing => "closing",
+            Self::Activated => "activated",
+            Self::Hidden => "hidden",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "requested" => Some(Self::Requested),
+            "queued" => Some(Self::Queued),
+            "opened" => Some(Self::Opened),
+            "readable" => Some(Self::Readable),
+            "closing" => Some(Self::Closing),
+            "activated" => Some(Self::Activated),
+            "hidden" => Some(Self::Hidden),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// Effective browser visibility after style, viewport and hit-test checks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EffectiveVisibility {
+    Visible,
+    Hidden,
+    Occluded,
+    Offscreen,
+    Transparent,
+    Unknown,
+}
+
+impl EffectiveVisibility {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Visible => "visible",
+            Self::Hidden => "hidden",
+            Self::Occluded => "occluded",
+            Self::Offscreen => "offscreen",
+            Self::Transparent => "transparent",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "visible" => Some(Self::Visible),
+            "hidden" => Some(Self::Hidden),
+            "occluded" => Some(Self::Occluded),
+            "offscreen" => Some(Self::Offscreen),
+            "transparent" => Some(Self::Transparent),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
+/// Page-local accounting for the interval a component was actually readable. This helper has
+/// no clock or logging side effects; callers supply timestamps and computed visibility.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ComponentClock {
+    opened_ms: Option<u64>,
+    visible_since_ms: Option<u64>,
+    visible_held_ms: u64,
+}
+
+impl ComponentClock {
+    pub fn observe(
+        &mut self,
+        at_ms: u64,
+        phase: ComponentPhase,
+        visibility: EffectiveVisibility,
+    ) -> u64 {
+        if self.opened_ms.is_none()
+            && matches!(phase, ComponentPhase::Opened | ComponentPhase::Readable)
+        {
+            self.opened_ms = Some(at_ms);
+        }
+        let can_be_visible = matches!(
+            phase,
+            ComponentPhase::Opened
+                | ComponentPhase::Readable
+                | ComponentPhase::Closing
+                | ComponentPhase::Activated
+        );
+        if let Some(visible_since) = self.visible_since_ms
+            && (!can_be_visible || visibility != EffectiveVisibility::Visible)
+        {
+            self.visible_held_ms = self
+                .visible_held_ms
+                .saturating_add(at_ms.saturating_sub(visible_since));
+            self.visible_since_ms = None;
+        }
+        if can_be_visible
+            && visibility == EffectiveVisibility::Visible
+            && self.visible_since_ms.is_none()
+        {
+            self.visible_since_ms = Some(at_ms);
+        }
+        self.visible_held_ms.saturating_add(
+            self.visible_since_ms
+                .map_or(0, |start| at_ms.saturating_sub(start)),
+        )
+    }
+
+    pub const fn opened_ms(&self) -> Option<u64> {
+        self.opened_ms
+    }
+
+    pub fn visible_held_ms(&self, at_ms: u64) -> u64 {
+        self.visible_held_ms.saturating_add(
+            self.visible_since_ms
+                .map_or(0, |start| at_ms.saturating_sub(start)),
+        )
+    }
+}
 
 /// Closed scene image source labels used by the display's visual-source diagnostic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -212,6 +410,10 @@ pub struct TimingEvent {
     pub closed_ms: Option<u64>,
     pub crossfade_ms: u32,
     pub visual_source: Option<VisualSourceDetails>,
+    pub component: Option<PresentationComponent>,
+    pub component_phase: Option<ComponentPhase>,
+    pub visibility: Option<EffectiveVisibility>,
+    pub visible_held_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -246,12 +448,32 @@ impl TimingEvent {
             closed_ms: None,
             crossfade_ms: 0,
             visual_source: None,
+            component: None,
+            component_phase: None,
+            visibility: None,
+            visible_held_ms: None,
         }
     }
 
     pub fn visual_source(id: u64, scene: u64, at_ms: u64, details: VisualSourceDetails) -> Self {
         let mut event = Self::lifecycle("visual-source", "changed", id, scene, at_ms);
         event.visual_source = Some(details);
+        event
+    }
+
+    pub fn component_lifecycle(
+        id: u64,
+        scene: u64,
+        at_ms: u64,
+        component: PresentationComponent,
+        phase: ComponentPhase,
+        visibility: EffectiveVisibility,
+        reason: &'static str,
+    ) -> Self {
+        let mut event = Self::lifecycle("component", reason, id, scene, at_ms);
+        event.component = Some(component);
+        event.component_phase = Some(phase);
+        event.visibility = Some(visibility);
         event
     }
 
@@ -265,6 +487,7 @@ impl TimingEvent {
             || self.chars > 16_384
             || self.read_ms > 120_000
             || self.crossfade_ms > 30_000
+            || self.visible_held_ms.is_some_and(|time| time > MAX_PAGE_MS)
             || [
                 self.opened_ms,
                 self.voice_start_ms,
@@ -283,6 +506,15 @@ impl TimingEvent {
                 .zip(self.voice_end_ms)
                 .is_some_and(|(start, end)| end < start)
             || (self.kind == "visual-source") != self.visual_source.is_some()
+            || (self.kind == "component")
+                != (self.component.is_some()
+                    && self.component_phase.is_some()
+                    && self.visibility.is_some())
+            || (self.kind != "component"
+                && (self.component.is_some()
+                    || self.component_phase.is_some()
+                    || self.visibility.is_some()
+                    || self.visible_held_ms.is_some()))
             || self.visual_source.as_ref().is_some_and(|details| {
                 details
                     .requested_asset
@@ -336,6 +568,17 @@ impl TimingEvent {
                 details.plate_state.label(),
                 optional(details.requested_asset),
                 optional(details.effective_asset),
+            ));
+        }
+        if let (Some(component), Some(phase), Some(visibility)) =
+            (self.component, self.component_phase, self.visibility)
+        {
+            line.push_str(&format!(
+                " component={} component_phase={} visibility={} visible_held_ms={}",
+                component.label(),
+                phase.label(),
+                visibility.label(),
+                optional(self.visible_held_ms),
             ));
         }
         line
@@ -400,6 +643,21 @@ pub fn encode(events: &[TimingEvent]) -> Result<Vec<u8>, TimingError> {
                 }
             }
         }
+        if let (Some(component), Some(phase), Some(visibility)) =
+            (event.component, event.component_phase, event.visibility)
+        {
+            attributes.extend([
+                attribute("component", Value::StringValue(component.label().into())),
+                attribute("component_phase", Value::StringValue(phase.label().into())),
+                attribute("visibility", Value::StringValue(visibility.label().into())),
+            ]);
+        }
+        if let Some(visible_held_ms) = event.visible_held_ms {
+            attributes.push(attribute(
+                "visible_held_ms",
+                Value::IntValue(visible_held_ms as i64),
+            ));
+        }
         records.push(LogRecord {
             event_name: event.kind.into(),
             attributes,
@@ -457,6 +715,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
         let mut effective_source = None;
         let mut shot = None;
         let mut plate_state = None;
+        let mut component = None;
+        let mut component_phase = None;
+        let mut visibility = None;
         for field in &record.attributes {
             let value = field
                 .value
@@ -518,6 +779,39 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                 if shot.is_none() {
                     return Err(TimingError::Invalid);
                 }
+            } else if field.key == "component" {
+                let Value::StringValue(text) = value else {
+                    return Err(TimingError::Invalid);
+                };
+                if component.is_some() {
+                    return Err(TimingError::Invalid);
+                }
+                component = PresentationComponent::from_label(text);
+                if component.is_none() {
+                    return Err(TimingError::Invalid);
+                }
+            } else if field.key == "component_phase" {
+                let Value::StringValue(text) = value else {
+                    return Err(TimingError::Invalid);
+                };
+                if component_phase.is_some() {
+                    return Err(TimingError::Invalid);
+                }
+                component_phase = ComponentPhase::from_label(text);
+                if component_phase.is_none() {
+                    return Err(TimingError::Invalid);
+                }
+            } else if field.key == "visibility" {
+                let Value::StringValue(text) = value else {
+                    return Err(TimingError::Invalid);
+                };
+                if visibility.is_some() {
+                    return Err(TimingError::Invalid);
+                }
+                visibility = EffectiveVisibility::from_label(text);
+                if visibility.is_none() {
+                    return Err(TimingError::Invalid);
+                }
             } else {
                 let Value::IntValue(value) = value else {
                     return Err(TimingError::Invalid);
@@ -566,6 +860,10 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
             voice_end_ms: values.get("voice_end_ms").copied(),
             closed_ms: values.get("closed_ms").copied(),
             visual_source,
+            component,
+            component_phase,
+            visibility,
+            visible_held_ms: values.get("visible_held_ms").copied(),
         };
         event.validate()?;
         // Comparing a rebuilt record also rejects severity, body, trace, flags, timestamps,
@@ -735,6 +1033,10 @@ mod tests {
             closed_ms: Some(10_000),
             crossfade_ms: 0,
             visual_source: None,
+            component: None,
+            component_phase: None,
+            visibility: None,
+            visible_held_ms: None,
         }
     }
 
@@ -848,6 +1150,119 @@ mod tests {
         assert!(line.contains("plate_state=failed"));
         assert!(line.contains("requested_asset_id=31"));
         assert!(line.contains("effective_asset_id=37"));
+    }
+
+    #[test]
+    fn component_lifecycle_round_trips_closed_visibility_and_duration() {
+        let mut event = TimingEvent::component_lifecycle(
+            41,
+            23,
+            8_250,
+            PresentationComponent::SpeechBubble,
+            ComponentPhase::Hidden,
+            EffectiveVisibility::Occluded,
+            "successor",
+        );
+        event.opened_ms = Some(2_000);
+        event.closed_ms = Some(8_250);
+        event.read_ms = 5_500;
+        event.visible_held_ms = Some(4_125);
+        let bytes = encode(std::slice::from_ref(&event)).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), vec![event.clone()]);
+
+        let line = event.log_line("DISPLAY", 99_000, "sha256:producer", 3);
+        assert!(line.contains("component=speech_bubble"));
+        assert!(line.contains("component_phase=hidden"));
+        assert!(line.contains("visibility=occluded"));
+        assert!(line.contains("read_ms=5500"));
+        assert!(line.contains("visible_held_ms=4125"));
+        assert_eq!(
+            PresentationComponent::from_label("check_card"),
+            Some(PresentationComponent::CheckCard)
+        );
+        assert_eq!(PresentationComponent::from_label("secret-component"), None);
+        assert_eq!(
+            ComponentPhase::from_label("readable"),
+            Some(ComponentPhase::Readable)
+        );
+        assert_eq!(
+            EffectiveVisibility::from_label("hidden"),
+            Some(EffectiveVisibility::Hidden)
+        );
+    }
+
+    #[test]
+    fn component_events_require_closed_fields_and_bounded_measurements() {
+        let event = TimingEvent::component_lifecycle(
+            1,
+            2,
+            10,
+            PresentationComponent::Subtitle,
+            ComponentPhase::Readable,
+            EffectiveVisibility::Visible,
+            "ready",
+        );
+        assert!(encode(&[event.clone()]).is_ok());
+        assert_eq!(
+            encode(&[TimingEvent {
+                component_phase: None,
+                ..event.clone()
+            }]),
+            Err(TimingError::Invalid)
+        );
+        assert_eq!(
+            encode(&[TimingEvent {
+                read_ms: 120_001,
+                ..event.clone()
+            }]),
+            Err(TimingError::Invalid)
+        );
+        assert_eq!(
+            encode(&[TimingEvent {
+                visible_held_ms: Some(MAX_PAGE_MS + 1),
+                ..event
+            }]),
+            Err(TimingError::Invalid)
+        );
+    }
+
+    #[test]
+    fn component_clock_counts_only_confirmed_readable_intervals() {
+        let mut clock = ComponentClock::default();
+        assert_eq!(
+            clock.observe(
+                100,
+                ComponentPhase::Opened,
+                EffectiveVisibility::Transparent,
+            ),
+            0
+        );
+        assert_eq!(
+            clock.observe(250, ComponentPhase::Readable, EffectiveVisibility::Visible,),
+            0
+        );
+        assert_eq!(
+            clock.observe(
+                1_000,
+                ComponentPhase::Readable,
+                EffectiveVisibility::Occluded,
+            ),
+            750
+        );
+        assert_eq!(
+            clock.observe(
+                1_500,
+                ComponentPhase::Readable,
+                EffectiveVisibility::Visible,
+            ),
+            750
+        );
+        assert_eq!(
+            clock.observe(2_000, ComponentPhase::Hidden, EffectiveVisibility::Hidden,),
+            1_250
+        );
+        assert_eq!(clock.opened_ms(), Some(100));
+        assert_eq!(clock.visible_held_ms(3_000), 1_250);
     }
 
     #[test]
