@@ -1002,6 +1002,64 @@ impl TableLog {
             .map(|line| line.text.clone())
     }
 
+    /// Returns one public line by its stable in-memory sequence. Transaction callers use this to
+    /// bind a durable decision to exactly what the table displayed, never to raw model or input
+    /// text that may have been cleaned or redacted.
+    pub(super) fn line_at_sequence(&self, sequence: u64) -> Option<rpc::TableLine> {
+        self.ring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lines
+            .iter()
+            .find(|line| line.sequence == sequence)
+            .cloned()
+    }
+
+    pub(super) fn latest_hero_speech_after(&self, sequence: u64) -> Option<rpc::TableLine> {
+        self.ring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lines
+            .iter()
+            .rev()
+            .find(|line| {
+                line.sequence > sequence
+                    && line.role == rpc::TableRole::Hero as i32
+                    && line.kind == rpc::TableKind::Speech as i32
+            })
+            .cloned()
+    }
+
+    pub(super) fn latest_hero_speech_before(&self, sequence: u64) -> Option<rpc::TableLine> {
+        self.ring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lines
+            .iter()
+            .rev()
+            .find(|line| {
+                line.sequence < sequence
+                    && line.role == rpc::TableRole::Hero as i32
+                    && line.kind == rpc::TableKind::Speech as i32
+            })
+            .cloned()
+    }
+
+    pub(super) fn latest_npc_speech_before(&self, sequence: u64) -> Option<rpc::TableLine> {
+        self.ring
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lines
+            .iter()
+            .rev()
+            .find(|line| {
+                line.sequence < sequence
+                    && line.role == rpc::TableRole::Npc as i32
+                    && line.kind == rpc::TableKind::Speech as i32
+            })
+            .cloned()
+    }
+
     /// Returns the exact text the table displayed for the current NPC source line. Callers
     /// that journal a source-bound decision persist this value instead of model output that
     /// may contain control characters or exceed the public line limit.

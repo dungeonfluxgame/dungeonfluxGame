@@ -19,7 +19,9 @@ use df_types::MemberId;
 use serde_json::{Value, json};
 
 use super::{
-    adventure::dossier::{Attitude, Dossier, NpcRole, QuestionSubject, mentions_term},
+    adventure::dossier::{
+        AnswerSubject, Attitude, Dossier, NpcRole, QuestionSubject, mentions_term,
+    },
     approach_model::ApproachModel,
     npc_dossier::{self, Clue, Inputs, Turn, Withheld, released_terms},
     pack::{Age, PackFile, SceneKey, SpeakerProfile},
@@ -233,6 +235,8 @@ pub(super) struct NpcReplyContext {
     /// The unique live quote this exact turn may answer with an acceptance, decline or
     /// counteroffer. Captured by the authoritative actor after source-line validation.
     pub(super) pending_quote: Option<super::journey::living_scene::SceneTradeQuote>,
+    /// Set only after the caller matches canonical terms to this hero and addressed merchant.
+    pub(super) merchant_trade_scope: bool,
     publication_guard: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub(super) facts: Value,
     pub(super) speaker: String,
@@ -283,6 +287,14 @@ pub(super) enum ExchangeOutcome {
     Spoken,
     Withheld,
     Unavailable,
+}
+
+fn subject_for_trade_context(scope_is_canonical: bool, subject: AnswerSubject) -> AnswerSubject {
+    if scope_is_canonical && subject == AnswerSubject::Reward {
+        AnswerSubject::Other
+    } else {
+        subject
+    }
 }
 
 impl ExchangeOutcome {
@@ -760,6 +772,7 @@ impl NpcReplyContext {
             npc_id: turn_dossier.npc_id.clone(),
             hero_id: hero.name.clone(),
             pending_quote: None,
+            merchant_trade_scope: false,
             publication_guard: None,
             member,
             facts,
@@ -949,6 +962,7 @@ impl NpcReplyContext {
             npc_id: String::new(),
             hero_id: hero.name.clone(),
             pending_quote: None,
+            merchant_trade_scope: false,
             publication_guard: None,
             member,
             facts,
@@ -975,21 +989,22 @@ impl NpcReplyContext {
     /// Publishes the hero's line as public table talk, before any answer. `shown` is the display
     /// version (see `line_cleanup`); the raw words stay what the reply reasons about. A hero who
     /// was told a clue in private may type its terms, but the table does not read them.
-    pub(super) fn publish_typed_line(&self, log: &TableLog, shown: &str) {
+    pub(super) fn publish_typed_line(&self, log: &TableLog, shown: &str) -> Option<rpc::TableLine> {
         if !self.publication_current() {
-            return;
+            return None;
         }
         let spoken = match &self.turn {
             Some(turn) => turn.withheld.hide_released(shown),
             None => npc_dossier::redact_terms(shown, &self.private_terms),
         };
-        log.push(
+        let sequence = log.push(
             &self.hero_name,
             rpc::TableRole::Hero,
             self.hero_index,
             rpc::TableKind::Speech,
             &spoken,
-        );
+        )?;
+        log.line_at_sequence(sequence)
     }
 }
 
@@ -1378,9 +1393,10 @@ impl NpcVoice {
                 super::social::classify_keywords_reading_for_dossier(&context.typed_words, dossier)
             });
         let approach = reading.approach;
+        let subject = subject_for_trade_context(context.merchant_trade_scope, reading.subject);
         let influence_request = approach.is_influence_attempt();
         context.facts["player"]["approach"] = json!(approach.label());
-        context.facts["player"]["subject"] = json!(reading.subject.label());
+        context.facts["player"]["subject"] = json!(subject.label());
         let mut appraised_reaction = None;
         let mut reaction_note = None;
         let mut influence_willingness = None;
@@ -1410,7 +1426,7 @@ impl NpcVoice {
                     &current,
                     turn.standing.attitude,
                     approach,
-                    reading.subject,
+                    subject,
                     &context.typed_words,
                     &visible_moment,
                     similar_asks,
@@ -2078,6 +2094,22 @@ mod tests {
     use super::super::adventure::dossier::Attitude;
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn canonical_merchant_trade_scope_overrides_reward_subject_only_for_that_turn() {
+        assert_eq!(
+            subject_for_trade_context(true, AnswerSubject::Reward),
+            AnswerSubject::Other
+        );
+        assert_eq!(
+            subject_for_trade_context(false, AnswerSubject::Reward),
+            AnswerSubject::Reward
+        );
+        assert_eq!(
+            subject_for_trade_context(true, AnswerSubject::Errand),
+            AnswerSubject::Errand
+        );
+    }
 
     const CLUE: &str = "The courier quietly tells you: the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.";
 

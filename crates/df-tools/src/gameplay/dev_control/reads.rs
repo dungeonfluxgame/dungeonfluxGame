@@ -844,7 +844,17 @@ pub(super) async fn merchant_quotes(
                 crate::gameplay::journey::living_scene::MerchantQuoteStatus::Pending => "pending",
                 crate::gameplay::journey::living_scene::MerchantQuoteStatus::Accepted => "accepted",
                 crate::gameplay::journey::living_scene::MerchantQuoteStatus::Stale => "stale",
+                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Declined => "declined",
+                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Withdrawn => "withdrawn",
             };
+            let close_reason = entry.close_reason.map(|reason| match reason {
+                crate::gameplay::journey::living_scene::MerchantQuoteClosureReason::HeroDeclined => {
+                    "hero_declined"
+                }
+                crate::gameplay::journey::living_scene::MerchantQuoteClosureReason::MerchantWithdrew => {
+                    "merchant_withdrew"
+                }
+            });
             json!({
                 "quote_id": quote.quote_id,
                 "direction": direction,
@@ -862,6 +872,7 @@ pub(super) async fn merchant_quotes(
                 "status": status,
                 "attempt_count": entry.attempt_count,
                 "last_rejection": entry.last_rejection,
+                "close_reason": close_reason,
             })
         })
         .collect::<Vec<_>>();
@@ -1001,7 +1012,7 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"}),
         json!({"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"}),
         json!({"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&component=<component>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "component":"subtitle|speech_bubble|thinking_loader|intent_loader|check_card|item_card|title_card|scene_card|plate_incoming|plate_outgoing", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status,component_count,by_component,by_component_phase,by_visibility},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"}),
-        json!({"command":"merchant-quotes", "method":"GET", "path":"/dev/merchant-quotes?last=<N>", "args":{"last":"1..1000, default 50"}, "output":"{quotes[{quote_id,direction,item_id,offer_id,seller_id,buyer_id,price_cp,stock_revision,purse_revision,source_line_id,source_line_sequence,source_revision,source_actor_id,status,attempt_count,last_rejection}],count,returned}; durable exact-quote outcomes, closed rejection reasons only, no source speech text or private facts"}),
+        json!({"command":"merchant-quotes", "method":"GET", "path":"/dev/merchant-quotes?last=<N>", "args":{"last":"1..1000, default 50"}, "output":"{quotes[{quote_id,direction,item_id,offer_id,seller_id,buyer_id,price_cp,stock_revision,purse_revision,source_line_id,source_line_sequence,source_revision,source_actor_id,status,attempt_count,last_rejection,close_reason}],count,returned}; durable exact-quote outcomes and closure reasons, no source speech text or private facts"}),
         json!({"command":"layout list|get", "method":"GET", "path":"/dev/layout", "args":{}, "output":"{revision,status,overrides,visibility,clients,capacity}; actual browser IDs with per-client exact-revision rect/configured/effective-transform/visibility readback and explicit overflow"}),
         json!({"command":"layout transform <id>", "method":"POST", "path":"/dev/layout/transform", "args":"--translate-x <n> --translate-y <n> --unit px|percent [--scale <n>|--scale-x <n> --scale-y <n>] [--rotate <degrees>]", "output":"{status:pending,id,revision}; changes only the named registered visual"}),
         json!({"command":"layout move <id>", "method":"POST", "path":"/dev/layout/move", "args":"[--x <n>] [--y <n>] --unit px|percent; translation offsets compose with scale and rotation", "output":"{status:pending,id,revision}; changes bounded translation offsets"}),

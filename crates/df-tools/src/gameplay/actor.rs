@@ -1760,8 +1760,26 @@ impl Actor {
         if let Some(quote) = proposal.trade_quote.as_ref() {
             let hero = super::journey::player_entity(member, &current).map_err(unavailable)?;
             let hero_id = super::journey::name(current.state(), hero).map_err(unavailable)?;
-            let terms = super::journey::living_scene::merchant_trade_terms(&current, &hero_id)
+            let mut terms = super::journey::living_scene::merchant_trade_terms(&current, &hero_id)
                 .map_err(unavailable)?;
+            if quote.direction == super::journey::living_scene::SceneTradeDirection::HeroSells {
+                let place_id = scene
+                    .setting
+                    .as_ref()
+                    .map(|setting| setting.place_id.as_str())
+                    .ok_or_else(|| {
+                        tonic::Status::failed_precondition("merchant place unavailable")
+                    })?;
+                super::journey::merchant_bargaining::apply_committed_buyback_context(
+                    &current,
+                    &mut terms,
+                    place_id,
+                    &quote.item_id,
+                    &hero_id,
+                    &proposal.actor_id,
+                )
+                .map_err(unavailable)?;
+            }
             let validated = match super::journey::merchant_bargaining::quote_candidate_for_item(
                 &terms,
                 &hero_id,
@@ -2497,6 +2515,10 @@ impl Actor {
             .table_log
             .latest_npc_speech_at(quote.source_line_sequence, &quote.source_actor_id)
             .is_none()
+            || self
+                .table_log
+                .latest_hero_speech_after(quote.source_line_sequence)
+                .is_some()
         {
             return Err(tonic::Status::failed_precondition(
                 "merchant quote no longer matches the latest public NPC speech",
@@ -3817,6 +3839,7 @@ impl Reducer<Call> for Actor {
                     super::dialogue::DialogueRequest::Confirm(_)
                     | super::dialogue::DialogueRequest::SyncNotes
                     | super::dialogue::DialogueRequest::PendingMerchantQuote
+                    | super::dialogue::DialogueRequest::CloseMerchantQuote { .. }
                     | super::dialogue::DialogueRequest::Cancel(_) => None,
                 };
                 let result = after_grant_reconnect(reconnected, || {
