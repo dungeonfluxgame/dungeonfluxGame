@@ -13,6 +13,8 @@ the printed display URL once and the player URL in two tabs. See [Play the game
 locally](development/README.md#play-the-game-locally) for details. Gameplay tuning
 is in progress, with design in [planning/gameplay-tuning.md](planning/gameplay-tuning.md)
 and data planned for `content/harbor-journey/`.
+For the agent CLI, visual asset provenance, scene timing, and photographic
+review, use the [visual resource operations manual](development/visual-resource-manual.md).
 
 The playable two-player harbor journey covers room join, Level 1 Dwarf Fighter
 (Soldier) creation, Lantern Wharf, typed courier dialogue, a real-dice bandit fight,
