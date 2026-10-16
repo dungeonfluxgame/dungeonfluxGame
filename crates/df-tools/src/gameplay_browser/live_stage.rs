@@ -1130,7 +1130,7 @@ impl Figures {
                 ".tv-check-result[data-check-sequence=\"{sequence}\"]"
             ))? {
                 panel.remove();
-                self.report_removed_component(&panel, 0, "read-complete");
+                self.report_removed_component(&panel, 0, "read");
             }
         }
         Ok(())
