@@ -220,8 +220,8 @@ mkdir -p "$TMPDIR" "$PLAY"
 chmod 700 "$PLAY"
 mkdir -p "$RUN_DIR"
 chmod 700 "$RUN_DIR"
-# A previous interrupted run may leave the marker as an empty directory (some
-# Windows/MSYS file operations create it that way). Remove only that directory;
+# The server treats STOP_FILE as a base directory and appends its own
+# <run_identity>.stop marker beneath it. Remove only an empty base directory;
 # never recurse through the run directory. A non-empty directory is left intact
 # and reported so an operator can inspect it.
 if test -d "$STOP_FILE" && test ! -L "$STOP_FILE"; then

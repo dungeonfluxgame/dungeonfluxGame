@@ -1128,3 +1128,120 @@ does not establish which hero or NPC is depicted. Key results to the plate hash 
 revision, reject stale results, and measure bounded inference latency and spend. Keep
 the current head-location and bubble-placement path as the fallback. Hosted inference
 is still unverified; see [Segment Anything feasibility](segment-anything-feasibility.md).
+
+**2026-10-16 KOKOZA retest:** The disk/build blocker above is historical. A fresh
+native and WASM build of `0996445c` ran as `dialogue-0996445c`, with two ready
+heroes in dialogue and no combat. Sixteen NPC exchanges and a packet inspection
+were exercised with visual checks after each interaction. The inspection resolved
+to 8 + 0 = 8 but used a clipped narration phrase as its target; its result card
+remained hidden for its entire 11.8-second lifecycle. NPC replies also invented
+unknown injury, history, payment, motive, employer and witness details. Follow-up
+repairs therefore cover authored disclosure/silence, grounded question answers,
+canonical investigation targets, DM result narration, and queued card visibility.
+Seven completed 1,000 ms plate crossfades were observed before later scene tests,
+but subtle edit direction made the progression hard to perceive. Actor identity
+measurement and zero-width retained captions also failed in the running build.
+Repair code is awaiting integrated compilation and running-output evaluation;
+this retest does not establish audio audition or complete feature acceptance.
+
+**TEPEVA follow-up, `dialogue-dm-6adb3e5a`:** Native and WASM builds completed;
+159 focused repair tests passed. Fifty failures from the broader native sweep
+were also reproduced on the prior `d99afc5f` snapshot. Strict Clippy still reports
+80 native and 15 WASM findings. The old KOKOZA database was preserved and refused
+the changed content revision; a fresh two-player CLI quickstart reached dialogue.
+Its layout revision is zero, with no caption-hiding override.
+
+The first live Perception check (13 + 1 = 14) produced a visible 600 by 186 px
+card, but DM acceptance failed. Generic narration line 6 opened at 192404 ms;
+the check card first became visible at 199176 ms, 6772 ms later. A second DM line
+read the full 90-character roll metadata. The user heard both defects. The card
+reached readable at 204620 ms but never closed: the final lingering line stops
+the presentation clock before its terminal transition. Result-only voice,
+duplicate narration suppression, visible reveal ordering, final card retirement
+and complete CLI timing evidence remain under repair. Browser audio reached its
+7.7845-second end; root did not audition it. Capture gaps reported four dropped
+records, so incomplete lifecycle fields are not proof that a media event failed.
+
+**BEKEMO, `dialogue-9162f2fd`:** 157 focused native checks passed and native/WASM
+builds completed. Build pins prevented loading the old TEPEVA checkpoint; that
+database was preserved and a fresh two-player CLI quickstart reached dialogue.
+The redesigned card was visibly readable at 600 by 307 px, showed the accepted
+intention and full finding, and retired from the DOM. This run was muted during
+the check, so it does not verify DM playback. The absent CLI retirement event was
+traced to an unsupported `read-complete` capture reason; use the shared `read`
+reason and retest the actual Hidden event and held time.
+
+The user reported absent Courier audio. Its caption was present, but no Courier
+voice request existed: the scripted caption carried actor ID `courier` while the
+registered voice only carried the name `Courier`. The audio element's finished
+6.32175-second clip belonged to the preceding DM line. Shared canonical speaker
+resolution and case-insensitive name matching are under repair; retain exact actor
+IDs and verify the Courier's own request/playback after rebuilding.
+
+**SAMURE, `dialogue-e3caa3f1`:** 23 voice/casing tests passed, WASM library and
+test compilation passed, and the user confirmed the Courier was audible. This
+repairs the canonical actor/name mismatch. A live lowercase Courier question
+also resolved to the canonical `courier` actor. The Bandit motive question returned
+`withheld`, with no invented NPC reply.
+
+The roll retest still failed human timing acceptance. Card result became readable
+at 189668 ms but hid at 192168 ms; DM voice began at 192189 ms. The result had only
+2500 ms to read and disappeared 21 ms before speech. The user confirmed the DM
+was late and the card disappeared too soon. The silent roll predecessor's ordinary
+linger and Closing cleanup are being replaced with an explicit bounded handoff;
+the result must own its full reading and voice window. The canonical `read`
+retirement event is now visible in the CLI. Remaining visual observations include
+incorrect actor head assignments and role-label replies such as "I'm Courier."
+
+**FUTERA, `dialogue-30a4857a`:** 94 focused native tests passed; WASM library
+and tests compile, formatting passes, and strict lint diagnostics match the prior
+build (native 80/86, WASM 15/30). The Courier's identity question now returns the
+authored deferral "You can call me the courier. My name can wait." Lowercase and
+uppercase questions retain canonical actor ID `courier`; a compound question
+preserves the authorized story clause. Public identity facts, aliases/refusals,
+explicit withholding, trust gates and private audience continuity have focused
+boundary tests. Full independent visual coverage remains unavailable to the
+evaluator's browser session.
+
+Three actual checks revealed their results 213, 213 and 243 ms before DM playback.
+The readable windows were 5703, 8652 and 7703 ms, all through actual voice end.
+Root visually observed the cards during playback and after retirement. The user
+confirmed the repeated check went well and selected gentler entry/exit fades as
+the remaining polish. A settled reconnect card restored silently and retired;
+its budget ran behind the sound modal, so human reading behind that modal is not
+accepted. Retained scene context also overlapped the named Courier caption and
+persisted through a new check. The scoped follow-up retires recovery context
+when a current line/check owns presentation and adds conductor-owned opacity
+fades; new running acceptance is pending.
+
+The same playtest exposed two scene-context gaps. Both natural-language packet
+inspections were refused: fixed harbor has no structured scene model or packet
+entity/affordance in its investigation catalog. This is not evidence that simply
+stripping the article from classifier output will repair it. A Courier scene
+question produced an unsupported "nothing more from here" clause. Latest check
+narration can replace the stable public scene paragraph, while the no-dossier
+path lacks the shared structured room model. Two-pass preparation/plate
+observation and time-aware scene-memory representation are being designed from
+these concrete failures; no image observation is authorized to create a clue,
+hidden name or rules fact automatically.
+
+**GUFEDU, `dialogue-a99bcf03`:** The selected 250 ms entry / 350 ms exit opacity
+polish and recovery-context retirement are integrated. A first fade run exposed
+that re-appending a card's bubble host to its existing portal restarted its entry
+at result reveal and DM opening. The same-parent guard now prevents those moves.
+In the corrected running build the result became readable at 26368 ms, DM started
+at 26587, voice ended at 29677, Closing began at 32071 and removal was reported at
+32489. No extra transparent transitions occurred at reveal/handoff. The reloaded
+Courier caption and next check both had zero competing scene-context nodes.
+The card held after its own voice end and retired; final lowercase identity speech
+still used the Courier's authored deferral. Root observed actual display output;
+independent IAB and separate human fade-smoothness review remain unavailable.
+
+WASM library/tests and formatting pass. Strict WASM lint remains the same 15/30
+existing findings. Native timing/name/voice code is unchanged from 94 passing
+focused tests. The remaining scene gaps and conservative temporal representation
+are documented in [two-pass scene hydration](scene-observation-hydration.md) and
+[scene memory](scene-memory-representation.md). Those are planning proposals;
+the scene entity bridge, byte-bound observations and merge reducer are not yet
+implemented. Actor localization, generic clues, startup-modal reading coverage
+and lossless capture remain separate unfinished items.

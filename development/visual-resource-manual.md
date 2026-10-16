@@ -484,6 +484,13 @@ accepted speech through `table_log.rs` and `voice_line.rs` into `gameplay/voice.
 The provider boundary is `df-providers/src/speech_adapter.rs`. Change this path
 together; a second text rewrite at TTS would break caption/speech agreement.
 
+Scripted journey dialogue and generated replies must use the same canonical actor
+identity in `presentation.rs` and `voice_line.rs`. Speaker names are compared after
+trimming and lowercasing; emitted names retain their canonical cast spelling and
+actor IDs remain exact. Ambiguous folded names must not select an arbitrary actor.
+A visible NPC caption and the prior audio element's `ended` flag do not establish
+NPC playback: inspect that line's own voice request, role/key and start/end records.
+
 NPC replies now prioritize the latest question, use public history for follow-ups,
 avoid forced names and unrelated biography, and use Medium reasoning with the same
 450-token output cap. The model, casting and speech-provider settings are unchanged.
@@ -506,3 +513,113 @@ Compare full replies with the approved facts, then inspect the CLI `text_model`,
 conversational pacing and pauses; verify the spoken words match the caption.
 Prompt-only experiments and the remaining build/audio gates are recorded in
 `planning/issue-triage.md` under dialogue refinement.
+
+### Roll results and the DM
+
+`voice_line.rs::check_voice_line` pairs the public Roll row with its immediately
+following public finding. The DM announces success with the approved public clue,
+or a natural line describing the unsuccessful attempt, through the existing
+narrator voice registry. The spoken line has no roll number, character/skill
+metadata, modifier or equation. The card retains the full visual result.
+
+`gameplay_browser/live_motion.rs` queues a silent check-card item and then its DM
+announcement. The dice phase uses `live_stage::check_roll_read_ms()` (5,200 ms);
+the result remains visible through the announcement's reading/voice lifecycle.
+The conductor's private `LineTiming` policy gives the roll a 200 ms reveal
+handoff, then gives the result its own full reading budget after the DM entrance
+(finding reading time plus 1,000 ms, at least 5,000 ms). Both that budget and
+actual clip completion must pass before retirement. Ordinary speech keeps its
+existing timing; it must not lend its silent-roll linger or cleanup to the card.
+`TvStage::{begin_check,reveal_check,finish_check}` use the check sequence so an old
+completion cannot close a newer card. Reconnect restores a settled card silently.
+Managed cards fade in over 250 ms and fade out over 350 ms after their protected
+reading/voice gates. The conductor's Closing-to-Done transition removes the DOM;
+there is no second removal timer. Keep an already portaled bubble under its
+existing parent: re-appending it restarts its entrance at reveal/DM handoff.
+Recovery scene context retires when a current caption or check takes ownership
+and cannot reappear through another same-scene display render.
+Missing character geometry uses a measured neutral panel rather than an invented
+speaker position. Inspect both `check_card` and line/voice records:
+
+```powershell
+& $fixture dev timeline --last 1000 --component check_card
+& $fixture dev timeline --last 1000 --type voice
+```
+
+Verify visible result reveal before actual playback, then the reading/voice hold
+and close order. A changed narration field from the same check must not queue an
+earlier announcement. Keep the managed check's clock alive until its terminal
+transition, including when no later line is queued. A generated clip or browser
+playback flag alone is not an audible acceptance result.
+
+### Check-card presentation and camera coverage
+
+`gameplay_browser/live_stage.rs::set_check_mode` renders the check as a reading
+field, a compact mechanics rail and a full-width resolution region. The accepted
+action intention is the primary text. `live_stage.css` owns its smoked-oak,
+bronze and ash palette; `live_plate.css` owns managed outcome/finding visibility.
+The result phase reveals both without changing measured card bounds. Keep dice,
+kept face, modifier and total visible as rules information; the DM speaks only
+the outcome and approved finding. Preserve wrapping, scroll access and the
+existing sequence/component attributes when changing this layout.
+
+`gameplay/shot.rs::Camera::for_public_beat` selects bounded photographic coverage
+from committed public tempo and dialogue continuity. Opening, victory and release
+use establishing coverage. Ordinary exchanges use medium for the first published
+reply, close coverage for the same speaker and over-shoulder coverage on a speaker
+change; rare public peak beats can use a three-degree Dutch angle. Arbitrary words
+in a reply never select a shot.
+
+`living_scenes/plates/state_images.rs` classifies continuity when dispatching an
+edit and advances it only when a current successful image is published. Failed,
+coalesced or stale renders do not become previous shots. Scene changes reset it.
+Each image keeps canonical identity references and receives its own measured
+geometry. Inspect plate timeline fields `shot_kind`, `angle`, `focus_reason`,
+`focus_actor` and `image_key`, then visually verify the actual generated framing.
+
+### Authored answers and intentional silence
+
+The shipped harbor has no social dossiers. Its normal RPC and CLI conversation
+paths must both reach `npc_reply.rs::converse_report`, including the bounded
+question handling in `npc_answer.rs`. `QuestionAuthority` in a dossier refers to
+authored facts; it preserves their polarity and provenance. Shipped speaker
+profiles carry the authored withholding subjects.
+An unknown injury, employer, payment or prior delivery must not become an invented
+positive or negative claim. The Bandit's motive/employer silence policy is authored
+in `content/harbor-journey/pack.json`.
+
+`ExchangeOutcome` distinguishes spoken, withheld and unavailable. The CLI exposes
+the same distinction at `status` and `npc_outcome`. Intentional withholding closes
+the pending reply without an NPC caption, dummy action or voice clip. Provider
+failure and rejected private information are unavailable, not intentional silence.
+Private follow-ups require recipient authority; later public questions must not
+publish the recipient's private destination or other forbidden terms.
+
+Personal-name disclosure is separate from canonical actor identity. The authored
+speaker profile can supply a bounded public `identity_reply` containing a role,
+alias, public name or guarded deferral. Existing exact question-authority facts
+and listener/trust gates govern personal names; identity withholding remains an
+authored policy choice. A display label such as Courier must not manufacture a
+personal name or force an introduction. Compound questions preserve the other
+authorized answers while respecting name privacy. Inspect `npc_answer.rs`,
+`npc_dossier.rs`, `npc_room.rs` and the pack speaker profile together.
+
+### Scene observations and memory (proposed)
+
+The current harbor lacks a structured packet target, and latest check narration
+can replace the NPC's stable scene paragraph. The next bounded design is
+[two-pass scene hydration](../planning/scene-observation-hydration.md), backed by
+the [scene memory representation](../planning/scene-memory-representation.md).
+These documents are proposals, not installed runtime APIs.
+
+Prepare one canonical public entity snapshot before narration and imagery, then
+attach bounded appearance observations to the exact returned image bytes. Keep
+the ordered world journal, per-plate observations and NPC witness/belief history
+linked by provenance. A three-way merge checks render basis, observed image and
+current canonical state; a late image cannot resurrect an earlier holder or
+position, and an out-of-frame character has not thereby left the world.
+
+`ImageKey` and `SceneGraph.revision` are content/request fingerprints, not ordered
+time or returned-byte identity. Preserve a real image-byte SHA-256, source basis,
+image ancestry, display occurrence, observer access and explicit merge decisions.
+Do not feed private dossiers or image-only clues into a public observation job.
