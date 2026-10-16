@@ -1,7 +1,8 @@
 //! Committed scene interactions. Presentation caches are rebuilt from this checkpoint journal.
 use super::*;
 use crate::gameplay::adventure::scene_model::{
-    SceneChange, SceneChangeKind, SceneNow, ScenePerson, SceneStealAdjudication, StartingAttitude,
+    SceneChange, SceneChangeKind, SceneInventoryEntry, SceneInventoryLocation, SceneModel,
+    SceneNow, ScenePerson, SceneStealAdjudication, StartingAttitude,
 };
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,56 @@ static MODELS: std::sync::OnceLock<
         std::collections::BTreeMap<String, crate::gameplay::adventure::scene_model::SceneModel>,
     >,
 > = std::sync::OnceLock::new();
+
+/// Projects inventory rows with stable, non-display actor references for device cards.
+/// The underlying scene model keeps local actor IDs for authored rules and narrative
+/// resolution; this view binds hero names to durable entity IDs and scopes NPC IDs by place.
+pub(crate) fn inventory_projection(
+    state: &GameState,
+    model: &SceneModel,
+    place_id: &str,
+) -> Result<Vec<SceneInventoryEntry>, RepositoryError> {
+    let mut entries = model.inventory();
+    for entry in &mut entries {
+        entry.owner_id = entry
+            .owner_id
+            .as_deref()
+            .map(|actor| canonical_scene_actor_ref(state, model, place_id, actor))
+            .transpose()?;
+        entry.holder_id = entry
+            .holder_id
+            .as_deref()
+            .map(|actor| canonical_scene_actor_ref(state, model, place_id, actor))
+            .transpose()?;
+        if let SceneInventoryLocation::Held { holder_id } = &mut entry.location {
+            *holder_id = canonical_scene_actor_ref(state, model, place_id, holder_id)?;
+        }
+    }
+    Ok(entries)
+}
+
+fn canonical_scene_actor_ref(
+    state: &GameState,
+    model: &SceneModel,
+    place_id: &str,
+    actor_id: &str,
+) -> Result<String, RepositoryError> {
+    if let Some(character) = state
+        .characters
+        .iter()
+        .find(|character| super::name(state, character.entity).is_ok_and(|name| name == actor_id))
+    {
+        return super::canonical_actor_ref(state, character.entity);
+    }
+    if model.people.iter().any(|person| person.id == actor_id) {
+        return Ok(format!(
+            "npc:{}:{}",
+            super::hex(place_id.as_bytes()),
+            super::hex(actor_id.as_bytes())
+        ));
+    }
+    Err(invalid())
+}
 
 pub(in crate::gameplay) fn install(
     settings: &crate::gameplay::adventure::setting::ChapterSettings,

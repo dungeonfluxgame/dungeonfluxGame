@@ -485,6 +485,24 @@ pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, Repositor
         .ok_or(RepositoryError::InvalidCandidate)
 }
 
+/// Returns a stable, non-display identity for an entity participating in a scene.
+/// Scene text and authored NPC IDs are presentation-local; persisted inventory cards
+/// need an actor key that survives display-name changes and reconnects.
+pub(crate) fn canonical_actor_ref(
+    state: &GameState,
+    who: EntityId,
+) -> Result<String, RepositoryError> {
+    if !state.entities.iter().any(|entity| entity.id == who)
+        && !state
+            .characters
+            .iter()
+            .any(|character| character.entity == who)
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    Ok(format!("entity:{}", hex(who.as_bytes())))
+}
+
 /// Returns the single non-party participant for the legacy journey encounter.
 /// The fixed Bandit remains the fallback for pre-binding checkpoints; a scene
 /// assault resolves the canonical Courier entity instead.
