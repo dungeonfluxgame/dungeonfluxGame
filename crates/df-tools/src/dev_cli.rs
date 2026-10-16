@@ -208,6 +208,7 @@ fn print_help() {
          feelings <npc>               current development-only NPC diagnostic\n\
          timeline [--last <n>] [--type <resource>] [--component <kind>] [--summary]  bounded resource and presentation lifecycles\n\
          merchant-quotes [--last <n>]  exact source-bound quote status and closed outcomes\n\
+         ledger                       canonical coin, item custody, merchant purses and stock for every hero\n\
          play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
@@ -392,6 +393,7 @@ async fn dispatch(
             )
             .await
         }
+        "ledger" => get(client, "/dev/ledger").await,
         "layout" => layout::run(client, positional, options).await,
         "play" => play::run(client, options).await,
         "wait" => wait(client, options).await,

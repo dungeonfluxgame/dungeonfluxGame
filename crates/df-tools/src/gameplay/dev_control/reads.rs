@@ -7,11 +7,19 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use df_model::checkpoint::Checkpoint;
+use df_persistence::local_demo_scope::LocalDemoRole;
 use df_protocol::common as rpc;
+use df_session::submission::RepositoryError;
 use serde_json::{Map, Value, json};
 use std::{collections::HashMap, sync::Arc};
 
 use super::{Outcome, Shared, authorized, bad_request, display_view, revision_json, seat_view};
+use crate::gameplay::{
+    adventure::scene_model::{SceneInventoryLocation, SceneModel},
+    journey::{self, living_scene},
+    wire,
+};
 
 /// `GET /dev/state`: everything a script needs in one document: room, phase,
 /// scene, seats with sheets and offers, the fight, standings, revision and the
@@ -344,18 +352,14 @@ pub(super) async fn scene_for(
     let hero = params
         .get("name")
         .ok_or_else(|| bad_request("scene needs a hero name"))?;
-    let index = {
-        let seats = state.seats.lock().await;
-        super::resolve_hero(&seats, hero).map_err(bad_request)?
-    };
-    let (_, view) = seat_view(&state, index).await?;
+    let (_, view, projection) = named_hero_view(&state, hero).await?;
     let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
         return Err(super::failed("player view required"));
     };
     Ok((
         axum::http::StatusCode::OK,
         Json(json!({
-            "hero": hero, "scene": player.scene.as_ref().map(scene_json),
+            "hero": hero, "projection": projection, "scene": player.scene.as_ref().map(scene_json),
         })),
     ))
 }
@@ -538,15 +542,11 @@ pub(super) async fn view_as(
             ),
         ));
     }
-    let index = {
-        let seats = state.seats.lock().await;
-        super::resolve_hero(&seats, who).map_err(bad_request)?
-    };
-    let (revision, view) = seat_view(&state, index).await?;
+    let (revision, view, projection) = named_hero_view(&state, who).await?;
     Ok((
         axum::http::StatusCode::OK,
         Json(
-            json!({"as": who, "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, None, false)}),
+            json!({"as": who, "projection": projection, "revision": revision, "view": view_json(&view), "timings":super::timeline::snapshot(20, None, None, false)}),
         ),
     ))
 }
@@ -830,57 +830,332 @@ pub(super) async fn merchant_quotes(
     }
     let quotes = history
         .into_iter()
-        .map(|entry| {
-            let quote = entry.quote;
-            let direction = match quote.direction {
-                crate::gameplay::journey::living_scene::SceneTradeDirection::HeroBuys => {
-                    "hero_buys"
-                }
-                crate::gameplay::journey::living_scene::SceneTradeDirection::HeroSells => {
-                    "hero_sells"
-                }
-            };
-            let status = match entry.status {
-                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Pending => "pending",
-                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Accepted => "accepted",
-                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Stale => "stale",
-                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Declined => "declined",
-                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Withdrawn => "withdrawn",
-            };
-            let close_reason = entry.close_reason.map(|reason| match reason {
-                crate::gameplay::journey::living_scene::MerchantQuoteClosureReason::HeroDeclined => {
-                    "hero_declined"
-                }
-                crate::gameplay::journey::living_scene::MerchantQuoteClosureReason::MerchantWithdrew => {
-                    "merchant_withdrew"
-                }
-            });
-            json!({
-                "quote_id": quote.quote_id,
-                "direction": direction,
-                "item_id": quote.item_id,
-                "offer_id": quote.offer_id,
-                "seller_id": quote.seller_id,
-                "buyer_id": quote.buyer_id,
-                "price_cp": quote.price_cp,
-                "stock_revision": quote.stock_revision,
-                "purse_revision": quote.purse_revision,
-                "source_line_id": quote.source_line_id,
-                "source_line_sequence": quote.source_line_sequence,
-                "source_revision": quote.source_revision,
-                "source_actor_id": quote.source_actor_id,
-                "status": status,
-                "attempt_count": entry.attempt_count,
-                "last_rejection": entry.last_rejection,
-                "close_reason": close_reason,
-            })
-        })
+        .map(merchant_quote_json)
         .collect::<Vec<_>>();
     let returned = quotes.len();
     Ok((
         StatusCode::OK,
         Json(json!({"quotes": quotes, "count": total, "returned": returned})),
     ))
+}
+
+/// One durable quote record as the operator sees it: exact terms, revisions, status and
+/// closure reason. Source speech text and private reply context are never included.
+fn merchant_quote_json(
+    entry: crate::gameplay::journey::living_scene::MerchantQuoteHistoryEntry,
+) -> Value {
+    use crate::gameplay::journey::living_scene::{
+        MerchantQuoteClosureReason, MerchantQuoteStatus, SceneTradeDirection,
+    };
+    let quote = entry.quote;
+    let direction = match quote.direction {
+        SceneTradeDirection::HeroBuys => "hero_buys",
+        SceneTradeDirection::HeroSells => "hero_sells",
+    };
+    let status = match entry.status {
+        MerchantQuoteStatus::Pending => "pending",
+        MerchantQuoteStatus::Accepted => "accepted",
+        MerchantQuoteStatus::Stale => "stale",
+        MerchantQuoteStatus::Declined => "declined",
+        MerchantQuoteStatus::Withdrawn => "withdrawn",
+    };
+    let close_reason = entry.close_reason.map(|reason| match reason {
+        MerchantQuoteClosureReason::HeroDeclined => "hero_declined",
+        MerchantQuoteClosureReason::MerchantWithdrew => "merchant_withdrew",
+    });
+    json!({
+        "quote_id": quote.quote_id,
+        "direction": direction,
+        "item_id": quote.item_id,
+        "offer_id": quote.offer_id,
+        "seller_id": quote.seller_id,
+        "buyer_id": quote.buyer_id,
+        "price_cp": quote.price_cp,
+        "stock_revision": quote.stock_revision,
+        "purse_revision": quote.purse_revision,
+        "source_line_id": quote.source_line_id,
+        "source_line_sequence": quote.source_line_sequence,
+        "source_revision": quote.source_revision,
+        "source_actor_id": quote.source_actor_id,
+        "status": status,
+        "attempt_count": entry.attempt_count,
+        "last_rejection": entry.last_rejection,
+        "close_reason": close_reason,
+    })
+}
+
+/// `GET /dev/ledger`: the canonical economy of the current checkpoint for every hero and every
+/// NPC merchant of the current place. No seat or hero credential is involved.
+pub(super) async fn ledger(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let checkpoint = state.service.updates.borrow().clone();
+    let document = ledger_json(&checkpoint).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "ledger unavailable"})),
+        )
+    })?;
+    Ok((StatusCode::OK, Json(document)))
+}
+
+/// Recent quote records the ledger repeats; the open count covers the whole history.
+const LEDGER_RECENT_QUOTES: usize = 5;
+
+/// One canonical inventory row. The actor references are what the phones and display match on,
+/// kept beside the JSON so each hero can be matched without reparsing the document.
+struct LedgerItem {
+    owner_ref: Option<String>,
+    holder_ref: Option<String>,
+    json: Value,
+}
+
+fn ledger_json(current: &Checkpoint) -> Result<Value, RepositoryError> {
+    let state = current.state();
+    let scene = crate::gameplay::beat_script_runtime::scene(state)?;
+    let mut heroes = Vec::new();
+    for character in &state.characters {
+        heroes.push((
+            journey::name(state, character.entity)?,
+            journey::canonical_actor_ref(state, character.entity)?,
+            living_scene::balance_cp(state, character.entity)?,
+        ));
+    }
+    let hero_names = heroes
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .collect::<Vec<_>>();
+    let place = scene
+        .setting
+        .as_ref()
+        .map(|setting| setting.place_id.as_str());
+    let (items, merchants) = match (place, living_scene::snapshot(state, &scene)?) {
+        (Some(place_id), Some(snapshot)) => {
+            scene_ledger(current, place_id, &snapshot.model, &hero_names)?
+        }
+        _ => (Vec::new(), Vec::new()),
+    };
+    let party = heroes
+        .iter()
+        .map(|(name, id, coin_cp)| {
+            let held = items
+                .iter()
+                .filter(|item| {
+                    item.owner_ref.as_deref() == Some(id.as_str())
+                        || item.holder_ref.as_deref() == Some(id.as_str())
+                })
+                .map(|item| {
+                    let custody = if item.owner_ref.as_deref() == Some(id.as_str()) {
+                        "permanent"
+                    } else {
+                        "observation_only"
+                    };
+                    let mut row = item.json.clone();
+                    row["custody"] = json!(custody);
+                    row
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "id": id,
+                "name": name,
+                "coin_cp": coin_cp,
+                "coin_breakdown": coin_breakdown(*coin_cp),
+                "items": held,
+            })
+        })
+        .collect::<Vec<_>>();
+    let history = living_scene::merchant_quote_history(current)?;
+    let quote_count = history.len();
+    let open_quotes_count = history
+        .iter()
+        .filter(|entry| entry.status == living_scene::MerchantQuoteStatus::Pending)
+        .count();
+    let quotes = history
+        .into_iter()
+        .skip(quote_count.saturating_sub(LEDGER_RECENT_QUOTES))
+        .map(merchant_quote_json)
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "revision": checkpoint_revision_json(current),
+        "place_id": place,
+        "party": party,
+        "merchants": merchants,
+        "scene_items": items.into_iter().map(|item| item.json).collect::<Vec<_>>(),
+        "open_quotes_count": open_quotes_count,
+        "quote_count": quote_count,
+        "quotes": quotes,
+    }))
+}
+
+/// Scene inventory rows and the trading NPCs' purses for one place. Owner and holder carry the
+/// canonical actor reference and the authored id, so a merchant or hero can be matched either way.
+fn scene_ledger(
+    current: &Checkpoint,
+    place_id: &str,
+    model: &SceneModel,
+    hero_names: &[&str],
+) -> Result<(Vec<LedgerItem>, Vec<Value>), RepositoryError> {
+    let (stock_revisions, purse_revisions) = trade_revisions(current, hero_names)?;
+    let authored = model.inventory();
+    let mut items = Vec::new();
+    for entry in living_scene::inventory_projection(current.state(), model, place_id)? {
+        let local = authored
+            .iter()
+            .find(|candidate| candidate.item_id == entry.item_id)
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        let json = json!({
+            "item_id": entry.item_id,
+            "source_id": entry.source_id,
+            "name": item_name(model, &entry.item_id),
+            "provenance_kind": entry.provenance_kind,
+            "owner_id": entry.owner_id,
+            "owner": local.owner_id,
+            "holder_id": entry.holder_id,
+            "holder": local.holder_id,
+            "location": location_json(&entry.location),
+            "available": entry.available,
+            "cost_cp": entry.cost_cp,
+            "stock_revision": stock_revisions.get(&entry.item_id).copied(),
+        });
+        items.push(LedgerItem {
+            owner_ref: entry.owner_id,
+            holder_ref: entry.holder_id,
+            json,
+        });
+    }
+    let sellers = model
+        .offers
+        .iter()
+        .map(|offer| offer.seller_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut merchants = Vec::new();
+    for seller in sellers {
+        let Some(person) = model.people.iter().find(|person| person.id == seller) else {
+            continue;
+        };
+        merchants.push(json!({
+            "id": person.id,
+            "name": person.name,
+            "place_id": place_id,
+            "purse_cp": person.coin_cp,
+            "purse_revision": purse_revisions.get(seller).copied(),
+        }));
+    }
+    Ok((items, merchants))
+}
+
+/// Stock and purse revisions from the server's own trade terms, keyed by item and by merchant.
+/// Those revisions do not depend on which hero asks, so the first answer for a key is kept.
+/// Keys are absent when no hero exists to ask, and the document reports them as null.
+fn trade_revisions(
+    current: &Checkpoint,
+    hero_names: &[&str],
+) -> Result<(HashMap<String, u64>, HashMap<String, u64>), RepositoryError> {
+    let mut stock = HashMap::new();
+    let mut purses = HashMap::new();
+    for hero in hero_names {
+        for term in living_scene::merchant_trade_terms(current, hero)? {
+            let merchant = match term.direction {
+                living_scene::SceneTradeDirection::HeroBuys => term.seller_id.clone(),
+                living_scene::SceneTradeDirection::HeroSells => term.buyer_id.clone(),
+            };
+            purses.entry(merchant).or_insert(term.purse_revision);
+            stock.entry(term.item_id).or_insert(term.stock_revision);
+        }
+    }
+    Ok((stock, purses))
+}
+
+fn item_name(model: &SceneModel, item_id: &str) -> String {
+    model
+        .things
+        .iter()
+        .find(|thing| thing.id == item_id)
+        .map(|thing| thing.name.clone())
+        .or_else(|| {
+            model
+                .offers
+                .iter()
+                .find(|offer| offer.canonical_item_id() == item_id)
+                .map(|offer| offer.name.clone())
+        })
+        .unwrap_or_default()
+}
+
+fn location_json(location: &SceneInventoryLocation) -> Value {
+    match location {
+        SceneInventoryLocation::Stock => json!({"kind": "stock"}),
+        SceneInventoryLocation::Scene { position } => {
+            json!({"kind": "scene", "position": position})
+        }
+        SceneInventoryLocation::Held { holder_id } => {
+            json!({"kind": "held", "holder_id": holder_id})
+        }
+    }
+}
+
+/// A copper total with its gold, silver and copper split (1 gp = 10 sp = 100 cp).
+fn coin_breakdown(total_cp: u64) -> Value {
+    json!({"gp": total_cp / 100, "sp": total_cp % 100 / 10, "cp": total_cp % 10})
+}
+
+/// The view for a hero named on a CLI seat is read through that seat's live phone binding, as
+/// before. Any other hero is read from the canonical checkpoint through the same player
+/// projection that hero's phone receives. Neither path revokes, joins or writes anything.
+async fn named_hero_view(
+    state: &Shared,
+    who: &str,
+) -> Result<(Value, rpc::ViewMessage, &'static str), (StatusCode, Json<Value>)> {
+    let seat = {
+        let seats = state.seats.lock().await;
+        let seat_named = super::seat_index(who).is_ok()
+            || seats.seats.iter().any(|seat| {
+                seat.hero
+                    .as_deref()
+                    .is_some_and(|hero| hero.eq_ignore_ascii_case(who))
+            });
+        if seat_named {
+            Some(super::resolve_hero(&seats, who).map_err(bad_request)?)
+        } else {
+            None
+        }
+    };
+    if let Some(index) = seat {
+        let (revision, view) = seat_view(state, index).await?;
+        return Ok((revision_json(Some(&revision)), view, "seat"));
+    }
+    let current = state.service.updates.borrow().clone();
+    let view = checkpoint_hero_view(&current, who)?.ok_or_else(|| {
+        bad_request(format!(
+            "unknown hero {who:?}; join and create first (see dev describe)"
+        ))
+    })?;
+    Ok((revision_json(view.revision.as_ref()), view, "checkpoint"))
+}
+
+/// The player projection for a named hero from the canonical checkpoint: the same
+/// `wire::journey_view` the hero's phone is served. The phone's notebook and social attachments
+/// record live observations and are not applied to this read.
+fn checkpoint_hero_view(
+    current: &Checkpoint,
+    who: &str,
+) -> Result<Option<rpc::ViewMessage>, (StatusCode, Json<Value>)> {
+    let state = current.state();
+    for character in &state.characters {
+        let name = journey::name(state, character.entity)
+            .map_err(|_| super::failed("hero name unavailable"))?;
+        if !name.eq_ignore_ascii_case(who) {
+            continue;
+        }
+        let link = state
+            .members
+            .iter()
+            .find(|link| link.character == Some(character.entity))
+            .ok_or_else(|| super::failed(format!("hero {who:?} has no player seat")))?;
+        let view = wire::journey_view(current, LocalDemoRole::Player, link.member)
+            .map_err(|_| super::failed("hero view unavailable"))?;
+        return Ok(Some(view));
+    }
+    Ok(None)
 }
 
 /// `POST /dev/checkpoint {"name": "<name>"}`: names the owner's current point
@@ -997,7 +1272,7 @@ fn describe_json() -> Value {
         "envelope": "domain outcomes (accepted/refused/unavailable/ambiguous/said/saved) arrive with HTTP 200; malformed dev requests are HTTP 400 JSON {error}; a revoked local seat binding is HTTP 409 rejoin_required; server failures are HTTP 502/500 JSON {error}",
         "refusals": "a refused action reports the server's own reason code: stale-offer, wrong-turn, invalid-selection, paused, resource-missing, capability-unavailable, recovery-required, revision-conflict, operation-conflict, operation-expired",
         "phases": ["room", "creation", "opening", "dialogue", "combat", "complete", "ended (adventure_ended)"],
-        "views": ["tv", "each joined seat or hero name; a revoked local binding returns an explicit rejoin_required result and never falls back to another audience"],
+        "views": ["tv", "each joined seat or hero name; a hero whose phone is not on a CLI seat is read from the checkpoint, read-only; a revoked local binding returns an explicit rejoin_required result and never falls back to another audience"],
         "actions": actions,
         "selection": "act <hero> <offer label or id>, or act <hero> choose --option <offer label or id>; --choice group=id repeatable / --choices JSON sets every input group; uses live server offers",
         "commands": describe_commands(),
@@ -1009,11 +1284,12 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"confirm", "method":"POST", "path":"/dev/act", "args":"<hero> <action> --input-id <hex> --confirmation-token <hex> [action selections]", "output":"same admitted action receipt; requires a current pending confirmation from say"}),
         json!({"command":"cancel", "method":"POST", "path":"/dev/cancel", "args":"<hero> --input-id <hex> --confirmation-token <hex>", "output":"{status:cancelled,disposition,revision}"}),
         json!({"command":"preview", "method":"POST", "path":"/dev/preview", "args":{"seat":"seat or hero name","appearance_text":"up to 1000 characters","backstory_text":"up to 4000 characters","identity":"optional current identity JSON"}, "output":"{status:previewed, identity, source, warnings}; read-only, review then create --identity"}),
-        json!({"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"}),
+        json!({"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"{hero, projection: seat|checkpoint, scene}: current scene contents, item card and media states; a hero whose phone is not on a CLI seat is read from the canonical checkpoint, read-only, never reclaiming the phone"}),
         json!({"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"}),
         json!({"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&component=<component>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "component":"subtitle|speech_bubble|thinking_loader|intent_loader|check_card|item_card|title_card|scene_card|plate_incoming|plate_outgoing", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status,component_count,by_component,by_component_phase,by_visibility},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"}),
         json!({"command":"merchant-quotes", "method":"GET", "path":"/dev/merchant-quotes?last=<N>", "args":{"last":"1..1000, default 50"}, "output":"{quotes[{quote_id,direction,item_id,offer_id,seller_id,buyer_id,price_cp,stock_revision,purse_revision,source_line_id,source_line_sequence,source_revision,source_actor_id,status,attempt_count,last_rejection,close_reason}],count,returned}; durable exact-quote outcomes and closure reasons, no source speech text or private facts"}),
-        json!({"command":"layout list|get", "method":"GET", "path":"/dev/layout", "args":{}, "output":"{revision,status,overrides,visibility,clients,capacity}; actual browser IDs with per-client exact-revision rect/configured/effective-transform/visibility readback and explicit overflow"}),
+        json!({"command":"ledger", "method":"GET", "path":"/dev/ledger", "args":{}, "output":"{revision{epoch,sequence}, place_id, party[{id, name, coin_cp, coin_breakdown{gp,sp,cp}, items[item+custody]}], merchants[{id, name, place_id, purse_cp, purse_revision}], scene_items[item], open_quotes_count, quote_count, quotes[last 5 merchant quote records as in merchant-quotes]}; item = {item_id, source_id, name, provenance_kind, owner_id, owner, holder_id, holder, location{kind: stock|scene|held, position|holder_id}, available, cost_cp, stock_revision}; owner_id and holder_id are canonical actor refs, owner and holder the authored ids; custody is permanent when the hero owns the item, observation_only when the hero only holds it; stock_revision and purse_revision are null when the server's trade terms do not expose them; reads the canonical checkpoint for every hero, no seat, token-gated, no credentials"}),
+        json!({"command":"layout list|get", "method":"GET", "path":"/dev/layout", "args":{},"output":"{revision,status,overrides,visibility,clients,capacity}; actual browser IDs with per-client exact-revision rect/configured/effective-transform/visibility readback and explicit overflow"}),
         json!({"command":"layout transform <id>", "method":"POST", "path":"/dev/layout/transform", "args":"--translate-x <n> --translate-y <n> --unit px|percent [--scale <n>|--scale-x <n> --scale-y <n>] [--rotate <degrees>]", "output":"{status:pending,id,revision}; changes only the named registered visual"}),
         json!({"command":"layout move <id>", "method":"POST", "path":"/dev/layout/move", "args":"[--x <n>] [--y <n>] --unit px|percent; translation offsets compose with scale and rotation", "output":"{status:pending,id,revision}; changes bounded translation offsets"}),
         json!({"command":"layout reset [id]", "method":"POST", "path":"/dev/layout/reset", "args":"optional stable visual id; omit to reset every override", "output":"{status:pending,id,revision}; removes only owned transform rules; current game styles remain"}),
@@ -1028,7 +1304,7 @@ fn describe_commands() -> Vec<Value> {
         json!({"command": "direct plate <text> [--keep] [--wait]", "method": "POST", "path": "/dev/direct", "args": {"kind": "plate|clear", "text": "1-1000 characters", "keep": "false by default"}, "output": "{kind:plate, scene, key, state:pending|ready|failed, reason?:closed image failure}; --wait uses --timeout (60 seconds default, max 600)"}),
         json!({"command": "direct clear", "method": "POST", "path": "/dev/direct", "args": {"kind": "clear"}, "output": "{status:cleared}"}),
         json!({"command": "state", "method": "GET", "path": "/dev/state", "args": {}, "output": "{revision, room, phase, scene, seats[{seat, hero, binding_status, offers, sheet, standings, told[{npc, voiced}]}], party, combat{round, active_actor, participants, reachable_cells, legal_targets}, edited}; a revoked local binding is listed as rejoin_required without private fields, while the public state remains readable"}),
-        json!({"command": "view", "method": "GET", "path": "/dev/view?as=tv|<hero>", "args": {"as": "tv or hero name"}, "output": "{as, revision, view}: exactly the view that screen is being sent; a revoked local binding returns rejoin_required with an explicit dev reclaim command and no substitute audience"}),
+        json!({"command": "view", "method": "GET", "path": "/dev/view?as=tv|<hero>", "args": {"as": "tv or hero name"}, "output": "{as, projection: seat|checkpoint, revision, view}: exactly the view that screen is being sent; a hero whose phone is not on a CLI seat gets the checkpoint player projection (no notebook or social attachments), read-only; a revoked local binding returns rejoin_required with an explicit dev reclaim command and no substitute audience"}),
         json!({"command": "notes", "method": "GET", "path": "/dev/notes?hero=<name>", "args": {"hero": "seat or hero name"}, "output": "{hero, entries[{kind, title, text, scene, order, owner, author}]}: private clues are filtered to that hero"}),
         json!({"command": "note", "method": "POST", "path": "/dev/note", "args": {"hero": "seat or hero name", "text": "1-4096 UTF-8 bytes"}, "output": "{status: added, hero, scene, order}: adds one shared party note"}),
         json!({"command": "log", "method": "GET", "path": "/dev/log?since=<sequence>", "args": {"since": "optional table sequence number"}, "output": "{revision, lines[{sequence, speaker, role, kind, text}], overrides}"}),
@@ -1369,5 +1645,131 @@ mod feelings_identity_tests {
             feelings_identity(&modeled, &background.name),
             format!("bystander:{}", background.id)
         );
+    }
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::*;
+    use crate::gameplay::{
+        adventure::{RulesMode, record, shop},
+        beat_script_tests::input,
+        beat_script_variety_tests as native, model, pack,
+        startup_configuration::ContentRating,
+    };
+
+    /// One step of the Marek clothes trade: the quoted price, then the committed purchase.
+    fn trade_clothes(current: &Checkpoint, operation: u8, payment: &str) -> Checkpoint {
+        let choices = [
+            ("scene-target", "clothes-travelers"),
+            ("scene-option", "trade"),
+            ("scene-payment", payment),
+        ]
+        .into_iter()
+        .map(|(key, value)| (model::label(key).unwrap(), model::label(value).unwrap()))
+        .collect();
+        journey::stage_with_supplier(
+            current,
+            &input(
+                current,
+                native::first(),
+                operation,
+                "script-choice",
+                choices,
+            ),
+            &mut |_| panic!("ordinary transfer does not roll"),
+        )
+        .unwrap()
+    }
+
+    fn row<'a>(rows: &'a Value, key: &str, value: &str) -> &'a Value {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate[key] == value)
+            .unwrap()
+    }
+
+    #[test]
+    fn ledger_reports_each_heroes_coin_custody_and_the_merchant_purse_and_stock() {
+        let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let actor = journey::player_entity(native::first(), &opening).unwrap();
+            let coin_before = journey::living_scene::balance_cp(opening.state(), actor).unwrap();
+            let before = ledger_json(&opening).unwrap();
+
+            assert_eq!(before["revision"], checkpoint_revision_json(&opening));
+            assert_eq!(before["place_id"], "place-mareks-cloth-shop");
+            let brynn = row(&before["party"], "name", "Brynn");
+            assert_eq!(brynn["coin_cp"], coin_before);
+            let split = &brynn["coin_breakdown"];
+            assert_eq!(
+                split["gp"].as_u64().unwrap() * 100
+                    + split["sp"].as_u64().unwrap() * 10
+                    + split["cp"].as_u64().unwrap(),
+                coin_before
+            );
+            assert!(brynn["items"].as_array().unwrap().is_empty());
+            let purse_before = row(&before["merchants"], "id", "merchant")["purse_cp"]
+                .as_u64()
+                .unwrap();
+            assert_eq!(
+                row(&before["merchants"], "id", "merchant")["purse_revision"],
+                0
+            );
+            let stock = row(&before["scene_items"], "item_id", "item-clothes-travelers");
+            assert_eq!(stock["available"], true);
+            assert_eq!(stock["cost_cp"], 200);
+            assert_eq!(stock["owner"], "merchant");
+            assert!(stock["holder_id"].is_null());
+            assert_eq!(stock["location"]["kind"], "stock");
+            assert_eq!(stock["stock_revision"], 0);
+            assert_eq!(before["open_quotes_count"], 0);
+
+            let quoted = trade_clothes(&opening, 6, "100");
+            let bought = trade_clothes(&quoted, 7, "200");
+            let after = ledger_json(&bought).unwrap();
+
+            let brynn = row(&after["party"], "name", "Brynn");
+            assert_eq!(brynn["coin_cp"], coin_before - 200);
+            let item = row(&brynn["items"], "item_id", "item-clothes-travelers");
+            assert_eq!(item["custody"], "permanent");
+            assert_eq!(item["owner"], "Brynn");
+            assert_eq!(item["holder"], "Brynn");
+            assert_eq!(item["owner_id"], brynn["id"]);
+            assert_eq!(item["holder_id"], brynn["id"]);
+            assert_eq!(item["location"]["kind"], "held");
+            let merchant = row(&after["merchants"], "id", "merchant");
+            assert_eq!(merchant["purse_cp"], purse_before + 200);
+            assert_eq!(merchant["purse_revision"], 1);
+            let stock = row(&after["scene_items"], "item_id", "item-clothes-travelers");
+            assert_eq!(stock["available"], false);
+            assert_eq!(stock["stock_revision"], 1);
+            assert_eq!(stock["owner_id"], brynn["id"]);
+        });
+    }
+
+    #[test]
+    fn named_hero_without_a_cli_seat_projects_the_checkpoint_player_view() {
+        let generated = shop::generate(47, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+
+            let view = checkpoint_hero_view(&opening, "brynn")
+                .expect("projection reads the checkpoint")
+                .expect("the phone-owned hero is in the checkpoint");
+            let shown = view_json(&view);
+            assert_eq!(shown["audience"], "player");
+            assert_eq!(shown["journey"]["own_character"]["name"], "Brynn");
+
+            assert!(
+                checkpoint_hero_view(&opening, "Nobody")
+                    .expect("projection reads the checkpoint")
+                    .is_none()
+            );
+        });
     }
 }
