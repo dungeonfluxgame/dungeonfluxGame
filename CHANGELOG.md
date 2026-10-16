@@ -14,6 +14,15 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T10:33:59-04:00 to 2026-10-16T11:02:55-04:00
+
+Range: 994b39044549af9c15682958ab83b5083c7160fd..8b59f6013f446c368f87e74c85e562cc924fb1c7
+
+- baa407fa7578a0030c7e9b30cdeddc33676901bf — Record portrait dialogue presentation work block
+- 8b59f6013f446c368f87e74c85e562cc924fb1c7 — Record NPC investigation and story plate continuation findings
+
+Next block baseline: `8b59f6013f446c368f87e74c85e562cc924fb1c7`.
+
 ## 2026-10-16T10:06:52-04:00 to 2026-10-16T10:33:59-04:00
 
 Range: e881a61e02ec62ea0047f7f854da9e29c951997c..994b39044549af9c15682958ab83b5083c7160fd
