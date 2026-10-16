@@ -22,9 +22,9 @@ const MAXIMUM_FACT_CHARACTERS: usize = 80;
 
 pub(in crate::gameplay) const FILM_LOOK: &str = "Live-action fantasy film photographed on location with real adult actors, practical sewn costumes \
     and props, real camera and prime lens, natural depth of field, skin pores, worn materials, \
-    natural atmospheric light, restrained grade and fine 35mm grain. Photographic only; no \
-    painting, illustration, concept art, matte painting, CGI, 3D render, synthetic game art or \
-    plastic surfaces.";
+    natural atmospheric light, candid unposed human gestures, soft lens focus, restrained grade \
+    and fine 35mm grain. Photographic only; no key art, heroic posing, HDR, painting, illustration, \
+    concept art, matte painting, CGI, 3D render, synthetic game art or plastic surfaces.";
 const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
 const NO_REAL_PEOPLE: &str = "No real people, celebrities or likenesses of real persons.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";
