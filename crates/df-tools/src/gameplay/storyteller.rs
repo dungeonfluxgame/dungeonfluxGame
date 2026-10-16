@@ -70,7 +70,7 @@ const MAXIMUM_WITHHELD: usize = 160;
 const MAXIMUM_WITHHELD_CHARACTERS: usize = 240;
 const MAXIMUM_TERM_CHARACTERS: usize = 64;
 const MAXIMUM_FACTS_BYTES: usize = 16 * 1024;
-const MAXIMUM_PROMPT_BYTES: usize = 32 * 1024;
+pub(super) const MAXIMUM_PROMPT_BYTES: usize = 32 * 1024;
 const MAXIMUM_CACHE_FILE_BYTES: u64 = 64 * 1024;
 /// Tokens the model may spend thinking before it writes, on top of the visible prose.
 const REASONING_ALLOWANCE_TOKENS: usize = 200;

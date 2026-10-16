@@ -1,6 +1,7 @@
 use super::super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
 use super::super::super::storyteller::{
-    ADVENTURE_STYLE, CallProfile, Expression, ReasoningEffort, build_prompt, check_request,
+    ADVENTURE_STYLE, CallProfile, Expression, MAXIMUM_PROMPT_BYTES, ReasoningEffort,
+    build_prompt, check_request,
 };
 use super::super::{generate, record};
 use super::*;
@@ -595,7 +596,12 @@ fn merchant_opening_group_requests_pass_storyteller_validation_in_both_ratings()
             check_request(&request).unwrap_or_else(|error| {
                 panic!("{rating:?} {group:?} storyteller request rejected: {error}")
             });
-            assert!(!build_prompt(&request, None).is_empty());
+            let prompt = build_prompt(&request, None);
+            assert!(
+                prompt.len() <= MAXIMUM_PROMPT_BYTES,
+                "{rating:?} {group:?} prompt is {} bytes",
+                prompt.len()
+            );
         }
     }
 }
