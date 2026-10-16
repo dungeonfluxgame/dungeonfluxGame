@@ -107,6 +107,14 @@ Variants are written to be read aloud: no markup, no stage directions in speech,
 
 Length limits (checked on the rendered result; the table lint also checks every pattern against the longest value of each slot it uses): scene title <= 32, generated narration <= 220 except the opening's bounded 900-character public scene dressing, spoken line <= 160, offer label <= 40, speaker <= 28, private clue <= 280. The loader's own bounds (1024 / 96 / 512) are looser.
 
+Opening dressing projects the model to the opening phase before selecting facts.
+It includes every present person and their supplied appearance, activity and
+position, the time and weather, the first visible prop in canonical model order,
+and the first authored way out. Empty categories are omitted. The bounded prop
+and exit selection keeps the establishing description focused; the complete
+public inventory remains available through scene inspection. Private knowledge,
+wants, attitudes and relationships are excluded from narration's scene model.
+
 ## 7. Optional language-model expression
 
 Purpose: re-express the rolled prose in a fresher voice. It never decides anything. The language-model step runs once, at generation time, before the pack bytes are fixed; if it is off, slow or its output fails any check, the pattern text is used and `expression` records `patterns`.
