@@ -7,18 +7,12 @@
    with the title card and the narrator over it, until the plate can be cut to; a scene never shows
    its cut-outs while its plate is on its way) or `plate` (the composed plate, which comes in as a
    short focus pull). On the plate layer: `data-active` (which picture shows), `data-pull=focus`
-   (the next picture is a mood edit of the shown one) and `data-push` (a or b: restarts the slow
-   push-in for a new scene). */
+   (the next picture is a mood edit of the shown one). */
 
 .tv-plate{position:absolute;z-index:3;inset:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 1s ease,visibility 0s 1s}
 .tv-stage[data-shot=plate] .tv-plate{opacity:1;visibility:visible;transition:opacity 1s ease,visibility 0s}
 .tv-stage[data-tv-mode=lobby] .tv-plate{display:none}
-/* the slow push-in toward the speaker: about 3.6% over a long scene, eased, restarted by a new scene */
 .tv-plate-zoom{position:absolute;inset:0;transform-origin:var(--head-x,50%) var(--head-y,45%);will-change:transform}
-.tv-plate[data-push=a] .tv-plate-zoom{animation:df-plate-push-a 150s cubic-bezier(.12,.55,.3,1) forwards}
-.tv-plate[data-push=b] .tv-plate-zoom{animation:df-plate-push-b 150s cubic-bezier(.12,.55,.3,1) forwards}
-@keyframes df-plate-push-a{from{transform:scale(1)}to{transform:scale(1.036)}}
-@keyframes df-plate-push-b{from{transform:scale(1)}to{transform:scale(1.036)}}
 .tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:none}
 .tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;filter:blur(0)}
 .tv-plate-frame>.tv-plate-video.tv-loop{z-index:2}
@@ -121,11 +115,10 @@
    `live_tv.rs`) and eases back after, and the room's light flickers. Driven only by flags the
    stage already carries: a character's bubble while it is speaking (a reply then lingers on
    screen for as long as nobody speaks, and the frame eases back meanwhile), or the narrator's
-   box speaking. Replaces the 150 s, 3.6 % push of a new scene, which nobody saw. */
-.tv-plate[data-push] .tv-plate-zoom{animation:none}
-.tv-plate-zoom{transform:scale(1);transition:transform 16s cubic-bezier(.35,.05,.25,1)}
-.tv-stage:has(.tv-bubble[data-line-state=speaking]) .tv-plate-zoom{transform:scale(1.16);transition:transform 6s cubic-bezier(.2,.6,.2,1)}
-.tv-stage:has(.tv-dm:is([data-line-state=speaking],[data-line-state=opening])) .tv-plate-zoom{transform:scale(.99);transition:transform 9s cubic-bezier(.3,.1,.3,1)}
+   box speaking. */
+.tv-plate-zoom{--plate-scale:1;--plate-zoom-duration:1.35s;--plate-zoom-ease:cubic-bezier(.35,.05,.25,1);transform:scale(var(--plate-scale));transition:transform var(--plate-zoom-duration) var(--plate-zoom-ease),transform-origin var(--plate-zoom-duration) var(--plate-zoom-ease)}
+.tv-stage:has(.tv-bubble[data-line-state=speaking]) .tv-plate-zoom{--plate-scale:1.16;--plate-zoom-duration:6s;--plate-zoom-ease:cubic-bezier(.16,1,.3,1)}
+.tv-stage:has(.tv-dm:is([data-line-state=speaking],[data-line-state=opening])) .tv-plate-zoom{--plate-scale:1;--plate-zoom-duration:1.35s;--plate-zoom-ease:cubic-bezier(.35,.05,.25,1)}
 .tv-stage[data-shot=plate] .tv-plate-img{animation:df-plate-drift 47s ease-in-out infinite alternate}
 .tv-stage[data-shot=plate] .tv-plate-img[data-i="1"]{animation-duration:53s;animation-direction:alternate-reverse}
 @keyframes df-plate-drift{0%{transform:scale(1.07) translate(-1.4%,-.6%) rotate(-.25deg)}50%{transform:scale(1.1) translate(.4%,.7%) rotate(.1deg)}100%{transform:scale(1.08) translate(1.4%,-.4%) rotate(.3deg)}}
@@ -134,7 +127,8 @@
 .tv-plate-vignette::after{background:radial-gradient(ellipse 45% 40% at 18% 30%,#ffd08a1f,#ffd08a00 70%),radial-gradient(ellipse 40% 36% at 84% 26%,#ffd08a1a,#ffd08a00 70%);mix-blend-mode:screen;animation:df-lanterns 3.7s ease-in-out infinite alternate}
 @keyframes df-firelight{0%{opacity:.75}9%{opacity:1}17%{opacity:.6}26%{opacity:.92}38%{opacity:.7}47%{opacity:1}58%{opacity:.66}69%{opacity:.88}81%{opacity:.62}90%{opacity:.95}}
 @keyframes df-lanterns{0%{opacity:.55}35%{opacity:.85}60%{opacity:.6}100%{opacity:1}}
-@media (prefers-reduced-motion:reduce){.tv-stage[data-shot=plate] .tv-plate-img,.tv-plate-vignette::before,.tv-plate-vignette::after{animation:none}.tv-plate-zoom{transition:none}}
+/* Camera zoom stays on under reduced motion by preference. */
+@media (prefers-reduced-motion:reduce){.tv-stage[data-shot=plate] .tv-plate-img,.tv-plate-vignette::before,.tv-plate-vignette::after{animation:none}}
 .live-scene-item{padding:1rem;margin:1rem 0;background:#201c18;color:#eee2ca;border:1px solid #927650;border-radius:.6rem}
 .live-scene-item-name{margin:0 0 .6rem;font-size:1.2rem}
 .live-scene-item-image{display:block;width:100%;max-height:22rem;object-fit:contain;border-radius:.4rem}

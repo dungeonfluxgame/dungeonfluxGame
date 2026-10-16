@@ -222,24 +222,23 @@
 
 /* INV-07: the check replaces its hero's action bubble; dialogue from other figures remains
    readable while the result card is on screen. */
-.tv-check-result{display:grid;justify-items:center;gap:calc(var(--u)*.3);min-width:calc(var(--u)*24);max-width:calc(var(--u)*34);padding:calc(var(--u)*.8) calc(var(--u)*1.2);border:calc(var(--u)*.16) solid #e8cb94;border-radius:calc(var(--u)*.8);background:linear-gradient(180deg,#111a29f5,#060b13f5);box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.8) #000d;text-align:center;color:#f7efdc;animation:df-check-result-out var(--check-duration,14s) ease forwards}
-.tv-check-hero{font:700 var(--fs-label)/1.1 var(--serif);letter-spacing:.12em;text-transform:uppercase;color:#f3d595}
-.tv-check-skill{font:italic var(--fs-label)/1.2 var(--serif);color:#ded5c2}
-.tv-check-mode{font:700 calc(var(--u)*.9)/1.2 system-ui,sans-serif;letter-spacing:.18em;color:#9ec7de}
-.tv-check-roll{display:grid;justify-items:center;gap:calc(var(--u)*.25);animation:df-check-roll-phase var(--check-roll-duration,5s) ease forwards}
-.tv-check-dice{display:flex;align-items:center;gap:calc(var(--u)*.4)}
+.tv-check-result{box-sizing:border-box;display:flex;flex-direction:column;align-items:stretch;gap:calc(var(--u)*.42);width:min(100%,calc(var(--u)*27));max-inline-size:100%;min-width:0;padding:calc(var(--u)*.62) calc(var(--u)*.78);border:1px solid #c9a35f;background:linear-gradient(135deg,#0b1623f2,#101b26eb);border-radius:calc(var(--u)*.38);box-shadow:0 calc(var(--u)*.35) calc(var(--u)*1.2) #000b;text-align:left;color:#f7efdc;animation:df-check-result-out var(--check-fade-duration,500ms) ease var(--check-close-delay,10s) both}
+.tv-check-hero{font:600 max(18px,calc(var(--u)*1.25))/1.1 var(--serif);color:#f3d595;overflow-wrap:anywhere}
+.tv-check-skill{font:400 var(--fs-label)/1.25 var(--serif);color:#ded5c2;overflow-wrap:anywhere}
+.tv-check-mode{font:700 max(16px,calc(var(--u)*.78))/1.15 system-ui,sans-serif;letter-spacing:.08em;color:#9ec7de}
+.tv-check-roll{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--u)*.42);min-width:0}
+.tv-check-dice{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--u)*.3)}
 .tv-check-die-label{font:700 var(--fs-label)/1 system-ui,sans-serif;color:#c8d4df}
-.tv-check-die{display:grid;place-items:center;width:calc(var(--u)*3.4);aspect-ratio:1;border:1px solid #f1d59b;border-radius:18%;background:#17283b;color:#f7efdc;font:700 calc(var(--u)*2)/1 system-ui,sans-serif;box-shadow:0 calc(var(--u)*.25) calc(var(--u)*.8) #000a}
+.tv-check-die{display:grid;place-items:center;width:max(40px,calc(var(--u)*2.75));aspect-ratio:1;border:1px solid #d9b77a;border-radius:16%;background:#17283b;color:#f7efdc;font:700 max(24px,calc(var(--u)*1.55))/1 system-ui,sans-serif;font-variant-numeric:tabular-nums;box-shadow:0 calc(var(--u)*.2) calc(var(--u)*.55) #0009}
 .tv-check-die[data-kept]{background:linear-gradient(145deg,#f3d595,#ba8740);color:#1c160e;transform:scale(1.12)}
-.tv-check-equation{display:flex;align-items:baseline;gap:.45em;font:700 var(--fs-line)/1.1 system-ui,sans-serif;font-variant-numeric:tabular-nums;color:#f7efdc}
+.tv-check-equation{display:flex;flex-wrap:wrap;align-items:baseline;gap:.35em;font:700 var(--fs-label)/1.1 system-ui,sans-serif;font-variant-numeric:tabular-nums;color:#f7efdc}
 .tv-check-modifier,.tv-check-operator{color:#ded5c2}
 .tv-check-total{font-size:1.35em;color:#fff4d6}
-.tv-check-outcome{font:800 calc(var(--u)*1.8)/1 system-ui,sans-serif;letter-spacing:.16em;color:#a9d49c}
+.tv-check-outcome{margin-inline-start:auto;font:800 max(18px,calc(var(--u)*1.05))/1 system-ui,sans-serif;letter-spacing:.06em;color:#a9d49c}
 .tv-check-result[data-succeeded=false] .tv-check-outcome{color:#e3a29a}
-.tv-check-finding{margin:calc(var(--u)*.25) 0 0;font:italic var(--fs-label)/1.25 var(--serif);color:#f1dfbc;opacity:0;animation:df-check-finding-phase var(--check-finding-duration,5s) ease var(--check-finding-delay,5s) both}
-@keyframes df-check-roll-phase{0%,88%{opacity:1}100%{opacity:0}}
-@keyframes df-check-finding-phase{0%,8%{opacity:0}16%,92%{opacity:1}100%{opacity:0}}
-@keyframes df-check-result-out{0%,92%{opacity:1}100%{opacity:0;visibility:hidden}}
+.tv-check-finding{width:100%;margin:calc(var(--u)*.15) 0 0;font:400 var(--fs-label)/1.3 var(--serif);color:#f1dfbc;overflow-wrap:anywhere;opacity:0;animation:df-check-finding-reveal var(--check-finding-reveal-duration,200ms) ease var(--check-finding-delay,5s) both}
+@keyframes df-check-finding-reveal{from{opacity:0;transform:translateY(calc(var(--u)*.2))}to{opacity:1;transform:none}}
+@keyframes df-check-result-out{from{opacity:1;visibility:visible}to{opacity:0;visibility:hidden}}
 
 /* ---------- the rules note under the narration of the phone and of the combat screens ---------- */
 .rules-note{display:block;margin:10px 0 0;max-width:580px;font:italic 13px/1.5 var(--serif,Georgia,serif);color:#a9b3bd}
@@ -295,6 +294,8 @@
   .tv-hud{transition:none}
   .tv-hud[data-party-hud=visible]{transition:none}
   .tv-fig-hp-fill{transition:none}
+  .tv-check-finding{animation:df-check-finding-reveal var(--check-finding-reveal-duration,200ms) step-end var(--check-finding-delay,5s) both;transform:none}
+  .tv-check-result{animation:df-check-result-out var(--check-fade-duration,500ms) step-end var(--check-close-delay,10s) both}
 }
 /* while the 3D battlefield shows the fight, the flat combat screen and its dice card never do (not during
    the entrance, the exit or the victory card); the battlefield's own cards show the dice */

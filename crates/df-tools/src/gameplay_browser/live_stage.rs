@@ -70,6 +70,7 @@ const BUBBLE_UI_OBSTACLES: [&str; 5] = [
 const BUBBLE_FIXED_OBSTACLES: [&str; 3] = [".tv-headline", ".tv-rules", ".tv-scene-context"];
 const CHECK_ROLL_MS: u32 = 5_000;
 const CHECK_FINDING_PADDING_MS: u32 = 1_000;
+const CHECK_FINDING_REVEAL_MS: u32 = 200;
 const CHECK_FADE_MS: u32 = 500;
 const PARTY_HUD_FADE_MS: u32 = 700;
 const PARTY_HUD_SCENE: &str = "party_hud";
@@ -162,6 +163,7 @@ fn check_result_phase_ms(finding: &str) -> (u32, u32, u32) {
     let read_ms = crate::stage_machines::reading_time_ms(finding);
     let finding_ms = read_ms.saturating_add(CHECK_FINDING_PADDING_MS);
     let total_ms = CHECK_ROLL_MS
+        .saturating_add(CHECK_FINDING_REVEAL_MS)
         .saturating_add(finding_ms)
         .saturating_add(CHECK_FADE_MS);
     (finding_ms, total_ms, CHECK_ROLL_MS)
@@ -1140,7 +1142,8 @@ impl Figures {
         panel.set_attribute(
             "style",
             &format!(
-                "--check-duration:{total_ms}ms;--check-roll-duration:{roll_ms}ms;--check-finding-duration:{finding_ms}ms;--check-finding-delay:{roll_ms}ms"
+                "--check-finding-delay:{roll_ms}ms;--check-finding-reveal-duration:{CHECK_FINDING_REVEAL_MS}ms;--check-fade-duration:{CHECK_FADE_MS}ms;--check-close-delay:{}ms",
+                total_ms.saturating_sub(CHECK_FADE_MS)
             ),
         )?;
         panel.set_attribute("data-roll-mode", &check.roll_mode.to_string())?;
@@ -1168,9 +1171,9 @@ impl Figures {
             "span",
             "tv-check-mode",
             match check.roll_mode {
-                -1 => "DISADVANTAGE",
-                1 => "ADVANTAGE",
-                _ => "D20 ROLL",
+                -1 => "Disadvantage",
+                1 => "Advantage",
+                _ => "D20 roll",
             },
         )?;
         let roll = node(&self.document, &panel, "div", "tv-check-roll", "")?;
@@ -1215,9 +1218,9 @@ impl Figures {
             "strong",
             "tv-check-outcome",
             if check.succeeded {
-                "SUCCESS"
+                "Success"
             } else {
-                "FAILURE"
+                "Failure"
             },
         )?;
         if !check.finding.trim().is_empty() {
@@ -1247,7 +1250,7 @@ impl Figures {
             ComponentPhase::Readable,
             "ready",
             finding_ms,
-            roll_ms.saturating_add(finding_ms.saturating_mul(16) / 100),
+            roll_ms.saturating_add(CHECK_FINDING_REVEAL_MS),
         );
         super::presentation_timing::schedule_component_transition(
             panel.clone(),
@@ -2506,8 +2509,8 @@ fn healing_action_text(mode: StageMode, amount: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUBBLE_FIXED_OBSTACLES, CHECK_FADE_MS, CHECK_ROLL_MS, art_candidates,
-        check_result_phase_ms, line_component_phase, typed_line_anchor,
+        BUBBLE_FIXED_OBSTACLES, CHECK_FADE_MS, CHECK_FINDING_REVEAL_MS, CHECK_ROLL_MS,
+        art_candidates, check_result_phase_ms, line_component_phase, typed_line_anchor,
     };
     use df_observe::presentation::ComponentPhase;
 
@@ -2845,11 +2848,25 @@ mod tests {
 
     #[test]
     fn check_finding_has_a_full_reading_phase_after_the_roll() {
-        let (finding_ms, total_ms, roll_ms) =
-            check_result_phase_ms("A clear crest catches the light.");
-        assert_eq!(roll_ms, CHECK_ROLL_MS);
-        assert!(finding_ms > 4_000);
-        assert_eq!(total_ms, roll_ms + finding_ms + CHECK_FADE_MS);
+        let (short_finding_ms, short_total_ms, short_roll_ms) = check_result_phase_ms("Found.");
+        let long_finding = concat!(
+            "The salt-stained crest catches the lantern light beside the broken quay, revealing a courier's trail through the flooded market and a safe route beyond the watchtower before the tide turns. ",
+            "Beyond the collapsed arch, wet boot marks cross the silt toward a locked storehouse, while a strip of blue cloth hangs from a rusted nail and points toward the old ferry stairs. ",
+            "The marks are fresh enough to follow, but the tide is rising quickly; a careful search can recover the hidden map before the water covers the lower passage and washes away the evidence. ",
+            "The courier's last message also names a bell rope above the quay, giving the party one clear landmark for the return journey if the storm closes in before dawn."
+        );
+        let (long_finding_ms, long_total_ms, long_roll_ms) = check_result_phase_ms(long_finding);
+        assert_eq!(short_roll_ms, CHECK_ROLL_MS);
+        assert_eq!(long_roll_ms, CHECK_ROLL_MS);
+        assert!(long_finding_ms > short_finding_ms);
+        assert_eq!(
+            short_total_ms,
+            short_roll_ms + CHECK_FINDING_REVEAL_MS + short_finding_ms + CHECK_FADE_MS
+        );
+        assert_eq!(
+            long_total_ms,
+            long_roll_ms + CHECK_FINDING_REVEAL_MS + long_finding_ms + CHECK_FADE_MS
+        );
     }
 
     #[test]
