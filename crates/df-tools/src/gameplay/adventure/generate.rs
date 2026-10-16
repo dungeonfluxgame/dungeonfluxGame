@@ -521,6 +521,32 @@ pub(crate) fn generate_with_prose(
         &mut roller,
         &mut context,
     )?;
+    let opening_dressing = settings
+        .meeting
+        .model
+        .as_ref()
+        .map(|model| {
+            let people = model
+                .people
+                .iter()
+                .take(3)
+                .map(|person| format!("{} at {}", person.name, person.position))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let goods = model
+                .things
+                .iter()
+                .filter(|thing| thing.in_scene)
+                .take(2)
+                .map(|thing| format!("{} at {}", thing.name, thing.position))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!(
+                "{} holds {people}. Visible goods: {goods}.",
+                settings.meeting.name
+            )
+        })
+        .unwrap_or_else(|| settings.meeting.name.clone());
     context.insert("pos".into(), pronouns(&patron.gender)?[2].into());
     let entrance = render::render(&hook.entrance, &context)?;
     context.insert("entrance".into(), entrance);
@@ -751,17 +777,8 @@ pub(crate) fn generate_with_prose(
     let job = context
         .get("hook.job")
         .ok_or_else(|| GenerateError::Pattern("hook.job".into()))?;
-    let opening_dressing = context
-        .get("loc.atmos_a")
-        .map(|text| {
-            text.split_whitespace()
-                .take(4)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
     let opening_brief = format!(
-        "{} {} Job: {job}. If it fails, {}.",
+        "{} {} {job}. If it fails, {}.",
         template("opening_narration")?,
         opening_dressing,
         stake.failure
@@ -977,7 +994,19 @@ pub(crate) fn generate_with_prose(
             ),
         };
         scene.title = expression(Some(scene.key), beat, "title", speaker, &title, 32)?;
-        let story = expression(Some(scene.key), beat, "narration", speaker, &narration, 220)?;
+        let narration_bound = if scene.key == SceneKey::Opening {
+            480
+        } else {
+            220
+        };
+        let story = expression(
+            Some(scene.key),
+            beat,
+            "narration",
+            speaker,
+            &narration,
+            narration_bound,
+        )?;
         scene.speaker = if speaker == "ant" {
             pack.bandit.name.clone()
         } else {

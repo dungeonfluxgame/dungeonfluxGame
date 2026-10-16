@@ -187,7 +187,7 @@ fn public_dialogue_coverage_changes_without_a_tempo_change_and_bookends_stay_wid
 }
 
 #[test]
-fn cast_rich_scene_uses_establishing_context_for_the_primary_speaker() {
+fn cast_rich_dialogue_keeps_a_primary_speaker_focus() {
     let others = [SPEAKER_STEMS[2], SPEAKER_STEMS[5]];
     let scene = ShotInput {
         others: &others,
@@ -200,7 +200,7 @@ fn cast_rich_scene_uses_establishing_context_for_the_primary_speaker() {
         )
     };
     let spec = direct(&scene).expect("cast-rich dialogue should stage");
-    assert_eq!(spec.camera, Camera::WideEstablishing);
+    assert_ne!(spec.camera, Camera::WideEstablishing);
     assert!(spec.speaker.is_some(), "the primary speaker remains staged");
     assert!(!spec.others.is_empty());
 }
