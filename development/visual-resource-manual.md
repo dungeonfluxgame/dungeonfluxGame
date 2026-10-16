@@ -78,6 +78,20 @@ courier's face" can be classified as an action and perform an Investigation chec
 Use an explicit question addressed to the NPC, then confirm the hero and reply
 in `dev view --as tv` and the actual display before measuring reading time.
 
+## Character dialogue presentation
+
+Player and NPC dialogue uses the wide portrait, speaker name and text panel
+(`.tv-lower`) for every scene shot, including when character head geometry is
+available. Compact figure bubbles remain for action callouts and intent loaders.
+Narration and check cards retain their own presentation and conductor timing.
+
+Inspect dialogue visibility with `dev timeline --component subtitle --last 250`.
+The shared timeline retains line open/speak/close events and the panel's
+requested, readable and hidden events. Character dialogue no longer creates a
+second `speech_bubble` component; action/intent components still use their own
+types. Live placement overrides continue to target the registered subtitle
+element. Character speech still drives the camera push and smooth release.
+
 ## Inspect the complete resource path
 
 The token is a bearer credential. Never print it into a retained log or commit.

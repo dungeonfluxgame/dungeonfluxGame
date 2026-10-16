@@ -1245,3 +1245,20 @@ are documented in [two-pass scene hydration](scene-observation-hydration.md) and
 the scene entity bridge, byte-bound observations and merge reducer are not yet
 implemented. Actor localization, generic clues, startup-modal reading coverage
 and lossless capture remain separate unfinished items.
+
+**SANAPU, `portrait-ec334de7`:** Per the user's preferred portrait/name/text
+panel, all managed character speech and typed dialogue now uses `.tv-lower`
+instead of floating speech bubbles. Brakka, Sigrun and Courier portrait/name
+switches were visually inspected in the real Codex display with actor head
+geometry available. Reconnect and photograph replacement retained the caption;
+choices stayed 17.51 px below it. Brakka's question had 10200 ms steady readable
+time against a 7700 ms budget; Sigrun's had 6500 ms against 4000 ms. Subtitle and
+line timeline events, live subtitle registration and speaking camera zoom remain
+available. The operations manual now identifies `--component subtitle` for
+character dialogue. Native/WASM builds, affected formatting and WASM library/test
+compilation pass. Strict WASM lint still fails with the unchanged 15/30 baseline;
+32 distinct normalized diagnostics match a99bcf03. Browser tests were compiled,
+not executed by a WASM test runner. Independent source findings were repaired;
+independent visual approval remains unavailable because its IAB inventory was
+empty and Chrome creation lacked the visibility capability. No new human audio
+or combat acceptance is claimed. Root's actual IAB observations are separate.
