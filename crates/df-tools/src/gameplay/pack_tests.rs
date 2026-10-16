@@ -2,7 +2,7 @@
 //! `content/harbor-journey` files with the values compiled into the demo today.
 use super::pack::{
     BackgroundBonus, COMPILED_ITEMS, CrossRefReason, MAX_FILE_BYTES, PACK_FILE_NAME, PackError,
-    ParseErrorKind, Revision, SERVED_SCENE_ASSETS, SourceFile, TUNING_FILE_NAME, load,
+    ParseErrorKind, Revision, SERVED_SCENE_ASSETS, SceneKey, SourceFile, TUNING_FILE_NAME, load,
     load_from_bytes, render_array_description,
 };
 use super::{journey, wire};
@@ -165,6 +165,39 @@ fn shipped_files_load_with_only_disclosed_tactical_cover_policy() {
     assert_eq!(loaded.tuning.pack, loaded.pack.id);
     assert_eq!(loaded.tuning.hero.ability_arrays.len(), 2);
     assert_eq!(loaded.pack.scenes.len(), 8);
+}
+
+#[test]
+fn shipped_harbor_scenes_have_manifest_pinned_staging_facts() {
+    let loaded = load(&shipped_directory()).expect("shipped files must load");
+
+    for scene in &loaded.pack.scenes {
+        let setting = scene
+            .setting
+            .as_ref()
+            .expect("harbor scenes must declare their staging setting");
+        match scene.key {
+            SceneKey::Inn => {
+                assert_eq!(setting.place_id, "harbor-inn");
+                assert_eq!(
+                    setting.kind,
+                    super::adventure::setting::SettingKind::NetLoft
+                );
+                assert_eq!(scene.asset, "assets/ui/generated/scene-salt-quay-interior");
+            }
+            SceneKey::Room
+            | SceneKey::Opening
+            | SceneKey::DialogueSeal
+            | SceneKey::DialogueEscort
+            | SceneKey::Combat
+            | SceneKey::Victory
+            | SceneKey::Defeat => {
+                assert_eq!(setting.place_id, "salt-quay");
+                assert_eq!(setting.kind, super::adventure::setting::SettingKind::Quay);
+                assert_eq!(scene.asset, "assets/ui/generated/scene-salt-quay-arrival");
+            }
+        }
+    }
 }
 
 #[test]
@@ -936,11 +969,18 @@ fn duplicate_equipment_items_are_refused() {
 
 #[test]
 fn scene_assets_must_be_served() {
-    let pack = set(
-        &shipped_pack(),
-        "/scenes/4/asset",
-        json!("assets/ui/scenes/unknown.png"),
-    );
+    let pack = edit(&shipped_pack(), |document| {
+        let scenes = document["scenes"]
+            .as_array_mut()
+            .expect("scenes must be an array");
+        for scene in scenes.iter_mut() {
+            scene
+                .as_object_mut()
+                .expect("scene must be an object")
+                .insert("setting".to_owned(), Value::Null);
+        }
+        scenes[4]["asset"] = json!("assets/ui/scenes/unknown.png");
+    });
 
     assert_cross_ref(
         refusal(&pack, &shipped_tuning()),
@@ -1387,7 +1427,8 @@ fn shipped_scene_assets_are_the_served_paths() {
     }
     for scene in &loaded.pack.scenes {
         assert!(
-            SERVED_SCENE_ASSETS.contains(&scene.asset.as_str()),
+            SERVED_SCENE_ASSETS.contains(&scene.asset.as_str())
+                || super::adventure::generated_asset(&scene.asset),
             "{} unused",
             scene.asset
         );

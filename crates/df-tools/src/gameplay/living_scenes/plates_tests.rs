@@ -84,6 +84,28 @@ fn view(scene: &pack::Scene, heroes: &[u8], in_combat: bool) -> View {
     }
 }
 
+#[test]
+fn shipped_harbor_story_scenes_are_plannable_except_lobby_and_combat() {
+    let document: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../../../content/harbor-journey/pack.json"
+    ))
+    .expect("harbor pack must be JSON");
+
+    for raw in document["scenes"]
+        .as_array()
+        .expect("scenes must be an array")
+    {
+        let scene: pack::Scene = serde_json::from_value(raw.clone()).expect("scene must decode");
+        let plannable = PlateScene::of(&scene).is_some();
+        assert_eq!(
+            plannable,
+            !matches!(scene.key, SceneKey::Room | SceneKey::Combat),
+            "unexpected plate eligibility for {:?}",
+            scene.key
+        );
+    }
+}
+
 fn shared(capacity: usize) -> (Arc<Shared>, mpsc::Receiver<Job>) {
     let timing = Timing::from_interval(Duration::from_secs(30));
     let inner = Arc::new(Inner {

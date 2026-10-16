@@ -203,7 +203,15 @@
       "narration": "A rain-soaked harbor waits beyond the lanterns. Share the room with your companions, then bring your heroes into the story.",
       "speaker": "",
       "dialogue": "",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png"
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      }
     },
     {
       "key": "opening",
@@ -211,7 +219,15 @@
       "narration": "You reach the Lantern Wharf as a frightened courier slips from the shadows. Behind him, a boot scrapes across the boards.",
       "speaker": "Courier",
       "dialogue": "Please. I can't deliver this alone. The seal was broken before the ship reached port.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      },
       "cast": [
         {
           "id": "courier",
@@ -231,7 +247,15 @@
       "narration": "The courier presses the packet against his coat. A dockside enforcer approaches, one hand on a scimitar.",
       "speaker": "Courier",
       "dialogue": "The crest belongs to a ship that never appears on the ledger. I think someone aboard followed me.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      },
       "cast": [
         {
           "id": "courier",
@@ -261,7 +285,15 @@
       "narration": "The courier steadies himself behind you. The approaching enforcer draws a scimitar and demands the packet.",
       "speaker": "Courier",
       "dialogue": "If you help me reach the inn, I'll tell Vell what I saw aboard that ship. But he won't let us leave.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      },
       "cast": [
         {
           "id": "courier",
@@ -292,7 +324,15 @@
       "rules_note": "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die.",
       "speaker": "Bandit",
       "dialogue": "Hand over the packet. Last warning.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      },
       "cast": [
         {
           "id": "bandit",
@@ -312,7 +352,15 @@
       "narration": "Warm lamplight frames the next chapter with your party and the courier. The sealed packet remains unresolved.",
       "speaker": "Courier",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
-      "asset": "assets/concept-art/scene-tavern-barkeep-talk-rain.webp",
+      "asset": "assets/ui/generated/scene-salt-quay-interior",
+      "setting": {
+        "place_id": "harbor-inn",
+        "name": "the Harbor Inn",
+        "short": "the warm harbor inn",
+        "kind": "net-loft",
+        "exterior": false,
+        "art_key": "loc-salt-quay-interior"
+      },
       "cast": [
         {
           "id": "courier",
@@ -334,7 +382,15 @@
       "narration_rested": "The opposition was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. The original victory and the courier's unresolved journey remain.",
       "speaker": "Courier",
       "dialogue": "You stood your ground. Come on. There's a light waiting for us at the inn.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      },
       "cast": [
         {
           "id": "courier",
@@ -356,7 +412,15 @@
       "narration_rested": "The party was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. That rest does not change the original defeat: the Bandit took the packet and left.",
       "speaker": "",
       "dialogue": "",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png"
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      }
     }
   ],
   "secret_terms": [
