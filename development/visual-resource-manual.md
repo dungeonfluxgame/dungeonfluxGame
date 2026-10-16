@@ -11,7 +11,7 @@ agents. The design contracts remain in `planning/asset-engine.md`,
 | --- | --- | --- |
 | Image request identity, provider call, cache, manifest, HTTP bytes | `crates/df-tools/src/gameplay/imagery.rs` | `ImageRequest`, `ImageKey`, `ImageFailure`, `imagery.jsonl`, `GET /gameplay/imagery/<key>` |
 | Reference loading and photographic allowlist | `crates/df-tools/src/gameplay/imagery/references.rs` | `ReferenceStore::photographic`, `load_photographic`, neutral carrier policy |
-| Plate prompt and reference composition | `crates/df-tools/src/gameplay/imagery/plate_prompt.rs`, `photo_edit.rs`, `party_sheet.rs`, `scene_prompt.rs` | `PlateReferences`, `scene_plate`, `model_plate`, fixed-harbor photograph edit, graph edits |
+| Plate prompt and reference composition | `crates/df-tools/src/gameplay/imagery/plate_prompt.rs`, `photo_edit.rs`, `cast_sheet.rs`, `scene_prompt.rs` | `PlateReferences`, `scene_plate`, `model_plate`, numbered canonical cast contact sheet, photograph edit, graph edits |
 | Scene graph and shot staging | `crates/df-tools/src/gameplay/scene_graph.rs`, `shot.rs` | graph revision, camera, speaker, actor spots, props and light |
 | Plate lifecycle and timing | `crates/df-tools/src/gameplay/living_scenes/plates.rs` and `plates/` | request, render, head location, ready/failed, projection, stale result handling |
 | Generated character and place references | `assets/ui/generated/` | checked-in reviewed references; runtime output never belongs here |
@@ -19,6 +19,9 @@ agents. The design contracts remain in `planning/asset-engine.md`,
 | Provenance | run-local `imagery.jsonl` | model, kind, prompt length, reference hashes/count/bytes, result and elapsed time |
 | Server projection and visual summary | `crates/df-tools/src/gameplay/dev_control/reads.rs` | `/dev/view`, `/dev/scene`, `visual_assets` |
 | Agent timeline | `crates/df-tools/src/gameplay/dev_control/timeline.rs`, `reads.rs` | `/dev/timeline?last=N`, bounded 4096-event in-memory mirror |
+| Component lifecycle and actual visibility | `crates/df-observe/src/presentation.rs`, `gameplay_browser/presentation_timing.rs`, `presentation_ingress.rs` | closed component/phase types, readable duration, effective visibility and content-free correlation |
+| Live placement contract and CLI | `crates/df-tools/src/layout_contract.rs`, `dev_cli/layout.rs` | typed geometry, IDs, revisions, limits, `dev layout` flags |
+| Live placement authority and browser application | `crates/df-tools/src/gameplay/dev_control/layout.rs`, `gameplay_browser/layout.rs` | authenticated configuration, per-display inventory/acknowledgment, isolated override stylesheet |
 | Browser plate/source selection | `crates/df-tools/src/gameplay_browser/live_tv.rs`, `live_stage.rs` | `record_visual_source`, plate state, `data-visual-source-*`, image load events |
 | Tempo driven music plan | `crates/df-tools/src/music_score.rs`, `gameplay_browser/live_music.rs` | server `music_plan`, browser `data-music-state`, `/assets/music/<track>` |
 | Fixed public assets and allowlisted routes | `crates/df-tools/src/gameplay/public_assets.rs`, `gameplay_browser/public_scene_assets.rs` | startup snapshots and exact route registration |
