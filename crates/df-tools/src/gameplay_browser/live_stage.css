@@ -314,7 +314,9 @@
 /* MOT-03: server scene graph composite. The baked plate above it wins only for its matching revision. */
 .tv-scene-graph{position:absolute;z-index:2;inset:0;overflow:hidden;pointer-events:none;opacity:1;visibility:visible;transition:opacity .55s ease,visibility 0s}
 .tv-scene-graph[data-inactive],.tv-stage[data-tv-mode=lobby] .tv-scene-graph,.tv-stage[data-tv-mode=combat] .tv-scene-graph,.tv-stage[data-arrange=combat] .tv-scene-graph,.tv-stage[data-battlefield-live=true] .tv-scene-graph,.tv-stage[data-battle-state]:not([data-battle-state=absent]) .tv-scene-graph,.tv-stage[data-shot=plate] .tv-scene-graph{opacity:0;visibility:hidden;transition:opacity .55s ease,visibility 0s .55s}
-.tv-stage[data-stage-graph] .tv-fig-body{opacity:0;visibility:hidden}
+/* Only a scene graph that owns the scene replaces the fallback figures. Combat keeps its
+   figures when the 3D renderer falls back, even if the view still carries a scene graph. */
+.tv-stage[data-tv-mode=scene][data-battle-state=absent][data-stage-graph]:not([data-battlefield-live=true],[data-arrange=combat]) .tv-fig-body{opacity:0;visibility:hidden}
 .tv-scene-camera{position:absolute;inset:0;transform:scale(1.035);transform-origin:var(--camera-x,50%) var(--camera-y,50%);transition:transform .95s cubic-bezier(.2,.65,.25,1);will-change:transform}
 .tv-scene-graph[data-camera=two-shot] .tv-scene-camera{transform:scale(1.13)}
 .tv-scene-graph[data-camera=speaker] .tv-scene-camera{transform:scale(1.21)}

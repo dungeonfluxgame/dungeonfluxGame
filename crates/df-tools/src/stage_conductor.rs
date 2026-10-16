@@ -276,6 +276,14 @@ impl<D: Clone> Conductor<D> {
         self.battle
     }
 
+    /// The fight owns the stage from its entrance through its exit unless the renderer failed.
+    /// A pending renderer while no fight is present must never hide the scene cast.
+    pub(crate) fn battlefield_live(&self) -> bool {
+        self.battle != BattleState::Absent
+            && self.battlefield_expected
+            && self.battlefield != Battlefield::Fallback
+    }
+
     /// The last beat sequence the cue sequencer finished presenting (one clock).
     pub(crate) fn presented_sequence(&self) -> u64 {
         self.director.presented_sequence()
@@ -724,6 +732,9 @@ impl<D: Clone> Conductor<D> {
             self.battle_since_ms = now_ms;
             if next == BattleState::Entering {
                 self.battle_progress_ms = now_ms;
+                // Readiness belongs to this fight; a previous fight's failure or completed
+                // entrance cannot release this entrance before its renderer reports.
+                self.battlefield = Battlefield::Pending;
             }
             out.push(Command::Battle(next));
         }
@@ -2864,6 +2875,85 @@ mod tests {
     }
 
     #[test]
+    fn an_absent_battle_never_owns_the_scene_even_with_webgpu_and_a_pending_renderer() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0]);
+        harness.conductor.set_battlefield_expected(true);
+        for renderer in [
+            Battlefield::Pending,
+            Battlefield::Ready,
+            Battlefield::Fallback,
+        ] {
+            let commands = harness.conductor.on_battlefield(harness.now, renderer);
+            harness.record(commands);
+            assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
+            assert!(!harness.conductor.battlefield_live());
+        }
+        harness.view(ViewPlan {
+            diff: ViewDiff::default(),
+            script: vec![line("dialogue", false, Some(0))],
+            cast: vec![0],
+        });
+        harness.run_to(5_000);
+        assert!(harness.opened("dialogue").is_some());
+        assert!(!harness.conductor.battlefield_live());
+    }
+
+    #[test]
+    fn a_battle_owns_the_stage_until_exit_and_resets_renderer_readiness_on_reentry() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0]);
+        harness.conductor.set_battlefield_expected(true);
+        harness.view(fight_start());
+        harness.run_to(5_000);
+        assert_eq!(harness.conductor.battle_state(), BattleState::Entering);
+        assert!(harness.conductor.battlefield_live());
+
+        let commands = harness
+            .conductor
+            .on_battlefield(harness.now, Battlefield::Ready);
+        harness.record(commands);
+        assert_eq!(harness.conductor.battle_state(), BattleState::TurnStart);
+        assert!(harness.conductor.battlefield_live());
+
+        harness.view(ViewPlan {
+            diff: ViewDiff {
+                scene_changed: true,
+                roll: Some("blow"),
+                impact: Some("blow"),
+                defeat: Some("blow"),
+                banner: Some("victory"),
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0, 2],
+        });
+        harness.run_to(30_000);
+        assert!(battle_states(&harness).contains(&BattleState::Exiting));
+        assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
+        assert!(!harness.conductor.battlefield_live());
+
+        // The old renderer can be Ready or Fallback after exit; neither belongs to this fight.
+        for old_renderer in [Battlefield::Ready, Battlefield::Fallback] {
+            let commands = harness.conductor.on_battlefield(harness.now, old_renderer);
+            harness.record(commands);
+            harness.view(fight_start());
+            harness.run_to(harness.now + 5_000);
+            assert_eq!(harness.conductor.battle_state(), BattleState::Entering);
+            assert!(harness.conductor.battlefield_live());
+            let commands = harness.conductor.restart(
+                harness.now,
+                ViewPlan {
+                    diff: ViewDiff::default(),
+                    script: Vec::new(),
+                    cast: vec![0],
+                },
+            );
+            harness.record(commands);
+            assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
+            assert!(!harness.conductor.battlefield_live());
+        }
+    }
+
+    #[test]
     fn the_first_attack_waits_for_the_battlefield_entrance_and_the_flat_view_is_not_released_early()
     {
         let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0]);
@@ -2875,6 +2965,7 @@ mod tests {
         harness.run_to(6_000);
         assert_eq!(harness.conductor.scene_state(), SceneState::AwaitingChoice);
         assert_eq!(harness.conductor.battle_state(), BattleState::Entering);
+        assert!(harness.conductor.battlefield_live());
         assert!(
             harness.entered(StageState::Rolling).is_none(),
             "no attack before the entrance"
@@ -3021,6 +3112,7 @@ mod tests {
         harness.view(first_attack());
         harness.run_to(5_000);
         assert!(harness.entered(StageState::Rolling).is_some());
+        assert!(!harness.conductor.battlefield_live());
 
         let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0]);
         harness.conductor.set_battlefield_expected(true);
@@ -3035,6 +3127,7 @@ mod tests {
         harness.record(commands);
         harness.run_to(harness.now + 2_000);
         assert!(harness.entered(StageState::Rolling).is_some());
+        assert!(!harness.conductor.battlefield_live());
     }
 
     #[test]
@@ -3050,6 +3143,7 @@ mod tests {
         assert!(rolling >= BATTLE_ENTER_CAP_MS);
         assert_ne!(harness.conductor.battle_state(), BattleState::Entering);
         assert!(harness.conductor.battlefield_failed());
+        assert!(!harness.conductor.battlefield_live());
     }
 
     #[test]

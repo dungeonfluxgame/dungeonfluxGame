@@ -1151,6 +1151,7 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 "data-battlefield-live",
                 if battlefield_live() { "true" } else { "false" },
             )?;
+            super::live_tv::refresh_timing_visibility(root);
             // Whose words the stage shows follows the line being heard, not the raw view.
             stage.set_speaker(match speaker {
                 None => "",
@@ -1692,9 +1693,17 @@ fn set_battle_state(client: &Rc<RefCell<Client>>, state: BattleState) -> Result<
         }
     }
     match client.borrow().live.tv.as_ref() {
-        Some(stage) => stage
-            .root()
-            .set_attribute("data-battle-state", state.name()),
+        Some(stage) => {
+            stage
+                .root()
+                .set_attribute("data-battle-state", state.name())?;
+            stage.root().set_attribute(
+                "data-battlefield-live",
+                if battlefield_live() { "true" } else { "false" },
+            )?;
+            super::live_tv::refresh_timing_visibility(stage.root());
+            Ok(())
+        }
         None => Ok(()),
     }
 }
@@ -1702,8 +1711,7 @@ fn set_battle_state(client: &Rc<RefCell<Client>>, state: BattleState) -> Result<
 /// Whether the 3D battlefield is showing (or about to show) the fight, so the flat combat
 /// screen, its dice card and its call-out bubbles must not.
 pub(super) fn battlefield_live() -> bool {
-    gpu_expected()
-        && super::live_battlefield::entrance() != crate::stage_conductor::Battlefield::Fallback
+    with_motion(|motion| motion.conductor.battlefield_live()).unwrap_or(false)
 }
 
 fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<(), JsValue> {

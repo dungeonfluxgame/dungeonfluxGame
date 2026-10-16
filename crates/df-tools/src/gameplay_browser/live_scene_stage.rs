@@ -945,19 +945,31 @@ mod tests {
     }
 
     #[test]
-    fn composed_plate_hides_cutouts_and_restores_them_when_the_plate_is_unavailable() {
+    fn scene_cast_uses_the_graph_or_fallback_and_recovers_after_battle_and_plate_failure() {
         let window = web_sys::window().unwrap();
         let document = window.document().unwrap();
         let style = document.create_element("style").unwrap();
         style.set_text_content(Some(&format!(
-            "{}\n.tv-scene-actors,.tv-fig-body{{transition:none!important}}",
-            include_str!("live_plate.css")
+            "{}\n{}\n.tv-stage *{{transition:none!important;animation:none!important}}",
+            include_str!("live_stage.css"),
+            include_str!("live_plate.css"),
         )));
         document.body().unwrap().append_child(&style).unwrap();
         let root = document.create_element("div").unwrap();
         root.set_attribute("class", "tv-stage").unwrap();
         root.set_attribute("data-tv-mode", "scene").unwrap();
         root.set_attribute("data-battle-state", "absent").unwrap();
+        let mut conductor = crate::stage_conductor::Conductor::<()>::new();
+        conductor.set_battlefield_expected(true);
+        root.set_attribute(
+            "data-battlefield-live",
+            if conductor.battlefield_live() {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .unwrap();
         document.body().unwrap().append_child(&root).unwrap();
         let layer = StageLayer::mount(&document, &root).unwrap();
         layer.update(&root, Some(&graph()), Some(1)).unwrap();
@@ -969,13 +981,16 @@ mod tests {
             .unwrap()
             .dyn_into::<js_sys::Function>()
             .unwrap();
-        for (shot, expected) in [
-            ("stage", "visible"),
-            ("plate", "hidden"),
-            ("stage", "visible"),
+        for (shot, plate_state, graph_visibility) in [
+            ("stage", "none", "visible"),
+            ("plate", "ready", "hidden"),
+            ("stage", "failed", "visible"),
         ] {
             root.set_attribute("data-shot", shot).unwrap();
-            for body in [&actors, &legacy_body] {
+            // The failed plate returns to the graph; the legacy cast stays hidden so it
+            // never doubles the actors already shown by that graph.
+            root.set_attribute("data-plate-state", plate_state).unwrap();
+            for (body, expected) in [(&actors, graph_visibility), (&legacy_body, "hidden")] {
                 let css = computed.call1(&window, body).unwrap();
                 assert_eq!(
                     js_sys::Reflect::get(&css, &"visibility".into())
@@ -986,6 +1001,40 @@ mod tests {
                 );
             }
         }
+        // A flat combat fallback must not inherit the scene graph's suppression rule.
+        root.set_attribute("data-tv-mode", "combat").unwrap();
+        root.set_attribute("data-battle-state", "turn-start")
+            .unwrap();
+        for (body, expected) in [(&actors, "hidden"), (&legacy_body, "visible")] {
+            let css = computed.call1(&window, body).unwrap();
+            assert_eq!(
+                js_sys::Reflect::get(&css, &"visibility".into())
+                    .unwrap()
+                    .as_string()
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        // Returning to dialogue without a graph reveals the retained figure fallback.
+        root.set_attribute("data-tv-mode", "scene").unwrap();
+        root.set_attribute("data-battle-state", "absent").unwrap();
+        let css = computed.call1(&window, &actors).unwrap();
+        assert_eq!(
+            js_sys::Reflect::get(&css, &"visibility".into())
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("visible")
+        );
+        layer.update(&root, None, None).unwrap();
+        let css = computed.call1(&window, &legacy_body).unwrap();
+        assert_eq!(
+            js_sys::Reflect::get(&css, &"visibility".into())
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("visible")
+        );
         root.remove();
         style.remove();
     }
