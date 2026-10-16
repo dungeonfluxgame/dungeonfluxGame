@@ -878,3 +878,44 @@ The courier's face and hood differ from the reviewed source photograph, so cast
 identity continuity remains open even though the style and missing-hero failures
 are improved. Retained screenshots are `satevo-live-plate.jpg` and
 `rebevo-photographic-plate-both-heroes.png` in the coordinator's outputs.
+
+### Dialogue readability and live layout baseline (2026-10-16 UTC)
+
+Room SUMURE used native/WASM build `ux-baseline-c0bdded0`, database
+`df_gameplay_demo_play_20261016030017`, two heroes and enabled paid providers.
+The browser stayed in dialogue with no combat. Source changes made during this
+pass were not present in that fixed baseline.
+
+- A 332-character hero question was displayed as 236 characters and held at the
+  old 14,000 ms reading cap. The Courier thinking indicator covered its text.
+  A same-scene subsequent NPC reply was readable, so this was a presentation
+  length/placement defect rather than a missing model response.
+- TVX-19/20 reproduced after two Insight checks: the card faded to opacity zero
+  while `data-check-active=true` remained. A later line reported `speaking`, but
+  every bubble was hidden by the global check-active CSS rule. Evidence:
+  `ux-baseline-speaking-text-hidden-after-check.png` and
+  `ux-baseline-timeline.json` in the coordinator's outputs.
+- Same-phase lines 6–9 had open records without terminal/held records. Component
+  visibility and lifetimes require actual browser reporting before CLI timings
+  can certify readability. Logical `speaking` alone is insufficient.
+- Retained DM scene context at `top:11vh` crowded the hero health row. The owner
+  requested a lower caption position, then requested CLI translation, scale and
+  rotation for every visual element so later adjustments need no compilation.
+  The new live layout capability needs one initial installation build; its
+  subsequent commands must apply immediately and expose measured readback.
+- `dev back 2` restored a lower table-log sequence. New questions were accepted
+  but suppressed by the connected browser until reload. This history/reconnect
+  regression remains open and separate from the forward session machine.
+- Dialogue still repeats deferrals about the crest, missing ship and follower.
+  Asking the Courier's name produced only “I'm a courier”; addressing the Bandit
+  elicited a Courier reply (“I'm no bandit”), reproducing the DLG-14 routing shape.
+  Asking what had not yet been disclosed produced another refusal to explain.
+  Neither the visual repairs nor a successful provider call establish dialogue
+  quality improvement.
+
+Source candidates for the next integrated browser pass include a 30 s reading
+cap, 420-character captions, obstacle-aware loading indicators, queued check
+cards with explicit readable phases, and removal of the global speech-hiding
+rule. The photographic plate candidate retains the outgoing frame through a
+1 s dissolve and supplies a deterministic numbered contact sheet of all selected
+heroes and scene NPCs. These remain pending current-build visual acceptance.
