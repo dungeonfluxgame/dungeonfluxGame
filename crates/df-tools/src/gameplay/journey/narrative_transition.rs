@@ -223,6 +223,37 @@ fn select_for(
         return invalid();
     };
     let policy = model::label(THREAD_POLICY)?;
+    if crate::gameplay::beat_script::with_script(|script| {
+        script.mode == crate::gameplay::beat_script::ScriptMode::Freeplay
+    }) {
+        // Entry into a social place needs causal beat selection, not a story intervention
+        // budget. Reuse the same authored-source validation without inventing story policy.
+        return df_narrative::stage_checkpoint_beat_selection(
+            current,
+            CheckpointBeatRequest {
+                expected_basis: current.basis(),
+                admitted_pins: current.pins(),
+                policy: &policy,
+                expected_policy: &policy,
+                recipient: member,
+                selection: action,
+                alternatives: &alternatives,
+                inventory: ReferenceInventory {
+                    rules: &[model::rule()?, rule()?],
+                    content: &model::contents()?,
+                    resources: &super::resources()?,
+                    assets: &[],
+                },
+                checkpoint_limits: model::limits(),
+            },
+            BeatSelectionLimits {
+                records: 512,
+                alternatives: 2,
+                work: 1024 * 1024,
+            },
+        )
+        .map_err(|_| RepositoryError::InvalidCandidate);
+    }
     let budget = native_budget()?;
     let proposal = stage_checkpoint_convergence(
         current,

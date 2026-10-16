@@ -260,7 +260,9 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
         .into_iter()
         .map(|bytes| Ok((bytes, None)))
         .collect::<Result<Vec<_>, RepositoryError>>()?;
-    if tactical::enabled() {
+    if pack::with_content(|content| content.is_freeplay()) {
+        // A social slice has no authored encounter participants or enemy resource bounds.
+    } else if tactical::enabled() {
         for (who, source_id, ammunition) in tactical::enemies()? {
             owners.push((
                 *who.as_bytes(),
