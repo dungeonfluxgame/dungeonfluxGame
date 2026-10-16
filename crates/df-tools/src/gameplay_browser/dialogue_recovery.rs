@@ -80,16 +80,56 @@ fn current_speaker(client: &Client) -> String {
     }
 }
 
-fn current_speaker_portrait(client: &Client, speaker: &str) -> String {
-    let scene = client
+fn current_scene(client: &Client) -> Option<&rpc::GameplayScene> {
+    client
         .views
         .as_ref()
         .and_then(|views| views.current())
         .and_then(|view| match view.audience.as_ref()? {
             rpc::view_message::Audience::Player(player) => player.scene.as_ref(),
             _ => None,
-        });
-    speaker_portrait_url(scene, speaker)
+        })
+}
+
+fn reply_attribution(
+    reply: &rpc::DialogueResponse,
+    scene: Option<&rpc::GameplayScene>,
+    selected_speaker: &str,
+) -> (String, String) {
+    let actor_id = reply.npc_actor_id.trim();
+    let canonical_speaker = reply.npc_speaker.trim();
+    if !actor_id.is_empty() && !canonical_speaker.is_empty() {
+        let portrait = scene
+            .and_then(|scene| {
+                scene
+                    .cast
+                    .iter()
+                    .find(|actor| actor.id == actor_id && actor.name == canonical_speaker)
+            })
+            .and_then(|actor| super::live_screens::asset_url(&actor.portrait))
+            .unwrap_or_else(|| portrait_url(canonical_speaker).to_owned());
+        return (canonical_speaker.to_owned(), portrait);
+    }
+
+    let speaker = selected_speaker.to_owned();
+    let portrait = speaker_portrait_url(scene, &speaker);
+    (speaker, portrait)
+}
+
+fn reply_status(kind: rpc::DialogueDisposition, reply_text: &str, speaker: &str) -> String {
+    match kind {
+        rpc::DialogueDisposition::Meta if !reply_text.is_empty() => reply_text.to_owned(),
+        rpc::DialogueDisposition::Meta => "Noted.".to_owned(),
+        rpc::DialogueDisposition::PlanOnly => "You say to the party.".to_owned(),
+        rpc::DialogueDisposition::Question | rpc::DialogueDisposition::Social
+            if !speaker.is_empty() =>
+        {
+            format!("You say to {speaker}.")
+        }
+        rpc::DialogueDisposition::Clarify => "Please rephrase that.".to_owned(),
+        rpc::DialogueDisposition::Rejected => "That line could not be taken.".to_owned(),
+        _ => "You say that to the table.".to_owned(),
+    }
 }
 
 fn scene_portrait_url(scene: Option<&rpc::GameplayScene>) -> Option<String> {
@@ -894,16 +934,20 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                                     && kind != rpc::DialogueDisposition::Unspecified =>
                             {
                                 state.dialogue.ticket = None;
+                                let selected_speaker = current_speaker(&state);
+                                let (speaker, portrait) = reply_attribution(
+                                    &reply,
+                                    current_scene(&state),
+                                    &selected_speaker,
+                                );
                                 if !reply.npc_reply.is_empty()
                                     && reply.npc_reply.len() <= MAXIMUM_REPLY_BYTES
                                 {
-                                    let speaker = current_speaker(&state);
-                                    let portrait = current_speaker_portrait(&state, &speaker);
                                     state.dialogue.exchange = Some(Exchange {
                                         revision: input.observed_revision,
                                         you: input.text.clone(),
                                         disposition: None,
-                                        speaker,
+                                        speaker: speaker.clone(),
                                         portrait,
                                         reply: reply.npc_reply.clone(),
                                     });
@@ -916,31 +960,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                                 if let Some(editor) = &state.dialogue.editor {
                                     editor.set_value("");
                                 }
-                                let speaker = current_speaker(&state);
-                                match kind {
-                                    rpc::DialogueDisposition::Meta
-                                        if !reply.npc_reply.is_empty() =>
-                                    {
-                                        reply.npc_reply.clone()
-                                    }
-                                    rpc::DialogueDisposition::Meta => "Noted.".to_owned(),
-                                    rpc::DialogueDisposition::PlanOnly => {
-                                        "You say to the party.".to_owned()
-                                    }
-                                    rpc::DialogueDisposition::Question
-                                    | rpc::DialogueDisposition::Social
-                                        if !speaker.is_empty() =>
-                                    {
-                                        format!("You say to {speaker}.")
-                                    }
-                                    rpc::DialogueDisposition::Clarify => {
-                                        "Please rephrase that.".to_owned()
-                                    }
-                                    rpc::DialogueDisposition::Rejected => {
-                                        "That line could not be taken.".to_owned()
-                                    }
-                                    _ => "You say that to the table.".to_owned(),
-                                }
+                                reply_status(kind, &reply.npc_reply, &speaker)
                             }
                             _ => {
                                 "The dialogue response is invalid. Retain your draft and reconnect."
@@ -1064,7 +1084,8 @@ mod tests {
     }
 
     use super::{
-        composer_available, scope_change_notice, speaker_portrait_url, split_action_response,
+        composer_available, reply_attribution, reply_status, scope_change_notice,
+        speaker_portrait_url, split_action_response,
     };
 
     #[test]
@@ -1142,5 +1163,58 @@ mod tests {
             speaker_portrait_url(None, "Courier"),
             "/assets/ui/generated/sprite-courier-documentary-photo"
         );
+    }
+
+    #[test]
+    fn reply_attribution_uses_the_canonical_responding_actor() {
+        let scene = super::rpc::GameplayScene {
+            speaker_portrait: "/assets/concept-art/marek-avatar.webp".to_owned(),
+            cast: vec![
+                super::rpc::SceneActor {
+                    id: "merchant".to_owned(),
+                    name: "Marek".to_owned(),
+                    portrait: "/assets/concept-art/marek-avatar.webp".to_owned(),
+                    ..Default::default()
+                },
+                super::rpc::SceneActor {
+                    id: "courier".to_owned(),
+                    name: "Corin".to_owned(),
+                    portrait: "/assets/concept-art/corin-avatar.webp".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let reply = super::rpc::DialogueResponse {
+            npc_actor_id: "courier".to_owned(),
+            npc_speaker: "Corin".to_owned(),
+            ..Default::default()
+        };
+
+        let (speaker, portrait) = reply_attribution(&reply, Some(&scene), "Marek");
+
+        assert_eq!(speaker, "Corin");
+        assert_eq!(portrait, "/assets/concept-art/corin-avatar.webp");
+        assert_eq!(
+            reply_status(super::rpc::DialogueDisposition::Social, "", &speaker),
+            "You say to Corin."
+        );
+    }
+
+    #[test]
+    fn reply_attribution_uses_selected_speaker_for_legacy_responses() {
+        let scene = super::rpc::GameplayScene {
+            speaker_portrait: "/assets/concept-art/marek-avatar.webp".to_owned(),
+            ..Default::default()
+        };
+
+        let (speaker, portrait) = reply_attribution(
+            &super::rpc::DialogueResponse::default(),
+            Some(&scene),
+            "Marek",
+        );
+
+        assert_eq!(speaker, "Marek");
+        assert_eq!(portrait, "/assets/concept-art/marek-avatar.webp");
     }
 }

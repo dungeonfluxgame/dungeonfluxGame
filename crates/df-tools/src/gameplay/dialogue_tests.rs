@@ -1138,7 +1138,7 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
     let inspector_joined = timeout(Duration::from_secs(2), inspector_driver).await;
     result?;
     release.map_err(repository_error)?;
-    inspector_joined??;
+    inspector_joined???;
     Ok(())
 }
 
