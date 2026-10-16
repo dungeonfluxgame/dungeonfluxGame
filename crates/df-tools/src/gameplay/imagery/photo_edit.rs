@@ -9,16 +9,16 @@ use crate::gameplay::{
     adventure::scene_model::SceneModel, shot::ShotSpec, startup_configuration::ContentRating,
 };
 
-const EDIT_PHOTOGRAPH: &str = "Image 1 is the actual photograph to edit, not a concept or mood reference. \
-    Retain its camera position, framing, perspective, optical softness, ordinary skin and \
-    imperfect physical materials. Keep the people caught mid-conversation at natural distances. \
-    Preserve the source photograph's diffuse illumination and restrained natural colors unless \
-    the canonical scene state explicitly changes them. Change only the listed scene facts; \
-    do not reconstruct or restage the picture as a new composition. No dramatic relighting, \
-    blue/amber grade, rim light, polished texture, centered full-body speaker or poster poses. \
-    Other supplied images identify the fictional performers and their clothes only: the party \
-    sheet identifies the travelers at the edges, and the individual cutouts identify the cast. \
-    Match those identities while retaining the photograph's candid human poses and capture.";
+const EDIT_PHOTOGRAPH: &str = "Edit image 1 as the actual photograph. Keep its camera position, \
+    framing, perspective, optical softness, candid poses, imperfect materials, diffuse light \
+    and restrained color unless canonical state changes them. Apply only listed scene facts. \
+    No restaging, dramatic relighting, blue/amber grade, rim light, polished texture or poster \
+    poses. Other images identify performers and clothes only, never a new composition.";
+
+const TWO_TRAVELERS: &str = "Keep both foreground travelers from image 1: armored man at left \
+    is party performer 1; adult woman at right is party performer 2. Match her red hair, armor \
+    and blue cloak to the party sheet. Do not replace her with a man or porter, remove her, \
+    or move either traveler.";
 
 /// Uses the full-frame photograph as the edit base. The optional model remains the same
 /// canonical picture state used by narration; rule-based shot embellishments are omitted.
@@ -29,6 +29,10 @@ pub(in crate::gameplay) fn harbor_photo_edit(
     hero_names: &[String],
 ) -> Result<AssembledPrompt, ImageFailure> {
     let mut parts = vec![Part::Fixed(EDIT_PHOTOGRAPH), Part::Fixed(FILM_LOOK)];
+    if spec.heroes.iter().any(|hero| hero.art == 1) && spec.heroes.iter().any(|hero| hero.art == 2)
+    {
+        parts.push(Part::Fixed(TWO_TRAVELERS));
+    }
     if let Some(model) = model {
         let state = model
             .picture_state()
@@ -125,6 +129,11 @@ mod tests {
         .unwrap();
         assert!(prompt.as_str().contains(&model.picture_state().unwrap()));
         assert!(prompt.as_str().contains("Brakka, Sigrun"));
+        assert!(
+            prompt
+                .as_str()
+                .contains("adult woman at right is party performer 2")
+        );
         assert!(prompt.as_str().chars().count() <= 4000);
     }
 }

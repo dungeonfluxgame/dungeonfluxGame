@@ -109,9 +109,10 @@ The resource filter and summary are available directly from the CLI:
 ```
 
 The accepted resource types are `text_model`, `speech_input`, `voice`, `image`,
-`plate`, `video`, `browser_media`, and `state`. Events are normalized into the
-lifecycle stages `requested`, `queued`, `ready`, `failed`, `played`,
-`projected`, and `delivered`. The summary reports `matched`,
+`plate`, `video`, `browser_media`, and `state`. Events report lifecycle stages
+including `requested`, `queued`, `ready`, `failed`, `played`, `projected`, and
+`delivered`; browser observations can also report `observed` or `hidden`.
+The summary reports `matched`,
 `summary.window_events`, distinct `resource_count`, and counts by resource type,
 stage, and status. Status values can also identify `cached`, `fallback`,
 `partial`, or `cancelled` outcomes. `--summary` returns counts with an empty
@@ -199,6 +200,9 @@ For a CGI or illustrated regression, inspect the actual bytes named by the
 provenance entry, or by the timeline image key for fixed harbor, with an image
 viewer. A filename containing `photo` is not proof of photographic content.
 Confirm the selected reference files are the reviewed documentary variants.
+For the fixed exterior harbor, the first provider reference is the complete
+`scene-salt-quay-candid-documentary-photo.webp` frame; check its byte length
+against the first `reference_byte_lengths` value in the image-request event.
 `ReferenceStore::load_photographic` accepts the explicit
 `-documentary-photo` suffix and deliberately does not fall back to a painted base
 or older nominal photo stem. Do not reintroduce an illustrated fallback to hide a
