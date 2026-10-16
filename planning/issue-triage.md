@@ -919,3 +919,43 @@ cards with explicit readable phases, and removal of the global speech-hiding
 rule. The photographic plate candidate retains the outgoing frame through a
 1 s dissolve and supplies a deterministic numbered contact sheet of all selected
 heroes and scene NPCs. These remain pending current-build visual acceptance.
+
+### Live placement acceptance and remaining lifecycle repairs (2026-10-16 UTC)
+
+Room RAGURA ran fixed native/WASM build `layout-4e00e958`, database
+`df_gameplay_demo_play_20261016040310_1578`. The independent browser pass accepted
+the current photographic medieval plate and cast, and the live layout registry,
+translation, scale/rotation, partial updates, reset, applied readback, reconnect
+inheritance and stale target rejection. The initial inventory had 237 addressable
+elements and zero overflow. CLI-only subtitle/context moves applied without a
+reload or restart and left gameplay revision unchanged. This is placement
+acceptance, not acceptance of all presentation timing or dialogue quality.
+
+- A decoded, generation-matching plate stayed unapplied after the final line
+  became idle; a later interaction woke it. The frame/timer scheduler stopped
+  because the conductor was idle even though decoded plate work remained.
+  The repair keeps that work on the existing clock, including the 2.5 s reading
+  linger gate and lost-transition retirement. Installed runtime retest pending.
+- The evaluator's first long input began "I study" and returned disposition
+  `action`; it performed Investigation rather than a spoken question. The
+  faithful 332-character Courier question returned `social` and appeared in
+  table-log entries 8/9, but its hero bubble host was hidden. The line had
+  `read_ms=24080`, logical `held_ms=27206` and `visible_held_ms=0` for bubble and
+  subtitle. The old check was recreated on redraw after its timed removal.
+  The source repair deduplicates by authoritative Roll sequence and uses the
+  existing named subtitle lane when a long bubble cannot fit. Retest pending.
+- The upper-right title overlapped the sound control at the evaluator's large
+  viewport. The 1024x768 view kept the remaining labels clear but hid the title.
+  This title placement concern remains open.
+- Accepted display batches reported aggregate client capture loss of one record
+  while the timeline mirror's own dropped count was zero. No server telemetry
+  refusal was logged. The current aggregate does not identify the lost event or
+  its source; complete lifetime capture remains unaccepted.
+- The original Courier deferrals remained repetitive. No dialogue quality,
+  audio, or crossfade acceptance follows from the placement pass.
+
+The session and exact native/WASM artifacts were retained before shutdown.
+An old checkpoint correctly refused another build ID, so repair-build acceptance
+must use a fresh quick-start database rather than bypassing its build pin.
+SAM research is saved in `planning/segment-anything-feasibility.md` and indexed
+in the visual resource manual; integration is deferred at the owner's request.

@@ -48,7 +48,7 @@ $env:DF_GAMEPLAY_PLATES='on'
 $env:DF_GAMEPLAY_HOME_VIDEO='on'
 $env:DF_GAMEPLAY_SCENE_VIDEO='on'
 $env:DF_GAMEPLAY_STT='on'
-& 'C:\Program Files\Git\bin\bash.exe' ./development/run-gameplay.sh --harbor
+& 'C:\Program Files\Git\bin\bash.exe' ./development/run-gameplay.sh --harbor --new-game
 ```
 
 Copy the `DEV CONTROL` URL and token file from startup, then run the fixture
@@ -65,6 +65,18 @@ If the fixture is not built, use `cargo run --locked -p df-tools --bin
 df-transport-fixture -- dev --server $env:DF_DEV_CONTROL_URL --token-file
 $env:DF_DEV_CONTROL_TOKEN_FILE play --to dialogue`. The game still applies its
 ordinary presentation gates; a quickstart is not a bypass of server authority.
+
+Checkpoints are pinned to their build ID. Resume an old database only with its
+matching retained native binary and WASM files. A `Checkpoint(BuildMismatch)`
+refusal after installing another build is expected; start a new quick test with
+`--new-game` and preserve the old database. Do not relabel a different binary to
+match the old checkpoint. `--no-build` reuses an already installed matching build.
+
+For dialogue tests, inspect the `disposition` returned by `dev say`. `status: said`
+alone does not mean a social question was spoken: an input such as "I study the
+courier's face" can be classified as an action and perform an Investigation check.
+Use an explicit question addressed to the NPC, then confirm the hero and reply
+in `dev view --as tv` and the actual display before measuring reading time.
 
 ## Inspect the complete resource path
 
@@ -253,6 +265,15 @@ Component lifetimes can be filtered separately, for example:
 Component records distinguish requested/opened/readable/closing/hidden phases,
 effective visibility, and measured visible duration. A logical speaking state or
 a mounted node alone does not prove that a person could see its text.
+
+Keep the timeline mirror's `dropped` count separate from `DISPLAY gap` records.
+The former measures the bounded server mirror; the latter carries client-reported
+capture loss. In RAGURA, the mirror reported zero drops while browser batches
+reported one lost record. The current aggregate cannot identify its exact loss
+source. Preserve these gaps and do not certify a complete lifetime from an
+incomplete capture. A 332-character regression in that run had a 24,080 ms reading
+budget and a 27,206 ms logical lifetime, while both caption components reported
+zero visible time; screenshots confirmed the missing question.
 
 ## Visual review loop
 
