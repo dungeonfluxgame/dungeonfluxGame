@@ -781,3 +781,11 @@ Kept here so they are not triaged again.
 - The loading card shows the narrator's caption.
 - Music ducks under a voiced line (it does not yet come back promptly: AUD-01).
 - The server starts on Windows without the manual stack patch.
+
+## 2026-10-15 dialogue regression session
+
+The agent CLI now reaches NPC dialogue without using the character creator: `dev play --to dialogue` on a fresh two-seat local room joined both seats, made Brakka and Sigrun through the live creation offer, chose the opening `ask` path, and returned `phase=dialogue`, `combat=null` after six admitted steps in 8.4 s (`e7a71311`). Running it again in the same room returned with zero steps in 98 ms. Focused tests passed (7 CLI play, 4 creation selection). The room was stopped cleanly after the visual check.
+
+On that room's display, the state machine reported `data-battle-state=absent` and `data-battlefield-live=false` during dialogue (`37ace03e`). A generated 2560-pixel plate loaded and was visibly shown behind the Courier's dialogue; Brakka and Sigrun's health labels were separated. This confirms the previously empty scene and plate were fixed for this fresh run (`dae5b98b`, `a2327cdd`). The player still judged the plate's finish painterly rather than photographic, so PIC-17 remains open. The visual check did not establish audible TTS or mute behavior.
+
+The earlier room could not be resumed (`retained_access_unavailable Unauthorized`), so its saved state was left untouched and the regression used a fresh database. This is still an untriaged resume failure. Five Courier questions in that earlier room returned repetitive deferrals about the packet, seal, ship, and follower; dialogue quality needs a separate pass against TLK-13/DLG-09 rather than a claim of improvement from this rendering session.
