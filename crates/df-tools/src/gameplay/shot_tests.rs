@@ -113,6 +113,23 @@ fn the_same_scene_always_gets_the_same_spec_and_other_scenes_can_differ() {
 }
 
 #[test]
+fn public_story_cues_choose_bounded_camera_variants_deterministically() {
+    let base = Camera::OverShoulderRight;
+    assert_eq!(
+        Camera::for_public_beat(base, SceneKey::DialogueSeal, PublicBeat::Build, 2),
+        Camera::DialogueMedium
+    );
+    assert_eq!(
+        Camera::for_public_beat(base, SceneKey::DialogueSeal, PublicBeat::Peak, 8),
+        Camera::DutchOverShoulderRight
+    );
+    assert_eq!(
+        Camera::for_public_beat(base, SceneKey::DialogueSeal, PublicBeat::Release, 9),
+        Camera::WideEstablishing
+    );
+}
+
+#[test]
 fn every_plate_of_a_place_keeps_its_camera_sides_props_light_and_hour_and_no_hero_holds_another_weapon()
  {
     let heroes = [1, 2];
@@ -196,7 +213,10 @@ fn the_speaker_is_placed_for_the_bubble_with_heads_below_the_top_band_and_inside
             Camera::OverShoulderLeft,
             Camera::OverShoulderRight,
             Camera::WideEstablishing,
+            Camera::DialogueMedium,
             Camera::SpeakerClose,
+            Camera::DutchOverShoulderLeft,
+            Camera::DutchOverShoulderRight,
         ] {
             let layout = layout_for(slot, camera);
             let head = layout.head_box();

@@ -155,7 +155,7 @@ fn authored_story_reads_only_committed_npc_reply_after_the_scene_action_boundary
 
 #[tokio::test]
 async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_configured_interval() {
-    let current = scene(SceneKey::Opening, "Harbor story", Some("Kestrel"));
+    let current = scene(SceneKey::DialogueSeal, "Harbor story", Some("Kestrel"));
     let (shared, mut queue) = shared(16);
     observe(&shared, &current, &[], &[1]);
     let id = fresh_ids(&drain(&mut queue)).remove(0);
@@ -166,6 +166,7 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
         speaker: "Kestrel".into(),
         text: text.into(),
         sha256: format!("hash-{text}"),
+        tempo: crate::gameplay::shot::PublicBeat::Build,
     };
     let mut next = view(&current, &[1], false);
     next.story = Some(story(2, "Keep your voice low."));
@@ -1588,6 +1589,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
         speaker: current.speaker.clone(),
         text: "The enforcer listens.".into(),
         sha256: "test-story-hash".into(),
+        tempo: crate::gameplay::shot::PublicBeat::Build,
     });
     story_view.graph_revision = 2;
     shared.observe_with(&story_view, Some(current.clone()), Vec::new());
@@ -1618,7 +1620,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
     assert!(
         edit.prompt
             .as_str()
-            .contains("Preserve the camera and framing")
+            .contains("bounded public-beat camera direction")
     );
     assert!(edit.prompt.as_str().contains("actor_id"));
     assert!(
@@ -1628,11 +1630,14 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
     );
     let edit_key = shared.inner.imagery.key_for(&edit);
     pending.story.as_mut().unwrap().text = "Keep your voice low.".into();
+    pending.story.as_mut().unwrap().tempo = crate::gameplay::shot::PublicBeat::Peak;
+    pending.story.as_mut().unwrap().sequence = 8;
     let changed = shared
         .state_image_request(&pending, base.clone(), identities.as_deref())
         .await
         .unwrap();
     assert_ne!(edit_key, shared.inner.imagery.key_for(&changed));
+    assert!(changed.prompt.as_str().contains("Dutch-angle"));
     let (rebuilt, _) = shared
         .fresh_request(&scene, &spec, &[2, 1], &[], None)
         .await

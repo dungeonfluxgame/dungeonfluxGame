@@ -340,6 +340,21 @@ struct StoryBeat {
     speaker: String,
     text: String,
     sha256: String,
+    tempo: shot::PublicBeat,
+}
+
+fn public_beat(journey: &rpc::JourneyView) -> shot::PublicBeat {
+    match journey
+        .tempo
+        .as_ref()
+        .and_then(|cue| rpc::TempoPhase::try_from(cue.phase).ok())
+    {
+        Some(rpc::TempoPhase::Build) => shot::PublicBeat::Build,
+        Some(rpc::TempoPhase::Anticipation) => shot::PublicBeat::Anticipation,
+        Some(rpc::TempoPhase::Peak) => shot::PublicBeat::Peak,
+        Some(rpc::TempoPhase::Release) => shot::PublicBeat::Release,
+        _ => shot::PublicBeat::Calm,
+    }
 }
 
 fn committed_story(journey: &rpc::JourneyView) -> Option<StoryBeat> {
@@ -373,6 +388,7 @@ fn committed_story(journey: &rpc::JourneyView) -> Option<StoryBeat> {
             Sha256::digest(format!("{}\0{}\0{text}", line.actor_id, line.speaker).as_bytes())
         ),
         text,
+        tempo: public_beat(journey),
     })
 }
 
@@ -787,6 +803,7 @@ fn record_plate_render_diagnostic(
     event: &'static str,
     status: &'static str,
     scene: &PlateScene,
+    spec: &ShotSpec,
     plate_id: &str,
     graph_revision: u64,
     ahead: bool,
@@ -801,7 +818,10 @@ fn record_plate_render_diagnostic(
     let image_key_id = image_key.map(df_observe::presentation::local_identity);
     let failure_category = failure.map(ImageFailure::label);
     let line = format!(
-        "PLATE {status} scene_id={scene_id} revision={graph_revision} ahead={ahead} plate_id={plate_id} image_key={} image_key_id={} failure_category={} elapsed_ms={elapsed_ms}",
+        "PLATE {status} scene_id={scene_id} revision={graph_revision} ahead={ahead} plate_id={plate_id} shot_kind={} angle={} focus_reason={} image_key={} image_key_id={} failure_category={} elapsed_ms={elapsed_ms}",
+        spec.camera.kind(),
+        spec.camera.angle(),
+        spec.camera.focus_reason(),
         image_key.unwrap_or("none"),
         image_key_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
         failure_category.unwrap_or("none"),
@@ -821,6 +841,15 @@ fn record_plate_render_diagnostic(
         ("status".to_owned(), serde_json::json!(status)),
         ("image_key".to_owned(), serde_json::json!(image_key)),
         ("image_key_id".to_owned(), serde_json::json!(image_key_id)),
+        (
+            "shot_kind".to_owned(),
+            serde_json::json!(spec.camera.kind()),
+        ),
+        ("angle".to_owned(), serde_json::json!(spec.camera.angle())),
+        (
+            "focus_reason".to_owned(),
+            serde_json::json!(spec.camera.focus_reason()),
+        ),
         (
             "failure_category".to_owned(),
             serde_json::json!(failure_category),
@@ -2383,6 +2412,7 @@ impl Shared {
                 "gameplay.living_scene.plate_render_requested",
                 "render_requested",
                 scene,
+                spec,
                 plate_id,
                 graph_revision,
                 ahead,
@@ -2428,6 +2458,7 @@ impl Shared {
             event,
             if failure.is_some() { "failed" } else { "ready" },
             scene,
+            spec,
             plate_id,
             graph_revision,
             ahead,

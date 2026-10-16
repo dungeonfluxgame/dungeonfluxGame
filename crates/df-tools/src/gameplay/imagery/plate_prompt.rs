@@ -15,8 +15,8 @@ use super::{
         pack::Gender,
         scene_mood::{Expression as FaceExpression, HealthTier},
         shot::{
-            DressingZone, Expression, ExtraZone, HeroShot, HeroSlot, Mood, ShotSpec, SpeakerShot,
-            TimeOfDay, asked_head,
+            Camera, DressingZone, Expression, ExtraZone, HeroShot, HeroSlot, Mood, ShotSpec,
+            SpeakerShot, TimeOfDay, asked_head,
         },
         startup_configuration::ContentRating,
     },
@@ -81,9 +81,25 @@ enum Which {
     Place,
 }
 
-const CAMERA: &str = "A wide shot on a 28mm lens from far back among the party: the heroes are small figures \
-    at the edges of the picture, each no wider than a quarter of the frame, and the room \
-    itself is the subject, its beams, floor and far walls all in view.";
+pub(in crate::gameplay) fn camera_phrase(camera: Camera) -> &'static str {
+    match camera {
+        Camera::WideEstablishing => {
+            "A wide establishing shot on a 28mm lens from far back among the party: the heroes are small figures at the edges, the whole place is legible, and the architecture recedes in deep focus."
+        }
+        Camera::DialogueMedium => {
+            "A medium dialogue shot on a 50mm lens at eye level: keep the speaker and the party relationship readable, with the foreground shoulder softly out of focus and the speaking face crisp."
+        }
+        Camera::SpeakerClose => {
+            "A close conversational shot on a 75mm lens at eye level: the speaker's face and hands carry the public beat in crisp focus while the familiar place falls into restrained optical depth of field."
+        }
+        Camera::OverShoulderLeft | Camera::OverShoulderRight => {
+            "An over-the-shoulder dialogue shot on a 50mm lens: a party shoulder is a soft foreground anchor, the speaker is crisp in the mid-ground, and the familiar place remains readable behind."
+        }
+        Camera::DutchOverShoulderLeft | Camera::DutchOverShoulderRight => {
+            "A restrained three-degree Dutch-angle over-the-shoulder dialogue shot on a 50mm lens: keep the slight tension in the horizon, the speaker crisp, the foreground shoulder soft, and the place recognizable."
+        }
+    }
+}
 const REFERENCE_STYLE: &str = "Supplied reference photographs fix identity, layout and costume. Match their ordinary \
     human skin, practical garments and natural camera finish.";
 const PLACE_IS: &str = "The place is";
@@ -380,7 +396,7 @@ fn scene_plate_with(
     let mut parts = vec![
         Part::Fixed(FILM_LOOK),
         Part::Fixed(REFERENCE_STYLE),
-        Part::Fixed(CAMERA),
+        Part::Fixed(camera_phrase(spec.camera)),
         Part::Fixed(PLACE_IS),
     ];
     if let Some(place) = place {
@@ -560,7 +576,11 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
     let mut phrases = vec![
         FILM_LOOK,
         REFERENCE_STYLE,
-        CAMERA,
+        camera_phrase(Camera::WideEstablishing),
+        camera_phrase(Camera::DialogueMedium),
+        camera_phrase(Camera::SpeakerClose),
+        camera_phrase(Camera::OverShoulderLeft),
+        camera_phrase(Camera::DutchOverShoulderLeft),
         PLACE_IS,
         INTERIOR,
         EXTERIOR,

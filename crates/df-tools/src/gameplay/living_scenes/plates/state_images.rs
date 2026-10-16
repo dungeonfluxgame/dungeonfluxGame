@@ -35,6 +35,20 @@ pub(super) struct Pending {
     graph: Option<crate::gameplay::shot::scene_graph::SceneGraph>,
 }
 
+fn story_camera(
+    pending: &Pending,
+    identities: &IdentitySnapshot,
+) -> Option<crate::gameplay::shot::Camera> {
+    let story = pending.story.as_deref()?;
+    let base = identities.scene.stage(&identities.heroes).ok()?.camera;
+    Some(crate::gameplay::shot::Camera::for_public_beat(
+        base,
+        identities.scene.key,
+        story.tempo,
+        story.sequence,
+    ))
+}
+
 #[derive(Clone)]
 pub(super) struct Item {
     pub(super) thing: SceneThing,
@@ -358,11 +372,14 @@ impl Shared {
         identities: Option<&IdentitySnapshot>,
     ) -> Result<ImageRequest, ImageFailure> {
         let prompt = if let Some(story) = &pending.story {
+            let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
+            let camera = story_camera(pending, identity).ok_or(ImageFailure::InvalidRequest)?;
             crate::gameplay::imagery::story_beat_edit(
                 self.inner.rating,
                 &story.actor_id,
                 &story.speaker,
                 &story.text,
+                camera,
             )?
         } else {
             match &pending.graph {
@@ -434,6 +451,32 @@ impl Shared {
                         )
                         .await?;
                     let key = self.inner.imagery.render(request).await?;
+                    if let Some(identity) = identities.as_deref()
+                        && let Some(story) = pending.story.as_deref()
+                        && let Some(camera) = story_camera(&pending, identity)
+                    {
+                        crate::gameplay::actor::record_audit_diagnostic(
+                            "gameplay.living_scene.plate_story_edited",
+                            format!(
+                                "PLATE story_edit sequence={} shot_kind={} angle={} focus_reason={} focus_actor={} image_key={}",
+                                story.sequence,
+                                camera.kind(),
+                                camera.angle(),
+                                camera.focus_reason(),
+                                story.actor_id,
+                                key.as_str(),
+                            ),
+                            serde_json::Map::from_iter([
+                                ("story_sequence".to_owned(), serde_json::json!(story.sequence)),
+                                ("shot_kind".to_owned(), serde_json::json!(camera.kind())),
+                                ("angle".to_owned(), serde_json::json!(camera.angle())),
+                                ("focus_reason".to_owned(), serde_json::json!(camera.focus_reason())),
+                                ("focus_actor".to_owned(), serde_json::json!(story.actor_id)),
+                                ("image_key".to_owned(), serde_json::json!(key.as_str())),
+                            ]),
+                            &[("image.key", key.as_str().to_owned())],
+                        );
+                    }
                     if let Some(identity) = identities.as_deref() {
                         self.measure_scene_plate(&key, &identity.scene, &identity.heroes)
                             .await;

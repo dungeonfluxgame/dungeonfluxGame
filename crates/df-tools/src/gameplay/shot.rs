@@ -8,9 +8,9 @@
 //! describe a staging the prompt module has a fixed phrase for, and the same scene always gets
 //! the same staging. The spec carries no player text and no model output.
 //!
-//! The camera stands with the party and well back: heroes are small (about a fifth of the frame
-//! wide at most), the speaker is the lit mid-ground focal point, and the side of the speaker that
-//! faces the middle of the frame is kept calm for the speech bubble ([`PlateLayout`] says where).
+//! The camera stays in the party's geography: establishing views make the place legible, dialogue
+//! views keep the speaker and party relationship readable, and the side of the speaker that faces
+//! the middle of the frame is kept calm for the speech bubble ([`PlateLayout`] says where).
 
 use std::{collections::BTreeMap, sync::OnceLock};
 
@@ -81,7 +81,85 @@ pub(in crate::gameplay) enum Camera {
     OverShoulderLeft,
     OverShoulderRight,
     WideEstablishing,
+    DialogueMedium,
     SpeakerClose,
+    DutchOverShoulderLeft,
+    DutchOverShoulderRight,
+}
+
+/// A public, already committed story tempo used to vary coverage. This is deliberately typed so
+/// environment prose and quoted dialogue cannot trigger a camera move.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) enum PublicBeat {
+    Calm,
+    Build,
+    Anticipation,
+    Peak,
+    Release,
+}
+
+impl Camera {
+    pub(in crate::gameplay) fn for_public_beat(
+        base: Self,
+        scene_key: SceneKey,
+        beat: PublicBeat,
+        sequence: u64,
+    ) -> Self {
+        if matches!(scene_key, SceneKey::Opening | SceneKey::Victory)
+            || matches!(beat, PublicBeat::Release)
+        {
+            return Self::WideEstablishing;
+        }
+        let side = match base {
+            Self::OverShoulderRight | Self::DutchOverShoulderRight => Self::OverShoulderRight,
+            _ => Self::OverShoulderLeft,
+        };
+        match beat {
+            PublicBeat::Build => Self::DialogueMedium,
+            // Peak tension is rare and bounded to a typed public beat; the sequence keeps it
+            // deterministic without reacting to arbitrary words in the scene or reply.
+            PublicBeat::Peak if sequence % 4 == 0 => match side {
+                Self::OverShoulderRight => Self::DutchOverShoulderRight,
+                _ => Self::DutchOverShoulderLeft,
+            },
+            PublicBeat::Peak | PublicBeat::Anticipation => side,
+            PublicBeat::Calm => match scene_key {
+                SceneKey::Inn => Self::SpeakerClose,
+                _ => side,
+            },
+            PublicBeat::Release => Self::WideEstablishing,
+        }
+    }
+
+    pub(in crate::gameplay) fn kind(self) -> &'static str {
+        match self {
+            Self::WideEstablishing => "establishing-wide",
+            Self::DialogueMedium => "dialogue-medium",
+            Self::SpeakerClose => "speaker-close",
+            Self::OverShoulderLeft | Self::OverShoulderRight => "over-shoulder",
+            Self::DutchOverShoulderLeft | Self::DutchOverShoulderRight => "dutch-over-shoulder",
+        }
+    }
+
+    pub(in crate::gameplay) fn angle(self) -> &'static str {
+        match self {
+            Self::OverShoulderLeft | Self::DutchOverShoulderLeft => "left",
+            Self::OverShoulderRight | Self::DutchOverShoulderRight => "right",
+            Self::WideEstablishing | Self::DialogueMedium | Self::SpeakerClose => "level",
+        }
+    }
+
+    pub(in crate::gameplay) fn focus_reason(self) -> &'static str {
+        match self {
+            Self::WideEstablishing => "arrival-or-release-context",
+            Self::DialogueMedium => "public-dialogue-exchange",
+            Self::SpeakerClose => "intimate-public-beat",
+            Self::OverShoulderLeft | Self::OverShoulderRight => "speaker-and-party-relationship",
+            Self::DutchOverShoulderLeft | Self::DutchOverShoulderRight => {
+                "bounded-public-tension-cue"
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -809,14 +887,18 @@ fn mood_of(scene_key: SceneKey, text: &str) -> Mood {
 fn hero_order(camera: Camera) -> [HeroSlot; 5] {
     use HeroSlot::{BackLeft, BackRight, LeftForeground, LeftMid, RightForeground, RightMid};
     match camera {
-        Camera::OverShoulderRight => [
+        Camera::OverShoulderRight | Camera::DutchOverShoulderRight => [
             RightForeground,
             LeftForeground,
             RightMid,
             BackRight,
             BackLeft,
         ],
-        Camera::OverShoulderLeft | Camera::WideEstablishing | Camera::SpeakerClose => [
+        Camera::OverShoulderLeft
+        | Camera::WideEstablishing
+        | Camera::DialogueMedium
+        | Camera::SpeakerClose
+        | Camera::DutchOverShoulderLeft => [
             LeftForeground,
             RightForeground,
             LeftMid,
@@ -937,22 +1019,25 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
         return Err(ShotError::EmptyScene);
     }
     let mood = mood_of(input.scene_key, &story);
-    let camera = match (&person, input.scene_key) {
-        (None, _) | (Some(_), SceneKey::Combat) => Camera::WideEstablishing,
-        (Some(_), SceneKey::Inn | SceneKey::Victory) => Camera::SpeakerClose,
-        (Some(_), _) => {
-            if place_stream.below(2) == 0 {
-                Camera::OverShoulderLeft
-            } else {
-                Camera::OverShoulderRight
-            }
+    let default_over_shoulder = || {
+        if place_stream.below(2) == 0 {
+            Camera::OverShoulderLeft
+        } else {
+            Camera::OverShoulderRight
         }
+    };
+    let camera = match (&person, input.scene_key) {
+        (None, _) | (Some(_), SceneKey::Combat | SceneKey::Opening) => Camera::WideEstablishing,
+        (Some(_), SceneKey::Victory) => Camera::WideEstablishing,
+        (Some(_), SceneKey::Inn) => Camera::SpeakerClose,
+        (Some(_), SceneKey::DialogueEscort) => Camera::DialogueMedium,
+        (Some(_), _) => default_over_shoulder(),
     };
     let speaker = person.map(|(speaker, person)| {
         let slot = match camera {
-            Camera::OverShoulderLeft => SpeakerSlot::MidRight,
-            Camera::OverShoulderRight => SpeakerSlot::MidLeft,
-            Camera::WideEstablishing | Camera::SpeakerClose => {
+            Camera::OverShoulderLeft | Camera::DutchOverShoulderLeft => SpeakerSlot::MidRight,
+            Camera::OverShoulderRight | Camera::DutchOverShoulderRight => SpeakerSlot::MidLeft,
+            Camera::WideEstablishing | Camera::DialogueMedium | Camera::SpeakerClose => {
                 if place_stream.below(2) == 0 {
                     SpeakerSlot::MidLeft
                 } else {
