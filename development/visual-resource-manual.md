@@ -1,7 +1,7 @@
 # Visual resource operations manual
 
 This is the short path for inspecting generated art, scene plates, fallbacks, and
-their timing in a local two-player dialogue run. It is an operational guide for
+their timing in local Story and Freeplay runs. It is an operational guide for
 agents. The design contracts remain in `planning/asset-engine.md`,
 `planning/observability.md`, and `planning/client-architecture.md`.
 
@@ -31,7 +31,7 @@ The server owns scene state, media admission, cache identity, and the effective
 source sent to clients. The browser reports presentation and renders that source;
 it must not invent a replacement asset or game outcome.
 
-## Fast two-player dialogue run
+## Story / harbor two-player dialogue run
 
 Start from the repository root in PowerShell. Use a fresh database for a clean
 asset and timing record. Keep the server revision, build directory, database name,
@@ -51,30 +51,12 @@ $env:DF_GAMEPLAY_STT='on'
 & 'C:\Program Files\Git\bin\bash.exe' ./development/run-gameplay.sh --harbor --new-game
 ```
 
-For a deterministic roleplay scene in the merchant's cloth shop, set
-`DF_GAMEPLAY_ADVENTURE=merchant-shop` before starting a fresh run. This pins
-the market location and merchant patron so the canonical scene model contains
-the merchant, a named adventurer, a named soldier, and the shop's registered
-stock.
+The `merchant-shop` preset is a separate two-scene Freeplay run with its own
+opening-phase quickstart below. Do not use the Story dialogue phase as its target.
 
-```powershell
-$env:DF_GAMEPLAY_ADVENTURE='merchant-shop'
-& 'C:\Program Files\Git\bin\bash.exe' ./development/run-gameplay.sh --new-game
-```
-
-Normal server authority and the scene interaction journal still apply:
-background people resolve as conversation targets, while offers expose exact
-copper prices without claiming a purchase until the ordinary buy path accepts it.
-The `Shop` setting is the single canonical cloth-shop composition in the shipped
-place tables, so its adventurer and soldier background cast is intentionally
-present for ordinary shop runs as well as this explicit quickstart. A completed
-purchase is recorded through the ordinary decision journal and exposes the
-registered `SceneItemCard` for the buying hero; this fixture does not invent a
-successful purchase or bypass the existing ownership path.
-
-Copy the `DEV CONTROL` URL and token file from startup, then run the fixture
-binary. This joins both seats, creates the fixture heroes from the live offers,
-and stops in dialogue before combat.
+For this Story / harbor run only, copy the `DEV CONTROL` URL and token file from
+startup, then run the fixture binary. It joins both seats, creates the fixture
+heroes from the live offers, and follows the Story offers to dialogue.
 
 ```powershell
 $env:DF_DEV_CONTROL_URL='http://127.0.0.1:63319'
@@ -86,6 +68,7 @@ If the fixture is not built, use `cargo run --locked -p df-tools --bin
 df-transport-fixture -- dev --server $env:DF_DEV_CONTROL_URL --token-file
 $env:DF_DEV_CONTROL_TOKEN_FILE play --to dialogue`. The game still applies its
 ordinary presentation gates; a quickstart is not a bypass of server authority.
+This `--to dialogue` command is for Story / harbor only.
 
 Checkpoints are pinned to their build ID. Resume an old database only with its
 matching retained native binary and WASM files. A `Checkpoint(BuildMismatch)`
@@ -112,6 +95,121 @@ not a valid legacy finding selection. `watch-<cast-id>` observes an actual cast
 member; specific clues require authored finding bindings. A successful generic
 observation is not proof that the packet or every object in the photograph is
 inspectable. Scene/feelings names are positional CLI arguments.
+
+## Merchant Freeplay shop run
+
+Set the explicit merchant mode before starting a fresh run:
+
+```powershell
+$env:DF_GAMEPLAY_ADVENTURE='merchant-shop'
+& 'C:\Program Files\Git\bin\bash.exe' ./development/run-gameplay.sh --new-game
+```
+
+Copy the `DEV CONTROL` URL and token file from startup. Use the bounded Opening
+probe below to join both seats and create heroes. Freeplay stays in
+`JourneyPhase::Opening`; do not use the Story-only `--to dialogue` command here.
+
+```powershell
+$env:DF_DEV_CONTROL_URL='http://127.0.0.1:63319'
+$env:DF_DEV_CONTROL_TOKEN_FILE='C:\path\from\DEV CONTROL\dev-control-token'
+$fixture='.\artifacts\build\play\debug\df-transport-fixture.exe'
+& $fixture dev --timeout 600 play --to opening --max-steps 1
+```
+
+Keep each probe to one step. Review its result and capture the view before
+calling it again; if repeated observation choices make no progress, record the
+no-progress result and stop rather than running the loop to its limit. Keep the
+same database and run between steps. Do not add `--new-game` between calls.
+
+Before roleplay, record the build/source revision, run ID, both accepted hero
+IDs, current room revision, canonical room readiness, and live cast/item IDs
+from `dev view --as tv` and `dev scene <hero>`. Expected identities are place
+`place-mareks-cloth-shop`; merchant `merchant` (Marek), `shop-adventurer`
+(Corin), `shop-soldier` (Jessa); offer `clothes-travelers`; and canonical item
+`item-clothes-travelers`, priced at 200 CP. The real room reference
+`scene-mareks-cloth-shop` is pending canonical generation: wait until the
+canonical owner pipeline makes the current room Ready. Do not substitute an
+older harbor/shop image or local fallback.
+
+### Buy, sell and haggle assessment
+
+At integrated source `aabca299`, the fixed-price buy path and durable source-bound
+quote/trade reducers exist. The natural-language merchant quote creation and
+acceptance caller is still pending integration; reducer tests do not prove a
+spoken haggle or buyback. Run the conversational procedure after that caller is
+integrated and its current-source gates pass. The direct 200 CP purchase may be
+assessed independently when the root build gate is ready.
+
+The current 200 CP stock item has a server-derived buy-quote range of 100–200
+CP. A sale quote must be at least 1 CP and cannot exceed half the item's authored
+value or Marek's current purse, whichever is lower. For this 200 CP item, the
+maximum buyback is 100 CP when Marek has enough coin. Read fresh server terms
+after every state change; do not infer a quote from mood or prose alone.
+
+Use one input at a time. After **every** player action, NPC reply, counteroffer,
+quote, acceptance, and committed purchase/sale, pause before the next input:
+
+1. Capture screenshots of the shared display and acting hero's phone; also
+   capture the other hero's phone for privacy checks.
+2. Read `dev view --as tv` and `dev scene <hero>`. Record scene revision,
+   selected/effective visual source, `plate_state`, `image_key`, canonical item
+   ID, owner, holder, quote/stock status and both purses.
+3. Inspect `dev timeline --last 1000 --type plate` for the matching
+   `plate_requested` → `plate_ready` (or terminal failure) → `plate_projected`
+   lifecycle. In the browser record URL, `data-scene-state`,
+   `data-plate-state`, selected source, image natural dimensions, and whether
+   the visible image matches the new canonical room/goods state.
+4. For a question, quote, counter, or refusal, confirm the image update matches
+   the unchanged item/currency state. For an accepted trade, verify the exact
+   copper movement, owner/holder change on the same
+   `item-clothes-travelers`, and an image of its new state.
+5. Do not submit another line until the current visual state is ready and
+   recorded. A missing request, stale plate, wrong item, old room, or image
+   inconsistent with the holder is a visual failure for that interaction.
+
+For the current fixed-price path, try `I buy the travelers' clothes.` in a fresh
+run. Verify Marek as seller, exactly 200 CP spent, one canonical item card on
+the buyer's phone, and the offer no longer available. Attempt a duplicate buy
+and verify no second debit. Capture the visual/state evidence after each input
+and reply; this is not a haggle test.
+
+After the bargaining caller is integrated, use a separate fresh run for this
+human-paced sequence, capturing the screenshot/state/timeline evidence after
+each input and each NPC response:
+
+1. Ask: `Marek, what is your price for the travelers' clothes?`
+2. Counter: `Would you take 1 GP for the travelers' clothes?` Record the exact
+   latest unconditional quote in CP; do not assume a reply or amount.
+3. If Marek counters, quotes, refuses, hedges, or makes a conditional offer,
+   inspect the refreshed image before continuing. Refusal/question/conditional/
+   future-credit replies must leave money, stock, owner, and holder unchanged.
+   A newer exact quote supersedes the old pending quote.
+4. Accept the exact latest quote with `Deal.` or the documented exact
+   acceptance. Verify one exact debit/credit, one item transfer, one accepted
+   quote operation, and no duplicate charge. Stale quote or amount mismatch
+   must not transfer the item or charge again.
+5. For resale, use the bought item and say: `I show Marek the travelers' clothes
+   I just bought, still unworn. Marek, I want to sell these back to you for 1
+   GP.` Verify a quote binds that same currently held and owned item; before
+   acceptance, state and image remain unchanged. After accepting the latest
+   exact seller quote, confirm Marek's purse pays, the hero receives the same
+   copper, and owner/holder return to `merchant` on the same item ID. The new
+   image must show the returned item without minting another stock instance.
+
+Log reply text, quote amount/state, source line/sequence, balances, owner/holder,
+scene revision, image key, and screenshot name for every turn. Mood and authored
+individual attitude may affect willingness and wording, but not authoritative
+price bounds or demographic price modifiers.
+
+Quick display/item reads with the `DEV CONTROL` token:
+
+```powershell
+$token=(Get-Content -Raw $env:DF_DEV_CONTROL_TOKEN_FILE).Trim()
+$auth=@{ Authorization = "Bearer $token" }
+Invoke-RestMethod "$env:DF_DEV_CONTROL_URL/dev/view?as=tv" -Headers $auth
+Invoke-RestMethod "$env:DF_DEV_CONTROL_URL/dev/scene?name=<hero>" -Headers $auth
+Invoke-RestMethod "$env:DF_DEV_CONTROL_URL/dev/timeline?last=1000&type=plate" -Headers $auth
+```
 
 ## Character dialogue presentation
 
