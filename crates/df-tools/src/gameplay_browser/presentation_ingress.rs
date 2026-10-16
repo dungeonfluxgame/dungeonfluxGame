@@ -705,7 +705,10 @@ mod tests {
         };
         let bytes = presentation::encode(&[line]).unwrap();
         let lines = RefCell::new(Vec::new());
-        let emit = |_, line, _, _| lines.borrow_mut().push(line);
+        let emit = |_: &'static str,
+                    line: String,
+                    _: Option<presentation::TimingEvent>,
+                    _: &str| { lines.borrow_mut().push(line) };
         assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (1, false));
         assert_eq!(ledger.record(upload(&bytes), emit).unwrap(), (1, true));
         assert_eq!(lines.borrow().len(), 1);

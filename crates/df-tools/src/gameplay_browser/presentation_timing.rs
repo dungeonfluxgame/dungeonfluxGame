@@ -12,6 +12,7 @@ use df_observe::presentation::{
     TimingEvent, VisualPlateState, VisualShot, VisualSource, VisualSourceDetails,
 };
 use futures::future::{AbortHandle, Abortable};
+use gloo_timers::future::TimeoutFuture;
 use wasm_bindgen::{JsCast, closure::Closure};
 
 use super::{BrowserChannel, Client, rpc};
@@ -43,7 +44,9 @@ struct ActiveComponent {
     clock: ComponentClock,
     read_ms: u32,
     phase: ComponentPhase,
+    readable_pending: bool,
     visibility: EffectiveVisibility,
+    close_reason: &'static str,
     element: Option<web_sys::Element>,
 }
 
@@ -67,6 +70,7 @@ impl Drop for Capture {
 
 thread_local! {
     static CAPTURES: RefCell<Vec<Capture>> = const { RefCell::new(Vec::new()) };
+    static NEXT_COMPONENT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
     // The join controls may be usable before a credential exists. Retain only their time;
     // uploading still waits for authenticated scope and the existing connection.
     static FIRST_USABLE: RefCell<Vec<(Weak<RefCell<Client>>, u64)>> = const { RefCell::new(Vec::new()) };
@@ -86,6 +90,15 @@ fn now_ms() -> Option<u64> {
 // Stable content-free local identifiers. Clear the sign bit for the OTLP integer domain.
 pub(super) fn identity(text: &str) -> u64 {
     df_observe::presentation::local_identity(text)
+}
+
+/// Unique page-local identity for short-lived presentation elements without a server line id.
+pub(super) fn next_component_id() -> u64 {
+    NEXT_COMPONENT_ID.with(|next| {
+        let id = next.get();
+        next.set(id.saturating_add(1).max(1));
+        id
+    })
 }
 
 fn retain(capture: &mut Capture, event: TimingEvent) {
@@ -247,6 +260,11 @@ pub(super) fn close_reason(id: u64, reason: &'static str) {
         if let Some(event) = capture.lines.get_mut(&id) {
             event.reason = reason;
         }
+        for ((_, component_id, _), component) in &mut capture.components {
+            if *component_id == id {
+                component.close_reason = reason;
+            }
+        }
     });
 }
 
@@ -266,11 +284,38 @@ pub(super) fn component(
         return;
     };
     let scene = identity(scene);
-    let visibility = effective_visibility(element);
     displays(|capture| {
         let key = (component, id, scene);
         let closing = matches!(phase, ComponentPhase::Hidden | ComponentPhase::Failed);
-        if !capture.components.contains_key(&key) && !closing {
+        let visibility = element.map_or_else(
+            || {
+                if closing {
+                    EffectiveVisibility::Hidden
+                } else {
+                    EffectiveVisibility::Unknown
+                }
+            },
+            |element| effective_visibility(Some(element)),
+        );
+        if phase == ComponentPhase::Failed && !capture.components.contains_key(&key) {
+            let mut event = TimingEvent::component_lifecycle(
+                id, scene, now, component, phase, visibility, reason,
+            );
+            event.read_ms = read_ms;
+            event.closed_ms = Some(now);
+            event.visible_held_ms = Some(0);
+            retain(capture, event);
+            return;
+        }
+        let created = !capture.components.contains_key(&key) && !closing;
+        let readable_pending =
+            phase == ComponentPhase::Readable && visibility != EffectiveVisibility::Visible;
+        let active_phase = if readable_pending {
+            ComponentPhase::Opened
+        } else {
+            phase
+        };
+        if created {
             if capture.components.len() >= 256 {
                 capture.buffer.report_loss(1);
                 web_sys::console::warn_1(&"Presentation timing active component capacity".into());
@@ -281,38 +326,71 @@ pub(super) fn component(
                 ActiveComponent {
                     clock: ComponentClock::default(),
                     read_ms,
-                    phase,
+                    phase: active_phase,
+                    readable_pending,
                     visibility,
+                    close_reason: if active_phase == ComponentPhase::Closing {
+                        reason
+                    } else {
+                        "ended"
+                    },
                     element: element.cloned(),
                 },
             );
         }
-        let event = if let Some(active) = capture.components.get_mut(&key) {
+        let Some(active) = capture.components.get_mut(&key) else {
+            return;
+        };
+        let event = {
+            if !created
+                && !closing
+                && active.phase == phase
+                && active.visibility == visibility
+                && read_ms <= active.read_ms
+            {
+                return;
+            }
             active.read_ms = read_ms.max(active.read_ms);
-            active.phase = phase;
+            let previous_phase = active.phase;
+            if phase == ComponentPhase::Readable {
+                active.readable_pending = readable_pending;
+            } else if matches!(phase, ComponentPhase::Hidden | ComponentPhase::Failed) {
+                active.readable_pending = false;
+            }
+            active.phase = if phase == ComponentPhase::Readable && readable_pending {
+                previous_phase
+            } else {
+                active_phase
+            };
             active.visibility = visibility;
             if element.is_some() {
                 active.element = element.cloned();
             }
-            let visible_held_ms = active.clock.observe(now, phase, visibility);
+            let visible_held_ms = active.clock.observe(now, active.phase, visibility);
             let mut event = TimingEvent::component_lifecycle(
-                id, scene, now, component, phase, visibility, reason,
+                id,
+                scene,
+                now,
+                component,
+                active.phase,
+                visibility,
+                reason,
             );
             event.read_ms = active.read_ms;
             event.opened_ms = active.clock.opened_ms();
             event.visible_held_ms = Some(visible_held_ms);
-            if closing {
-                event.closed_ms = Some(now);
+            if active.phase == ComponentPhase::Closing && active.close_reason == "ended" {
+                active.close_reason = reason;
             }
-            event
-        } else {
-            let mut event = TimingEvent::component_lifecycle(
-                id, scene, now, component, phase, visibility, reason,
-            );
-            event.read_ms = read_ms;
+            if active.phase == ComponentPhase::Closing {
+                event.reason = active.close_reason;
+            } else if closing && previous_phase == ComponentPhase::Closing {
+                event.reason = active.close_reason;
+            } else if closing {
+                event.reason = reason;
+            }
             if closing {
                 event.closed_ms = Some(now);
-                event.visible_held_ms = Some(0);
             }
             event
         };
@@ -321,6 +399,115 @@ pub(super) fn component(
         }
         retain(capture, event);
     });
+    refresh_component_visibility();
+}
+
+/// Delay an element phase until its entrance, readable window or authored hold completes. The
+/// callback rechecks the live element and carries only its closed component id and timings.
+pub(super) fn schedule_component_transition(
+    element: web_sys::Element,
+    component_type: PresentationComponent,
+    id: u64,
+    scene: String,
+    phase: ComponentPhase,
+    reason: &'static str,
+    read_ms: u32,
+    delay_ms: u32,
+) {
+    wasm_bindgen_futures::spawn_local(async move {
+        TimeoutFuture::new(delay_ms).await;
+        if !component_is_active(component_type, id, &scene, &element, phase) {
+            return;
+        }
+        if phase == ComponentPhase::Hidden {
+            // The timer starts a bounded browser visibility probe; it never fabricates a close.
+            for _ in 0..60 {
+                let visibility = effective_visibility(Some(&element));
+                if visibility != EffectiveVisibility::Visible
+                    && visibility != EffectiveVisibility::Unknown
+                {
+                    component(
+                        Some(&element),
+                        component_type,
+                        id,
+                        &scene,
+                        ComponentPhase::Hidden,
+                        reason,
+                        read_ms,
+                    );
+                    return;
+                }
+                TimeoutFuture::new(100).await;
+                if !component_is_active(component_type, id, &scene, &element, phase) {
+                    return;
+                }
+            }
+            return;
+        }
+        component(
+            Some(&element),
+            component_type,
+            id,
+            &scene,
+            phase,
+            reason,
+            read_ms,
+        );
+        if phase != ComponentPhase::Readable {
+            return;
+        }
+        // A card or overlay may still cover the element when its entrance delay expires. Keep
+        // checking briefly for the first genuinely readable frame; later visibility refreshes
+        // can still complete the phase if this bounded probe ends first.
+        for _ in 0..30 {
+            TimeoutFuture::new(100).await;
+            if !component_is_active(component_type, id, &scene, &element, phase) {
+                return;
+            }
+            if effective_visibility(Some(&element)) == EffectiveVisibility::Visible {
+                component(
+                    Some(&element),
+                    component_type,
+                    id,
+                    &scene,
+                    ComponentPhase::Readable,
+                    reason,
+                    read_ms,
+                );
+                return;
+            }
+        }
+    });
+}
+
+fn component_is_active(
+    component: PresentationComponent,
+    id: u64,
+    scene: &str,
+    element: &web_sys::Element,
+    next_phase: ComponentPhase,
+) -> bool {
+    if !element.is_connected() {
+        return false;
+    }
+    let scene_id = identity(scene);
+    CAPTURES.with_borrow(|captures| {
+        captures.iter().any(|capture| {
+            capture.display
+                && capture
+                    .components
+                    .get(&(component, id, scene_id))
+                    .is_some_and(|active| {
+                        active.element.as_ref().is_some_and(|active_element| {
+                            active_element.is_same_node(Some(element.as_ref()))
+                        }) && match next_phase {
+                            ComponentPhase::Readable => active.phase != ComponentPhase::Closing,
+                            ComponentPhase::Hidden => active.phase == ComponentPhase::Closing,
+                            _ => true,
+                        }
+                    })
+        })
+    })
 }
 
 /// Re-sample tracked elements after a display overlay or scene transition. This emits only when
@@ -332,10 +519,41 @@ pub(super) fn refresh_component_visibility() {
     };
     displays(|capture| {
         let mut changed = Vec::new();
+        let mut closed = Vec::new();
         for ((component, id, scene), active) in &mut capture.components {
             let visibility = effective_visibility(active.element.as_ref());
-            if visibility == active.visibility {
+            let hidden_while_closing = active.phase == ComponentPhase::Closing
+                && visibility != EffectiveVisibility::Visible
+                && visibility != EffectiveVisibility::Unknown;
+            let became_readable =
+                active.readable_pending && visibility == EffectiveVisibility::Visible;
+            if visibility == active.visibility && !became_readable && !hidden_while_closing {
                 continue;
+            }
+            if hidden_while_closing {
+                let visible_held_ms = active
+                    .clock
+                    .observe(now, ComponentPhase::Hidden, visibility);
+                let mut event = TimingEvent::component_lifecycle(
+                    *id,
+                    *scene,
+                    now,
+                    *component,
+                    ComponentPhase::Hidden,
+                    visibility,
+                    active.close_reason,
+                );
+                event.read_ms = active.read_ms;
+                event.opened_ms = active.clock.opened_ms();
+                event.visible_held_ms = Some(visible_held_ms);
+                event.closed_ms = Some(now);
+                changed.push(event);
+                closed.push((*component, *id, *scene));
+                continue;
+            }
+            if became_readable {
+                active.phase = ComponentPhase::Readable;
+                active.readable_pending = false;
             }
             active.visibility = visibility;
             let visible_held_ms = active.clock.observe(now, active.phase, visibility);
@@ -359,6 +577,9 @@ pub(super) fn refresh_component_visibility() {
         }
         for event in changed {
             retain(capture, event);
+        }
+        for key in closed {
+            capture.components.remove(&key);
         }
     });
 }
@@ -404,7 +625,7 @@ fn effective_visibility(element: Option<&web_sys::Element>) -> EffectiveVisibili
         }
         current = node.parent_element();
     }
-    if opacity < 0.95 {
+    if opacity < 0.05 {
         return EffectiveVisibility::Transparent;
     }
     let rect = element.get_bounding_client_rect();
@@ -438,7 +659,7 @@ fn effective_visibility(element: Option<&web_sys::Element>) -> EffectiveVisibili
     }
     let x = (rect.left() + rect.right()) / 2.0;
     let y = (rect.top() + rect.bottom()) / 2.0;
-    let Some(hit) = document.element_from_point(x, y) else {
+    let Some(hit) = document.element_from_point(x as f32, y as f32) else {
         return EffectiveVisibility::Unknown;
     };
     let mut hit = Some(hit);

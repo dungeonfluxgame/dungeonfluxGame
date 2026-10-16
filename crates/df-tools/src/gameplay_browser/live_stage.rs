@@ -36,6 +36,7 @@ use crate::{
     stage_depth,
     stage_machines::{ActorState, LineState},
 };
+use df_observe::presentation::{ComponentPhase, PresentationComponent};
 use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
@@ -70,6 +71,59 @@ const BUBBLE_FIXED_OBSTACLES: [&str; 3] = [".tv-headline", ".tv-rules", ".tv-sce
 const CHECK_ROLL_MS: u32 = 5_000;
 const CHECK_FINDING_PADDING_MS: u32 = 1_000;
 const CHECK_FADE_MS: u32 = 500;
+
+pub(super) fn line_component_phase(state: LineState) -> ComponentPhase {
+    match state {
+        LineState::Composing | LineState::Submitted => ComponentPhase::Requested,
+        LineState::Queued => ComponentPhase::Queued,
+        LineState::Opening => ComponentPhase::Opened,
+        LineState::Speaking | LineState::Lingering => ComponentPhase::Readable,
+        LineState::Closing | LineState::Cancelled => ComponentPhase::Closing,
+        LineState::Done => ComponentPhase::Closing,
+    }
+}
+
+pub(super) fn line_component_reason(state: LineState) -> &'static str {
+    match state {
+        LineState::Closing | LineState::Cancelled => "successor",
+        LineState::Done => "ended",
+        _ => "ready",
+    }
+}
+
+fn report_removed_presentation_component(element: &Element, reason: &'static str) {
+    let component = match element.get_attribute("data-component-type").as_deref() {
+        Some("subtitle") => PresentationComponent::Subtitle,
+        Some("speech_bubble") => PresentationComponent::SpeechBubble,
+        Some("thinking_loader") => PresentationComponent::ThinkingLoader,
+        Some("intent_loader") => PresentationComponent::IntentLoader,
+        Some("check_card") => PresentationComponent::CheckCard,
+        Some("item_card") => PresentationComponent::ItemCard,
+        Some("title_card") => PresentationComponent::TitleCard,
+        Some("scene_card") => PresentationComponent::SceneCard,
+        Some("plate_incoming") => PresentationComponent::PlateIncoming,
+        Some("plate_outgoing") => PresentationComponent::PlateOutgoing,
+        _ => return,
+    };
+    let Some(id) = element
+        .get_attribute("data-component-id")
+        .and_then(|id| id.parse::<u64>().ok())
+    else {
+        return;
+    };
+    let scene = element
+        .get_attribute("data-component-scene")
+        .unwrap_or_default();
+    super::presentation_timing::component(
+        Some(element),
+        component,
+        id,
+        &scene,
+        ComponentPhase::Hidden,
+        reason,
+        0,
+    );
+}
 
 pub(super) struct CheckDisplay {
     pub(super) hero_name: String,
@@ -478,6 +532,7 @@ impl Figures {
                 && let Some(element) = event.target().and_then(|t| t.dyn_into::<Element>().ok())
             {
                 element.remove();
+                report_removed_presentation_component(&element, "timeout");
             }
         }) as Box<dyn FnMut(Event)>);
         root.add_event_listener_with_callback(
@@ -549,8 +604,8 @@ impl Figures {
         )?;
         flag(&self.root, "data-wet", staging.wet)?;
         if *self.scene.borrow() != scene {
-            *self.scene.borrow_mut() = scene.to_owned();
             self.clear_bubbles()?;
+            *self.scene.borrow_mut() = scene.to_owned();
         }
         // Non-player figures that do not hold the stage stand back, in the cast's order.
         let stood_back = cast
@@ -858,6 +913,68 @@ impl Figures {
         index(slot).and_then(|position| self.figures.get(position))
     }
 
+    fn report_removed_component(&self, element: &Element, position: usize, reason: &'static str) {
+        if element.has_attribute("data-component-type") {
+            report_removed_presentation_component(element, reason);
+            return;
+        }
+        report_removed_presentation_component(element, reason);
+        let component = if element.class_list().contains("tv-check-result") {
+            element
+                .get_attribute("data-check-signature")
+                .map(|signature| {
+                    (
+                        PresentationComponent::CheckCard,
+                        super::presentation_timing::identity(&signature),
+                    )
+                })
+        } else if element.class_list().contains("tv-thinking") {
+            Some((PresentationComponent::ThinkingLoader, position as u64 + 1))
+        } else if element.class_list().contains("tv-intent") {
+            element
+                .get_attribute("data-line-id")
+                .and_then(|id| id.parse::<u64>().ok())
+                .map(|id| (PresentationComponent::IntentLoader, id))
+        } else if element.class_list().contains("tv-bubble") {
+            element
+                .get_attribute("data-line-id")
+                .or_else(|| element.get_attribute("data-timing-id"))
+                .and_then(|id| id.parse::<u64>().ok())
+                .map(|id| {
+                    let component = PresentationComponent::SpeechBubble;
+                    (component, id)
+                })
+        } else {
+            None
+        };
+        if let Some((component, id)) = component {
+            let scene = self.scene.borrow().clone();
+            super::presentation_timing::component(
+                Some(element),
+                component,
+                id,
+                &scene,
+                ComponentPhase::Hidden,
+                reason,
+                0,
+            );
+        }
+    }
+
+    fn clear_figure_components(
+        &self,
+        figure: &Figure,
+        position: usize,
+        reason: &'static str,
+    ) -> Result<(), JsValue> {
+        while let Some(element) = figure.bubbles.first_element_child() {
+            element.remove();
+            self.report_removed_component(&element, position, reason);
+        }
+        figure.root.remove_attribute("data-thinking")?;
+        Ok(())
+    }
+
     fn present(figure: &Figure) -> bool {
         figure.root.get_attribute("data-present").as_deref() == Some("true")
     }
@@ -875,9 +992,10 @@ impl Figures {
 
     pub(super) fn set_check(&self, check: Option<&CheckDisplay>) -> Result<(), JsValue> {
         let Some(check) = check else {
-            for figure in &self.figures {
+            for (position, figure) in self.figures.iter().enumerate() {
                 while let Some(panel) = figure.bubbles.query_selector(".tv-check-result")? {
                     panel.remove();
+                    self.report_removed_component(&panel, position, "successor");
                 }
             }
             return Ok(());
@@ -889,6 +1007,7 @@ impl Figures {
             .figure(slot)
             .ok_or_else(|| JsValue::from_str("check hero figure is absent"))?;
         let signature = check.signature();
+        let component_id = super::presentation_timing::identity(&signature);
         if let Some(panel) = figure.bubbles.query_selector(".tv-check-result")?
             && panel.get_attribute("data-check-signature").as_deref() == Some(&signature)
         {
@@ -903,9 +1022,24 @@ impl Figures {
             child = element.next_element_sibling();
             if !element.class_list().contains("tv-check-result") {
                 element.remove();
+                self.report_removed_component(
+                    &element,
+                    index(slot).unwrap_or_default(),
+                    "successor",
+                );
             }
         }
         let (finding_ms, total_ms, roll_ms) = check_result_phase_ms(&check.finding);
+        let scene = self.scene.borrow().clone();
+        super::presentation_timing::component(
+            None,
+            PresentationComponent::CheckCard,
+            component_id,
+            &scene,
+            ComponentPhase::Requested,
+            "ready",
+            finding_ms,
+        );
         let panel = node(
             &self.document,
             &figure.bubbles,
@@ -914,6 +1048,9 @@ impl Figures {
             "",
         )?;
         panel.set_attribute("data-check-signature", &signature)?;
+        panel.set_attribute("data-component-id", &component_id.to_string())?;
+        panel.set_attribute("data-component-scene", &scene)?;
+        panel.set_attribute("data-component-type", "check_card")?;
         panel.set_attribute(
             "style",
             &format!(
@@ -1007,6 +1144,45 @@ impl Figures {
             )?;
         }
         self.place_bubble(figure);
+        super::presentation_timing::component(
+            Some(&panel),
+            PresentationComponent::CheckCard,
+            component_id,
+            &scene,
+            ComponentPhase::Opened,
+            "ready",
+            finding_ms,
+        );
+        super::presentation_timing::schedule_component_transition(
+            panel.clone(),
+            PresentationComponent::CheckCard,
+            component_id,
+            scene.clone(),
+            ComponentPhase::Readable,
+            "ready",
+            finding_ms,
+            roll_ms.saturating_add(finding_ms.saturating_mul(16) / 100),
+        );
+        super::presentation_timing::schedule_component_transition(
+            panel.clone(),
+            PresentationComponent::CheckCard,
+            component_id,
+            scene.clone(),
+            ComponentPhase::Closing,
+            "timeout",
+            finding_ms,
+            total_ms.saturating_sub(CHECK_FADE_MS),
+        );
+        super::presentation_timing::schedule_component_transition(
+            panel,
+            PresentationComponent::CheckCard,
+            component_id,
+            scene,
+            ComponentPhase::Hidden,
+            "timeout",
+            finding_ms,
+            total_ms,
+        );
         Ok(())
     }
 
@@ -1096,7 +1272,12 @@ impl Figures {
         {
             return Ok(());
         }
-        figure.bubbles.set_text_content(None);
+        let position = self
+            .figures
+            .iter()
+            .position(|candidate| candidate.root.is_same_node(Some(&figure.root)))
+            .unwrap_or_default();
+        self.clear_figure_components(figure, position, "successor")?;
         let bubble = node(&self.document, &figure.bubbles, "div", "tv-bubble", "")?;
         bubble.set_attribute("data-kind", kind.name())?;
         bubble.set_attribute("data-line", &identity)?;
@@ -1125,6 +1306,64 @@ impl Figures {
         }
         node(&self.document, &bubble, "p", "tv-bubble-text", text)?;
         self.place_bubble(figure);
+        if kind == BubbleKind::Action {
+            let id = super::presentation_timing::next_component_id();
+            bubble.set_attribute("data-timing-id", &id.to_string())?;
+            let scene = self.scene.borrow().clone();
+            bubble.set_attribute("data-component-id", &id.to_string())?;
+            bubble.set_attribute("data-component-scene", &scene)?;
+            bubble.set_attribute("data-component-type", "speech_bubble")?;
+            let read_ms = crate::stage_machines::reading_time_ms(text);
+            super::presentation_timing::component(
+                None,
+                PresentationComponent::SpeechBubble,
+                id,
+                &scene,
+                ComponentPhase::Requested,
+                "ready",
+                read_ms,
+            );
+            super::presentation_timing::component(
+                Some(&bubble),
+                PresentationComponent::SpeechBubble,
+                id,
+                &scene,
+                ComponentPhase::Opened,
+                "ready",
+                read_ms,
+            );
+            super::presentation_timing::schedule_component_transition(
+                bubble.clone(),
+                PresentationComponent::SpeechBubble,
+                id,
+                scene.clone(),
+                ComponentPhase::Readable,
+                "ready",
+                read_ms,
+                u32::try_from(appear_ms).unwrap_or(u32::MAX),
+            );
+            super::presentation_timing::schedule_component_transition(
+                bubble.clone(),
+                PresentationComponent::SpeechBubble,
+                id,
+                scene.clone(),
+                ComponentPhase::Closing,
+                "timeout",
+                read_ms,
+                u32::try_from(appear_ms.saturating_add(hold)).unwrap_or(u32::MAX),
+            );
+            super::presentation_timing::schedule_component_transition(
+                bubble,
+                PresentationComponent::SpeechBubble,
+                id,
+                scene,
+                ComponentPhase::Hidden,
+                "timeout",
+                read_ms,
+                u32::try_from(appear_ms.saturating_add(hold).saturating_add(FADE_OUT_MS))
+                    .unwrap_or(u32::MAX),
+            );
+        }
         Ok(())
     }
 
@@ -1494,6 +1733,7 @@ impl Figures {
         let existing = host
             .query_selector(&selector)?
             .or(other_host.query_selector(&selector)?);
+        let created = existing.is_none();
         let live = matches!(state, LineState::Composing | LineState::Submitted);
         if live {
             figure.root.set_attribute("data-intent", state.name())?;
@@ -1535,8 +1775,64 @@ impl Figures {
             "data-submitted",
             matches!(kind, IntentKind::Submitted),
         )?;
+        let component_phase = match state {
+            LineState::Composing | LineState::Submitted => {
+                if created {
+                    ComponentPhase::Opened
+                } else {
+                    ComponentPhase::Readable
+                }
+            }
+            LineState::Cancelled | LineState::Closing => ComponentPhase::Closing,
+            LineState::Done => ComponentPhase::Hidden,
+            LineState::Queued => ComponentPhase::Queued,
+            _ => ComponentPhase::Opened,
+        };
+        let scene = self.scene.borrow().clone();
+        loader.set_attribute("data-component-id", &id.to_string())?;
+        loader.set_attribute("data-component-scene", &scene)?;
+        loader.set_attribute("data-component-type", "intent_loader")?;
+        let reason = if state == LineState::Done {
+            "ended"
+        } else if matches!(state, LineState::Closing | LineState::Cancelled) {
+            "successor"
+        } else {
+            "ready"
+        };
+        if created {
+            super::presentation_timing::component(
+                None,
+                PresentationComponent::IntentLoader,
+                id,
+                &scene,
+                ComponentPhase::Requested,
+                "ready",
+                0,
+            );
+        }
         if state == LineState::Done {
             loader.remove();
+        }
+        super::presentation_timing::component(
+            Some(&loader),
+            PresentationComponent::IntentLoader,
+            id,
+            &scene,
+            component_phase,
+            reason,
+            0,
+        );
+        if created && live {
+            super::presentation_timing::schedule_component_transition(
+                loader,
+                PresentationComponent::IntentLoader,
+                id,
+                scene,
+                ComponentPhase::Readable,
+                "ready",
+                0,
+                200,
+            );
         }
         Ok(())
     }
@@ -1552,6 +1848,10 @@ impl Figures {
         state: LineState,
         bubble: &LineBubble<'_>,
     ) -> Result<bool, JsValue> {
+        let component_type = PresentationComponent::SpeechBubble;
+        let phase = line_component_phase(state);
+        let reason = line_component_reason(state);
+        let read_ms = crate::stage_machines::reading_time_ms(bubble.text);
         let anchor = if bubble.kind == BubbleKind::Typed {
             let heroes = self
                 .figures
@@ -1571,9 +1871,67 @@ impl Figures {
                     state,
                     None,
                     bubble.text.chars().count() as u32,
-                    crate::stage_machines::reading_time_ms(bubble.text),
+                    read_ms,
                     &self.scene.borrow(),
                 );
+                let lower = self
+                    .root
+                    .parent_element()
+                    .and_then(|stage| stage.query_selector(".tv-lower").ok().flatten());
+                let scene = self.scene.borrow().clone();
+                if let Some(lower) = lower.as_ref() {
+                    lower.set_attribute("data-component-id", &id.to_string())?;
+                    lower.set_attribute("data-component-scene", &scene)?;
+                    lower.set_attribute("data-component-type", "speech_bubble")?;
+                }
+                if opened {
+                    super::presentation_timing::component(
+                        None,
+                        PresentationComponent::SpeechBubble,
+                        id,
+                        &scene,
+                        ComponentPhase::Requested,
+                        "ready",
+                        read_ms,
+                    );
+                }
+                super::presentation_timing::component(
+                    lower.as_ref(),
+                    PresentationComponent::SpeechBubble,
+                    id,
+                    &scene,
+                    phase,
+                    reason,
+                    read_ms,
+                );
+                if state == LineState::Opening
+                    && opened
+                    && let Some(lower) = lower
+                {
+                    super::presentation_timing::schedule_component_transition(
+                        lower,
+                        PresentationComponent::SpeechBubble,
+                        id,
+                        scene,
+                        ComponentPhase::Readable,
+                        "ready",
+                        read_ms,
+                        500,
+                    );
+                } else if state == LineState::Closing
+                    && let Some(lower) = lower
+                {
+                    super::presentation_timing::schedule_component_transition(
+                        lower,
+                        PresentationComponent::SpeechBubble,
+                        id,
+                        scene,
+                        ComponentPhase::Hidden,
+                        "successor",
+                        read_ms,
+                        500,
+                    );
+                }
                 return Ok(opened);
             }
             return Ok(false);
@@ -1590,6 +1948,27 @@ impl Figures {
             (Some(element), _) => (element, false),
             (None, LineState::Opening | LineState::Speaking | LineState::Lingering) => {
                 (self.open_managed(figure, id, state, bubble)?, true)
+            }
+            (None, LineState::Closing | LineState::Done | LineState::Cancelled) => {
+                let scene = self.scene.borrow().clone();
+                super::presentation_timing::line(
+                    id,
+                    state,
+                    anchor,
+                    bubble.text.chars().count() as u32,
+                    read_ms,
+                    &scene,
+                );
+                super::presentation_timing::component(
+                    None,
+                    component_type,
+                    id,
+                    &scene,
+                    phase,
+                    reason,
+                    read_ms,
+                );
+                return Ok(false);
             }
             (None, _) => return Ok(false),
         };
@@ -1609,9 +1988,56 @@ impl Figures {
             state,
             anchor,
             bubble.text.chars().count() as u32,
-            crate::stage_machines::reading_time_ms(bubble.text),
+            read_ms,
             &self.scene.borrow(),
         );
+        let scene = self.scene.borrow().clone();
+        element.set_attribute("data-component-id", &id.to_string())?;
+        element.set_attribute("data-component-scene", &scene)?;
+        element.set_attribute("data-component-type", "speech_bubble")?;
+        if opened {
+            super::presentation_timing::component(
+                None,
+                component_type,
+                id,
+                &scene,
+                ComponentPhase::Requested,
+                "ready",
+                read_ms,
+            );
+        }
+        super::presentation_timing::component(
+            Some(&element),
+            component_type,
+            id,
+            &scene,
+            phase,
+            reason,
+            read_ms,
+        );
+        if state == LineState::Opening && opened {
+            super::presentation_timing::schedule_component_transition(
+                element,
+                component_type,
+                id,
+                scene,
+                ComponentPhase::Readable,
+                "ready",
+                read_ms,
+                200,
+            );
+        } else if state == LineState::Closing {
+            super::presentation_timing::schedule_component_transition(
+                element,
+                component_type,
+                id,
+                scene,
+                ComponentPhase::Hidden,
+                reason,
+                read_ms,
+                200,
+            );
+        }
         Ok(opened)
     }
 
@@ -1661,11 +2087,20 @@ impl Figures {
         } else {
             false
         };
-        figure.bubbles.set_text_content(None);
+        let position = self
+            .figures
+            .iter()
+            .position(|candidate| candidate.root.is_same_node(Some(&figure.root)))
+            .unwrap_or_default();
+        self.clear_figure_components(figure, position, "successor")?;
         let element = node(&self.document, &figure.bubbles, "div", "tv-bubble", "")?;
         element.set_attribute("data-kind", bubble.kind.name())?;
         element.set_attribute("data-line-id", &id.to_string())?;
         element.set_attribute("data-managed", "")?;
+        let scene = self.scene.borrow().clone();
+        element.set_attribute("data-component-id", &id.to_string())?;
+        element.set_attribute("data-component-scene", &scene)?;
+        element.set_attribute("data-component-type", "speech_bubble")?;
         if replaced_typed_line {
             element.set_attribute("style", "--appear:180ms")?;
         }
@@ -1694,9 +2129,8 @@ impl Figures {
     }
 
     pub(super) fn clear_bubbles(&self) -> Result<(), JsValue> {
-        for figure in &self.figures {
-            figure.bubbles.set_text_content(None);
-            figure.root.remove_attribute("data-thinking")?;
+        for (position, figure) in self.figures.iter().enumerate() {
+            self.clear_figure_components(figure, position, "scene-change")?;
         }
         Ok(())
     }
@@ -1706,7 +2140,7 @@ impl Figures {
     /// restarted by every view.
     pub(super) fn set_thinking(&self, slot: Option<ActorSlot>) -> Result<(), JsValue> {
         let target = slot.and_then(|slot| self.figure(slot));
-        for figure in &self.figures {
+        for (position, figure) in self.figures.iter().enumerate() {
             let wanted = target.is_some_and(|target| target.root.is_same_node(Some(&figure.root)));
             let shown = figure.root.has_attribute("data-thinking");
             if wanted && !shown {
@@ -1717,10 +2151,54 @@ impl Figures {
                     node(&self.document, &dots, "i", "", "")?;
                 }
                 self.place_bubble(figure);
+                let id = position as u64 + 1;
+                let scene = self.scene.borrow().clone();
+                dots.set_attribute("data-component-id", &id.to_string())?;
+                dots.set_attribute("data-component-scene", &scene)?;
+                dots.set_attribute("data-component-type", "thinking_loader")?;
+                super::presentation_timing::component(
+                    None,
+                    PresentationComponent::ThinkingLoader,
+                    id,
+                    &scene,
+                    ComponentPhase::Requested,
+                    "ready",
+                    0,
+                );
+                super::presentation_timing::component(
+                    Some(&dots),
+                    PresentationComponent::ThinkingLoader,
+                    id,
+                    &scene,
+                    ComponentPhase::Opened,
+                    "ready",
+                    0,
+                );
+                super::presentation_timing::schedule_component_transition(
+                    dots,
+                    PresentationComponent::ThinkingLoader,
+                    id,
+                    scene,
+                    ComponentPhase::Readable,
+                    "ready",
+                    0,
+                    200,
+                );
             } else if !wanted && shown {
                 figure.root.remove_attribute("data-thinking")?;
                 if let Some(dots) = figure.bubbles.query_selector(".tv-thinking")? {
                     dots.remove();
+                    let id = position as u64 + 1;
+                    let scene = self.scene.borrow().clone();
+                    super::presentation_timing::component(
+                        Some(&dots),
+                        PresentationComponent::ThinkingLoader,
+                        id,
+                        &scene,
+                        ComponentPhase::Hidden,
+                        "successor",
+                        0,
+                    );
                 }
             }
         }
@@ -1748,8 +2226,43 @@ fn healing_action_text(mode: StageMode, amount: u32) -> String {
 mod tests {
     use super::{
         BUBBLE_FIXED_OBSTACLES, CHECK_FADE_MS, CHECK_ROLL_MS, art_candidates,
-        check_result_phase_ms, typed_line_anchor,
+        check_result_phase_ms, line_component_phase, typed_line_anchor,
     };
+    use df_observe::presentation::ComponentPhase;
+
+    #[test]
+    fn line_completion_waits_for_observed_dom_closure() {
+        use crate::stage_machines::LineState;
+
+        assert_eq!(
+            line_component_phase(LineState::Composing),
+            ComponentPhase::Requested
+        );
+        assert_eq!(
+            line_component_phase(LineState::Queued),
+            ComponentPhase::Queued
+        );
+        assert_eq!(
+            line_component_phase(LineState::Opening),
+            ComponentPhase::Opened
+        );
+        assert_eq!(
+            line_component_phase(LineState::Speaking),
+            ComponentPhase::Readable
+        );
+        assert_eq!(
+            line_component_phase(LineState::Lingering),
+            ComponentPhase::Readable
+        );
+        assert_eq!(
+            line_component_phase(LineState::Closing),
+            ComponentPhase::Closing
+        );
+        assert_eq!(
+            line_component_phase(LineState::Done),
+            ComponentPhase::Closing
+        );
+    }
 
     #[test]
     fn photographic_sprite_candidates_do_not_reintroduce_painted_portraits() {

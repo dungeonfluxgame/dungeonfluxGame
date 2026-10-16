@@ -548,7 +548,9 @@ fn record_visual_source(
 
 /// Observe visibility after motion-only changes as well as media/view updates.
 pub(super) fn refresh_timing_visibility(stage: &Element) {
+    super::presentation_timing::refresh_component_visibility();
     live_scene_stage::refresh_timing_visibility(stage);
+    refresh_establish_component(stage);
     let check_visible = stage.is_connected()
         && stage.get_attribute("data-tv-mode").as_deref() == Some("scene")
         && !stage.has_attribute("data-sound-gate")
@@ -648,6 +650,161 @@ pub(super) fn refresh_timing_visibility(stage: &Element) {
                 super::presentation_timing::media("clip-shown", &scene, &path, "ready", 1200);
             }
         }
+    }
+}
+
+fn refresh_establish_component(stage: &Element) {
+    let Ok(Some(establish)) = stage.query_selector(".tv-establish") else {
+        return;
+    };
+    let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+    let previous_scene = establish
+        .get_attribute("data-component-scene")
+        .unwrap_or_default();
+    let previous_id = establish
+        .get_attribute("data-component-id")
+        .and_then(|id| id.parse::<u64>().ok());
+    if let Some(id) = previous_id
+        && previous_scene != scene
+    {
+        super::presentation_timing::component(
+            Some(&establish),
+            df_observe::presentation::PresentationComponent::SceneCard,
+            id,
+            &previous_scene,
+            df_observe::presentation::ComponentPhase::Closing,
+            "scene-change",
+            0,
+        );
+        super::presentation_timing::schedule_component_transition(
+            establish.clone(),
+            df_observe::presentation::PresentationComponent::SceneCard,
+            id,
+            previous_scene.clone(),
+            df_observe::presentation::ComponentPhase::Hidden,
+            "scene-change",
+            0,
+            0,
+        );
+        let _removed = establish.remove_attribute("data-component-id");
+        let _removed = establish.remove_attribute("data-component-open");
+    }
+    let shown = stage.is_connected()
+        && stage.get_attribute("data-tv-mode").as_deref() == Some("scene")
+        && stage.get_attribute("data-shot").as_deref() == Some("establishing")
+        && !stage.has_attribute("data-narration-over")
+        && !stage.has_attribute("data-stage")
+        && !stage.has_attribute("data-ended")
+        && !stage.has_attribute("data-sound-gate")
+        && stage.get_attribute("data-battlefield-live").as_deref() != Some("true");
+    if shown {
+        let id = establish
+            .get_attribute("data-component-id")
+            .and_then(|id| id.parse::<u64>().ok())
+            .unwrap_or_else(super::presentation_timing::next_component_id);
+        let _set = establish.set_attribute("data-component-id", &id.to_string());
+        let _set = establish.set_attribute("data-component-scene", &scene);
+        let is_open = establish.get_attribute("data-component-open").as_deref() == Some("true");
+        if !is_open {
+            let _set = establish.set_attribute("data-component-open", "true");
+            let read_ms = crate::stage_machines::reading_time_ms(&format!(
+                "{} {}",
+                establish
+                    .query_selector(".tv-establish-title")
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.text_content())
+                    .unwrap_or_default(),
+                establish
+                    .query_selector(".tv-establish-place")
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.text_content())
+                    .unwrap_or_default(),
+            ));
+            super::presentation_timing::component(
+                None,
+                df_observe::presentation::PresentationComponent::SceneCard,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Requested,
+                "ready",
+                read_ms,
+            );
+            super::presentation_timing::component(
+                Some(&establish),
+                df_observe::presentation::PresentationComponent::SceneCard,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Opened,
+                "ready",
+                read_ms,
+            );
+            super::presentation_timing::schedule_component_transition(
+                establish,
+                df_observe::presentation::PresentationComponent::SceneCard,
+                id,
+                scene,
+                df_observe::presentation::ComponentPhase::Readable,
+                "ready",
+                read_ms,
+                500,
+            );
+            let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+            let close_id = id;
+            let close_element = stage.query_selector(".tv-establish").ok().flatten();
+            if let Some(close_element) = close_element {
+                super::presentation_timing::schedule_component_transition(
+                    close_element.clone(),
+                    df_observe::presentation::PresentationComponent::SceneCard,
+                    close_id,
+                    scene.clone(),
+                    df_observe::presentation::ComponentPhase::Closing,
+                    "timeout",
+                    read_ms,
+                    3_500,
+                );
+                super::presentation_timing::schedule_component_transition(
+                    close_element,
+                    df_observe::presentation::PresentationComponent::SceneCard,
+                    close_id,
+                    scene,
+                    df_observe::presentation::ComponentPhase::Hidden,
+                    "timeout",
+                    read_ms,
+                    5_000,
+                );
+            }
+        }
+    } else if let Some(id) = previous_id
+        && establish.get_attribute("data-component-open").as_deref() == Some("true")
+    {
+        let reason = if scene != previous_scene {
+            "scene-change"
+        } else {
+            "successor"
+        };
+        let read_ms = 0;
+        super::presentation_timing::component(
+            Some(&establish),
+            df_observe::presentation::PresentationComponent::SceneCard,
+            id,
+            &previous_scene,
+            df_observe::presentation::ComponentPhase::Closing,
+            reason,
+            read_ms,
+        );
+        let _set = establish.set_attribute("data-component-open", "false");
+        super::presentation_timing::schedule_component_transition(
+            establish,
+            df_observe::presentation::PresentationComponent::SceneCard,
+            id,
+            previous_scene,
+            df_observe::presentation::ComponentPhase::Hidden,
+            reason,
+            read_ms,
+            0,
+        );
     }
 }
 
@@ -836,6 +993,7 @@ fn bind_plate_events(
                         &figures,
                         &pending_layout,
                         &picture_size,
+                        "failed",
                     );
                     return;
                 };
@@ -892,6 +1050,7 @@ fn bind_plate_events(
                             &decode_figures,
                             &decode_layout,
                             &decode_picture_size,
+                            "decode-fail",
                         );
                     }
                 });
@@ -910,6 +1069,7 @@ fn bind_plate_events(
                     &figures,
                     &pending_layout,
                     &picture_size,
+                    "failed",
                 );
             }) as Box<dyn FnMut(Event)>)
         };
@@ -918,7 +1078,12 @@ fn bind_plate_events(
         layer.listeners.push((load, error));
     }
     for (index, frame) in layer.frames.iter().enumerate() {
-        let (root, frame, event_frame) = (layer.root.clone(), frame.clone(), frame.clone());
+        let (root, frame, event_frame, event_stage) = (
+            layer.root.clone(),
+            frame.clone(),
+            frame.clone(),
+            stage.clone(),
+        );
         let video_frame = frame.clone();
         let video_loops = Rc::clone(&layer.video_loops);
         let video_paths = Rc::clone(&layer.video_paths);
@@ -941,6 +1106,25 @@ fn bind_plate_events(
                 .and_then(|transitioning| transitioning.parse::<usize>().ok());
             if is_frame && is_opacity {
                 if active_index == Some(index) && transitioning_index == Some(index) {
+                    if let Some(image) = frame.query_selector(".tv-plate-img").ok().flatten() {
+                        let scene = event_stage
+                            .get_attribute("data-scene-key")
+                            .unwrap_or_default();
+                        if let Some(id) = image
+                            .get_attribute("data-component-id")
+                            .and_then(|id| id.parse::<u64>().ok())
+                        {
+                            super::presentation_timing::component(
+                                Some(&frame),
+                                df_observe::presentation::PresentationComponent::PlateIncoming,
+                                id,
+                                &scene,
+                                df_observe::presentation::ComponentPhase::Readable,
+                                "ready",
+                                0,
+                            );
+                        }
+                    }
                     let _removed = root.remove_attribute("data-transition");
                     let _removed = root.remove_attribute("data-previous");
                     if let (Some(video_loop), Some(path)) = (
@@ -949,11 +1133,43 @@ fn bind_plate_events(
                     ) {
                         let _applied = video_loop.apply(path.as_deref());
                     }
-                } else if active_index != Some(index)
-                    && let Some(video_loop) = video_loops.borrow().get(index)
-                {
-                    video_loop.release();
-                    let _removed = frame.remove_attribute("data-video-ready");
+                } else if active_index != Some(index) {
+                    if let Some(image) = frame.query_selector(".tv-plate-img").ok().flatten()
+                        && let Some(id) = image
+                            .get_attribute("data-component-id")
+                            .and_then(|id| id.parse::<u64>().ok())
+                    {
+                        let scene =
+                            image
+                                .get_attribute("data-component-scene")
+                                .unwrap_or_else(|| {
+                                    event_stage
+                                        .get_attribute("data-scene-key")
+                                        .unwrap_or_default()
+                                });
+                        super::presentation_timing::component(
+                            Some(&frame),
+                            df_observe::presentation::PresentationComponent::PlateOutgoing,
+                            id,
+                            &scene,
+                            df_observe::presentation::ComponentPhase::Hidden,
+                            "successor",
+                            0,
+                        );
+                        super::presentation_timing::component(
+                            Some(&frame),
+                            df_observe::presentation::PresentationComponent::PlateIncoming,
+                            id,
+                            &scene,
+                            df_observe::presentation::ComponentPhase::Hidden,
+                            "successor",
+                            0,
+                        );
+                    }
+                    if let Some(video_loop) = video_loops.borrow().get(index) {
+                        video_loop.release();
+                        let _removed = frame.remove_attribute("data-video-ready");
+                    }
                 }
             }
         }) as Box<dyn FnMut(Event)>);
@@ -1068,7 +1284,9 @@ fn bind_plate_events(
                                 "failed",
                                 0,
                             );
-                            fail_plate_request(&stage, &root, &image, &figures, &layout, &size);
+                            fail_plate_request(
+                                &stage, &root, &image, &figures, &layout, &size, "failed",
+                            );
                         }
                     }
                 }) as Box<dyn FnMut(Event)>);
@@ -1189,9 +1407,63 @@ fn activate_plate_request(
     let Some(image_index) = image.get_attribute("data-i") else {
         return;
     };
+    let Some(incoming_index) = image_index.parse::<usize>().ok() else {
+        return;
+    };
     let Some(key) = root.get_attribute("data-want-key") else {
         return;
     };
+    let scene = stage.get_attribute("data-scene-key").unwrap_or_default();
+    let incoming_id = super::presentation_timing::identity(&key);
+    let previous = root
+        .get_attribute("data-active")
+        .and_then(|active| active.parse::<usize>().ok())
+        .filter(|previous| *previous != incoming_index);
+    let outgoing = previous.and_then(|previous| {
+        root.query_selector(&format!(".tv-plate-frame[data-i=\"{previous}\"]"))
+            .ok()
+            .flatten()
+    });
+    if let Some(previous_frame) = &outgoing
+        && let Some(previous_image) = previous_frame
+            .query_selector(".tv-plate-img")
+            .ok()
+            .flatten()
+        && let Some(previous_id) = previous_image
+            .get_attribute("data-component-id")
+            .and_then(|id| id.parse::<u64>().ok())
+    {
+        let previous_scene = previous_image
+            .get_attribute("data-component-scene")
+            .unwrap_or_else(|| scene.clone());
+        super::presentation_timing::component(
+            Some(previous_frame),
+            df_observe::presentation::PresentationComponent::PlateIncoming,
+            previous_id,
+            &previous_scene,
+            df_observe::presentation::ComponentPhase::Closing,
+            "successor",
+            0,
+        );
+        super::presentation_timing::component(
+            Some(previous_frame),
+            df_observe::presentation::PresentationComponent::PlateOutgoing,
+            previous_id,
+            &previous_scene,
+            df_observe::presentation::ComponentPhase::Opened,
+            "ready",
+            0,
+        );
+        super::presentation_timing::component(
+            Some(previous_frame),
+            df_observe::presentation::PresentationComponent::PlateOutgoing,
+            previous_id,
+            &previous_scene,
+            df_observe::presentation::ComponentPhase::Closing,
+            "successor",
+            0,
+        );
+    }
     let tick = if root.get_attribute("data-push").as_deref() == Some("a") {
         "b"
     } else {
@@ -1216,6 +1488,63 @@ fn activate_plate_request(
     let _set = root.set_attribute("data-transition", &image_index);
     let _set = root.set_attribute("data-transition-at", &js_sys::Date::now().to_string());
     let _set = root.set_attribute("data-active", &image_index);
+    if let Some(frame) = &frame {
+        let _set = image.set_attribute("data-component-id", &incoming_id.to_string());
+        let _set = image.set_attribute("data-component-scene", &scene);
+        let _set = image.set_attribute("data-component-type", "plate_incoming");
+        super::presentation_timing::component(
+            Some(frame),
+            df_observe::presentation::PresentationComponent::PlateIncoming,
+            incoming_id,
+            &scene,
+            df_observe::presentation::ComponentPhase::Opened,
+            "ready",
+            0,
+        );
+        super::presentation_timing::schedule_component_transition(
+            frame.clone(),
+            df_observe::presentation::PresentationComponent::PlateIncoming,
+            incoming_id,
+            scene.clone(),
+            df_observe::presentation::ComponentPhase::Readable,
+            "ready",
+            0,
+            1_000,
+        );
+    }
+    if let Some(previous_frame) = outgoing
+        && let Some(previous_image) = previous_frame
+            .query_selector(".tv-plate-img")
+            .ok()
+            .flatten()
+        && let Some(previous_id) = previous_image
+            .get_attribute("data-component-id")
+            .and_then(|id| id.parse::<u64>().ok())
+    {
+        let previous_scene = previous_image
+            .get_attribute("data-component-scene")
+            .unwrap_or_else(|| scene.clone());
+        super::presentation_timing::schedule_component_transition(
+            previous_frame.clone(),
+            df_observe::presentation::PresentationComponent::PlateIncoming,
+            previous_id,
+            previous_scene.clone(),
+            df_observe::presentation::ComponentPhase::Hidden,
+            "successor",
+            0,
+            1_000,
+        );
+        super::presentation_timing::schedule_component_transition(
+            previous_frame,
+            df_observe::presentation::PresentationComponent::PlateOutgoing,
+            previous_id,
+            previous_scene,
+            df_observe::presentation::ComponentPhase::Hidden,
+            "successor",
+            0,
+            1_000,
+        );
+    }
     let _set = stage.set_attribute("data-plate-key", &key);
     let _set = stage.set_attribute("data-plate-state", "ready");
     let _removed = root.remove_attribute("data-failed");
@@ -1264,6 +1593,7 @@ fn fail_plate_request(
     figures: &Weak<Figures>,
     pending_layout: &Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
     picture_size: &Rc<Cell<Option<(f64, f64)>>>,
+    failure_reason: &'static str,
 ) {
     if !plate_request_matches(root, image) {
         return;
@@ -1272,6 +1602,17 @@ fn fail_plate_request(
         return;
     };
     let _set = root.set_attribute("data-failed", &url);
+    if let Some(key) = root.get_attribute("data-want-key") {
+        super::presentation_timing::component(
+            None,
+            df_observe::presentation::PresentationComponent::PlateIncoming,
+            super::presentation_timing::identity(&key),
+            &stage.get_attribute("data-scene-key").unwrap_or_default(),
+            df_observe::presentation::ComponentPhase::Failed,
+            failure_reason,
+            0,
+        );
+    }
     if root.has_attribute("data-active") && stage.has_attribute("data-plate-loaded") {
         let _set = stage.set_attribute("data-plate-state", "ready");
         let active = root.get_attribute("data-active").unwrap_or_default();
@@ -1715,22 +2056,156 @@ impl TvStage {
             self.root.remove_attribute("data-stage")
         } else {
             self.root.set_attribute("data-stage", state)
+        }?;
+        if !matches!(state, "title" | "closing")
+            && self
+                .card
+                .root
+                .get_attribute("data-component-open")
+                .as_deref()
+                == Some("true")
+        {
+            let id = self
+                .card
+                .root
+                .get_attribute("data-component-id")
+                .and_then(|id| id.parse::<u64>().ok());
+            let component = match self
+                .card
+                .root
+                .get_attribute("data-component-type")
+                .as_deref()
+            {
+                Some("title_card") => {
+                    Some(df_observe::presentation::PresentationComponent::TitleCard)
+                }
+                Some("scene_card") => {
+                    Some(df_observe::presentation::PresentationComponent::SceneCard)
+                }
+                _ => None,
+            };
+            if let (Some(id), Some(component)) = (id, component) {
+                let scene = self
+                    .root
+                    .get_attribute("data-scene-key")
+                    .unwrap_or_default();
+                super::presentation_timing::component(
+                    Some(&self.card.root),
+                    component,
+                    id,
+                    &scene,
+                    df_observe::presentation::ComponentPhase::Closing,
+                    "successor",
+                    0,
+                );
+                self.card
+                    .root
+                    .set_attribute("data-component-open", "false")?;
+                super::presentation_timing::schedule_component_transition(
+                    self.card.root.clone(),
+                    component,
+                    id,
+                    scene,
+                    df_observe::presentation::ComponentPhase::Hidden,
+                    "successor",
+                    0,
+                    0,
+                );
+            }
         }
+        Ok(())
     }
 
     /// Fills the title or closing card; the stylesheet shows it while the director is in the
     /// matching state.
     pub(super) fn show_card(&self, document: &Document, card: &Card) -> Result<(), JsValue> {
         let shown = &self.card;
+        let kind = match card.kind {
+            CardKind::Title => "title",
+            CardKind::Victory => "victory",
+            CardKind::Defeat => "defeat",
+            CardKind::End => "end",
+        };
+        let component = if card.kind == CardKind::Title {
+            df_observe::presentation::PresentationComponent::TitleCard
+        } else {
+            df_observe::presentation::PresentationComponent::SceneCard
+        };
+        let component_kind = component.label();
+        let same_kind = shown.root.get_attribute("data-component-kind").as_deref() == Some(kind);
+        let same_content = shown.kicker.text_content().as_deref() == Some(card.kicker.as_str())
+            && shown.headline.text_content().as_deref() == Some(card.headline.as_str())
+            && shown.line.text_content().as_deref() == Some(card.subline.as_str())
+            && shown.place.text_content().as_deref() == Some(card.place.as_str());
+        let reuse_component = same_kind && same_content;
+        let id = if reuse_component {
+            shown
+                .root
+                .get_attribute("data-component-id")
+                .and_then(|id| id.parse::<u64>().ok())
+                .unwrap_or_else(super::presentation_timing::next_component_id)
+        } else {
+            if let (Some(previous_id), Some(previous_type)) = (
+                shown
+                    .root
+                    .get_attribute("data-component-id")
+                    .and_then(|id| id.parse::<u64>().ok()),
+                shown
+                    .root
+                    .get_attribute("data-component-type")
+                    .as_deref()
+                    .and_then(|type_label| match type_label {
+                        "title_card" => {
+                            Some(df_observe::presentation::PresentationComponent::TitleCard)
+                        }
+                        "scene_card" => {
+                            Some(df_observe::presentation::PresentationComponent::SceneCard)
+                        }
+                        _ => None,
+                    }),
+            ) {
+                let scene = self
+                    .root
+                    .get_attribute("data-scene-key")
+                    .unwrap_or_default();
+                super::presentation_timing::component(
+                    Some(&shown.root),
+                    previous_type,
+                    previous_id,
+                    &scene,
+                    df_observe::presentation::ComponentPhase::Closing,
+                    "replaced",
+                    0,
+                );
+                super::presentation_timing::component(
+                    Some(&shown.root),
+                    previous_type,
+                    previous_id,
+                    &scene,
+                    df_observe::presentation::ComponentPhase::Hidden,
+                    "replaced",
+                    0,
+                );
+            }
+            super::presentation_timing::next_component_id()
+        };
+        let is_new = !reuse_component || !shown.root.has_attribute("data-component-id");
+        shown.root.set_attribute("data-kind", kind)?;
+        shown
+            .root
+            .set_attribute("data-component-id", &id.to_string())?;
         shown.root.set_attribute(
-            "data-kind",
-            match card.kind {
-                CardKind::Title => "title",
-                CardKind::Victory => "victory",
-                CardKind::Defeat => "defeat",
-                CardKind::End => "end",
-            },
+            "data-component-scene",
+            &self
+                .root
+                .get_attribute("data-scene-key")
+                .unwrap_or_default(),
         )?;
+        shown
+            .root
+            .set_attribute("data-component-type", component_kind)?;
+        shown.root.set_attribute("data-component-kind", kind)?;
+        shown.root.set_attribute("data-component-open", "true")?;
         shown.kicker.set_text_content(Some(&card.kicker));
         shown.headline.set_text_content(Some(&card.headline));
         shown.line.set_text_content(Some(&card.subline));
@@ -1749,6 +2224,45 @@ impl TvStage {
             node(document, &item, "b", "tv-bigcard-name", &hero.name)?;
             node(document, &item, "span", "tv-bigcard-role", &hero.role)?;
         }
+        let read_text = format!(
+            "{} {} {} {}",
+            card.kicker, card.headline, card.subline, card.place
+        );
+        let read_ms = crate::stage_machines::reading_time_ms(&read_text);
+        let scene = self
+            .root
+            .get_attribute("data-scene-key")
+            .unwrap_or_default();
+        if is_new {
+            super::presentation_timing::component(
+                None,
+                component,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Requested,
+                "ready",
+                read_ms,
+            );
+        }
+        super::presentation_timing::component(
+            Some(&shown.root),
+            component,
+            id,
+            &scene,
+            df_observe::presentation::ComponentPhase::Opened,
+            "ready",
+            read_ms,
+        );
+        super::presentation_timing::schedule_component_transition(
+            shown.root.clone(),
+            component,
+            id,
+            scene,
+            df_observe::presentation::ComponentPhase::Readable,
+            "ready",
+            read_ms,
+            0,
+        );
         Ok(())
     }
 
@@ -1800,6 +2314,10 @@ impl TvStage {
         state: LineState,
         text: &str,
     ) -> Result<bool, JsValue> {
+        let scene = self
+            .root
+            .get_attribute("data-scene-key")
+            .unwrap_or_default();
         if state == LineState::Lingering {
             self.root
                 .set_attribute("data-plate-linger-at", &js_sys::Date::now().to_string())?;
@@ -1820,6 +2338,23 @@ impl TvStage {
             state,
             LineState::Opening | LineState::Speaking | LineState::Lingering
         ) && self.narration.text_content().as_deref() != Some(text);
+        let previous_component = self
+            .narration
+            .get_attribute("data-component-id")
+            .and_then(|id| id.parse::<u64>().ok())
+            .filter(|previous_id| *previous_id != id)
+            .zip(self.narration.get_attribute("data-component-scene"));
+        if let Some((previous_id, previous_scene)) = &previous_component {
+            super::presentation_timing::component(
+                Some(&self.narration),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                *previous_id,
+                previous_scene,
+                df_observe::presentation::ComponentPhase::Closing,
+                "successor",
+                0,
+            );
+        }
         if opened {
             self.narration.set_text_content(Some(text));
             self.narration.set_attribute("title", text)?;
@@ -1847,16 +2382,89 @@ impl TvStage {
             None,
             text.chars().count() as u32,
             crate::stage_machines::reading_time_ms(text),
-            &self
-                .root
-                .get_attribute("data-scene-key")
-                .unwrap_or_default(),
+            &scene,
         );
+        if let Some((previous_id, previous_scene)) = previous_component {
+            super::presentation_timing::component(
+                Some(&self.narration),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                previous_id,
+                &previous_scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                "successor",
+                0,
+            );
+        }
+        let phase = super::live_stage::line_component_phase(state);
+        let reason = super::live_stage::line_component_reason(state);
+        let read_ms = crate::stage_machines::reading_time_ms(text);
+        let created = self
+            .narration
+            .get_attribute("data-component-id")
+            .and_then(|existing| existing.parse::<u64>().ok())
+            != Some(id);
+        self.narration
+            .set_attribute("data-component-id", &id.to_string())?;
+        self.narration
+            .set_attribute("data-component-scene", &scene)?;
+        self.narration
+            .set_attribute("data-component-type", "subtitle")?;
+        if created {
+            super::presentation_timing::component(
+                None,
+                df_observe::presentation::PresentationComponent::Subtitle,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Requested,
+                "ready",
+                read_ms,
+            );
+        }
+        super::presentation_timing::component(
+            Some(&self.narration),
+            df_observe::presentation::PresentationComponent::Subtitle,
+            id,
+            &scene,
+            phase,
+            reason,
+            read_ms,
+        );
+        if state == LineState::Closing {
+            super::presentation_timing::schedule_component_transition(
+                self.narration.clone(),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                id,
+                scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                reason,
+                read_ms,
+                500,
+            );
+        }
         Ok(opened)
     }
 
     /// Empties the Dungeon Master's box: a new scene starts with none of the old scene's words.
     pub(super) fn clear_narration(&self) -> Result<(), JsValue> {
+        let component_id = self
+            .narration
+            .get_attribute("data-component-id")
+            .and_then(|id| id.parse::<u64>().ok());
+        let component_scene = self
+            .narration
+            .get_attribute("data-component-scene")
+            .unwrap_or_default();
+        if let Some(id) = component_id {
+            super::presentation_timing::component(
+                Some(&self.narration),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                id,
+                &component_scene,
+                df_observe::presentation::ComponentPhase::Closing,
+                "scene-change",
+                0,
+            );
+        }
         if let Some(id) = self
             .narration
             .parent_element()
@@ -1879,6 +2487,20 @@ impl TvStage {
         self.narration.set_text_content(None);
         self.narration.remove_attribute("title")?;
         self.narration.class_list().remove_1("speaking")?;
+        if let Some(id) = component_id {
+            super::presentation_timing::component(
+                Some(&self.narration),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                id,
+                &component_scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                "scene-change",
+                0,
+            );
+        }
+        self.narration.remove_attribute("data-component-id")?;
+        self.narration.remove_attribute("data-component-scene")?;
+        self.narration.remove_attribute("data-component-type")?;
         if let Some(caption) = self.narration.parent_element() {
             caption.remove_attribute("data-line-id")?;
             caption.remove_attribute("data-line-state")?;
@@ -1920,6 +2542,50 @@ impl TvStage {
                     .ok_or_else(|| JsValue::from_str("display document absent"))?;
                 let context = node(&document, &self.root, "aside", "tv-scene-context", "")?;
                 context.set_attribute("aria-label", "Scene context")?;
+                let id = super::presentation_timing::next_component_id();
+                context.set_attribute("data-component-id", &id.to_string())?;
+                context.set_attribute("data-component-type", "scene_card")?;
+                context.set_attribute("data-component-open", "true")?;
+                context.set_attribute(
+                    "data-component-scene",
+                    &self
+                        .root
+                        .get_attribute("data-scene-key")
+                        .unwrap_or_default(),
+                )?;
+                let scene = self
+                    .root
+                    .get_attribute("data-scene-key")
+                    .unwrap_or_default();
+                let read_ms = crate::stage_machines::reading_time_ms(text);
+                super::presentation_timing::component(
+                    None,
+                    df_observe::presentation::PresentationComponent::SceneCard,
+                    id,
+                    &scene,
+                    df_observe::presentation::ComponentPhase::Requested,
+                    "ready",
+                    read_ms,
+                );
+                super::presentation_timing::component(
+                    Some(&context),
+                    df_observe::presentation::PresentationComponent::SceneCard,
+                    id,
+                    &scene,
+                    df_observe::presentation::ComponentPhase::Opened,
+                    "ready",
+                    read_ms,
+                );
+                super::presentation_timing::schedule_component_transition(
+                    context.clone(),
+                    df_observe::presentation::PresentationComponent::SceneCard,
+                    id,
+                    scene,
+                    df_observe::presentation::ComponentPhase::Readable,
+                    "ready",
+                    read_ms,
+                    0,
+                );
                 context
             }
         };
@@ -1936,7 +2602,34 @@ impl TvStage {
         if self.root.get_attribute("data-scene-key").as_deref() != Some(&model.scene_key)
             && let Some(context) = self.root.query_selector(".tv-scene-context")?
         {
-            context.remove();
+            if let (Some(id), Some(scene)) = (
+                context
+                    .get_attribute("data-component-id")
+                    .and_then(|id| id.parse::<u64>().ok()),
+                context.get_attribute("data-component-scene"),
+            ) {
+                super::presentation_timing::component(
+                    Some(&context),
+                    df_observe::presentation::PresentationComponent::SceneCard,
+                    id,
+                    &scene,
+                    df_observe::presentation::ComponentPhase::Closing,
+                    "scene-change",
+                    0,
+                );
+                context.remove();
+                super::presentation_timing::component(
+                    Some(&context),
+                    df_observe::presentation::PresentationComponent::SceneCard,
+                    id,
+                    &scene,
+                    df_observe::presentation::ComponentPhase::Hidden,
+                    "scene-change",
+                    0,
+                );
+            } else {
+                context.remove();
+            }
         }
         self.root
             .set_attribute("data-scene-key", &model.scene_key)?;
@@ -2293,10 +2986,33 @@ impl TvStage {
     /// over an establishing shot and only while the line is the one being heard.
     pub(super) fn lower_third(
         &self,
+        id: u64,
         speaker: &str,
         text: &str,
         state: LineState,
     ) -> Result<(), JsValue> {
+        let scene = self
+            .root
+            .get_attribute("data-scene-key")
+            .unwrap_or_default();
+        let previous_component = self
+            .lower
+            .root
+            .get_attribute("data-component-id")
+            .and_then(|previous_id| previous_id.parse::<u64>().ok())
+            .filter(|previous_id| *previous_id != id)
+            .zip(self.lower.root.get_attribute("data-component-scene"));
+        if let Some((previous_id, previous_scene)) = &previous_component {
+            super::presentation_timing::component(
+                Some(&self.lower.root),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                *previous_id,
+                previous_scene,
+                df_observe::presentation::ComponentPhase::Closing,
+                "successor",
+                0,
+            );
+        }
         if state == LineState::Lingering {
             self.root
                 .set_attribute("data-plate-linger-at", &js_sys::Date::now().to_string())?;
@@ -2324,7 +3040,69 @@ impl TvStage {
                     .unwrap_or_default(),
             )?;
         }
-        lower.root.set_attribute("data-line-state", state.name())
+        lower.root.set_attribute("data-line-state", state.name())?;
+        if let Some((previous_id, previous_scene)) = previous_component {
+            super::presentation_timing::component(
+                Some(&lower.root),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                previous_id,
+                &previous_scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                "successor",
+                0,
+            );
+        }
+        let phase = super::live_stage::line_component_phase(state);
+        let reason = super::live_stage::line_component_reason(state);
+        let read_ms = crate::stage_machines::reading_time_ms(text);
+        let created = lower
+            .root
+            .get_attribute("data-component-id")
+            .and_then(|existing| existing.parse::<u64>().ok())
+            != Some(id);
+        lower
+            .root
+            .set_attribute("data-component-id", &id.to_string())?;
+        lower.root.set_attribute("data-component-scene", &scene)?;
+        lower
+            .root
+            .set_attribute("data-component-type", "subtitle")?;
+        if created {
+            super::presentation_timing::component(
+                None,
+                df_observe::presentation::PresentationComponent::Subtitle,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Requested,
+                "ready",
+                read_ms,
+            );
+        }
+        super::presentation_timing::component(
+            Some(&lower.root),
+            df_observe::presentation::PresentationComponent::Subtitle,
+            id,
+            &scene,
+            phase,
+            reason,
+            read_ms,
+        );
+        if matches!(
+            state,
+            LineState::Closing | LineState::Done | LineState::Cancelled
+        ) {
+            super::presentation_timing::schedule_component_transition(
+                lower.root.clone(),
+                df_observe::presentation::PresentationComponent::Subtitle,
+                id,
+                scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                reason,
+                read_ms,
+                500,
+            );
+        }
+        Ok(())
     }
 
     /// PLAY-V09: shows the scene plate the server made, or leaves the scene as it was.
@@ -2373,6 +3151,67 @@ impl TvStage {
                 self.root.set_attribute("data-plate-state", "ready")?;
                 *layer.seen.borrow_mut() = scene_key.to_owned();
                 return Ok(());
+            }
+            if let Some(active_frame) = layer
+                .root
+                .get_attribute("data-active")
+                .and_then(|active| active.parse::<usize>().ok())
+                .and_then(|active| layer.frames.get(active))
+                && let Some(image) = active_frame.query_selector(".tv-plate-img")?
+                && let Some(id) = image
+                    .get_attribute("data-component-id")
+                    .and_then(|id| id.parse::<u64>().ok())
+            {
+                let previous_scene = image
+                    .get_attribute("data-component-scene")
+                    .unwrap_or_else(|| layer.scene.borrow().clone());
+                super::presentation_timing::component(
+                    Some(active_frame),
+                    df_observe::presentation::PresentationComponent::PlateIncoming,
+                    id,
+                    &previous_scene,
+                    df_observe::presentation::ComponentPhase::Closing,
+                    "scene-change",
+                    0,
+                );
+                super::presentation_timing::component(
+                    Some(active_frame),
+                    df_observe::presentation::PresentationComponent::PlateOutgoing,
+                    id,
+                    &previous_scene,
+                    df_observe::presentation::ComponentPhase::Opened,
+                    "ready",
+                    0,
+                );
+                super::presentation_timing::component(
+                    Some(active_frame),
+                    df_observe::presentation::PresentationComponent::PlateOutgoing,
+                    id,
+                    &previous_scene,
+                    df_observe::presentation::ComponentPhase::Closing,
+                    "scene-change",
+                    0,
+                );
+                super::presentation_timing::schedule_component_transition(
+                    active_frame.clone(),
+                    df_observe::presentation::PresentationComponent::PlateIncoming,
+                    id,
+                    previous_scene.clone(),
+                    df_observe::presentation::ComponentPhase::Hidden,
+                    "scene-change",
+                    0,
+                    0,
+                );
+                super::presentation_timing::schedule_component_transition(
+                    active_frame.clone(),
+                    df_observe::presentation::PresentationComponent::PlateOutgoing,
+                    id,
+                    previous_scene,
+                    df_observe::presentation::ComponentPhase::Hidden,
+                    "scene-change",
+                    0,
+                    0,
+                );
             }
             self.root.set_attribute("data-plate-state", state.name())?;
             self.root.remove_attribute("data-plate-key")?;
@@ -2458,6 +3297,7 @@ impl TvStage {
             .filter(|key| !key.is_empty())
             .ok_or_else(|| JsValue::from_str("plate URL has no asset key"))?;
         layer.root.set_attribute("data-want-key", key)?;
+        let component_id = super::presentation_timing::identity(key);
         layer.root.set_attribute("data-want", url)?;
         if same_scene {
             // An edit of the plate on screen: the old one stays until the new one has loaded.
@@ -2469,6 +3309,19 @@ impl TvStage {
         *layer.seen.borrow_mut() = scene_key.to_owned();
         image.set_attribute("data-src", url)?;
         image.set_attribute("src", url)?;
+        super::presentation_timing::component(
+            None,
+            df_observe::presentation::PresentationComponent::PlateIncoming,
+            component_id,
+            scene_key,
+            df_observe::presentation::ComponentPhase::Requested,
+            if same_scene {
+                "replaced"
+            } else {
+                "scene-change"
+            },
+            0,
+        );
         super::presentation_timing::media(
             "plate-requested",
             scene_key,
@@ -2723,7 +3576,7 @@ mod tests {
         let (parent, stage) = mounted_stage();
         seed_active_plate(&stage);
         stage
-            .lower_third("Courier", "Keep this line steady.", LineState::Speaking)
+            .lower_third(7, "Courier", "Keep this line steady.", LineState::Speaking)
             .unwrap();
         let plate = PlateView {
             state: PlateState::Ready,
@@ -2740,7 +3593,7 @@ mod tests {
             Some("0")
         );
         stage
-            .lower_third("Courier", "Keep this line steady.", LineState::Done)
+            .lower_third(7, "Courier", "Keep this line steady.", LineState::Done)
             .unwrap();
         stage.set_speaker("").unwrap();
         assert_eq!(

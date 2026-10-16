@@ -478,7 +478,7 @@ pub(super) async fn view_as(
         return Ok((
             axum::http::StatusCode::OK,
             Json(
-                json!({"as": "tv", "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, false)}),
+                json!({"as": "tv", "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, None, false)}),
             ),
         ));
     }
@@ -490,7 +490,7 @@ pub(super) async fn view_as(
     Ok((
         axum::http::StatusCode::OK,
         Json(
-            json!({"as": who, "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, false)}),
+            json!({"as": who, "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, None, false)}),
         ),
     ))
 }

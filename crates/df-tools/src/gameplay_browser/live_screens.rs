@@ -200,9 +200,10 @@ impl Drop for ServerImage {
 }
 
 fn art_source(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> VisualSource {
-    let photographic_harbor = (matches!(phase, rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening)
-        || is_fixed_harbor_dialogue(phase, scene))
-        && scene.destination != rpc::HarborDestination::HarborInn as i32;
+    let photographic_harbor =
+        (matches!(phase, rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening)
+            || is_fixed_harbor_dialogue(phase, scene))
+            && scene.destination != rpc::HarborDestination::HarborInn as i32;
     if photographic_harbor {
         VisualSource::EstablishingPhoto
     } else if crate::presentation::imagery_url(&scene.live_backdrop).is_some() {
@@ -932,12 +933,61 @@ fn render_item_card(
         if same {
             return Ok(());
         }
+        if let (Some(id), Some(scene)) = (
+            previous
+                .get_attribute("data-component-id")
+                .and_then(|id| id.parse::<u64>().ok()),
+            previous.get_attribute("data-component-scene"),
+        ) {
+            super::presentation_timing::component(
+                Some(&previous),
+                df_observe::presentation::PresentationComponent::ItemCard,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Closing,
+                "successor",
+                0,
+            );
+        }
         previous.remove();
+        if let (Some(id), Some(scene)) = (
+            previous
+                .get_attribute("data-component-id")
+                .and_then(|id| id.parse::<u64>().ok()),
+            previous.get_attribute("data-component-scene"),
+        ) {
+            super::presentation_timing::component(
+                Some(&previous),
+                df_observe::presentation::PresentationComponent::ItemCard,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                "successor",
+                0,
+            );
+        }
     }
     let Some(item) = item else {
         return Ok(());
     };
     let card = node(document, parent, "article", "live-scene-item", "")?;
+    let id =
+        super::presentation_timing::identity(&format!("{}:{}", item.thing_id, item.state_revision));
+    let scene = {
+        let mut current = Some(parent.clone());
+        let mut scene = String::new();
+        while let Some(element) = current {
+            if element.class_list().contains("tv-stage") {
+                scene = element.get_attribute("data-scene-key").unwrap_or_default();
+                break;
+            }
+            current = element.parent_element();
+        }
+        scene
+    };
+    card.set_attribute("data-component-id", &id.to_string())?;
+    card.set_attribute("data-component-scene", &scene)?;
+    card.set_attribute("data-component-type", "item_card")?;
     card.set_attribute(
         "data-item-state",
         &format!(
@@ -953,6 +1003,57 @@ fn render_item_card(
         image.set_attribute("alt", &item.name)?;
     }
     node(document, &card, "p", "live-scene-item-detail", &item.detail)?;
+    let read_ms = crate::stage_machines::reading_time_ms(&format!("{} {}", item.name, item.detail));
+    super::presentation_timing::component(
+        None,
+        df_observe::presentation::PresentationComponent::ItemCard,
+        id,
+        &scene,
+        df_observe::presentation::ComponentPhase::Requested,
+        "ready",
+        read_ms,
+    );
+    super::presentation_timing::component(
+        Some(&card),
+        df_observe::presentation::PresentationComponent::ItemCard,
+        id,
+        &scene,
+        df_observe::presentation::ComponentPhase::Opened,
+        "ready",
+        read_ms,
+    );
+    super::presentation_timing::schedule_component_transition(
+        card.clone(),
+        df_observe::presentation::PresentationComponent::ItemCard,
+        id,
+        scene.clone(),
+        df_observe::presentation::ComponentPhase::Readable,
+        "ready",
+        read_ms,
+        0,
+    );
+    if display {
+        super::presentation_timing::schedule_component_transition(
+            card.clone(),
+            df_observe::presentation::PresentationComponent::ItemCard,
+            id,
+            scene.clone(),
+            df_observe::presentation::ComponentPhase::Closing,
+            "timeout",
+            read_ms,
+            7_200,
+        );
+        super::presentation_timing::schedule_component_transition(
+            card,
+            df_observe::presentation::PresentationComponent::ItemCard,
+            id,
+            scene,
+            df_observe::presentation::ComponentPhase::Hidden,
+            "timeout",
+            read_ms,
+            8_000,
+        );
+    }
     Ok(())
 }
 
@@ -1057,7 +1158,7 @@ mod tests {
         );
         assert_eq!(
             lobby_art_source("assets/ui/generated/scene-place-guardhouse", &live_backdrop),
-            Some(live_backdrop)
+            Some(live_backdrop.clone())
         );
         assert_eq!(
             lobby_art_source(

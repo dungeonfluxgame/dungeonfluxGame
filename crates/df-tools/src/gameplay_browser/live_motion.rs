@@ -1764,7 +1764,7 @@ fn line_command(
         match slot {
             None => stage.narrator_line(id, state, &line.text)?,
             Some(position) => {
-                stage.lower_third(&line.speaker, &line.text, state)?;
+                stage.lower_third(id, &line.speaker, &line.text, state)?;
                 let kind = match (line.kind, line.role) {
                     (TableKind::Action, _) => BubbleKind::Action,
                     (TableKind::Speech, TableRole::Hero(_)) => BubbleKind::Typed,
