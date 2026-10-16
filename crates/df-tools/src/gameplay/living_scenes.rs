@@ -529,7 +529,7 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
     for hero in &stage.heroes {
         let art = u8::try_from(hero.index + 1).ok()?;
         let fallback_art = match art {
-            1 | 2 => format!("/assets/ui/generated/figure-hero-{art}-photo.png"),
+            1 | 2 => format!("/assets/ui/generated/figure-hero-{art}-photo"),
             _ => format!("/assets/ui/generated/figure-hero-{art}-photo"),
         };
         let live_art = state

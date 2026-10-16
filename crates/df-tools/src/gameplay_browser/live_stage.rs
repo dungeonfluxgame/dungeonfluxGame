@@ -312,6 +312,11 @@ fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'stati
             candidates.push(("sprite", sprite.to_owned()));
         }
     }
+    // Once a known photo sibling exists, do not append painted portrait/card fallbacks that can
+    // reintroduce the old illustrated asset after a load error.
+    if photographic_stem(sprite_stem).is_some() {
+        return candidates;
+    }
     let stem = stage_art::stem_of(portrait);
     if stem.starts_with("portrait-") {
         candidates.push(("portrait", format!("{GENERATED}/{stem}-full")));
@@ -1700,7 +1705,18 @@ fn healing_action_text(mode: StageMode, amount: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUBBLE_FIXED_OBSTACLES, typed_line_anchor};
+    use super::{BUBBLE_FIXED_OBSTACLES, art_candidates, typed_line_anchor};
+
+    #[test]
+    fn photographic_sprite_candidates_do_not_reintroduce_painted_portraits() {
+        let candidates = art_candidates(
+            "/assets/ui/generated/sprite-courier",
+            "/assets/ui/generated/portrait-courier",
+            true,
+        );
+        assert!(!candidates.is_empty());
+        assert!(candidates.iter().all(|(_, path)| path.contains("photo")));
+    }
 
     #[test]
     fn speech_bubble_placement_keeps_off_the_title_and_rules_note() {
