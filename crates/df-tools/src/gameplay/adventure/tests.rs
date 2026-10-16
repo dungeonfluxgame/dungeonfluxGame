@@ -36,6 +36,37 @@ fn fixed_seeds_reproduce_current_settings_rolls_and_documents() {
         assert_eq!(a.record, b.record);
     }
 }
+
+#[test]
+fn merchant_shop_opening_cast_includes_every_authored_background_person() {
+    let tables = tables();
+    let mut forced = ForcedEntries::new();
+    forced.insert("location".into(), "lamplit-market".into());
+    forced.insert("patron".into(), "merchant".into());
+    let adventure = generate(&tables, 671003, GenerateOptions::default(), &forced).unwrap();
+    let opening = adventure
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::pack::SceneKey::Opening)
+        .unwrap();
+    let setting = opening.setting.as_ref().unwrap();
+    assert_eq!(setting.kind, super::setting::SettingKind::Shop);
+    let cast = opening
+        .cast
+        .iter()
+        .map(|actor| (&actor.id, &actor.name, &actor.sprite))
+        .collect::<Vec<_>>();
+    assert!(cast.iter().any(|(id, _, _)| id.as_str() == "merchant"));
+    assert!(cast.iter().any(|(id, _, sprite)| {
+        id.as_str().ends_with("bystander-1") && sprite.contains("sprite-shop-adventurer")
+    }));
+    assert!(cast.iter().any(|(id, _, sprite)| {
+        id.as_str().ends_with("bystander-2") && sprite.contains("sprite-shop-soldier")
+    }));
+    assert_eq!(cast.len(), 3);
+}
+
 #[test]
 fn five_thousand_standard_seeds_validate() {
     let tables = tables();

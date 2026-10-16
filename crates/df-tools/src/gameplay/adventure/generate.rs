@@ -848,6 +848,33 @@ pub(crate) fn generate_with_prose(
         &tables.asset(&ant.art)?,
         (&ant.voice, &ant.gender, &ant.age),
     );
+    // A shop's authored background people are public cast, not prompt-only scene facts. Keep
+    // their IDs and photographic stems stable so the plate identity sheet can admit every
+    // interactable person before requesting a render.
+    let shop_background_actors = |setting: &super::setting::SceneSetting| {
+        (setting.kind == super::setting::SettingKind::Shop)
+            .then(|| {
+                setting
+                    .model
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|model| model.people.iter())
+                    .filter(|person| person.is_background)
+                    .map(|person| {
+                        let stem = person.role.replace(' ', "-");
+                        let portrait = format!("assets/ui/generated/portrait-shop-{stem}");
+                        super::listener::cast_member(
+                            CastRole::Bystander,
+                            &person.id,
+                            &person.name,
+                            &portrait,
+                            ("", "they", "adult"),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
     for scene in &mut pack.scenes {
         let (beat, title, narration, speaker, line, portrait) = match scene.key {
             SceneKey::Room => (
@@ -949,6 +976,14 @@ pub(crate) fn generate_with_prose(
             SceneKey::Inn => vec![contact_actor.clone()],
             SceneKey::Room | SceneKey::Defeat => Vec::new(),
         };
+        if matches!(
+            scene.key,
+            SceneKey::Opening | SceneKey::DialogueSeal | SceneKey::DialogueEscort
+        ) {
+            scene
+                .cast
+                .extend(shop_background_actors(setting).into_iter());
+        }
         let mechanic = match scene.key {
             SceneKey::Combat => Some("combat_mech"),
             SceneKey::Victory => Some("victory_mech"),
