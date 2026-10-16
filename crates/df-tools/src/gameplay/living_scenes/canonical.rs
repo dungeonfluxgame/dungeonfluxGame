@@ -427,6 +427,7 @@ mod tests {
             attitudes: Default::default(),
             knowledge: Vec::new(),
             wants: "Sell suitable clothing at a fair price.".to_owned(),
+            coin_cp: 0,
         });
 
         assert_eq!(
