@@ -311,10 +311,12 @@ fn record_lookup_not_planned(view: &View, failure: LookupFailure) {
     let scene_key = pack::SceneKey::parse_source_label(&view.source_scene_key)
         .map_or("unknown", pack::SceneKey::source_label);
     let variant = if view.source_scene_variant.is_empty() {
-        "base"
+        "base".to_owned()
     } else {
-        pack::SceneVariantId::parse(&view.source_scene_variant)
-            .map_or("invalid", |variant| variant.as_str())
+        pack::SceneVariantId::parse(&view.source_scene_variant).map_or_else(
+            || "invalid".to_owned(),
+            |variant| variant.as_str().to_owned(),
+        )
     };
     record_plate_diagnostic(
         "gameplay.living_scene.plate_not_planned",

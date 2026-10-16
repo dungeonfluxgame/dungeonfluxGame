@@ -298,7 +298,7 @@ mod tests {
             person,
             identity_photo,
             identity_figure_photo,
-        } = work.source
+        } = &work.source
         else {
             panic!("Marek NPC identity source");
         };

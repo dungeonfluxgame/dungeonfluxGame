@@ -207,17 +207,20 @@ impl Shared {
             let rendered = self.inner.imagery.render(request).await?;
             self.wait_for_roll(&scene_key, generation).await?;
             let placement = match &spec.speaker {
-                Some(speaker) => Some(
-                    self.measured_or_predicted(
-                        &rendered,
-                        &spec,
-                        speaker,
-                        &self.locator_references(&scene, &heroes).await,
-                        &scene.locator_actors(),
-                        scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
+                Some(speaker) => {
+                    let actor_references = self.locator_references(&scene, &heroes).await?;
+                    Some(
+                        self.measured_or_predicted(
+                            &rendered,
+                            &spec,
+                            speaker,
+                            &actor_references,
+                            &scene.locator_actors(),
+                            scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
+                        )
+                        .await,
                     )
-                    .await,
-                ),
+                }
                 None => None,
             };
             Ok((rendered, placement))
