@@ -78,6 +78,20 @@ courier's face" can be classified as an action and perform an Investigation chec
 Use an explicit question addressed to the NPC, then confirm the hero and reply
 in `dev view --as tv` and the actual display before measuring reading time.
 
+For the current harbor's legacy observation offer, supply its actual selection:
+
+```text
+dev act Brakka search --option look-around
+dev act Sigrun search --option watch-bandit
+dev scene Brakka
+```
+
+`search` requires an option. The synthetic investigation-catalog ID `room` is
+not a valid legacy finding selection. `watch-<cast-id>` observes an actual cast
+member; specific clues require authored finding bindings. A successful generic
+observation is not proof that the packet or every object in the photograph is
+inspectable. Scene/feelings names are positional CLI arguments.
+
 ## Character dialogue presentation
 
 Player and NPC dialogue uses the wide portrait, speaker name and text panel

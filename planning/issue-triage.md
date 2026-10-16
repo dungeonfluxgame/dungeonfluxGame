@@ -1262,3 +1262,44 @@ not executed by a WASM test runner. Independent source findings were repaired;
 independent visual approval remains unavailable because its IAB inventory was
 empty and Chrome creation lacked the visibility capability. No new human audio
 or combat acceptance is claimed. Root's actual IAB observations are separate.
+
+**SANAPU continuation, same `portrait-ec334de7` build:** A slow NPC/clue pass
+submitted six NPC questions, two supported observation checks and a packet-seal
+inspection, with actual Codex display inspection after each input, including
+rejections. No combat, dice override, manual plate direction or runtime source
+change was used. Five new public story plates reached the stage, for story
+sequences 12, 19, 21, 23 and 25. Their render times were 17.1, 21.2, 20.5, 17.6
+and 17.2 seconds, but request-to-browser-readable times were 37.1, 47.8, 39.7,
+36.7 and 37.0 seconds. Post-render actor-head measurement blocked projection
+for roughly 18–25 seconds. Optional geometry should be considered for separately
+owned, revision-fenced hydration after image publication; that change is not
+implemented or approved by this playtest.
+
+The Bandit's plain parley answer correctly used actor `bandit`, his portrait,
+focus metadata and an over-shoulder camera request, without disclosing an
+employer. The resulting new plate `a991d8c9...` nevertheless kept the gesturing
+Courier dominant and the Bandit cropped. This is a confirmed framing defect,
+not an actor-routing regression or a missing image update. The edit prompt's
+composition preservation needs explicit speaker-change staging and actual
+visual acceptance. Repeated edits also showed more pronounced skin/cloth
+texture, a visual quality concern requiring separate review.
+
+Brakka's look-around failed normally; Sigrun's successful Bandit watch returned
+only "Bandit is here." No new clue was proved. Existing private notes predated
+the watch and were not used in public prompts. Concrete packet inspection was
+refused because the fixed scene still lacks its structured target. The Courier
+avoided inventing a ship name, but sensory/proximity details in other replies
+remain unsupported by a structured witness model. The apparent closer/unknown
+position sequence is a grounding gap rather than proof of a hard temporal
+contradiction. Source-linked NPC/world observation remains necessary.
+
+The named dialogue panel stayed clear over all five plate replacements, with
+17.51 px between it and choices. Check-card visibility was retained; no human
+audio audition or continuous video capture is claimed. Runtime timeline loss
+means the retained records are not a complete audiovisual trace. Agent evidence
+is in `outputs/npc-scene-playtest-20261016/combined-playtest-report.md` and its
+raw case/timeline files in the local testing chat. Operational CLI examples now
+document `search --option look-around`, `watch-<cast-id>`, and positional scene
+names; synthetic `room` is not a legacy finding selection. Awkward intention
+copy ("Brakka searches look around") and generic interaction refusals remain
+open UX/CLI issues. No implementation fix is claimed by this continuation.
