@@ -73,6 +73,25 @@ impl ReferenceStore {
         self.photographic_only
     }
 
+    /// Returns the checked-in empty photographic carrier used only to satisfy the image edit
+    /// endpoint when no live identity references have been generated yet. It has no scene,
+    /// subject or composition for the provider to copy.
+    pub(in crate::gameplay) fn neutral_photographic(
+        &self,
+    ) -> Result<ReferenceImage, ReferenceError> {
+        if !self.photographic_only {
+            return Err(ReferenceError::Missing);
+        }
+        let path = self
+            .directory
+            .parent()
+            .ok_or(ReferenceError::Missing)?
+            .join("scenes")
+            .join("neutral-photographic-carrier.png");
+        let bytes = read_file(&path)?;
+        Ok(ReferenceImage::new(ImageFormat::Png, bytes))
+    }
+
     /// Reads the generated art named by `path`: a served path such as
     /// `/assets/ui/generated/scene-place-inn-taproom.webp`, or a bare stem such as
     /// `sprite-patron-merchant` (read as `.webp`, then `.png`). Only the last path segment is
@@ -88,7 +107,14 @@ impl ReferenceStore {
         &self,
         path: &str,
     ) -> Result<ReferenceImage, ReferenceError> {
-        self.load_named(path, &["-photo", "-film"])
+        // A generated photographic variant may be emitted as PNG even when the source asset
+        // was named with a `.webp` extension. Preserve the stem while allowing either provider
+        // container for the variant.
+        let stem = match path.rsplit_once('.') {
+            Some((stem, "webp" | "png")) => stem,
+            _ => path,
+        };
+        self.load_named(stem, &["-photo", "-film"])
     }
 
     fn load_named(&self, path: &str, suffixes: &[&str]) -> Result<ReferenceImage, ReferenceError> {
@@ -176,6 +202,25 @@ mod tests {
             .load_photographic("scene-place-test")
             .expect("photographic variant");
         assert_eq!(&photo.bytes[..], b"live photo");
+        std::fs::remove_file(directory.join("scene-place-test-photo.webp"))
+            .expect("remove webp fixture");
+        std::fs::write(directory.join("scene-place-test-photo.png"), b"live png")
+            .expect("photographic png fixture");
+        let photo = store
+            .load_photographic("scene-place-test.webp")
+            .expect("photographic png variant");
+        assert_eq!(&photo.bytes[..], b"live png");
         std::fs::remove_dir_all(directory).expect("remove temporary reference directory");
+    }
+
+    #[test]
+    fn neutral_photographic_carrier_is_provider_sized_and_nonempty() {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated");
+        let carrier = ReferenceStore::photographic(directory)
+            .neutral_photographic()
+            .expect("checked-in neutral photographic carrier");
+        assert_eq!(carrier.format, ImageFormat::Png);
+        assert!(!carrier.bytes.is_empty());
+        assert!(carrier.bytes.len() as u64 <= MAXIMUM_REFERENCE_BYTES);
     }
 }

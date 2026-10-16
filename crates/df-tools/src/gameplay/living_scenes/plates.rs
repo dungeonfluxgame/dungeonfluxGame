@@ -1276,6 +1276,15 @@ impl Shared {
             let (figure, _) = self.speaker_art(sprite).await;
             references.extend(figure);
         }
+        // The image edit adapter requires at least one reference even when the scene has no
+        // generated photographic identity art yet. Use the checked-in neutral photo as a carrier
+        // so the request reaches the provider; the prompt explicitly tells it to rebuild the
+        // entire plate from the written scene direction.
+        let mut neutral_reference = false;
+        if references.is_empty() && self.inner.references.photographic_only() {
+            references.push(self.inner.neutral_photographic_reference().await?);
+            neutral_reference = true;
+        }
         let prompt = if let Some(snapshot) = &scene.snapshot {
             super::super::imagery::model_plate(
                 self.inner.rating,
@@ -1296,6 +1305,11 @@ impl Shared {
                 },
             )
             .map_err(|_| ImageFailure::InvalidRequest)?
+        };
+        let prompt = if neutral_reference {
+            prompt.with_neutral_reference()
+        } else {
+            prompt
         };
         let prompt = match direction {
             Some(direction) => prompt.with_development_direction(direction),

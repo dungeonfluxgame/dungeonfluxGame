@@ -148,6 +148,13 @@ impl AssembledPrompt {
         self
     }
 
+    pub(in crate::gameplay) fn with_neutral_reference(mut self) -> Self {
+        self.text.push_str(
+            "\nImage 1 is a neutral photographic carrier only; create the entire scene from the written direction and use no visual content from this carrier.",
+        );
+        self
+    }
+
     #[cfg(test)]
     pub(in crate::gameplay) fn parts(&self) -> &[Part] {
         &self.parts

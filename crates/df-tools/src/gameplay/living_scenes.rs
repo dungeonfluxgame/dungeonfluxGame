@@ -1451,6 +1451,14 @@ impl Inner {
         }
     }
 
+    async fn neutral_photographic_reference(&self) -> Result<ReferenceImage, ImageFailure> {
+        let references = self.references.clone();
+        tokio::task::spawn_blocking(move || references.neutral_photographic())
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?
+            .map_err(|_| ImageFailure::InvalidRequest)
+    }
+
     async fn render_hero_cutout(
         &self,
         index: usize,
