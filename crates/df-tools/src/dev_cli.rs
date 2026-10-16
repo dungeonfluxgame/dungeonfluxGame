@@ -205,7 +205,7 @@ fn print_help() {
          scene <hero>                current contents and item card\n\
          feelings <npc>               current development-only NPC diagnostic\n\
          timeline [--last <n>]         last N audit events with wall and elapsed times\n\
-         play --to <phase>            play to room|creation|opening|dialogue|combat|complete|ended\n\
+         play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
          script <file>                run one dev command per line, stop at first failure\n\

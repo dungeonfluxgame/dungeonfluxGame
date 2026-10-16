@@ -156,6 +156,28 @@ dev view --as Neris                # exactly her phone view (offers, own sheet)
 dev log                            # the table log; dev checkpoint save <name> names a point
 ```
 
+For a fast two-hero NPC dialogue setup, start a fresh local game server with
+development control enabled, then copy its URL and token-file path from the
+`DEV CONTROL` startup line into a second terminal:
+
+```sh
+DF_GAMEPLAY_DEV_CONTROL=on development/run-gameplay.sh
+```
+
+```sh
+export DF_DEV_CONTROL_URL='http://127.0.0.1:<port from DEV CONTROL>'
+export DF_DEV_CONTROL_TOKEN_FILE='<token_file path from DEV CONTROL>'
+df-transport-fixture dev play --to dialogue
+```
+
+The command joins both seats, creates Brakka and Sigrun from the server's current
+creation offer, and asks the courier to reach dialogue without taking the combat
+offer. It respects ordinary presentation gates and can be rerun to resume or
+return immediately when the room is already in dialogue. Use
+`--max-steps <n>` (1 to 512, default 256) to bound admitted steps, or
+`cargo run --locked -p df-tools --bin df-transport-fixture -- dev --server "$DF_DEV_CONTROL_URL" --token-file "$DF_DEV_CONTROL_TOKEN_FILE" play --to dialogue`
+when the fixture binary is not on `PATH`.
+
 Safety rules: the surface is development-only and loopback-only (a non-loopback
 listener needs a second explicit setting or startup is refused); the token is
 never printed; with the setting off there is no route, no file and no behaviour

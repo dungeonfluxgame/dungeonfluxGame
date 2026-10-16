@@ -186,35 +186,6 @@ async fn random_array<const N: usize>() -> Result<[u8; N], (axum::http::StatusCo
     super::super::model::random::<N>().map_err(|_| failed("local randomness unavailable"))
 }
 
-/// The canonical creation choices: the one source-selected Dwarf Fighter /
-/// Soldier the compiled validator admits. The hero name travels only in the
-/// selection's name field (the owner hex-encodes it there); repeating it here
-/// would be a duplicate group.
-fn creation_choices() -> Vec<rpc::JourneyChoice> {
-    let mut choices = Vec::new();
-    for (group, option) in [
-        ("species", "dwarf"),
-        ("class", "fighter-1"),
-        ("background", "soldier"),
-        ("array", "stalwart"),
-        ("alignment", "lawful-good"),
-        ("language-1", "dwarvish"),
-        ("language-2", "elvish"),
-        ("skill-1", "perception"),
-        ("skill-2", "survival"),
-        ("gaming-set", "dice"),
-        ("equipment", "fighter-a-soldier-a"),
-        ("style-masteries", "defense-greatsword-flail-javelin"),
-        ("allied-ties", "join-order"),
-    ] {
-        choices.push(rpc::JourneyChoice {
-            group_id: group.to_owned(),
-            option_id: option.to_owned(),
-        });
-    }
-    choices
-}
-
 fn choice_values(
     value: Option<&Value>,
 ) -> Result<Vec<rpc::JourneyChoice>, (axum::http::StatusCode, Json<Value>)> {
@@ -246,19 +217,101 @@ fn choice_values(
 
 fn selected_creation_choices(
     body: &Value,
+    seat: usize,
 ) -> Result<Vec<rpc::JourneyChoice>, (axum::http::StatusCode, Json<Value>)> {
-    let mut choices = creation_choices();
-    for choice in choice_values(body.get("choices"))? {
-        if let Some(found) = choices
-            .iter_mut()
-            .find(|found| found.group_id == choice.group_id)
-        {
-            *found = choice;
+    let offer =
+        super::super::wire::creation_offer().map_err(|_| failed("creation offer unavailable"))?;
+    let overrides = choice_values(body.get("choices"))?;
+    if overrides.iter().any(|choice| {
+        !offer
+            .groups
+            .iter()
+            .any(|group| group.group_id == choice.group_id)
+    }) {
+        return Err(bad_request("choice group is not currently offered"));
+    }
+    let mut choices = Vec::with_capacity(offer.groups.len());
+    for group in &offer.groups {
+        let requested = overrides
+            .iter()
+            .find(|choice| choice.group_id == group.group_id);
+        let available = group
+            .options
+            .iter()
+            .filter(|option| creation_dependencies_met(option, &choices))
+            .filter(|option| {
+                !duplicates_creation_choice(&group.group_id, &option.option_id, &choices)
+            })
+            .collect::<Vec<_>>();
+        let selected = if let Some(requested) = requested {
+            group
+                .options
+                .iter()
+                .find(|option| option.option_id == requested.option_id)
+                .filter(|option| creation_dependencies_met(option, &choices))
+                .ok_or_else(|| {
+                    bad_request("choice is not currently offered or its dependency is unmet")
+                })?
         } else {
-            choices.push(choice);
+            let index = default_creation_option_index(&group.group_id, seat, available.len());
+            available
+                .get(index)
+                .or_else(|| available.first())
+                .copied()
+                .ok_or_else(|| bad_request("creation group has no valid default"))?
+        };
+        if duplicates_creation_choice(&group.group_id, &selected.option_id, &choices) {
+            return Err(bad_request("language and skill choices must be distinct"));
         }
+        choices.push(rpc::JourneyChoice {
+            group_id: group.group_id.clone(),
+            option_id: selected.option_id.clone(),
+        });
     }
     Ok(choices)
+}
+
+fn creation_dependencies_met(option: &rpc::JourneyOption, selected: &[rpc::JourneyChoice]) -> bool {
+    if option.requires_group.is_empty() {
+        return true;
+    }
+    selected
+        .iter()
+        .find(|choice| choice.group_id == option.requires_group)
+        .is_some_and(|choice| {
+            option.requires_options.is_empty()
+                || option.requires_options.contains(&choice.option_id)
+        })
+}
+
+fn duplicates_creation_choice(group: &str, option: &str, selected: &[rpc::JourneyChoice]) -> bool {
+    let category = match group {
+        "language-1" | "language-2" => "language",
+        "skill-1" | "skill-2" => "skill",
+        _ => return false,
+    };
+    selected.iter().any(|choice| {
+        choice.option_id == option
+            && match category {
+                "language" => matches!(choice.group_id.as_str(), "language-1" | "language-2"),
+                "skill" => matches!(choice.group_id.as_str(), "skill-1" | "skill-2"),
+                _ => false,
+            }
+    })
+}
+
+fn default_creation_option_index(group: &str, seat: usize, option_count: usize) -> usize {
+    if option_count <= 1 {
+        return 0;
+    }
+    let seat_offset = seat.saturating_sub(1);
+    if matches!(group, "build-package" | "portrait") {
+        return seat_offset.min(option_count - 1);
+    }
+    if !matches!(group, "language-1" | "language-2" | "skill-1" | "skill-2") {
+        return 0;
+    }
+    (seat_offset.saturating_mul(2)).min(option_count - 1)
 }
 
 fn selected_identity(
@@ -345,7 +398,7 @@ pub(super) async fn create_hero(
         action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
         character: Some(rpc::CharacterSelection {
             name: name.to_owned(),
-            choices: selected_creation_choices(&body)?,
+            choices: selected_creation_choices(&body, index + 1)?,
             identity: selected_identity(&body)?,
         }),
         ..Default::default()
@@ -1452,7 +1505,7 @@ mod creation_selection_tests {
     #[test]
     fn creation_overrides_the_selected_menu_and_keeps_other_required_groups() {
         let choices =
-            selected_creation_choices(&json!({"choices":{"alignment":"neutral-good"}})).unwrap();
+            selected_creation_choices(&json!({"choices":{"alignment":"neutral-good"}}), 1).unwrap();
         assert_eq!(
             choices
                 .iter()
@@ -1468,9 +1521,91 @@ mod creation_selection_tests {
                 .option_id,
             "neutral-good"
         );
-        assert_eq!(choices.len(), creation_choices().len());
+        assert_eq!(
+            choices.len(),
+            super::super::super::wire::creation_offer()
+                .unwrap()
+                .groups
+                .len()
+        );
         assert!(choice_values(Some(&json!({"alignment":5}))).is_err());
     }
+
+    #[test]
+    fn creation_defaults_follow_the_live_offer_and_validate_for_both_seats() {
+        let offer = super::super::super::wire::creation_offer().unwrap();
+        let first = selected_creation_choices(&json!({}), 1).unwrap();
+        let second = selected_creation_choices(&json!({}), 2).unwrap();
+        assert_eq!(first.len(), offer.groups.len());
+        assert_eq!(second.len(), offer.groups.len());
+        assert_eq!(
+            first
+                .iter()
+                .map(|choice| choice.group_id.as_str())
+                .collect::<Vec<_>>(),
+            offer
+                .groups
+                .iter()
+                .map(|group| group.group_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        for stale_group in ["array", "equipment", "style-masteries"] {
+            if !offer
+                .groups
+                .iter()
+                .any(|group| group.group_id == stale_group)
+            {
+                assert!(!first.iter().any(|choice| choice.group_id == stale_group));
+            }
+        }
+        for choices in [&first, &second] {
+            let borrowed = choices
+                .iter()
+                .map(|choice| (choice.group_id.as_str(), choice.option_id.as_str()))
+                .collect::<Vec<_>>();
+            crate::gameplay::pack::validate_character("Brakka", &borrowed)
+                .expect("the current creation offer has valid defaults");
+        }
+        for (group_a, group_b) in [("language-1", "language-2"), ("skill-1", "skill-2")] {
+            fn selected<'a>(choices: &'a [rpc::JourneyChoice], group: &str) -> Option<&'a str> {
+                choices
+                    .iter()
+                    .find(|choice| choice.group_id == group)
+                    .map(|choice| choice.option_id.as_str())
+            }
+            assert_ne!(selected(&first, group_a), selected(&first, group_b));
+            assert_ne!(selected(&second, group_a), selected(&second, group_b));
+        }
+        if let (Some(first_package), Some(second_package)) = (
+            first
+                .iter()
+                .find(|choice| choice.group_id == "build-package"),
+            second
+                .iter()
+                .find(|choice| choice.group_id == "build-package"),
+        ) {
+            assert_ne!(first_package.option_id, second_package.option_id);
+        }
+    }
+
+    #[test]
+    fn creation_rejects_a_group_that_is_no_longer_offered() {
+        let answer = selected_creation_choices(
+            &json!({
+                "choices": {"array": "stalwart"}
+            }),
+            1,
+        );
+        if super::super::super::wire::creation_offer()
+            .unwrap()
+            .groups
+            .iter()
+            .all(|group| group.group_id != "array")
+        {
+            assert!(answer.is_err());
+        }
+    }
+
     #[test]
     fn identity_menu_choices_keep_the_selected_presentation_and_pronouns() {
         let identity = selected_identity(

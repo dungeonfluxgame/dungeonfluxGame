@@ -707,7 +707,7 @@ fn describe_json() -> Value {
             {"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"},
             {"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"},
             {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>", "args":{"last":"1..1000, default 50"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line}],dropped,capacity,scope}; line/plate/clip/check/combat audit events"},
-            {"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates, chooses current offers, fights, rests and closes chapters; ordinary presentation gates remain authoritative"},
+            {"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates complete heroes from the live creation offer, and follows current offers; dialogue target chooses ask and stops before combat; ordinary presentation gates remain authoritative"},
             {"command": "join", "method": "POST", "path": "/dev/join",
              "args": {"seat": "1 or 2"},
              "output": "{status: joined|refused, seat, receipt?}"},
