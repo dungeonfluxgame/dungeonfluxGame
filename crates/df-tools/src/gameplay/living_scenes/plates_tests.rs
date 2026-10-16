@@ -1953,3 +1953,34 @@ async fn four_person_locator_batch_reaches_the_real_provider_adapter_fixture() {
         assert_eq!(instruction.matches(&format!("{id}: ")).count(), 1);
     }
 }
+
+#[tokio::test]
+async fn a_failed_measurement_is_remembered_in_process_without_repeating_the_locator() {
+    let (shared, _) = shared(16);
+    let scene = PlateScene::of(&scene(SceneKey::Opening, "The Wharf", Some("Kestrel"))).unwrap();
+    let spec = scene.stage(&[1, 2]).unwrap();
+    let mut fallback = layout();
+    fallback.head_x_permille = 123;
+    let failed = PlatePlacement {
+        speaker: fallback,
+        heroes: vec![],
+        actors: vec![],
+    };
+    locked(&shared.book)
+        .image_layouts
+        .insert(key('a').as_str().into(), failed.clone());
+    let known = shared
+        .measured_or_predicted(
+            &key('a'),
+            &spec,
+            spec.speaker.as_ref().unwrap(),
+            None,
+            &scene.locator_actors(),
+            Some("keeper"),
+        )
+        .await;
+    assert_eq!(
+        known, failed,
+        "repeated views reuse even a missing-head result until a new owner/run"
+    );
+}

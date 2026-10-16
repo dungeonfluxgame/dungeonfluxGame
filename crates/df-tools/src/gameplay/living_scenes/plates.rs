@@ -2219,12 +2219,16 @@ impl Shared {
         actors: &[(String, String)],
         focus_actor_id: Option<&str>,
     ) -> PlatePlacement {
+        if let Some(known) = locked(&self.book).image_layouts.get(key.as_str()).cloned() {
+            return known;
+        }
         if let Some(stored) = self.stored_placement(key, actors).await {
             return stored;
         }
         let (focus_id, targets) = locator_targets(spec, speaker, actors, focus_actor_id);
         let started = tokio::time::Instant::now();
         let mut located = Vec::new();
+        let mut measured_all_batches = targets.len() <= 16;
         for (batch, targets) in targets.chunks(4).take(4).enumerate() {
             let borrowed: Vec<(&str, &str)> = targets
                 .iter()
@@ -2261,6 +2265,7 @@ impl Shared {
                     ),
                 ],
             );
+            measured_all_batches &= found.is_ok();
             located.extend(found.unwrap_or_default());
         }
         if targets.len() > 16 {
@@ -2347,9 +2352,15 @@ impl Shared {
         );
         let mut stored = StoredPlacement::of(&placement);
         stored.actor_ids = actors.iter().map(|(id, _)| id.clone()).collect();
-        if let Ok(note) = serde_json::to_vec(&stored) {
+        if measured_all_batches && let Ok(note) = serde_json::to_vec(&stored) {
             self.inner.imagery.write_note(key, note).await;
         }
+        let mut book = locked(&self.book);
+        if book.image_layouts.len() >= MAXIMUM_ENTRIES {
+            book.image_layouts.pop_first();
+        }
+        book.image_layouts
+            .insert(key.as_str().to_owned(), placement.clone());
         placement
     }
 
@@ -2361,7 +2372,7 @@ impl Shared {
         let Some(speaker) = spec.speaker.as_ref() else {
             return;
         };
-        let placement = self
+        let _placement = self
             .measured_or_predicted(
                 key,
                 &spec,
@@ -2371,12 +2382,6 @@ impl Shared {
                 scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
             )
             .await;
-        let mut book = locked(&self.book);
-        if book.image_layouts.len() >= MAXIMUM_ENTRIES {
-            book.image_layouts.pop_first();
-        }
-        book.image_layouts
-            .insert(key.as_str().to_owned(), placement);
     }
 
     async fn render_edit(

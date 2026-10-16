@@ -27,7 +27,7 @@ pub(super) struct Book {
 
 pub(super) struct Pending {
     snapshot: Option<SceneNow>,
-    pub(super) story: Option<StoryBeat>,
+    pub(super) story: Option<Box<StoryBeat>>,
     reason: String,
     pub(super) state: String,
     pub(super) revision: u64,
@@ -151,7 +151,7 @@ fn observe_story(book: &mut super::Book, view: &View, now: Duration) {
     images.ready = None;
     images.pending = Some(Pending {
         snapshot: None,
-        story: Some(story.clone()),
+        story: Some(Box::new(story.clone())),
         reason: "completed NPC story beat".to_owned(),
         state: story.sha256.clone(),
         revision: view.graph_revision,
