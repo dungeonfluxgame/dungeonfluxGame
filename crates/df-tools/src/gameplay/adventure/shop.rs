@@ -722,18 +722,65 @@ mod tests {
                 },
             )
             .expect("the seller can issue a bounded exact quote");
-            let buy_quote =
-                journey::living_scene::pending_merchant_quote(&buy_quote_checkpoint, "Brynn")
-                    .unwrap()
-                    .expect("the quote is pending for its player buyer");
+            let superseding_checkpoint = journey::living_scene::commit_npc_trade_quote(
+                &buy_quote_checkpoint,
+                journey::living_scene::NpcTradeQuoteProposal {
+                    operation: df_types::OperationId::from_bytes(&[47; 16]).unwrap(),
+                    expected_basis: buy_quote_checkpoint.basis(),
+                    actor_id: merchant_id.clone(),
+                    customer_id: "Brynn".into(),
+                    direction: journey::living_scene::SceneTradeDirection::HeroBuys,
+                    item_id: offer.canonical_item_id(),
+                    offer_id: Some(offer.id.clone()),
+                    price_cp: 140,
+                    source: journey::living_scene::NpcInventorySource {
+                        source_line_id: "merchant-quote-buy-revised".into(),
+                        source_revision: buy_quote_checkpoint.basis().revision,
+                        source_line_sequence: 2,
+                        source_actor_id: merchant_id.clone(),
+                        source_text: "I can lower that to 140 CP.".into(),
+                    },
+                },
+            )
+            .expect("a newer exact quote replaces the earlier pending offer");
+            let history =
+                journey::living_scene::merchant_quote_history(&superseding_checkpoint).unwrap();
+            assert_eq!(history.len(), 2);
+            assert_eq!(
+                history[0].status,
+                journey::living_scene::MerchantQuoteStatus::Stale
+            );
+            assert_eq!(
+                history[1].status,
+                journey::living_scene::MerchantQuoteStatus::Pending
+            );
+            let stale_attempt = interaction_with_choices(
+                &superseding_checkpoint,
+                50,
+                "item-clothes-travelers",
+                "trade",
+                &[
+                    ("scene-quote-id", &history[0].quote.quote_id),
+                    ("scene-payment", "150"),
+                ],
+            );
+            let history = journey::living_scene::merchant_quote_history(&stale_attempt).unwrap();
+            assert_eq!(
+                history[0].status,
+                journey::living_scene::MerchantQuoteStatus::Stale
+            );
+            assert_eq!(history[0].attempt_count, 1);
+            assert_eq!(history[0].last_rejection.as_deref(), Some("stale_quote"));
+            let buy_quote = journey::living_scene::pending_merchant_quote(&stale_attempt, "Brynn")
+                .unwrap()
+                .expect("the quote is pending for its player buyer");
             assert_eq!(
                 buy_quote.direction,
                 journey::living_scene::SceneTradeDirection::HeroBuys
             );
-            assert_eq!(buy_quote.price_cp, 150);
+            assert_eq!(buy_quote.price_cp, 140);
             assert_eq!(
-                journey::living_scene::merchant_quote_history(&buy_quote_checkpoint).unwrap()[0]
-                    .status,
+                journey::living_scene::merchant_quote_history(&stale_attempt).unwrap()[1].status,
                 journey::living_scene::MerchantQuoteStatus::Pending
             );
 
@@ -744,12 +791,12 @@ mod tests {
                 "trade",
                 &[
                     ("scene-quote-id", &buy_quote.quote_id),
-                    ("scene-payment", "150"),
+                    ("scene-payment", "140"),
                 ],
             );
             assert_eq!(
                 journey::living_scene::balance_cp(bought.state(), actor).unwrap(),
-                initial_balance - 150
+                initial_balance - 140
             );
             let bought_scene = runtime::scene(bought.state()).unwrap();
             let bought_model = bought_scene
@@ -766,7 +813,7 @@ mod tests {
                     .find(|person| person.id == merchant_id)
                     .unwrap()
                     .coin_cp,
-                5_150
+                5_140
             );
             let item_id = buy_quote.item_id.clone();
             let sell_terms = journey::living_scene::merchant_trade_terms(&bought, "Brynn")
@@ -820,7 +867,7 @@ mod tests {
             );
             assert_eq!(
                 journey::living_scene::balance_cp(sold.state(), actor).unwrap(),
-                initial_balance - 60
+                initial_balance - 50
             );
             let sold_scene = runtime::scene(sold.state()).unwrap();
             let sold_model = sold_scene.setting.as_ref().unwrap().model.as_ref().unwrap();
@@ -832,8 +879,13 @@ mod tests {
             assert_eq!(item.owner_id.as_deref(), Some(merchant_id.as_str()));
             assert_eq!(item.holder_id.as_deref(), Some(merchant_id.as_str()));
             let history = journey::living_scene::merchant_quote_history(&sold).unwrap();
-            assert_eq!(history.len(), 2);
-            assert!(history.iter().all(|entry| {
+            assert_eq!(history.len(), 3);
+            assert_eq!(
+                history[0].status,
+                journey::living_scene::MerchantQuoteStatus::Stale
+            );
+            assert_eq!(history[0].attempt_count, 1);
+            assert!(history[1..].iter().all(|entry| {
                 entry.status == journey::living_scene::MerchantQuoteStatus::Accepted
                     && entry.attempt_count == 1
             }));

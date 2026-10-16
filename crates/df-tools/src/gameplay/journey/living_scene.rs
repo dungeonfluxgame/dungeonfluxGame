@@ -685,7 +685,30 @@ pub(crate) fn merchant_quote_history(
             }
         }
     }
+    // A newer quote for the same customer, item, merchant, direction, and place replaces
+    // an older unaccepted quote even when neither stock nor purse has changed. This keeps
+    // a previously spoken price from remaining actionable after the merchant revises it.
+    for index in 0..history.len() {
+        if history[index].status == MerchantQuoteStatus::Accepted {
+            continue;
+        }
+        let quote = &history[index].quote;
+        let superseded = history[index + 1..]
+            .iter()
+            .any(|later| same_quote_channel(quote, &later.quote));
+        if superseded {
+            history[index].status = MerchantQuoteStatus::Stale;
+        }
+    }
     Ok(history)
+}
+
+fn same_quote_channel(left: &SceneTradeQuote, right: &SceneTradeQuote) -> bool {
+    left.direction == right.direction
+        && left.place_id == right.place_id
+        && left.item_id == right.item_id
+        && left.seller_id == right.seller_id
+        && left.buyer_id == right.buyer_id
 }
 
 fn valid_npc_source(current: &Checkpoint, actor_id: &str, source: &NpcInventorySource) -> bool {
