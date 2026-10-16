@@ -437,6 +437,28 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
     assert_eq!(selling["available_trades"][0]["direction"], "merchant_buys");
     assert_eq!(selling["available_trades"][0]["item"], "silver brooch");
 
+    let mut silver_brooch = terms(TradeDirection::HeroSells);
+    silver_brooch.item_id = "item-silver-brooch".into();
+    silver_brooch.item_name = "silver brooch".into();
+    silver_brooch.aliases.clear();
+    let selling_by_how_much = reply_context(
+        &[terms(TradeDirection::HeroBuys), silver_brooch],
+        "sigrun",
+        "marek",
+        "How much would you pay for my silver brooch?",
+        None,
+        &facts,
+    )
+    .unwrap();
+    assert_eq!(
+        selling_by_how_much["available_trades"][0]["direction"],
+        "merchant_buys"
+    );
+    assert_eq!(
+        selling_by_how_much["available_trades"][0]["item"],
+        "silver brooch"
+    );
+
     let other_hero_view = reply_context(
         &[
             terms(TradeDirection::HeroBuys),
