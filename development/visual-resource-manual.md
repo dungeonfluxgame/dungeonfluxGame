@@ -115,6 +115,19 @@ typed `fields`. Relevant event families include:
 - `gameplay.living_scene.plate_story_observed` and `plate_refresh_decision`:
   committed NPC reply sequence/hash, pending settle, queue admission, suppression,
   rate limiting and in-flight state. An unchanged reply does not request an edit.
+- `gameplay.living_scene.head_located` and `actor_heads`: per-batch and aggregate
+  head measurement outcomes under `--type plate`. Inspect the exact `image_key`,
+  `target_ids`, `located_ids`, per-batch `actor_id_mapping`, `cache_source`,
+  `elapsed_ms`, failure/partial/truncation fields, stage and status. Aggregate
+  records use `located_ids`; mappings belong to each batch. Provider, durable-note
+  and in-process cache results are distinct. Failed provider batches are not
+  written as durable layout notes; an otherwise successful partial result can
+  retain valid heads and leave missing actors in the named caption lane.
+- `gameplay.npc_target`: input ID, canonical actor ID, decision source, model,
+  latency, reason and validation. Use `--type text_model` for Jev decisions and
+  `--type state` for exact-name selection and the server's current-cast validation.
+  A model selection is a proposal; publication still checks the current scene and
+  cast. An absent or ambiguous target must not become an unrelated focus reply.
 - Browser `visual-source` presentation records: requested and effective source,
   selected shot, plate state, and page-local asset hashes.
 - `gameplay.music.plan`: the public tempo source, phase/intensity, suite, location
@@ -148,6 +161,24 @@ stage, and status. Status values can also identify `cached`, `fallback`,
 The corresponding HTTP request is
 `/dev/timeline?last=1000&type=plate&summary=true`; invalid types or a non-boolean
 summary value are rejected by the server.
+
+For NPC placement, compare `.view.scene.plate_actor_heads` from `dev view --as tv`
+with the display's active image key. Every head record belongs to its `image_path`;
+coordinates from an earlier edited photo are invalid for a new photo. Canonical
+NPC bubble layout IDs are `bubbles-courier`, `bubbles-bandit`, or the corresponding
+current cast ID. A same-image measurement may arrive after a line opens. The
+current readable line retains its position; the next line uses the latched head.
+Verify both with screenshots and browser component events, since valid server
+coordinates alone do not prove that the browser applied them.
+
+Placement maps the head through the active image's measured cover frame, then
+converts viewport coordinates into the bubble layer's local origin and scale.
+Nearby positions on both sides and above/below compete by distance to that
+speaker; the authored side breaks ties. All measured heads and interface
+obstacles still constrain placement. The bubble host exposes `data-side` as its
+lateral preference and `data-tail` as the actual pointer edge, with `--tail-x`
+and `--tail-y` locating the head relative to the bubble. Use the pointer edge,
+image key, canonical actor ID and screenshot together when checking association.
 
 For a compact event table in PowerShell:
 
@@ -312,6 +343,20 @@ from zero through six intermediate values to one in about 1.02 seconds. The
 outgoing plate remained fully opaque throughout the fade, then retired. Screenshots
 and timeline evidence are retained by the coordinator. Neither this evidence nor
 a successful provider response certifies dialogue quality or audible playback.
+
+Build `routing-0187f83e`, room GOSASU, subsequently accepted canonical NPC routing
+and physical speaker placement in the actual Codex display and independent
+Chrome observation. Jev selected the background Bandit in 132 ms; his box stayed
+below his own head after an automatic photo refresh, with a head-facing pointer.
+Courier's box stayed below Courier. A 332-character question remained visibly
+held for 26,726–26,983 ms across the two browser lifecycle producers, above the
+24,080 ms reading budget. Seven crossfade samples showed no blank frame. A
+47-sample zoom check reached 1.16x and returned to 1x without a speaker/head/HUD
+collision. The waiting indicator followed Bandit as well. The game remained in
+NPC dialogue with two heroes and no combat. Evidence is indexed by the
+coordinator's `gosasu-routing-acceptance.json`; the detailed history and remaining
+default-layout, capture-gap and dialogue-quality limitations are in
+`planning/issue-triage.md`. The -96 px subtitle override still applied in this run.
 
 After every browser interaction, take a screenshot and record the current URL,
 scene revision, `data-scene-state`, `data-plate-state`, selected source, and image

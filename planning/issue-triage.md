@@ -997,8 +997,9 @@ Courier instead returned an empty reply after a 5,140 ms model failure; that cas
 does not establish a routing result. Source investigation found the authored pack
 path always selected the journey speaker, and plate bubble placement also used
 the focus NPC's head for every NPC. Jev selection from validated public cast IDs,
-persisted actor identity, voice/bubble routing, and per-NPC image head metadata are
-the current implementation task and remain pending installed runtime acceptance.
+persisted actor identity, voice/bubble routing, and per-NPC image head metadata
+were the next implementation task. Installed routing and placement results are
+recorded in the subsequent passes below.
 
 Dialogue quality remains open: questions about the crest and delivery destination
 still repeatedly defer rather than provide useful detail. Client capture-gap
@@ -1006,3 +1007,84 @@ aggregates, complete lifecycle coverage, queued-check timing and audible playbac
 are not certified by this pass. Evidence is indexed in the coordinator outputs by
 `podobu-build-b6cb696d.json`, `podobu-accepted-caption-refresh-timeline.json`, and
 the `podobu-*-samples.json` and screenshots.
+
+### Canonical NPC routing and head traces (2026-10-16 UTC)
+
+Build `routing-9b42661f`, room BAMERE, database
+`df_gameplay_demo_play_20261016055351_1828`, passed the installed CLI classification
+cases after a real reload of the Codex display:
+
+- Exact Bandit address returned Bandit's persona and canonical actor ID in 857 ms.
+- The man behind Courier selected Bandit through Jev in 160 ms; the whole reply
+  took 863 ms. The actor ID persisted into the table line and browser bubble host.
+- Absent Harbourmaster selected the absent outcome in 161 ms and returned an
+  explicit refusal in 489 ms, with no new display line. The previous GOGOTA build
+  incorrectly answered as Courier because the Jev prompt contradicted its absent
+  choice. This is a measured correction, not a claim about every possible name.
+- Ordinary discourse, "Wait, who are you?", used current focus Courier through
+  Jev in 128 ms. Addressing Bandit and Courier together refused in 249 ms.
+- `dev timeline --type plate` now contains head-location and actor-head records.
+  A four-person provider batch completed in 16,662 ms and another in 21,320 ms.
+  Both located four of four targets and mapped `npc-0` to `courier`, `npc-1` to
+  `bandit`. Durable-note cache hits are separately visible. These head timings are
+  distinct from NPC reply latency.
+
+Spatial placement was rejected in this build: matching actor IDs and image-owned head
+boxes reached the browser, but both root's actual Codex view and independent
+Chrome observation rejected the Bandit box over Courier's torso. The solver's
+first-clear side preference and viewport-to-portal coordinate mapping were the
+next repair. Hero question text cleared the HUD in this build. Default named
+lane/context overlap still needed the live subtitle translation of -96 px.
+
+Evidence: coordinator outputs `bamere-build-9b42661f.json`,
+`bamere-routing-acceptance.json`, `bamere-routing-timeline.json`, and the
+`bamere-*-visual.png` screenshots. Voice HTTP 200 delivery and DOM `playing` were
+observed; actual audible identity was not judged. Client capture gaps remain a
+separate limitation even when the server mirror reports `dropped: 0`.
+
+### Speaker proximity runtime acceptance (2026-10-16 UTC)
+
+Build `routing-0187f83e`, source `0187f83e` (worker `bf6d906e`), ran room GOSASU,
+database `df_gameplay_demo_play_20261016061307_1304`. Native build passed in 62 s,
+WASM in 12.88 s, and the two-player dialogue quickstart in 7,933 ms. The actual
+Codex display was reloaded before acceptance. Independent Chrome observation and
+root's actual Codex view both accepted the corrected speaker association.
+
+- Bandit line 3 was below his own head at approximately `[981,360,365,203]` in
+  Codex, with a top pointer and no face/HUD collision. The waiting indicator was
+  also beside Bandit rather than Courier. Independent Chrome observed the same
+  association at its own viewport, approximately `[1105,395,420,173]`.
+- Courier line 5 stood below Courier at approximately `[566,392,365,266]`.
+  The full 332-character preceding question rendered without truncation. The
+  two browser lifecycle producers measured 26,726 and 26,983 ms visible time,
+  both above its 24,080 ms reading budget. Root's immediate screenshot polling
+  captured only the final 19.4 s; the full duration comes from lifecycle records.
+- The automatic story edit activated photo `993bf2f9...` with seven intermediate
+  opacity samples and no blank frame. The photo remained photographic/medieval.
+  Exact matching head records for Courier and Bandit were visible in the CLI.
+- A subsequent descriptive address selected Bandit through Jev in 132 ms; the
+  complete response took 895 ms. Its successor line 7 used `bubbles-bandit`,
+  no missing-head fallback or retained anchor hold, and a box around
+  `[972,365,365,139]` beside Bandit after the photo refresh.
+- A further question sampled 47 frames over 10 s. Speaking zoom reached 1.16x
+  and returned to 1x. Bandit line 9 stayed at approximately
+  `[972,381,365,171]`, clear of heads/HUD with its pointer toward Bandit.
+- The final state remained `dialogue`, `combat: null`, revision epoch 1/sequence 7.
+
+Source changes compare nearby lateral and above/below candidates, map measured
+heads through the actual active image bounds, and convert the chosen viewport
+box into the bubble portal's coordinates. Existing readable captions retain
+ownership; successor lines use the updated geometry. Twelve focused geometry
+tests, native/WASM checks and independent review passed. Required strict Clippy
+still reports the same existing 80 native/15 WASM findings; it is not a clean lint
+pass. The WASM DOM test sources compiled; this running-browser pass supplies the
+physical output evidence.
+
+Evidence: coordinator outputs `gosasu-build-0187f83e.json`,
+`gosasu-routing-acceptance.json`, `gosasu-final-timeline.json`,
+`gosasu-long-courier-samples.json`, `gosasu-zoom-samples.json`, and the
+`gosasu-*-visual.png` screenshots. This is bounded acceptance for routing,
+placement, readability and plate continuity. Default caption/context positioning
+still uses the -96 px live subtitle override. Audio was not auditioned; client
+capture gaps, narrative deferrals/memory quality, title/control layout and queued
+check timing remain separate open work.
