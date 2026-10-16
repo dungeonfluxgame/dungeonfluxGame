@@ -266,6 +266,77 @@ pub(super) enum Call {
 pub(super) struct NpcEventOutcome {
     pub(super) status: &'static str,
     pub(super) revision: String,
+    pub(super) operation_id: Option<String>,
+    pub(super) source_line_id: Option<String>,
+    pub(super) item_id: Option<String>,
+    pub(super) holder_id: Option<String>,
+    pub(super) owner_id: Option<String>,
+    pub(super) item_detail: Option<String>,
+}
+
+impl NpcEventOutcome {
+    fn status(status: &'static str, revision: String) -> Self {
+        Self {
+            status,
+            revision,
+            operation_id: None,
+            source_line_id: None,
+            item_id: None,
+            holder_id: None,
+            owner_id: None,
+            item_detail: None,
+        }
+    }
+}
+
+fn revision_key(revision: df_types::SessionRevision) -> String {
+    format!("{}:{}", revision.epoch().get(), revision.sequence())
+}
+
+fn record_npc_event_status(
+    proposal: &Proposal,
+    status: &'static str,
+    reason: &'static str,
+    current_revision: &str,
+) {
+    record_audit_diagnostic(
+        "gameplay.npc.reply_event",
+        format!(
+            "NPC_EVENT status={status} reason={reason} kind={} actor={} item={} source_line_id={}",
+            proposal.kind.label(),
+            proposal.actor_id,
+            proposal.item_id.as_deref().unwrap_or("none"),
+            proposal.source_line_id,
+        ),
+        serde_json::Map::from_iter([
+            ("status".into(), serde_json::json!(status)),
+            ("reason".into(), serde_json::json!(reason)),
+            ("kind".into(), serde_json::json!(proposal.kind.label())),
+            ("actor_id".into(), serde_json::json!(proposal.actor_id)),
+            ("npc_id".into(), serde_json::json!(proposal.npc_id)),
+            ("item_id".into(), serde_json::json!(proposal.item_id)),
+            (
+                "source_line_id".into(),
+                serde_json::json!(proposal.source_line_id),
+            ),
+            (
+                "source_line_sequence".into(),
+                serde_json::json!(proposal.source_line_sequence),
+            ),
+            (
+                "source_revision".into(),
+                serde_json::json!(proposal.revision),
+            ),
+            (
+                "current_revision".into(),
+                serde_json::json!(current_revision),
+            ),
+        ]),
+        &[
+            ("gameplay.npc.reply_event.status", status.into()),
+            ("gameplay.npc.reply_event.reason", reason.into()),
+        ],
+    );
 }
 impl ActorInput for Call {
     fn retained_heap_bytes(&self) -> Option<usize> {
@@ -1546,7 +1617,8 @@ impl Actor {
 
     /// Admit the small set of NPC reply events that can have an immediate, observable world
     /// effect. Jev only supplies a proposal; this method is the sole authority that checks the
-    /// exact basis, canonical actor/target/recipient and the actor's purse before committing it.
+    /// exact basis, current public source line, canonical speaker, target and recipient before
+    /// committing it.
     fn npc_event(
         &mut self,
         credential: &[u8; 32],
@@ -1562,92 +1634,72 @@ impl Actor {
             ));
         }
         let member = self.dialogue_member(credential)?;
-        let Some(item_id) = proposal.item_id.clone() else {
-            return Ok(NpcEventOutcome {
-                status: "ignored",
-                revision: proposal.revision,
-            });
-        };
-        let action = match proposal.kind {
-            EventKind::IntentToTake => super::journey::living_scene::NpcInventoryAction::Take,
-            EventKind::IntentToBuy => super::journey::living_scene::NpcInventoryAction::Purchase,
-            EventKind::IntentToGive => {
-                let Some(recipient_id) = proposal.recipient_id.clone() else {
-                    return Ok(NpcEventOutcome {
-                        status: "ignored_missing_recipient",
-                        revision: proposal.revision,
-                    });
-                };
-                super::journey::living_scene::NpcInventoryAction::Give { recipient_id }
-            }
-            // Reveal/offer/conditional/refusal/ordinary replies are presentation or intent
-            // only. The existing plate director selects reveal focus from the committed line.
-            _ => {
-                return Ok(NpcEventOutcome {
-                    status: "ignored",
-                    revision: proposal.revision,
-                });
-            }
-        };
         let current = self.owner.checkpoint().clone();
         let scene = super::beat_script_runtime::scene(current.state()).map_err(unavailable)?;
         let snapshot = super::journey::living_scene::snapshot(current.state(), &scene)
             .map_err(unavailable)?
             .ok_or_else(|| tonic::Status::failed_precondition("scene snapshot unavailable"))?;
-        let canonical_actor = snapshot
+        let Some(canonical_actor) = snapshot
             .model
             .people
             .iter()
             .find(|person| person.id == proposal.actor_id)
-            .ok_or_else(|| tonic::Status::failed_precondition("NPC actor is not canonical"))?;
-        let dossier_matches_actor = proposal.npc_id == canonical_actor.id
-            || proposal
-                .npc_id
-                .strip_suffix(&format!(":{}", canonical_actor.id))
-                .is_some();
-        if !dossier_matches_actor {
-            return Ok(NpcEventOutcome {
-                status: "ignored_wrong_speaker",
-                revision: proposal.revision,
-            });
-        }
-        let line_is_current = self.table_log.lines().iter().rev().any(|line| {
-            line.role == rpc::TableRole::Npc as i32
-                && line.speaker == canonical_actor.name
-                && line.text == proposal.reply_text
-        });
-        if !line_is_current {
-            return Ok(NpcEventOutcome {
-                status: "ignored_line_not_current",
-                revision: proposal.revision,
-            });
-        }
-        let current_revision = format!(
-            "{}:{}",
-            current.basis().revision.epoch().get(),
-            current.basis().revision.sequence()
-        );
-        if proposal.revision != current_revision {
-            record_audit_diagnostic(
-                "gameplay.npc.reply_event",
-                format!(
-                    "NPC_EVENT status=stale source_line_id={}",
-                    proposal.source_line_id
-                ),
-                serde_json::Map::from_iter([
-                    ("status".into(), serde_json::json!("stale")),
-                    (
-                        "source_line_id".into(),
-                        serde_json::json!(proposal.source_line_id),
-                    ),
-                    ("revision".into(), serde_json::json!(proposal.revision)),
-                ]),
-                &[("gameplay.npc.reply_event.status", "stale".into())],
+        else {
+            record_npc_event_status(
+                &proposal,
+                "ignored",
+                "unknown_speaker",
+                &revision_key(current.basis().revision),
             );
-            return Ok(NpcEventOutcome {
-                status: "stale",
-                revision: current_revision,
-            });
+            return Ok(NpcEventOutcome::status(
+                "ignored_unknown_speaker",
+                revision_key(current.basis().revision),
+            ));
+        };
+        let dossier_matches_actor = [
+            rpc::SceneRole::Patron,
+            rpc::SceneRole::Contact,
+            rpc::SceneRole::Antagonist,
+            rpc::SceneRole::Bystander,
+        ]
+        .into_iter()
+        .filter_map(|role| self.social.dossier_of(role, &canonical_actor.id))
+        .any(|dossier| dossier.npc_id == proposal.npc_id);
+        if !dossier_matches_actor {
+            record_npc_event_status(
+                &proposal,
+                "ignored",
+                "wrong_speaker_binding",
+                &revision_key(current.basis().revision),
+            );
+            return Ok(NpcEventOutcome::status(
+                "ignored_wrong_speaker",
+                revision_key(current.basis().revision),
+            ));
+        }
+
+        let expected_scene_identity = format!("{}|{}", scene.title, scene.asset);
+        let expected_source_line_id = Proposal::source_line_id(
+            &proposal.actor_id,
+            &proposal.npc_id,
+            &proposal.scene_identity,
+            &proposal.revision,
+            &proposal.typed_words,
+            &proposal.reply_text,
+        );
+        if proposal.scene_identity != expected_scene_identity
+            || proposal.source_line_id != expected_source_line_id
+        {
+            record_npc_event_status(
+                &proposal,
+                "ignored",
+                "source_identity_mismatch",
+                &revision_key(current.basis().revision),
+            );
+            return Ok(NpcEventOutcome::status(
+                "ignored_invalid_source",
+                revision_key(current.basis().revision),
+            ));
         }
         let digest = Sha256::digest(proposal.source_line_id.as_bytes());
         let mut operation_bytes = [0_u8; 16];
@@ -1660,28 +1712,161 @@ impl Actor {
             .iter()
             .any(|decision| decision.operation == operation)
         {
-            return Ok(NpcEventOutcome {
-                status: "duplicate",
-                revision: current_revision,
-            });
+            record_npc_event_status(
+                &proposal,
+                "duplicate",
+                "operation_already_journaled",
+                &revision_key(current.basis().revision),
+            );
+            return Ok(NpcEventOutcome::status(
+                "duplicate",
+                revision_key(current.basis().revision),
+            ));
         }
+        let current_revision = revision_key(current.basis().revision);
+        if proposal.revision != current_revision {
+            record_npc_event_status(&proposal, "stale", "revision_changed", &current_revision);
+            return Ok(NpcEventOutcome::status("stale", current_revision));
+        }
+        let Some(source_sequence) = proposal.source_line_sequence else {
+            record_npc_event_status(
+                &proposal,
+                "ignored",
+                "missing_source_sequence",
+                &current_revision,
+            );
+            return Ok(NpcEventOutcome::status(
+                "ignored_line_not_current",
+                current_revision.clone(),
+            ));
+        };
+        let Some(source_text) = self.table_log.latest_npc_speech_text(
+            source_sequence,
+            &proposal.actor_id,
+            &canonical_actor.name,
+            &proposal.reply_text,
+        ) else {
+            record_npc_event_status(
+                &proposal,
+                "ignored",
+                "source_line_not_latest_public_speech",
+                &current_revision,
+            );
+            return Ok(NpcEventOutcome::status(
+                "ignored_line_not_current",
+                current_revision.clone(),
+            ));
+        };
+        if !matches!(
+            proposal.kind,
+            EventKind::IntentToTake | EventKind::IntentToGive
+        ) {
+            let status = match proposal.kind {
+                EventKind::IntentToBuy => "awaiting_quote_acceptance",
+                EventKind::Conditional => "conditional_no_commit",
+                EventKind::Refusal => "refusal_no_commit",
+                EventKind::None => "ignored",
+                EventKind::Reveal | EventKind::Offer => "proposal_only",
+                EventKind::IntentToTake | EventKind::IntentToGive => unreachable!(),
+            };
+            let reason = match proposal.kind {
+                EventKind::IntentToBuy => "explicit_quote_acceptance_required",
+                EventKind::Conditional => "conditional_narrative_only",
+                EventKind::Refusal => "refusal_narrative_only",
+                EventKind::None => "no_event_proposed",
+                EventKind::Reveal | EventKind::Offer => "narrative_proposal_only",
+                EventKind::IntentToTake | EventKind::IntentToGive => unreachable!(),
+            };
+            record_npc_event_status(&proposal, status, reason, &current_revision);
+            return Ok(NpcEventOutcome::status(status, current_revision));
+        }
+        let Some(item_id) = proposal.item_id.clone() else {
+            record_npc_event_status(
+                &proposal,
+                "ignored",
+                "missing_canonical_item",
+                &current_revision,
+            );
+            return Ok(NpcEventOutcome::status(
+                "ignored_missing_item",
+                current_revision,
+            ));
+        };
+        if let Err(reason) = super::npc_event_classifier::validate_item_event(
+            proposal.kind,
+            &item_id,
+            &proposal.typed_words,
+            &proposal.reply_text,
+            &snapshot,
+        ) {
+            record_npc_event_status(&proposal, "rejected", reason.label(), &current_revision);
+            return Ok(NpcEventOutcome::status("rejected", current_revision));
+        }
+        let action = match proposal.kind {
+            EventKind::IntentToTake => super::journey::living_scene::NpcInventoryAction::Take,
+            EventKind::IntentToGive => {
+                let hero = super::journey::player_entity(member, &current).map_err(unavailable)?;
+                let hero_id = super::journey::name(current.state(), hero).map_err(unavailable)?;
+                if proposal.recipient_id.as_deref() != Some(hero_id.as_str()) {
+                    record_npc_event_status(
+                        &proposal,
+                        "rejected",
+                        "recipient_not_authenticated_hero",
+                        &current_revision,
+                    );
+                    return Ok(NpcEventOutcome::status(
+                        "ignored_wrong_recipient",
+                        current_revision,
+                    ));
+                }
+                super::journey::living_scene::NpcInventoryAction::Give {
+                    recipient_id: hero_id,
+                    transfer_ownership: false,
+                    owner_consent_id: None,
+                }
+            }
+            _ => unreachable!("only inventory events reach the inventory adapter"),
+        };
         let next = current
             .basis()
             .revision
             .next_sequence()
             .map_err(|_| tonic::Status::failed_precondition("revision sequence exhausted"))?;
-        let candidate = super::journey::living_scene::commit_npc_inventory_action(
+        let candidate = match super::journey::living_scene::commit_npc_inventory_action(
             &current,
             super::journey::living_scene::NpcInventoryProposal {
                 operation,
                 expected_basis: current.basis(),
                 actor_id: proposal.actor_id.clone(),
-                target_id: item_id,
+                target_id: item_id.clone(),
                 action,
+                source: Some(super::journey::living_scene::NpcInventorySource {
+                    source_line_id: proposal.source_line_id.clone(),
+                    source_line_sequence: source_sequence,
+                    source_revision: current.basis().revision,
+                    source_actor_id: proposal.actor_id.clone(),
+                    source_text,
+                }),
             },
-        )
-        .map_err(unavailable)?;
+        ) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                record_npc_event_status(
+                    &proposal,
+                    "rejected",
+                    "inventory_owner_validation_rejected",
+                    &current_revision,
+                );
+                return Err(unavailable(error));
+            }
+        };
         if candidate.basis().revision != next {
+            record_npc_event_status(
+                &proposal,
+                "rejected",
+                "candidate_revision_not_single_step",
+                &current_revision,
+            );
             return Err(tonic::Status::failed_precondition(
                 "NPC event revision did not advance exactly once",
             ));
@@ -1725,6 +1910,25 @@ impl Actor {
         {
             SubmissionOutcome::Confirmed(receipt) => {
                 super::journey::living_scene::publish(&candidate).map_err(unavailable)?;
+                let committed_scene =
+                    super::beat_script_runtime::scene(candidate.state()).map_err(unavailable)?;
+                let committed_snapshot =
+                    super::journey::living_scene::snapshot(candidate.state(), &committed_scene)
+                        .map_err(unavailable)?
+                        .ok_or_else(|| {
+                            tonic::Status::failed_precondition("scene snapshot unavailable")
+                        })?;
+                let committed_thing = committed_snapshot
+                    .model
+                    .things
+                    .iter()
+                    .find(|thing| thing.id == item_id);
+                let item_detail = committed_thing.map(|thing| thing.detail.clone());
+                let holder_id = committed_thing.and_then(|thing| thing.holder_id.clone());
+                let owner_id = committed_thing.and_then(|thing| thing.owner_id.clone());
+                let committed_line = super::journey::living_scene::last_line(candidate.state())
+                    .map_err(unavailable)?;
+                let operation_id = super::journey::hex(operation.as_bytes());
                 record_audit_diagnostic(
                     "gameplay.npc.reply_event",
                     format!(
@@ -1735,36 +1939,85 @@ impl Actor {
                     serde_json::Map::from_iter([
                         ("status".into(), serde_json::json!("committed")),
                         ("kind".into(), serde_json::json!(proposal.kind.label())),
+                        ("operation_id".into(), serde_json::json!(operation_id)),
                         (
                             "source_line_id".into(),
                             serde_json::json!(proposal.source_line_id),
                         ),
+                        ("item_id".into(), serde_json::json!(item_id)),
+                        ("holder_id".into(), serde_json::json!(holder_id)),
+                        ("owner_id".into(), serde_json::json!(owner_id)),
+                        (
+                            "source_line_sequence".into(),
+                            serde_json::json!(source_sequence),
+                        ),
+                        (
+                            "source_revision".into(),
+                            serde_json::json!(proposal.revision),
+                        ),
+                        (
+                            "committed_revision".into(),
+                            serde_json::json!(revision_key(receipt.basis().revision)),
+                        ),
                     ]),
-                    &[("gameplay.npc.reply_event.status", "committed".into())],
+                    &[
+                        ("gameplay.npc.reply_event.status", "committed".into()),
+                        (
+                            "gameplay.npc.reply_event.operation_id",
+                            operation_id.clone(),
+                        ),
+                    ],
                 );
-                self.table_log.push(
-                    &proposal.actor_id,
-                    rpc::TableRole::Npc,
-                    0,
-                    rpc::TableKind::Action,
-                    &format!("NPC event committed: {}", proposal.kind.label()),
-                );
+                if let Some(line) = committed_line {
+                    self.table_log.push_actor(
+                        &proposal.actor_id,
+                        &canonical_actor.name,
+                        rpc::TableRole::Npc,
+                        0,
+                        rpc::TableKind::Action,
+                        &line,
+                    );
+                }
                 Ok(NpcEventOutcome {
                     status: "committed",
-                    revision: format!(
-                        "{}:{}",
-                        receipt.basis().revision.epoch().get(),
-                        receipt.basis().revision.sequence()
-                    ),
+                    revision: revision_key(receipt.basis().revision),
+                    operation_id: Some(operation_id),
+                    source_line_id: Some(proposal.source_line_id),
+                    item_id: Some(item_id),
+                    holder_id,
+                    owner_id,
+                    item_detail,
                 })
             }
-            SubmissionOutcome::Refused(error) => Err(error),
+            SubmissionOutcome::Refused(error) => {
+                record_npc_event_status(
+                    &proposal,
+                    "rejected",
+                    "owner_refused_candidate",
+                    &current_revision,
+                );
+                Err(error)
+            }
             SubmissionOutcome::OperationConflict => {
+                record_npc_event_status(
+                    &proposal,
+                    "conflict",
+                    "owner_operation_conflict",
+                    &current_revision,
+                );
                 Err(tonic::Status::aborted("NPC event conflict"))
             }
-            SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => Err(
-                tonic::Status::unavailable("NPC event commit outcome unavailable"),
-            ),
+            SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                record_npc_event_status(
+                    &proposal,
+                    "unavailable",
+                    "owner_commit_outcome_indeterminate",
+                    &current_revision,
+                );
+                Err(tonic::Status::unavailable(
+                    "NPC event commit outcome unavailable",
+                ))
+            }
         }
     }
 

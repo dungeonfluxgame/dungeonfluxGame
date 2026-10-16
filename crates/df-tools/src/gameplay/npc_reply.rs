@@ -1720,7 +1720,7 @@ impl NpcVoice {
         let private = outcome == ExchangeOutcome::Spoken
             && !turn.withheld.released().is_empty()
             && !(done_now || never_forgive_now || unwilling_now || hesitant_now);
-        let event_proposal = if outcome == ExchangeOutcome::Spoken {
+        let event_proposal = if outcome == ExchangeOutcome::Spoken && !private {
             if let Some(room) = context.room.as_ref() {
                 let result = self
                     .approach_model
@@ -1792,6 +1792,7 @@ impl NpcVoice {
         } else {
             None
         };
+        let mut source_line_sequence = None;
         if outcome == ExchangeOutcome::Withheld {
             super::actor::record_audit_line(
                 "gameplay.social.withheld",
@@ -1807,7 +1808,7 @@ impl NpcVoice {
                 &format!("murmurs to {}", context.hero_name),
             );
         } else {
-            log.push_actor(
+            source_line_sequence = log.push_actor(
                 &context.actor_id,
                 &context.speaker,
                 rpc::TableRole::Npc,
@@ -1816,6 +1817,10 @@ impl NpcVoice {
                 &text,
             );
         }
+        let event_proposal = event_proposal.map(|mut proposal| {
+            proposal.source_line_sequence = source_line_sequence;
+            proposal
+        });
         let recorded = turn.ledger.record_exchange(
             context.member,
             &turn.dossier,

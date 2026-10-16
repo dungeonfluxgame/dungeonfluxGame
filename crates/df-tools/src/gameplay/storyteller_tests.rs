@@ -26,6 +26,8 @@ pub(in crate::gameplay) enum Reply {
     Verbose(Value),
     /// A complete response whose assistant text is computed from the request's prompt.
     Compute(Arc<dyn Fn(&str) -> Value + Send + Sync>),
+    /// An HTTP status and JSON response computed from the request body.
+    ComputeResponse(Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync>),
     /// A bare HTTP status with a JSON body.
     Status(u16, Value),
     /// A bare JSON response deliberately arriving after the caller's deadline.
@@ -89,6 +91,10 @@ impl FakeEndpoint {
                         Some(Reply::Compute(compute)) => {
                             let slots = compute(body["input"].as_str().unwrap_or_default());
                             respond(&mut socket, 200, &completed(&body, slots.to_string()))
+                        }
+                        Some(Reply::ComputeResponse(compute)) => {
+                            let (status, response) = compute(&body);
+                            respond(&mut socket, status, &response)
                         }
                         Some(Reply::Status(status, body)) => respond(&mut socket, status, &body),
                         Some(Reply::DelayedStatus(delay, status, body)) => {

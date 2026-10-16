@@ -44,6 +44,24 @@ const STORY_HOLD_MS: u64 = 4_000;
 /// dropped. Several televisions on one room stay distinguishable by instance.
 const ACK_DISPLAYS: usize = 8;
 
+fn visible_table_line(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(LINE_CHARACTERS)
+        .collect()
+}
+
 /// The server-side presentation gate, as one typed state so "phones may act on beat N"
 /// and "beat N is still being shown" cannot both be recorded. Transitions happen only in
 /// [`TableLog::pacing_observe`] and [`TableLog::expire_pacing_at`].
@@ -368,8 +386,8 @@ impl TableLog {
         hero_index: u32,
         kind: rpc::TableKind,
         text: &str,
-    ) {
-        self.push_line(None, (speaker, ""), role, hero_index, kind, text);
+    ) -> Option<u64> {
+        self.push_line(None, (speaker, ""), role, hero_index, kind, text)
     }
 
     pub(super) fn push_actor(
@@ -380,8 +398,8 @@ impl TableLog {
         hero_index: u32,
         kind: rpc::TableKind,
         text: &str,
-    ) {
-        self.push_line(None, (speaker, actor_id), role, hero_index, kind, text);
+    ) -> Option<u64> {
+        self.push_line(None, (speaker, actor_id), role, hero_index, kind, text)
     }
 
     pub(super) fn push_speech(&self, speaker: &str, hero_index: u32, text: &str) {
@@ -403,7 +421,7 @@ impl TableLog {
         hero_index: u32,
         kind: rpc::TableKind,
         text: &str,
-    ) {
+    ) -> Option<u64> {
         self.push_line(
             reservation.sequence,
             (speaker, ""),
@@ -411,7 +429,7 @@ impl TableLog {
             hero_index,
             kind,
             text,
-        );
+        )
     }
 
     /// A check is rules narration; the hero's name and outcome belong in its text.
@@ -439,7 +457,7 @@ impl TableLog {
         hero_index: u32,
         kind: rpc::TableKind,
         text: &str,
-    ) {
+    ) -> Option<u64> {
         let (speaker, actor_id) = speaker;
         if let Some((entry_kind, title, scene)) = notebook_entry_log_fields(text) {
             let context = df_observe::OperationContext {
@@ -456,35 +474,20 @@ impl TableLog {
                 ],
             );
             span.finish_unmeasured("recorded");
-            return;
+            return None;
         }
         if !self.enabled {
-            return;
+            return None;
         }
-        let text: String = text
-            .chars()
-            .map(|character| {
-                if character.is_control() {
-                    ' '
-                } else {
-                    character
-                }
-            })
-            .collect::<String>()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .chars()
-            .take(LINE_CHARACTERS)
-            .collect();
+        let text = visible_table_line(text);
         if text.is_empty() {
-            return;
+            return None;
         }
         super::actor::record_audit_line(
             "gameplay.table_line",
             format!("LINE queued speaker={speaker:?} role={role:?} kind={kind:?} text={text:?}"),
         );
-        let version = {
+        let (version, sequence) = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
             let sequence = reserved_sequence.unwrap_or_else(|| {
                 let sequence = ring.next_sequence;
@@ -512,9 +515,10 @@ impl TableLog {
                 ring.composing.retain(|mark| mark.hero_index != hero_index);
             }
             ring.version += 1;
-            ring.version
+            (ring.version, sequence)
         };
         self.wake.send_replace(version);
+        Some(sequence)
     }
 
     /// Marks `speaker` as writing a reply until the returned guard is dropped, so every screen
@@ -966,6 +970,47 @@ impl TableLog {
             .iter()
             .cloned()
             .collect()
+    }
+
+    /// Checks the exact current NPC speech line that a Jev proposal names. Sequence is
+    /// captured when the reply enters the table log, so another character's later line
+    /// cannot make a previous NPC proposal look current by matching its text.
+    pub(super) fn is_latest_npc_speech(
+        &self,
+        sequence: u64,
+        actor_id: &str,
+        speaker: &str,
+        text: &str,
+    ) -> bool {
+        self.latest_npc_speech_text(sequence, actor_id, speaker, text)
+            .is_some()
+    }
+
+    /// Returns the exact text the table displayed for the current NPC source line. Callers
+    /// that journal a source-bound decision persist this value instead of model output that
+    /// may contain control characters or exceed the public line limit.
+    pub(super) fn latest_npc_speech_text(
+        &self,
+        sequence: u64,
+        actor_id: &str,
+        speaker: &str,
+        text: &str,
+    ) -> Option<String> {
+        let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        ring.lines
+            .iter()
+            .rev()
+            .find(|line| {
+                line.role == rpc::TableRole::Npc as i32
+                    && line.kind == rpc::TableKind::Speech as i32
+            })
+            .filter(|line| {
+                line.sequence == sequence
+                    && line.actor_id == actor_id
+                    && line.speaker == speaker.chars().take(48).collect::<String>()
+                    && line.text == visible_table_line(text)
+            })
+            .map(|line| line.text.clone())
     }
 
     /// Adds the public feed to the view of either audience. In a fight it also runs the
@@ -1878,6 +1923,34 @@ mod tests {
                 .all(|pair| pair[0].sequence < pair[1].sequence)
         );
         assert_eq!(lines[RING_LINES - 1].sequence, 30);
+    }
+
+    #[test]
+    fn npc_event_source_must_be_the_exact_latest_public_speech() {
+        let log = TableLog::new();
+        let source = log
+            .push_actor(
+                "merchant",
+                "Marek",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "Here, have a look.",
+            )
+            .unwrap();
+
+        assert!(log.is_latest_npc_speech(source, "merchant", "Marek", "Here, have a look."));
+        assert!(!log.is_latest_npc_speech(source, "other-merchant", "Marek", "Here, have a look."));
+
+        log.push_actor(
+            "guard",
+            "Runa",
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Speech,
+            "That is enough.",
+        );
+        assert!(!log.is_latest_npc_speech(source, "merchant", "Marek", "Here, have a look."));
     }
 
     #[test]

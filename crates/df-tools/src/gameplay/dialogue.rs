@@ -358,6 +358,25 @@ mod classified_line_tests {
 }
 
 impl Service {
+    pub(super) async fn commit_npc_event(
+        &self,
+        credential: [u8; 32],
+        proposal: super::npc_event_classifier::Proposal,
+    ) -> Result<actor::NpcEventOutcome, Status> {
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::NpcEvent {
+                credential,
+                proposal,
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("NPC event actor queue full"))?;
+        tokio::time::timeout(super::timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("retain the NPC event for lookup"))?
+            .map_err(|_| Status::unavailable("gameplay actor stopped"))?
+    }
+
     async fn dialogue_call(
         &self,
         credential: [u8; 32],
@@ -1183,8 +1202,28 @@ impl rpc::dialogue_service_server::DialogueService for Service {
                     let shown = self.npc_voice.display_line(&context).await;
                     context.publish_typed_line(&self.table_log, &shown);
                     let _thinking = self.table_log.reply_pending(&context.speaker);
-                    if let Some(reply) = self.npc_voice.converse(context, &self.table_log).await {
-                        response.npc_reply = reply;
+                    if let Some(exchange) = self
+                        .npc_voice
+                        .converse_report(context, &self.table_log)
+                        .await
+                    {
+                        // The spoken reply is user facing and remains valid even when Jev is
+                        // unavailable or the owner rejects its event proposal.
+                        response.npc_reply = exchange.text;
+                        if let Some(proposal) = exchange.event_proposal {
+                            match self.commit_npc_event(credential, proposal).await {
+                                Ok(outcome) if outcome.status == "committed" => {
+                                    response.revision = Some(wire::revision(
+                                        self.updates.borrow().basis().revision,
+                                    ));
+                                }
+                                Ok(_) => {}
+                                Err(error) => actor::record_unavailable(
+                                    "npc-event-commit",
+                                    &format!("{}: {}", error.code(), error.message()),
+                                ),
+                            }
+                        }
                     }
                     if let Err(error) = self
                         .dialogue_call(credential, DialogueRequest::SyncNotes)

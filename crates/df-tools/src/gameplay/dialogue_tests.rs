@@ -8,6 +8,7 @@ use df_persistence::{
 use df_protocol::common as rpc;
 use df_session::inbox::{InboxHandle, bounded_inbox};
 use df_session::submission::DurableOwner;
+use serde_json::{Value, json};
 use std::{
     io,
     sync::{
@@ -51,6 +52,19 @@ fn configuration() -> Result<Config, Error> {
         .user(&user)
         .ssl_mode(tokio_postgres::config::SslMode::Disable)
         .application_name("df-intent-dialogue-d02-owned-proof");
+    Ok(config)
+}
+fn npc_event_configuration() -> Result<Config, Error> {
+    required(std::env::var("DF_NPC_EVENT_QUALIFICATION").as_deref() == Ok("owned-npc-event-e01"))?;
+    let port = std::env::var("DF_DIALOGUE_PG_PORT")?.parse::<u16>()?;
+    let mut config = Config::new();
+    config
+        .host("127.0.0.1")
+        .port(port)
+        .dbname("df_gameplay_demo_npc_event_e01")
+        .user("df_npc_event_e01_owner")
+        .ssl_mode(tokio_postgres::config::SslMode::Disable)
+        .application_name("df-npc-event-e01-owned-proof");
     Ok(config)
 }
 fn options(codec: NativeCodecLimits) -> Result<NativeRepositoryOptions, Error> {
@@ -120,10 +134,48 @@ impl RunningActor {
     }
     async fn start_observed(
         repository: PostgresRepository<LocalDemoAuthority>,
+        issuer: LocalDemoScopeIssuer,
+        checkpoint: Checkpoint,
+        codec: NativeCodecLimits,
+        counter: Arc<AtomicUsize>,
+        completion_observer: Option<actor::CompletionObserver>,
+        calls_remaining: u16,
+    ) -> Result<Self, Error> {
+        Self::start_observed_with_npc(
+            repository,
+            issuer,
+            checkpoint,
+            codec,
+            counter,
+            super::social::SocialLedger::none(),
+            Arc::new(super::npc_reply::NpcVoice::silent()),
+            completion_observer,
+            calls_remaining,
+        )
+        .await
+    }
+    async fn start_with_npc(
+        repository: PostgresRepository<LocalDemoAuthority>,
+        issuer: LocalDemoScopeIssuer,
+        checkpoint: Checkpoint,
+        codec: NativeCodecLimits,
+        counter: Arc<AtomicUsize>,
+        social: Arc<super::social::SocialLedger>,
+        npc_voice: Arc<super::npc_reply::NpcVoice>,
+    ) -> Result<Self, Error> {
+        Self::start_observed_with_npc(
+            repository, issuer, checkpoint, codec, counter, social, npc_voice, None, 100,
+        )
+        .await
+    }
+    async fn start_observed_with_npc(
+        repository: PostgresRepository<LocalDemoAuthority>,
         mut issuer: LocalDemoScopeIssuer,
         checkpoint: Checkpoint,
         codec: NativeCodecLimits,
         counter: Arc<AtomicUsize>,
+        social: Arc<super::social::SocialLedger>,
+        npc_voice: Arc<super::npc_reply::NpcVoice>,
         completion_observer: Option<actor::CompletionObserver>,
         calls_remaining: u16,
     ) -> Result<Self, Error> {
@@ -147,7 +199,7 @@ impl RunningActor {
         let actor = actor::Actor {
             table_log: table_log.clone(),
             notebook: super::notebook::NotebookLedger::none(),
-            social: super::social::SocialLedger::none(),
+            social: social.clone(),
             table_settings: super::table_settings::TableSettings::startup(None, false),
             tempo: None,
             dialogue: super::dialogue::DialogueState::default(),
@@ -223,9 +275,9 @@ impl RunningActor {
             voice: super::voice::Voice::disabled(
                 super::startup_configuration::VoiceOff::Qualification,
             ),
-            npc_voice: Arc::new(super::npc_reply::NpcVoice::silent()),
+            npc_voice,
             table_log,
-            social: super::social::SocialLedger::none(),
+            social,
             living: super::living_scenes::LivingScenes::disabled(),
         };
         Ok(Self {
@@ -279,6 +331,13 @@ fn create(checkpoint: &Checkpoint, operation: u8) -> rpc::SubmitActionRequest {
         .collect(),
     });
     body
+}
+fn create_named(checkpoint: &Checkpoint, operation: u8, name: &str) -> rpc::SubmitActionRequest {
+    let mut request = create(checkpoint, operation);
+    if let Some(character) = request.character.as_mut() {
+        character.name = name.to_owned();
+    }
+    request
 }
 fn action(
     checkpoint: &Checkpoint,
@@ -387,6 +446,716 @@ fn pending_ai(checkpoint: &Checkpoint) -> usize {
                 && intent.status == df_model::checkpoint::DurableStatus::Pending
         })
         .count()
+}
+
+fn event_line_proposal(
+    actor_id: &str,
+    npc_id: &str,
+    item_id: &str,
+    recipient_id: &str,
+    scene_identity: &str,
+    revision: &str,
+    typed_words: &str,
+    reply_text: &str,
+    source_line_sequence: u64,
+) -> super::npc_event_classifier::Proposal {
+    use super::npc_event_classifier::{EventKind, Proposal};
+    Proposal {
+        kind: EventKind::IntentToGive,
+        actor_id: actor_id.to_owned(),
+        npc_id: npc_id.to_owned(),
+        item_id: Some(item_id.to_owned()),
+        recipient_id: Some(recipient_id.to_owned()),
+        reply_text: reply_text.to_owned(),
+        typed_words: typed_words.to_owned(),
+        scene_identity: scene_identity.to_owned(),
+        source_line_id: Proposal::source_line_id(
+            actor_id,
+            npc_id,
+            scene_identity,
+            revision,
+            typed_words,
+            reply_text,
+        ),
+        source_line_sequence: Some(source_line_sequence),
+        revision: revision.to_owned(),
+    }
+}
+
+async fn direct_join(service: &Service, operation: u8) -> Result<rpc::JoinedRoom, Error> {
+    let response = rpc::room_service_server::RoomService::join(
+        service,
+        Request::new(rpc::JoinRoomRequest {
+            room_code: journey::ROOM_CODE.to_owned(),
+            join_secret: vec![operation; 32],
+            operation_id: input_id(operation),
+        }),
+    )
+    .await?
+    .into_inner();
+    match response.outcome {
+        Some(rpc::join_room_response::Outcome::Joined(joined)) => Ok(*joined),
+        _ => Err(io::Error::other("NPC-event room join refused").into()),
+    }
+}
+
+async fn direct_submit_action(
+    service: &Service,
+    body: rpc::SubmitActionRequest,
+    credential: &[u8; 32],
+) -> Result<rpc::SubmitActionResponse, Error> {
+    Ok(
+        rpc::action_service_server::ActionService::submit(service, authenticated(body, credential))
+            .await?
+            .into_inner(),
+    )
+}
+
+fn revision_label(revision: df_types::SessionRevision) -> String {
+    format!("{}:{}", revision.epoch().get(), revision.sequence())
+}
+
+fn joined_identity(joined: &rpc::JoinedRoom) -> Result<([u8; 32], df_types::MemberId), Error> {
+    let credential = super::parse_binding(&joined.local_binding)
+        .ok_or_else(|| io::Error::other("NPC-event local binding invalid"))?;
+    let member_bytes: [u8; 16] = joined
+        .client_binding_id
+        .as_ref()
+        .and_then(|binding| binding.value.as_deref())
+        .ok_or_else(|| io::Error::other("NPC-event member binding absent"))?
+        .try_into()
+        .map_err(|_| io::Error::other("NPC-event member binding invalid"))?;
+    let member = df_types::MemberId::from_bytes(&member_bytes)
+        .map_err(|_| io::Error::other("NPC-event member identity invalid"))?;
+    Ok((credential, member))
+}
+
+async fn start_npc_event_actor(
+    config: &Config,
+    checkpoint: Checkpoint,
+    fence: [u8; 16],
+    codec: NativeCodecLimits,
+    counter: Arc<AtomicUsize>,
+    social: Arc<super::social::SocialLedger>,
+    voice: Arc<super::npc_reply::NpcVoice>,
+) -> Result<RunningActor, Error> {
+    let (grant_client, grant_connection) =
+        timeout(Duration::from_secs(2), config.connect(NoTls)).await??;
+    let grant_driver = tokio::spawn(grant_connection);
+    let mut issuer = LocalDemoScopeIssuer::new(
+        tokio::runtime::Handle::current(),
+        grant_client,
+        checkpoint.basis().session,
+        fence,
+    )
+    .map_err(repository_error)?;
+    issuer
+        .configure_reconnect(config.clone(), grant_driver)
+        .map_err(|(error, _)| repository_error(error))?;
+    RunningActor::start_with_npc(
+        repository(config, config, codec).await?,
+        issuer,
+        checkpoint,
+        codec,
+        counter,
+        social,
+        voice,
+    )
+    .await
+}
+
+fn latest_npc_speech(service: &Service, actor_id: &str) -> Result<rpc::TableLine, Error> {
+    service
+        .table_log
+        .lines()
+        .into_iter()
+        .rev()
+        .find(|line| {
+            line.role == rpc::TableRole::Npc as i32
+                && line.kind == rpc::TableKind::Speech as i32
+                && line.actor_id == actor_id
+        })
+        .ok_or_else(|| io::Error::other("NPC-event public speech line absent").into())
+}
+
+async fn submit_npc_event_dialogue(
+    service: &Service,
+    checkpoint: &Checkpoint,
+    credential: &[u8; 32],
+    operation: u8,
+    words: &str,
+) -> Result<rpc::DialogueResponse, Error> {
+    Ok(rpc::dialogue_service_server::DialogueService::submit(
+        service,
+        authenticated(
+            raw(
+                checkpoint,
+                operation,
+                rpc::DialogueContext::Question,
+                rpc::DialogueFinality::Final,
+                String::new(),
+                words,
+            ),
+            credential,
+        ),
+    )
+    .await?
+    .into_inner())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Root-owned fresh npc-event-e01 PostgreSQL runtime"]
+async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replays_after_restart()
+-> Result<(), Error> {
+    use super::adventure::{self, RulesMode};
+    use super::storyteller::tests::{FakeEndpoint, Reply};
+
+    let config = npc_event_configuration()?;
+    super::model::install_database_run("df_gameplay_demo_npc_event_e01")
+        .map_err(repository_error)?;
+    let generated = adventure::shop::generate(
+        45,
+        RulesMode::Standard,
+        super::startup_configuration::ContentRating::default(),
+    )
+    .map_err(repository_error)?;
+    let documents = generated.documents(false).map_err(repository_error)?;
+    let (loaded, record) = adventure::record::reload(&documents).map_err(repository_error)?;
+    super::pack::install(loaded).map_err(repository_error)?;
+    let social = super::social::SocialLedger::open(record.dossiers.clone(), &record.seed, None)
+        .map_err(repository_error)?;
+
+    let first_ask =
+        "Marek, may I hold the fine clothes for inspection? I will give them straight back.";
+    let first_reply = "Here, have a look.";
+    let second_ask = "Marek, what is the cloth made of?";
+    let second_reply = "The cloth is tightly woven and sturdy.";
+    let wrong_item_ask =
+        "Marek, may I hold the fine clothes and the brass hand bell for inspection?";
+    let wrong_item_reply = "Here, have a look at the fine clothes.";
+    let contaminated_ask = "Marek, may I hold the brass hand bell for a moment? I will give it straight back without ringing it.";
+    let contaminated_reply = "brass key is a brass key wrapped in blue cloth.";
+    let storyteller_endpoint = FakeEndpoint::start(vec![
+        Reply::Output(json!({"clean": first_ask})),
+        Reply::Output(json!({"reply": first_reply, "approach": "question"})),
+        Reply::Output(json!({"clean": second_ask})),
+        Reply::Output(json!({"reply": second_reply, "approach": "question"})),
+        Reply::Output(json!({"clean": wrong_item_ask})),
+        Reply::Output(json!({"reply": wrong_item_reply, "approach": "question"})),
+        Reply::Output(json!({"clean": contaminated_ask})),
+        Reply::Output(json!({"reply": contaminated_reply, "approach": "question"})),
+    ]);
+    let classify_jev = Arc::new(move |body: &Value| {
+        let state = &body["state"];
+        if state["npc_reply"].as_str() == Some(second_reply) {
+            return (503, json!({"error": "fixture-provider-failure"}));
+        }
+        let criteria = body["questions"]["q1"]["criteria"]
+            .as_object()
+            .expect("choice criteria object");
+        let target = if state.get("npc_reply").is_some() {
+            let typed = state["player_words"].as_str().unwrap_or_default();
+            if typed.contains("brass hand bell") {
+                let bell_id = state["canonical_items"].as_array().and_then(|items| {
+                    items.iter().find_map(|item| {
+                        (item["name"].as_str() == Some("brass hand bell"))
+                            .then(|| item["id"].as_str())
+                            .flatten()
+                    })
+                });
+                bell_id.map(|id| format!("intent_to_give:{id}:"))
+            } else {
+                Some("intent_to_give:item-clothes-travelers:".to_owned())
+            }
+        } else if criteria.values().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.starts_with("character-speech:"))
+        }) {
+            Some("character-speech:".to_owned())
+        } else if criteria.values().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.starts_with("question:"))
+        }) {
+            Some("question:".to_owned())
+        } else if criteria.values().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.starts_with("other:"))
+        }) {
+            Some("other:".to_owned())
+        } else if criteria.values().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.starts_with("unmoved:"))
+        }) {
+            Some("unmoved:".to_owned())
+        } else {
+            None
+        };
+        let choice = target
+            .and_then(|prefix| {
+                criteria.iter().find_map(|(option, criterion)| {
+                    criterion
+                        .as_str()
+                        .is_some_and(|value| value.starts_with(prefix.as_str()))
+                        .then(|| option.clone())
+                })
+            })
+            .unwrap_or_else(|| "o1".to_owned());
+        (
+            200,
+            json!({
+                "answers": {"q1": {"type": "choice", "choice": choice, "confidence": 0.99}}
+            }),
+        )
+    });
+    let jev_endpoint = FakeEndpoint::start(
+        (0..32)
+            .map(|_| Reply::ComputeResponse(classify_jev.clone()))
+            .collect(),
+    );
+    let cache = super::storyteller::tests::cache_directory("npc-event-e01");
+    let storyteller = Arc::new(super::storyteller::tests::teller(
+        storyteller_endpoint.address,
+        20_000,
+        Duration::from_secs(5),
+        &cache,
+    ));
+    let voice = Arc::new(
+        super::npc_reply::NpcVoice::new(storyteller)
+            .with_approach_model(super::approach_model_tests::model(&jev_endpoint)),
+    );
+
+    let codec = NativeCodecLimits {
+        maximum_document_bytes: 1024 * 1024,
+        maximum_allocated_bytes: 2 * 1024 * 1024,
+        maximum_collection_items: 1024,
+        maximum_text_bytes: 4096,
+    };
+    let cold = journey::initial().map_err(repository_error)?;
+    let session = cold.basis().session;
+    let first_fence = [0x83; 16];
+    let second_fence = [0x84; 16];
+    let (mut inspector, inspector_connection) =
+        timeout(Duration::from_secs(2), config.connect(NoTls)).await??;
+    let inspector_driver = tokio::spawn(inspector_connection);
+    let mut admitted = local_demo_scope::admit_startup_with_adventure(
+        &mut inspector,
+        &cold,
+        local_demo_scope::DemoStartupIdentity {
+            fence: first_fence,
+            player_credential: [0x81; 32],
+            display_credential: [0x82; 32],
+        },
+        codec,
+        &model::recovery().map_err(repository_error)?,
+        Some(&documents),
+        |checkpoint| journey::phase(checkpoint).map(|_| ()),
+    )
+    .await
+    .map_err(repository_error)?;
+    required(!admitted.restored && admitted.checkpoint == cold)?;
+    let counter = Arc::new(AtomicUsize::new(0));
+    let mut running = Some(
+        start_npc_event_actor(
+            &config,
+            admitted.checkpoint,
+            first_fence,
+            codec,
+            counter.clone(),
+            social,
+            voice,
+        )
+        .await?,
+    );
+    let mut active_fence = first_fence;
+    let mut accepted_proposal = None;
+    let result = async {
+        let service = &running
+            .as_ref()
+            .ok_or_else(|| io::Error::other("NPC-event owner absent"))?
+            .service;
+        let joined = direct_join(service, 0x91).await?;
+        let (credential, member) = joined_identity(&joined)?;
+        let created = direct_submit_action(
+            service,
+            create_named(&service.updates.borrow(), 0x92, "Sigrun"),
+            &credential,
+        )
+        .await?;
+        required(matches!(
+            created.outcome,
+            Some(rpc::submit_action_response::Outcome::CommittedDecision(_))
+        ))?;
+        let created_at = service.updates.borrow().clone();
+        let begun = direct_submit_action(
+            service,
+            action(&created_at, 0x93, rpc::GameplayActionKind::BeginStory),
+            &credential,
+        )
+        .await?;
+        required(matches!(
+            begun.outcome,
+            Some(rpc::submit_action_response::Outcome::CommittedDecision(_))
+        ))?;
+        let opening = service.updates.borrow().clone();
+        required(
+            journey::phase(&opening).map_err(repository_error)? == rpc::JourneyPhase::Dialogue,
+        )?;
+        let scene = super::beat_script_runtime::scene(opening.state()).map_err(repository_error)?;
+        let scene_identity = format!("{}|{}", scene.title, scene.asset);
+        let before_snapshot = journey::living_scene::snapshot(opening.state(), &scene)
+            .map_err(repository_error)?
+            .ok_or_else(|| io::Error::other("shop scene snapshot absent"))?;
+        let offer = before_snapshot
+            .model
+            .offers
+            .iter()
+            .find(|offer| offer.id == "clothes-travelers")
+            .ok_or_else(|| io::Error::other("clothes stock offer absent"))?;
+        required(offer.item_id == "item-clothes-travelers" && offer.seller_id == "merchant")?;
+        let bell_id = before_snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.name == "brass hand bell")
+            .map(|thing| thing.id.clone())
+            .ok_or_else(|| io::Error::other("brass hand bell absent from fresh shop"))?;
+        let hero = journey::player_entity(member, &opening).map_err(repository_error)?;
+        let balance_before =
+            journey::living_scene::balance_cp(opening.state(), hero).map_err(repository_error)?;
+
+        let response =
+            submit_npc_event_dialogue(service, &opening, &credential, 0xa1, first_ask).await?;
+        required(response.npc_reply == first_reply)?;
+        required(response.npc_actor_id == "merchant" && response.npc_speaker == "Marek")?;
+        let source_line = latest_npc_speech(service, "merchant")?;
+        required(source_line.speaker == "Marek" && source_line.text == first_reply)?;
+        let committed = service.updates.borrow().clone();
+        let next_revision = opening
+            .basis()
+            .revision
+            .next_sequence()
+            .map_err(repository_error)?;
+        required(committed.basis().revision == next_revision)?;
+        required(response.revision == Some(wire::revision(next_revision)))?;
+        required(committed.state().decisions.len() == opening.state().decisions.len() + 1)?;
+        let after_scene =
+            super::beat_script_runtime::scene(committed.state()).map_err(repository_error)?;
+        let after_snapshot = journey::living_scene::snapshot(committed.state(), &after_scene)
+            .map_err(repository_error)?
+            .ok_or_else(|| io::Error::other("committed shop snapshot absent"))?;
+        let held = after_snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.id == "item-clothes-travelers")
+            .ok_or_else(|| io::Error::other("loan item was not materialized"))?;
+        required(held.owner_id.as_deref() == Some("merchant"))?;
+        required(held.holder_id.as_deref() == Some("Sigrun"))?;
+        required(
+            held.provenance.kind
+                == super::adventure::scene_model::SceneItemProvenanceKind::GeneratedOffer,
+        )?;
+        required(held.provenance.source_id == "clothes-travelers")?;
+        required(held.provenance.seller_id.as_deref() == Some("merchant"))?;
+        required(
+            !after_snapshot
+                .model
+                .offer_available("item-clothes-travelers"),
+        )?;
+        required(
+            journey::living_scene::balance_cp(committed.state(), hero).map_err(repository_error)?
+                == balance_before,
+        )?;
+
+        let interaction = committed
+            .state()
+            .decisions
+            .last()
+            .and_then(|decision| decision.semantic_output.as_deref())
+            .and_then(|output| output.strip_prefix("living-scene-1:"))
+            .ok_or_else(|| io::Error::other("NPC inventory semantic receipt absent"))?;
+        let receipt: Value = serde_json::from_str(interaction)?;
+        required(receipt["option"] == "npc-inventory")?;
+        required(receipt["target"] == "item-clothes-travelers")?;
+        required(
+            receipt["source_line_id"].as_str()
+                == Some(
+                    source_line_id_for(
+                        "merchant",
+                        "patron:merchant",
+                        &scene_identity,
+                        &revision_label(opening.basis().revision),
+                        first_ask,
+                        first_reply,
+                    )
+                    .as_str(),
+                ),
+        )?;
+        required(receipt["source_revision"] == revision_label(opening.basis().revision))?;
+        required(receipt["source_actor_id"] == "merchant")?;
+        required(receipt["source_text"] == first_reply)?;
+        required(receipt["source_line_sequence"].as_u64() == Some(source_line.sequence))?;
+
+        let projection = wire::project_journey(&committed, LocalDemoRole::Player, member)
+            .map_err(repository_error)?;
+        let Some(rpc::view_message::Audience::Player(phone)) = projection.view.audience else {
+            return Err(io::Error::other("player phone projection absent").into());
+        };
+        let phone_scene = phone
+            .scene
+            .ok_or_else(|| io::Error::other("player phone scene absent"))?;
+        let phone_card = phone_scene
+            .hand_items
+            .iter()
+            .find(|card| card.thing_id == "item-clothes-travelers")
+            .ok_or_else(|| io::Error::other("loan missing from phone hand inventory"))?;
+        required(phone_card.observation_only && phone_card.holder == "Sigrun")?;
+        required(phone_card.detail == held.detail)?;
+        let first_proposal = event_line_proposal(
+            "merchant",
+            "patron:merchant",
+            "item-clothes-travelers",
+            "Sigrun",
+            &scene_identity,
+            &revision_label(opening.basis().revision),
+            first_ask,
+            first_reply,
+            source_line.sequence,
+        );
+        accepted_proposal = Some(first_proposal.clone());
+
+        let second_response =
+            submit_npc_event_dialogue(service, &committed, &credential, 0xa2, second_ask).await?;
+        required(second_response.npc_reply == second_reply)?;
+        let second_line = latest_npc_speech(service, "merchant")?;
+        required(second_line.text == second_reply)?;
+        let after_provider_failure = service.updates.borrow().clone();
+        required(after_provider_failure == committed)?;
+
+        use super::npc_event_classifier::EventKind;
+        let mut refusal = event_line_proposal(
+            "merchant",
+            "patron:merchant",
+            "item-clothes-travelers",
+            "Sigrun",
+            &scene_identity,
+            &revision_label(committed.basis().revision),
+            second_ask,
+            second_reply,
+            second_line.sequence,
+        );
+        refusal.kind = EventKind::Refusal;
+        refusal.item_id = None;
+        refusal.recipient_id = None;
+        let refusal_result = service
+            .commit_npc_event(credential, refusal.clone())
+            .await?;
+        required(refusal_result.status == "refusal_no_commit")?;
+        required(service.updates.borrow().clone() == committed)?;
+        let mut conditional = refusal.clone();
+        conditional.kind = EventKind::Conditional;
+        let conditional_result = service.commit_npc_event(credential, conditional).await?;
+        required(conditional_result.status == "conditional_no_commit")?;
+        required(service.updates.borrow().clone() == committed)?;
+        let wrong_speaker = event_line_proposal(
+            "shop-adventurer",
+            "bystander:shop-adventurer",
+            "item-clothes-travelers",
+            "Sigrun",
+            &scene_identity,
+            &revision_label(committed.basis().revision),
+            second_ask,
+            second_reply,
+            second_line.sequence,
+        );
+        required(
+            service
+                .commit_npc_event(credential, wrong_speaker)
+                .await?
+                .status
+                == "ignored_line_not_current",
+        )?;
+        required(service.updates.borrow().clone() == committed)?;
+        let wrong_dossier = event_line_proposal(
+            "merchant",
+            "bystander:merchant",
+            "item-clothes-travelers",
+            "Sigrun",
+            &scene_identity,
+            &revision_label(committed.basis().revision),
+            second_ask,
+            second_reply,
+            second_line.sequence,
+        );
+        required(
+            service
+                .commit_npc_event(credential, wrong_dossier)
+                .await?
+                .status
+                == "ignored_wrong_speaker",
+        )?;
+        required(service.updates.borrow().clone() == committed)?;
+        let stale = event_line_proposal(
+            "merchant",
+            "patron:merchant",
+            "item-clothes-travelers",
+            "Sigrun",
+            &scene_identity,
+            &revision_label(opening.basis().revision),
+            second_ask,
+            second_reply,
+            second_line.sequence,
+        );
+        required(service.commit_npc_event(credential, stale).await?.status == "stale")?;
+        required(service.updates.borrow().clone() == committed)?;
+
+        let wrong_reply_response =
+            submit_npc_event_dialogue(service, &committed, &credential, 0xa3, wrong_item_ask)
+                .await?;
+        required(wrong_reply_response.npc_reply == wrong_item_reply)?;
+        let wrong_reply_line = latest_npc_speech(service, "merchant")?;
+        required(wrong_reply_line.text == wrong_item_reply)?;
+        required(service.updates.borrow().clone() == committed)?;
+        let wrong_item_proposal = event_line_proposal(
+            "merchant",
+            "patron:merchant",
+            &bell_id,
+            "Sigrun",
+            &scene_identity,
+            &revision_label(committed.basis().revision),
+            wrong_item_ask,
+            wrong_item_reply,
+            wrong_reply_line.sequence,
+        );
+        required(
+            service
+                .commit_npc_event(credential, wrong_item_proposal)
+                .await?
+                .status
+                == "rejected",
+        )?;
+        required(service.updates.borrow().clone() == committed)?;
+
+        let contaminated_response =
+            submit_npc_event_dialogue(service, &committed, &credential, 0xa4, contaminated_ask)
+                .await?;
+        required(contaminated_response.npc_reply == contaminated_reply)?;
+        let contaminated_line = latest_npc_speech(service, "merchant")?;
+        required(contaminated_line.text == contaminated_reply)?;
+        required(service.updates.borrow().clone() == committed)?;
+
+        let mut exited = running
+            .take()
+            .ok_or_else(|| io::Error::other("NPC-event owner absent during restart"))?
+            .close()
+            .await?;
+        required(exited.checkpoint == committed)?;
+        exited
+            .issuer
+            .close_owned()
+            .await
+            .map_err(repository_error)?;
+        local_demo_scope::release_owner(&inspector, session, first_fence)
+            .await
+            .map_err(repository_error)?;
+
+        active_fence = second_fence;
+        admitted = local_demo_scope::admit_startup_with_adventure(
+            &mut inspector,
+            &cold,
+            local_demo_scope::DemoStartupIdentity {
+                fence: second_fence,
+                player_credential: [0x85; 32],
+                display_credential: [0x86; 32],
+            },
+            codec,
+            &model::recovery().map_err(repository_error)?,
+            Some(&documents),
+            |checkpoint| journey::phase(checkpoint).map(|_| ()),
+        )
+        .await
+        .map_err(repository_error)?;
+        required(admitted.restored && admitted.checkpoint == committed)?;
+        let restored_semantic = admitted
+            .checkpoint
+            .state()
+            .decisions
+            .last()
+            .and_then(|decision| decision.semantic_output.as_deref())
+            .and_then(|output| output.strip_prefix("living-scene-1:"))
+            .ok_or_else(|| io::Error::other("durable NPC source receipt absent after restore"))?;
+        let restored_receipt: Value = serde_json::from_str(restored_semantic)?;
+        required(restored_receipt["source_line_id"] == receipt["source_line_id"])?;
+        required(restored_receipt["source_line_sequence"] == receipt["source_line_sequence"])?;
+        required(restored_receipt["source_text"] == receipt["source_text"])?;
+        running = Some(
+            start_npc_event_actor(
+                &config,
+                admitted.checkpoint,
+                second_fence,
+                codec,
+                Arc::new(AtomicUsize::new(0)),
+                super::social::SocialLedger::open(record.dossiers.clone(), &record.seed, None)
+                    .map_err(repository_error)?,
+                Arc::new(super::npc_reply::NpcVoice::silent()),
+            )
+            .await?,
+        );
+        let restarted_service = &running
+            .as_ref()
+            .ok_or_else(|| io::Error::other("restarted NPC-event owner absent"))?
+            .service;
+        let replay_joined = direct_join(restarted_service, 0x91).await?;
+        let (replay_credential, replay_member) = joined_identity(&replay_joined)?;
+        required(replay_credential == credential && replay_member == member)?;
+        let duplicate = restarted_service
+            .commit_npc_event(
+                replay_credential,
+                accepted_proposal
+                    .clone()
+                    .ok_or_else(|| io::Error::other("accepted proposal absent"))?,
+            )
+            .await?;
+        required(duplicate.status == "duplicate")?;
+        required(restarted_service.updates.borrow().clone() == committed)?;
+        Ok::<(), Error>(())
+    }
+    .await;
+
+    if let Some(mut running) = running.take()
+        && let Ok(mut exited) = running.close().await
+    {
+        let _ = exited.issuer.close_owned().await;
+    }
+    let release = local_demo_scope::release_owner(&inspector, session, active_fence).await;
+    drop(inspector);
+    let inspector_joined = timeout(Duration::from_secs(2), inspector_driver).await;
+    result?;
+    release.map_err(repository_error)?;
+    inspector_joined??;
+    Ok(())
+}
+
+fn source_line_id_for(
+    actor_id: &str,
+    npc_id: &str,
+    scene_identity: &str,
+    revision: &str,
+    typed_words: &str,
+    reply: &str,
+) -> String {
+    super::npc_event_classifier::Proposal::source_line_id(
+        actor_id,
+        npc_id,
+        scene_identity,
+        revision,
+        typed_words,
+        reply,
+    )
 }
 
 async fn exercise() -> Result<(), Error> {
