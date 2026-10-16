@@ -1017,7 +1017,7 @@ fn image_request_diagnostics(
 ) {
     let kind = request.kind.label();
     let key = key.as_str();
-    let prompt_char_count = request.prompt.as_str().chars().count();
+    let prompt_char_count = request.prompt.character_count();
     let reference_byte_lengths: Vec<usize> = request
         .references
         .iter()
