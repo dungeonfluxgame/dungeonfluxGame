@@ -1,5 +1,7 @@
 use super::super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
-use super::super::super::storyteller::{CallProfile, Expression};
+use super::super::super::storyteller::{
+    ADVENTURE_STYLE, CallProfile, Expression, ReasoningEffort, build_prompt, check_request,
+};
 use super::super::{generate, record};
 use super::*;
 use std::{path::Path, sync::Arc};
@@ -552,6 +554,50 @@ fn slot_groups_are_small_opening_first_and_never_mixed() {
     assert!(groups[1].2.contains("opening_line"));
     assert_eq!(OPENING_GROUP_DEADLINE, Duration::from_secs(12));
     assert_eq!(DEADLINE, Duration::from_secs(60));
+}
+
+#[test]
+fn merchant_opening_group_requests_pass_storyteller_validation_in_both_ratings() {
+    let tables = tables();
+    let forced = ForcedEntries::from([
+        ("location".into(), "lamplit-market".into()),
+        ("patron".into(), "merchant".into()),
+    ]);
+
+    for rating in [ContentRating::Mature, ContentRating::Restrained] {
+        let baseline = generate(&tables, 671_003, rated(rating), &forced).unwrap();
+        let planned = plan(&baseline).unwrap();
+
+        for (_, group, names) in slot_groups(&planned) {
+            let asked: Vec<&Planned<'_>> = planned
+                .iter()
+                .filter(|slot| slot.group == group && names.contains(&slot.name))
+                .collect();
+            let slots: Vec<Slot> = asked.iter().map(|slot| slot_spec(slot, &baseline)).collect();
+            let with_secret = asked.iter().any(|slot| {
+                slot.sheet.slot == "clue"
+                    || (slot.sheet.beat == "resolution" && slot.sheet.slot == "line")
+            });
+            let facts = group_facts(&baseline, &planned, with_secret, None, Some(&names));
+            let request = Expression {
+                purpose: "adventure",
+                facts: &facts,
+                slots: &slots,
+                style: ADVENTURE_STYLE,
+                profile: CallProfile {
+                    reasoning: Some(ReasoningEffort::Low),
+                    output_tokens: Some(2500),
+                    deadline: Some(DEADLINE),
+                    guidance: guidance(rating),
+                },
+            };
+
+            check_request(&request).unwrap_or_else(|error| {
+                panic!("{rating:?} {group:?} storyteller request rejected: {error}")
+            });
+            assert!(!build_prompt(&request, None).is_empty());
+        }
+    }
 }
 
 #[test]
