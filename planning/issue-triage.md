@@ -1119,3 +1119,12 @@ The final source policy was shortened after experiments to preserve the existing
 guidance headroom gate (Restrained 3,118; Mature 3,692; style 467 characters).
 Formatting/whitespace checks passed. Builds, browser play and audio audition remain
 blocked by zero free C: bytes and the stopped local server. No quality-complete claim.
+
+**Deferred nice-to-have — SAM 3.1 character localization for speech bubbles.** On
+the exact generated plate, optionally cache person boxes or masks in normalized
+source-image coordinates and use them as extra geometry to refine bubble placement.
+Map detected instances to canonical actor IDs in a separate step; localization alone
+does not establish which hero or NPC is depicted. Key results to the plate hash and
+revision, reject stale results, and measure bounded inference latency and spend. Keep
+the current head-location and bubble-placement path as the fallback. Hosted inference
+is still unverified; see [Segment Anything feasibility](segment-anything-feasibility.md).
