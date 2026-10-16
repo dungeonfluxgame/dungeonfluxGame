@@ -58,6 +58,8 @@ pub(super) struct References {
     entries: BTreeMap<Target, Entry>,
     seats: BTreeMap<u8, EntityId>,
     selected_rooms: BTreeMap<String, Target>,
+    current_room: Option<Target>,
+    current_npcs: BTreeSet<String>,
 }
 
 pub(super) struct WorkerLifetime(pub(super) Arc<Inner>);
@@ -124,14 +126,33 @@ impl References {
     }
 
     pub(super) fn take_jobs_up_to(&mut self, available: usize) -> Vec<Job> {
-        self.entries
-            .values_mut()
-            .filter(|entry| matches!(entry.status, Status::Queued))
+        let mut wanted = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry.status, Status::Queued))
+            .map(|(target, _)| {
+                let priority = if self.current_room.as_ref() == Some(target) {
+                    0
+                } else {
+                    match target {
+                        Target::Hero(_) => 1,
+                        Target::Npc(id) if self.current_npcs.contains(id) => 2,
+                        Target::Room { .. } => 3,
+                        Target::Npc(_) => 4,
+                    }
+                };
+                (priority, target.clone())
+            })
+            .collect::<Vec<_>>();
+        wanted.sort();
+        wanted
+            .into_iter()
             .take(available)
-            .map(|entry| {
+            .filter_map(|(_, target)| {
+                let entry = self.entries.get_mut(&target)?;
                 entry.status = Status::Generating;
                 diagnostic(&entry.work, "requested", None);
-                Job::Canonical(entry.work.clone())
+                Some(Job::Canonical(entry.work.clone()))
             })
             .collect()
     }
@@ -770,6 +791,12 @@ impl References {
         };
         if select {
             self.selected_rooms.insert(place.to_owned(), target.clone());
+            self.current_room = Some(target.clone());
+            self.current_npcs = model
+                .people
+                .iter()
+                .map(|person| person.id.clone())
+                .collect();
         }
         self.select(
             target,
