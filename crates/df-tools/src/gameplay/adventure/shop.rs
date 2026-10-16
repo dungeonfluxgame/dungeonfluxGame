@@ -564,6 +564,12 @@ mod tests {
             assert_eq!(item.holder_id.as_deref(), Some("shop-adventurer"));
             assert_eq!(item.owner_id.as_deref(), Some("shop-adventurer"));
             let borrowed = interaction(&given, 9, "folded-label", "take");
+            assert!(
+                journey::living_scene::last_line(borrowed.state())
+                    .unwrap()
+                    .unwrap()
+                    .contains("belongs to someone else")
+            );
             let refused = interaction_with_choices(
                 &borrowed,
                 10,
@@ -577,14 +583,7 @@ mod tests {
                     .unwrap()
                     .contains("belongs to someone else")
             );
-            let returned = interaction_with_choices(
-                &refused,
-                11,
-                "folded-label",
-                "give",
-                &[("scene-recipient", "merchant")],
-            );
-            let scene = runtime::scene(returned.state()).unwrap();
+            let scene = runtime::scene(refused.state()).unwrap();
             let label = scene
                 .setting
                 .as_ref()
@@ -597,7 +596,7 @@ mod tests {
                 .find(|thing| thing.id == "folded-label")
                 .unwrap();
             assert_eq!(label.owner_id.as_deref(), Some("merchant"));
-            assert_eq!(label.holder_id.as_deref(), Some("merchant"));
+            assert_eq!(label.holder_id.as_deref(), None);
             assert_eq!(
                 journey::living_scene::payment_amount_cp("I trade 2 GP for the travelers clothes."),
                 Some(200)
