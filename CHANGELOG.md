@@ -14,6 +14,18 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T10:06:52-04:00 to 2026-10-16T10:33:59-04:00
+
+Range: e881a61e02ec62ea0047f7f854da9e29c951997c..994b39044549af9c15682958ab83b5083c7160fd
+
+- 3ebe5e251f66ecc6352ccdc9eb62d3074d1cb705 — Record integrated dialogue timing and scene-memory design work block
+- cf2c4cc15070e107e3133422db3ef74f9ed7191a — Route character dialogue through portrait panel
+- 6c093eb85d0907097d5e14c92bb1c9bcc884a6b4 — Refresh portrait dialogue regression coverage
+- ec334de7bdc11673517ffd0eea36fcaf71af0368 — Clear portrait dialogue stage markers
+- 994b39044549af9c15682958ab83b5083c7160fd — Document portrait dialogue presentation and live retest
+
+Next block baseline: `994b39044549af9c15682958ab83b5083c7160fd`.
+
 ## 2026-10-16T06:39:31-04:00 to 2026-10-16T10:06:52-04:00
 
 Range: 4f9a7516b5f73c61818afb67dd8a5480b1431325..e881a61e02ec62ea0047f7f854da9e29c951997c
