@@ -203,6 +203,8 @@ pub(super) struct TvStage {
     /// began after: only a later line is this scene's narration.
     last_narrator_line: Cell<u64>,
     narration_floor: Cell<u64>,
+    /// Recovery context yields once this scene has a current line or check of its own.
+    scene_context_retired: Cell<bool>,
     figures: Rc<Figures>,
     roster: Element,
     gathered: Element,
@@ -1850,6 +1852,7 @@ impl TvStage {
             portraits: RefCell::new(Vec::new()),
             last_narrator_line: Cell::new(0),
             narration_floor: Cell::new(0),
+            scene_context_retired: Cell::new(false),
             figures,
             roster,
             gathered,
@@ -2360,6 +2363,9 @@ impl TvStage {
         state: LineState,
         text: &str,
     ) -> Result<bool, JsValue> {
+        if state.is_active() {
+            self.retire_scene_context("successor")?;
+        }
         let scene = self
             .root
             .get_attribute("data-scene-key")
@@ -2573,10 +2579,9 @@ impl TvStage {
         self.root.set_attribute("data-scene-swap", tick)
     }
 
-    /// The container for recovery controls; it is emptied and refilled on every render.
-    /// Silent context on a late join sits apart from the single active subtitle lane.
+    /// Silent late-join context is a fallback until the scene's current line or check claims it.
     pub(super) fn set_scene_context(&self, text: &str) -> Result<(), JsValue> {
-        if text.trim().is_empty() {
+        if text.trim().is_empty() || self.scene_context_retired.get() {
             return Ok(());
         }
         let context = match self.root.query_selector(".tv-scene-context")? {
@@ -2639,43 +2644,50 @@ impl TvStage {
         Ok(())
     }
 
+    fn retire_scene_context(&self, reason: &'static str) -> Result<(), JsValue> {
+        self.scene_context_retired.set(true);
+        let Some(context) = self.root.query_selector(".tv-scene-context")? else {
+            return Ok(());
+        };
+        let identity = context
+            .get_attribute("data-component-id")
+            .and_then(|id| id.parse::<u64>().ok())
+            .zip(context.get_attribute("data-component-scene"));
+        if let Some((id, scene)) = &identity {
+            super::presentation_timing::component(
+                Some(&context),
+                df_observe::presentation::PresentationComponent::SceneCard,
+                *id,
+                scene,
+                df_observe::presentation::ComponentPhase::Closing,
+                reason,
+                0,
+            );
+        }
+        context.remove();
+        if let Some((id, scene)) = identity {
+            super::presentation_timing::component(
+                Some(&context),
+                df_observe::presentation::PresentationComponent::SceneCard,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                reason,
+                0,
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn dock(&self) -> &Element {
         &self.dock
     }
 
     pub(super) fn update(&self, model: &TvModel) -> Result<(), JsValue> {
         let lobby = model.mode == TvMode::Lobby;
-        if self.root.get_attribute("data-scene-key").as_deref() != Some(&model.scene_key)
-            && let Some(context) = self.root.query_selector(".tv-scene-context")?
-        {
-            if let (Some(id), Some(scene)) = (
-                context
-                    .get_attribute("data-component-id")
-                    .and_then(|id| id.parse::<u64>().ok()),
-                context.get_attribute("data-component-scene"),
-            ) {
-                super::presentation_timing::component(
-                    Some(&context),
-                    df_observe::presentation::PresentationComponent::SceneCard,
-                    id,
-                    &scene,
-                    df_observe::presentation::ComponentPhase::Closing,
-                    "scene-change",
-                    0,
-                );
-                context.remove();
-                super::presentation_timing::component(
-                    Some(&context),
-                    df_observe::presentation::PresentationComponent::SceneCard,
-                    id,
-                    &scene,
-                    df_observe::presentation::ComponentPhase::Hidden,
-                    "scene-change",
-                    0,
-                );
-            } else {
-                context.remove();
-            }
+        if self.root.get_attribute("data-scene-key").as_deref() != Some(&model.scene_key) {
+            self.retire_scene_context("scene-change")?;
+            self.scene_context_retired.set(false);
         }
         self.root
             .set_attribute("data-scene-key", &model.scene_key)?;
@@ -3028,6 +3040,7 @@ impl TvStage {
         settled: bool,
     ) -> Result<(), JsValue> {
         self.figures.begin_check(check, settled)?;
+        self.retire_scene_context("successor")?;
         self.root.set_attribute("data-check-active", "")?;
         self.root
             .set_attribute("data-check-sequence", &check.sequence.to_string())?;
@@ -3048,6 +3061,12 @@ impl TvStage {
             self.root.remove_attribute("data-check-active")?;
             self.root.remove_attribute("data-check-sequence")?;
         }
+        refresh_timing_visibility(&self.root);
+        Ok(())
+    }
+
+    pub(super) fn close_check(&self, sequence: u64) -> Result<(), JsValue> {
+        self.figures.close_check(sequence)?;
         refresh_timing_visibility(&self.root);
         Ok(())
     }
@@ -3074,6 +3093,9 @@ impl TvStage {
         text: &str,
         state: LineState,
     ) -> Result<(), JsValue> {
+        if state.is_active() {
+            self.retire_scene_context("successor")?;
+        }
         // A predecessor closes after the successor may already own the named lane.
         // Its terminal event must not replace the successor's text, identity or visibility.
         if matches!(
@@ -4188,7 +4210,7 @@ mod tests {
     }
 
     #[test]
-    fn late_join_context_is_separate_from_the_active_narrator_caption() {
+    fn late_join_context_ignores_old_terminal_lines_and_yields_to_current_narration() {
         let (parent, stage) = mounted_stage();
         stage
             .set_scene_context("A letter lies on the table.")
@@ -4213,6 +4235,26 @@ mod tests {
         assert_eq!(
             stage.narration.text_content().as_deref(),
             Some("A reply has arrived.")
+        );
+        stage
+            .narrator_line(2, LineState::Opening, "The current scene speaks.")
+            .unwrap();
+        assert!(
+            stage
+                .root
+                .query_selector(".tv-scene-context")
+                .unwrap()
+                .is_none()
+        );
+        stage
+            .set_scene_context("A letter lies on the table.")
+            .unwrap();
+        assert!(
+            stage
+                .root
+                .query_selector(".tv-scene-context")
+                .unwrap()
+                .is_none()
         );
         finish_stage(parent, stage);
     }

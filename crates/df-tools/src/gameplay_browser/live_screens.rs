@@ -1114,6 +1114,149 @@ mod tests {
     };
 
     #[test]
+    fn reconnect_context_yields_to_retained_courier_and_stays_retired_through_a_fresh_check() {
+        use crate::presentation::{ActorSlot, SceneFamily, StageActor};
+        use crate::stage_machines::LineState;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let client = super::super::new_client(&document, parent.clone(), "display").unwrap();
+        let scene = rpc::GameplayScene {
+            title: "reconnect-scene".into(),
+            ..Default::default()
+        };
+        let journey = rpc::JourneyView::default();
+        let input = SceneInput {
+            phase: rpc::JourneyPhase::Dialogue,
+            narration: "A rain-soaked wharf stretches beside the sealed gate.",
+            scene: &scene,
+            journey: &journey,
+            offers: &[],
+            clue: "",
+        };
+        super::render(&client, &parent, &input).unwrap();
+        {
+            let state = client.borrow();
+            let stage = state.live.tv.as_ref().unwrap();
+            assert!(
+                stage
+                    .root()
+                    .query_selector(".tv-scene-context")
+                    .unwrap()
+                    .is_some()
+            );
+            stage
+                .lower_third(7, "Courier", "Keep the letter safe.", LineState::Lingering)
+                .unwrap();
+            assert!(
+                stage
+                    .root()
+                    .query_selector(".tv-scene-context")
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                stage
+                    .root()
+                    .query_selector(".tv-lower")
+                    .unwrap()
+                    .unwrap()
+                    .text_content()
+                    .unwrap()
+                    .contains("Keep the letter safe.")
+            );
+        }
+        client.borrow_mut().generation += 1;
+        super::render(&client, &parent, &input).unwrap();
+        {
+            let state = client.borrow();
+            let stage = state.live.tv.as_ref().unwrap();
+            assert!(
+                stage
+                    .root()
+                    .query_selector(".tv-scene-context")
+                    .unwrap()
+                    .is_none()
+            );
+            stage
+                .figures()
+                .update(
+                    &[StageActor {
+                        actor_id: "hero-brakka".into(),
+                        slot: ActorSlot::Hero(0),
+                        name: "Brakka".into(),
+                        role: "hero".into(),
+                        sprite: String::new(),
+                        portrait: String::new(),
+                        hit_points: None,
+                        speaking: false,
+                        down: false,
+                        live_sprite: None,
+                    }],
+                    "reconnect-scene",
+                    "",
+                    SceneFamily::Exterior,
+                    super::super::live_stage::StageMode::Scene,
+                )
+                .unwrap();
+            stage
+                .begin_check(
+                    &super::super::live_stage::CheckDisplay {
+                        sequence: 8,
+                        hero_name: "Brakka".into(),
+                        intention: "Search beside the sealed gate".into(),
+                        ability_skill: "Wisdom (Perception)".into(),
+                        faces: vec![(12, true)],
+                        roll_mode: 0,
+                        modifier: 2,
+                        total: 14,
+                        succeeded: true,
+                        finding: "A trail leads to the wharf.".into(),
+                    },
+                    false,
+                )
+                .unwrap();
+            stage.reveal_check(8).unwrap();
+            stage
+                .narrator_line(
+                    8,
+                    LineState::Opening,
+                    "Success. A trail leads to the wharf.",
+                )
+                .unwrap();
+            assert!(
+                stage
+                    .root()
+                    .query_selector(".tv-check-result[data-check-phase=result]")
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                stage
+                    .root()
+                    .query_selector(".tv-scene-context")
+                    .unwrap()
+                    .is_none()
+            );
+            stage.finish_check(8).unwrap();
+            stage
+                .narrator_line(9, LineState::Opening, "The table considers its next move.")
+                .unwrap();
+            stage.set_scene_context(input.narration).unwrap();
+            assert!(
+                stage
+                    .root()
+                    .query_selector(".tv-scene-context")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let stage = client.borrow_mut().live.tv.take().unwrap();
+        stage.dispose().unwrap();
+        parent.remove();
+    }
+
+    #[test]
     fn away_reclaim_buttons_are_bound_again_after_join_redraw() {
         let document = web_sys::window().unwrap().document().unwrap();
         let root = document.create_element("section").unwrap();

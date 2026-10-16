@@ -1920,7 +1920,9 @@ fn line_command(
                 LineState::Opening if !line.check_settled => stage.begin_check(check, false)?,
                 LineState::Lingering if line.check_settled => stage.begin_check(check, true)?,
                 LineState::Lingering => stage.reveal_check(check.sequence)?,
-                LineState::Closing | LineState::Done if interrupted || line.check_settled => {
+                LineState::Closing if interrupted => stage.finish_check(check.sequence)?,
+                LineState::Closing if line.check_settled => stage.close_check(check.sequence)?,
+                LineState::Done if interrupted || line.check_settled => {
                     stage.finish_check(check.sequence)?
                 }
                 LineState::Cancelled => stage.finish_check(check.sequence)?,
@@ -1989,19 +1991,14 @@ fn line_command(
     if let Some(sequence) = line.check_sequence {
         let state_ref = client.borrow();
         if let Some(stage) = state_ref.live.tv.as_ref() {
-            if line.check_roll.is_none()
-                && matches!(
-                    state,
-                    // Lingering is emitted only after the clip has ended (or failed) and the
-                    // line's minimum reading time has elapsed. Finish managed cards here so a
-                    // final check does not depend on the conductor's ordinary final-linger cap.
-                    LineState::Lingering
-                        | LineState::Closing
-                        | LineState::Done
-                        | LineState::Cancelled
-                )
-            {
-                stage.finish_check(sequence)?;
+            if line.check_roll.is_none() {
+                match state {
+                    // Both protected gates have finished. The existing Closing -> Done clock
+                    // owns the opacity fade and retirement; no separate removal timer exists.
+                    LineState::Lingering | LineState::Closing => stage.close_check(sequence)?,
+                    LineState::Done | LineState::Cancelled => stage.finish_check(sequence)?,
+                    _ => {}
+                }
             }
             mark_check_voice_line(stage.root(), id, sequence, state, line);
         }
@@ -2774,6 +2771,30 @@ mod tests {
                 .unwrap()
                 .0
         }
+
+        fn assert_closing_fade(&self, sequence: u64) {
+            let panel = self
+                .panel(sequence)
+                .expect("exit fade retains the owned card");
+            assert_eq!(
+                panel.get_attribute("data-check-phase").as_deref(),
+                Some("closing")
+            );
+            let style = web_sys::window()
+                .unwrap()
+                .get_computed_style(&panel)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                style.get_property_value("transition-property").unwrap(),
+                "opacity"
+            );
+            assert_eq!(
+                style.get_property_value("transition-duration").unwrap(),
+                "0.35s"
+            );
+            assert_eq!(style.get_property_value("transform").unwrap(), "none");
+        }
     }
 
     impl Drop for CheckDom {
@@ -2793,6 +2814,19 @@ mod tests {
             check_voice_script_line(&check, std::slice::from_ref(&check.voice), false),
         ];
         let mut fixture = CheckDom::new(script, true, 1_000, false);
+        let entering = web_sys::window()
+            .unwrap()
+            .get_computed_style(&fixture.panel(40).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            entering.get_property_value("animation-name").unwrap(),
+            "df-check-card-in"
+        );
+        assert_eq!(
+            entering.get_property_value("animation-duration").unwrap(),
+            "0.25s"
+        );
         fixture.run_to(5_150);
         assert_eq!(
             fixture
@@ -2815,6 +2849,8 @@ mod tests {
         fixture.run_to(opened + u64::from(budget) + 200);
         fixture.assert_result_visible(40);
         fixture.run_to(opened + u64::from(budget) + 300);
+        fixture.assert_closing_fade(40);
+        fixture.run_to(opened + u64::from(budget) + 750);
         assert!(fixture.panel(40).is_none());
         assert!(
             fixture.at(40, LineState::Lingering, false)
@@ -2853,7 +2889,7 @@ mod tests {
             fixture.assert_result_visible(50);
             assert!(fixture.panel(52).is_none());
             fixture.run_to(finish + 100);
-            assert!(fixture.panel(50).is_none());
+            fixture.assert_closing_fade(50);
             assert_eq!(
                 fixture
                     .panel(52)
@@ -2894,7 +2930,7 @@ mod tests {
             let mut fixture = CheckDom::new(script, sound, 1_000, failed);
             fixture.run_to(10_600);
             fixture.assert_result_visible(60);
-            fixture.run_to(11_000);
+            fixture.run_to(11_200);
             assert!(fixture.panel(60).is_none());
             assert!(fixture.plays.is_empty());
             assert!(
@@ -2918,7 +2954,7 @@ mod tests {
         fixture.run_to(4_950);
         fixture.assert_result_visible(70);
         fixture.run_to(5_000);
-        assert!(fixture.panel(70).is_none());
+        fixture.assert_closing_fade(70);
         assert!(fixture.plays.is_empty());
 
         let (first, first_payload) = check_pair(72);
@@ -2947,9 +2983,74 @@ mod tests {
         assert!(fixture.panel(72).is_none());
         fixture.assert_result_visible(74);
         fixture.apply(old);
+        {
+            let state = fixture.client.borrow();
+            let stage = state.live.tv.as_ref().unwrap();
+            stage.close_check(72).unwrap();
+            stage.finish_check(72).unwrap();
+        }
         fixture.assert_result_visible(74);
         fixture.run_to(10_050);
+        fixture.assert_closing_fade(74);
+        fixture
+            .client
+            .borrow()
+            .live
+            .tv
+            .as_ref()
+            .unwrap()
+            .reveal_check(74)
+            .unwrap();
+        fixture.assert_closing_fade(74);
+        fixture.run_to(10_450);
         assert!(fixture.panel(74).is_none());
+    }
+
+    #[test]
+    fn managed_check_dom_interrupted_roll_is_removed_without_revealing_its_finding() {
+        let (check, payload) = check_pair(76);
+        let mut fixture = CheckDom::new(
+            vec![check_roll_script_line(&check, payload, false)],
+            false,
+            1_000,
+            false,
+        );
+        let panel = fixture.panel(76).unwrap();
+        assert_eq!(
+            panel.get_attribute("data-check-phase").as_deref(),
+            Some("roll")
+        );
+        let finding = panel.query_selector(".tv-check-finding").unwrap().unwrap();
+        assert_eq!(
+            web_sys::window()
+                .unwrap()
+                .get_computed_style(&finding)
+                .unwrap()
+                .unwrap()
+                .get_property_value("visibility")
+                .unwrap(),
+            "hidden"
+        );
+        let commands = fixture.conductor.install_beat(
+            100,
+            vec![narration_line(
+                "An outcome interrupts the roll.",
+                &[],
+                false,
+            )],
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, Command::Line {
+            state: LineState::Closing, interrupted: true, detail: Detail::Line(line), ..
+        } if line.check_sequence == Some(76)))
+        );
+        fixture.now = 100;
+        fixture.apply(commands);
+        assert!(fixture.panel(76).is_none());
+        assert!(!panel.is_connected());
+        assert!(fixture.plays.is_empty());
     }
 
     #[test]

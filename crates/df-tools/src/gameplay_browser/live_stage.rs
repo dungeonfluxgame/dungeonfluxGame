@@ -1105,7 +1105,7 @@ impl Figures {
             if let Some(panel) = figure.bubbles.query_selector(&format!(
                 ".tv-check-result[data-check-sequence=\"{sequence}\"]"
             ))? {
-                if panel.get_attribute("data-check-phase").as_deref() != Some("result") {
+                if panel.get_attribute("data-check-phase").as_deref() == Some("roll") {
                     panel.set_attribute("data-check-phase", "result")?;
                     let id = panel
                         .get_attribute("data-component-id")
@@ -1138,6 +1138,31 @@ impl Figures {
             ))? {
                 panel.remove();
                 self.report_removed_component(&panel, 0, "read");
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn close_check(&self, sequence: u64) -> Result<(), JsValue> {
+        for figure in &self.figures {
+            if let Some(panel) = figure.bubbles.query_selector(&format!(
+                ".tv-check-result[data-check-sequence=\"{sequence}\"]"
+            ))? && panel.get_attribute("data-check-phase").as_deref() != Some("closing")
+            {
+                panel.set_attribute("data-check-phase", "closing")?;
+                let id = panel
+                    .get_attribute("data-component-id")
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .unwrap_or(sequence);
+                super::presentation_timing::component(
+                    Some(&panel),
+                    PresentationComponent::CheckCard,
+                    id,
+                    &self.scene.borrow(),
+                    ComponentPhase::Closing,
+                    "read",
+                    0,
+                );
             }
         }
         Ok(())
