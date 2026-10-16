@@ -220,7 +220,18 @@ mkdir -p "$TMPDIR" "$PLAY"
 chmod 700 "$PLAY"
 mkdir -p "$RUN_DIR"
 chmod 700 "$RUN_DIR"
-rm -f "$STOP_FILE"
+# A previous interrupted run may leave the marker as an empty directory (some
+# Windows/MSYS file operations create it that way). Remove only that directory;
+# never recurse through the run directory. A non-empty directory is left intact
+# and reported so an operator can inspect it.
+if test -d "$STOP_FILE" && test ! -L "$STOP_FILE"; then
+  if ! rmdir "$STOP_FILE"; then
+    echo "stop marker is a non-empty directory: $STOP_FILE" >&2
+    exit 1
+  fi
+elif test -e "$STOP_FILE" || test -L "$STOP_FILE"; then
+  rm -f "$STOP_FILE"
+fi
 
 # Approach model: take only its credential from the ignored .env, never printing it.
 if test -z "${DF_JEV_API_KEY:-}" && test -f "$ROOT/.env"; then
