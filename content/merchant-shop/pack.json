@@ -206,7 +206,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",
@@ -256,7 +256,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",
@@ -306,7 +306,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",
@@ -356,7 +356,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",
@@ -406,7 +406,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",
@@ -456,7 +456,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",
@@ -506,7 +506,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",
@@ -556,7 +556,7 @@
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
       "asset": "assets/ui/generated/scene-mareks-cloth-shop",
-      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
         "name": "Marek’s Cloth Shop",

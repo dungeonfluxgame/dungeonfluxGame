@@ -2105,12 +2105,17 @@ fn validate_scenes(scenes: &[Scene]) -> Result<(), PackError> {
                 expected: "setting with art depicting its kind",
             });
         }
-        if !served_asset(&scene.asset)
-            || (!scene.speaker_portrait.is_empty() && !served_asset(&scene.speaker_portrait))
-        {
+        if !served_asset(&scene.asset) {
             return Err(cross_reference(
                 FILE,
                 &format!("{at}.asset"),
+                CrossRefReason::AssetNotServed,
+            ));
+        }
+        if !scene.speaker_portrait.is_empty() && !served_asset(&scene.speaker_portrait) {
+            return Err(cross_reference(
+                FILE,
+                &format!("{at}.speaker_portrait"),
                 CrossRefReason::AssetNotServed,
             ));
         }

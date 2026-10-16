@@ -890,5 +890,13 @@
       "shop"
     ],
     "prompt": "Photograph of a practical medieval cloth shop interior, afternoon window light, wooden counter along the rear, wool jackets on a left wall rack, cloaks along the right wall, fitting curtain and mirror, an open front street door. Natural textures and realistic camera optics. No people, no letters, no illustration or painterly rendering."
+  },
+  {
+    "art_key": "marek-documentary-portrait",
+    "file_stem": "portrait-patron-merchant-documentary-photo",
+    "kind": "portrait",
+    "aspect": "2:3",
+    "used_by": "Standalone merchant-shop canonical Marek portrait, approved committed photo",
+    "prompt": "Approved documentary portrait photograph of Marek, the cloth merchant. Preserve this canonical face, hair, age and costume identity."
   }
 ]
