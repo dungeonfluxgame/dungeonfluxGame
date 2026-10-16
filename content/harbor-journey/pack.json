@@ -432,6 +432,7 @@
       "name": "Courier",
       "role": "a frightened courier who needs the heroes' help to deliver a sealed packet",
       "voice": "hurried and anxious",
+      "identity_reply": "You can call me the courier. My name can wait.",
       "gender": "he",
       "age": "young"
     },

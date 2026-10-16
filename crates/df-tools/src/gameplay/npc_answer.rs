@@ -151,6 +151,39 @@ fn authored(context: &NpcReplyContext, subject: QuestionSubject) -> Option<(Stri
     }
 }
 
+/// A routing label is not a personal-name fact. Authored knowledge keeps its existing trust
+/// gate; a profile may separately supply an exact public alias, name or deferral.
+pub(super) fn identity(context: &NpcReplyContext) -> Option<(String, String)> {
+    if context
+        .withheld_subjects
+        .contains(&QuestionSubject::Identity)
+        || context.turn.as_ref().is_some_and(|turn| {
+            turn.dossier
+                .withheld_subjects
+                .contains(&QuestionSubject::Identity)
+        })
+    {
+        return None;
+    }
+    authored(context, QuestionSubject::Identity).or_else(|| {
+        let text = context.identity_reply.as_ref()?;
+        let forbidden = context.facts["forbidden"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str);
+        let leaks = forbidden
+            .chain(context.private_terms.iter().map(String::as_str))
+            .any(|term| crate::gameplay::adventure::dossier::mentions_term(text, term))
+            || context
+                .turn
+                .as_ref()
+                .is_some_and(|turn| turn.withheld.leaks(text));
+        (!text.trim().is_empty() && !leaks)
+            .then(|| (text.clone(), "identity:public_reply".to_owned()))
+    })
+}
+
 fn ordinary_part(context: &NpcReplyContext, part: &str) -> Vec<(String, String)> {
     let Some(turn) = context.turn.as_ref() else {
         let part = part.to_lowercase();
@@ -225,17 +258,18 @@ pub(super) fn prepare(context: &NpcReplyContext, approach: Approach) -> Option<A
                 withheld = true;
                 continue;
             }
-            Some(QuestionSubject::Identity) => {
-                vec![(format!("I'm {}.", context.speaker), "identity".to_owned())]
-            }
-            Some(subject) => authored(context, subject)
-                .map(|answer| vec![answer])
-                .unwrap_or_else(|| {
-                    vec![(
-                        "I can't give you a clear answer to that.".to_owned(),
-                        String::new(),
-                    )]
-                }),
+            Some(subject) => (if subject == QuestionSubject::Identity {
+                identity(context)
+            } else {
+                authored(context, subject)
+            })
+            .map(|answer| vec![answer])
+            .unwrap_or_else(|| {
+                vec![(
+                    "I can't give you a clear answer to that.".to_owned(),
+                    String::new(),
+                )]
+            }),
             None => ordinary_part(context, &part),
         };
         for (text, key) in answer {

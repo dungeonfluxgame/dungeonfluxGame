@@ -226,6 +226,7 @@ pub(super) struct NpcReplyContext {
     known_names: Vec<String>,
     /// The public appearance facts the hero's own sheet lets another character perceive.
     hero_visible: Value,
+    identity_reply: Option<String>,
     withheld_subjects: Vec<QuestionSubject>,
     private_reply: bool,
     private_terms: Vec<String>,
@@ -733,6 +734,11 @@ impl NpcReplyContext {
             public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
             hero_visible: visible_hero(hero),
+            identity_reply: story
+                .speakers
+                .iter()
+                .find(|profile| profile.name == actor.name)
+                .and_then(|profile| profile.identity_reply.clone()),
             withheld_subjects: turn_dossier.withheld_subjects.clone(),
             private_reply: false,
             private_terms: Vec::new(),
@@ -913,6 +919,7 @@ impl NpcReplyContext {
             public_scene: player.narration.clone(),
             known_names: scene_names(journey, player.scene.as_ref()),
             hero_visible: visible_hero(hero),
+            identity_reply: profile.and_then(|profile| profile.identity_reply.clone()),
             withheld_subjects: profile
                 .map(|profile| profile.withheld_subjects.clone())
                 .unwrap_or_default(),
@@ -2112,6 +2119,7 @@ mod tests {
                     age: None,
                     role: "a frightened courier carrying a sealed packet".to_owned(),
                     voice: "hurried and anxious".to_owned(),
+                    identity_reply: None,
                     withheld_subjects: Vec::new(),
                 },
                 SpeakerProfile {
@@ -2120,6 +2128,7 @@ mod tests {
                     age: None,
                     role: "a hostile bandit fighting the heroes".to_owned(),
                     voice: "sneering and rough".to_owned(),
+                    identity_reply: None,
                     withheld_subjects: Vec::new(),
                 },
             ],
@@ -2570,6 +2579,15 @@ mod tests {
         let pack: PackFile =
             serde_json::from_str(include_str!("../../../../content/harbor-journey/pack.json"))
                 .unwrap();
+        harbor_question_from_pack(&pack, target, words, told)
+    }
+
+    fn harbor_question_from_pack(
+        pack: &PackFile,
+        target: &str,
+        words: &str,
+        told: bool,
+    ) -> NpcReplyContext {
         let scene = pack
             .scenes
             .iter()
@@ -2590,7 +2608,7 @@ mod tests {
             &projected,
             member(1),
             words,
-            &StoryFacts::from_pack(&pack),
+            &StoryFacts::from_pack(pack),
             &SocialLedger::none(),
             "DialogueSeal",
             Some(target),
@@ -2632,11 +2650,101 @@ mod tests {
             .unwrap()
             .to_owned();
         let text = voice.converse(context, &TableLog::new()).await.unwrap();
-        assert_eq!(text, format!("I'm Courier. {scripted}"));
+        assert_eq!(
+            text,
+            format!("You can call me the courier. My name can wait. {scripted}")
+        );
         assert_eq!(endpoint.connections(), 0);
         if let Err(error) = std::fs::remove_dir_all(cache) {
             assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
         }
+    }
+
+    #[tokio::test]
+    async fn harbor_identity_uses_authored_public_speech_instead_of_the_scene_label() {
+        let source: PackFile =
+            serde_json::from_str(include_str!("../../../../content/harbor-journey/pack.json"))
+                .unwrap();
+        for (identity_reply, expected) in [
+            (
+                source.speakers[0].identity_reply.clone(),
+                "You can call me the courier. My name can wait.",
+            ),
+            (Some("I'm Mara.".to_owned()), "I'm Mara."),
+            (None, "I can't give you a clear answer to that."),
+            (
+                Some("My name is Vell.".to_owned()),
+                "I can't give you a clear answer to that.",
+            ),
+        ] {
+            let mut pack = source.clone();
+            pack.speakers[0].identity_reply = identity_reply;
+            let context =
+                harbor_question_from_pack(&pack, "courier", "courier, who are you?", true);
+            assert_eq!(context.actor_id, "courier");
+            assert_eq!(context.speaker, "Courier");
+            let log = TableLog::new();
+            let exchange = NpcVoice::silent()
+                .converse_report(context, &log)
+                .await
+                .unwrap();
+            assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
+            assert_eq!(exchange.text, expected);
+            assert!(!exchange.from_model);
+            assert_eq!(exchange.fallback, None);
+            assert!(log.lines().iter().any(|line| {
+                line.role == rpc::TableRole::Npc as i32
+                    && line.actor_id == "courier"
+                    && line.speaker == "Courier"
+                    && line.text == expected
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn harbor_guarded_identity_closes_pending_and_preserves_other_authorized_clauses() {
+        let mut pack: PackFile =
+            serde_json::from_str(include_str!("../../../../content/harbor-journey/pack.json"))
+                .unwrap();
+        pack.speakers[0].identity_reply = Some("I'm Mara.".to_owned());
+        pack.speakers[0]
+            .withheld_subjects
+            .push(QuestionSubject::Identity);
+        let log = TableLog::new();
+        let context = harbor_question_from_pack(&pack, "courier", "courier, who are you?", false);
+        let exchange = {
+            let _pending = log.reply_pending(&context.speaker);
+            NpcVoice::silent()
+                .converse_report(context, &log)
+                .await
+                .unwrap()
+        };
+        assert_eq!(exchange.outcome, ExchangeOutcome::Withheld);
+        assert!(exchange.text.is_empty() && !exchange.from_model);
+        assert_eq!(exchange.fallback, None);
+        assert!(
+            log.lines().is_empty(),
+            "silence has no NPC caption or TTS source"
+        );
+        let mut shown = view("", "Courier");
+        log.attach(&mut shown);
+        let Some(rpc::view_message::Audience::Player(player)) = shown.audience else {
+            panic!("player")
+        };
+        assert!(player.journey.unwrap().reply_speaker.is_empty());
+        let context =
+            harbor_question_from_pack(&pack, "courier", "Who are you and what happened?", false);
+        let scripted = context.facts["npc_current_scripted_line"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let compound = NpcVoice::silent()
+            .converse_report(context, &log)
+            .await
+            .unwrap();
+        assert_eq!(compound.outcome, ExchangeOutcome::Spoken);
+        assert_eq!(compound.text, scripted);
+        assert!(!compound.text.contains("Mara"));
     }
 
     #[tokio::test]
@@ -2787,7 +2895,10 @@ mod tests {
         );
         let public = voice.converse_report(public_context, &log).await.unwrap();
         assert!(!public.private);
-        assert_eq!(public.text, "I'm Courier.");
+        assert_eq!(
+            public.text,
+            "You can call me the courier. My name can wait."
+        );
         assert!(
             log.lines()
                 .iter()

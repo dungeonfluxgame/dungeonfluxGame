@@ -725,7 +725,7 @@ impl Age {
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SpeakerProfile {
-    /// Equals the `speaker` of the scenes this character speaks in.
+    /// Equals the scene speaker label; it does not authorize disclosure of a personal name.
     pub(super) name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) gender: Option<Gender>,
@@ -735,6 +735,9 @@ pub(super) struct SpeakerProfile {
     pub(super) role: String,
     /// How the character sounds, in a short phrase.
     pub(super) voice: String,
+    /// Exact public answer to an identity question: a name, alias, role or authored deferral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) identity_reply: Option<String>,
     /// Story-authored refusal subjects; no motive or employer fact is implied by withholding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) withheld_subjects: Vec<super::adventure::dossier::QuestionSubject>,
@@ -1718,6 +1721,15 @@ fn validate_speaking_notes(pack: &PackFile) -> Result<(), PackError> {
             1,
             96,
         )?;
+        if let Some(reply) = &speaker.identity_reply {
+            text(
+                FILE,
+                &format!("speakers[{index}].identity_reply"),
+                reply,
+                1,
+                120,
+            )?;
+        }
     }
     require_unique(
         FILE,

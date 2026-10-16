@@ -97,8 +97,7 @@ pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
     let body = question_body(context);
     let words = body.as_str();
     if words.contains("your name") || words.starts_with("who are you") {
-        let answer = format!("I'm {}, the {}.", context.speaker, turn.dossier.role_label);
-        return (!turn.withheld.leaks(&answer)).then_some(answer);
+        return super::answer::identity(context).map(|(text, _)| text);
     }
     // A named object takes precedence over a person alias embedded in its name.
     let named_thing = model
@@ -143,7 +142,7 @@ pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
                         .is_some_and(|turn| is_speaker(people[0], &turn.dossier))
                 {
                     if words.contains("name") || words.contains("who are you") {
-                        format!("I'm {}, the {}.", context.speaker, people[0].role)
+                        return super::answer::identity(context).map(|(text, _)| text);
                     } else {
                         return None;
                     }

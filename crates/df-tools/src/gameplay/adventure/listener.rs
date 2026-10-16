@@ -81,6 +81,7 @@ pub(super) fn speakers(
             name: field("patron.first"),
             role: format!("{} who asks the heroes for help", field("patron.desc")),
             voice: field("patron.voice"),
+            identity_reply: None,
             withheld_subjects: Vec::new(),
         },
         SpeakerProfile {
@@ -92,6 +93,7 @@ pub(super) fn speakers(
                 field("contact.desc")
             ),
             voice: field("contact.voice"),
+            identity_reply: None,
             withheld_subjects: Vec::new(),
         },
     ];
@@ -105,6 +107,7 @@ pub(super) fn speakers(
                 antagonist.noun
             ),
             voice: antagonist.voice.clone(),
+            identity_reply: None,
             withheld_subjects: Vec::new(),
         });
     }

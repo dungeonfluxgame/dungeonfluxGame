@@ -2545,6 +2545,71 @@ async fn question_fact_references_require_the_exact_fact_and_its_current_audienc
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn personal_name_fact_uses_its_existing_trust_gate_and_identity_withholding_wins() {
+    use super::{
+        adventure::dossier::{Knowledge, QuestionAuthority, QuestionSubject},
+        npc_reply::ExchangeOutcome,
+    };
+    for (friendly, exchanges, withheld, expected) in [
+        (false, 3, false, "Call me the courier for now."),
+        (true, 1, false, "Call me the courier for now."),
+        (true, 3, false, "My name is Mara."),
+        (true, 3, true, ""),
+    ] {
+        let mut adventure = adventure(1);
+        let dossier = &mut adventure.dossiers[0];
+        dossier.starting_attitude = if friendly {
+            Attitude::Friendly
+        } else {
+            Attitude::Indifferent
+        };
+        dossier
+            .knowledge
+            .says_freely
+            .retain(|fact| fact.source != "personal_name_line");
+        dossier.knowledge.says_when_trusted.push(Knowledge {
+            topic: Topic::WhoAreYou,
+            source: "personal_name".to_owned(),
+            id: "identity:trusted_name".to_owned(),
+            text: "My name is Mara.".to_owned(),
+            about: Some(dossier.npc_id.clone()),
+        });
+        dossier.question_answers.insert(
+            QuestionSubject::Identity,
+            QuestionAuthority::Knowledge("identity:trusted_name".to_owned()),
+        );
+        let profile = adventure
+            .pack
+            .speakers
+            .iter_mut()
+            .find(|profile| profile.name == dossier.name)
+            .unwrap();
+        profile.identity_reply = Some("Call me the courier for now.".to_owned());
+        if withheld {
+            profile.withheld_subjects.push(QuestionSubject::Identity);
+        }
+        let ledger = SocialLedger::open(adventure.dossiers.clone(), "name-gate", None).unwrap();
+        let mut ask = context(&adventure, &ledger, SceneKey::Opening, "What is your name?");
+        ask.turn.as_mut().unwrap().conversation.exchange = exchanges;
+        let exchange = NpcVoice::silent()
+            .converse_in_character(ask, &TableLog::new())
+            .await
+            .unwrap();
+        assert_eq!(exchange.text, expected);
+        assert_eq!(
+            exchange.outcome,
+            if withheld {
+                ExchangeOutcome::Withheld
+            } else {
+                ExchangeOutcome::Spoken
+            }
+        );
+        assert!(!exchange.from_model);
+        assert_eq!(exchange.fallback, None);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn compound_identity_keeps_the_other_known_answer_and_does_not_invent_a_private_name() {
     let adventure = adventure(1);
     let ledger = SocialLedger::open(adventure.dossiers.clone(), "bounded-identity", None).unwrap();
@@ -2699,4 +2764,5 @@ fn old_dossiers_and_speakers_default_to_no_new_fact_or_disclosure_authority() {
         serde_json::from_value(json!({"name": "Speaker", "role": "contact", "voice": "plain"}))
             .unwrap();
     assert!(speaker.withheld_subjects.is_empty());
+    assert!(speaker.identity_reply.is_none());
 }

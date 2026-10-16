@@ -1241,17 +1241,20 @@ fn roll_one(
             require(context.render(&profile.text), npc, name)?,
         ))
     };
-    let question_answers = knowledge
+    let mut question_answers = BTreeMap::from([(
+        QuestionSubject::Identity,
+        QuestionAuthority::Knowledge("identity:public_personal_name".to_owned()),
+    )]);
+    if let Some(item) = knowledge
         .says_freely
         .iter()
         .find(|item| item.source == "motive_line")
-        .map(|item| {
-            BTreeMap::from([(
-                QuestionSubject::Motive,
-                QuestionAuthority::Knowledge(item.id.clone()),
-            )])
-        })
-        .unwrap_or_default();
+    {
+        question_answers.insert(
+            QuestionSubject::Motive,
+            QuestionAuthority::Knowledge(item.id.clone()),
+        );
+    }
     Ok(Dossier {
         npc_id: member.id.clone(),
         name: member.name.clone(),
@@ -1520,6 +1523,14 @@ fn knowledge_tiers(
         id: String::new(),
         about: None,
     }];
+    // Generated cast names are the first names the party hears, unlike a fixed scene label.
+    says_freely.push(Knowledge {
+        topic: Topic::WhoAreYou,
+        source: "personal_name_line".to_owned(),
+        text: format!("I'm {}.", context.member.name),
+        id: "identity:public_personal_name".to_owned(),
+        about: Some(context.member.id.clone()),
+    });
     let free_lines = [
         (
             Topic::WhoAreYou,

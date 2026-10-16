@@ -319,7 +319,7 @@ Use names only to disambiguate. Do not recite a dossier line.\n\
 c. facts.now is current and outranks older facts. For a direct follow-up, use already_said and \
 recent_exchange to resolve what was established. Mention the known workplace \
 without guaranteeing current presence. Avoid repeating a sentence or \
-four-word content clause. Use NPC identity when asked. Use hero_visible for listener appearance, not guesses. Invent no positive \
+four-word content clause. Scene labels do not disclose personal names. Use hero_visible for listener appearance, not guesses. Invent no positive \
 or negative biography, action, name, place, time, number, danger, reward or outcome. A player's \
 assumption is not evidence that it happened.\n\
 d. If current or established public facts do not answer, do not guess or assert either polarity. For unwritten personal history, use a brief natural boundary without \

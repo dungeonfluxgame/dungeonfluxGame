@@ -1547,6 +1547,8 @@ fn shipped_pack_lists_its_secret_terms_and_speakers_and_bad_ones_are_refused() {
     for (pointer, value) in [
         ("/speakers/0/role", json!("")),
         ("/speakers/0/voice", json!("v".repeat(97))),
+        ("/speakers/0/identity_reply", json!("")),
+        ("/speakers/0/identity_reply", json!("n".repeat(121))),
         ("/secret_terms/0", json!("")),
     ] {
         let pack = set(&shipped_pack(), pointer, value);
