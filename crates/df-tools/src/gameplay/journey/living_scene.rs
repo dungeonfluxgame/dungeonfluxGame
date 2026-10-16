@@ -433,11 +433,11 @@ pub(in crate::gameplay) fn hand_items(
     state: &GameState,
     scene: &pack::Scene,
     holder: Option<&str>,
+    state_revision: u64,
 ) -> Result<Vec<rpc::SceneItemCard>, RepositoryError> {
     let Some(snapshot) = snapshot(state, scene)? else {
         return Ok(Vec::new());
     };
-    let revision = state.basis().revision.sequence();
     Ok(snapshot
         .model
         .things
@@ -454,7 +454,7 @@ pub(in crate::gameplay) fn hand_items(
             detail: thing.detail.clone(),
             image_path: String::new(),
             image_state: rpc::PlateState::Failed as i32,
-            state_revision: revision,
+            state_revision,
             observation_only: true,
             holder: thing.holder_id.clone().unwrap_or_default(),
         })

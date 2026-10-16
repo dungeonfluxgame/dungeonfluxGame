@@ -646,7 +646,13 @@ fn hand_inventory_lists_each_current_observation_and_clears_only_the_returned_it
         let first = interact(&current, member, 41, &targets[0], "take");
         let second = interact(&first, member, 42, &targets[1], "take");
 
-        let held = living_scene::hand_items(second.state(), &scene, Some("Brynn")).unwrap();
+        let held = living_scene::hand_items(
+            second.state(),
+            &scene,
+            Some("Brynn"),
+            second.basis().revision.sequence(),
+        )
+        .unwrap();
         assert_eq!(held.len(), 2);
         assert_eq!(
             held.iter()
@@ -656,15 +662,26 @@ fn hand_inventory_lists_each_current_observation_and_clears_only_the_returned_it
         );
         assert!(held.iter().all(|item| item.observation_only));
         assert!(
-            living_scene::hand_items(second.state(), &scene, Some("Vale"))
-                .unwrap()
-                .is_empty(),
+            living_scene::hand_items(
+                second.state(),
+                &scene,
+                Some("Vale"),
+                second.basis().revision.sequence(),
+            )
+            .unwrap()
+            .is_empty(),
             "another hero cannot review Brynn's private hand collection"
         );
 
         let examined = interact(&second, member, 43, &targets[0], "examine");
         let returned = interact(&examined, member, 44, &targets[0], "return");
-        let remaining = living_scene::hand_items(returned.state(), &scene, Some("Brynn")).unwrap();
+        let remaining = living_scene::hand_items(
+            returned.state(),
+            &scene,
+            Some("Brynn"),
+            returned.basis().revision.sequence(),
+        )
+        .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].thing_id, targets[1]);
     });

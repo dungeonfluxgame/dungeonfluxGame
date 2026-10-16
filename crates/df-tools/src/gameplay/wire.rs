@@ -1418,9 +1418,19 @@ pub(super) fn project_journey(
         && let Some(hero) = journey.own_character.as_ref()
     {
         scene.item = journey::living_scene::item_for(state, &authored, &hero.name)?;
-        scene.hand_items = journey::living_scene::hand_items(state, &authored, Some(&hero.name))?;
+        scene.hand_items = journey::living_scene::hand_items(
+            state,
+            &authored,
+            Some(&hero.name),
+            current.basis().revision.sequence(),
+        )?;
     } else if role == LocalDemoRole::Display {
-        scene.hand_items = journey::living_scene::hand_items(state, &authored, None)?;
+        scene.hand_items = journey::living_scene::hand_items(
+            state,
+            &authored,
+            None,
+            current.basis().revision.sequence(),
+        )?;
     }
 
     let latest_check = state
