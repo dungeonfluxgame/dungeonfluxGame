@@ -49,7 +49,7 @@ use super::shot::scene_graph::{ActorInput, SceneGraph, SceneGraphInput};
 /// The authored cut-out of the party's hero at this position; the health variants are made from
 /// it.
 fn hero_art(index: usize) -> String {
-    format!("assets/ui/generated/sprite-hero-{}", index + 1)
+    format!("assets/ui/generated/sprite-hero-{}-photo", index + 1)
 }
 
 /// The cut-out the battlefield dresses the hero at this party position in (the dwarf fighter, the
@@ -58,7 +58,7 @@ fn hero_art(index: usize) -> String {
 /// shows.
 fn battle_hero_art(index: usize) -> String {
     let art = [1, 3, 2][index % 3];
-    format!("assets/ui/generated/sprite-hero-{art}")
+    format!("assets/ui/generated/sprite-hero-{art}-photo")
 }
 
 /// What a hero's health variants are made from on each screen, and which are cached.

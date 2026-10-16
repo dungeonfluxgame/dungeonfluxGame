@@ -20,14 +20,11 @@ use super::super::{
 
 const MAXIMUM_FACT_CHARACTERS: usize = 80;
 
-pub(in crate::gameplay) const FILM_LOOK: &str = "Live-action fantasy film; real camera, one consistent \
-    prime lens per scene; natural depth of field. Practical light sources visible in scene. Skin \
-    pores, worn woven fabric and seams. One named film grade for each place and time of day \
-    (Lantern Night, Overcast Day, Hearth Amber): cool shadows, warm practical highlights, fine \
-    film grain. Photograph real adult actors in practical sewn costumes on a built set or real \
-    location; physically imperfect skin, wood, metal, water and props; restrained contrast and \
-    natural atmospheric light. Photographic only; no painting, illustration, concept art, matte \
-    painting, CGI, 3D render, synthetic game art or plastic surfaces.";
+pub(in crate::gameplay) const FILM_LOOK: &str = "Live-action fantasy film photographed on location with real adult actors, practical sewn costumes \
+    and props, real camera and prime lens, natural depth of field, skin pores, worn materials, \
+    natural atmospheric light, restrained grade and fine 35mm grain. Photographic only; no \
+    painting, illustration, concept art, matte painting, CGI, 3D render, synthetic game art or \
+    plastic surfaces.";
 const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
 const NO_REAL_PEOPLE: &str = "No real people, celebrities or likenesses of real persons.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";
