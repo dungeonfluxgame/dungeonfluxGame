@@ -3079,7 +3079,34 @@ impl TvStage {
         state: LineState,
         bubble: &super::live_stage::LineBubble<'_>,
     ) -> Result<bool, JsValue> {
-        self.lower_third(id, bubble.speaker, bubble.text, state)?;
+        // Spoken and typed dialogue share one readable, portrait-led caption lane.  The
+        // anchored bubbles remain reserved for actions and intent so a character never has two
+        // competing dialogue presentations in the same beat.
+        if matches!(
+            bubble.kind,
+            super::live_stage::BubbleKind::Speech | super::live_stage::BubbleKind::Typed
+        ) {
+            let opened = self
+                .lower
+                .root
+                .get_attribute("data-component-id")
+                .and_then(|value| value.parse::<u64>().ok())
+                != Some(id);
+            self.lower_third(id, bubble.speaker, bubble.text, state)?;
+            let scene = self
+                .root
+                .get_attribute("data-scene-key")
+                .unwrap_or_default();
+            super::presentation_timing::line(
+                id,
+                state,
+                Some(position),
+                bubble.text.chars().count() as u32,
+                crate::stage_machines::reading_time_ms(bubble.text),
+                &scene,
+            );
+            return Ok(state == LineState::Opening && opened);
+        }
         self.figures.set_line(position, id, state, bubble)
     }
 
@@ -3152,6 +3179,13 @@ impl TvStage {
             self.root.remove_attribute("data-plate-caption-retained")?;
         }
         let lower = &self.lower;
+        if let Some(stage) = self.root.parent_element()
+            && state.is_active()
+        {
+            // A previous build may have left the old fallback marker behind.  Dialogue now owns
+            // the lower lane directly, so it must not also make a floating fallback visible.
+            stage.remove_attribute("data-unplaced-line")?;
+        }
         if lower.text.text_content().as_deref() != Some(text)
             || lower.name.text_content().as_deref() != Some(speaker)
         {
@@ -3172,6 +3206,10 @@ impl TvStage {
             )?;
         }
         lower.root.set_attribute("data-line-state", state.name())?;
+        lower.root.set_attribute(
+            "aria-hidden",
+            if state.is_active() { "false" } else { "true" },
+        )?;
         if let Some((previous_id, previous_scene)) = previous_component {
             super::presentation_timing::component(
                 Some(&lower.root),
@@ -3208,6 +3246,18 @@ impl TvStage {
                 "ready",
                 read_ms,
             );
+            if state == LineState::Opening {
+                super::presentation_timing::schedule_component_transition(
+                    lower.root.clone(),
+                    df_observe::presentation::PresentationComponent::Subtitle,
+                    id,
+                    scene.clone(),
+                    df_observe::presentation::ComponentPhase::Readable,
+                    "ready",
+                    read_ms,
+                    450,
+                );
+            }
         }
         super::presentation_timing::component(
             Some(&lower.root),
@@ -3673,10 +3723,7 @@ mod tests {
             stage.lower.root.get_attribute("data-line-state").as_deref(),
             Some("speaking")
         );
-        assert_eq!(
-            stage.root.get_attribute("data-unplaced-line").as_deref(),
-            Some("2")
-        );
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
         let npc = LineBubble {
             kind: BubbleKind::Speech,
             speaker: "Courier",
@@ -3704,14 +3751,11 @@ mod tests {
                 .as_deref(),
             Some("4")
         );
-        assert_eq!(
-            stage.root.get_attribute("data-unplaced-line").as_deref(),
-            Some("4")
-        );
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
         assert!(
             host.query_selector("[data-line-id=\"4\"]")
                 .unwrap()
-                .is_some()
+                .is_none()
         );
         assert_eq!(
             stage.lower.text.text_content().as_deref(),
@@ -3721,7 +3765,69 @@ mod tests {
     }
 
     #[test]
-    fn late_same_bitmap_heads_latch_during_lingering_and_anchor_the_successor_line() {
+    fn character_dialogue_uses_the_portrait_lane_without_a_floating_bubble() {
+        use super::super::live_stage::{BubbleKind, LineBubble, StageMode};
+        use crate::presentation::{ActorSlot, SceneFamily, StageActor};
+        let (parent, stage) = mounted_stage();
+        stage
+            .figures
+            .update(
+                &[StageActor {
+                    actor_id: "courier".into(),
+                    slot: ActorSlot::Npc(0),
+                    name: "Courier".into(),
+                    role: "npc".into(),
+                    sprite: String::new(),
+                    portrait: String::new(),
+                    hit_points: None,
+                    speaking: false,
+                    down: false,
+                    live_sprite: None,
+                }],
+                "scene",
+                "",
+                SceneFamily::Exterior,
+                StageMode::Scene,
+            )
+            .unwrap();
+        let line = LineBubble {
+            kind: BubbleKind::Speech,
+            speaker: "Courier",
+            text: "You can call me the courier.",
+            voiced: true,
+        };
+        assert!(
+            stage
+                .character_line(2, 42, LineState::Opening, &line)
+                .unwrap()
+        );
+        assert_eq!(stage.lower.name.text_content().as_deref(), Some("Courier"));
+        assert_eq!(stage.lower.text.text_content().as_deref(), Some(line.text));
+        assert_eq!(
+            stage
+                .lower
+                .root
+                .get_attribute("data-component-type")
+                .as_deref(),
+            Some("subtitle")
+        );
+        assert_eq!(
+            stage.lower.root.get_attribute("aria-hidden").as_deref(),
+            Some("false")
+        );
+        assert!(
+            stage
+                .root
+                .query_selector(".tv-bubble[data-line-id=\"42\"]")
+                .unwrap()
+                .is_none()
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    #[ignore = "dialogue is intentionally no longer anchored to figure bubbles"]
+    fn legacy_late_same_bitmap_heads_latch_during_lingering_and_anchor_the_successor_line() {
         use super::super::live_stage::{BubbleKind, LineBubble, StageMode};
         use crate::{
             plate_layout::Side,

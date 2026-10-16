@@ -9,10 +9,9 @@
 //! shake, lunge, heal shimmer, floating numbers) are CSS animations on the figure elements,
 //! started by `live_motion` and `update` and never owning game state.
 //!
-//! Names and health live in a compact HUD at the screen edge, not under the figures; a name
-//! appears on a character's speech bubble. Speech bubbles stand BESIDE the speaker's head: each
-//! is tried on both sides, then narrower, until it overlaps no other head, the roll panel or the
-//! screen edge.
+//! Names and health live in a compact HUD at the screen edge, not under the figures. Spoken and
+//! typed character dialogue uses the portrait-led lower lane; small bubbles are reserved for
+//! action call-outs and intent loaders.
 //!
 //! The cast is arranged by what the scene is doing, and the stylesheet draws each arrangement
 //! from the `data-arrange` flag set here:

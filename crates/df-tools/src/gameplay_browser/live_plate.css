@@ -98,6 +98,10 @@
 .tv-lower-words{min-width:0}
 .tv-lower-name{margin:0 0 calc(var(--u)*.3);font:700 var(--fs-label)/1.2 var(--serif);letter-spacing:.22em;text-transform:uppercase;color:#e8cb94;text-shadow:none}
 .tv-lower-text{margin:0;font-size:var(--fs-line);line-height:1.3;text-shadow:0 2px 10px #000}
+/* Every spoken or typed character line uses this single portrait-led lane.  The lane remains
+   present in combat and ordinary stage shots; only narrator copy and mechanical cards use their
+   own presentation. */
+.tv-stage .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
 .tv-stage[data-shot=establishing] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
 /* A retained character line and the choices share normal flow: wrapped labels determine
    their own height instead of rising into the independently positioned speech panel. */
@@ -120,7 +124,7 @@
    screen for as long as nobody speaks, and the frame eases back meanwhile), or the narrator's
    box speaking. */
 .tv-plate-zoom{--plate-scale:1;--plate-zoom-duration:1.35s;--plate-zoom-ease:cubic-bezier(.35,.05,.25,1);transform:scale(var(--plate-scale));transition:transform var(--plate-zoom-duration) var(--plate-zoom-ease),transform-origin var(--plate-zoom-duration) var(--plate-zoom-ease)}
-.tv-stage:has(.tv-bubble[data-line-state=speaking]) .tv-plate-zoom{--plate-scale:1.16;--plate-zoom-duration:6s;--plate-zoom-ease:cubic-bezier(.16,1,.3,1)}
+.tv-stage:has(.tv-bubble[data-line-state=speaking],.tv-lower[data-line-state=speaking]) .tv-plate-zoom{--plate-scale:1.16;--plate-zoom-duration:6s;--plate-zoom-ease:cubic-bezier(.16,1,.3,1)}
 .tv-stage:has(.tv-dm:is([data-line-state=speaking],[data-line-state=opening])) .tv-plate-zoom{--plate-scale:1;--plate-zoom-duration:1.35s;--plate-zoom-ease:cubic-bezier(.35,.05,.25,1)}
 .tv-stage[data-shot=plate] .tv-plate-img{animation:df-plate-drift 47s ease-in-out infinite alternate}
 .tv-stage[data-shot=plate] .tv-plate-img[data-i="1"]{animation-duration:53s;animation-direction:alternate-reverse}

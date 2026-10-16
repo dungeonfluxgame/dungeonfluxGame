@@ -1894,8 +1894,8 @@ fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<()
     }
 }
 
-/// Applies one line machine transition to the display: the narrator's box, or the bubble at
-/// the figure that speaks it. A character's bubble pops softly as its line opens.
+/// Applies one line machine transition to the display: the narrator's box, or the portrait-led
+/// lower lane for character dialogue. Action call-outs still use the figure's compact bubble.
 fn line_command(
     client: &Rc<RefCell<Client>>,
     id: LineId,
