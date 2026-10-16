@@ -24,7 +24,10 @@ enum Source {
         species: String,
         gear: Vec<&'static str>,
     },
-    Npc(ScenePerson),
+    Npc {
+        person: ScenePerson,
+        identity_photo: Option<String>,
+    },
     Room {
         model: SceneModel,
         place: String,
@@ -230,7 +233,7 @@ mod tests {
     fn room(references: &mut References, revision: &str) {
         let mut authored = model();
         authored.weather = revision.to_owned();
-        references.admit_room("same-place", &authored, true);
+        references.admit_room("same-place", &authored, &[], true);
     }
 
     fn selected_room_binding(references: &References) -> &str {
@@ -374,8 +377,8 @@ mod tests {
         evening.time_of_day = "evening".to_owned();
         let morning_revision = room_revision(&morning).unwrap();
         let evening_revision = room_revision(&evening).unwrap();
-        canonical.admit_room("shared-place", &morning, true);
-        canonical.admit_room("shared-place", &evening, true);
+        canonical.admit_room("shared-place", &morning, &[], true);
+        canonical.admit_room("shared-place", &evening, &[], true);
         assert_eq!(canonical.entries.len(), 2);
         let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
         let work = locked(&inner.state).canonical.take_jobs();
@@ -403,7 +406,7 @@ mod tests {
         drop(state);
         locked(&inner.state)
             .canonical
-            .admit_room("shared-place", &morning, true);
+            .admit_room("shared-place", &morning, &[], true);
         assert_eq!(inner.canonical_room_key("shared-place"), Some(first));
         assert!(
             locked(&inner.state).canonical.take_jobs().is_empty(),
@@ -480,7 +483,7 @@ mod tests {
     fn canonical_dispatch_obeys_the_existing_media_capacity_and_cancellation_is_terminal() {
         let mut canonical = references("capacity-run");
         for place in ["one", "two", "three"] {
-            canonical.admit_room(place, &model(), true);
+            canonical.admit_room(place, &model(), &[], true);
         }
         assert_eq!(canonical.take_jobs_up_to(1).len(), 1);
         assert!(canonical.take_jobs_up_to(0).is_empty());
@@ -646,15 +649,19 @@ impl Inner {
 
     pub(super) async fn render_canonical(&self, work: &Work) -> Result<ImageKey, ImageFailure> {
         let mut references = vec![self.neutral_photographic_reference().await?];
-        if let Source::Hero {
-            visual_dossier: Some(dossier),
-            ..
-        } = &work.source
-        {
-            references.push(
+        match &work.source {
+            Source::Hero {
+                visual_dossier: Some(dossier),
+                ..
+            } => references.push(
                 self.load_photographic(dossier.figure_reference.to_owned())
                     .await?,
-            );
+            ),
+            Source::Npc {
+                identity_photo: Some(photo),
+                ..
+            } => references.push(self.load_photographic(photo.clone()).await?),
+            _ => {}
         }
         if !locked(&self.state)
             .canonical
@@ -684,9 +691,17 @@ impl Inner {
                 )?,
                 OutputSpec::CUTOUT,
             ),
-            Source::Npc(person) => (
+            Source::Npc {
+                person,
+                identity_photo,
+            } => (
                 ImageKind::CanonicalCharacter,
-                imagery::canonical_npc(self.rating, person, &work.binding)?,
+                imagery::canonical_npc(
+                    self.rating,
+                    person,
+                    identity_photo.is_some(),
+                    &work.binding,
+                )?,
                 OutputSpec::CUTOUT,
             ),
             Source::Room { model, place } => (
@@ -747,10 +762,15 @@ impl Inner {
             })
     }
 
-    pub(super) fn admit_canonical_room(&self, place: &str, model: &SceneModel) {
+    pub(super) fn admit_canonical_room(
+        &self,
+        place: &str,
+        model: &SceneModel,
+        cast: &[pack::SceneCastMember],
+    ) {
         locked(&self.state)
             .canonical
-            .admit_room(place, model, false);
+            .admit_room(place, model, cast, false);
     }
 
     pub(super) fn canonical_room_status_at(&self, place: &str, revision: &str) -> ReferenceStatus {
@@ -863,10 +883,16 @@ impl References {
         let Some(model) = setting.model.as_ref() else {
             return;
         };
-        self.admit_room(&setting.place_id, model, true);
+        self.admit_room(&setting.place_id, model, &scene.cast, true);
     }
 
-    fn admit_room(&mut self, place: &str, model: &SceneModel, select: bool) {
+    fn admit_room(
+        &mut self,
+        place: &str,
+        model: &SceneModel,
+        cast: &[pack::SceneCastMember],
+        select: bool,
+    ) {
         if self.scope.is_empty() {
             return;
         }
@@ -901,14 +927,34 @@ impl References {
             if !select && self.entries.contains_key(&Target::Npc(person.id.clone())) {
                 continue;
             }
+            let identity_photo = cast
+                .iter()
+                .filter(|member| member.id == person.id)
+                .map(|member| member.portrait.as_str())
+                .collect::<Vec<_>>();
+            let identity_photo = match identity_photo.as_slice() {
+                [portrait] => portrait
+                    .strip_suffix("-documentary-photo")
+                    .map(str::to_owned),
+                _ => None,
+            };
             let revision = digest(
-                serde_json::json!({"id": person.id, "description": person.description})
-                    .to_string()
-                    .as_bytes(),
+                serde_json::json!({
+                    "id": person.id,
+                    "name": person.name,
+                    "role": person.role,
+                    "description": person.description,
+                    "identity_photo": identity_photo,
+                })
+                .to_string()
+                .as_bytes(),
             );
             self.select(
                 Target::Npc(person.id.clone()),
-                Source::Npc(person.clone()),
+                Source::Npc {
+                    person: person.clone(),
+                    identity_photo,
+                },
                 &revision,
             );
         }

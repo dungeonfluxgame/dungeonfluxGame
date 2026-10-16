@@ -2802,6 +2802,7 @@ pub mod fixture {
         let scene = rpc::GameplayScene {
             destination: rpc::HarborDestination::HarborInn as i32,
             source_scene_key: String::new(),
+            source_scene_variant: String::new(),
             title: if tavern {
                 "The harbor inn"
             } else {

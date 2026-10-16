@@ -136,8 +136,79 @@ fn canonical_source_scene_key_survives_wire_projection_when_room_and_opening_sha
         let opening_scene = scene(opening_view);
         assert_eq!(room_scene.source_scene_key, "room");
         assert_eq!(opening_scene.source_scene_key, "opening");
+        assert!(room_scene.source_scene_variant.is_empty());
+        assert!(opening_scene.source_scene_variant.is_empty());
         assert_eq!(room_scene.title, opening_scene.title);
         assert_eq!(room_scene.scene_asset, opening_scene.scene_asset);
+    });
+}
+
+#[test]
+fn wire_projection_carries_the_exact_authored_scene_variant() {
+    const ROOM_VARIANT: &str = "room-authored-revision";
+    const OPENING_VARIANT: &str = "opening-authored-revision";
+    let mut loaded = pack::load_from_bytes(SHOP_PACK, SHOP_TUNING).unwrap();
+    let mut room_variant = loaded
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == pack::SceneKey::Room)
+        .unwrap()
+        .clone();
+    room_variant.source_variant_id = Some(ROOM_VARIANT.to_owned());
+    let mut opening_variant = loaded
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == pack::SceneKey::Opening)
+        .unwrap()
+        .clone();
+    opening_variant.source_variant_id = Some(OPENING_VARIANT.to_owned());
+    let script = loaded.pack.beat_script.as_mut().unwrap();
+    script
+        .scenes
+        .insert(ROOM_VARIANT.to_owned(), room_variant);
+    script
+        .scenes
+        .insert(OPENING_VARIANT.to_owned(), opening_variant);
+    script
+        .beats
+        .iter_mut()
+        .find(|beat| beat.id == "gather")
+        .unwrap()
+        .scene_variant = Some(ROOM_VARIANT.to_owned());
+    script
+        .beats
+        .iter_mut()
+        .find(|beat| beat.id == "freeplay")
+        .unwrap()
+        .scene_variant = Some(OPENING_VARIANT.to_owned());
+    let destination_beat = script.find("gather").unwrap().clone();
+
+    pack::with_test_pack(loaded, || {
+        let destination = super::beat_script_runtime::destination_scene(&destination_beat).unwrap();
+        assert_eq!(destination.source_scene_variant, ROOM_VARIANT);
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let room = prepared_story();
+        let opening = opening_story();
+        let room_view = wire::journey_view(
+            &room,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap();
+        let opening_view = wire::journey_view(
+            &opening,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap();
+        let scene = |view: rpc::ViewMessage| match view.audience.unwrap() {
+            rpc::view_message::Audience::Player(player) => player.scene.unwrap(),
+            _ => panic!("player view"),
+        };
+        assert_eq!(scene(room_view).source_scene_variant, ROOM_VARIANT);
+        assert_eq!(scene(opening_view).source_scene_variant, OPENING_VARIANT);
     });
 }
 

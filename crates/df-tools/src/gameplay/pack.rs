@@ -912,6 +912,29 @@ impl SceneKey {
     }
 }
 
+/// Exact authored BeatScript scene key, kept separate from the broad scene category.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SceneVariantId(String);
+
+impl SceneVariantId {
+    /// Parses only the lowercase kebab-case identifiers accepted for authored scene variants.
+    pub(super) fn parse(value: &str) -> Option<Self> {
+        let well_formed = !value.is_empty()
+            && value.len() <= ID_CHARACTERS_MAX
+            && value.split('-').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            });
+        well_formed.then(|| Self(value.to_owned()))
+    }
+
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum FindingSkill {
@@ -941,6 +964,9 @@ pub(super) struct Finding {
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Scene {
+    /// Runtime projection of the exact BeatScript map key; this is not serialized into pack data.
+    #[serde(skip)]
+    pub(super) source_variant_id: Option<String>,
     pub(super) key: SceneKey,
     pub(super) title: String,
     pub(super) narration: String,
@@ -1069,6 +1095,11 @@ pub(super) fn load_from_bytes(
         .map_err(PackError::Script)?;
     validate_tuning(&tuning, pack.is_freeplay())?;
     validate_cross_references(&pack, &tuning)?;
+    if let Some(script) = &mut pack.beat_script {
+        for (id, scene) in &mut script.scenes {
+            scene.source_variant_id = Some(id.clone());
+        }
+    }
     let mut departures = departures(&pack, &tuning);
     if tuning.tactical.is_some() {
         departures.extend(

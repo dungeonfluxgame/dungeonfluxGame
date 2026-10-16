@@ -31,7 +31,8 @@ message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decisio
 enum HarborDestination { HARBOR_DESTINATION_UNSPECIFIED = 0; LOADING_PIER = 1; LANTERN_WHARF = 2; HARBOR_INN = 3; }
 // live_backdrop (display only): a server-generated re-render of this scene's painting, `/gameplay/imagery/<key>`; empty when none. Presentation only.
 // source_scene_key is the exact public pack::SceneKey label; empty means no authoritative source identity is available.
-message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; string live_plate = 20; PlateLayout plate_layout = 21; PlateState plate_state = 22; HomeVideoState scene_video_state = 23; string scene_video_path = 24; string scene_contents_json = 25; SceneItemCard item = 26; bool plate_update_pending = 27; repeated SceneItemCard hand_items = 28; string source_scene_key = 29; }
+// source_scene_variant is the exact public BeatScript scene map key; empty identifies a compiled base scene.
+message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; string live_plate = 20; PlateLayout plate_layout = 21; PlateState plate_state = 22; HomeVideoState scene_video_state = 23; string scene_video_path = 24; string scene_contents_json = 25; SceneItemCard item = 26; bool plate_update_pending = 27; repeated SceneItemCard hand_items = 28; string source_scene_key = 29; string source_scene_variant = 30; }
 // Audience-filtered object card. A failed picture keeps its detail available immediately.
 message SceneItemCard {
   string thing_id = 1;

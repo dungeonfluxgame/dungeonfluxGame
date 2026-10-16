@@ -71,6 +71,7 @@ const POLL: Duration = Duration::from_secs(1);
 struct PlateScene {
     title: String,
     key: SceneKey,
+    source_variant_id: Option<String>,
     asset: String,
     place_id: String,
     place_kind: String,
@@ -79,7 +80,8 @@ struct PlateScene {
     place: Option<PlaceFacts>,
     story_text: String,
     speaker: Option<Speaker>,
-    others: Vec<String>,
+    others: Vec<IdentityReference>,
+    cast: Vec<pack::SceneCastMember>,
     identity_cast: Vec<IdentityReference>,
     snapshot: Option<crate::gameplay::adventure::scene_model::SceneNow>,
     hero_names: Vec<String>,
@@ -118,15 +120,29 @@ impl PlateScene {
             .cast
             .iter()
             .find(|member| !scene.speaker.is_empty() && member.name == scene.speaker);
-        let others = scene
+        let identity_cast: Vec<IdentityReference> = scene
             .cast
             .iter()
-            .filter(|member| speaker.is_none_or(|speaker| speaker.id != member.id))
-            .map(|member| member.sprite.clone())
+            .map(|member| IdentityReference {
+                id: format!("npc:{}", member.id),
+                name: member.name.clone(),
+                sprite: member.sprite.clone(),
+                portrait: member.portrait.clone(),
+            })
+            .collect();
+        let others = identity_cast
+            .iter()
+            .filter(|member| {
+                speaker.is_none_or(|speaker| {
+                    member.id.strip_prefix("npc:").unwrap_or(&member.id) != speaker.id
+                })
+            })
+            .cloned()
             .collect();
         Some(Self {
             title: scene.title.clone(),
             key: scene.key,
+            source_variant_id: scene.source_variant_id.clone(),
             asset: scene.asset.clone(),
             place_id: setting.place_id.clone(),
             place_kind,
@@ -140,16 +156,8 @@ impl PlateScene {
                 age: member.age,
             }),
             others,
-            identity_cast: scene
-                .cast
-                .iter()
-                .map(|member| IdentityReference {
-                    id: format!("npc:{}", member.id),
-                    name: member.name.clone(),
-                    sprite: member.sprite.clone(),
-                    portrait: member.portrait.clone(),
-                })
-                .collect(),
+            cast: scene.cast.clone(),
+            identity_cast,
             snapshot: crate::gameplay::adventure::scene_model::current_scene(scene),
             hero_names: Vec::new(),
             authored_room: setting.model.clone(),
@@ -181,11 +189,11 @@ impl PlateScene {
             gender: actor.gender,
             age: actor.age,
         });
-        plate.others = scene
-            .cast
+        plate.others = plate
+            .identity_cast
             .iter()
-            .filter(|other| other.id != actor.id)
-            .map(|other| other.sprite.clone())
+            .filter(|other| other.id.strip_prefix("npc:").unwrap_or(&other.id) != actor.id)
+            .cloned()
             .collect();
         Some(plate)
     }
@@ -209,6 +217,15 @@ impl PlateScene {
             .collect()
     }
 
+    fn source_identity(&self) -> String {
+        projection_scene_identity(
+            self.key.source_label(),
+            self.source_variant_id.as_deref().unwrap_or_default(),
+            &self.title,
+            &self.asset,
+        )
+    }
+
     /// The plate of this scene for this party: the same scene and party always have one name.
     fn plate_id(&self, heroes: &[u8], faces: &[(u8, ImageKey)], _graph_revision: u64) -> String {
         let party: String = heroes.iter().map(|art| art.to_string()).collect();
@@ -217,8 +234,12 @@ impl PlateScene {
             .iter()
             .map(|(art, key)| format!("{art}{}", &key.as_str()[..8]))
             .collect();
+        let source_variant = self
+            .source_variant_id
+            .as_deref()
+            .map_or_else(|| "base".to_owned(), |id| format!("variant={id}"));
         format!(
-            "{}|{}|{:?}|speaker={}|{party}|{hurt}|room={}",
+            "{}|{}|{:?}|{source_variant}|speaker={}|{party}|{hurt}|room={}",
             self.title,
             self.place_id,
             self.key,
@@ -230,7 +251,11 @@ impl PlateScene {
     }
 
     fn stage(&self, heroes: &[u8]) -> Result<ShotSpec, ShotError> {
-        let others: Vec<&str> = self.others.iter().map(String::as_str).collect();
+        let others: Vec<&str> = self
+            .others
+            .iter()
+            .map(|member| member.sprite.as_str())
+            .collect();
         shot::direct(&ShotInput {
             scene_key: self.key,
             place_id: &self.place_id,
@@ -249,35 +274,114 @@ impl PlateScene {
     }
 }
 
-/// The pack scene a display view shows. The source key is authoritative; a title and painting
-/// can be shared by different authored beats and cannot identify one by themselves.
-pub(super) fn locate(title: &str, asset: &str, source_scene_key: &str) -> Option<pack::Scene> {
-    let source = pack::SceneKey::parse_source_label(source_scene_key)?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LookupFailure {
+    InvalidSceneKey,
+    InvalidSceneVariant,
+    MissingSceneVariant,
+    SceneVariantMismatch,
+    MissingBaseScene,
+    AmbiguousBaseScene,
+}
+
+impl LookupFailure {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::InvalidSceneKey => "invalid_scene_key",
+            Self::InvalidSceneVariant => "invalid_scene_variant",
+            Self::MissingSceneVariant => "missing_scene_variant",
+            Self::SceneVariantMismatch => "scene_variant_mismatch",
+            Self::MissingBaseScene => "missing_base_scene",
+            Self::AmbiguousBaseScene => "ambiguous_base_scene",
+        }
+    }
+}
+
+fn record_lookup_not_planned(view: &View, failure: LookupFailure) {
+    let scene_id = df_observe::presentation::local_identity(&view.scene_key);
+    let scene_key = pack::SceneKey::parse_source_label(&view.source_scene_key)
+        .map_or("unknown", pack::SceneKey::source_label);
+    let variant = if view.source_scene_variant.is_empty() {
+        "base"
+    } else {
+        pack::SceneVariantId::parse(&view.source_scene_variant)
+            .map_or("invalid", |variant| variant.as_str())
+    };
+    record_plate_diagnostic(
+        "gameplay.living_scene.plate_not_planned",
+        format!(
+            "PLATE not_planned scene_id={scene_id} source_scene_key={scene_key} source_scene_variant={variant} reason={}",
+            failure.label()
+        ),
+        serde_json::Map::from_iter([
+            ("scene_id".to_owned(), serde_json::json!(scene_id)),
+            ("source_scene_key".to_owned(), serde_json::json!(scene_key)),
+            (
+                "source_scene_variant".to_owned(),
+                serde_json::json!(variant),
+            ),
+            ("status".to_owned(), serde_json::json!("not_planned")),
+            (
+                "failure_category".to_owned(),
+                serde_json::json!(failure.label()),
+            ),
+        ]),
+    );
+}
+
+/// Resolves a compiled base scene or the exact BeatScript variant from the public projection.
+/// A variant never falls back to another variant or a base scene with matching display text.
+pub(super) fn locate(
+    title: &str,
+    asset: &str,
+    source_scene_key: &str,
+    source_scene_variant: &str,
+) -> Result<pack::Scene, LookupFailure> {
+    let source = pack::SceneKey::parse_source_label(source_scene_key)
+        .ok_or(LookupFailure::InvalidSceneKey)?;
     pack::with_content(|content| {
         let wanted = asset.trim_start_matches('/');
-        let matches = |scene: &pack::Scene, asset: &str| {
-            scene.key == source && asset.trim_start_matches('/') == wanted && scene.title == title
+        let matches = |scene: &pack::Scene, actual_asset: &str| {
+            scene.key == source
+                && actual_asset.trim_start_matches('/') == wanted
+                && scene.title == title
         };
         let overrides = pack::active().map(|loaded| loaded.script_scene_assets.clone());
-        let mut candidates: Vec<&pack::Scene> = content
+        if source_scene_variant.is_empty() {
+            let mut candidates = content
+                .scenes
+                .iter()
+                .filter(|scene| matches(scene, &scene.asset));
+            let Some(scene) = candidates.next() else {
+                return Err(LookupFailure::MissingBaseScene);
+            };
+            if candidates.next().is_some() {
+                return Err(LookupFailure::AmbiguousBaseScene);
+            }
+            return Ok(scene.clone());
+        }
+
+        let variant = pack::SceneVariantId::parse(source_scene_variant)
+            .ok_or(LookupFailure::InvalidSceneVariant)?;
+        let script = content
+            .beat_script
+            .as_ref()
+            .ok_or(LookupFailure::MissingSceneVariant)?;
+        let scene = script
             .scenes
-            .iter()
-            .filter(|scene| matches(scene, &scene.asset))
-            .collect();
-        if let Some(script) = content.beat_script.as_ref() {
-            candidates.extend(script.scenes.iter().filter_map(|(id, scene)| {
-                let asset = overrides
-                    .as_ref()
-                    .and_then(|assets| assets.get(id))
-                    .unwrap_or(&scene.asset);
-                matches(scene, asset).then_some(scene)
-            }));
+            .get(variant.as_str())
+            .ok_or(LookupFailure::MissingSceneVariant)?;
+        let actual_asset = overrides
+            .as_ref()
+            .and_then(|assets| assets.get(variant.as_str()))
+            .unwrap_or(&scene.asset);
+        if !matches(scene, actual_asset) {
+            return Err(LookupFailure::SceneVariantMismatch);
         }
-        match candidates.as_slice() {
-            [scene] => Some((*scene).clone()),
-            // Missing, invalid and ambiguous source identities are deliberately not planned.
-            _ => None,
-        }
+        let mut resolved = scene.clone();
+        resolved.asset = actual_asset.clone();
+        resolved.source_variant_id = Some(variant.as_str().to_owned());
+        Ok(resolved)
     })
 }
 
@@ -307,7 +411,10 @@ fn successors_in(
 ) -> Vec<pack::Scene> {
     {
         let scene_of = |beat: &Beat| match &beat.scene_variant {
-            Some(variant) => script.scenes.get(variant).cloned(),
+            Some(variant) => script.scenes.get(variant).cloned().map(|mut scene| {
+                scene.source_variant_id = Some(variant.clone());
+                scene
+            }),
             None => scenes
                 .iter()
                 .find(|candidate| candidate.key == beat.scene)
@@ -317,8 +424,11 @@ fn successors_in(
         let mut seen: Vec<&str> = Vec::new();
         let mut queue: VecDeque<(&Beat, usize)> = VecDeque::new();
         for beat in &script.beats {
-            let here = scene_of(beat)
-                .is_some_and(|scene| scene.title == current.title && scene.key == current.key);
+            let here = scene_of(beat).is_some_and(|scene| {
+                scene.title == current.title
+                    && scene.key == current.key
+                    && scene.source_variant_id == current.source_variant_id
+            });
             if here {
                 queue.extend(
                     beat.transitions
@@ -346,7 +456,12 @@ fn successors_in(
             if beat.kind != BeatKind::Fight
                 && let Some(next) = scene_of(beat)
                 && next.title != current.title
-                && !found.iter().any(|known| known.title == next.title)
+                && !found.iter().any(|known| {
+                    known.key == next.key
+                        && known.title == next.title
+                        && known.asset == next.asset
+                        && known.source_variant_id == next.source_variant_id
+                })
             {
                 found.push(next);
             }
@@ -370,6 +485,7 @@ struct View {
     /// Names the authored source scene as well as its title and painting.
     scene_key: String,
     source_scene_key: String,
+    source_scene_variant: String,
     title: String,
     asset: String,
     in_combat: bool,
@@ -453,15 +569,42 @@ fn committed_story(journey: &rpc::JourneyView) -> Option<StoryBeat> {
     })
 }
 
+pub(super) fn projection_scene_identity(
+    source_scene_key: &str,
+    source_scene_variant: &str,
+    title: &str,
+    asset: &str,
+) -> String {
+    let source = pack::SceneKey::parse_source_label(source_scene_key)
+        .map_or("unknown", pack::SceneKey::source_label);
+    let prefix = if source_scene_variant.is_empty() {
+        source.to_owned()
+    } else if let Some(variant) = pack::SceneVariantId::parse(source_scene_variant) {
+        format!("{source}|variant={}", variant.as_str())
+    } else {
+        format!(
+            "{source}|variant=invalid-{}",
+            df_observe::presentation::local_identity(source_scene_variant)
+        )
+    };
+    format!("{prefix}|{title}|{asset}")
+}
+
 fn scene_identity(display_asset: &str, scene: &rpc::GameplayScene) -> (String, String) {
     let asset = if scene.scene_asset.is_empty() {
         display_asset.to_owned()
     } else {
         scene.scene_asset.clone()
     };
-    let source = pack::SceneKey::parse_source_label(&scene.source_scene_key)
-        .map_or("unknown", pack::SceneKey::source_label);
-    (format!("{source}|{}|{}", scene.title, asset), asset)
+    (
+        projection_scene_identity(
+            &scene.source_scene_key,
+            &scene.source_scene_variant,
+            &scene.title,
+            &asset,
+        ),
+        asset,
+    )
 }
 
 fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
@@ -498,6 +641,7 @@ fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
     Some(View {
         scene_key,
         source_scene_key: scene.source_scene_key.clone(),
+        source_scene_variant: scene.source_scene_variant.clone(),
         title: scene.title.clone(),
         asset,
         in_combat,
@@ -917,12 +1061,7 @@ fn record_plate_render_diagnostic(
     failure: Option<ImageFailure>,
     elapsed_ms: u128,
 ) {
-    let scene_key = format!(
-        "{}|{}|{}",
-        scene.key.source_label(),
-        scene.title,
-        scene.asset
-    );
+    let scene_key = scene.source_identity();
     let scene_id = df_observe::presentation::local_identity(&scene_key);
     let plate_id = df_observe::presentation::local_identity(plate_id);
     let image_key = image_key.map(ImageKey::as_str);
@@ -1519,15 +1658,24 @@ impl Shared {
         let changed = locked(&self.book).current.as_ref().is_none_or(|current| {
             current.scene_key != view.scene_key || current.heroes != view.heroes
         });
-        let (located, next) = if changed {
-            let located = locate(&view.title, &view.asset, &view.source_scene_key);
-            let next = located.as_ref().map(successors).unwrap_or_default();
-            (located, next)
+        let located = match locate(
+            &view.title,
+            &view.asset,
+            &view.source_scene_key,
+            &view.source_scene_variant,
+        ) {
+            Ok(scene) => Some(scene),
+            Err(failure) => {
+                if changed {
+                    record_lookup_not_planned(view, failure);
+                }
+                None
+            }
+        };
+        let next = if changed {
+            located.as_ref().map(successors).unwrap_or_default()
         } else {
-            (
-                locate(&view.title, &view.asset, &view.source_scene_key),
-                Vec::new(),
-            )
+            Vec::new()
         };
         self.observe_with(view, located, next);
     }
@@ -1548,7 +1696,8 @@ impl Shared {
             .and_then(|scene| PlateScene::for_view(view, scene))
             .is_some_and(|scene| {
                 if let Some(model) = &scene.authored_room {
-                    self.inner.admit_canonical_room(&scene.place_id, model);
+                    self.inner
+                        .admit_canonical_room(&scene.place_id, model, &scene.cast);
                 }
                 let faces = self.inner.hero_face_keys(&view.hero_names);
                 let id = self.canonical_plate_id(&scene, &view.heroes, &faces, view.graph_revision);
@@ -1771,7 +1920,8 @@ impl Shared {
         ahead: bool,
     ) {
         if let Some(model) = &scene.authored_room {
-            self.inner.admit_canonical_room(&scene.place_id, model);
+            self.inner
+                .admit_canonical_room(&scene.place_id, model, &scene.cast);
         }
         let id = self.canonical_plate_id(scene, heroes, faces, graph_revision);
         if book.entries.contains_key(&id) {
@@ -1799,12 +1949,7 @@ impl Shared {
                 "gameplay.living_scene.plate_reference_failed",
                 format!(
                     "PLATE failed scene_id={} reason=canonical_reference_{}",
-                    df_observe::presentation::local_identity(&format!(
-                        "{}|{}|{}",
-                        scene.key.source_label(),
-                        scene.title,
-                        scene.asset
-                    )),
+                    df_observe::presentation::local_identity(&scene.source_identity()),
                     failure.label()
                 ),
                 serde_json::Map::from_iter([
@@ -1836,23 +1981,15 @@ impl Shared {
                     "gameplay.living_scene.plate_not_planned",
                     format!(
                         "PLATE not_planned scene_id={} revision={} reason=invalid_stage",
-                        df_observe::presentation::local_identity(&format!(
-                            "{}|{}|{}",
-                            scene.key.source_label(),
-                            scene.title,
-                            scene.asset
-                        )),
+                        df_observe::presentation::local_identity(&scene.source_identity()),
                         graph_revision
                     ),
                     serde_json::Map::from_iter([
                         (
                             "scene_id".to_owned(),
-                            serde_json::json!(df_observe::presentation::local_identity(&format!(
-                                "{}|{}|{}",
-                                scene.key.source_label(),
-                                scene.title,
-                                scene.asset
-                            ))),
+                            serde_json::json!(df_observe::presentation::local_identity(
+                                &scene.source_identity()
+                            )),
                         ),
                         (
                             "plate_id".to_owned(),
@@ -1892,12 +2029,7 @@ impl Shared {
                 "gameplay.living_scene.plate_requested",
                 &[("scene.kind", "plate".to_owned())],
             );
-            let scene_key = format!(
-                "{}|{}|{}",
-                scene.key.source_label(),
-                scene.title,
-                scene.asset
-            );
+            let scene_key = scene.source_identity();
             let scene_id = df_observe::presentation::local_identity(&scene_key);
             let plate_id = df_observe::presentation::local_identity(&id);
             record_plate_diagnostic(
@@ -1936,24 +2068,16 @@ impl Shared {
                 "gameplay.living_scene.plate_queue_dropped",
                 format!(
                     "PLATE dropped scene_id={} revision={} reason=queue_full plate_id={}",
-                    df_observe::presentation::local_identity(&format!(
-                        "{}|{}|{}",
-                        scene.key.source_label(),
-                        scene.title,
-                        scene.asset
-                    )),
+                    df_observe::presentation::local_identity(&scene.source_identity()),
                     graph_revision,
                     df_observe::presentation::local_identity(&id),
                 ),
                 serde_json::Map::from_iter([
                     (
                         "scene_id".to_owned(),
-                        serde_json::json!(df_observe::presentation::local_identity(&format!(
-                            "{}|{}|{}",
-                            scene.key.source_label(),
-                            scene.title,
-                            scene.asset
-                        ))),
+                        serde_json::json!(df_observe::presentation::local_identity(
+                            &scene.source_identity()
+                        )),
                     ),
                     (
                         "plate_id".to_owned(),
@@ -2358,12 +2482,7 @@ impl Shared {
                 None => None,
             };
             let Some(figure) = figure else {
-                let scene_id = df_observe::presentation::local_identity(&format!(
-                    "{}|{}|{}",
-                    scene.key.source_label(),
-                    scene.title,
-                    scene.asset
-                ));
+                let scene_id = df_observe::presentation::local_identity(&scene.source_identity());
                 crate::gameplay::actor::record_audit_diagnostic(
                     "gameplay.living_scene.plate_identity_missing",
                     format!("PLATE identity_missing scene_id={scene_id} cast_id={id}"),

@@ -1407,6 +1407,7 @@ pub(super) fn project_journey(
             title: authored.title.clone(),
             scene_asset: authored.asset.clone(),
             source_scene_key: authored.key.source_label().to_owned(),
+            source_scene_variant: authored.source_variant_id.clone().unwrap_or_default(),
             speaker_portrait: authored.speaker_portrait.clone(),
             cast: Vec::new(),
             rules_note: String::new(),

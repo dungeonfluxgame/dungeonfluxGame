@@ -238,6 +238,7 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
                     .get(variant)
                     .cloned()
                     .ok_or(RepositoryError::InvalidCandidate)?;
+                authored.source_variant_id = Some(variant.clone());
                 // Who stands on stage is the adventure's own cast, never the static base's.
                 authored.cast = pack::scene(beat.scene).cast;
                 if beat.kind == BeatKind::Ending {
@@ -323,11 +324,15 @@ pub(super) fn native_inn(state: &GameState) -> Result<bool, RepositoryError> {
 }
 pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, RepositoryError> {
     let scene = beat_script::with_script(|script| match &beat.scene_variant {
-        Some(id) => script
-            .scenes
-            .get(id)
-            .cloned()
-            .ok_or(RepositoryError::InvalidCandidate),
+        Some(id) => {
+            let mut scene = script
+                .scenes
+                .get(id)
+                .cloned()
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            scene.source_variant_id = Some(id.clone());
+            Ok(scene)
+        }
         None => {
             let mut scene = pack::scene(beat.scene);
             scene.asset = pack::source_scene_asset(beat.scene)?;
@@ -339,6 +344,7 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
         title: scene.title,
         scene_asset: scene.asset,
         source_scene_key: scene.key.source_label().to_owned(),
+        source_scene_variant: scene.source_variant_id.unwrap_or_default(),
         speaker_portrait: scene.speaker_portrait,
         cast: Vec::new(),
         rules_note: String::new(),

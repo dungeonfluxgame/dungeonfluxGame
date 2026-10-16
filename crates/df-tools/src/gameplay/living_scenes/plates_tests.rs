@@ -185,6 +185,7 @@ fn member(id: &str, name: &str, sprite: &str, role: pack::CastRole) -> pack::Sce
 
 fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
     pack::Scene {
+        source_variant_id: None,
         key,
         title: title.to_owned(),
         narration: "Lamplight and quiet.".to_owned(),
@@ -216,7 +217,7 @@ fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
 }
 
 #[test]
-fn canonical_lookup_uses_scene_key_and_rejects_ambiguous_matches() {
+fn canonical_lookup_uses_exact_authored_scene_variant() {
     const TITLE: &str = "Marek’s Cloth Shop";
     const ASSET: &str = "assets/ui/generated/scene-mareks-cloth-shop";
     let load_shop = || {
@@ -229,7 +230,7 @@ fn canonical_lookup_uses_scene_key_and_rejects_ambiguous_matches() {
     for (label, expected) in [("room", SceneKey::Room), ("opening", SceneKey::Opening)] {
         let loaded = load_shop();
         pack::with_test_pack(loaded, || {
-            let scene = locate(TITLE, ASSET, label).expect("exact authored scene key resolves");
+            let scene = locate(TITLE, ASSET, label, "").expect("base scene key resolves");
             assert_eq!(scene.key, expected);
             assert_eq!(scene.title, TITLE);
             assert_eq!(scene.asset, ASSET);
@@ -238,19 +239,23 @@ fn canonical_lookup_uses_scene_key_and_rejects_ambiguous_matches() {
 
     let loaded = load_shop();
     pack::with_test_pack(loaded, || {
-        assert!(locate(TITLE, ASSET, "").is_none());
-        assert!(locate(TITLE, ASSET, "Opening").is_none());
-        assert!(locate(TITLE, ASSET, "dialogue-seal").is_none());
+        assert_eq!(
+            locate(TITLE, ASSET, "", ""),
+            Err(LookupFailure::InvalidSceneKey)
+        );
+        assert!(locate(TITLE, ASSET, "Opening", "").is_err());
+        assert!(locate(TITLE, ASSET, "dialogue-seal", "").is_err());
     });
 
     let mut ambiguous = load_shop();
-    let opening = ambiguous
+    let mut opening = ambiguous
         .pack
         .scenes
         .iter()
         .find(|scene| scene.key == SceneKey::Opening)
         .unwrap()
         .clone();
+    opening.source_variant_id = Some("duplicate-opening".to_owned());
     ambiguous
         .pack
         .beat_script
@@ -259,9 +264,22 @@ fn canonical_lookup_uses_scene_key_and_rejects_ambiguous_matches() {
         .scenes
         .insert("duplicate-opening".to_owned(), opening);
     pack::with_test_pack(ambiguous, || {
-        assert!(
-            locate(TITLE, ASSET, "opening").is_none(),
-            "a source key that still matches multiple authored records is not guessed"
+        let base = locate(TITLE, ASSET, "opening", "").expect("base opening is exact");
+        assert_eq!(base.source_variant_id, None);
+        let variant = locate(TITLE, ASSET, "opening", "duplicate-opening")
+            .expect("exact variant resolves despite matching title and art");
+        assert_eq!(variant.source_variant_id.as_deref(), Some("duplicate-opening"));
+        assert_eq!(
+            locate(TITLE, ASSET, "opening", "missing-opening"),
+            Err(LookupFailure::MissingSceneVariant)
+        );
+        assert_eq!(
+            locate(TITLE, ASSET, "room", "duplicate-opening"),
+            Err(LookupFailure::SceneVariantMismatch)
+        );
+        assert_eq!(
+            locate(TITLE, ASSET, "opening", "Duplicate-opening"),
+            Err(LookupFailure::InvalidSceneVariant)
         );
     });
 }
@@ -309,14 +327,16 @@ async fn displayed_shop_opening_queues_its_plate_when_room_shares_title_and_art(
 }
 
 fn view(scene: &pack::Scene, heroes: &[u8], in_combat: bool) -> View {
+    let source_scene_variant = scene.source_variant_id.clone().unwrap_or_default();
     View {
-        scene_key: format!(
-            "{}|{}|{}",
+        scene_key: projection_scene_identity(
             scene.key.source_label(),
-            scene.title,
-            scene.asset
+            &source_scene_variant,
+            &scene.title,
+            &scene.asset,
         ),
         source_scene_key: scene.key.source_label().to_owned(),
+        source_scene_variant,
         title: scene.title.clone(),
         asset: scene.asset.clone(),
         in_combat,
@@ -1525,6 +1545,7 @@ fn display_message(scene: &pack::Scene) -> rpc::ViewMessage {
                     title: scene.title.clone(),
                     scene_asset: scene.asset.clone(),
                     source_scene_key: scene.key.source_label().to_owned(),
+                    source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
                     ..Default::default()
                 }),
                 journey: None,
@@ -1543,6 +1564,7 @@ fn player_message(scene: &pack::Scene) -> rpc::ViewMessage {
                     title: scene.title.clone(),
                     scene_asset: scene.asset.clone(),
                     source_scene_key: scene.key.source_label().to_owned(),
+                    source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
                     ..Default::default()
                 }),
                 ..Default::default()

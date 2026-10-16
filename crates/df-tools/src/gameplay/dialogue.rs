@@ -171,6 +171,7 @@ mod party_note_scene_title_tests {
     fn party_note_uses_the_human_readable_scene_title() {
         let member = MemberId::from_bytes(&[1; 16]).unwrap();
         let scene = pack::Scene {
+            source_variant_id: None,
             key: pack::SceneKey::DialogueSeal,
             title: "The Sealed Warning".to_owned(),
             narration: String::new(),

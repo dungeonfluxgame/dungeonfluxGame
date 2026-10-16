@@ -328,9 +328,13 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
     } else {
         scene.scene_asset.clone()
     };
-    let source_scene_key = pack::SceneKey::parse_source_label(&scene.source_scene_key)
-        .map_or("unknown", pack::SceneKey::source_label);
-    let story_scene = plates::locate(&scene.title, &asset, &scene.source_scene_key);
+    let story_scene = plates::locate(
+        &scene.title,
+        &asset,
+        &scene.source_scene_key,
+        &scene.source_scene_variant,
+    )
+    .ok();
     let hero_names: Vec<(String, String)> = journey
         .map(|journey| {
             journey
@@ -385,7 +389,12 @@ fn stage_of(message: &rpc::ViewMessage) -> Option<Stage> {
             rpc::TableKind::try_from(line.kind).ok() == Some(rpc::TableKind::Action)
         });
     Some(Stage {
-        scene_key: format!("{source_scene_key}|{}|{}", scene.title, asset),
+        scene_key: plates::projection_scene_identity(
+            &scene.source_scene_key,
+            &scene.source_scene_variant,
+            &scene.title,
+            &asset,
+        ),
         scene_asset: asset,
         revision: message
             .revision

@@ -825,6 +825,7 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                 scene: Some(rpc::GameplayScene {
                     destination: 0,
                     source_scene_key: String::new(),
+                    source_scene_variant: String::new(),
                     title: "The Heron Shrine".to_owned(),
                     scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
                     speaker_portrait: "/assets/ui/generated/portrait-patron-merchant".to_owned(),

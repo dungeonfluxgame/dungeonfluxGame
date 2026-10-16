@@ -7,7 +7,7 @@
       "id": "merchant",
       "name": "Marek",
       "role": "cloth merchant",
-      "description": "Marek folds blue linen behind the counter.",
+      "description": "Marek, a short, round middle-aged man with a neatly trimmed beard, wears a rich velvet cap and a measuring ribbon around his neck as he folds blue linen behind the counter.",
       "relation_to_speaker": "shopkeeper",
       "position": "behind the wooden counter",
       "aliases": [

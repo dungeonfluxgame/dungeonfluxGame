@@ -534,6 +534,7 @@ fn a_beast_antagonist_is_not_added_to_the_people_list() {
 
 fn scene(key: super::pack::SceneKey) -> super::pack::Scene {
     super::pack::Scene {
+        source_variant_id: None,
         key,
         title: "Jorun's Quiet Warning".to_owned(),
         narration: String::new(),
