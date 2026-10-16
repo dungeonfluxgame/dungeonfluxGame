@@ -472,23 +472,6 @@ impl Service {
         }
     }
 
-    fn quote_source_is_latest(&self, quote: &journey::living_scene::SceneTradeQuote) -> bool {
-        let expected_actor = match quote.direction {
-            journey::living_scene::SceneTradeDirection::HeroBuys => &quote.seller_id,
-            journey::living_scene::SceneTradeDirection::HeroSells => &quote.buyer_id,
-        };
-        if quote.source_actor_id != *expected_actor || quote.source_line_sequence == 0 {
-            return false;
-        }
-        self.table_log
-            .latest_npc_speech_at(quote.source_line_sequence, &quote.source_actor_id)
-            .is_some()
-            && self
-                .table_log
-                .latest_hero_speech_after(quote.source_line_sequence)
-                .is_none()
-    }
-
     fn request_committed_item(
         &self,
         checkpoint: &df_model::checkpoint::Checkpoint,
@@ -582,7 +565,10 @@ impl Service {
                         quote.seller_id == hero_id
                     }
                 };
-                if hero_bound && self.quote_source_is_latest(&quote) {
+                // The public source was checked and journaled when the quote was issued.
+                // TableLog is a bounded presentation ring, so it may no longer retain that
+                // line after enough speech or a server restart.
+                if hero_bound {
                     current_quote_is_actionable = true;
                     match super::journey::merchant_bargaining::quote_decision(
                         &request.text,
@@ -2124,27 +2110,12 @@ impl actor::Actor {
             .table_log
             .line_at_sequence(source_line_sequence)
             .ok_or_else(|| Status::failed_precondition("merchant quote source line expired"))?;
-        if source_line_sequence <= quote.source_line_sequence {
-            return Err(Status::failed_precondition(
-                "merchant quote closure needs a later public line",
-            ));
-        }
-
         let (actor_id, source_text) = match reason {
             journey::living_scene::MerchantQuoteClosureReason::HeroDeclined => {
-                let preceding_npc = self
-                    .table_log
-                    .latest_npc_speech_before(source_line_sequence)
-                    .ok_or_else(|| Status::failed_precondition("merchant quote speech expired"))?;
-                let latest_hero = self
-                    .table_log
-                    .latest_hero_speech_after(quote.source_line_sequence)
-                    .ok_or_else(|| Status::failed_precondition("hero decision line expired"))?;
+                let latest_hero = self.table_log.latest_hero_speech_after(0);
                 let decision =
                     super::journey::merchant_bargaining::quote_decision(&line.text, quote.price_cp);
-                if preceding_npc.sequence != quote.source_line_sequence
-                    || preceding_npc.actor_id != quote.source_actor_id
-                    || latest_hero.sequence != source_line_sequence
+                if latest_hero.as_ref().map(|line| line.sequence) != Some(source_line_sequence)
                     || line.role != rpc::TableRole::Hero as i32
                     || line.kind != rpc::TableKind::Speech as i32
                     || line.speaker != hero.chars().take(48).collect::<String>()
@@ -2168,14 +2139,7 @@ impl actor::Actor {
                     .table_log
                     .line_at_sequence(player_sequence)
                     .ok_or_else(|| Status::failed_precondition("hero trade request expired"))?;
-                let preceding_npc = self
-                    .table_log
-                    .latest_npc_speech_before(player_sequence)
-                    .ok_or_else(|| Status::failed_precondition("merchant quote speech expired"))?;
-                let latest_hero = self
-                    .table_log
-                    .latest_hero_speech_after(quote.source_line_sequence)
-                    .ok_or_else(|| Status::failed_precondition("hero trade request expired"))?;
+                let latest_hero = self.table_log.latest_hero_speech_after(0);
                 let latest_npc_matches = self
                     .table_log
                     .latest_npc_speech_at(source_line_sequence, merchant_id)
@@ -2203,11 +2167,8 @@ impl actor::Actor {
                     || super::journey::merchant_bargaining::is_trade_dialogue_request(
                         &player_line.text,
                     );
-                if player_sequence <= quote.source_line_sequence
-                    || player_sequence >= source_line_sequence
-                    || preceding_npc.sequence != quote.source_line_sequence
-                    || preceding_npc.actor_id != quote.source_actor_id
-                    || latest_hero.sequence != player_sequence
+                if player_sequence >= source_line_sequence
+                    || latest_hero.as_ref().map(|line| line.sequence) != Some(player_sequence)
                     || player_line.role != rpc::TableRole::Hero as i32
                     || player_line.kind != rpc::TableKind::Speech as i32
                     || player_line.speaker != hero.chars().take(48).collect::<String>()
@@ -2707,10 +2668,6 @@ impl actor::Actor {
             };
             quote.source_actor_id == *expected_merchant
                 && quote.source_actor_id == reply.actor_id
-                && self
-                    .table_log
-                    .latest_npc_speech_at(quote.source_line_sequence, &quote.source_actor_id)
-                    .is_some()
                 && {
                     let decision =
                         super::journey::merchant_bargaining::quote_decision(typed, quote.price_cp);

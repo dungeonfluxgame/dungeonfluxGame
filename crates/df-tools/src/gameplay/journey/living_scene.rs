@@ -836,7 +836,7 @@ pub(crate) fn close_merchant_quote(
         || source_actor_id != &proposal.actor_id
         || *source_revision != current.basis().revision
         || *source_line_sequence == 0
-        || *source_line_sequence <= quote.source_line_sequence
+        || !revision_is_after(&revision_text(*source_revision), &quote.source_revision)
         || source_line_id == &quote.source_line_id
         || source_text.trim().is_empty()
         || source_text.len() > 1024
@@ -979,9 +979,9 @@ pub(crate) fn merchant_quote_history(
                 || closure.source_line_id.is_empty()
                 || closure.source_line_id.len() > 128
                 || closure.source_line_id == quote.source_line_id
-                || closure.source_line_sequence <= quote.source_line_sequence
                 || closure.source_revision.is_empty()
                 || closure.source_revision.len() > 64
+                || !revision_is_after(&closure.source_revision, &quote.source_revision)
                 || closure.source_actor_id != closure.actor_id
                 || closure.source_text.trim().is_empty()
                 || closure.source_text.len() > 1024
@@ -1133,6 +1133,18 @@ fn valid_npc_source(current: &Checkpoint, actor_id: &str, source: &NpcInventoryS
 
 fn revision_text(revision: df_types::SessionRevision) -> String {
     format!("{}:{}", revision.epoch().get(), revision.sequence())
+}
+
+fn revision_is_after(candidate: &str, prior: &str) -> bool {
+    fn parts(value: &str) -> Option<(u64, u64)> {
+        let (epoch, sequence) = value.split_once(':')?;
+        if sequence.contains(':') {
+            return None;
+        }
+        Some((epoch.parse().ok()?, sequence.parse().ok()?))
+    }
+
+    matches!((parts(candidate), parts(prior)), (Some(candidate), Some(prior)) if candidate > prior)
 }
 
 fn is_authenticated_hero(

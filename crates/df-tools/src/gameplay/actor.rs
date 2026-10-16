@@ -2462,7 +2462,7 @@ impl Actor {
         }
     }
 
-    fn validate_trade_quote_source(
+    fn validate_trade_quote_receipt(
         &self,
         member: df_types::MemberId,
         request: &rpc::SubmitActionRequest,
@@ -2506,22 +2506,10 @@ impl Actor {
         if quote.source_actor_id != *merchant_id
             || quote.source_line_sequence == 0
             || quote.source_line_id.is_empty()
+            || quote.source_revision.is_empty()
         {
             return Err(tonic::Status::failed_precondition(
                 "merchant quote source binding is invalid",
-            ));
-        }
-        if self
-            .table_log
-            .latest_npc_speech_at(quote.source_line_sequence, &quote.source_actor_id)
-            .is_none()
-            || self
-                .table_log
-                .latest_hero_speech_after(quote.source_line_sequence)
-                .is_some()
-        {
-            return Err(tonic::Status::failed_precondition(
-                "merchant quote no longer matches the latest public NPC speech",
             ));
         }
         Ok(())
@@ -2550,7 +2538,7 @@ impl Actor {
         }
         let member = df_types::MemberId::from_bytes(&principal)
             .map_err(|_| tonic::Status::permission_denied("member binding invalid"))?;
-        self.validate_trade_quote_source(member, &request)?;
+        self.validate_trade_quote_receipt(member, &request)?;
         if rpc::GameplayActionKind::try_from(request.action_kind)
             == Ok(rpc::GameplayActionKind::SetTableSetting)
         {

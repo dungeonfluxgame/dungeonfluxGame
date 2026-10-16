@@ -986,9 +986,9 @@ impl TableLog {
             .is_some()
     }
 
-    /// Returns the current latest NPC speech when its actor and sequence match. Quote receipts
-    /// retain the source-line digest and sequence, so acceptance can prove it still refers to
-    /// the same public turn without retaining or returning the speech text.
+    /// Returns the latest in-memory NPC speech when its actor and sequence match. This is for
+    /// checks on live table turns; durable quote receipts are validated from the checkpoint
+    /// journal and must not depend on this bounded presentation ring.
     pub(super) fn latest_npc_speech_at(&self, sequence: u64, actor_id: &str) -> Option<String> {
         let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
         ring.lines

@@ -1055,7 +1055,9 @@ mod tests {
                     source: journey::living_scene::NpcInventorySource {
                         source_line_id: "merchant-quote-close-1".into(),
                         source_revision: opening.basis().revision,
-                        source_line_sequence: 1,
+                        // The quote's original TableLog can be older than a restarted ring;
+                        // its new public decline line may therefore have a smaller sequence.
+                        source_line_sequence: 100,
                         source_actor_id: merchant_id.clone(),
                         source_text: "I can do those clothes for 150 CP.".into(),
                     },
