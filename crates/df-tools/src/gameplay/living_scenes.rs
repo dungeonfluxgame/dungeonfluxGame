@@ -1489,11 +1489,19 @@ impl Inner {
     async fn load_figure(&self, sprite: &str) -> Result<ReferenceImage, ImageFailure> {
         let stem = sprite.rsplit('/').next().unwrap_or(sprite);
         if let Some(name) = stem.strip_prefix("sprite-")
-            && let Ok(figure) = self.load(format!("figure-{name}")).await
+            && let Ok(figure) = if self.references.photographic_only() {
+                self.load_photographic(format!("figure-{name}")).await
+            } else {
+                self.load(format!("figure-{name}")).await
+            }
         {
             return Ok(figure);
         }
-        self.load(sprite.to_owned()).await
+        if self.references.photographic_only() {
+            self.load_photographic(sprite.to_owned()).await
+        } else {
+            self.load(sprite.to_owned()).await
+        }
     }
 
     async fn render_expression(
@@ -1577,7 +1585,7 @@ impl Inner {
         scene_asset: &str,
         look: Look,
     ) -> Result<ImageKey, ImageFailure> {
-        let backdrop = self.load(scene_asset.to_owned()).await?;
+        let backdrop = self.load_plate_reference(scene_asset.to_owned()).await?;
         self.imagery
             .render(ImageRequest {
                 kind: ImageKind::SceneRefresh,

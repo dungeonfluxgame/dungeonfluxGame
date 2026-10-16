@@ -12,8 +12,8 @@ use super::super::live_tv::GENERATED;
 /// The single place that turns a generated-art stem into its served URL.
 pub(super) fn generated_asset_url(stem: &str) -> String {
     let photographic = match stem {
-        "portrait-hero-1" | "portrait-hero-1-full" => Some("figure-hero-1-photo.png"),
-        "portrait-hero-2" | "portrait-hero-2-full" => Some("figure-hero-2-photo.png"),
+        "portrait-hero-1" | "portrait-hero-1-full" => Some("figure-hero-1-photo"),
+        "portrait-hero-2" | "portrait-hero-2-full" => Some("figure-hero-2-photo"),
         _ => None,
     };
     photographic.map_or_else(

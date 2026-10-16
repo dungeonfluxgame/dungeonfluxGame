@@ -593,14 +593,14 @@ mod tests {
             TestActor {
                 id: "hero-1".to_owned(),
                 name: "Brakka".to_owned(),
-                fallback_art: "/assets/ui/generated/figure-hero-1-photo.png".to_owned(),
+                fallback_art: "/assets/ui/generated/figure-hero-1-photo".to_owned(),
                 hero_art: Some(1),
                 speaking: false,
             },
             TestActor {
                 id: "hero-2".to_owned(),
                 name: "Sigrun".to_owned(),
-                fallback_art: "/assets/ui/generated/figure-hero-2-photo.png".to_owned(),
+                fallback_art: "/assets/ui/generated/figure-hero-2-photo".to_owned(),
                 hero_art: Some(2),
                 speaking: false,
             },
@@ -858,7 +858,7 @@ mod tests {
             .find(|actor| actor.id == "hero-1")
             .expect("first hero is present");
         assert_eq!(hero.art, "/gameplay/imagery/hero-cutout");
-        assert!(hero.fallback_art.ends_with("figure-hero-1-photo.png"));
+        assert!(hero.fallback_art.ends_with("figure-hero-1-photo"));
         assert!(graph.set.asset.ends_with("empty-set"));
         let (fallback_graph, _, _) =
             graph_for(scene, Some("/gameplay/imagery/empty-set"), None, 40);
