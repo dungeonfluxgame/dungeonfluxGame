@@ -14,6 +14,19 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T02:22:10-04:00 to 2026-10-16T06:39:31-04:00
+
+Range: 33f5b3e51473781b300186f552bd0cad6feb10e2..4f9a7516b5f73c61818afb67dd8a5480b1431325
+
+- 74c3986101614c7d493520f9366813cfa01b2dca — Record integrated dialogue routing work block
+- facc4ca64413495533ca8a11eedf9d64d8a905fb — Redesign party HUD and phase fades
+- 69dc4541ae30e737899cecebd82011c02e46a1c0 — Harden party HUD phase fades
+- b9fc216bc5fc012c9998e0ee7c9f33d793347793 — Refine check-card readability and cinematic camera easing
+- 0996445c6d285fdba82b6a9f5762a125e1dfd619 — Refine grounded conversational replies and add natural dialogue canary
+- 4f9a7516b5f73c61818afb67dd8a5480b1431325 — Defer SAM character localization as a speech placement enhancement
+
+Next block baseline: `4f9a7516b5f73c61818afb67dd8a5480b1431325`.
+
 ## 2026-10-15T22:31:46-04:00 to 2026-10-16T02:22:10-04:00
 
 Range: 4a80dbb32322b829c7bbfaba473784d21ee51cee..33f5b3e51473781b300186f552bd0cad6feb10e2
