@@ -344,6 +344,16 @@ struct StoryBeat {
     dialogue: shot::PublicDialogue,
 }
 
+impl StoryBeat {
+    fn actor_key(&self) -> String {
+        if self.actor_id.is_empty() {
+            format!("speaker:{}", self.speaker)
+        } else {
+            self.actor_id.clone()
+        }
+    }
+}
+
 fn public_beat(journey: &rpc::JourneyView) -> shot::PublicBeat {
     match journey
         .tempo
@@ -1411,6 +1421,8 @@ impl Shared {
         let mut book = locked(&self.book);
         if let Some(scene) = located.as_ref().and_then(PlateScene::of) {
             state_images::observe(&mut book, view, &scene, self.inner.now());
+        } else {
+            state_images::reset_scene(&mut book, view);
         }
         let scene_changed = book
             .current

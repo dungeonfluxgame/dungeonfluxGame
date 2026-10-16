@@ -187,6 +187,7 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
             scene: next.scene_key.clone(),
             state: pending.state,
             revision: pending.revision,
+            story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
             result: Ok(key('b')),
         },
         Duration::from_secs(5),
@@ -223,6 +224,355 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
         drain(&mut queue).is_empty(),
         "one bounded pending story, not one job per reply"
     );
+}
+
+fn public_story_message(scene: &pack::Scene, table_log: Vec<rpc::TableLine>) -> rpc::ViewMessage {
+    let mut message = display_message(scene);
+    let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+        panic!("display fixture")
+    };
+    display.journey = Some(rpc::JourneyView {
+        table_log,
+        tempo: Some(rpc::TempoCue {
+            phase: rpc::TempoPhase::Build as i32,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    message
+}
+
+fn public_npc_line(sequence: u64, actor: &pack::SceneCastMember, text: &str) -> rpc::TableLine {
+    rpc::TableLine {
+        sequence,
+        actor_id: actor.id.clone(),
+        speaker: actor.name.clone(),
+        role: rpc::TableRole::Npc as i32,
+        kind: rpc::TableKind::Speech as i32,
+        text: text.to_owned(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_edited_key() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/filmic-camera-repair/caller-{}",
+        std::process::id(),
+    ));
+    let fixture = DirectionFixture::new(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let (jobs, mut queue) = mpsc::channel(16);
+    let shared = Arc::new(Shared {
+        inner: Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Restrained,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        }),
+        book: Mutex::new(Book::new()),
+        jobs,
+    });
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    let loaded =
+        pack::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/harbor-journey"))
+            .unwrap();
+    let current = loaded
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::DialogueSeal)
+        .unwrap();
+    let first_actor = &current.cast[0];
+    let other_actor = &current.cast[1];
+    pack::with_test_pack(loaded.clone(), || {
+        plates.observe(&public_story_message(current, Vec::new()), 1);
+    });
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    let scene = PlateScene::of(current).unwrap();
+    let (request, _) = shared
+        .fresh_request(&scene, &scene.stage(&[]).unwrap(), &[], &[], None)
+        .await
+        .unwrap();
+    let base = fixture.imagery.render(request).await.unwrap();
+    locked(&shared.book).insert(
+        id,
+        Entry::Ready {
+            key: base.clone(),
+            placement: None,
+        },
+    );
+    let mut lines = Vec::new();
+    for (sequence, actor, text, camera, phrase) in [
+        (
+            2,
+            first_actor,
+            "Keep your voice low.",
+            shot::PublicDialogue::FirstReply,
+            "medium dialogue",
+        ),
+        (
+            3,
+            first_actor,
+            "I am still listening.",
+            shot::PublicDialogue::SameSpeakerFollowup,
+            "close conversational",
+        ),
+        (
+            4,
+            other_actor,
+            "I heard that.",
+            shot::PublicDialogue::SpeakerChange,
+            "over-the-shoulder dialogue",
+        ),
+    ] {
+        lines.push(public_npc_line(sequence, actor, text));
+        pack::with_test_pack(loaded.clone(), || {
+            plates.observe(&public_story_message(current, lines.clone()), sequence);
+        });
+        let now = shared.inner.now() + Duration::from_secs(4 + (sequence - 2) * 31);
+        shared.poll_state_images_at(now);
+        let Job::State(job) = drain(&mut queue).remove(0) else {
+            panic!("automatic story edit")
+        };
+        let state_images::Job::Bake {
+            pending,
+            base,
+            identities,
+            ..
+        } = &job
+        else {
+            panic!("story bake")
+        };
+        assert_eq!(pending.story.as_ref().unwrap().dialogue, camera);
+        let Lookup::Image { bytes, format } = fixture.imagery.image(base.as_str()).await else {
+            panic!("shown base bytes")
+        };
+        let request = shared
+            .state_image_request(
+                pending,
+                ReferenceImage::new(format, bytes),
+                identities.as_deref(),
+            )
+            .await
+            .unwrap();
+        assert!(request.prompt.as_str().contains(phrase));
+        assert!(
+            !request
+                .prompt
+                .as_str()
+                .contains("Keep the exact aspect ratio and framing")
+        );
+        assert!(!request.prompt.as_str().contains("Keep its camera position"));
+        let expected = fixture.imagery.key_for(&request);
+        assert_ne!(&expected, base);
+        let done = shared.render_state_image(job).await;
+        assert!(
+            matches!(&done, state_images::Done::Bake { result: Ok(key), .. } if key == &expected)
+        );
+        assert!(
+            locked(&shared.book)
+                .image_layouts
+                .contains_key(expected.as_str()),
+            "the actual edit renderer measured this exact new image, using the fixture fallback"
+        );
+        shared.finish_state_image_at(done, now + Duration::from_secs(1));
+        assert_eq!(locked(&shared.book).shown().unwrap().0, expected);
+        assert!(fixture.prompt().contains(phrase));
+    }
+}
+
+#[tokio::test]
+async fn public_story_caller_counts_only_published_edits_and_resets_when_the_scene_changes() {
+    let loaded =
+        pack::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/harbor-journey"))
+            .unwrap();
+    let current = loaded
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::DialogueSeal)
+        .unwrap();
+    let next = loaded
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::DialogueEscort)
+        .unwrap();
+    let actor = &current.cast[0];
+    let other = &current.cast[1];
+    let (shared, mut queue) = shared(16);
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    let mut lines = Vec::new();
+    pack::with_test_pack(loaded.clone(), || {
+        plates.observe(&public_story_message(current, Vec::new()), 1)
+    });
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    // Both replies settle into one first shot; observing a reply does not count as showing it.
+    for (sequence, speaker, text) in [(2, other, "Wait."), (3, actor, "Let me explain.")] {
+        lines.push(public_npc_line(sequence, speaker, text));
+        pack::with_test_pack(loaded.clone(), || {
+            plates.observe(&public_story_message(current, lines.clone()), sequence)
+        });
+    }
+    shared.poll_state_images_at(Duration::from_secs(4));
+    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
+        panic!("first edit")
+    };
+    assert_eq!(
+        pending.story.as_ref().unwrap().dialogue,
+        shot::PublicDialogue::FirstReply
+    );
+    let completed_actor = pending.story.as_deref().map(StoryBeat::actor_key);
+    shared.finish_state_image_at(
+        state_images::Done::Bake {
+            scene: view(current, &[], false).scene_key,
+            state: pending.state,
+            revision: pending.revision,
+            story_actor: completed_actor,
+            result: Ok(key('b')),
+        },
+        Duration::from_secs(5),
+    );
+    // Identical text with another public sequence is suppressed.
+    lines.push(public_npc_line(4, actor, "Let me explain."));
+    pack::with_test_pack(loaded.clone(), || {
+        plates.observe(&public_story_message(current, lines.clone()), 4)
+    });
+    shared.poll_state_images_at(Duration::from_secs(34));
+    assert!(drain(&mut queue).is_empty());
+    // A failed change of speaker does not become the previous shown actor.
+    lines.push(public_npc_line(5, other, "No."));
+    pack::with_test_pack(loaded.clone(), || {
+        plates.observe(&public_story_message(current, lines.clone()), 5)
+    });
+    shared.poll_state_images_at(Duration::from_secs(35));
+    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
+        panic!("changed speaker")
+    };
+    assert_eq!(
+        pending.story.as_ref().unwrap().dialogue,
+        shot::PublicDialogue::SpeakerChange
+    );
+    shared.finish_state_image_at(
+        state_images::Done::Bake {
+            scene: view(current, &[], false).scene_key,
+            state: pending.state,
+            revision: pending.revision,
+            story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
+            result: Err(ImageFailure::InvalidRequest),
+        },
+        Duration::from_secs(36),
+    );
+    for (sequence, speaker, text) in [(6, other, "Listen."), (7, actor, "As I said.")] {
+        lines.push(public_npc_line(sequence, speaker, text));
+        pack::with_test_pack(loaded.clone(), || {
+            plates.observe(&public_story_message(current, lines.clone()), sequence)
+        });
+    }
+    shared.poll_state_images_at(Duration::from_secs(66));
+    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
+        panic!("followup")
+    };
+    assert_eq!(
+        pending.story.as_ref().unwrap().dialogue,
+        shot::PublicDialogue::SameSpeakerFollowup
+    );
+    // An uncompleted old-scene job and retained log cannot set the next scene's continuity.
+    pack::with_test_pack(loaded.clone(), || {
+        plates.observe(&public_story_message(next, lines.clone()), 8)
+    });
+    assert!(locked(&shared.book).state_images.pending.is_none());
+    drain(&mut queue);
+    let id = locked(&shared.book)
+        .current
+        .as_ref()
+        .unwrap()
+        .id
+        .clone()
+        .unwrap();
+    ready(&shared, &id, 'c');
+    shared.finish_state_image_at(
+        state_images::Done::Bake {
+            scene: view(current, &[], false).scene_key,
+            state: pending.state,
+            revision: pending.revision,
+            story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
+            result: Ok(key('d')),
+        },
+        Duration::from_secs(67),
+    );
+    lines.push(public_npc_line(9, actor, "Here we are."));
+    pack::with_test_pack(loaded.clone(), || {
+        plates.observe(&public_story_message(next, lines), 9)
+    });
+    shared.poll_state_images_at(Duration::from_secs(70));
+    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
+        panic!("new scene first reply")
+    };
+    assert_eq!(
+        pending.story.as_ref().unwrap().dialogue,
+        shot::PublicDialogue::FirstReply
+    );
+}
+
+#[tokio::test]
+async fn public_story_caller_ignores_private_withheld_and_action_only_updates() {
+    let loaded =
+        pack::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/harbor-journey"))
+            .unwrap();
+    let current = loaded
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::DialogueSeal)
+        .unwrap();
+    let (shared, mut queue) = shared(16);
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    pack::with_test_pack(loaded.clone(), || {
+        plates.observe(&public_story_message(current, Vec::new()), 1)
+    });
+    drain(&mut queue);
+    let mut private = public_npc_line(2, &current.cast[0], "murmurs to Hero 1");
+    private.kind = rpc::TableKind::Action as i32;
+    let action = rpc::TableLine {
+        sequence: 3,
+        role: rpc::TableRole::Hero as i32,
+        kind: rpc::TableKind::Action as i32,
+        text: "Look around.".into(),
+        ..Default::default()
+    };
+    for (revision, lines) in [(2, Vec::new()), (3, vec![private]), (4, vec![action])] {
+        let mut message = public_story_message(current, lines);
+        let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+            panic!("display")
+        };
+        display.journey.as_mut().unwrap().dialogue =
+            "Uncommitted or withheld prose is not a camera cue.".into();
+        pack::with_test_pack(loaded.clone(), || plates.observe(&message, revision));
+        shared.poll_state_images_at(Duration::from_secs(40));
+        assert!(drain(&mut queue).is_empty());
+        assert!(locked(&shared.book).state_images.pending.is_none());
+    }
+    plates.observe(&player_message(current), 5);
+    assert!(locked(&shared.book).state_images.pending.is_none());
 }
 
 #[test]
@@ -646,6 +996,7 @@ async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_
                 .picture_state()
                 .unwrap(),
             revision: 2,
+            story_actor: None,
             result: Ok(key('b')),
         },
         Duration::from_secs(19),
@@ -672,6 +1023,7 @@ async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_
                 .picture_state()
                 .unwrap(),
             revision: 3,
+            story_actor: None,
             result: Ok(key('c')),
         },
         Duration::from_secs(21),
@@ -743,6 +1095,7 @@ async fn settled_changes_edit_once_keep_the_old_plate_and_drop_an_outdated_compl
         scene: changed_view.scene_key,
         state: obsolete,
         revision: 2,
+        story_actor: None,
         result: Ok(key('b')),
     });
     assert_eq!(locked(&shared.book).shown().unwrap().0, base);

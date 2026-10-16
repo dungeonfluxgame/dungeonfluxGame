@@ -148,6 +148,45 @@ fn public_story_cues_choose_bounded_camera_variants_deterministically() {
 }
 
 #[test]
+fn public_dialogue_coverage_changes_without_a_tempo_change_and_bookends_stay_wide() {
+    for beat in [
+        PublicBeat::Calm,
+        PublicBeat::Build,
+        PublicBeat::Anticipation,
+        PublicBeat::Peak,
+    ] {
+        for (dialogue, expected) in [
+            (PublicDialogue::FirstReply, Camera::DialogueMedium),
+            (PublicDialogue::SameSpeakerFollowup, Camera::SpeakerClose),
+            (PublicDialogue::SpeakerChange, Camera::OverShoulderLeft),
+        ] {
+            assert_eq!(
+                Camera::for_public_beat(
+                    Camera::OverShoulderLeft,
+                    SceneKey::DialogueSeal,
+                    beat,
+                    5,
+                    dialogue
+                ),
+                expected,
+            );
+        }
+    }
+    for scene in [SceneKey::Opening, SceneKey::Victory] {
+        assert_eq!(
+            Camera::for_public_beat(
+                Camera::OverShoulderRight,
+                scene,
+                PublicBeat::Peak,
+                8,
+                PublicDialogue::SameSpeakerFollowup
+            ),
+            Camera::WideEstablishing,
+        );
+    }
+}
+
+#[test]
 fn every_plate_of_a_place_keeps_its_camera_sides_props_light_and_hour_and_no_hero_holds_another_weapon()
  {
     let heroes = [1, 2];

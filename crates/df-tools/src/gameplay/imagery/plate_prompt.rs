@@ -92,11 +92,17 @@ pub(in crate::gameplay) fn camera_phrase(camera: Camera) -> &'static str {
         Camera::SpeakerClose => {
             "A close conversational shot on a 75mm lens at eye level: the speaker's face and hands carry the public beat in crisp focus while the familiar place falls into restrained optical depth of field."
         }
-        Camera::OverShoulderLeft | Camera::OverShoulderRight => {
-            "An over-the-shoulder dialogue shot on a 50mm lens: a party shoulder is a soft foreground anchor, the speaker is crisp in the mid-ground, and the familiar place remains readable behind."
+        Camera::OverShoulderLeft => {
+            "An over-the-shoulder dialogue shot on a 50mm lens from the party's left: a soft left foreground shoulder anchors the crisp speaker; familiar architecture stays readable behind."
         }
-        Camera::DutchOverShoulderLeft | Camera::DutchOverShoulderRight => {
-            "A restrained three-degree Dutch-angle over-the-shoulder dialogue shot on a 50mm lens: keep the slight tension in the horizon, the speaker crisp, the foreground shoulder soft, and the place recognizable."
+        Camera::OverShoulderRight => {
+            "An over-the-shoulder dialogue shot on a 50mm lens from the party's right: a soft right foreground shoulder anchors the crisp speaker; familiar architecture stays readable behind."
+        }
+        Camera::DutchOverShoulderLeft => {
+            "A restrained three-degree Dutch-angle over-the-shoulder shot on a 50mm lens from the party's left: keep the speaker crisp, the left foreground shoulder soft, and the familiar place recognizable."
+        }
+        Camera::DutchOverShoulderRight => {
+            "A restrained three-degree Dutch-angle over-the-shoulder shot on a 50mm lens from the party's right: keep the speaker crisp, the right foreground shoulder soft, and the familiar place recognizable."
         }
     }
 }
@@ -580,7 +586,9 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         camera_phrase(Camera::DialogueMedium),
         camera_phrase(Camera::SpeakerClose),
         camera_phrase(Camera::OverShoulderLeft),
+        camera_phrase(Camera::OverShoulderRight),
         camera_phrase(Camera::DutchOverShoulderLeft),
+        camera_phrase(Camera::DutchOverShoulderRight),
         PLACE_IS,
         INTERIOR,
         EXTERIOR,

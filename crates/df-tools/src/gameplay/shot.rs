@@ -122,25 +122,18 @@ impl Camera {
             Self::OverShoulderRight | Self::DutchOverShoulderRight => Self::OverShoulderRight,
             _ => Self::OverShoulderLeft,
         };
-        match beat {
-            PublicBeat::Calm if matches!(dialogue, PublicDialogue::SameSpeakerFollowup) => {
-                Self::SpeakerClose
-            }
-            PublicBeat::Calm if matches!(dialogue, PublicDialogue::SpeakerChange) => side,
-            PublicBeat::Calm => Self::DialogueMedium,
-            PublicBeat::Build if matches!(dialogue, PublicDialogue::SameSpeakerFollowup) => {
-                Self::SpeakerClose
-            }
-            PublicBeat::Build if matches!(dialogue, PublicDialogue::SpeakerChange) => side,
-            PublicBeat::Build => Self::DialogueMedium,
-            // Peak tension is rare and bounded to a typed public beat; the sequence keeps it
-            // deterministic without reacting to arbitrary words in the scene or reply.
-            PublicBeat::Peak if sequence % 4 == 0 => match side {
+        // Peak tension is rare and bounded to a typed public beat; the sequence keeps it
+        // deterministic without reacting to arbitrary words in the scene or reply.
+        if matches!(beat, PublicBeat::Peak) && sequence % 4 == 0 {
+            return match side {
                 Self::OverShoulderRight => Self::DutchOverShoulderRight,
                 _ => Self::DutchOverShoulderLeft,
-            },
-            PublicBeat::Peak | PublicBeat::Anticipation => side,
-            PublicBeat::Release => Self::WideEstablishing,
+            };
+        }
+        match dialogue {
+            PublicDialogue::FirstReply => Self::DialogueMedium,
+            PublicDialogue::SameSpeakerFollowup => Self::SpeakerClose,
+            PublicDialogue::SpeakerChange => side,
         }
     }
 

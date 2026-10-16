@@ -20,7 +20,7 @@ pub(super) struct Book {
     last_shown: Option<Duration>,
     pub(super) shown: Option<(ImageKey, Option<PlatePlacement>)>,
     pub(super) baked_revision: Option<u64>,
-    ready: Option<(ImageKey, u64)>,
+    ready: Option<(ImageKey, u64, Option<String>)>,
     pub(super) items: BTreeMap<String, Item>,
     pub(super) latest_items: BTreeMap<String, String>,
     last_story_actor: Option<String>,
@@ -86,6 +86,7 @@ pub(super) enum Done {
         scene: String,
         state: String,
         revision: u64,
+        story_actor: Option<String>,
         result: Result<ImageKey, ImageFailure>,
     },
     Item {
@@ -94,9 +95,30 @@ pub(super) enum Done {
     },
 }
 
+pub(super) fn reset_scene(book: &mut super::Book, view: &View) -> bool {
+    let images = &mut book.state_images;
+    if images.scene == view.scene_key {
+        return false;
+    }
+    // A retained public log row from the previous scene cannot start a new scene's edit.
+    let retained_story = view
+        .story
+        .as_ref()
+        .filter(|story| images.observed == story.sha256)
+        .map(|story| story.sha256.clone())
+        .unwrap_or_default();
+    *images = Book {
+        scene: view.scene_key.clone(),
+        observed: retained_story,
+        ..Book::default()
+    };
+    true
+}
+
 pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, now: Duration) {
+    let scene_changed = reset_scene(book, view);
     let Some(snapshot) = &scene.snapshot else {
-        observe_story(book, view, now);
+        observe_story(book, view, scene, now);
         return;
     };
     let Ok(state) = snapshot.model.picture_state() else {
@@ -107,17 +129,9 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
         return;
     };
     let images = &mut book.state_images;
-    if images.scene != view.scene_key {
-        images.scene = view.scene_key.clone();
+    if scene_changed {
         images.observed = state;
         images.observed_graph = view.graph_revision;
-        images.shown = None;
-        images.pending = None;
-        images.flying = false;
-        images.baked_revision = None;
-        images.ready = None;
-        images.last_started = None;
-        images.last_shown = None;
         return;
     }
     // Who speaks and their expression change the graph, not the room's visible state.
@@ -135,16 +149,6 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
     let reason = images.pending.as_ref().map_or(reason.clone(), |pending| {
         format!("{}; {reason}", pending.reason)
     });
-    let dialogue = match images.last_story_actor.as_deref() {
-        Some(actor) if actor == story.actor_id => {
-            crate::gameplay::shot::PublicDialogue::SameSpeakerFollowup
-        }
-        Some(_) => crate::gameplay::shot::PublicDialogue::SpeakerChange,
-        None => crate::gameplay::shot::PublicDialogue::FirstReply,
-    };
-    images.last_story_actor = Some(story.actor_id.clone());
-    let mut story = story.clone();
-    story.dialogue = dialogue;
     images.pending = Some(Pending {
         snapshot: Some(snapshot.clone()),
         story: None,
@@ -156,18 +160,22 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
     });
 }
 
-fn observe_story(book: &mut super::Book, view: &View, now: Duration) {
+fn observe_story(book: &mut super::Book, view: &View, scene: &PlateScene, now: Duration) {
     let images = &mut book.state_images;
-    if images.scene != view.scene_key {
-        *images = Book {
-            scene: view.scene_key.clone(),
-            ..Book::default()
-        };
-    }
     let Some(story) = &view.story else {
         refresh_decision(book, "story", "no_committed_npc_reply");
         return;
     };
+    if !scene.identity_cast.iter().any(|member| {
+        if story.actor_id.is_empty() {
+            member.name == story.speaker
+        } else {
+            member.id.strip_prefix("npc:") == Some(story.actor_id.as_str())
+        }
+    }) {
+        refresh_decision(book, "story", "speaker_not_in_scene");
+        return;
+    }
     if images.observed == story.sha256 {
         refresh_decision(book, "story", "unchanged_reply");
         return;
@@ -177,7 +185,7 @@ fn observe_story(book: &mut super::Book, view: &View, now: Duration) {
     images.ready = None;
     images.pending = Some(Pending {
         snapshot: None,
-        story: Some(Box::new(story)),
+        story: Some(Box::new(story.clone())),
         reason: "completed NPC story beat".to_owned(),
         state: story.sha256.clone(),
         revision: view.graph_revision,
@@ -305,12 +313,15 @@ impl Shared {
             .state_images
             .last_shown
             .is_none_or(|last| now.saturating_sub(last) >= BAKE_INTERVAL);
-        if can_show && let Some((key, revision)) = book.state_images.ready.take() {
+        if can_show && let Some((key, revision, story_actor)) = book.state_images.ready.take() {
             let layout = book.image_layouts.get(key.as_str()).cloned();
             book.edit = Edit::Idle;
             book.state_images.shown = Some((key, layout));
             book.state_images.baked_revision = Some(revision);
             book.state_images.last_shown = Some(now);
+            if let Some(actor) = story_actor {
+                book.state_images.last_story_actor = Some(actor);
+            }
             self.wake();
         }
         let Some(pending) = &book.state_images.pending else {
@@ -345,6 +356,17 @@ impl Shared {
             return;
         };
         let mut pending = pending;
+        // Coalesced, failed and unsent replies are not prior shots. Compare with the last
+        // successfully published public story edit, at the point this job is dispatched.
+        if let Some(story) = pending.story.as_mut() {
+            story.dialogue = match book.state_images.last_story_actor.as_deref() {
+                Some(actor) if actor == story.actor_key() => {
+                    crate::gameplay::shot::PublicDialogue::SameSpeakerFollowup
+                }
+                Some(_) => crate::gameplay::shot::PublicDialogue::SpeakerChange,
+                None => crate::gameplay::shot::PublicDialogue::FirstReply,
+            };
+        }
         pending.graph = locked(&self.inner.state)
             .scene_graph
             .clone()
@@ -508,6 +530,7 @@ impl Shared {
                     scene,
                     state: pending.state,
                     revision: pending.revision,
+                    story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
                     result,
                 }
             }
@@ -561,6 +584,7 @@ impl Shared {
                 scene,
                 state,
                 revision,
+                story_actor,
                 result,
             } => {
                 // A late bake is never published over a more recent composition.
@@ -583,13 +607,16 @@ impl Shared {
                                         now.saturating_sub(last) < BAKE_INTERVAL
                                     })
                                 {
-                                    book.state_images.ready = Some((key, revision));
+                                    book.state_images.ready = Some((key, revision, story_actor));
                                 } else {
                                     let layout = book.image_layouts.get(key.as_str()).cloned();
                                     book.edit = Edit::Idle;
                                     book.state_images.shown = Some((key, layout));
                                     book.state_images.baked_revision = Some(revision);
                                     book.state_images.last_shown = Some(now);
+                                    if let Some(actor) = story_actor {
+                                        book.state_images.last_story_actor = Some(actor);
+                                    }
                                 }
                             }
                             Err(failure) => record(
