@@ -271,7 +271,10 @@ fn plate_loading_timing(stage: &Element, visible: bool, scene: &str) {
     let Some(indicator) = stage.query_selector(".tv-plate-loading").ok().flatten() else {
         return;
     };
-    let id = super::presentation_timing::identity(&format!("plate-loading:{scene}"));
+    let id = indicator
+        .get_attribute("data-loading-component-id")
+        .and_then(|id| id.parse::<u64>().ok())
+        .unwrap_or_else(super::presentation_timing::next_component_id);
     super::presentation_timing::component(
         Some(&indicator),
         df_observe::presentation::PresentationComponent::ThinkingLoader,
@@ -307,8 +310,20 @@ fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str
     } else {
         let _ = stage.remove_attribute("data-plate-loading");
     }
-    if was_visible != visible {
-        plate_loading_timing(stage, visible, scene);
+    let Some(indicator) = stage.query_selector(".tv-plate-loading").ok().flatten() else {
+        return;
+    };
+    let active_scene = indicator.get_attribute("data-loading-component-scene");
+    if was_visible && (!visible || active_scene.as_deref() != Some(scene)) {
+        plate_loading_timing(stage, false, active_scene.as_deref().unwrap_or(scene));
+        let _ = indicator.remove_attribute("data-loading-component-id");
+        let _ = indicator.remove_attribute("data-loading-component-scene");
+    }
+    if visible && (!was_visible || active_scene.as_deref() != Some(scene)) {
+        let id = super::presentation_timing::next_component_id();
+        let _ = indicator.set_attribute("data-loading-component-id", &id.to_string());
+        let _ = indicator.set_attribute("data-loading-component-scene", scene);
+        plate_loading_timing(stage, true, scene);
     }
 }
 
@@ -2063,6 +2078,7 @@ impl TvStage {
                 self.plate
                     .root
                     .set_attribute("data-request", &request.to_string())?;
+                self.plate.root.set_attribute("data-loading", "")?;
                 sync_plate_loading(
                     &self.root,
                     None,

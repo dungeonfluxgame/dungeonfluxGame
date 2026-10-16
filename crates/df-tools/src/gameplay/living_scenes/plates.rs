@@ -3088,6 +3088,9 @@ impl Shared {
                             ("scene.tier", face.tier.label().to_owned()),
                         ],
                     );
+                    drop(book);
+                    self.wake();
+                    return;
                 }
             }
         }
