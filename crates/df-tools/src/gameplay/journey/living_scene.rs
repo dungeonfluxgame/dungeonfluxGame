@@ -96,12 +96,39 @@ pub(in crate::gameplay) fn snapshot(
     let Some(setting) = &scene.setting else {
         return Ok(None);
     };
-    let Some(mut model) = MODELS
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&setting.place_id)
-        .cloned()
+    // Callers may pass a projected scene whose model already includes this journal. Always
+    // replay from the immutable loaded authoring, never from that projected copy.
+    let authored = pack::with_content(|content| {
+        let mut models = content
+            .scenes
+            .iter()
+            .chain(
+                content
+                    .beat_script
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|script| script.scenes.values()),
+            )
+            .filter_map(|scene| scene.setting.as_ref())
+            .filter(|source| source.place_id == setting.place_id)
+            .filter_map(|source| source.model.as_ref());
+        let Some(first) = models.next() else {
+            return Ok(None);
+        };
+        if models.any(|other| other != first) {
+            return Err(invalid());
+        }
+        Ok(Some(first.clone()))
+    })?;
+    let Some(mut model) = authored
+        .or_else(|| {
+            MODELS
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&setting.place_id)
+                .cloned()
+        })
         .or_else(|| setting.model.clone())
     else {
         return Ok(None);
@@ -307,40 +334,35 @@ pub(in crate::gameplay) fn item_for(
     let Some(setting) = &scene.setting else {
         return Ok(None);
     };
-    let Some(model) = &setting.model else {
+    let Some(snapshot) = snapshot(state, scene)? else {
         return Ok(None);
     };
+    let model = &snapshot.model;
     for decision in state.decisions.iter().rev() {
-        if let Some(entry) = read(decision)?
-            && entry.place == setting.place_id
-            && entry.hero == hero
-            && matches!(entry.option.as_str(), "examine" | "take" | "share")
-            && let Some(thing) = model.things.iter().find(|thing| thing.id == entry.target)
-        {
-            return Ok(Some(rpc::SceneItemCard {
-                thing_id: thing.id.clone(),
-                name: thing.name.clone(),
-                detail: thing.detail.clone(),
-                image_path: String::new(),
-                image_state: rpc::PlateState::Failed as i32,
-                state_revision: decision.revision.sequence(),
-            }));
-        } else if let Some(entry) = read(decision)?
-            && entry.place == setting.place_id
-            && entry.hero == hero
-            && entry.paid_cp > 0
-            && matches!(entry.option.as_str(), "buy" | "use")
-            && let Some(offer) = model.offers.iter().find(|offer| offer.id == entry.target)
-        {
-            return Ok(Some(rpc::SceneItemCard {
-                thing_id: offer.id.clone(),
-                name: offer.name.clone(),
-                detail: offer.description.clone(),
-                image_path: String::new(),
-                image_state: rpc::PlateState::Failed as i32,
-                state_revision: decision.revision.sequence(),
-            }));
+        let Some(entry) = read(decision)? else {
+            continue;
+        };
+        if entry.place != setting.place_id || entry.hero != hero {
+            continue;
         }
+        let target = if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use") {
+            format!("purchased-{}", entry.target)
+        } else if matches!(entry.option.as_str(), "examine" | "take" | "share") {
+            entry.target
+        } else {
+            continue;
+        };
+        let Some(thing) = model.things.iter().find(|thing| thing.id == target) else {
+            continue;
+        };
+        return Ok(Some(rpc::SceneItemCard {
+            thing_id: thing.id.clone(),
+            name: thing.name.clone(),
+            detail: thing.detail.clone(),
+            image_path: String::new(),
+            image_state: rpc::PlateState::Failed as i32,
+            state_revision: decision.revision.sequence(),
+        }));
     }
     Ok(None)
 }
@@ -388,6 +410,9 @@ pub(in crate::gameplay) fn interaction_for_line(
     }
     let direct = [
         "i give ",
+        "i return ",
+        "i put ",
+        "i drop ",
         "i pick up ",
         "i take the ",
         "i grab the ",
@@ -409,9 +434,15 @@ pub(in crate::gameplay) fn interaction_for_line(
     if !lower.starts_with("whose ") && (!direct || lower.ends_with('?')) {
         return None;
     }
-    let option = if lower.starts_with("i give ") && gift_amount(words).is_some() {
+    let option = if lower.starts_with("i return ")
+        || lower.starts_with("i put ") && lower.contains(" back")
+    {
+        "return"
+    } else if lower.starts_with("i drop ") {
+        "drop"
+    } else if lower.starts_with("i give ") && gift_amount(words).is_some() {
         "gift"
-    } else if lower.starts_with("i give ") && lower.contains(" back") {
+    } else if lower.starts_with("i give ") {
         "give"
     } else if ["pick up", "take the ", "grab the "]
         .iter()
@@ -444,6 +475,20 @@ pub(in crate::gameplay) fn interaction_for_line(
     Some((id, option))
 }
 
+pub(in crate::gameplay) fn recipient_for_line(scene: &pack::Scene, words: &str) -> Option<String> {
+    let lower = words.to_lowercase();
+    let (_, recipient) = lower.split_once(" to ")?;
+    let model = scene.setting.as_ref()?.model.as_ref()?.for_scene(scene.key);
+    let resolved = model.resolve_target(recipient)?;
+    if resolved.kind != crate::gameplay::adventure::scene_model::SceneTargetKind::Person {
+        return None;
+    }
+    let [id] = resolved.ids.as_slice() else {
+        return None;
+    };
+    Some(id.clone())
+}
+
 pub(super) fn stage(
     current: &Checkpoint,
     command: &CommandInput,
@@ -472,7 +517,14 @@ pub(super) fn stage(
     };
     let target = get("scene-target").ok_or_else(invalid)?;
     let option = get("scene-option").ok_or_else(invalid)?;
-    if choices.len() != if option == "gift" { 3 } else { 2 } {
+    let named_recipient = get("scene-recipient");
+    if choices.len()
+        != if option == "gift" || option == "give" && named_recipient.is_some() {
+            3
+        } else {
+            2
+        }
+    {
         return Err(invalid());
     }
     let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
@@ -561,32 +613,75 @@ pub(super) fn stage(
                     description
                 }
                 "use" => format!("{hero} uses {}. {}", thing.name, thing.use_effect),
+                "return" | "drop" if thing.holder_id.as_deref() != Some(&hero) => {
+                    format!("You are not holding {}.", thing.name)
+                }
+                "return" | "drop" => {
+                    let position = if option == "drop" {
+                        "on the floor".to_owned()
+                    } else {
+                        pack::with_content(|content| {
+                            content
+                                .scenes
+                                .iter()
+                                .filter_map(|source| source.setting.as_ref())
+                                .filter(|source| {
+                                    source.place_id
+                                        == scene
+                                            .setting
+                                            .as_ref()
+                                            .map_or("", |setting| setting.place_id.as_str())
+                                })
+                                .filter_map(|source| source.model.as_ref())
+                                .flat_map(|model| &model.things)
+                                .find(|source| source.id == thing.id)
+                                .map(|source| source.position.clone())
+                        })
+                        .unwrap_or_else(|| "on the floor".into())
+                    };
+                    let description = format!("{hero} puts {} {position}.", thing.name);
+                    change = Some(SceneChange {
+                        entity_id: thing.id.clone(),
+                        description: description.clone(),
+                        kind: SceneChangeKind::Returned { position },
+                    });
+                    description
+                }
                 "give"
                     if thing.holder_id.as_deref() == Some(&hero)
-                        && thing.owner_id.as_deref() == Some(hero.as_str()) =>
+                        && (named_recipient.is_some()
+                            || thing.owner_id.as_deref() != Some(&hero)) =>
                 {
-                    format!(
-                        "You must name a recipient before giving {} away.",
-                        thing.name
-                    )
-                }
-                "give" if thing.holder_id.as_deref() == Some(&hero) && thing.owner_id.is_some() => {
-                    let recipient = thing.owner_id.as_ref().ok_or_else(invalid)?;
+                    let recipient = named_recipient
+                        .or(thing.owner_id.as_deref())
+                        .ok_or_else(invalid)?;
                     let person = snapshot
                         .model
                         .people
                         .iter()
-                        .find(|person| &person.id == recipient)
+                        .find(|person| person.id == recipient)
                         .ok_or_else(invalid)?;
-                    let description = format!("{hero} gives {} to {}.", thing.name, person.name);
-                    change = Some(SceneChange {
-                        entity_id: thing.id.clone(),
-                        description: description.clone(),
-                        kind: SceneChangeKind::Given {
-                            holder_id: recipient.clone(),
-                        },
-                    });
-                    description
+                    if thing
+                        .owner_id
+                        .as_deref()
+                        .is_some_and(|owner| owner != hero && owner != recipient)
+                    {
+                        format!(
+                            "{} belongs to someone else; return it to its owner.",
+                            thing.name
+                        )
+                    } else {
+                        let description =
+                            format!("{hero} gives {} to {}.", thing.name, person.name);
+                        change = Some(SceneChange {
+                            entity_id: thing.id.clone(),
+                            description: description.clone(),
+                            kind: SceneChangeKind::Given {
+                                holder_id: recipient.to_owned(),
+                            },
+                        });
+                        description
+                    }
                 }
                 "give" if thing.holder_id.as_deref() == Some(&hero) => format!(
                     "You must name a recipient before giving {} away.",
@@ -635,11 +730,13 @@ pub(super) fn stage(
         .iter()
         .find(|offer| offer.id == target)
     {
-        if option != "buy" && option != "use" {
+        if !matches!(option, "buy" | "use" | "examine") {
             return Err(invalid());
         }
         let purchased_id = format!("purchased-{}", offer.id);
-        if snapshot
+        if option == "examine" {
+            format!("{} It costs {} CP.", offer.description, offer.cost_cp)
+        } else if snapshot
             .model
             .things
             .iter()

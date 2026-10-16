@@ -15,6 +15,8 @@ pub(super) const LOOK_AROUND_OFFER_ID: &str = "look-around";
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BeatScript {
+    #[serde(default, skip_serializing_if = "ScriptMode::is_story")]
+    pub(super) mode: ScriptMode,
     pub(super) entry: String,
     pub(super) terminal: Vec<String>,
     pub(super) beats: Vec<Beat>,
@@ -22,6 +24,19 @@ pub(super) struct BeatScript {
     pub(super) labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) scenes: BTreeMap<String, pack::Scene>,
+}
+/// Freeplay has no terminal beat and cannot offer narrative or combat handlers.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum ScriptMode {
+    #[default]
+    Story,
+    Freeplay,
+}
+impl ScriptMode {
+    fn is_story(&self) -> bool {
+        *self == Self::Story
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -233,6 +248,9 @@ impl BeatScript {
         });
     }
     pub(super) fn validate(&self, content: &pack::PackFile) -> Result<(), ScriptError> {
+        if self.mode == ScriptMode::Freeplay {
+            return self.validate_freeplay(content);
+        }
         use ScriptErrorReason as E;
         if self.beats.is_empty()
             || self.beats.len() > 64
@@ -736,9 +754,91 @@ impl BeatScript {
         }
         Ok(())
     }
-    /// The inherited courier handlers consume one creation/opening/conversation
-    /// prefix. Public observation/continuation cycles can revisit generic beats;
-    /// they cannot offer an irreversible native source a second time.
+    fn validate_freeplay(&self, content: &pack::PackFile) -> Result<(), ScriptError> {
+        use ScriptErrorReason as E;
+        // This is an explicit social session contract, not an escape from graph validation.
+        // Only native creation/begin handlers may change its two durable states. Ordinary
+        // interactions append their own validated journal without completing a story beat.
+        let [gather, store] = self.beats.as_slice() else {
+            return Err(refuse(&self.entry, E::HandlerWiring));
+        };
+        if !self.terminal.is_empty()
+            || !self.scenes.is_empty()
+            || !self.labels.is_empty()
+            || gather.id != self.entry
+            || !identifier(&gather.id)
+            || gather.id == store.id
+            || gather.kind != BeatKind::Gather
+            || gather.scene != pack::SceneKey::Room
+            || gather.state.durable != "room"
+            || store.id != "freeplay"
+            || store.kind != BeatKind::Converse
+            || store.scene != pack::SceneKey::Opening
+            || store.state.durable != "opening"
+            || store.offers
+                != [BeatOffer {
+                    id: LOOK_AROUND_OFFER_ID.into(),
+                    label_slot: LOOK_AROUND_OFFER_ID.into(),
+                    effect: BeatEffect::Observe,
+                }]
+            || store.transitions
+                != [BeatTransition {
+                    trigger: BeatTrigger::Offer {
+                        offer: LOOK_AROUND_OFFER_ID.into(),
+                    },
+                    target: store.id.clone(),
+                }]
+            || gather.offers.len() != 2
+            || gather.transitions.len() != 2
+            || self.beats.iter().any(|beat| {
+                beat.scene_variant.is_some()
+                    || beat.state.victory.is_some()
+                    || beat.state.rested.is_some()
+                    || beat.state.chosen_offer.is_some()
+            })
+        {
+            return Err(refuse(&self.entry, E::HandlerWiring));
+        }
+        for (id, effect, slot) in [
+            (
+                "create-character",
+                BeatEffect::CreateCharacter,
+                "create-character",
+            ),
+            ("begin-story", BeatEffect::BeginStory, "begin-story"),
+        ] {
+            if !gather
+                .offers
+                .iter()
+                .any(|offer| offer.id == id && offer.effect == effect && offer.label_slot == slot)
+            {
+                return Err(refuse(&gather.id, E::HandlerWiring));
+            }
+        }
+        if gather.transitions[0]
+            != (BeatTransition {
+                trigger: BeatTrigger::Offer {
+                    offer: "create-character".into(),
+                },
+                target: gather.id.clone(),
+            })
+            || gather.transitions[1]
+                != (BeatTransition {
+                    trigger: BeatTrigger::Offer {
+                        offer: "begin-story".into(),
+                    },
+                    target: store.id.clone(),
+                })
+            || content.reward.is_some()
+            || content.campaign.is_some()
+            || !content.scenes.iter().any(|scene| scene.key == store.scene)
+        {
+            return Err(refuse(&store.id, E::HandlerWiring));
+        }
+        Ok(())
+    }
+    /// The inherited courier handlers consume one creation/opening/conversation prefix.
+    /// Public observation cycles cannot offer an irreversible native source a second time.
     fn validate_native_prefix(&self) -> Result<(), ScriptError> {
         let mut visited = BTreeSet::new();
         let mut pending = vec![(self.entry.as_str(), false, false)];

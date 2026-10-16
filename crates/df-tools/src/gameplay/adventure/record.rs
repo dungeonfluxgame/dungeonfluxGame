@@ -378,6 +378,18 @@ pub(crate) fn reload(
     {
         return Err(RecordError::Invalid("dossiers"));
     }
+    let freeplay = loaded
+        .pack
+        .beat_script
+        .as_ref()
+        .is_some_and(|script| script.mode == super::super::beat_script::ScriptMode::Freeplay);
+    if freeplay
+        && (!record.rolls.is_empty()
+            || record.expression.model.is_some()
+            || super::shop::validate_cast(&loaded.pack, &record.dossiers).is_err())
+    {
+        return Err(RecordError::Invalid("freeplay authoring or cast binding"));
+    }
     let mut story = BTreeSet::new();
     for (index, roll) in record.rolls.iter().enumerate() {
         if roll.n != index + 1
@@ -411,17 +423,11 @@ pub(crate) fn reload(
         "contact",
         "reward",
     ] {
-        if !story.contains(table) {
+        if !freeplay && !story.contains(table) {
             return Err(RecordError::Invalid("missing story roll"));
         }
     }
-    let antagonist = loaded
-        .pack
-        .bandit
-        .srd_id
-        .as_deref()
-        .ok_or(RecordError::Invalid("missing antagonist identity"))?;
-    if record.entry("antagonist")? != antagonist
+    if !freeplay && Some(record.entry("antagonist")?) != loaded.pack.bandit.srd_id.as_deref()
         || record.rules_mode == RulesMode::Standard
             && loaded.departures.iter().any(|departure| {
                 !matches!(
@@ -470,6 +476,9 @@ pub(crate) fn reload(
                 setting.model = Some(model.clone());
             }
         }
+    }
+    if freeplay && super::shop::validate_cast(&loaded.pack, &record.dossiers).is_err() {
+        return Err(RecordError::Invalid("freeplay hydrated cast binding"));
     }
     Ok((loaded, record))
 }

@@ -638,7 +638,7 @@ pub(super) fn validate(
         || state.narrative.completed_beats != completed
         || state.narrative.accepted_facts != accepted
         || state.narrative.open_threads
-            != if started {
+            != if started && script.mode != beat_script::ScriptMode::Freeplay {
                 vec![model::content("sealed-packet-delivery-thread")?]
             } else {
                 Vec::new()
@@ -649,7 +649,9 @@ pub(super) fn validate(
     if started && (journey::participants(current).len() != 2 || state.characters.len() != 2) {
         return invalid();
     }
-    journey::validate_script_native_prefix(current, native_durable)?;
+    if script.mode != beat_script::ScriptMode::Freeplay {
+        journey::validate_script_native_prefix(current, native_durable)?;
+    }
     journey::validate_script_characters(state)?;
     if state
         .entities

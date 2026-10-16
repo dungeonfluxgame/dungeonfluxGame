@@ -946,7 +946,8 @@ fn dossier_location(
     sheets: &[&super::adventure::FactSheet],
 ) -> Option<String> {
     let key = match role {
-        super::adventure::dossier::NpcRole::Patron => "setting.meeting.name",
+        super::adventure::dossier::NpcRole::Patron
+        | super::adventure::dossier::NpcRole::Bystander => "setting.meeting.name",
         super::adventure::dossier::NpcRole::Contact => "setting.destination.name",
         super::adventure::dossier::NpcRole::Antagonist
         | super::adventure::dossier::NpcRole::Villain

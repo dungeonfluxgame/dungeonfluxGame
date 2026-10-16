@@ -182,7 +182,13 @@ fn select_for(
             to: &opening,
             causes: &causes,
             required_threads: &required_threads,
-            opened_thread: Some(&packet),
+            opened_thread: if crate::gameplay::beat_script::with_script(|script| {
+                script.mode == crate::gameplay::beat_script::ScriptMode::Freeplay
+            }) {
+                None
+            } else {
+                Some(&packet)
+            },
         }]
     } else if phase == rpc::JourneyPhase::Opening && (*action == ask || *action == escort_action) {
         let sources = native_sources(current, &begin, rpc::JourneyPhase::Opening)?;

@@ -778,6 +778,19 @@ impl Service {
                 option_id: amount.to_string(),
             });
         }
+        if option == "give" {
+            let current = self.updates.borrow().clone();
+            let scene =
+                super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
+            if let Some(recipient) =
+                journey::living_scene::recipient_for_line(&scene, &request.text)
+            {
+                submit.action_choices.push(rpc::JourneyChoice {
+                    group_id: "scene-recipient".into(),
+                    option_id: recipient,
+                });
+            }
+        }
         let (reply, receive) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Submit {
@@ -837,7 +850,8 @@ impl Service {
         {
             let hero = journey::living_scene::hero(after.state(), operation)
                 .map_err(actor::unavailable)?;
-            if let Err(reason) = self.living.request_item(&hero, target, None, false) {
+            let purchased = format!("purchased-{target}");
+            if let Err(reason) = self.living.request_item(&hero, &purchased, None, false) {
                 actor::record_audit_line(
                     "gameplay.scene_item_request",
                     format!("IMAGERY kind=item target={target:?} status=text reason={reason:?}"),
@@ -881,6 +895,16 @@ impl Service {
         request: &rpc::RawDialogueRequest,
         available_things: &[String],
     ) -> Result<DialogueReply, Status> {
+        let current = self.updates.borrow().clone();
+        let scene =
+            super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
+        if let Some((target, option)) =
+            journey::living_scene::interaction_for_line(&scene, &request.text)
+        {
+            return self
+                .interaction_call(credential, request, &target, option)
+                .await;
+        }
         let action = super::approach_model::physical_action(&request.text, available_things)
             .ok_or_else(|| Status::failed_precondition("explicit action could not be resolved"))?;
         let verb = match action.kind {
@@ -890,9 +914,6 @@ impl Service {
             super::approach_model::PhysicalActionKind::Trade => "trade",
             super::approach_model::PhysicalActionKind::Use => "use",
         };
-        let current = self.updates.borrow().clone();
-        let scene =
-            super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
         if action.kind == super::approach_model::PhysicalActionKind::Attack
             && !journey::tactical::present(current.state())
             && journey::encounter_admission::scene_combat_binding(&current, &action.target)

@@ -2192,6 +2192,11 @@ fn stage_authored_threads(
     candidate: Checkpoint,
     source_id: FactId,
 ) -> Result<Checkpoint, RepositoryError> {
+    if super::beat_script::with_script(|script| {
+        script.mode == super::beat_script::ScriptMode::Freeplay
+    }) {
+        return Ok(candidate);
+    }
     use df_engine::director_staging::{
         DirectorLimits, DirectorStaging, ThreadDirectorLimits, compose_director_thread_progress,
     };
@@ -3949,7 +3954,11 @@ fn stage_using(
                 .state()
                 .narrative
                 .clone();
-            courier_reaction::enter_opening(&mut state)?;
+            if super::beat_script::with_script(|script| {
+                script.mode != super::beat_script::ScriptMode::Freeplay
+            }) {
+                courier_reaction::enter_opening(&mut state)?;
+            }
         }
         rpc::GameplayActionKind::AskCourier | rpc::GameplayActionKind::EscortCourier => {
             if !choices.is_empty() {

@@ -265,7 +265,7 @@ impl Ties {
     pub(super) fn for_role(&self, role: NpcRole) -> &Table<Tie> {
         match role {
             NpcRole::Patron => &self.patron,
-            NpcRole::Contact => &self.contact,
+            NpcRole::Contact | NpcRole::Bystander => &self.contact,
             NpcRole::Antagonist => &self.antagonist,
             NpcRole::Villain => &self.villain,
             NpcRole::Lieutenant => &self.lieutenant,
@@ -318,7 +318,7 @@ impl Attitudes {
     pub(super) fn for_role(&self, role: NpcRole) -> &Table<AttitudeEntry> {
         match role {
             NpcRole::Patron => &self.patron,
-            NpcRole::Contact => &self.contact,
+            NpcRole::Contact | NpcRole::Bystander => &self.contact,
             NpcRole::Antagonist => &self.antagonist,
             NpcRole::Villain => &self.villain,
             NpcRole::Lieutenant => &self.lieutenant,

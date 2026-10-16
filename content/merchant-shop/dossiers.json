@@ -1,0 +1,596 @@
+[
+  {
+    "npc_id": "patron:merchant",
+    "name": "Marek",
+    "role": "patron",
+    "role_label": "a cloth merchant",
+    "tables_revision": "merchant-shop-authoring-1",
+    "given": {
+      "mannerism": "measures with his thumb",
+      "delivery": "plain, conversational",
+      "voice": "warm, measured adult man",
+      "tags": [],
+      "note": null
+    },
+    "origin": {
+      "id": "merchant-origin",
+      "text": "grew up in a family of cloth workers"
+    },
+    "past_trade": {
+      "id": "merchant-past",
+      "text": "I learned to cut cloth in my aunt’s workshop and bought this little shop after she retired."
+    },
+    "formative_event": {
+      "id": "merchant-event",
+      "text": "took over the shop when his aunt retired"
+    },
+    "ideal": {
+      "id": "merchant-ideal",
+      "text": "fair dealing"
+    },
+    "bond": {
+      "id": "merchant-bond",
+      "text": "the aunt who taught him his trade"
+    },
+    "flaw": {
+      "id": "merchant-flaw",
+      "text": "worries too much about making ends meet"
+    },
+    "want": {
+      "id": "merchant-want",
+      "text": "Sell suitable clothing at a fair price."
+    },
+    "fear": {
+      "id": "merchant-fear",
+      "text": "losing the shop"
+    },
+    "talent": {
+      "id": "merchant-talent",
+      "text": "can judge fabric by touch"
+    },
+    "story_tie": {
+      "id": "merchant-shop",
+      "binds": "location",
+      "bound_fact": "Marek’s Cloth Shop",
+      "bound_cast": null,
+      "public": true,
+      "text": "Marek is spending the afternoon at Marek’s Cloth Shop.",
+      "speak": "The traveler’s clothes cost two gold pieces."
+    },
+    "motive": null,
+    "stand_down": null,
+    "knowledge": {
+      "says_freely": [
+        {
+          "topic": "who_are_you",
+          "source": "merchant-public-0",
+          "text": "I run this shop and mend clothing as well as selling it.",
+          "id": "merchant:public:0",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "merchant-public-1",
+          "text": "The traveler’s clothes cost two gold pieces.",
+          "id": "merchant:public:1",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "merchant-public-2",
+          "text": "Corin and Jessa are customers here today.",
+          "id": "merchant:public:2",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "merchant-public-3",
+          "text": "I learned to cut cloth in my aunt’s workshop and bought this little shop after she retired.",
+          "id": "merchant:public:3",
+          "about": null
+        }
+      ],
+      "says_when_trusted": [
+        {
+          "topic": "your_past",
+          "source": "merchant-private",
+          "text": "I am anxious about paying the rent this month, though I will not pressure customers to make up the difference.",
+          "id": "merchant:private",
+          "about": null
+        }
+      ],
+      "never_says": [
+        {
+          "source": "merchant-boundary",
+          "text": "the rent ledger beneath the till",
+          "terms": [
+            "the rent ledger beneath the till"
+          ],
+          "scope": "everywhere"
+        }
+      ]
+    },
+    "temperament": {
+      "flattery": {
+        "id": "merchant-flattery",
+        "text": "Marek responds in a measured way.",
+        "answer": "Thank you. That is kind of you.",
+        "tags": [],
+        "effect": "warm"
+      },
+      "flirting": {
+        "id": "merchant-flirting",
+        "text": "Marek responds in a measured way.",
+        "answer": "You are charming, but I am occupied just now.",
+        "tags": [],
+        "effect": "steady"
+      },
+      "threats": {
+        "id": "merchant-threats",
+        "text": "Marek responds in a measured way.",
+        "answer": "Let us keep this civil.",
+        "tags": [],
+        "effect": "cool"
+      },
+      "lies": {
+        "id": "merchant-lies",
+        "text": "Marek responds in a measured way.",
+        "answer": "That does not sound right to me.",
+        "tags": [],
+        "effect": "cool"
+      },
+      "bribes": {
+        "id": "merchant-bribes",
+        "text": "Marek responds in a measured way.",
+        "answer": "I would rather we deal plainly.",
+        "tags": [],
+        "effect": "steady"
+      }
+    },
+    "starting_attitude": "friendly",
+    "speech_style": {
+      "id": "merchant-voice",
+      "length": "medium",
+      "vocabulary": "plain, concrete, conversational",
+      "tic": "",
+      "opener": "",
+      "closer": "",
+      "tags": []
+    },
+    "prepared_answers": {
+      "who_are_you": "I run this shop and mend clothing as well as selling it.",
+      "your_past": "I learned to cut cloth in my aunt’s workshop and bought this little shop after she retired.",
+      "why_this_matters": "The traveler’s clothes cost two gold pieces.",
+      "the_antagonist": "I am having an ordinary afternoon here.",
+      "the_place": "Marek sells practical clothing here. There is space by the curtain to try things on.",
+      "compliment_or_flirt": "Thank you. That is kind of you.",
+      "threat": "Let us keep this civil.",
+      "bribe": "I would rather we deal plainly.",
+      "what_are_you_hiding": "Some things are personal. I would rather get to know you first."
+    },
+    "subject_answers": {
+      "people": {
+        "text": "I run this shop and mend clothing as well as selling it.",
+        "restatement": "I run this shop and mend clothing as well as selling it."
+      },
+      "where": {
+        "text": "Marek sells practical clothing here. There is space by the curtain to try things on.",
+        "restatement": "Marek sells practical clothing here. There is space by the curtain to try things on."
+      },
+      "other": {
+        "text": "The traveler’s clothes cost two gold pieces.",
+        "restatement": "The traveler’s clothes cost two gold pieces."
+      }
+    },
+    "question_answers": {
+      "identity": {
+        "knowledge": "merchant:public:0"
+      },
+      "motive": {
+        "knowledge": "merchant:public:1"
+      }
+    },
+    "curt_answers": [
+      "I would like a little space.",
+      "Let us leave it there.",
+      "Please keep your voice down."
+    ],
+    "rolls": []
+  },
+  {
+    "npc_id": "bystander:shop-adventurer",
+    "name": "Corin",
+    "role": "bystander",
+    "role_label": "an adventurer shopping for sturdy clothes",
+    "tables_revision": "merchant-shop-authoring-1",
+    "given": {
+      "mannerism": "tests seams between finger and thumb",
+      "delivery": "plain, conversational",
+      "voice": "dry, easygoing adult man",
+      "tags": [],
+      "note": null
+    },
+    "origin": {
+      "id": "shop-adventurer-origin",
+      "text": "grew up near the western hill roads"
+    },
+    "past_trade": {
+      "id": "shop-adventurer-past",
+      "text": "I spent six years guiding mule trains through wet passes. I learned to judge a jacket by its seams."
+    },
+    "formative_event": {
+      "id": "shop-adventurer-event",
+      "text": "lost a good jacket to a winter storm"
+    },
+    "ideal": {
+      "id": "shop-adventurer-ideal",
+      "text": "preparation before pride"
+    },
+    "bond": {
+      "id": "shop-adventurer-bond",
+      "text": "the old guide who taught him the passes"
+    },
+    "flaw": {
+      "id": "shop-adventurer-flaw",
+      "text": "overexamines every purchase"
+    },
+    "want": {
+      "id": "shop-adventurer-want",
+      "text": "Find a durable jacket without wasting coin."
+    },
+    "fear": {
+      "id": "shop-adventurer-fear",
+      "text": "being trapped underground"
+    },
+    "talent": {
+      "id": "shop-adventurer-talent",
+      "text": "spots weak stitching immediately"
+    },
+    "story_tie": {
+      "id": "shop-adventurer-shop",
+      "binds": "location",
+      "bound_fact": "Marek’s Cloth Shop",
+      "bound_cast": null,
+      "public": true,
+      "text": "Corin is spending the afternoon at Marek’s Cloth Shop.",
+      "speak": "I am comparing seams before buying a replacement jacket."
+    },
+    "motive": null,
+    "stand_down": null,
+    "knowledge": {
+      "says_freely": [
+        {
+          "topic": "who_are_you",
+          "source": "shop-adventurer-public-0",
+          "text": "I used to guide mule trains over the western hills.",
+          "id": "shop-adventurer:public:0",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "shop-adventurer-public-1",
+          "text": "I am comparing seams before buying a replacement jacket.",
+          "id": "shop-adventurer:public:1",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "shop-adventurer-public-2",
+          "text": "Wool keeps its warmth better than linen when the weather turns cold.",
+          "id": "shop-adventurer:public:2",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "shop-adventurer-public-3",
+          "text": "I spent six years guiding mule trains through wet passes. I learned to judge a jacket by its seams.",
+          "id": "shop-adventurer:public:3",
+          "about": null
+        }
+      ],
+      "says_when_trusted": [
+        {
+          "topic": "your_past",
+          "source": "shop-adventurer-private",
+          "text": "My last expedition left me wary of deep caves; I would rather talk about the road for now.",
+          "id": "shop-adventurer:private",
+          "about": null
+        }
+      ],
+      "never_says": [
+        {
+          "source": "shop-adventurer-boundary",
+          "text": "the name written inside Corin’s old pack",
+          "terms": [
+            "the name written inside Corin’s old pack"
+          ],
+          "scope": "everywhere"
+        }
+      ]
+    },
+    "temperament": {
+      "flattery": {
+        "id": "shop-adventurer-flattery",
+        "text": "Corin responds in a measured way.",
+        "answer": "Thank you. That is kind of you.",
+        "tags": [],
+        "effect": "warm"
+      },
+      "flirting": {
+        "id": "shop-adventurer-flirting",
+        "text": "Corin responds in a measured way.",
+        "answer": "You are charming, but I am occupied just now.",
+        "tags": [],
+        "effect": "steady"
+      },
+      "threats": {
+        "id": "shop-adventurer-threats",
+        "text": "Corin responds in a measured way.",
+        "answer": "Let us keep this civil.",
+        "tags": [],
+        "effect": "cool"
+      },
+      "lies": {
+        "id": "shop-adventurer-lies",
+        "text": "Corin responds in a measured way.",
+        "answer": "That does not sound right to me.",
+        "tags": [],
+        "effect": "cool"
+      },
+      "bribes": {
+        "id": "shop-adventurer-bribes",
+        "text": "Corin responds in a measured way.",
+        "answer": "I would rather we deal plainly.",
+        "tags": [],
+        "effect": "steady"
+      }
+    },
+    "starting_attitude": "indifferent",
+    "speech_style": {
+      "id": "shop-adventurer-voice",
+      "length": "medium",
+      "vocabulary": "plain, concrete, conversational",
+      "tic": "",
+      "opener": "",
+      "closer": "",
+      "tags": []
+    },
+    "prepared_answers": {
+      "who_are_you": "I used to guide mule trains over the western hills.",
+      "your_past": "I spent six years guiding mule trains through wet passes. I learned to judge a jacket by its seams.",
+      "why_this_matters": "I am comparing seams before buying a replacement jacket.",
+      "the_antagonist": "I am having an ordinary afternoon here.",
+      "the_place": "Marek sells practical clothing here. There is space by the curtain to try things on.",
+      "compliment_or_flirt": "Thank you. That is kind of you.",
+      "threat": "Let us keep this civil.",
+      "bribe": "I would rather we deal plainly.",
+      "what_are_you_hiding": "Some things are personal. I would rather get to know you first."
+    },
+    "subject_answers": {
+      "people": {
+        "text": "I used to guide mule trains over the western hills.",
+        "restatement": "I used to guide mule trains over the western hills."
+      },
+      "where": {
+        "text": "Marek sells practical clothing here. There is space by the curtain to try things on.",
+        "restatement": "Marek sells practical clothing here. There is space by the curtain to try things on."
+      },
+      "other": {
+        "text": "I am comparing seams before buying a replacement jacket.",
+        "restatement": "I am comparing seams before buying a replacement jacket."
+      }
+    },
+    "question_answers": {
+      "identity": {
+        "knowledge": "shop-adventurer:public:0"
+      },
+      "motive": {
+        "knowledge": "shop-adventurer:public:1"
+      }
+    },
+    "curt_answers": [
+      "I would like a little space.",
+      "Let us leave it there.",
+      "Please keep your voice down."
+    ],
+    "rolls": []
+  },
+  {
+    "npc_id": "bystander:shop-soldier",
+    "name": "Jessa",
+    "role": "bystander",
+    "role_label": "an off-duty soldier buying a warm layer",
+    "tables_revision": "merchant-shop-authoring-1",
+    "given": {
+      "mannerism": "checks the shoulder room before the color",
+      "delivery": "plain, conversational",
+      "voice": "direct, relaxed adult woman",
+      "tags": [],
+      "note": null
+    },
+    "origin": {
+      "id": "shop-soldier-origin",
+      "text": "grew up above a bakery"
+    },
+    "past_trade": {
+      "id": "shop-soldier-past",
+      "text": "I grew up above a bakery and joined the watch for steady wages. Today I am enjoying being off duty."
+    },
+    "formative_event": {
+      "id": "shop-soldier-event",
+      "text": "joined the watch to earn steady wages"
+    },
+    "ideal": {
+      "id": "shop-soldier-ideal",
+      "text": "a quiet day earned honestly"
+    },
+    "bond": {
+      "id": "shop-soldier-bond",
+      "text": "her sister who runs a bakery"
+    },
+    "flaw": {
+      "id": "shop-soldier-flaw",
+      "text": "finds it hard to leave work behind"
+    },
+    "want": {
+      "id": "shop-soldier-want",
+      "text": "Buy a comfortable warm layer and enjoy an ordinary afternoon."
+    },
+    "fear": {
+      "id": "shop-soldier-fear",
+      "text": "letting family down"
+    },
+    "talent": {
+      "id": "shop-soldier-talent",
+      "text": "notices who is uncomfortable in a crowded room"
+    },
+    "story_tie": {
+      "id": "shop-soldier-shop",
+      "binds": "location",
+      "bound_fact": "Marek’s Cloth Shop",
+      "bound_cast": null,
+      "public": true,
+      "text": "Jessa is spending the afternoon at Marek’s Cloth Shop.",
+      "speak": "My uniform is being mended, so I want a warm cloak for my own time."
+    },
+    "motive": null,
+    "stand_down": null,
+    "knowledge": {
+      "says_freely": [
+        {
+          "topic": "who_are_you",
+          "source": "shop-soldier-public-0",
+          "text": "I am off duty from the town watch this afternoon.",
+          "id": "shop-soldier:public:0",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "shop-soldier-public-1",
+          "text": "My uniform is being mended, so I want a warm cloak for my own time.",
+          "id": "shop-soldier:public:1",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "shop-soldier-public-2",
+          "text": "I prefer a roomy shoulder to an impressive-looking buckle.",
+          "id": "shop-soldier:public:2",
+          "about": null
+        },
+        {
+          "topic": "the_place",
+          "source": "shop-soldier-public-3",
+          "text": "I grew up above a bakery and joined the watch for steady wages. Today I am enjoying being off duty.",
+          "id": "shop-soldier:public:3",
+          "about": null
+        }
+      ],
+      "says_when_trusted": [
+        {
+          "topic": "your_past",
+          "source": "shop-soldier-private",
+          "text": "My sister thinks I should leave the watch and work with her. I have not decided what I want.",
+          "id": "shop-soldier:private",
+          "about": null
+        }
+      ],
+      "never_says": [
+        {
+          "source": "shop-soldier-boundary",
+          "text": "Jessa’s private watch passphrase",
+          "terms": [
+            "Jessa’s private watch passphrase"
+          ],
+          "scope": "everywhere"
+        }
+      ]
+    },
+    "temperament": {
+      "flattery": {
+        "id": "shop-soldier-flattery",
+        "text": "Jessa responds in a measured way.",
+        "answer": "Thank you. That is kind of you.",
+        "tags": [],
+        "effect": "warm"
+      },
+      "flirting": {
+        "id": "shop-soldier-flirting",
+        "text": "Jessa responds in a measured way.",
+        "answer": "You are charming, but I am occupied just now.",
+        "tags": [],
+        "effect": "steady"
+      },
+      "threats": {
+        "id": "shop-soldier-threats",
+        "text": "Jessa responds in a measured way.",
+        "answer": "Let us keep this civil.",
+        "tags": [],
+        "effect": "cool"
+      },
+      "lies": {
+        "id": "shop-soldier-lies",
+        "text": "Jessa responds in a measured way.",
+        "answer": "That does not sound right to me.",
+        "tags": [],
+        "effect": "cool"
+      },
+      "bribes": {
+        "id": "shop-soldier-bribes",
+        "text": "Jessa responds in a measured way.",
+        "answer": "I would rather we deal plainly.",
+        "tags": [],
+        "effect": "steady"
+      }
+    },
+    "starting_attitude": "indifferent",
+    "speech_style": {
+      "id": "shop-soldier-voice",
+      "length": "medium",
+      "vocabulary": "plain, concrete, conversational",
+      "tic": "",
+      "opener": "",
+      "closer": "",
+      "tags": []
+    },
+    "prepared_answers": {
+      "who_are_you": "I am off duty from the town watch this afternoon.",
+      "your_past": "I grew up above a bakery and joined the watch for steady wages. Today I am enjoying being off duty.",
+      "why_this_matters": "My uniform is being mended, so I want a warm cloak for my own time.",
+      "the_antagonist": "I am having an ordinary afternoon here.",
+      "the_place": "Marek sells practical clothing here. There is space by the curtain to try things on.",
+      "compliment_or_flirt": "Thank you. That is kind of you.",
+      "threat": "Let us keep this civil.",
+      "bribe": "I would rather we deal plainly.",
+      "what_are_you_hiding": "Some things are personal. I would rather get to know you first."
+    },
+    "subject_answers": {
+      "people": {
+        "text": "I am off duty from the town watch this afternoon.",
+        "restatement": "I am off duty from the town watch this afternoon."
+      },
+      "where": {
+        "text": "Marek sells practical clothing here. There is space by the curtain to try things on.",
+        "restatement": "Marek sells practical clothing here. There is space by the curtain to try things on."
+      },
+      "other": {
+        "text": "My uniform is being mended, so I want a warm cloak for my own time.",
+        "restatement": "My uniform is being mended, so I want a warm cloak for my own time."
+      }
+    },
+    "question_answers": {
+      "identity": {
+        "knowledge": "shop-soldier:public:0"
+      },
+      "motive": {
+        "knowledge": "shop-soldier:public:1"
+      }
+    },
+    "curt_answers": [
+      "I would like a little space.",
+      "Let us leave it there.",
+      "Please keep your voice down."
+    ],
+    "rolls": []
+  }
+]

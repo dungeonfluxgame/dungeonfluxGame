@@ -206,6 +206,9 @@ pub(crate) enum SceneChangeKind {
     Given {
         holder_id: String,
     },
+    Returned {
+        position: String,
+    },
     Opened,
     Closed,
     Lit,
@@ -285,7 +288,17 @@ impl SceneModel {
                 view["owner"] = serde_json::json!(thing.owner_id);
             }
         }
-        contents["offers"] = serde_json::json!(self.offers);
+        contents["offers"] = serde_json::json!(
+            self.offers
+                .iter()
+                .filter(|offer| {
+                    !self
+                        .things
+                        .iter()
+                        .any(|thing| thing.id == format!("purchased-{}", offer.id))
+                })
+                .collect::<Vec<_>>()
+        );
         serde_json::to_string(&contents).map_err(|_| SceneModelError::Serialization)
     }
 
@@ -572,15 +585,9 @@ impl SceneModel {
         if line.is_empty() {
             return None;
         }
-        if let Some(offer) = best_match(&self.offers, &line, |offer| &offer.aliases) {
-            return Some(ResolvedTarget {
-                kind: SceneTargetKind::Offer,
-                ids: vec![offer.id.clone()],
-                name: offer.name.clone(),
-            });
-        }
         let object_action = [
             "take", "pick up", "examine", "look at", "use", "open", "read", "sit", "warm",
+            "return", "put", "drop", "give",
         ]
         .iter()
         .any(|action| contains_phrase(&line, action));
@@ -599,6 +606,13 @@ impl SceneModel {
                     name: way_out.name.clone(),
                 });
             }
+        }
+        if let Some(offer) = best_match(&self.offers, &line, |offer| &offer.aliases) {
+            return Some(ResolvedTarget {
+                kind: SceneTargetKind::Offer,
+                ids: vec![offer.id.clone()],
+                name: offer.name.clone(),
+            });
         }
         let people = matching_people(&self.people, &line);
         if !people.is_empty() {
@@ -654,8 +668,17 @@ impl SceneModel {
                 }
                 SceneChangeKind::Taken { holder_id } | SceneChangeKind::Given { holder_id } => {
                     thing.holder_id = Some(holder_id.clone());
+                    if matches!(change.kind, SceneChangeKind::Given { .. }) {
+                        thing.owner_id = Some(holder_id.clone());
+                    }
                     thing.in_scene = person_ids.contains(holder_id.as_str());
                     thing.position = format!("held by {holder_id}");
+                }
+                SceneChangeKind::Returned { position } => {
+                    thing.holder_id = None;
+                    thing.in_scene = true;
+                    thing.in_use = false;
+                    thing.position = position.clone();
                 }
                 SceneChangeKind::Opened => thing.open = true,
                 SceneChangeKind::Closed => thing.open = false,

@@ -34,6 +34,7 @@ const DICE: [u8; 6] = [4, 6, 8, 10, 12, 20];
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NpcRole {
+    Bystander,
     Patron,
     Contact,
     Antagonist,
@@ -43,6 +44,7 @@ pub(crate) enum NpcRole {
 impl NpcRole {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            Self::Bystander => "bystander",
             Self::Patron => "patron",
             Self::Contact => "contact",
             Self::Antagonist => "antagonist",

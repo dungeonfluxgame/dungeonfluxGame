@@ -33,6 +33,7 @@ mod scene_model_tests;
 mod schema;
 pub(crate) mod setting;
 pub(crate) mod startup;
+pub(crate) mod shop;
 mod tables;
 #[cfg(test)]
 mod tests;

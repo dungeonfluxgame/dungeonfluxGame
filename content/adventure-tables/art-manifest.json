@@ -879,5 +879,16 @@
       "library-forecourt"
     ],
     "prompt": "The forecourt outside a great domed library at night: wide worn steps and tall bronze doors at the back with lit lamps either side, a brass armillary sphere on a plinth at one side, wet flagstones, moon above the dome."
+  },
+  {
+    "art_key": "mareks-cloth-shop",
+    "file_stem": "scene-mareks-cloth-shop",
+    "kind": "scene",
+    "aspect": "16:9",
+    "used_by": "Standalone merchant-shop freeplay room reference",
+    "depicts": [
+      "shop"
+    ],
+    "prompt": "Photograph of a practical medieval cloth shop interior, afternoon window light, wooden counter along the rear, wool jackets on a left wall rack, cloaks along the right wall, fitting curtain and mirror, an open front street door. Natural textures and realistic camera optics. No people, no letters, no illustration or painterly rendering."
   }
 ]

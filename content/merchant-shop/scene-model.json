@@ -1,0 +1,290 @@
+{
+  "time_of_day": "afternoon",
+  "weather": "dry and cool outside",
+  "people": [
+    {
+      "id": "merchant",
+      "name": "Marek",
+      "role": "cloth merchant",
+      "description": "Marek folds blue linen behind the counter.",
+      "relation_to_speaker": "shopkeeper",
+      "position": "behind the wooden counter",
+      "aliases": [
+        "Marek",
+        "merchant",
+        "merchant"
+      ],
+      "is_background": false,
+      "present_in": [
+        "room",
+        "opening",
+        "dialogue_seal",
+        "dialogue_escort"
+      ],
+      "attitude": "friendly",
+      "attitudes": {},
+      "knowledge": [
+        {
+          "fact_id": "merchant:public:0",
+          "statement": "I run this shop and mend clothing as well as selling it."
+        },
+        {
+          "fact_id": "merchant:public:1",
+          "statement": "The traveler’s clothes cost two gold pieces."
+        },
+        {
+          "fact_id": "merchant:public:2",
+          "statement": "Corin and Jessa are customers here today."
+        }
+      ],
+      "wants": "Sell suitable clothing at a fair price."
+    },
+    {
+      "id": "shop-adventurer",
+      "name": "Corin",
+      "role": "adventurer shopping for sturdy clothes",
+      "description": "Corin examines a jacket seam, a worn leather pack at his feet.",
+      "relation_to_speaker": "fellow customer",
+      "position": "beside the clothing rack on the left",
+      "aliases": [
+        "Corin",
+        "shop-adventurer",
+        "adventurer"
+      ],
+      "is_background": false,
+      "present_in": [
+        "room",
+        "opening",
+        "dialogue_seal",
+        "dialogue_escort"
+      ],
+      "attitude": "indifferent",
+      "attitudes": {},
+      "knowledge": [
+        {
+          "fact_id": "shop-adventurer:public:0",
+          "statement": "I used to guide mule trains over the western hills."
+        },
+        {
+          "fact_id": "shop-adventurer:public:1",
+          "statement": "I am comparing seams before buying a replacement jacket."
+        },
+        {
+          "fact_id": "shop-adventurer:public:2",
+          "statement": "Wool keeps its warmth better than linen when the weather turns cold."
+        }
+      ],
+      "wants": "Find a durable jacket without wasting coin."
+    },
+    {
+      "id": "shop-soldier",
+      "name": "Jessa",
+      "role": "off-duty soldier buying a warm layer",
+      "description": "Jessa compares warm cloaks, wearing plain clothes and scuffed boots.",
+      "relation_to_speaker": "fellow customer",
+      "position": "beside the cloak rail on the right",
+      "aliases": [
+        "Jessa",
+        "shop-soldier",
+        "soldier"
+      ],
+      "is_background": false,
+      "present_in": [
+        "room",
+        "opening",
+        "dialogue_seal",
+        "dialogue_escort"
+      ],
+      "attitude": "indifferent",
+      "attitudes": {},
+      "knowledge": [
+        {
+          "fact_id": "shop-soldier:public:0",
+          "statement": "I am off duty from the town watch this afternoon."
+        },
+        {
+          "fact_id": "shop-soldier:public:1",
+          "statement": "My uniform is being mended, so I want a warm cloak for my own time."
+        },
+        {
+          "fact_id": "shop-soldier:public:2",
+          "statement": "I prefer a roomy shoulder to an impressive-looking buckle."
+        }
+      ],
+      "wants": "Buy a comfortable warm layer and enjoy an ordinary afternoon."
+    }
+  ],
+  "things": [
+    {
+      "id": "shop-counter",
+      "name": "wooden counter",
+      "short": "a worn oak counter",
+      "detail": "The counter is smooth where cloth has been measured. A brass yardstick is fixed along its edge.",
+      "picture_description": "a worn oak counter",
+      "closer_look": "Scratches beside the yardstick mark years of repeated measurements.",
+      "skill": "investigation",
+      "dc": 10,
+      "finding_id": null,
+      "clue_fact_id": null,
+      "portable": false,
+      "value_cp": null,
+      "use_effect": "It can be handled and examined.",
+      "position": "across the rear of the shop",
+      "owner_id": "merchant",
+      "in_use": false,
+      "in_scene": true,
+      "holder_id": null,
+      "open": false,
+      "lit": false,
+      "broken": false,
+      "searched_by": [],
+      "aliases": [
+        "wooden counter",
+        "shop-counter"
+      ]
+    },
+    {
+      "id": "folded-label",
+      "name": "folded paper label",
+      "short": "a loose folded paper label",
+      "detail": "A folded paper label rests on the counter. A neat hand has written linen, blue on its face.",
+      "picture_description": "a loose folded paper label",
+      "closer_look": "The reverse records the length of the bolt in small, careful numerals.",
+      "skill": "investigation",
+      "dc": 10,
+      "finding_id": null,
+      "clue_fact_id": null,
+      "portable": true,
+      "value_cp": 0,
+      "use_effect": "It can be handled and examined.",
+      "position": "on the wooden counter",
+      "owner_id": "merchant",
+      "in_use": false,
+      "in_scene": true,
+      "holder_id": null,
+      "open": false,
+      "lit": false,
+      "broken": false,
+      "searched_by": [],
+      "aliases": [
+        "folded paper label",
+        "folded-label"
+      ]
+    },
+    {
+      "id": "blue-linen",
+      "name": "blue linen bolt",
+      "short": "a bolt of tightly woven blue linen",
+      "detail": "A bolt of blue linen lies beside the yardstick. Its cut edge is clean and the weave is even.",
+      "picture_description": "a bolt of tightly woven blue linen",
+      "closer_look": "The threads have been woven tightly with no obvious gaps.",
+      "skill": "investigation",
+      "dc": 10,
+      "finding_id": null,
+      "clue_fact_id": null,
+      "portable": false,
+      "value_cp": null,
+      "use_effect": "It can be handled and examined.",
+      "position": "on the wooden counter",
+      "owner_id": "merchant",
+      "in_use": false,
+      "in_scene": true,
+      "holder_id": null,
+      "open": false,
+      "lit": false,
+      "broken": false,
+      "searched_by": [],
+      "aliases": [
+        "blue linen bolt",
+        "blue-linen"
+      ]
+    },
+    {
+      "id": "clothing-rack",
+      "name": "clothing rack",
+      "short": "a rack of practical wool jackets",
+      "detail": "Several plain wool jackets hang from the rack. Each has wide seams and simple horn buttons.",
+      "picture_description": "a rack of practical wool jackets",
+      "closer_look": "The lower seams leave enough allowance for small alterations.",
+      "skill": "investigation",
+      "dc": 10,
+      "finding_id": null,
+      "clue_fact_id": null,
+      "portable": false,
+      "value_cp": null,
+      "use_effect": "It can be handled and examined.",
+      "position": "along the left wall",
+      "owner_id": "merchant",
+      "in_use": false,
+      "in_scene": true,
+      "holder_id": null,
+      "open": false,
+      "lit": false,
+      "broken": false,
+      "searched_by": [],
+      "aliases": [
+        "clothing rack",
+        "clothing-rack"
+      ]
+    },
+    {
+      "id": "fitting-mirror",
+      "name": "fitting mirror",
+      "short": "a tall mirror in a wooden frame",
+      "detail": "A narrow mirror stands beside a curtain. Its frame has little dents from years of moving it around.",
+      "picture_description": "a tall mirror in a wooden frame",
+      "closer_look": "The lower corner has a shallow chip in the frame.",
+      "skill": "investigation",
+      "dc": 10,
+      "finding_id": null,
+      "clue_fact_id": null,
+      "portable": false,
+      "value_cp": null,
+      "use_effect": "It can be handled and examined.",
+      "position": "beside the fitting curtain",
+      "owner_id": "merchant",
+      "in_use": false,
+      "in_scene": true,
+      "holder_id": null,
+      "open": false,
+      "lit": false,
+      "broken": false,
+      "searched_by": [],
+      "aliases": [
+        "fitting mirror",
+        "fitting-mirror"
+      ]
+    }
+  ],
+  "ways_out": [
+    {
+      "id": "street-door",
+      "name": "street door",
+      "aliases": [
+        "door",
+        "front door",
+        "street door"
+      ],
+      "position": "at the front of the shop",
+      "beyond_place_id": "none",
+      "beyond": "the market street outside",
+      "open": true
+    }
+  ],
+  "offers": [
+    {
+      "id": "clothes-travelers",
+      "seller_id": "merchant",
+      "name": "traveler’s clothes",
+      "aliases": [
+        "travelers clothes",
+        "traveler clothes",
+        "clothes",
+        "travel clothing",
+        "traveling clothes"
+      ],
+      "description": "A practical set of traveler’s clothes in sturdy wool and linen.",
+      "cost_cp": 200
+    }
+  ]
+}

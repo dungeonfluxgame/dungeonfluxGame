@@ -11,6 +11,7 @@ use crate::gameplay::adventure::{
 pub(super) fn is_speaker(person: &ScenePerson, dossier: &Dossier) -> bool {
     dossier.npc_id == format!("bystander:{}", person.id)
         || dossier.npc_id.starts_with(&format!("{}:", person.id))
+        || dossier.npc_id.ends_with(&format!(":{}", person.id))
 }
 
 pub(super) fn facts(room: &SceneNow, dossier: &Dossier, withheld: &Withheld) -> Value {
@@ -33,7 +34,8 @@ pub(super) fn facts(room: &SceneNow, dossier: &Dossier, withheld: &Withheld) -> 
         "ways_out": model.ways_out.iter().filter(|way| safe(&way.beyond)).map(|way| json!({
             "name": way.name, "position": way.position, "beyond": way.beyond, "open": way.open,
         })).collect::<Vec<_>>(),
-        "wares": model.offers.iter().filter(|offer| safe(&offer.description)).map(|offer| json!({
+        "wares": model.offers.iter().filter(|offer| safe(&offer.description)
+            && !model.things.iter().any(|thing| thing.id == format!("purchased-{}", offer.id))).map(|offer| json!({
             "name": offer.name, "description": offer.description, "cost_cp": offer.cost_cp,
             "seller": model.people.iter().find(|person| person.id == offer.seller_id).map(|person| &person.name),
         })).collect::<Vec<_>>(),

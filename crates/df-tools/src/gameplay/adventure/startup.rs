@@ -251,6 +251,13 @@ async fn fresh_adventure(
     settings: &AdventureSettings,
     storyteller: &Storyteller,
 ) -> Result<FreshAdventure, StartupError> {
+    if settings.mode == super::super::startup_configuration::AdventureMode::MerchantShop {
+        return Ok(FreshAdventure {
+            generated: fresh_shop(settings)?,
+            model: None,
+            prose: "prose=authored freeplay shop".into(),
+        });
+    }
     let (tables, seed, baseline) = pattern_adventure(settings)?;
     let options = GenerateOptions {
         rules_mode: settings.rules_mode,
@@ -301,18 +308,21 @@ fn pattern_adventure(
     .map_err(StartupError::Generate)?;
     Ok((tables, seed, generated))
 }
+fn fresh_shop(settings: &AdventureSettings) -> Result<GeneratedAdventure, StartupError> {
+    let seed = match settings.seed {
+        Some(seed) => seed,
+        None => u64::from_le_bytes(model::random::<8>().map_err(|_| StartupError::Seed)?),
+    };
+    super::shop::generate(seed, settings.rules_mode, content_rating())
+        .map_err(StartupError::Generate)
+}
 /// Development override of the chapter type; the generator refuses ids missing from the tables.
 fn forced_entries(settings: &AdventureSettings) -> ForcedEntries {
-    let mut forced = settings
+    settings
         .chapter_type
         .iter()
         .map(|kind| (super::beat_tables::CHAPTER_TYPE.into(), kind.clone()))
-        .collect::<ForcedEntries>();
-    if settings.mode == super::super::startup_configuration::AdventureMode::MerchantShop {
-        forced.insert("location".into(), "lamplit-market".into());
-        forced.insert("patron".into(), "merchant".into());
-    }
-    forced
+        .collect::<ForcedEntries>()
 }
 /// Store state determines fresh/resume; requested seed/tables apply only to a fresh database.
 #[cfg(test)]
@@ -349,7 +359,13 @@ fn select_with(
             let fresh = match fresh {
                 Some(fresh) => fresh,
                 None => FreshAdventure {
-                    generated: pattern_adventure(settings)?.2,
+                    generated: if settings.mode
+                        == super::super::startup_configuration::AdventureMode::MerchantShop
+                    {
+                        fresh_shop(settings)?
+                    } else {
+                        pattern_adventure(settings)?.2
+                    },
                     model: None,
                     prose: "prose=patterns (expression not attempted)".to_owned(),
                 },
@@ -403,6 +419,16 @@ pub(crate) fn substitute_missing_art(
     record: &AdventureRecord,
     asset_root: &Path,
 ) -> Vec<ArtSubstitution> {
+    // A new freeplay location remains pending when its own reference is absent. An unrelated
+    // harbor painting would misrepresent the authored room and poison subsequent plate context.
+    if loaded
+        .pack
+        .beat_script
+        .as_ref()
+        .is_some_and(|script| script.mode == super::super::beat_script::ScriptMode::Freeplay)
+    {
+        return Vec::new();
+    }
     let general = match &record.settings {
         Some(settings) => Some((
             settings.confrontation.art_key.clone(),

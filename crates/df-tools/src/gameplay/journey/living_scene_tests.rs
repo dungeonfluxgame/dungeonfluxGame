@@ -533,8 +533,11 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
         let card = living_scene::item_for(after.state(), &scene, "Brynn")
             .unwrap()
             .unwrap();
-        assert_eq!(card.thing_id, offer.id);
-        assert_eq!(card.detail, offer.description);
+        assert_eq!(card.thing_id, format!("purchased-{}", offer.id));
+        assert!(
+            card.detail
+                .contains(offer.description.trim_end_matches('.'))
+        );
         assert!(
             living_scene::item_for(after.state(), &scene, "Vale")
                 .unwrap()

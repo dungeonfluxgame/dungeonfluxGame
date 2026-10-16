@@ -1,0 +1,692 @@
+{
+  "schema": "df-gameplay-pack/1",
+  "id": "merchant-shop",
+  "locale": "en",
+  "room_code": "CLOTH",
+  "creation": {
+    "description": "Start as a level 1 Dwarf Fighter with the Soldier background. Choose your ability scores, starting gear, and look.",
+    "groups": [
+      {
+        "id": "species",
+        "label": "Ancestry",
+        "options": [
+          {
+            "id": "dwarf",
+            "label": "Dwarf",
+            "description": "Dwarves are hardy, resilient, and can see in the dark."
+          }
+        ]
+      },
+      {
+        "id": "class",
+        "label": "Class",
+        "options": [
+          {
+            "id": "fighter-1",
+            "label": "Fighter Â· level 1",
+            "description": "Choose a Fighting Style, call on Second Wind, and master three weapons."
+          }
+        ]
+      },
+      {
+        "id": "background",
+        "label": "Background",
+        "options": [
+          {
+            "id": "soldier",
+            "label": "Soldier",
+            "description": "Athletics, Intimidation, a gaming set, and the Savage Attacker feat."
+          }
+        ]
+      },
+      {
+        "id": "array",
+        "label": "Ability scores",
+        "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} Â· Soldier +{bonus_str}STR/+{bonus_con}CON",
+        "options": [
+          {
+            "id": "stalwart",
+            "label": "Stalwart"
+          },
+          {
+            "id": "vanguard",
+            "label": "Vanguard"
+          }
+        ]
+      },
+      {
+        "id": "equipment",
+        "label": "Starting equipment",
+        "options": [
+          {
+            "id": "fighter-a-soldier-a",
+            "label": "Chain mail, greatsword, flail, 8 javelins",
+            "description": "Also includes a dungeoneer's pack, spear, shortbow, 20 arrows, a gaming set, healer's kit, quiver, traveler's clothes, and 18 gp to spend."
+          }
+        ]
+      },
+      {
+        "id": "style-masteries",
+        "label": "Fighting style and weapon masteries",
+        "options": [
+          {
+            "id": "defense-greatsword-flail-javelin",
+            "label": "Defense",
+            "description": "Defense raises your AC by 1 while you wear armor. Your greatsword, flail, and javelin use Graze, Sap, and Slow."
+          }
+        ]
+      },
+      {
+        "id": "allied-ties",
+        "label": "When turns are tied",
+        "options": [
+          {
+            "id": "join-order",
+            "label": "Party goes first",
+            "description": "On a tie, heroes act before enemies. Tied heroes go in the order they joined."
+          }
+        ]
+      }
+    ],
+    "pick_lists": {
+      "alignment": [
+        "lawful-good",
+        "neutral-good",
+        "chaotic-good",
+        "lawful-neutral",
+        "neutral",
+        "chaotic-neutral"
+      ],
+      "language": [
+        "common-sign",
+        "draconic",
+        "dwarvish",
+        "elvish",
+        "giant",
+        "gnomish",
+        "goblin",
+        "halfling",
+        "orc"
+      ],
+      "skill": [
+        "acrobatics",
+        "animal-handling",
+        "history",
+        "insight",
+        "persuasion",
+        "perception",
+        "survival"
+      ],
+      "gaming-set": [
+        "dice",
+        "dragonchess",
+        "playing-cards",
+        "three-dragon-ante"
+      ]
+    }
+  },
+  "equipment": [
+    {
+      "item": "chain-mail",
+      "quantity": 1
+    },
+    {
+      "item": "greatsword",
+      "quantity": 1
+    },
+    {
+      "item": "flail",
+      "quantity": 1
+    },
+    {
+      "item": "javelin",
+      "quantity": 8
+    },
+    {
+      "item": "dungeoneer-pack",
+      "quantity": 1
+    },
+    {
+      "item": "spear",
+      "quantity": 1
+    },
+    {
+      "item": "shortbow",
+      "quantity": 1
+    },
+    {
+      "item": "arrow",
+      "quantity": 20
+    },
+    {
+      "item": "gaming-set",
+      "quantity": 1
+    },
+    {
+      "item": "healers-kit",
+      "quantity": 1
+    },
+    {
+      "item": "quiver",
+      "quantity": 1
+    },
+    {
+      "item": "travelers-clothes",
+      "quantity": 1
+    },
+    {
+      "item": "gold-piece",
+      "quantity": 18
+    }
+  ],
+  "antagonist": {
+    "name": "Unused creature profile"
+  },
+  "destination_label": "Marek’s Cloth Shop",
+  "offer_labels": {
+    "create-character": "Create a character",
+    "begin-story": "Enter the shop",
+    "ask-courier": "Continue",
+    "escort-courier": "Continue",
+    "defend-courier": "Continue",
+    "greatsword-attack": "Continue",
+    "second-wind": "Continue",
+    "end-turn": "Continue",
+    "short-rest": "Continue",
+    "choose-harbor-scene": "Continue"
+  },
+  "courier_clue": "The shop is open for browsing.",
+  "escort_support_suffix": "{name} is in the shop.",
+  "scenes": [
+    {
+      "key": "room",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": null,
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    },
+    {
+      "key": "opening",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": null,
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    },
+    {
+      "key": "dialogue-seal",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": null,
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    },
+    {
+      "key": "dialogue-escort",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": null,
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    },
+    {
+      "key": "combat",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": null,
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    },
+    {
+      "key": "inn",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": null,
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    },
+    {
+      "key": "victory",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    },
+    {
+      "key": "defeat",
+      "title": "Marek’s Cloth Shop",
+      "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "narration_rested": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
+      "speaker": "Marek",
+      "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
+      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "speaker_portrait": "portrait-patron-merchant-documentary-photo",
+      "setting": {
+        "place_id": "place-mareks-cloth-shop",
+        "name": "Marek’s Cloth Shop",
+        "short": "a small cloth shop with a wooden counter, clothing racks and an open street door",
+        "kind": "shop",
+        "exterior": false,
+        "art_key": "mareks-cloth-shop"
+      },
+      "cast": [
+        {
+          "id": "merchant",
+          "name": "Marek",
+          "role": "patron",
+          "sprite": "sprite-patron-merchant-documentary-photo",
+          "portrait": "portrait-patron-merchant-documentary-photo",
+          "voice": "warm, measured adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-adventurer",
+          "name": "Corin",
+          "role": "bystander",
+          "sprite": "sprite-shop-adventurer-documentary-photo",
+          "portrait": "portrait-shop-adventurer-documentary-photo",
+          "voice": "dry, easygoing adult man",
+          "gender": "he",
+          "age": "adult"
+        },
+        {
+          "id": "shop-soldier",
+          "name": "Jessa",
+          "role": "bystander",
+          "sprite": "sprite-shop-soldier-documentary-photo",
+          "portrait": "portrait-shop-soldier-documentary-photo",
+          "voice": "direct, relaxed adult woman",
+          "gender": "she",
+          "age": "adult"
+        }
+      ]
+    }
+  ],
+  "speakers": [
+    {
+      "name": "Marek",
+      "gender": "he",
+      "age": "adult",
+      "role": "a cloth merchant",
+      "voice": "warm, measured adult man"
+    },
+    {
+      "name": "Corin",
+      "gender": "he",
+      "age": "adult",
+      "role": "an adventurer shopping for sturdy clothes",
+      "voice": "dry, easygoing adult man"
+    },
+    {
+      "name": "Jessa",
+      "gender": "she",
+      "age": "adult",
+      "role": "an off-duty soldier buying a warm layer",
+      "voice": "direct, relaxed adult woman"
+    }
+  ],
+  "beat_script": {
+    "mode": "freeplay",
+    "entry": "gather",
+    "terminal": [],
+    "beats": [
+      {
+        "id": "gather",
+        "kind": "gather",
+        "scene": "room",
+        "state": {
+          "durable": "room"
+        },
+        "offers": [
+          {
+            "id": "create-character",
+            "label_slot": "create-character",
+            "effect": "create-character"
+          },
+          {
+            "id": "begin-story",
+            "label_slot": "begin-story",
+            "effect": "begin-story"
+          }
+        ],
+        "transitions": [
+          {
+            "trigger": {
+              "on": "offer",
+              "offer": "create-character"
+            },
+            "target": "gather"
+          },
+          {
+            "trigger": {
+              "on": "offer",
+              "offer": "begin-story"
+            },
+            "target": "freeplay"
+          }
+        ]
+      },
+      {
+        "id": "freeplay",
+        "kind": "converse",
+        "scene": "opening",
+        "state": {
+          "durable": "opening"
+        },
+        "offers": [
+          {
+            "id": "look-around",
+            "label_slot": "look-around",
+            "effect": "observe"
+          }
+        ],
+        "transitions": [
+          {
+            "trigger": {
+              "on": "offer",
+              "offer": "look-around"
+            },
+            "target": "freeplay"
+          }
+        ]
+      }
+    ]
+  }
+}
