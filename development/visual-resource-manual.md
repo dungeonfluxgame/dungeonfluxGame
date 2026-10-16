@@ -174,6 +174,8 @@ After every browser interaction, take a screenshot and record the current URL,
 scene revision, `data-scene-state`, `data-plate-state`, selected source, and image
 natural dimensions. DOM state proves wiring; the screenshot decides whether the
 result looks photographic, medieval/old-world, readable, and free of overlaps.
+Compare each visible hero and NPC with the reference art and canonical cast list:
+a photographic image can still replace a party member or change a speaker's face.
 Inspect the shared display and the player view that matters for the issue. A plate
 can be HTTP-ready while the visible stage still shows its previous source.
 

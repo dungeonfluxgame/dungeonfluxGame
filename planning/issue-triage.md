@@ -850,3 +850,31 @@ existing pipeline; the static lobby and cast preview are unchanged. Two native
 test-call compile regressions were repaired alongside request-order and canonical
 state coverage. This is an implementation candidate: only another full-display
 provider/browser observation can establish that the generated output is improved.
+
+### PIC-17 live generated-plate acceptance and cast follow-up (2026-10-15)
+
+The combined native/WASM build at `a45dcca9` ran a fresh two-player dialogue
+room SATEVO with all local model, voice, image, and video switches enabled.
+The new plate was generated from the reviewed candid photograph as the first
+reference (306,720 bytes), four references total, 1,950 prompt characters, and
+finished in 25,022 ms. CLI and browser agreed on `PLATE_STATE_READY`,
+`server_effective_source=live_plate`, and a decoded 2560×1440 image. An
+independent visual evaluation accepted its natural photographic old-world look
+and found no overlapping hero labels or dialogue. It also found a content defect:
+Sigrun had been replaced by a male porter at the right edge. The two NPC
+questions in that room remained in dialogue; video generation reported
+`price_unavailable`, and the fixed harbor emitted no `text_model` resource
+events. The SATEVO plate therefore did not pass full cast acceptance.
+
+The follow-up `a7d0c636` keeps image 1 as the photograph and explicitly holds
+the two party performers at their left and right positions. A fresh room REBEVO
+reached dialogue with Brakka and Sigrun via `dev play --to dialogue`. Its
+generated plate key `0608a4b7a3c26f3bc2ba2bed64149c82467b144cefef1e648bc1882be76825fa`
+used the same four reference sizes, a 1,757-character prompt, and completed in
+42,890 ms. The display loaded it at 2560 pixels, `data-plate-state=ready`,
+`data-shot=plate`, and visibly retained both armored heroes, including red-haired
+Sigrun at the right edge. The photographic medium and medieval quay still held.
+The courier's face and hood differ from the reviewed source photograph, so cast
+identity continuity remains open even though the style and missing-hero failures
+are improved. Retained screenshots are `satevo-live-plate.jpg` and
+`rebevo-photographic-plate-both-heroes.png` in the coordinator's outputs.
