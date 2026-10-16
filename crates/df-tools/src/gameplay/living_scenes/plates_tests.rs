@@ -1113,7 +1113,7 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
         shared: shared.clone(),
         _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
     };
-    let id = locked(&shared.book)
+    let thing = locked(&shared.book)
         .current
         .as_ref()
         .unwrap()
@@ -1125,18 +1125,50 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
         .unwrap()
         .model
         .things[0]
-        .id
         .clone();
+    let id = thing.id.clone();
     plates.request_item("Brakka", &id, None, false).unwrap();
     plates.request_item("Brakka", &id, None, false).unwrap();
     assert_eq!(drain(&mut queue).len(), 1);
     let mut private = rpc::GameplayScene {
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
+        item: Some(rpc::SceneItemCard {
+            thing_id: id.clone(),
+            name: thing.name.clone(),
+            detail: thing.detail.clone(),
+            state_revision: 8,
+            ..Default::default()
+        }),
         ..Default::default()
     };
     shared.project_scene_contents(&mut private, Some("Brakka"));
     assert_eq!(private.item.as_ref().unwrap().thing_id, id);
+    assert_eq!(private.item.as_ref().unwrap().state_revision, 8);
+    private.scene_contents_json = "{\"authoritative_revision\":9}".into();
+    private.item = Some(rpc::SceneItemCard {
+        thing_id: "purchased-clothes-travelers".into(),
+        name: "traveler’s clothes".into(),
+        detail: "The durable purchase belongs to Brakka.".into(),
+        state_revision: 9,
+        ..Default::default()
+    });
+    let authoritative = private.item.clone();
+    shared.project_scene_contents(&mut private, Some("Brakka"));
+    assert_eq!(
+        private.item, authoritative,
+        "stale image request must not replace a newer durable purchase"
+    );
+    assert_eq!(
+        private.scene_contents_json,
+        "{\"authoritative_revision\":9}"
+    );
+    private.item = None;
+    shared.project_scene_contents(&mut private, Some("Brakka"));
+    assert!(
+        private.item.is_none(),
+        "media requests cannot fabricate durable item selection"
+    );
     let mut public = rpc::GameplayScene {
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),

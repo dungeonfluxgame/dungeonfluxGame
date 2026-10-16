@@ -61,6 +61,25 @@ pub(super) struct Item {
     pub(super) requested_at: Duration,
 }
 
+/// Media decorates the server's latest durable item selection; stale requests cannot replace
+/// a newer purchase/examination or fabricate ownership on reconnect.
+fn enrich_item_card(card: &mut rpc::SceneItemCard, item: &Item) {
+    if card.thing_id != item.thing.id || card.detail != item.thing.detail {
+        return;
+    }
+    if let Some(detail) = &item.detail {
+        card.detail.push_str(&format!("\n{detail}"));
+    }
+    card.image_path = item.key.as_ref().map(ImageKey::path).unwrap_or_default();
+    card.image_state = if item.key.is_some() {
+        rpc::PlateState::Ready
+    } else if item.failed {
+        rpc::PlateState::Failed
+    } else {
+        rpc::PlateState::Pending
+    } as i32;
+}
+
 pub(super) enum Job {
     Bake {
         scene: String,
@@ -235,7 +254,9 @@ impl Shared {
             .current
             .as_ref()
             .and_then(|current| current.scene.as_ref());
-        if let Some(snapshot) = current.and_then(|scene| scene.snapshot.as_ref()) {
+        if scene.scene_contents_json.is_empty()
+            && let Some(snapshot) = current.and_then(|scene| scene.snapshot.as_ref())
+        {
             scene.scene_contents_json = snapshot.model.public_contents().unwrap_or_else(|error| {
                 record(
                     "gameplay.living_scene.contents_failed",
@@ -261,6 +282,12 @@ impl Shared {
                 })
                 .max_by_key(|item| item.requested_at),
         };
+        if hero.is_some() {
+            if let (Some(card), Some(item)) = (scene.item.as_mut(), item) {
+                enrich_item_card(card, item);
+            }
+            return;
+        }
         scene.item = item.map(|item| rpc::SceneItemCard {
             thing_id: item.thing.id.clone(),
             name: item.thing.name.clone(),

@@ -269,6 +269,17 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(card.thing_id, "purchased-clothes-travelers");
+            let projected =
+                wire::journey_view(&bought, LocalDemoRole::Player, native::first()).unwrap();
+            let Some(df_protocol::common::view_message::Audience::Player(projected)) =
+                projected.audience
+            else {
+                panic!("player projection");
+            };
+            assert_eq!(
+                projected.scene.unwrap().item.unwrap().thing_id,
+                card.thing_id
+            );
             assert!(
                 journey::living_scene::item_for(bought.state(), &scene, "Vale")
                     .unwrap()
@@ -316,6 +327,43 @@ mod tests {
             );
             assert!(!runtime::ended(repeated.state()).unwrap());
             assert!(repeated.state().narrative.open_threads.is_empty());
+            let mut checked = repeated;
+            for (operation, target) in [
+                (13, "thing-purchased-clothes-travelers"),
+                (14, "thing-folded-label"),
+            ] {
+                let choices = [
+                    (runtime::CHOICE_GROUP, "look-around"),
+                    ("attempt-thing", target),
+                    ("attempt-skill", "investigation"),
+                ]
+                .into_iter()
+                .map(|(key, value)| (model::label(key).unwrap(), model::label(value).unwrap()))
+                .collect();
+                checked = journey::stage_with_supplier(
+                    &checked,
+                    &input(
+                        &checked,
+                        native::first(),
+                        operation,
+                        "script-choice",
+                        choices,
+                    ),
+                    &mut |_| Ok(12),
+                )
+                .unwrap();
+                checked = native::persisted(&checked);
+                let scene = runtime::scene(checked.state()).unwrap();
+                let card = journey::living_scene::item_for(checked.state(), &scene, "Brynn")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    format!("thing-{}", card.thing_id),
+                    target,
+                    "latest rolled inspection must supersede historical purchase"
+                );
+            }
+            assert_eq!(checked.state().draws.len(), 3);
         });
     }
 

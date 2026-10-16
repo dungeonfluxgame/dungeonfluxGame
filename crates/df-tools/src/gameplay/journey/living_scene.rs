@@ -338,21 +338,51 @@ pub(in crate::gameplay) fn item_for(
         return Ok(None);
     };
     let model = &snapshot.model;
+    let mut projected = scene.clone();
+    if let Some(setting) = projected.setting.as_mut() {
+        setting.model = Some(model.clone());
+    }
     for decision in state.decisions.iter().rev() {
-        let Some(entry) = read(decision)? else {
-            continue;
-        };
-        if entry.place != setting.place_id || entry.hero != hero {
-            continue;
-        }
-        let target =
+        let target = if let Some(entry) = read(decision)? {
+            if entry.place != setting.place_id || entry.hero != hero {
+                continue;
+            }
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
                 format!("purchased-{}", entry.target)
             } else if matches!(entry.option.as_str(), "examine" | "take" | "share") {
                 entry.target
             } else {
                 continue;
+            }
+        } else if decision.source_policy.as_str() == THREAD_POLICY {
+            let Some(check) = accepted(decision)?.check else {
+                continue;
             };
+            let Some((_, _, member)) =
+                crate::gameplay::beat_script_runtime::choice(state, decision)?
+            else {
+                continue;
+            };
+            let who = state
+                .members
+                .iter()
+                .find(|link| link.member == member)
+                .and_then(|link| link.character)
+                .ok_or_else(invalid)?;
+            if name(state, who)? != hero {
+                continue;
+            }
+            let Some(target) = crate::gameplay::investigation::check_target(&projected, &check)
+            else {
+                continue;
+            };
+            let Some(thing) = target.id.strip_prefix("thing-") else {
+                continue;
+            };
+            thing.to_owned()
+        } else {
+            continue;
+        };
         let Some(thing) = model.things.iter().find(|thing| thing.id == target) else {
             continue;
         };
