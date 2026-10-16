@@ -39,17 +39,20 @@ impl<'a> SceneScript<'a> {
                 .any(|line| line.sequence == check.result_sequence)
         });
         if self.restart {
-            if self.check.is_some() {
-                script.push(SceneScriptLine::CheckRoll);
-                script.push(SceneScriptLine::CheckResult);
-                return script;
-            }
             // A reconnect leaves the latest answer or committed outcome visible, silently.
             let current = self.lines.last().filter(|line| {
-                (line.kind == TableKind::Speech && line.role == TableRole::Npc)
-                    || public_outcome(line, self.check)
+                ((line.kind == TableKind::Speech && line.role == TableRole::Npc)
+                    || public_outcome(line, self.check))
+                    && self
+                        .check
+                        .is_none_or(|check| line.sequence > check.result_sequence)
             });
-            if let Some(line) = current.or(scripted.filter(|line| line.role == TableRole::Npc)) {
+            if let Some(line) = current {
+                script.push(SceneScriptLine::Table(line));
+            } else if self.check.is_some() {
+                script.push(SceneScriptLine::CheckRoll);
+                script.push(SceneScriptLine::CheckResult);
+            } else if let Some(line) = scripted.filter(|line| line.role == TableRole::Npc) {
                 script.push(SceneScriptLine::Table(line));
             } else if !self.narration.trim().is_empty() {
                 script.push(SceneScriptLine::Narration(self.narration));
@@ -313,6 +316,17 @@ mod tests {
                 ..script
             }),
             ["[roll]", &check.voice.text]
+        );
+        let mut reply = outcome(22, "Marek says the label belongs with those parcels.");
+        reply.role = TableRole::Npc;
+        reply.kind = TableKind::Speech;
+        assert_eq!(
+            text(&SceneScript {
+                lines: std::slice::from_ref(&reply),
+                check: Some(&check),
+                ..script
+            }),
+            [reply.text.as_str()]
         );
         assert_eq!(
             text(&SceneScript {
