@@ -452,6 +452,37 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
 }
 
 #[test]
+fn reply_context_shares_named_stockout_and_not_unmentioned_unavailable_stock() {
+    let mut sold_out = terms(TradeDirection::HeroBuys);
+    sold_out.available = false;
+    sold_out.stock_units = 0;
+    let facts = json!({"npc": {"name": "Marek", "role": "merchant"}});
+
+    let asked = reply_context(
+        &[sold_out.clone()],
+        "sigrun",
+        "marek",
+        "Do you still have the fine clothes?",
+        None,
+        &facts,
+    )
+    .unwrap();
+    assert_eq!(asked["available_trades"][0]["item"], "fine clothes");
+    assert_eq!(asked["available_trades"][0]["available"], false);
+    assert_eq!(asked["available_trades"][0]["stock_units"], 0);
+
+    let unasked = reply_context(
+        &[sold_out],
+        "sigrun",
+        "marek",
+        "What are you selling?",
+        None,
+        &facts,
+    );
+    assert!(unasked.is_none());
+}
+
+#[test]
 fn stale_stock_wrong_buyer_and_out_of_range_prices_reject_before_quote_creation() {
     let mut changed_stock = terms(TradeDirection::HeroBuys);
     changed_stock.stock_units = 0;

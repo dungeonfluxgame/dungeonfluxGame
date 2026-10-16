@@ -209,15 +209,28 @@ pub(in crate::gameplay) fn reply_context(
     listener_facts: &Value,
 ) -> Option<Value> {
     let sell_context = tendered_item_id.is_some() || is_selling_request(typed_words);
+    let hero_buy_terms = terms
+        .iter()
+        .filter(|term| {
+            term.direction == TradeDirection::HeroBuys
+                && hero_id_for_terms(term) == authenticated_hero_id
+                && merchant_id_for_terms(term) == merchant_id
+        })
+        .collect::<Vec<_>>();
+    let unique_active_buy_item = (hero_buy_terms.len() == 1 && refers_to_active_item(typed_words))
+        .then(|| hero_buy_terms[0].item_id.as_str());
     let available: Vec<&TradeTerms> = terms
         .iter()
         .filter(|term| {
             hero_id_for_terms(term) == authenticated_hero_id
                 && merchant_id_for_terms(term) == merchant_id
-                && term.available
-                && term.stock_units > 0
                 && match term.direction {
-                    TradeDirection::HeroBuys => !sell_context,
+                    TradeDirection::HeroBuys => {
+                        !sell_context
+                            && (term.available
+                                || mentions_item(term, typed_words)
+                                || unique_active_buy_item == Some(term.item_id.as_str()))
+                    }
                     TradeDirection::HeroSells => {
                         sell_context
                             && tendered_item_id.map_or_else(
@@ -265,6 +278,7 @@ pub(in crate::gameplay) fn reply_context(
             if term.direction == TradeDirection::HeroBuys {
                 entry["listed_price_cp"] = json!(term.maximum_price_cp);
             }
+            entry["available"] = json!(term.available);
             entry["stock_units"] = json!(term.stock_units);
             entry
         })
