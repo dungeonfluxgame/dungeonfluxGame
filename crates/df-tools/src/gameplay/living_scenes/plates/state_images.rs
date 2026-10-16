@@ -29,6 +29,29 @@ pub(super) struct Book {
     focus: Option<Presentation>,
 }
 
+impl Book {
+    /// The first virtual time at which the current pending edit could pass its production
+    /// settle and pacing gates. Tests use this instead of assuming that several expensive fake
+    /// image operations fit inside a hard-coded wall-clock interval.
+    pub(super) fn next_eligible_at(
+        &self,
+        story_interval: Duration,
+        face_last_started: Option<Duration>,
+    ) -> Option<Duration> {
+        let pending = self.pending.as_ref()?;
+        let interval = if pending.story.is_some() && pending.focus.is_none() {
+            story_interval.max(BAKE_INTERVAL)
+        } else {
+            BAKE_INTERVAL
+        };
+        let mut eligible = pending.changed_at.saturating_add(SETTLE);
+        for last_started in [self.last_started, face_last_started].into_iter().flatten() {
+            eligible = eligible.max(last_started.saturating_add(interval));
+        }
+        Some(eligible)
+    }
+}
+
 #[cfg_attr(test, derive(Clone))]
 pub(super) struct Pending {
     snapshot: Option<SceneNow>,

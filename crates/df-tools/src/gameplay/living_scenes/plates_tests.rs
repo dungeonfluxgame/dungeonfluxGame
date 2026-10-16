@@ -553,7 +553,13 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
     focused.graph_revision = 2;
     focused.story = committed_story(&journey);
     shared.observe_with(&focused, Some(current.clone()), Vec::new());
-    shared.poll_state_images_at(Duration::from_secs(4));
+    let eligible_at = {
+        let book = locked(&shared.book);
+        book.state_images
+            .next_eligible_at(shared.inner.timing.interval, book.face_refresh.last_started)
+            .expect("focus edit is pending")
+    };
+    shared.poll_state_images_at(shared.inner.now().max(eligible_at));
     let Job::State(job) = drain(&mut queue).remove(0) else {
         panic!("narrative reveal through production observer")
     };

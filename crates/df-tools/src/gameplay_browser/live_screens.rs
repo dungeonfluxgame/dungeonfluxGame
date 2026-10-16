@@ -307,16 +307,15 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     let lobby = input.phase == rpc::JourneyPhase::Room;
     let join_url = join_address(input.journey)?;
     let (art, art_fallback, art_source) = art(input.phase, input.scene);
-    let speaker = (!input.journey.dialogue.is_empty()).then(|| TvSpeaker {
-        name: if input.journey.speaker.is_empty() {
+    let speaker = exploration_speech(input.journey, input.scene).map(|(_, name, line)| TvSpeaker {
+        name: if name.is_empty() {
             "Narrator".to_owned()
         } else {
-            input.journey.speaker.clone()
+            name.to_owned()
         },
-        line: input.journey.dialogue.clone(),
+        line: line.to_owned(),
         portrait: asset_url(&input.scene.speaker_portrait).or_else(|| {
-            speaker_portrait_stem(&input.journey.speaker)
-                .map(|stem| format!("/assets/ui/generated/{stem}"))
+            speaker_portrait_stem(name).map(|stem| format!("/assets/ui/generated/{stem}"))
         }),
     });
     Ok(TvModel {
@@ -572,15 +571,7 @@ fn exploration_model(
         "scene-whisper-in-the-rain" => ConceptScene::WhisperInTheRain,
         _ => ConceptScene::CourierRoad,
     };
-    let scene_speech = crate::presentation::newest_scene_speech(input.journey)
-        .map(|(sequence, name, line)| (Some(sequence), name, line))
-        .or_else(|| {
-            (!input.journey.dialogue.trim().is_empty()).then_some((
-                None,
-                input.journey.speaker.as_str(),
-                input.journey.dialogue.as_str(),
-            ))
-        });
+    let scene_speech = exploration_speech(input.journey, input.scene);
     let speaker =
         if ended { None } else { scene_speech }.map(|(_, name, line)| ExplorationSpeaker {
             name: if name.is_empty() {
@@ -642,6 +633,19 @@ fn exploration_model(
         choices,
         pending: client.busy.then_some("Waiting for the game server…"),
     })
+}
+
+fn exploration_speech<'a>(
+    journey: &'a rpc::JourneyView,
+    scene: &'a rpc::GameplayScene,
+) -> Option<(Option<u64>, &'a str, &'a str)> {
+    crate::presentation::newest_scene_speech(journey)
+        .map(|(sequence, name, line)| (Some(sequence), name, line))
+        .or_else(|| {
+            (!crate::presentation::scene_reply_pending(journey, Some(scene))
+                && !journey.dialogue.trim().is_empty())
+            .then_some((None, journey.speaker.as_str(), journey.dialogue.as_str()))
+        })
 }
 
 fn choice_disabled_reason(busy: bool, unconfirmed: bool) -> Option<&'static str> {
@@ -1306,9 +1310,65 @@ mod tests {
     use super::super::rpc;
     use super::{
         SceneInput, VisualSource, art, art_source, authored_scene_alt, choice_disabled_reason,
-        end_card_contact_ready, is_new_private_clue, lobby_art_source, phone_choice_label,
-        should_show_dialogue_composer, tv_model, validated_join_scene_asset,
+        end_card_contact_ready, exploration_speech, is_new_private_clue, lobby_art_source,
+        phone_choice_label, should_show_dialogue_composer, tv_model, validated_join_scene_asset,
     };
+
+    #[test]
+    fn phone_caption_waits_for_the_new_answer_instead_of_falling_back_to_the_purchase_line() {
+        let mut journey = rpc::JourneyView {
+            speaker: "Marek".into(),
+            dialogue: "Marek hands over the fine clothes for 200 copper.".into(),
+            reply_speaker: "Marek".into(),
+            ..Default::default()
+        };
+        journey.table_log = vec![
+            rpc::TableLine {
+                sequence: 1,
+                role: rpc::TableRole::Narrator as i32,
+                kind: rpc::TableKind::Action as i32,
+                speaker: "Narrator".into(),
+                text: "Marek hands over the fine clothes for 200 copper.".into(),
+                ..Default::default()
+            },
+            rpc::TableLine {
+                sequence: 2,
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                speaker: "Marek".into(),
+                text: "The tailor folds the purchased clothes into paper.".into(),
+                ..Default::default()
+            },
+            rpc::TableLine {
+                sequence: 3,
+                role: rpc::TableRole::Hero as i32,
+                kind: rpc::TableKind::Speech as i32,
+                speaker: "Brakka".into(),
+                text: "Could I inspect the other fine clothes?".into(),
+                ..Default::default()
+            },
+        ];
+        let scene = rpc::GameplayScene::default();
+
+        assert_eq!(exploration_speech(&journey, &scene), None);
+
+        journey.table_log.push(rpc::TableLine {
+            sequence: 4,
+            role: rpc::TableRole::Npc as i32,
+            kind: rpc::TableKind::Speech as i32,
+            speaker: "Marek".into(),
+            text: "Marek shows Brakka the remaining wool coats.".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            exploration_speech(&journey, &scene),
+            Some((
+                Some(4),
+                "Marek",
+                "Marek shows Brakka the remaining wool coats."
+            ))
+        );
+    }
 
     #[test]
     fn reconnect_context_yields_to_retained_courier_and_stays_retired_through_a_fresh_check() {

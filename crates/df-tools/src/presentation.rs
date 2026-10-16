@@ -958,7 +958,23 @@ pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
             (player.journey.as_ref(), player.scene.as_ref())
         }
     };
-    let journey = journey?;
+    pending_reply_speaker(journey?, scene)
+}
+
+/// Whether the server's reply marker still describes an unanswered turn for this scene. The
+/// marker can remain on the view for a moment after its answer is committed, so the last accepted
+/// table row remains the authority for whether the reply is still pending.
+pub(crate) fn scene_reply_pending(
+    journey: &rpc::JourneyView,
+    scene: Option<&rpc::GameplayScene>,
+) -> bool {
+    pending_reply_speaker(journey, scene).is_some()
+}
+
+fn pending_reply_speaker(
+    journey: &rpc::JourneyView,
+    scene: Option<&rpc::GameplayScene>,
+) -> Option<String> {
     let speaker = journey.reply_speaker.trim();
     if speaker.is_empty() {
         return None;
@@ -976,21 +992,28 @@ pub(crate) fn replying_speaker(view: &rpc::ViewMessage) -> Option<String> {
     (!answered).then(|| speaker.to_owned())
 }
 
+fn latest_hero_turn(journey: &rpc::JourneyView) -> Option<u64> {
+    journey
+        .table_log
+        .iter()
+        .filter(|line| {
+            rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
+                && matches!(
+                    rpc::TableKind::try_from(line.kind),
+                    Ok(rpc::TableKind::Speech | rpc::TableKind::Action)
+                )
+        })
+        .map(|line| line.sequence)
+        .max()
+}
+
 /// The newest public reply from the scene's speaker, if the accepted table log has one.
 pub(crate) fn newest_scene_speech(journey: &rpc::JourneyView) -> Option<(u64, &str, &str)> {
     let speaker = journey.speaker.trim();
     if speaker.is_empty() {
         return None;
     }
-    let scene_start = journey
-        .table_log
-        .iter()
-        .rev()
-        .find(|line| {
-            rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
-                && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
-        })
-        .map_or(0, |line| line.sequence);
+    let scene_start = latest_hero_turn(journey).unwrap_or(0);
     journey.table_log.iter().rev().find_map(|line| {
         (rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Npc)
             && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Speech)
@@ -2691,6 +2714,57 @@ mod tests {
         ];
 
         assert_eq!(newest_scene_speech(&shown), None);
+    }
+
+    #[test]
+    fn a_new_question_supersedes_the_previous_purchase_reply_until_answered() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Marek".to_owned();
+        shown.dialogue = "Marek hands over the fine clothes.".to_owned();
+        shown.reply_speaker = "Marek".to_owned();
+        shown.table_log = vec![
+            server_line(
+                1,
+                "Narrator",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Action,
+                "Marek hands over the fine clothes for 200 copper.",
+            ),
+            server_line(
+                2,
+                "Marek",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "The tailor folds the purchased clothes into paper.",
+            ),
+            server_line(
+                3,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Speech,
+                "Could I inspect the other fine clothes?",
+            ),
+        ];
+
+        assert_eq!(newest_scene_speech(&shown), None);
+        assert!(scene_reply_pending(&shown, None));
+
+        shown.table_log.push(server_line(
+            4,
+            "Marek",
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Speech,
+            "Marek shows Brakka the remaining wool coats.",
+        ));
+        assert_eq!(
+            newest_scene_speech(&shown),
+            Some((4, "Marek", "Marek shows Brakka the remaining wool coats."))
+        );
+        assert!(!scene_reply_pending(&shown, None));
     }
 
     #[test]

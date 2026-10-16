@@ -13,6 +13,9 @@ pub(crate) struct SceneScript<'a> {
     pub(crate) fresh: &'a [&'a TableLine],
     pub(crate) check: Option<&'a CheckVoiceLine>,
     pub(crate) restart: bool,
+    /// The server has accepted a player's speech and is still composing its answer. A reconnect
+    /// during that turn must not revive the authored opening line or the previous narrator cue.
+    pub(crate) awaiting_reply: bool,
     pub(crate) scene_changed: bool,
     pub(crate) in_fight: bool,
 }
@@ -49,6 +52,9 @@ impl<'a> SceneScript<'a> {
             });
             if let Some(line) = current {
                 script.push(SceneScriptLine::Table(line));
+            } else if self.awaiting_reply {
+                // The player's question is the current beat; keep the stage quiet until its reply
+                // is committed instead of replaying a previous caption or scene intro.
             } else if self.check.is_some() {
                 script.push(SceneScriptLine::CheckRoll);
                 script.push(SceneScriptLine::CheckResult);
@@ -136,6 +142,18 @@ mod tests {
             role: TableRole::Narrator,
             kind: TableKind::Action,
             text: text.into(),
+            scripted: false,
+        }
+    }
+
+    fn speech(sequence: u64, role: TableRole, speaker: &str, text: &str) -> TableLine {
+        TableLine {
+            sequence,
+            actor_id: String::new(),
+            speaker: speaker.to_owned(),
+            role,
+            kind: TableKind::Speech,
+            text: text.to_owned(),
             scripted: false,
         }
     }
@@ -337,5 +355,78 @@ mod tests {
             }),
             ["The next shop opens onto a sunny square."]
         );
+    }
+
+    #[test]
+    fn purchase_reply_then_new_question_waits_for_the_new_answer_without_replaying_old_audio() {
+        let purchase = outcome(1, "Marek hands over the fine clothes for 200 copper.");
+        let buy_reply = speech(
+            2,
+            TableRole::Npc,
+            "Marek",
+            "The tailor folds the purchased clothes into paper.",
+        );
+        let question = speech(
+            3,
+            TableRole::Hero(0),
+            "Brakka",
+            "Could I inspect the other fine clothes?",
+        );
+        let waiting_lines = [purchase.clone(), buy_reply.clone(), question.clone()];
+        let waiting = SceneScript {
+            narration: OPENING,
+            lines: &waiting_lines,
+            restart: true,
+            awaiting_reply: true,
+            ..Default::default()
+        };
+        assert!(
+            text(&waiting).is_empty(),
+            "a reconnect during a current question must not replay the old purchase line or intro"
+        );
+
+        let answer = speech(
+            4,
+            TableRole::Npc,
+            "Marek",
+            "Marek shows Brakka the remaining wool coats.",
+        );
+        let answered_lines = [purchase, buy_reply, question, answer.clone()];
+        let answered = SceneScript {
+            narration: OPENING,
+            lines: &answered_lines,
+            fresh: &[&answer],
+            ..Default::default()
+        };
+        assert_eq!(text(&answered), [answer.text.as_str()]);
+        let reply_read_ms = reading_time_ms(&answer.text);
+        assert!(reply_read_ms >= crate::stage_machines::READ_MINIMUM_MS);
+
+        let mut conductor = Conductor::new();
+        conductor.set_sound(true);
+        let commands = conductor.restart(
+            0,
+            ViewPlan {
+                diff: Default::default(),
+                script: text(&answered)
+                    .into_iter()
+                    .map(|text| ScriptLine {
+                        detail: text.to_owned(),
+                        voiceable: true,
+                        read_ms: reading_time_ms(text),
+                        slot: None,
+                        settled: false,
+                        timing: LineTiming::Ordinary,
+                    })
+                    .collect(),
+                cast: vec![],
+            },
+        );
+        assert!(commands.iter().any(|command| {
+            matches!(command, Command::Clip { op: ClipOp::Request, detail, .. } if detail == &answer.text)
+        }));
+        assert!(!commands.iter().any(|command| {
+            matches!(command, Command::Clip { op: ClipOp::Request, detail, .. } if detail == &buy_reply.text)
+        }));
     }
 }

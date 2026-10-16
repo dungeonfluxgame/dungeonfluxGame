@@ -745,6 +745,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             fresh: &fresh,
             check: check_voice.as_ref().filter(|_| check_roll.is_some()),
             restart,
+            awaiting_reply: thinking.is_some(),
             scene_changed,
             in_fight,
         }
