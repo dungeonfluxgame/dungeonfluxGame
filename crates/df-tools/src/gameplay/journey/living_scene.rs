@@ -713,6 +713,16 @@ pub(crate) fn commit_npc_trade_quote(
     };
     let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
     let place_id = scene.setting.as_ref().ok_or_else(invalid)?.place_id.clone();
+    // The quote's terms only name merchants found in the scene's people, so the lookup succeeds
+    // for any accepted proposal; the public row shows that person's name, never the internal id.
+    let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+    let merchant_name = snapshot
+        .model
+        .people
+        .iter()
+        .find(|person| person.id == proposal.actor_id)
+        .map(|person| person.name.clone())
+        .ok_or_else(invalid)?;
     let quote = SceneTradeQuote {
         quote_id,
         direction: proposal.direction,
@@ -742,7 +752,7 @@ pub(crate) fn commit_npc_trade_quote(
         recipient: String::new(),
         line: format!(
             "{} offers {} for {} CP.",
-            proposal.actor_id, expected.item_name, proposal.price_cp
+            merchant_name, expected.item_name, proposal.price_cp
         ),
         accepted: hex(&accepted.encode_to_vec()),
         target: proposal.item_id,
