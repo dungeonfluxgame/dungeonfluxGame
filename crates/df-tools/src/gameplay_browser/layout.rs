@@ -5,11 +5,6 @@ use web_sys::{Element, HtmlElement};
 
 fn id(element: &Element, value: &str) {
     let _ = element.set_attribute("data-layout-id", value);
-    if element.get_attribute("data-layout-base-style").is_none() {
-        if let Some(html) = element.dyn_ref::<HtmlElement>() {
-            let _ = element.set_attribute("data-layout-base-style", &html.style().css_text());
-        }
-    }
 }
 
 fn register(stage: &Element) {
@@ -143,17 +138,27 @@ pub(super) fn apply(stage: &Element, json: &str, revision: u64) -> Result<(), Js
     register(stage);
     let root = JSON::parse(json)?.dyn_into::<Object>()?;
     let overrides = Reflect::get(&root, &JsValue::from_str("overrides"))?.dyn_into::<Object>()?;
+    // Remove only properties owned by this controller. Application inline styles, including
+    // health and actor positioning, remain intact across every incoming view.
     if let Ok(elements) = stage.query_selector_all("[data-layout-id]") {
         for index in 0..elements.length() {
-            let Some(element) = elements
+            if let Some(element) = elements
                 .get(index)
                 .and_then(|node| node.dyn_into::<Element>().ok())
-            else {
-                continue;
-            };
-            if let Some(base) = element.get_attribute("data-layout-base-style") {
-                if let Some(html) = element.dyn_ref::<HtmlElement>() {
-                    let _ = html.style().set_css_text(&base);
+            {
+                if let Some(style) = element.dyn_ref::<HtmlElement>().map(|html| html.style()) {
+                    for property in [
+                        "translate",
+                        "scale",
+                        "rotate",
+                        "left",
+                        "top",
+                        "width",
+                        "height",
+                        "position",
+                    ] {
+                        let _ = style.remove_property(property);
+                    }
                 }
             }
         }

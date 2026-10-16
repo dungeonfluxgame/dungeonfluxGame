@@ -1015,6 +1015,13 @@ async fn send_report(client: &Rc<RefCell<Client>>, sequence: u64) -> Option<u64>
     call.set_timeout(Duration::from_millis(2_000));
     let outcome = sessions.report_presented(call).await;
     let root = client.borrow().root.clone();
+    if outcome.is_ok() {
+        if let Some(stage) = root.query_selector(".tv-stage").ok().flatten() {
+            if let Some(revision) = stage.get_attribute("data-layout-revision") {
+                let _ = root.set_attribute("data-layout-reported-revision", &revision);
+            }
+        }
+    }
     let _marked = root.set_attribute(
         "data-presented-report",
         if outcome.is_ok() { "sent" } else { "failed" },
@@ -1035,9 +1042,23 @@ fn report_presented(client: &Rc<RefCell<Client>>) {
         return;
     }
     let now = now_ms();
+    let layout_due = {
+        let state = client.borrow();
+        state
+            .root
+            .query_selector(".tv-stage")
+            .ok()
+            .flatten()
+            .and_then(|stage| stage.get_attribute("data-layout-revision"))
+            .map(|revision| {
+                let old = state.root.get_attribute("data-layout-reported-revision");
+                old.as_deref() != Some(revision.as_str())
+            })
+            .unwrap_or(false)
+    };
     let due = with_motion(|motion| {
         let presented = effective_presented(motion);
-        if presented == 0 {
+        if presented == 0 && !layout_due {
             return None;
         }
         let changed = presented != motion.reported_seq;
@@ -1050,7 +1071,7 @@ fn report_presented(client: &Rc<RefCell<Client>>) {
         Some(presented)
     })
     .flatten();
-    let Some(sequence) = due else {
+    let Some(sequence) = due.or_else(|| layout_due.then_some(0)) else {
         return;
     };
     let id = REPORT_LOOP.with(|current| {
