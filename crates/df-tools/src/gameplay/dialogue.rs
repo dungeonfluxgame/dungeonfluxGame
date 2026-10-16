@@ -2212,7 +2212,7 @@ impl actor::Actor {
                     || player_line.speaker != hero.chars().take(48).collect::<String>()
                     || line.role != rpc::TableRole::Npc as i32
                     || line.kind != rpc::TableKind::Speech as i32
-                    || line.actor_id != merchant_id
+                    || line.actor_id != merchant_id.as_str()
                     || !latest_npc_matches
                     || !player_was_negotiating
                     || !super::journey::merchant_bargaining::is_merchant_refusal(&line.text)
@@ -2293,7 +2293,7 @@ impl actor::Actor {
         let scope = self
             .issuer
             .issue(
-                credential,
+                &credential,
                 model::random().map_err(actor::unavailable)?,
                 fingerprint,
                 input,

@@ -341,7 +341,7 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
     );
     assert_eq!(
         quote_candidate_for_reply(
-            &two_gp_terms,
+            std::slice::from_ref(&two_gp_terms),
             "sigrun",
             "marek",
             "How much for the travelers clothes?",
