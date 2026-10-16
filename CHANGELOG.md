@@ -14,6 +14,38 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T06:39:31-04:00 to 2026-10-16T10:06:52-04:00
+
+Range: 4f9a7516b5f73c61818afb67dd8a5480b1431325..e881a61e02ec62ea0047f7f854da9e29c951997c
+
+- d99afc5f6a214927c83fe9865071b2baa5cab7eb — Record HUD camera and dialogue refinement work block
+- 73cd54a5d29893a2e6a4a2e5c0e41aa1ad2a0a1e — Ground NPC answers and preserve intentional withholding
+- 5b1a3e0e9403e940f3d198d42b148e46d2859c61 — Keep investigation targets grounded in authored scene objects
+- d9b9573613a8e8eb37f53843414a5379cc26f8d4 — Narrate roll results and preserve readable plate presentation
+- cd046bb6f8733a3bea34b89f637bf0fa0175e78d — Exercise grounded replies through valid conversation fixtures
+- 6adb3e5a1a846e661f77046db5725b88070d9c81 — Cover direct questions about following the courier
+- 28e9415578b9f84e8b6c0547342b2d55555497aa — Accept empty directory markers when restarting gameplay
+- 52af08583772903c62b10af6b3316ec3f856c9a6 — Speak check findings after reveal and retire managed results
+- 7b81b3083bb80381d2971d8c08fcf3f4ad6efb71 — Direct photographic plate coverage from public story beats
+- ac4575e9545ad035cc45609b4fa0abbfb1ae324a — Show the accepted intention and complete clue on check cards
+- f6d69ecdee425d8228bc6562479602b861216b7d — Vary dialogue coverage with public speaker continuity
+- 7a7cc13cb5356372d7533bc1d5c56d5b101b1ac3 — Track filmic coverage from successfully published public story shots
+- d4109e5f3efbc95368eb571b345932300a066208 — Recompose check cards around intention and a bronze die rail
+- 74a3adcfe31362ed93adacfb0ce945a214c21e1d — Compile the settled check clock query only for the browser
+- 31a7527bbcb6aaa636f5089ca176a6b40df78a5d — Keep measured plate serialization fixtures independent of camera policy
+- 88a7febed0a2a32f6e79fcf85d36301e317e863e — Wire intention signatures and browser regression imports
+- 9162f2fdbe06d065480349abdace37a3d1ba170a — Use the standard bounded camera cadence predicate
+- 16877d072436728cdb94f45eb281b2f18a5ebb2e — Tighten check intention grouping and remove redundant roll chrome
+- e29c9fceee90333c972cd0917ec1ff964c563b92 — Record check retirement with the shared reading reason
+- e3caa3f1ad6664e0549ccaea60d71171325e86ed — Resolve caption and voice speakers through canonical case-insensitive names
+- 97eeb9e69dc93c85277c0a395ec80700b0d71f42 — Give managed check results their own voice and reading lifetime
+- 30a4857ab698dded5b06440a16ce850b50bfa786 — Authorize NPC name disclosure from authored identity facts
+- fc916aea8335ef7c3e58d7bdbfcef51a5df5c21f — Fade managed checks and retire competing reconnect context
+- a99bcf038e35547d96f4c5aecd3ede9b62c3732a — Preserve check-card entrance during reveal and DM handoff
+- e881a61e02ec62ea0047f7f854da9e29c951997c — Document scene observation memory and integrated playtest evidence
+
+Next block baseline: `e881a61e02ec62ea0047f7f854da9e29c951997c`.
+
 ## 2026-10-16T02:22:10-04:00 to 2026-10-16T06:39:31-04:00
 
 Range: 33f5b3e51473781b300186f552bd0cad6feb10e2..4f9a7516b5f73c61818afb67dd8a5480b1431325
