@@ -151,6 +151,11 @@ impl AssembledPrompt {
         self
     }
 
+    /// Character count after all request fragments have been appended.
+    pub(in crate::gameplay) fn character_count(&self) -> usize {
+        self.text.chars().count()
+    }
+
     /// Only the authenticated, gated development owner may supply this bounded direction.
     /// Append it after the scene description; retain the original identity and rating clauses.
     pub(in crate::gameplay) fn with_development_direction(mut self, direction: &str) -> Self {

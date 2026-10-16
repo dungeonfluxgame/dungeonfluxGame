@@ -100,6 +100,49 @@ fn a_model_plate_names_each_person_and_keeps_their_staged_positions() {
 }
 
 #[test]
+fn merchant_seed_full_cast_plate_preserves_every_identity_in_final_assembly() {
+    let tables = super::super::adventure::Tables::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/adventure-tables")
+            .as_path(),
+    )
+    .expect("the checked adventure tables");
+    let mut forced = super::super::adventure::ForcedEntries::new();
+    forced.insert("location".into(), "lamplit-market".into());
+    forced.insert("patron".into(), "merchant".into());
+    let generated = super::super::adventure::generate(
+        &tables,
+        671003,
+        super::super::adventure::GenerateOptions::default(),
+        &forced,
+    )
+    .expect("the deterministic merchant shop adventure");
+    let opening = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::pack::SceneKey::Opening)
+        .expect("the opening scene");
+    let setting = opening.setting.as_ref().expect("the shop setting");
+    let model = setting.model.as_ref().expect("the merchant scene model");
+    let prompt = model_plate(
+        ContentRating::Mature,
+        model,
+        &setting.name,
+        &["Brakka".into(), "Sigrun".into()],
+    )
+    .expect("the merchant model plate prompt")
+    .with_cast_sheet(
+        2,
+        "slot 1 = merchant; slot 2 = shop-adventurer; slot 3 = shop-soldier; identity revision 671003",
+    );
+    assert!(prompt.character_count() > 0);
+    for id in ["merchant", "shop-adventurer", "shop-soldier"] {
+        assert!(prompt.as_str().contains(id), "missing cast identity {id}");
+    }
+}
+
+#[test]
 fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration() {
     let location = place();
     let generated = adventure(41);
