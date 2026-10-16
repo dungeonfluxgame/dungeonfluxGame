@@ -1996,7 +1996,7 @@ impl Actor {
                     "owner_refused_candidate",
                     &current_revision,
                 );
-                Err(error)
+                Err(unavailable(error))
             }
             SubmissionOutcome::OperationConflict => {
                 record_npc_event_status(

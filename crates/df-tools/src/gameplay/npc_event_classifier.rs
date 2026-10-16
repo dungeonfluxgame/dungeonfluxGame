@@ -485,12 +485,18 @@ mod tests {
             broken: false,
             searched_by: Vec::new(),
             aliases: aliases.iter().map(|alias| (*alias).to_owned()).collect(),
+            provenance: SceneItemProvenance {
+                kind: SceneItemProvenanceKind::AuthoredLocation,
+                source_id: id.to_owned(),
+                seller_id: None,
+            },
         }
     }
 
     fn room() -> SceneNow {
         SceneNow {
             model: SceneModel {
+                inventory_version: 1,
                 time_of_day: "day".to_owned(),
                 weather: "clear".to_owned(),
                 people: Vec::new(),

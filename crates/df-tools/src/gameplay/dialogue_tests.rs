@@ -1,7 +1,9 @@
 //! Operator-only mounted RPC evidence on a separately owned, empty local database.
 use super::{Service, actor, hex, journey, model, wire};
 use df_model::checkpoint::Checkpoint;
-use df_persistence::local_demo_scope::{self, LocalDemoAuthority, LocalDemoScopeIssuer};
+use df_persistence::local_demo_scope::{
+    self, LocalDemoAuthority, LocalDemoRole, LocalDemoScopeIssuer,
+};
 use df_persistence::{
     NativeCodecLimits, NativeRepositoryOptions, NativeTransactionBounds, PostgresRepository,
 };
@@ -725,7 +727,7 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
     ));
     let voice = Arc::new(
         super::npc_reply::NpcVoice::new(storyteller)
-            .with_approach_model(super::approach_model_tests::model(&jev_endpoint)),
+            .with_approach_model(super::approach_model::tests::model(&jev_endpoint)),
     );
 
     let codec = NativeCodecLimits {

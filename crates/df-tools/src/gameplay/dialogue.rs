@@ -358,25 +358,6 @@ mod classified_line_tests {
 }
 
 impl Service {
-    pub(super) async fn commit_npc_event(
-        &self,
-        credential: [u8; 32],
-        proposal: super::npc_event_classifier::Proposal,
-    ) -> Result<actor::NpcEventOutcome, Status> {
-        let (reply, wait) = oneshot::channel();
-        self.actor
-            .try_submit(actor::Call::NpcEvent {
-                credential,
-                proposal,
-                reply,
-            })
-            .map_err(|_| Status::resource_exhausted("NPC event actor queue full"))?;
-        tokio::time::timeout(super::timing::active().reply, wait)
-            .await
-            .map_err(|_| Status::deadline_exceeded("retain the NPC event for lookup"))?
-            .map_err(|_| Status::unavailable("gameplay actor stopped"))?
-    }
-
     async fn dialogue_call(
         &self,
         credential: [u8; 32],
