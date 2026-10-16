@@ -124,7 +124,7 @@ impl Camera {
         };
         // Peak tension is rare and bounded to a typed public beat; the sequence keeps it
         // deterministic without reacting to arbitrary words in the scene or reply.
-        if matches!(beat, PublicBeat::Peak) && sequence % 4 == 0 {
+        if matches!(beat, PublicBeat::Peak) && sequence.is_multiple_of(4) {
             return match side {
                 Self::OverShoulderRight => Self::DutchOverShoulderRight,
                 _ => Self::DutchOverShoulderLeft,
