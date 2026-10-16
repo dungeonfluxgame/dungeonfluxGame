@@ -122,6 +122,14 @@ bounded process-local mirror no longer contains the earliest events. The timelin
 is diagnostic evidence, not authoritative game state; preserve a run-local copy
 with the build and database identity when investigating a regression.
 
+The intended correlation is the same scene id and graph revision from request
+through projection. Current live runs can show different local identity hashes
+between the plate request/render records and the projected display asset because
+the former identifies the pack scene path while the latter identifies the
+effective served asset path. Treat that as the known identity-alignment gap and
+compare scene id, graph revision, plate id, and image key together until the
+diagnostics follow-up makes the domains explicit and joins them in one record.
+
 ## Visual review loop
 
 After every browser interaction, take a screenshot and record the current URL,
