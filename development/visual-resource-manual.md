@@ -187,6 +187,13 @@ There are three additional coverage gaps to account for during diagnosis:
 
 ## Move display elements live through the agent CLI
 
+Saved research for a future image-localization layer is in
+[Segment Anything feasibility](../planning/segment-anything-feasibility.md).
+It includes the official Meta SAM API, coordinate/provenance requirements,
+published provider options, and the local billing/TLS probe outcomes. The owner
+deferred SAM integration; exact DOM geometry remains available through layout
+readback below.
+
 The development layout surface is enabled by `DF_GAMEPLAY_DEV_CONTROL=on`.
 After installing a build containing it, changing an element uses the existing
 authenticated CLI and does not require recompilation, a server restart, a page
