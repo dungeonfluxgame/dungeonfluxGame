@@ -33,6 +33,16 @@ pub(super) fn pay(state: &mut GameState) -> Result<Option<Vec<EntityId>>, Reposi
     if paid(state) || !super::super::beat_script_runtime::ended(state)? {
         return Ok(None);
     }
+    // Assaulting a scene NPC is a separate objective. It must never satisfy
+    // the courier delivery errand or award its generic payment.
+    if state.encounters.iter().any(|encounter| {
+        encounter
+            .objectives
+            .iter()
+            .any(|objective| objective.entry.as_str() == "scene-npc-assault")
+    }) {
+        return Ok(None);
+    }
     let Some(reward) = pack::with_content(|pack| pack.reward.clone()) else {
         return Ok(None);
     };

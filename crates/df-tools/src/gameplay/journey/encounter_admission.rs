@@ -1057,6 +1057,77 @@ mod tests {
         assert_eq!(calls, 0);
         assert_eq!(stale, before);
     }
+
+    #[test]
+    fn scene_assault_uses_courier_tactical_binding_without_bandit_or_opening_enemy_turn() {
+        if !super::super::tactical::enabled() {
+            return;
+        }
+        let current = dialogue();
+        let mut command = proposal(&current);
+        let GameCommand::ProposeAction { choices, .. } = &mut command.command else {
+            panic!("proposal command")
+        };
+        choices.push((
+            model::label("scene-target").unwrap(),
+            model::label("courier").unwrap(),
+        ));
+        let selected = crate::gameplay::beat_script_runtime::select(
+            &current,
+            rpc::GameplayActionKind::DefendCourier,
+            &[],
+        )
+        .unwrap();
+        let mut staged = current.state().clone();
+        let mut draws = Vec::new();
+        let mut outcomes = Vec::new();
+        super::super::enter_fight(
+            &current,
+            &command,
+            &selected,
+            &mut staged,
+            &mut draws,
+            &mut outcomes,
+            &mut |_| Ok(10),
+        )
+        .unwrap();
+        let encounter = staged.encounters.first().unwrap();
+        assert_eq!(
+            encounter.objectives,
+            [model::content("scene-npc-assault").unwrap()]
+        );
+        assert_eq!(
+            encounter.combat_policy,
+            model::content("tactical-srd521-cover-policy").unwrap()
+        );
+        let courier = super::super::courier_reaction::courier().unwrap();
+        assert_eq!(
+            encounter
+                .participants
+                .iter()
+                .filter(|id| **id == courier)
+                .count(),
+            1
+        );
+        assert!(
+            !encounter
+                .participants
+                .iter()
+                .any(|id| *id == entity(BANDIT).unwrap())
+        );
+        let battle = super::super::tactical::read(&staged).unwrap();
+        let courier_id = super::super::tactical::actor_id(&staged, courier).unwrap();
+        let courier_actor = battle.actor(courier_id).unwrap();
+        assert_eq!(
+            courier_actor.spec().kind,
+            df_rules::tactical::CreatureKind::Commoner
+        );
+        assert_eq!(battle.round(), 1);
+        assert!(
+            outcomes.is_empty(),
+            "scene assault must not take an opening enemy turn"
+        );
+    }
     #[test]
     fn exact_validator_rejects_duplicate_unknown_and_existing_undisclosed_actor_with_no_partial_result()
      {
