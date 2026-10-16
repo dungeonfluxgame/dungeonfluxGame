@@ -14,6 +14,18 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T18:03:02-04:00 to 2026-10-16T18:11:31-04:00
+
+Range: c0a18abb0cbad37a084e2e5996d115cc686f65d8..de410db1c92735315682fa0cc1420bf10d2357c2
+
+- 30f249a91f3a23258ae061df5d07e9267acfeedf — Close merchant playtest work block at handoff
+- de410db1c92735315682fa0cc1420bf10d2357c2 — Record Sigrun haggle purchase and checkpoint resume constraint
+
+User resumed playtesting. Rebuilt 30f249a9, preserved ZOGAMU after a build-pin
+resume refusal, and started ZAVAFO. Sigrun haggled at 150 and 180 CP; Marek held
+200 CP. Her purchase committed once at 1:8; phone coin and permanent inventory
+were visually verified. The current server remains running. No game source changed.
+
 ## 2026-10-16T17:02:55-04:00 to 2026-10-16T18:03:02-04:00
 
 Range: ee72773235293ce1e0a6fb6d7f204f7dce6ed609..c0a18abb0cbad37a084e2e5996d115cc686f65d8
