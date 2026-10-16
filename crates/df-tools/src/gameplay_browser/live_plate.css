@@ -88,7 +88,8 @@
 .tv-stage[data-tv-mode=scene][data-scene-swap=b]:is([data-shot=plate],[data-shot=stage]) .tv-headline{animation-name:df-headline-visit-b}
 @keyframes df-headline-visit{0%{opacity:0;visibility:visible}11%,82%{opacity:1;visibility:visible}100%{opacity:0;visibility:hidden}}
 @keyframes df-headline-visit-b{0%{opacity:0;visibility:visible}11%,82%{opacity:1;visibility:visible}100%{opacity:0;visibility:hidden}}
-.tv-hud{transition:opacity .8s ease}
+.tv-hud[data-party-hud=hidden]{transition:opacity .7s cubic-bezier(.2,.65,.3,1),visibility 0s linear .7s}
+.tv-hud[data-party-hud=visible]{transition:opacity .7s cubic-bezier(.2,.65,.3,1),visibility 0s}
 .tv-stage[data-shot=establishing]:not([data-narration-over]) .tv-hud{opacity:0}
 .tv-stage[data-shot=establishing] :is(.tv-fig-bubbles,.tv-plate-bubbles){visibility:hidden}
 .tv-stage[data-shot=plate] .tv-plate-bubbles{animation:df-shot-in .7s ease .5s backwards}

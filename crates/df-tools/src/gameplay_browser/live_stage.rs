@@ -71,6 +71,9 @@ const BUBBLE_FIXED_OBSTACLES: [&str; 3] = [".tv-headline", ".tv-rules", ".tv-sce
 const CHECK_ROLL_MS: u32 = 5_000;
 const CHECK_FINDING_PADDING_MS: u32 = 1_000;
 const CHECK_FADE_MS: u32 = 500;
+const PARTY_HUD_TIMING_ID: u64 = 1;
+const PARTY_HUD_FADE_MS: u32 = 700;
+const PARTY_HUD_SCENE: &str = "party_hud";
 
 pub(super) fn line_component_phase(state: LineState) -> ComponentPhase {
     match state {
@@ -367,6 +370,7 @@ pub(super) struct Figures {
     hud: Vec<HudCard>,
     animation_end: Closure<dyn FnMut(Event)>,
     scene: RefCell<String>,
+    party_hud_visible: Cell<Option<bool>>,
     document: Document,
 }
 
@@ -507,10 +511,10 @@ impl Figures {
             let plate = node(document, &card, "div", "tv-hud-plate", "")?;
             let name = node(document, &plate, "div", "tv-hud-name", "")?;
             let role = node(document, &plate, "div", "tv-hud-role", "")?;
+            let hit_points_text = node(document, &plate, "span", "tv-fig-hp-text", "")?;
             let hit_points = node(document, &plate, "div", "tv-fig-hp", "")?;
             node(document, &hit_points, "span", "tv-fig-hp-fill", "")?;
             live_health::mount_bar(document, &hit_points)?;
-            let hit_points_text = node(document, &hit_points, "span", "tv-fig-hp-text", "")?;
             hud.push(HudCard {
                 root: card,
                 crest,
@@ -552,6 +556,7 @@ impl Figures {
             hud,
             animation_end,
             scene: RefCell::new(String::new()),
+            party_hud_visible: Cell::new(None),
             document: document.clone(),
         })
     }
@@ -592,6 +597,7 @@ impl Figures {
             },
         )?;
         self.root.set_attribute("data-arrange", arrange)?;
+        self.sync_party_hud(mode)?;
         // The stylesheet and the stage's other elements follow the arrangement too.
         if let Some(parent) = self.root.parent_element() {
             parent.set_attribute("data-arrange", arrange)?;
@@ -688,6 +694,56 @@ impl Figures {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn sync_party_hud(&self, mode: StageMode) -> Result<(), JsValue> {
+        let visible = mode == StageMode::Combat;
+        if self.party_hud_visible.get() == Some(visible) {
+            return Ok(());
+        }
+        self.party_hud_visible.set(Some(visible));
+        let hud = self
+            .root
+            .query_selector(".tv-hud")?
+            .ok_or_else(|| JsValue::from_str("party HUD root absent"))?;
+        hud.set_attribute("data-party-hud", if visible { "visible" } else { "hidden" })?;
+        let phase = if visible {
+            ComponentPhase::Opened
+        } else {
+            ComponentPhase::Closing
+        };
+        super::presentation_timing::component(
+            Some(&hud),
+            PresentationComponent::PartyHud,
+            PARTY_HUD_TIMING_ID,
+            PARTY_HUD_SCENE,
+            phase,
+            if visible {
+                "battle-begin"
+            } else {
+                "phase-change"
+            },
+            PARTY_HUD_FADE_MS,
+        );
+        super::presentation_timing::schedule_component_transition(
+            hud,
+            PresentationComponent::PartyHud,
+            PARTY_HUD_TIMING_ID,
+            PARTY_HUD_SCENE.to_owned(),
+            if visible {
+                ComponentPhase::Readable
+            } else {
+                ComponentPhase::Hidden
+            },
+            if visible {
+                "battle-begin"
+            } else {
+                "phase-change"
+            },
+            PARTY_HUD_FADE_MS,
+            PARTY_HUD_FADE_MS,
+        );
         Ok(())
     }
 
@@ -1645,9 +1701,25 @@ impl Figures {
                     vec![speaker_head],
                 ),
                 None => {
+                    let hud_visible = self
+                        .root
+                        .query_selector(".tv-hud[data-party-hud=visible]")
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    if !hud_visible {
+                        let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
+                        let _reason = bubble_owner
+                            .bubbles
+                            .set_attribute("data-anchor-fallback", "missing-hero-head");
+                        return;
+                    }
                     on_card = true;
                     let card = self.hud.get(index).map(|card| rectangle(&card.root));
                     let (left, top, right, bottom) = card.unwrap_or((0.0, 0.0, 1.0, 1.0));
+                    let _reason = bubble_owner
+                        .bubbles
+                        .remove_attribute("data-anchor-fallback");
                     (
                         Rect::new(left, top, right, bottom),
                         Side::Right,
@@ -1717,7 +1789,14 @@ impl Figures {
             }
         };
         for card in &self.hud {
-            if card.root.get_attribute("data-present").as_deref() == Some("true") {
+            if card.root.get_attribute("data-present").as_deref() == Some("true")
+                && card
+                    .root
+                    .closest(".tv-hud[data-party-hud=visible]")
+                    .ok()
+                    .flatten()
+                    .is_some()
+            {
                 let bounds = card.root.get_bounding_client_rect();
                 fallback_avoid.push(Rect::new(
                     bounds.left(),

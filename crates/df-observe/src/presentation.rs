@@ -106,6 +106,7 @@ pub enum PresentationComponent {
     SceneCard,
     PlateIncoming,
     PlateOutgoing,
+    PartyHud,
 }
 
 impl PresentationComponent {
@@ -121,6 +122,7 @@ impl PresentationComponent {
             Self::SceneCard => "scene_card",
             Self::PlateIncoming => "plate_incoming",
             Self::PlateOutgoing => "plate_outgoing",
+            Self::PartyHud => "party_hud",
         }
     }
 
@@ -136,6 +138,7 @@ impl PresentationComponent {
             Self::SceneCard,
             Self::PlateIncoming,
             Self::PlateOutgoing,
+            Self::PartyHud,
         ]
     }
 
@@ -1179,6 +1182,10 @@ mod tests {
         assert_eq!(
             PresentationComponent::from_label("check_card"),
             Some(PresentationComponent::CheckCard)
+        );
+        assert_eq!(
+            PresentationComponent::from_label("party_hud"),
+            Some(PresentationComponent::PartyHud)
         );
         assert_eq!(PresentationComponent::from_label("secret-component"), None);
         assert_eq!(

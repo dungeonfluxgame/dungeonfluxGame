@@ -84,22 +84,23 @@
 .tv-figures[data-arrange=combat] .tv-fig-body{animation:none}
 .tv-figures[data-lit][data-arrange=combat] .tv-fig:not([data-speaking]){opacity:.88}
 
-/* ---------- the HUD: names and health at the screen edge, not under the figures ---------- */
-.tv-hud{position:absolute;inset:0;z-index:8;pointer-events:none}
+/* ---------- the HUD: a quiet combat instrument, absent from story scenes ---------- */
+.tv-hud{position:absolute;inset:0;z-index:8;pointer-events:none;opacity:0;visibility:hidden;transition:opacity .7s cubic-bezier(.2,.65,.3,1),visibility 0s linear .7s}
+.tv-hud[data-party-hud=visible]{opacity:1;visibility:visible;transition:opacity .7s cubic-bezier(.2,.65,.3,1),visibility 0s}
 .tv-hud-card{position:absolute;display:flex;align-items:center;gap:calc(var(--u)*.9);width:calc(var(--u)*24);transition:opacity .5s ease}
 .tv-hud-card[data-present=false]{opacity:0;visibility:hidden}
-.tv-hud-card[data-slot=hero-1]{left:calc(var(--u)*3);top:5vh}
-.tv-hud-card[data-slot=hero-2]{left:calc(var(--u)*28.5);top:5vh}
+.tv-hud-card[data-slot=hero-1]{left:calc(var(--u)*3);top:3.3vh}
+.tv-hud-card[data-slot=hero-2]{left:calc(var(--u)*25.5);top:3.3vh}
 .tv-hud-card[data-slot=foe]{display:none}
-.tv-hud-crest{flex:none;width:calc(var(--u)*5.6);aspect-ratio:1;border:max(2px,calc(var(--u)*.14)) solid #cba466;border-radius:50%;background:#162230 center 18%/cover no-repeat;box-shadow:0 calc(var(--u)*.4) calc(var(--u)*1.2) #000c}
-.tv-hud-plate{flex:1;padding:calc(var(--u)*.2) calc(var(--u)*.6);background:linear-gradient(#0a121cd9,#060b12e6);border:1px solid #c9a35f99;border-radius:calc(var(--u)*.5);text-shadow:none}
-.tv-hud-name{font-size:var(--fs-name);line-height:1.15;color:#f7efdc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tv-hud-crest{flex:none;width:calc(var(--u)*3.9);aspect-ratio:4/5;border:max(2px,calc(var(--u)*.1)) solid #cba466;border-radius:calc(var(--u)*.28);background:#162230 center 18%/cover no-repeat;box-shadow:0 calc(var(--u)*.3) calc(var(--u)*.8) #000c}
+.tv-hud-plate{flex:1;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:calc(var(--u)*.55);padding:calc(var(--u)*.18) calc(var(--u)*.45);background:linear-gradient(135deg,#0a121cd9,#060b12b8);border:1px solid #c9a35f66;border-radius:calc(var(--u)*.22);text-shadow:none}
+.tv-hud-name{grid-column:1;font-size:calc(var(--u)*1.35);line-height:1.12;color:#f7efdc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tv-hud-role{display:none}
-.tv-fig-hp{position:relative;height:calc(var(--u)*1.7);margin-top:calc(var(--u)*.2);border:1px solid #d9b77a59;border-radius:calc(var(--u)*.85);background:#0a0e0b;overflow:hidden}
+.tv-fig-hp{grid-column:1/-1;position:relative;height:calc(var(--u)*.72);margin-top:calc(var(--u)*.3);border:1px solid #d9b77a59;border-radius:calc(var(--u)*.36);background:#0a0e0b;overflow:hidden}
 .tv-fig-hp[hidden]{display:none}
-.tv-fig-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#3f8553,#8fd18d);transition:width .8s ease-out 1.15s}
+.tv-fig-hp-fill{position:absolute;inset:0 auto 0 0;width:var(--hp,0%);background:linear-gradient(90deg,#527b5d,#9ab991);transition:width .8s ease-out 1.15s}
 .tv-hud-card[data-low] .tv-fig-hp-fill{background:linear-gradient(90deg,#92392a,#e0784f)}
-.tv-fig-hp-text{position:relative;display:block;text-align:center;font:700 var(--fs-label)/calc(var(--u)*1.7) system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
+.tv-fig-hp-text{grid-column:2;position:relative;display:block;text-align:right;font:700 clamp(16px,calc(var(--u)*1.05),22px)/1 system-ui,sans-serif;color:#f3ead6;white-space:nowrap;text-shadow:0 1px 3px #000}
 .tv-hud-card[data-down]{opacity:.6;filter:saturate(.3)}
 /* a fight: the plates sit at the bottom, under the screen's own banner */
 .tv-stage[data-arrange=combat] .tv-hud-card[data-slot=hero-1]{left:calc(var(--u)*4);top:auto;bottom:4.5vh;width:calc(var(--u)*19)}
@@ -290,6 +291,11 @@
 .tv-hud-card .tv-intent::after{display:none}
 .tv-hud-card .tv-intent .tv-wave{height:calc(var(--u)*.9)}
 .tv-intent::after{display:none}
+@media (prefers-reduced-motion:reduce){
+  .tv-hud{transition:none}
+  .tv-hud[data-party-hud=visible]{transition:none}
+  .tv-fig-hp-fill{transition:none}
+}
 /* while the 3D battlefield shows the fight, the flat combat screen and its dice card never do (not during
    the entrance, the exit or the victory card); the battlefield's own cards show the dice */
 .tv-stage[data-battlefield-live=true] .live-screen[data-screen=combat]{visibility:hidden}
