@@ -253,6 +253,187 @@ fn authored_story_reads_only_committed_npc_reply_after_the_scene_action_boundary
 }
 
 #[tokio::test]
+async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_references() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/narrative-stock-focus/{}",
+        std::process::id()
+    ));
+    let fixture = DirectionFixture::new(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let (jobs, mut queue) = mpsc::channel(16);
+    let shared = Arc::new(Shared {
+        inner: Arc::new(Inner {
+            imagery: fixture.imagery.clone(),
+            references: super::super::ReferenceStore::photographic(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+            ),
+            social: SocialLedger::none(),
+            rating: ContentRating::Mature,
+            timing,
+            state: Mutex::new(State::new(timing)),
+            wake: tokio::sync::watch::channel(0).0,
+            origin: Instant::now(),
+        }),
+        book: Mutex::new(Book::new()),
+        jobs,
+    });
+    let mut current = scene(SceneKey::Opening, "The cloth shop", Some("Marek"));
+    let model = crate::gameplay::narrative_focus::tests::shop();
+    current.cast = model
+        .people
+        .iter()
+        .enumerate()
+        .map(|(index, person)| {
+            member(
+                &person.id,
+                &person.name,
+                match index {
+                    0 => "sprite-patron-merchant",
+                    1 => "sprite-shop-adventurer",
+                    _ => "sprite-shop-soldier",
+                },
+                if index == 0 {
+                    pack::CastRole::Patron
+                } else {
+                    pack::CastRole::Bystander
+                },
+            )
+        })
+        .collect();
+    current.cast[0].id = "merchant".into();
+    current.cast[0].name = "Marek".into();
+    current.setting.as_mut().unwrap().place_id = "cloth-shop".into();
+    current.setting.as_mut().unwrap().model = Some(model);
+    let before = current.setting.as_ref().unwrap().model.clone().unwrap();
+    let initial = view(&current, &[1], false);
+    shared.observe_with(&initial, Some(current.clone()), Vec::new());
+    let Job::Fresh {
+        id,
+        scene,
+        spec,
+        heroes,
+        faces,
+        ..
+    } = drain(&mut queue).remove(0)
+    else {
+        panic!("initial plate")
+    };
+    let (base, placement, _) = shared
+        .render_fresh(&scene, &spec, &heroes, &faces, &id, 1, false)
+        .await
+        .unwrap();
+    locked(&shared.inner.state)
+        .canonical_backdrops
+        .insert("cloth-shop".into(), base.clone());
+    locked(&shared.book).insert(
+        id,
+        Entry::Ready {
+            key: base.clone(),
+            placement,
+        },
+    );
+
+    let mut journey = rpc::JourneyView::default();
+    journey.table_log.push(public_npc_line(
+        42,
+        &current.cast[0],
+        "The fine clothes are fifteen hundred copper.",
+    ));
+    let mut focused = view(&current, &[1], false);
+    focused.graph_revision = 2;
+    focused.story = committed_story(&journey);
+    shared.observe_with(&focused, Some(current.clone()), Vec::new());
+    shared.poll_state_images_at(Duration::from_secs(4));
+    let Job::State(job) = drain(&mut queue).remove(0) else {
+        panic!("narrative reveal through production observer")
+    };
+    let state_images::Job::Bake {
+        pending,
+        base: shown,
+        identities,
+        ..
+    } = &job
+    else {
+        panic!("focus bake")
+    };
+    assert_eq!(shown, &base);
+    assert_eq!(pending.focus.as_ref().unwrap().subject.id(), "clothes-fine");
+    let Lookup::Image { bytes, format } = fixture.imagery.image(base.as_str()).await else {
+        panic!("base image")
+    };
+    let base_reference = ReferenceImage::new(format, bytes);
+    let request = shared
+        .state_image_request(pending, base_reference.clone(), identities.as_deref())
+        .await
+        .unwrap();
+    assert_eq!(request.references.len(), 4);
+    assert_eq!(request.references[0].sha256, base_reference.sha256);
+    assert_eq!(
+        request.references[1].sha256,
+        shared
+            .inner
+            .canonical_room_reference("cloth-shop")
+            .await
+            .unwrap()
+            .sha256
+    );
+    assert!(
+        request
+            .prompt
+            .as_str()
+            .contains("Image 3 is the canonical photographic identity contact sheet")
+    );
+    assert!(request.prompt.as_str().contains("npc:merchant"));
+    assert!(request.prompt.as_str().contains("hero:1"));
+    for actor in &current.cast {
+        assert!(
+            request
+                .prompt
+                .as_str()
+                .contains(&format!("npc:{}", actor.id))
+        );
+    }
+    assert!(request.prompt.as_str().contains("clothes-fine"));
+    assert!(request.prompt.as_str().contains("1500"));
+    assert!(request.prompt.as_str().contains("no ownership transfer"));
+    let rendered = shared.render_state_image(job).await;
+    assert!(matches!(
+        &rendered,
+        state_images::Done::Bake { result: Ok(_), .. }
+    ));
+    shared.finish_state_image_at(rendered, Duration::from_secs(5));
+    let mut projection = rpc::GameplayScene {
+        title: current.title.clone(),
+        scene_asset: current.asset.clone(),
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut projection, None);
+    let contents: serde_json::Value =
+        serde_json::from_str(&projection.scene_contents_json).unwrap();
+    assert_eq!(
+        contents["narrative_focus"]["focus"]["subject"]["id"],
+        "clothes-fine"
+    );
+    assert_eq!(
+        contents["narrative_focus"]["focus"]["dialogue_sequence"],
+        42
+    );
+    assert_eq!(contents["narrative_focus"]["stage"], "published");
+    assert_eq!(contents["narrative_focus"]["published_revision"], 2);
+    assert_eq!(
+        current.setting.as_ref().unwrap().model.as_ref().unwrap(),
+        &before
+    );
+    shared.observe_with(&focused, Some(current.clone()), Vec::new());
+    shared.poll_state_images_at(Duration::from_secs(40));
+    assert!(
+        drain(&mut queue).is_empty(),
+        "one committed reveal, no repeated render"
+    );
+}
+
+#[tokio::test]
 async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_configured_interval() {
     let current = scene(SceneKey::DialogueSeal, "Harbor story", Some("Kestrel"));
     let (shared, mut queue) = shared(16);

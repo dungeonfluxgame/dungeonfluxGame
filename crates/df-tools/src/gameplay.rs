@@ -41,6 +41,7 @@ mod line_cleanup;
 mod living_scenes;
 mod model;
 mod music_assets;
+mod narrative_focus;
 #[cfg(test)]
 mod new_adventure_tests;
 mod notebook;

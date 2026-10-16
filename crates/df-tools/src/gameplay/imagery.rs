@@ -18,6 +18,7 @@
 mod artifact;
 mod canonical_prompt;
 mod cast_sheet;
+pub(super) mod narrative_focus;
 mod party_sheet;
 mod photo_edit;
 mod plate_prompt;

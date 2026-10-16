@@ -264,6 +264,9 @@ fn music_plan_summary(scene: &rpc::GameplayScene, journey: &rpc::JourneyView) ->
 }
 
 fn scene_json(scene: &rpc::GameplayScene) -> Value {
+    let narrative_focus = serde_json::from_str::<Value>(&scene.scene_contents_json)
+        .ok()
+        .and_then(|contents| contents.get("narrative_focus").cloned());
     json!({"title": scene.title, "place": scene.place, "rules_note": scene.rules_note,
         "location_id":scene.location_id, "scene_asset":scene.scene_asset, "live_backdrop":scene.live_backdrop,
         "live_plate":scene.live_plate, "plate_state":scene.plate_state,
@@ -274,6 +277,7 @@ fn scene_json(scene: &rpc::GameplayScene) -> Value {
         "scene_video_state":scene.scene_video_state, "scene_video_path":scene.scene_video_path,
         "cast":scene.cast.iter().map(|actor| json!({"id":actor.id,"name":actor.name,"role":actor.role,"sprite":actor.sprite,"live_sprite":actor.live_sprite,"speaking":actor.speaking})).collect::<Vec<_>>(),
         "contents": scene.scene_contents_json,
+        "narrative_focus": narrative_focus,
         "item": scene.item.as_ref().map(|item| json!({
             "id": item.thing_id, "name": item.name, "detail": item.detail,
             "image_path": item.image_path, "image_state": item.image_state,
