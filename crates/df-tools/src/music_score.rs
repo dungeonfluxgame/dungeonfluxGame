@@ -313,6 +313,21 @@ pub(crate) fn mix_for(phase: Phase, intensity: u16, sombre: bool) -> Mix {
     mix
 }
 
+/// Keeps an intense social/reveal cue urgent without importing combat percussion into a
+/// non-combat scene. The server tempo phase remains unchanged and still drives the melodic and
+/// tension layers; the scene facts decide whether the combat layer is public and appropriate.
+pub(crate) fn scene_layer_gains(mut layers: [f32; 4], in_combat: bool) -> [f32; 4] {
+    if !in_combat {
+        // Social scenes keep the same tempo arc, but leave room for speech and the location bed.
+        // The tension pulse is reduced more than the bed/motif; combat retains the full table.
+        layers[0] *= 0.78;
+        layers[1] *= 0.78;
+        layers[2] *= 0.55;
+        layers[3] = 0.0;
+    }
+    layers
+}
+
 fn emphasis(intensity: u16, floor: u16) -> f32 {
     let span = f32::from(1_000 - floor);
     let above = f32::from(intensity.clamp(floor, 1_000) - floor);
@@ -765,11 +780,6 @@ pub(crate) fn facts_of(
                 Outcome::Defeat
             }
         });
-    let asset = if scene.scene_asset.is_empty() {
-        display_asset
-    } else {
-        scene.scene_asset.as_str()
-    };
     Facts {
         in_combat: phase == Some(rpc::JourneyPhase::Combat),
         antagonist_speaking: phase == Some(rpc::JourneyPhase::Dialogue)
@@ -777,8 +787,25 @@ pub(crate) fn facts_of(
                 || scene.speaker_portrait.contains("bandit")
                 || journey.speaker == "Bandit"),
         outcome,
-        bed: bed_of(asset),
+        bed: bed_for_scene(scene, display_asset),
     }
+}
+
+/// The scene's public location identity is more stable than its presentation asset. Generated
+/// adventures can use generic stems such as `scene-place-lamp-room`, while `location_id` and
+/// `place` still name the actual harbour, market, forest or library. Prefer those fields and
+/// only use the asset path when the authored location has no family name.
+pub(crate) fn bed_for_scene(scene: &rpc::GameplayScene, display_asset: &str) -> Bed {
+    [
+        scene.location_id.as_str(),
+        scene.place.as_str(),
+        scene.scene_asset.as_str(),
+        display_asset,
+    ]
+    .into_iter()
+    .map(bed_of)
+    .find(|bed| *bed != Bed::Night)
+    .unwrap_or(Bed::Night)
 }
 
 /// The ambient family named by a server-provided scene asset path; unknown scenes get the
@@ -921,6 +948,16 @@ mod tests {
     }
 
     #[test]
+    fn intense_dialogue_keeps_combat_layer_silent() {
+        let gains = scene_layer_gains([0.7, 0.8, 0.9, 1.0], false);
+        assert!((gains[0] - 0.546).abs() < 1e-6);
+        assert!((gains[1] - 0.624).abs() < 1e-6);
+        assert!((gains[2] - 0.495).abs() < 1e-6);
+        assert_eq!(gains[3], 0.0);
+        assert_eq!(scene_layer_gains([0.7, 0.8, 0.9, 1.0], true)[3], 1.0);
+    }
+
+    #[test]
     fn an_antagonist_speaker_raises_dialogue_and_is_a_reveal() {
         let mut bandit = scene("");
         bandit.speaker_portrait = "/assets/ui/generated/portrait-ant-bandit".to_owned();
@@ -1030,6 +1067,27 @@ mod tests {
                 "{phase:?} fall"
             );
         }
+    }
+
+    #[test]
+    fn location_identity_wins_when_a_generated_scene_stem_is_generic() {
+        let mut scene = scene("assets/ui/generated/scene-place-lamp-room.webp");
+        scene.location_id = "salt-quay".to_owned();
+        scene.place = "The Salt Quay".to_owned();
+        assert_eq!(bed_for_scene(&scene, ""), Bed::Harbour);
+
+        scene.location_id = "orrery-library".to_owned();
+        scene.place.clear();
+        assert_eq!(bed_for_scene(&scene, ""), Bed::Library);
+    }
+
+    #[test]
+    fn display_asset_remains_the_last_location_hint() {
+        let scene = scene("");
+        assert_eq!(
+            bed_for_scene(&scene, "assets/ui/generated/scene-pinewood-trail-arrival"),
+            Bed::Forest
+        );
     }
 
     #[test]

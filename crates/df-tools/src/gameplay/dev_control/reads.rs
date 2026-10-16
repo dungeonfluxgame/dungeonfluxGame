@@ -8,7 +8,7 @@ use axum::{
     response::Json,
 };
 use df_protocol::common as rpc;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::{collections::HashMap, sync::Arc};
 
 use super::{Outcome, Shared, authorized, bad_request, display_view, revision_json, seat_view};
@@ -162,6 +162,104 @@ fn visual_asset_summary(scene: &rpc::GameplayScene) -> Value {
         "effective_asset_id": asset_id(effective_asset),
         "plate_state": state,
     })
+}
+
+/// The server-derived public music plan used by the shared display. This is intentionally a
+/// summary of the same pure score functions the browser consumes, so an agent can compare the
+/// authoritative cue and scene family with `data-music-state` without exposing audio bytes.
+fn music_plan_summary(scene: &rpc::GameplayScene, journey: &rpc::JourneyView) -> Value {
+    let tempo = crate::music_score::tempo_of(scene, journey, 0);
+    let facts = crate::music_score::facts_of(scene, journey, "");
+    let suite = crate::music_score::suite_for(facts.in_combat, facts.outcome);
+    let mix = crate::music_score::mix_for(
+        tempo.phase,
+        tempo.intensity,
+        facts
+            .outcome
+            .is_some_and(|outcome| outcome == crate::music_score::Outcome::Defeat),
+    );
+    let colour = crate::music_score::colour_for(facts.bed, facts.in_combat);
+    let layers =
+        crate::music_score::scene_layer_gains(mix.layers.in_track_order(), facts.in_combat);
+    let scene_profile = if facts.in_combat {
+        "combat-full"
+    } else {
+        "social-restrained"
+    };
+    let plan = json!({
+        "bpm": crate::music_score::BPM,
+        "beat_seconds": crate::music_score::BEAT_SECONDS,
+        "phase": tempo.phase.name(),
+        "intensity_permille": tempo.intensity,
+        "cue_sequence": tempo.cue,
+        "release_hold_millis": tempo.release_hold_millis,
+        "suite": suite.name(),
+        "bed": facts.bed.track(),
+        "scene_colour": colour.name,
+        "scene_profile": scene_profile,
+        "layers": {"bed": layers[0], "motif": layers[1], "tension": layers[2], "combat": layers[3]},
+        "ambient_gain": mix.ambient,
+        "filter_hertz": mix.filter_hertz,
+        "transition_seconds": crate::music_score::TRANSITION_SECONDS,
+    });
+    let mut fields = Map::new();
+    fields.insert(
+        "resource_type".to_owned(),
+        Value::String("music".to_owned()),
+    );
+    fields.insert(
+        "resource_id".to_owned(),
+        Value::String(format!("tempo:{}", tempo.cue.unwrap_or(tempo.sequence))),
+    );
+    fields.insert(
+        "phase".to_owned(),
+        Value::String(tempo.phase.name().to_owned()),
+    );
+    fields.insert(
+        "intensity_permille".to_owned(),
+        Value::from(tempo.intensity),
+    );
+    fields.insert("suite".to_owned(), Value::String(suite.name().to_owned()));
+    fields.insert(
+        "bed".to_owned(),
+        Value::String(facts.bed.track().to_owned()),
+    );
+    fields.insert(
+        "scene_colour".to_owned(),
+        Value::String(colour.name.to_owned()),
+    );
+    fields.insert(
+        "scene_profile".to_owned(),
+        Value::String(scene_profile.to_owned()),
+    );
+    fields.insert(
+        "tempo_source".to_owned(),
+        Value::String(
+            if tempo.cue.is_some() {
+                "server_cue"
+            } else {
+                "view_fallback"
+            }
+            .to_owned(),
+        ),
+    );
+    fields.insert("in_combat".to_owned(), Value::from(facts.in_combat));
+    fields.insert("layer_gains".to_owned(), json!(layers));
+    fields.insert("status".to_owned(), Value::String("projected".to_owned()));
+    super::timeline::record_structured(
+        "gameplay.music.plan",
+        &format!(
+            "MUSIC plan phase={} intensity={} suite={} bed={} colour={} profile={}",
+            tempo.phase.name(),
+            tempo.intensity,
+            suite.name(),
+            facts.bed.track(),
+            colour.name,
+            scene_profile
+        ),
+        fields,
+    );
+    plan
 }
 
 fn scene_json(scene: &rpc::GameplayScene) -> Value {
@@ -445,6 +543,7 @@ fn view_json(view: &rpc::ViewMessage) -> Value {
             "check": display.check.as_ref().map(|check|check_view_json(check, display.journey.as_ref())),
             "scene": display.scene.as_ref().map(scene_json).unwrap_or(json!(null)),
             "journey": display.journey.as_ref().map(journey_json).unwrap_or(json!(null)),
+            "music_plan": display.scene.as_ref().zip(display.journey.as_ref()).map(|(scene, journey)| music_plan_summary(scene, journey)).unwrap_or(json!(null)),
         }),
         None => json!({"audience": "none"}),
     }

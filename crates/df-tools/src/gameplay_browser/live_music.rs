@@ -26,8 +26,8 @@ use crate::music_score::{
     SOMBRE_FILTER_HERTZ, STINGER_TAKES, Stinger, Suite, TRANSITION_SECONDS, Tempo, VOICE_LUFS,
     arrangement_for, arrangements_for, bubble_hold_ms, colour_for, duck_decibels, effective_phase,
     facts_after_presentation, facts_of, gain_for_decibels, gap_hold_active, layer_track,
-    line_presenting, mix_for, mix_level_lufs, next_beat, next_take, stinger_between, stinger_track,
-    suite_for, tempo_of, unvoiced_hold_ms,
+    line_presenting, mix_for, mix_level_lufs, next_beat, next_take, scene_layer_gains,
+    stinger_between, stinger_track, suite_for, tempo_of, unvoiced_hold_ms,
 };
 use gloo_timers::callback::Interval;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -862,6 +862,7 @@ impl Director {
             table[2] * scales[2] * colour.layers[2],
             table[3] * scales[3] * colour.layers[3],
         ];
+        layers = scene_layer_gains(layers, latest.facts.in_combat);
         let mut filter_hertz = (mix.filter_hertz * colour.filter_scale)
             .clamp(MINIMUM_FILTER_HERTZ, MAXIMUM_FILTER_HERTZ);
         if sombre {

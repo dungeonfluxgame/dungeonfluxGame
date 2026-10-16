@@ -12,6 +12,7 @@ pub(super) const RESOURCE_TYPES: &[&str] = &[
     "text_model",
     "speech_input",
     "voice",
+    "music",
     "image",
     "plate",
     "video",
@@ -157,6 +158,8 @@ fn resource_type(event: &str, line: &str, fields: &Map<String, Value>) -> Option
         Some("speech_input")
     } else if event.starts_with("gameplay.voice") {
         Some("voice")
+    } else if event.starts_with("gameplay.music") || event.starts_with("gameplay.tempo") {
+        Some("music")
     } else if event.starts_with("gameplay.imagery.") {
         Some("image")
     } else if event.starts_with("gameplay.living_scene.plate_")
@@ -169,7 +172,9 @@ fn resource_type(event: &str, line: &str, fields: &Map<String, Value>) -> Option
     } else if event.starts_with("gameplay.session_machine_") {
         Some("state")
     } else if event == "gameplay.presentation" {
-        if line.contains(" visual-source ")
+        if line.contains(" music-") || line.contains(" tempo-") {
+            Some("music")
+        } else if line.contains(" visual-source ")
             || line.contains(" scene ")
             || line.contains(" figure")
             || line.contains(" check-")
@@ -385,5 +390,22 @@ mod tests {
         let summary = timeline.snapshot(20, Some("image"), true);
         assert_eq!(summary["events"].as_array().unwrap().len(), 0);
         assert_eq!(summary["matched"], 2);
+    }
+
+    #[test]
+    fn music_plan_is_filterable_without_mixing_into_visual_events() {
+        let mut timeline = Timeline::new();
+        timeline.push(
+            "gameplay.music.plan",
+            "MUSIC plan phase=anticipation intensity=700 suite=main bed=amb-harbour colour=hearth-warm",
+            Map::from_iter([
+                ("resource_id".to_owned(), Value::String("tempo:4".to_owned())),
+                ("status".to_owned(), Value::String("projected".to_owned())),
+            ]),
+        );
+        let snapshot = timeline.snapshot(10, Some("music"), false);
+        assert_eq!(snapshot["matched"], 1);
+        assert_eq!(snapshot["events"][0]["fields"]["resource_type"], "music");
+        assert_eq!(snapshot["events"][0]["fields"]["status"], "projected");
     }
 }

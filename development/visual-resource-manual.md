@@ -20,6 +20,7 @@ agents. The design contracts remain in `planning/asset-engine.md`,
 | Server projection and visual summary | `crates/df-tools/src/gameplay/dev_control/reads.rs` | `/dev/view`, `/dev/scene`, `visual_assets` |
 | Agent timeline | `crates/df-tools/src/gameplay/dev_control/timeline.rs`, `reads.rs` | `/dev/timeline?last=N`, bounded 4096-event in-memory mirror |
 | Browser plate/source selection | `crates/df-tools/src/gameplay_browser/live_tv.rs`, `live_stage.rs` | `record_visual_source`, plate state, `data-visual-source-*`, image load events |
+| Tempo driven music plan | `crates/df-tools/src/music_score.rs`, `gameplay_browser/live_music.rs` | server `music_plan`, browser `data-music-state`, `/assets/music/<track>` |
 | Fixed public assets and allowlisted routes | `crates/df-tools/src/gameplay/public_assets.rs`, `gameplay_browser/public_scene_assets.rs` | startup snapshots and exact route registration |
 | Paid resource startup toggles | `crates/df-tools/src/gameplay/startup_configuration.rs`, `gameplay.rs` | imagery, plates, voice, STT, home/scene video summaries |
 
@@ -96,6 +97,10 @@ typed `fields`. Relevant event families include:
   projection timing.
 - Browser `visual-source` presentation records: requested and effective source,
   selected shot, plate state, and page-local asset hashes.
+- `gameplay.music.plan`: the public tempo source, phase/intensity, suite, location
+  bed, scene colour, combat-layer eligibility, and projected mix gains. It is
+  emitted when `dev view --as tv` snapshots the display; the browser's
+  `data-music-state` remains the delivery/playback observation.
 - line, clip, scene, check, combat, and client presentation records that explain
   whether a visual change was delayed by the stage machine.
 
@@ -108,8 +113,10 @@ The resource filter and summary are available directly from the CLI:
 & '.\artifacts\build\play\debug\df-transport-fixture.exe' dev --pretty timeline --last 1000 --type video --summary
 ```
 
-The accepted resource types are `text_model`, `speech_input`, `voice`, `image`,
-`plate`, `video`, `browser_media`, and `state`. Events report lifecycle stages
+The accepted resource types are `text_model`, `speech_input`, `voice`, `music`, `image`,
+`plate`, `video`, `browser_media`, and `state`. Tempo and music lifecycle records
+can be filtered with `--type music`; the plan itself is always available from
+`dev view --as tv`. Events report lifecycle stages
 including `requested`, `queued`, `ready`, `failed`, `played`, `projected`, and
 `delivered`; browser observations can also report `observed` or `hidden`.
 The summary reports `matched`,
@@ -139,6 +146,16 @@ agent's normal JSON stream:
 & '.\artifacts\build\play\debug\df-transport-fixture.exe' dev --pretty scene Brakka
 & '.\artifacts\build\play\debug\df-transport-fixture.exe' dev --pretty timeline --last 1000
 ```
+
+`dev view --as tv` also includes `music_plan` for the shared display. It is the
+server-derived public plan: the tempo cue phase/intensity, cue sequence, 84 BPM
+beat grid, suite, location ambience, scene colour, scene profile, layer gains, filter and
+transition timing. Social dialogue uses the `social-restrained` profile: tempo still
+drives its phase and intensity, while the bed/motif are softened, the tension pulse
+is reduced, and the combat layer remains silent. The browser's `data-music-state` attribute reports the applied
+AudioContext state, loaded/failed track names, arrangement, duck reason and
+current bus levels. Compare both when diagnosing a music mismatch: the plan is
+authoritative; the DOM state proves delivery and application.
 
 `dropped` and `capacity` are part of the response. A nonzero `dropped` means the
 bounded process-local mirror no longer contains the earliest events. The timeline

@@ -166,7 +166,7 @@ df-transport-fixture dev timeline --last 100 --type image
 df-transport-fixture dev timeline --last 100 --type video --summary
 ```
 
-Types are `text_model`, `speech_input`, `voice`, `image`, `plate`, `video`, `browser_media` and
+Types are `text_model`, `speech_input`, `voice`, `music`, `image`, `plate`, `video`, `browser_media` and
 `state`. The response keeps the event sequence and timestamps, shows counts by resource type,
 stage and status, and reports the number of distinct resource ids in the selected window. Request,
 queue, ready, failure, media delivery, browser played and projected events share content-free ids
@@ -178,6 +178,12 @@ closed status and failure categories, provider labels, and hashes or generated i
 contain prompt or transcript text, credentials, raw URLs or media bytes. `dev view --as tv`
 includes `visual_assets`, showing the requested plate source, server-projected source, plate state
 and a hash of the effective asset identifier without adding asset paths to the timeline.
+For the shared display it also includes `music_plan`, which reports the authoritative tempo cue,
+scene ambience family, suite, scene profile, layer gains, filter and transition timing. Dialogue
+uses a restrained scene profile that follows tempo without bringing combat percussion into NPC
+conversation. The browser's
+`data-music-state` attribute shows whether that plan reached the Web Audio graph, which tracks
+loaded, and why ducking is active.
 
 Known correlation gap: plate request/render events currently hash the authored scene asset label,
 while projection events can hash the asset label returned by the display. Their `scene_id` values
@@ -371,7 +377,7 @@ changes per 8-bar arrangement epoch (never repeating the last voicing; quiet sce
 ambience alone), coloured per place or fight (filter, balance, ambience level), with one
 location ambience beside them and one-shot stingers on the next beat, rotating takes. Score,
 ambience and stingers run on separate buses into one music master with a limiter on the sum.
-Music ducks deep (-9 dB) under narration and shallow (-3 dB, short hold) under big sound
+Music ducks deep (-12 dB in the main/finale suites and -15 dB in battle) under narration and shallow (-3 dB, short hold) under big sound
 effects; phase changes (into/out of a fight, scene changes, the end of the adventure) glide
 over at least 3 seconds, and suite changes crossfade on the next loop boundary. Nothing plays
 before the "Enable sound" gesture; the mute control silences everything; a hidden tab suspends
@@ -379,10 +385,11 @@ and resyncs without replaying; the volume key (`df.music.volume`) still works. T
 is checkable without listening in the display root's `data-music-state` attribute (bus levels,
 arrangement, colour, suite, takes, duck reason).
 
-The track list is ready for alternates that do not exist yet (`score-*-b` takes, `b-`/`c-`
-battle/finale suites, `sting-*-2`/`-3` takes): a file that is not on disk is simply not served
-and the browser plays without it. See `artifacts/tmp/music-a1/new-material.md` for what to
-generate next, in priority order, with the loop-alignment requirements each file must meet.
+The track list includes the available alternate main takes, battle suite and three stinger
+takes. Finale tracks remain allowlisted for a future dedicated recording; when an allowlisted
+file is absent, the browser uses the validated main-suite layer for that slot and records the
+missing track in `data-music-state`. See `assets/music/source-manifest.json` for the exact
+generated file and alignment metadata.
 
 ## Real Gaussian-splat scans as battle scenes
 
