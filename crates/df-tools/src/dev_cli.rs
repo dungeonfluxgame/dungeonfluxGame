@@ -207,6 +207,7 @@ fn print_help() {
          scene <hero>                current contents and item card\n\
          feelings <npc>               current development-only NPC diagnostic\n\
          timeline [--last <n>] [--type <resource>] [--component <kind>] [--summary]  bounded resource and presentation lifecycles\n\
+         merchant-quotes [--last <n>]  exact source-bound quote status and closed outcomes\n\
          play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
@@ -380,6 +381,16 @@ async fn dispatch(
                 path.push_str("&summary=true");
             }
             get(client, &path).await
+        }
+        "merchant-quotes" => {
+            let last = flag("--last")
+                .or_else(|| positional.get(1).cloned())
+                .unwrap_or_else(|| "50".into());
+            get(
+                client,
+                &format!("/dev/merchant-quotes?last={}", url_escape(&last)),
+            )
+            .await
         }
         "layout" => layout::run(client, positional, options).await,
         "play" => play::run(client, options).await,

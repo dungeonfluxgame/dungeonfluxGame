@@ -28,6 +28,9 @@ mod fight_ending_tests;
 pub(super) mod living_scene;
 #[cfg(test)]
 mod living_scene_tests;
+pub(super) mod merchant_bargaining;
+#[cfg(test)]
+mod merchant_bargaining_tests;
 mod narrative_phase;
 #[cfg(test)]
 mod narrative_runtime_tests;

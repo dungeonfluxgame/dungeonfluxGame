@@ -173,6 +173,11 @@ df-transport-fixture dev timeline --last 100 --type browser_media --component sp
 df-transport-fixture dev timeline --last 100 --type browser_media --component check_card --summary
 ```
 
+Inspect durable merchant quotes and exact transaction outcomes with `dev merchant-quotes --last 50`.
+The bounded history reports direction, item, parties, exact copper price, stock and
+purse revisions, source-line identity, pending/accepted/stale status, attempt count and closed
+rejection reason. It omits spoken source text and private character context.
+
 Types are `text_model`, `speech_input`, `voice`, `music`, `image`, `plate`, `video`, `browser_media` and
 `state`. The response keeps the event sequence and timestamps, shows counts by resource type,
 stage and status, and reports the number of distinct resource ids in the selected window. Use

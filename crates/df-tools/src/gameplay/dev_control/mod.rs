@@ -197,6 +197,7 @@ pub(super) fn setup(
         .route("/dev/feelings", get(reads::feelings))
         .route("/dev/log", get(reads::game_log))
         .route("/dev/timeline", get(reads::timeline))
+        .route("/dev/merchant-quotes", get(reads::merchant_quotes))
         .route("/dev/layout", get(layout::list))
         .route(
             "/dev/layout/transform",

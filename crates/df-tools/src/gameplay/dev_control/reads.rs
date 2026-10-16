@@ -4,7 +4,7 @@
 
 use axum::{
     extract::{Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::Json,
 };
 use df_protocol::common as rpc;
@@ -773,6 +773,81 @@ pub(super) async fn timeline(
     ))
 }
 
+/// `GET /dev/merchant-quotes?last=<N>`: bounded quote receipts and their
+/// replay-derived outcome. The source speech text and private reply context are omitted.
+pub(super) async fn merchant_quotes(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let last = params
+        .get("last")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|_| bad_request("last must be 1 to 1000"))?
+        .unwrap_or(50);
+    if !(1..=1000).contains(&last) {
+        return Err(bad_request("last must be 1 to 1000"));
+    }
+
+    let checkpoint = state.service.updates.borrow().clone();
+    let mut history = crate::gameplay::journey::living_scene::merchant_quote_history(&checkpoint)
+        .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "merchant quote history unavailable"})),
+        )
+    })?;
+    let total = history.len();
+    if history.len() > last {
+        let first = history.len() - last;
+        history.drain(..first);
+    }
+    let quotes = history
+        .into_iter()
+        .map(|entry| {
+            let quote = entry.quote;
+            let direction = match quote.direction {
+                crate::gameplay::journey::living_scene::SceneTradeDirection::HeroBuys => {
+                    "hero_buys"
+                }
+                crate::gameplay::journey::living_scene::SceneTradeDirection::HeroSells => {
+                    "hero_sells"
+                }
+            };
+            let status = match entry.status {
+                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Pending => "pending",
+                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Accepted => "accepted",
+                crate::gameplay::journey::living_scene::MerchantQuoteStatus::Stale => "stale",
+            };
+            json!({
+                "quote_id": quote.quote_id,
+                "direction": direction,
+                "item_id": quote.item_id,
+                "offer_id": quote.offer_id,
+                "seller_id": quote.seller_id,
+                "buyer_id": quote.buyer_id,
+                "price_cp": quote.price_cp,
+                "stock_revision": quote.stock_revision,
+                "purse_revision": quote.purse_revision,
+                "source_line_id": quote.source_line_id,
+                "source_line_sequence": quote.source_line_sequence,
+                "source_revision": quote.source_revision,
+                "source_actor_id": quote.source_actor_id,
+                "status": status,
+                "attempt_count": entry.attempt_count,
+                "last_rejection": entry.last_rejection,
+            })
+        })
+        .collect::<Vec<_>>();
+    let returned = quotes.len();
+    Ok((
+        StatusCode::OK,
+        Json(json!({"quotes": quotes, "count": total, "returned": returned})),
+    ))
+}
+
 /// `POST /dev/checkpoint {"name": "<name>"}`: names the owner's current point
 /// in the session. The stored checkpoint restores with `dev restore`.
 pub(super) async fn save_checkpoint(
@@ -902,6 +977,7 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"}),
         json!({"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"}),
         json!({"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&component=<component>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "component":"subtitle|speech_bubble|thinking_loader|intent_loader|check_card|item_card|title_card|scene_card|plate_incoming|plate_outgoing", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status,component_count,by_component,by_component_phase,by_visibility},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"}),
+        json!({"command":"merchant-quotes", "method":"GET", "path":"/dev/merchant-quotes?last=<N>", "args":{"last":"1..1000, default 50"}, "output":"{quotes[{quote_id,direction,item_id,offer_id,seller_id,buyer_id,price_cp,stock_revision,purse_revision,source_line_id,source_line_sequence,source_revision,source_actor_id,status,attempt_count,last_rejection}],count,returned}; durable exact-quote outcomes, closed rejection reasons only, no source speech text or private facts"}),
         json!({"command":"layout list|get", "method":"GET", "path":"/dev/layout", "args":{}, "output":"{revision,status,overrides,visibility,clients,capacity}; actual browser IDs with per-client exact-revision rect/configured/effective-transform/visibility readback and explicit overflow"}),
         json!({"command":"layout transform <id>", "method":"POST", "path":"/dev/layout/transform", "args":"--translate-x <n> --translate-y <n> --unit px|percent [--scale <n>|--scale-x <n> --scale-y <n>] [--rotate <degrees>]", "output":"{status:pending,id,revision}; changes only the named registered visual"}),
         json!({"command":"layout move <id>", "method":"POST", "path":"/dev/layout/move", "args":"[--x <n>] [--y <n>] --unit px|percent; translation offsets compose with scale and rotation", "output":"{status:pending,id,revision}; changes bounded translation offsets"}),
