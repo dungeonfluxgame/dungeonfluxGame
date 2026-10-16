@@ -789,3 +789,39 @@ The agent CLI now reaches NPC dialogue without using the character creator: `dev
 On that room's display, the state machine reported `data-battle-state=absent` and `data-battlefield-live=false` during dialogue (`37ace03e`). A generated 2560-pixel plate loaded and was visibly shown behind the Courier's dialogue; Brakka and Sigrun's health labels were separated. This confirms the previously empty scene and plate were fixed for this fresh run (`dae5b98b`, `a2327cdd`). The player still judged the plate's finish painterly rather than photographic, so PIC-17 remains open. The visual check did not establish audible TTS or mute behavior.
 
 The earlier room could not be resumed (`retained_access_unavailable Unauthorized`), so its saved state was left untouched and the regression used a fresh database. This is still an untriaged resume failure. Five Courier questions in that earlier room returned repetitive deferrals about the packet, seal, ship, and follower; dialogue quality needs a separate pass against TLK-13/DLG-09 rather than a claim of improvement from this rendering session.
+
+
+### PIC-17 documentary photographic revision (2026-10-15)
+
+The `-photo` suffix did not establish a photographic medium: visual review of the
+previous courier, heroes and harbor still found glossy CGI costumes, polished
+mail and theatrical blue/amber light. A new built-in imagegen series starts from
+candid documentary photography on a practical historical film set, without old
+painted or CGI references. The coordinator independently viewed and accepted the
+candid harbor, male swordsman and courier. Seven source generations and the
+encoded artifacts are described in `assets/ui/generated/documentary-photo-v2.assets.json`.
+
+The three hero performers, courier, bandit, empty arrival harbor and candid harbor
+now use versioned `-documentary-photo` stems. Public cast/portrait routing resolves
+the earlier nominal photo aliases to that revision. Runtime photographic-reference
+selection accepts the reviewed suffix only, never the rejected `-photo` or `-film`
+siblings. A fresh plate without place photography receives the empty documentary
+harbor photograph as an explicitly style-only reference; written scene facts still
+own its place, people, objects and light. The documentary medium precedes scene
+JSON. Quality remains the configured provider setting: there is no evidence that
+raising quality alone fixes the medium.
+
+The empty harbor is the lobby/arrival image; the candid cast photograph is the
+fixed harbor dialogue preview. The old painted inn fallback is removed, leaving
+the stage base color until a valid runtime image is ready. Ending and combat
+fallbacks use the reviewed harbor and new performer portraits. Earlier image
+files remain historical source artifacts, but their rejected photo siblings are
+absent from active serving lists and fallback selection. This is not a claim that
+all other generated campaign locations or cast have been photographically reshot.
+
+All generated actor alpha channels survived WebP encoding byte-for-byte. The
+image viewer shows dark RGB in transparent regions; sampled halo-region pixels
+have alpha zero. Browser compositing and the integrated provider-generated plate
+remain required independent acceptance checks. Four isolated native routing
+tests passed; authored changed Rust files pass rustfmt and diff whitespace checks.
+Full native/WASM checks and live output acceptance belong to the coordinator.

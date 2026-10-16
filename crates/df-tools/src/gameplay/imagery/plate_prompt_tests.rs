@@ -111,13 +111,13 @@ fn a_plate_prompt_is_built_from_fixed_phrases_and_two_kinds_of_fact_only_within_
                             let prompt =
                                 scene_plate(rating, &spec, Some(&place()), references_for(&spec))
                                     .unwrap();
-                            assert!(prompt.as_str().contains("named film grade"));
+                            assert!(prompt.as_str().contains("Documentary color photograph"));
                             assert!(prompt.as_str().contains("fine film grain"));
                             assert!(prompt.as_str().contains(
-                                "Supplied reference images fix identity, layout and costume only"
+                                "Supplied reference photographs fix identity, layout and costume"
                             ));
                             assert!(prompt.as_str().contains(
-                                "do not copy their medium, brushwork or rendering style"
+                                "ordinary human skin, practical garments and natural camera finish"
                             ));
                             assert!(!prompt.as_str().contains("repaint"));
                             for part in prompt.parts() {
@@ -435,7 +435,7 @@ fn a_mood_edit_names_the_previous_plate_the_change_and_what_stays_in_both_rating
             for tier in HealthTier::ALL {
                 let prompt = plate_moment(rating, expression, tier, true).unwrap();
                 let text = prompt.as_str();
-                assert!(text.contains("named film grade"));
+                assert!(text.contains("Documentary color photograph"));
                 assert!(text.contains("fine film grain"));
                 assert!(!text.contains("repaint"));
                 assert!(text.starts_with("Image 1 is the previous film still"));

@@ -1558,6 +1558,16 @@ impl Shared {
             .ok();
         let has_place = place.is_some();
         references.extend(place);
+        // A reviewed location photograph anchors the medium even when this scene has no
+        // photographic place art. It supplies no scene facts; the prompt makes that explicit.
+        let photographic_style_reference = !has_place && self.inner.references.photographic_only();
+        if photographic_style_reference {
+            references.push(
+                self.inner
+                    .load_plate_reference("scene-salt-quay-arrival".to_owned())
+                    .await?,
+            );
+        }
         // Keep the remaining cast figures only while the provider's reference limit allows them.
         // They are also named in the prompt, so dropping the lowest-priority art preserves the
         // request's scene facts while keeping the party, speaker and place references intact.
@@ -1601,6 +1611,8 @@ impl Shared {
         };
         let prompt = if neutral_reference {
             prompt.with_neutral_reference()
+        } else if photographic_style_reference {
+            prompt.with_photographic_style_reference()
         } else {
             prompt
         };

@@ -302,11 +302,11 @@ fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'stati
     let mut candidates = Vec::new();
     let sprite_stem = stage_art::stem_of(sprite);
     if full_body && let Some(stem) = stage_depth::full_body_stem(sprite_stem) {
-        let stem = photographic_stem(&stem).unwrap_or(stem.as_str());
+        let stem = stage_art::photographic_stem(&stem).unwrap_or(stem.as_str());
         candidates.push(("figure", format!("{GENERATED}/{stem}")));
     }
     if !sprite.is_empty() {
-        if let Some(stem) = photographic_stem(sprite_stem) {
+        if let Some(stem) = stage_art::photographic_stem(sprite_stem) {
             candidates.push(("sprite", format!("{GENERATED}/{stem}")));
         } else {
             candidates.push(("sprite", sprite.to_owned()));
@@ -314,7 +314,7 @@ fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'stati
     }
     // Once a known photo sibling exists, do not append painted portrait/card fallbacks that can
     // reintroduce the old illustrated asset after a load error.
-    if photographic_stem(sprite_stem).is_some() {
+    if stage_art::photographic_stem(sprite_stem).is_some() {
         return candidates;
     }
     let stem = stage_art::stem_of(portrait);
@@ -325,20 +325,6 @@ fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'stati
         candidates.push(("card", portrait.to_owned()));
     }
     candidates
-}
-
-fn photographic_stem(stem: &str) -> Option<&'static str> {
-    match stem {
-        "sprite-hero-1" => Some("sprite-hero-1-photo"),
-        "sprite-hero-2" => Some("sprite-hero-2-photo"),
-        "sprite-hero-3" => Some("sprite-hero-3-photo"),
-        "sprite-courier" | "figure-courier" => Some("sprite-courier-photo"),
-        "sprite-bandit" | "figure-bandit" => Some("sprite-bandit-photo"),
-        "figure-hero-1" => Some("figure-hero-1-photo"),
-        "figure-hero-2" => Some("figure-hero-2-photo"),
-        "figure-hero-3" => Some("figure-hero-3-photo"),
-        _ => None,
-    }
 }
 
 fn use_candidate(figure: &Element, image: &Element, kind: &str, url: &str) -> Result<(), JsValue> {

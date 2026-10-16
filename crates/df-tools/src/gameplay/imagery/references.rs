@@ -61,7 +61,7 @@ impl ReferenceStore {
 
     /// Creates a store for scene plate references. Base generated art was authored as painted
     /// concept art, so it must never be sent to a photographic plate request. Re-rendered live
-    /// variants use the same stem with a `-photo` or `-film` suffix.
+    /// variants use the same stem with a `-documentary-photo` suffix, after visual review.
     pub(in crate::gameplay) fn photographic(generated_directory: PathBuf) -> Self {
         Self {
             directory: generated_directory,
@@ -114,7 +114,7 @@ impl ReferenceStore {
             Some((stem, "webp" | "png")) => stem,
             _ => path,
         };
-        self.load_named(stem, &["-photo", "-film"])
+        self.load_named(stem, &["-documentary-photo"])
     }
 
     fn load_named(&self, path: &str, suffixes: &[&str]) -> Result<ReferenceImage, ReferenceError> {
@@ -196,16 +196,31 @@ mod tests {
             store.load_photographic("scene-place-test"),
             Err(ReferenceError::Missing)
         ));
-        std::fs::write(directory.join("scene-place-test-photo.webp"), b"live photo")
-            .expect("photographic variant fixture");
+        std::fs::write(
+            directory.join("scene-place-test-photo.webp"),
+            b"unreviewed CGI",
+        )
+        .expect("older nominal photo fixture");
+        assert!(matches!(
+            store.load_photographic("scene-place-test"),
+            Err(ReferenceError::Missing)
+        ));
+        std::fs::write(
+            directory.join("scene-place-test-documentary-photo.webp"),
+            b"live photo",
+        )
+        .expect("photographic variant fixture");
         let photo = store
             .load_photographic("scene-place-test")
             .expect("photographic variant");
         assert_eq!(&photo.bytes[..], b"live photo");
-        std::fs::remove_file(directory.join("scene-place-test-photo.webp"))
+        std::fs::remove_file(directory.join("scene-place-test-documentary-photo.webp"))
             .expect("remove webp fixture");
-        std::fs::write(directory.join("scene-place-test-photo.png"), b"live png")
-            .expect("photographic png fixture");
+        std::fs::write(
+            directory.join("scene-place-test-documentary-photo.png"),
+            b"live png",
+        )
+        .expect("photographic png fixture");
         let photo = store
             .load_photographic("scene-place-test.webp")
             .expect("photographic png variant");

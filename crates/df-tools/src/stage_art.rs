@@ -29,9 +29,77 @@ pub(crate) fn stem_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// Visually reviewed photographic replacements for the public harbor cast and backdrops.
+/// Rejected earlier `-photo` siblings resolve to the reviewed revision as well.
+pub(crate) fn photographic_stem(stem: &str) -> Option<&'static str> {
+    let stem = stem
+        .strip_suffix(".webp")
+        .or_else(|| stem.strip_suffix(".png"))
+        .unwrap_or(stem);
+    let stem = stem
+        .strip_suffix("-documentary-photo")
+        .or_else(|| stem.strip_suffix("-photo"))
+        .unwrap_or(stem);
+    match stem {
+        "portrait-hero-1" | "portrait-hero-1-full" | "figure-hero-1" => {
+            Some("figure-hero-1-documentary-photo")
+        }
+        "portrait-hero-2" | "portrait-hero-2-full" | "figure-hero-2" => {
+            Some("figure-hero-2-documentary-photo")
+        }
+        "portrait-hero-3" | "portrait-hero-3-full" | "figure-hero-3" => {
+            Some("figure-hero-3-documentary-photo")
+        }
+        "sprite-hero-1" => Some("sprite-hero-1-documentary-photo"),
+        "sprite-hero-2" => Some("sprite-hero-2-documentary-photo"),
+        "sprite-hero-3" => Some("sprite-hero-3-documentary-photo"),
+        "portrait-courier" | "portrait-courier-full" | "sprite-courier" | "figure-courier" => {
+            Some("sprite-courier-documentary-photo")
+        }
+        "portrait-bandit" | "portrait-bandit-full" | "sprite-bandit" | "figure-bandit" => {
+            Some("sprite-bandit-documentary-photo")
+        }
+        "scene-lobby-harbor"
+        | "scene-wharf-arrival"
+        | "scene-whisper-in-the-rain"
+        | "scene-courier-road"
+        | "scene-salt-quay-arrival" => Some("scene-salt-quay-arrival-documentary-photo"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harbor_art_routes_to_reviewed_bytes_including_rejected_photo_aliases() {
+        for stem in [
+            "portrait-hero-1",
+            "figure-hero-1-photo",
+            "figure-hero-1-documentary-photo.webp",
+        ] {
+            assert_eq!(
+                photographic_stem(stem),
+                Some("figure-hero-1-documentary-photo")
+            );
+        }
+        for stem in [
+            "portrait-courier",
+            "sprite-courier-photo",
+            "sprite-courier-documentary-photo",
+        ] {
+            assert_eq!(
+                photographic_stem(stem),
+                Some("sprite-courier-documentary-photo")
+            );
+        }
+        assert_eq!(
+            photographic_stem("scene-courier-road"),
+            Some("scene-salt-quay-arrival-documentary-photo")
+        );
+        assert_eq!(photographic_stem("scene-place-unknown"), None);
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

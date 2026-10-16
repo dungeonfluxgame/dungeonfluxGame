@@ -262,7 +262,11 @@ pub(super) fn crest(crest: &Element, portrait: &str, live: Option<&str>) -> Resu
             crest.set_attribute("data-crop", "face")
         }
         None => {
-            crest.remove_attribute("data-crop")?;
+            if portrait.contains("-documentary-photo") {
+                crest.set_attribute("data-crop", "face")?;
+            } else {
+                crest.remove_attribute("data-crop")?;
+            }
             let style = if portrait.is_empty() {
                 String::new()
             } else {

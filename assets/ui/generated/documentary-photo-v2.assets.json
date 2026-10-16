@@ -1,0 +1,113 @@
+{
+  "schema": 1,
+  "synthetic": true,
+  "generator": "built-in imagegen tool",
+  "revision": "documentary-photo-v2",
+  "direction": "Candid photographic costume and location records of real-looking fictional adult performers on a practical historical film set; soft overcast natural light; simple sewn wool, linen, dull mail and leather; ordinary skin; no glamour, HDR, game key art or CGI. No old painterly or CGI image was used as reference.",
+  "visual_review": "Worker inspected all seven original generations. Coordinator independently accepted the candid harbor, hero 1 and courier before wiring. Full runtime plate and browser compositing require integrated acceptance.",
+  "encoding": "Format conversion only: WebP quality 95; no pixel edits or resizing; original generated alpha verified byte-for-byte after encoding.",
+  "assets": [
+    {
+      "file": "figure-hero-1-documentary-photo.webp",
+      "source_file": "exec-37f57570-0af0-4de1-ab61-a277e469b2bf.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "a49fd27aca0c5c5ff22939636aeb4ecae6c58d7a6bb8b2c4d123dcbb936df758",
+      "source_sha256": "73b56ada2e4bab64a4be6a7520edc8d46a24c5c78cf80f5d4916c7573b046a94",
+      "bytes": 355912,
+      "alpha_preserved": true
+    },
+    {
+      "file": "figure-hero-2-documentary-photo.webp",
+      "source_file": "exec-e617b8e6-0b34-4e47-82f2-6766cef64da7.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "066312f23dc8898e05a9f228bd73aa27e32d44544aff1486a98e55e3f67ef800",
+      "source_sha256": "a7ef1c1a77fe4e2ea304eba58340bccee962f429d91faea36de34c972dbc6a53",
+      "bytes": 344076,
+      "alpha_preserved": true
+    },
+    {
+      "file": "figure-hero-3-documentary-photo.webp",
+      "source_file": "exec-bbdbae02-0823-4be3-a630-8f0c4ea5f2a7.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "860c6991942a171c4af56f5b01e1e482607a3d7ed717a4a91f1fd9c88df9c804",
+      "source_sha256": "d02b5966e6443993adea86536dced3302ebd345f66b0492a86c91403f8960925",
+      "bytes": 263656,
+      "alpha_preserved": true
+    },
+    {
+      "file": "sprite-courier-documentary-photo.webp",
+      "source_file": "exec-1a41c908-6975-443c-b931-ea76544e5879.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "58eff9c71becc7cc22d42a00f2addd6ef1cb5a7c8d95766da705ccd57a38ee78",
+      "source_sha256": "e5548b6b926d76576064a794363c4e6bba10b3d3dc880279a8e38a0155696cd7",
+      "bytes": 208126,
+      "alpha_preserved": true
+    },
+    {
+      "file": "sprite-bandit-documentary-photo.webp",
+      "source_file": "exec-d7e5ce9f-a567-40b5-9774-14051418813a.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "134d5e9e7ef0fd6987c7197237779aa1c2b2ea51235489b768e732327e26e895",
+      "source_sha256": "98507ec44ce0a5dd824327b916c1ce37ed03d3f76afb79066be8cad233421ea9",
+      "bytes": 219990,
+      "alpha_preserved": true
+    },
+    {
+      "file": "scene-salt-quay-arrival-documentary-photo.webp",
+      "source_file": "exec-915519a8-2ae8-429f-98d5-527d2bf1c434.png",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "sha256": "6a2701fb398c16aa03516802f6f5b77f8a9c856488d7dd7a91abd5dd119e786a",
+      "source_sha256": "5ffcea48483c289c70a03a2aaa46c65875045800afa7f7244eeeb2fc2b46a56f",
+      "bytes": 553302,
+      "alpha_preserved": false
+    },
+    {
+      "file": "scene-salt-quay-candid-documentary-photo.webp",
+      "source_file": "exec-408043b1-930d-444c-a5a1-0c53f0bcb6b9.png",
+      "dimensions": [
+        1672,
+        941
+      ],
+      "sha256": "f0898beb6bc1a3d826c4953dfc773e3fb79341a36f6d43b96e48ca4f4ec3d965",
+      "source_sha256": "bfe2751f28ce2ec3c8107b00f153b1a0128bd179d471c72ba807999564a8b91c",
+      "bytes": 306720,
+      "alpha_preserved": false
+    },
+    {
+      "file": "sprite-hero-1-documentary-photo.webp",
+      "same_bytes_as": "figure-hero-1-documentary-photo.webp",
+      "sha256": "a49fd27aca0c5c5ff22939636aeb4ecae6c58d7a6bb8b2c4d123dcbb936df758",
+      "bytes": 355912
+    },
+    {
+      "file": "sprite-hero-2-documentary-photo.webp",
+      "same_bytes_as": "figure-hero-2-documentary-photo.webp",
+      "sha256": "066312f23dc8898e05a9f228bd73aa27e32d44544aff1486a98e55e3f67ef800",
+      "bytes": 344076
+    },
+    {
+      "file": "sprite-hero-3-documentary-photo.webp",
+      "same_bytes_as": "figure-hero-3-documentary-photo.webp",
+      "sha256": "860c6991942a171c4af56f5b01e1e482607a3d7ed717a4a91f1fd9c88df9c804",
+      "bytes": 263656
+    }
+  ]
+}

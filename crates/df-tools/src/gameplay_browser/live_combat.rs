@@ -463,7 +463,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     if let Some(url) = live_screens::asset_url(&view.scene.speaker_portrait)
         && screen == Screen::Combat
     {
-        assets.push_str(&format!("--asset-portrait-bandit:url({url}),url(/assets/ui/generated/portrait-bandit);--asset-portrait-bandit-full:url({url}),url(/assets/ui/generated/portrait-bandit-full);"));
+        assets.push_str(&format!("--asset-portrait-bandit:url({url}),url(/assets/ui/generated/sprite-bandit-documentary-photo);--asset-portrait-bandit-full:url({url}),url(/assets/ui/generated/sprite-bandit-documentary-photo);"));
     }
     host.set_attribute("style", &assets)?;
     match (screen, player) {

@@ -245,9 +245,14 @@ pub(super) fn mount_splash(document: &Document, parent: &Element) -> Result<(), 
     Ok(())
 }
 
-/// The generated painting is the top layer; the authored fallback shows where it is absent.
+/// A live image leads its reviewed fallback; an absent image leaves the stage's base color.
 pub(super) fn image_layers(stem: &str, fallback: &str) -> String {
-    format!("background-image:url({stem}),url({fallback})")
+    match (stem.is_empty(), fallback.is_empty()) {
+        (true, true) => "background-image:none".to_owned(),
+        (true, false) => format!("background-image:url({fallback})"),
+        (false, true) => format!("background-image:url({stem})"),
+        (false, false) => format!("background-image:url({stem}),url({fallback})"),
+    }
 }
 
 fn set_hidden(element: &Element, hidden: bool) -> Result<(), JsValue> {
@@ -1984,7 +1989,7 @@ impl TvStage {
                         "style",
                         &if member.ready {
                             format!(
-                                "background-image:url({GENERATED}/portrait-hero-{})",
+                                "background-image:url({GENERATED}/figure-hero-{}-documentary-photo)",
                                 index + 1
                             )
                         } else {

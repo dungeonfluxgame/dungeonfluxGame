@@ -84,10 +84,8 @@ enum Which {
 const CAMERA: &str = "A wide shot on a 28mm lens from far back among the party: the heroes are small figures \
     at the edges of the picture, each no wider than a quarter of the frame, and the room \
     itself is the subject, its beams, floor and far walls all in view.";
-const REFERENCE_STYLE: &str = "Supplied reference images fix identity, layout and costume only; they may be painted \
-    or illustrative, so do not copy their medium, brushwork or rendering style. The generated output \
-    must be a live-action photographic film still with real materials, real light and natural camera \
-    depth of field.";
+const REFERENCE_STYLE: &str = "Supplied reference photographs fix identity, layout and costume. Match their ordinary \
+    human skin, practical garments and natural camera finish.";
 const PLACE_IS: &str = "The place is";
 const INTERIOR: &str = "Indoors, under a ceiling.";
 const EXTERIOR: &str = "Outdoors.";
@@ -168,7 +166,7 @@ const CALM_RIGHT: &str = "Directly right of the head: a calm area of dark, soft,
     head-widths wide, no faces, no bright details, for a speech bubble.";
 const NEGATIVE: &str = "No outlines or cut-out look, no floating figures, no plastic or waxy skin, no glossy metal, no \
     speckle on mail or cloth. No text, letters, numbers, signs, logos, borders, frames, \
-    interface or speech bubbles. No real people or celebrities. Every person is clearly an \
+    interface or speech bubbles. No recognizable real person or celebrity. Every person is clearly an \
     adult.";
 const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire are shown as \
     the story demands, not softened.";

@@ -15,8 +15,8 @@ fn assembled(rating: ContentRating, text: String) -> Result<AssembledPrompt, Ima
         ContentRating::Restrained => "No gore, nudity or sexual content.",
     };
     let prompt = AssembledPrompt::from_parts(vec![
-        Part::Fact(text),
         Part::Fixed(FILM_LOOK),
+        Part::Fact(text),
         Part::Fixed(rating),
     ]);
     if prompt.as_str().chars().count() > 4000 {

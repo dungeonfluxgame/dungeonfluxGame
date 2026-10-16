@@ -11,12 +11,7 @@ use super::super::live_tv::GENERATED;
 
 /// The single place that turns a generated-art stem into its served URL.
 pub(super) fn generated_asset_url(stem: &str) -> String {
-    let photographic = match stem {
-        "portrait-hero-1" | "portrait-hero-1-full" => Some("figure-hero-1-photo"),
-        "portrait-hero-2" | "portrait-hero-2-full" => Some("figure-hero-2-photo"),
-        "portrait-hero-3" | "portrait-hero-3-full" => Some("figure-hero-3-photo"),
-        _ => None,
-    };
+    let photographic = crate::stage_art::photographic_stem(stem);
     photographic.map_or_else(
         || format!("{GENERATED}/{stem}"),
         |asset| format!("{GENERATED}/{asset}"),
@@ -25,7 +20,7 @@ pub(super) fn generated_asset_url(stem: &str) -> String {
 
 /// Combat painting for both roles; the server serves it from the concept-art route.
 pub(super) const COMBAT_ART_URL: &str =
-    "/assets/concept-art/combat-harbor-docks-wide-lanterns.webp";
+    "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
 
 /// CSS custom property -> generated art stem, with the shape each slot expects.
 pub(super) const ART_SLOTS: [(&str, &str); 19] = [
@@ -74,7 +69,12 @@ pub(super) fn stylesheet() -> String {
         "ant-scout",
     ] {
         let url = generated_asset_url(&format!("portrait-{stem}"));
-        portraits.push_str(&format!("@S .combat-actor[data-portrait={stem}] .combat-initiative-value::before,@S .aftermath-member[data-portrait={stem}] .aftermath-portrait::before,.live-portrait[data-portrait={stem}]::before{{background-image:url('{url}')}}@S[data-role=display] .live-keyart[data-portrait={stem}]{{background-image:url('{url}')}}"));
+        let crop = if url.contains("-documentary-photo") {
+            "background-size:240% auto;background-position:50% 0;"
+        } else {
+            ""
+        };
+        portraits.push_str(&format!("@S .combat-actor[data-portrait={stem}] .combat-initiative-value::before,@S .aftermath-member[data-portrait={stem}] .aftermath-portrait::before,.live-portrait[data-portrait={stem}]::before{{background-image:url('{url}');{crop}}}@S[data-role=display] .live-keyart[data-portrait={stem}]{{background-image:url('{url}')}}"));
     }
     format!(":root{{{variables}}}\n{COMMON}\n{PLAYER}\n{DISPLAY}\n{REST}\n{SHEET}\n{portraits}")
         .replace("@S", ".live-screen[data-role]")

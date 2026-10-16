@@ -20,13 +20,13 @@ use super::super::{
 
 const MAXIMUM_FACT_CHARACTERS: usize = 80;
 
-pub(in crate::gameplay) const FILM_LOOK: &str = "Live-action fantasy film photographed on location with real adult actors, practical sewn costumes \
-    and props, real camera and prime lens, natural depth of field, skin pores, worn materials, \
-    natural atmospheric light, candid unposed human gestures, soft lens focus, restrained grade \
-    and fine 35mm grain. Photographic only; no key art, heroic posing, HDR, painting, illustration, \
-    concept art, matte painting, CGI, 3D render, synthetic game art or plastic surfaces.";
+pub(in crate::gameplay) const FILM_LOOK: &str = "Documentary color photograph of a practical historical film set: real adult performers, simple \
+    sewn wool and linen costumes, worn real props. A candid unposed moment captured by a real \
+    camera and prime lens under natural practical light; skin pores, uneven woven fabric, natural \
+    depth of field, restrained color and fine film grain. No glamour, HDR, heroic posing, ornate \
+    fantasy key art, CGI, 3D render, painting or illustration.";
 const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
-const NO_REAL_PEOPLE: &str = "No real people, celebrities or likenesses of real persons.";
+const NO_REAL_PEOPLE: &str = "Fictional identities; no recognizable real person or celebrity.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";
 const RESTRAINED_LIMITS: &str = "No gore, no nudity, no sexual content.";
 const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire are shown as \
@@ -151,6 +151,13 @@ impl AssembledPrompt {
     pub(in crate::gameplay) fn with_neutral_reference(mut self) -> Self {
         self.text.push_str(
             "\nImage 1 is a neutral photographic carrier only; create the entire scene from the written direction and use no visual content from this carrier.",
+        );
+        self
+    }
+
+    pub(in crate::gameplay) fn with_photographic_style_reference(mut self) -> Self {
+        self.text.push_str(
+            "\nThe empty landscape reference supplies only documentary camera finish and materials. Written scene facts alone define location, layout, cast, objects and light.",
         );
         self
     }

@@ -423,7 +423,7 @@ pub(crate) fn closing_card(
             .map(|(index, member)| CardHero {
                 name: member.name.clone(),
                 role: HERO_ROLE.to_owned(),
-                portrait: format!("{GENERATED}/portrait-hero-{}", index + 1),
+                portrait: format!("{GENERATED}/figure-hero-{}-documentary-photo", index + 1),
             })
             .collect(),
     }
@@ -450,7 +450,7 @@ pub(crate) fn end_card(journey: &rpc::JourneyView, adventure: &str, outcome: &st
                 } else {
                     format!("{} / {} HP", member.hit_points, member.maximum_hit_points)
                 },
-                portrait: format!("{GENERATED}/portrait-hero-{}", index + 1),
+                portrait: format!("{GENERATED}/figure-hero-{}-documentary-photo", index + 1),
             })
             .collect(),
     }
@@ -524,7 +524,12 @@ pub(crate) fn asset_url(path: &str) -> Option<String> {
         && path
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'.' | b'_')))
-    .then(|| format!("/{path}"))
+    .then(|| {
+        let photographic = path
+            .strip_prefix("assets/ui/generated/")
+            .and_then(crate::stage_art::photographic_stem);
+        photographic.map_or_else(|| format!("/{path}"), |stem| format!("{GENERATED}/{stem}"))
+    })
 }
 
 // PLAY-L01: a server-generated image path: `/gameplay/imagery/` and a 64-digit lowercase
@@ -750,7 +755,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
             name: member.name.clone(),
             role: HERO_ROLE.to_owned(),
             sprite: format!("{GENERATED}/sprite-hero-{}", index + 1),
-            portrait: format!("{GENERATED}/portrait-hero-{}", index + 1),
+            portrait: format!("{GENERATED}/figure-hero-{}-documentary-photo", index + 1),
             hit_points: hit_points(member),
             speaking: fighting && member.active_turn,
             down: is_down(member),
@@ -2946,7 +2951,7 @@ mod tests {
         assert_eq!(names, ["Brakka", "Thrain"]);
         assert_eq!(
             won.heroes[1].portrait,
-            "/assets/ui/generated/portrait-hero-2"
+            "/assets/ui/generated/figure-hero-2-documentary-photo"
         );
         let lost = closing_card(&ended, &closing, "Darkness.", false);
         assert_eq!(lost.kind, CardKind::Defeat);

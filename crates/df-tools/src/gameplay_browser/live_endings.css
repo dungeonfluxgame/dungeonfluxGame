@@ -64,7 +64,7 @@
   background:
     linear-gradient(180deg, #05080a70 0, transparent 22%, transparent 40%, #05080ac4 66%, #05080af2),
     var(--asset-scene-courier-road) center 38% / cover,
-    url('/assets/ui/generated/scene-salt-quay-arrival-photo') center 38% / cover,
+    url('/assets/ui/generated/scene-salt-quay-arrival-documentary-photo') center 38% / cover,
     #0b0f0c;
 }
 
@@ -168,7 +168,7 @@
   background:
     linear-gradient(180deg, #0a050acc 0, transparent 30%, transparent 45%, #0a050ae6 75%, #0a050a),
     var(--asset-scene-courier-road) center 38% / cover,
-    url('/assets/ui/generated/scene-salt-quay-arrival-photo') center 38% / cover,
+    url('/assets/ui/generated/scene-salt-quay-arrival-documentary-photo') center 38% / cover,
     #0b0f0c;
 }
 

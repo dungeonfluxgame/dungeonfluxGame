@@ -57,8 +57,8 @@ fn split_action_response(response: &str) -> (&str, &str) {
 
 fn portrait_url(speaker: &str) -> &'static str {
     match speaker {
-        "Courier" => "/assets/ui/generated/portrait-courier",
-        "Bandit" => "/assets/ui/generated/portrait-bandit",
+        "Courier" => "/assets/ui/generated/sprite-courier-documentary-photo",
+        "Bandit" => "/assets/ui/generated/sprite-bandit-documentary-photo",
         "Vell" => "/assets/concept-art/vell-avatar.webp",
         _ => "/assets/concept-art/dm-avatar.webp",
     }
@@ -1140,7 +1140,7 @@ mod tests {
         );
         assert_eq!(
             speaker_portrait_url(None, "Courier"),
-            "/assets/ui/generated/portrait-courier"
+            "/assets/ui/generated/sprite-courier-documentary-photo"
         );
     }
 }

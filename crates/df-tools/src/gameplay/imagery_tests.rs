@@ -172,7 +172,7 @@ fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration(
             "real camera",
             "prime lens",
             "practical light",
-            "named film grade",
+            "documentary color photograph",
             "skin pores",
             "woven fabric",
             "natural depth of field",

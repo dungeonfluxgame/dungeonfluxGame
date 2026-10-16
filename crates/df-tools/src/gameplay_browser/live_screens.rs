@@ -11,9 +11,10 @@ use super::*;
 use df_observe::presentation::VisualSource;
 use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
 
-const HARBOR_ESTABLISHING: &str = "/assets/ui/generated/scene-salt-quay-arrival-photo";
-const HARBOR_WHARF: &str = "/assets/ui/generated/scene-salt-quay-arrival-photo";
-const HARBOR_INN: &str = "/assets/concept-art/scene-tavern-barkeep-talk-rain.webp";
+const HARBOR_ESTABLISHING: &str = "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
+const HARBOR_WHARF: &str = "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
+const HARBOR_DIALOGUE: &str = "/assets/ui/generated/scene-salt-quay-candid-documentary-photo";
+const HARBOR_INN: &str = "";
 const WAITING_TEXT: &str = "The story is being told. Your next choice will appear here.";
 const CHOOSE_TEXT: &str = "Choose how your hero responds.";
 
@@ -137,19 +138,14 @@ fn fallback_art(
     }
     match phase {
         rpc::JourneyPhase::Opening => ("scene-wharf-arrival", HARBOR_WHARF),
-        rpc::JourneyPhase::Dialogue => ("scene-whisper-in-the-rain", HARBOR_WHARF),
+        rpc::JourneyPhase::Dialogue => ("scene-whisper-in-the-rain", HARBOR_DIALOGUE),
         _ => ("scene-courier-road", HARBOR_WHARF),
     }
 }
 
 /// Public asset paths are presentation data; only local asset URLs enter CSS/image sources.
 pub(super) fn asset_url(path: &str) -> Option<String> {
-    let path = path.trim_start_matches('/');
-    (path.starts_with("assets/")
-        && path
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'.' | b'_')))
-    .then(|| format!("/{path}"))
+    crate::presentation::asset_url(path)
 }
 pub(super) struct ServerImage {
     image: Element,
@@ -209,7 +205,13 @@ fn art(
     // photographic harbor shot when a fresh plate is unavailable.
     let source = art_source(phase, scene);
     let painting = if source == VisualSource::EstablishingPhoto {
-        HARBOR_ESTABLISHING.to_owned()
+        if phase == rpc::JourneyPhase::Dialogue {
+            HARBOR_DIALOGUE.to_owned()
+        } else {
+            HARBOR_ESTABLISHING.to_owned()
+        }
+    } else if scene.destination == rpc::HarborDestination::HarborInn as i32 {
+        String::new()
     } else {
         asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}"))
     };
@@ -219,6 +221,7 @@ fn art(
         .then(|| crate::presentation::imagery_url(&scene.live_backdrop))
         .flatten()
     {
+        Some(live) if painting.is_empty() => live,
         Some(live) => format!("{live}),url({painting}"),
         None => painting,
     };
@@ -239,8 +242,8 @@ fn validated_join_scene_asset(scene_asset: Option<&str>) -> Option<String> {
 
 fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
     match name {
-        "Courier" => Some("portrait-courier"),
-        "Bandit" => Some("portrait-bandit"),
+        "Courier" => Some("sprite-courier-documentary-photo"),
+        "Bandit" => Some("sprite-bandit-documentary-photo"),
         _ => None,
     }
 }
@@ -1051,7 +1054,7 @@ mod tests {
                 "assets/ui/generated/scene-lobby-harbor.webp",
                 &live_backdrop
             ),
-            Some("/assets/ui/generated/scene-salt-quay-arrival-photo".to_owned())
+            Some("/assets/ui/generated/scene-salt-quay-arrival-documentary-photo".to_owned())
         );
     }
 
