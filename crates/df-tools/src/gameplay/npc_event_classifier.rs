@@ -69,6 +69,9 @@ pub(super) struct Proposal {
     pub(super) actor_id: String,
     pub(super) npc_id: String,
     pub(super) item_id: Option<String>,
+    /// Canonical recipient for an explicit, present handoff. This is filled only when the
+    /// current scene contains the addressed hero; a future or conditional offer leaves it empty.
+    pub(super) recipient_id: Option<String>,
     pub(super) source_line_id: String,
     pub(super) revision: String,
 }
@@ -204,6 +207,7 @@ pub(super) fn proposal(
         actor_id: actor_id.to_owned(),
         npc_id: npc_id.to_owned(),
         item_id,
+        recipient_id: None,
         source_line_id,
         revision,
     })

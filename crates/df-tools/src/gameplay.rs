@@ -159,6 +159,25 @@ fn parse_binding(value: &str) -> Option<[u8; 32]> {
     Some(result)
 }
 impl Service {
+    pub(super) async fn commit_npc_event(
+        &self,
+        credential: [u8; 32],
+        proposal: npc_event_classifier::Proposal,
+    ) -> Result<actor::NpcEventOutcome, Status> {
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::NpcEvent {
+                credential,
+                proposal,
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+        tokio::time::timeout(timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("NPC event commit timed out"))?
+            .map_err(|_| Status::unavailable("NPC event actor response dropped"))?
+    }
+
     async fn view(
         &self,
         credential: [u8; 32],

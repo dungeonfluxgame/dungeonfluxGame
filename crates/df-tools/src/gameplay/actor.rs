@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
 
 use super::{
-    model, notebook, refusal_detail,
+    model, notebook,
+    npc_event_classifier::{EventKind, Proposal},
+    refusal_detail,
     table_settings::{self, TableSettings},
     wire,
 };
@@ -197,6 +199,13 @@ pub(super) enum Call {
         request: rpc::SubmitActionRequest,
         reply: oneshot::Sender<Result<rpc::SubmitActionResponse, tonic::Status>>,
     },
+    /// A Jev classification of a committed NPC reply. The actor validates the proposal against
+    /// the current scene and revision before creating one durable scene journal entry.
+    NpcEvent {
+        credential: [u8; 32],
+        proposal: Proposal,
+        reply: oneshot::Sender<Result<NpcEventOutcome, tonic::Status>>,
+    },
     Dialogue {
         credential: [u8; 32],
         request: super::dialogue::DialogueRequest,
@@ -252,6 +261,12 @@ pub(super) enum Call {
         reply: oneshot::Sender<Result<super::dev_control::direct::Admission, tonic::Status>>,
     },
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NpcEventOutcome {
+    pub(super) status: &'static str,
+    pub(super) revision: String,
+}
 impl ActorInput for Call {
     fn retained_heap_bytes(&self) -> Option<usize> {
         fn bytes(value: &Option<Vec<u8>>) -> usize {
@@ -273,6 +288,7 @@ impl ActorInput for Call {
             Self::PublicSceneAsset { .. }
             | Self::QualificationInputs { .. }
             | Self::SpeechMember { .. }
+            | Self::NpcEvent { .. }
             | Self::Presence { .. }
             | Self::Presented { .. } => Some(0),
             Self::Dev { order, .. } => order.retained_heap_bytes(),
@@ -1526,6 +1542,198 @@ impl Actor {
             rpc::decision_receipt::Outcome::Accepted(Box::default()),
             false,
         )))
+    }
+
+    /// Admit the small set of NPC reply events that can have an immediate, observable world
+    /// effect. Jev only supplies a proposal; this method is the sole authority that checks the
+    /// exact basis, canonical actor/target/recipient and the actor's purse before committing it.
+    fn npc_event(
+        &mut self,
+        credential: &[u8; 32],
+        proposal: Proposal,
+    ) -> Result<NpcEventOutcome, tonic::Status> {
+        if self.session_lost() {
+            return Err(session_lost_status());
+        }
+        require_readable(self.fenced)?;
+        if self.issuer.authenticate(credential).map_err(unavailable)? != LocalDemoRole::Player {
+            return Err(tonic::Status::permission_denied(
+                "NPC event needs a seated player binding",
+            ));
+        }
+        let member = self.dialogue_member(credential)?;
+        let Some(item_id) = proposal.item_id.clone() else {
+            return Ok(NpcEventOutcome {
+                status: "ignored",
+                revision: proposal.revision,
+            });
+        };
+        let action = match proposal.kind {
+            EventKind::IntentToTake => super::journey::living_scene::NpcInventoryAction::Take,
+            EventKind::IntentToBuy => super::journey::living_scene::NpcInventoryAction::Purchase,
+            EventKind::IntentToGive => {
+                let Some(recipient_id) = proposal.recipient_id.clone() else {
+                    return Ok(NpcEventOutcome {
+                        status: "ignored_missing_recipient",
+                        revision: proposal.revision,
+                    });
+                };
+                super::journey::living_scene::NpcInventoryAction::Give { recipient_id }
+            }
+            // Reveal/offer/conditional/refusal/ordinary replies are presentation or intent
+            // only. The existing plate director selects reveal focus from the committed line.
+            _ => {
+                return Ok(NpcEventOutcome {
+                    status: "ignored",
+                    revision: proposal.revision,
+                });
+            }
+        };
+        let current = self.owner.checkpoint().clone();
+        let current_revision = format!(
+            "{}:{}",
+            current.basis().revision.epoch().get(),
+            current.basis().revision.sequence()
+        );
+        if proposal.revision != current_revision {
+            record_audit_diagnostic(
+                "gameplay.npc.reply_event",
+                format!(
+                    "NPC_EVENT status=stale source_line_id={}",
+                    proposal.source_line_id
+                ),
+                serde_json::Map::from_iter([
+                    ("status".into(), serde_json::json!("stale")),
+                    (
+                        "source_line_id".into(),
+                        serde_json::json!(proposal.source_line_id),
+                    ),
+                    ("revision".into(), serde_json::json!(proposal.revision)),
+                ]),
+                &[("gameplay.npc.reply_event.status", "stale".into())],
+            );
+            return Ok(NpcEventOutcome {
+                status: "stale",
+                revision: current_revision,
+            });
+        }
+        let digest = Sha256::digest(proposal.source_line_id.as_bytes());
+        let mut operation_bytes = [0_u8; 16];
+        operation_bytes.copy_from_slice(&digest[..16]);
+        let operation = df_types::OperationId::from_bytes(&operation_bytes)
+            .map_err(|_| tonic::Status::failed_precondition("NPC event operation invalid"))?;
+        if current
+            .state()
+            .decisions
+            .iter()
+            .any(|decision| decision.operation == operation)
+        {
+            return Ok(NpcEventOutcome {
+                status: "duplicate",
+                revision: current_revision,
+            });
+        }
+        let next = current
+            .basis()
+            .revision
+            .next_sequence()
+            .map_err(|_| tonic::Status::failed_precondition("revision sequence exhausted"))?;
+        let candidate = super::journey::living_scene::commit_npc_inventory_action(
+            &current,
+            super::journey::living_scene::NpcInventoryProposal {
+                operation,
+                expected_basis: current.basis(),
+                actor_id: proposal.actor_id.clone(),
+                target_id: item_id,
+                action,
+            },
+        )
+        .map_err(unavailable)?;
+        if candidate.basis().revision != next {
+            return Err(tonic::Status::failed_precondition(
+                "NPC event revision did not advance exactly once",
+            ));
+        }
+        let speaker = current
+            .state()
+            .characters
+            .iter()
+            .find(|character| character.owner == member)
+            .map(|character| character.entity)
+            .ok_or_else(|| tonic::Status::failed_precondition("seat has no hero"))?;
+        let input = GameInput::Game(CommandInput {
+            basis: current.basis(),
+            observed_revision: current.basis().revision,
+            operation,
+            member,
+            command: GameCommand::Speak {
+                speaker,
+                text: proposal.source_line_id.clone(),
+                conversation: None,
+            },
+        });
+        let fingerprint: [u8; 32] = Sha256::digest(proposal.source_line_id.as_bytes()).into();
+        let scope = self
+            .issuer
+            .issue(
+                credential,
+                model::random().map_err(unavailable)?,
+                fingerprint,
+                input,
+                model::pins().map_err(unavailable)?,
+            )
+            .map_err(unavailable)?;
+        let context = OperationContext {
+            trace_parent: String::new(),
+            build: crate::BUILD_ID.to_owned(),
+        };
+        match self
+            .owner
+            .commit_owner_candidate(&scope, &candidate, &context)
+        {
+            SubmissionOutcome::Confirmed(receipt) => {
+                super::journey::living_scene::publish(&candidate).map_err(unavailable)?;
+                record_audit_diagnostic(
+                    "gameplay.npc.reply_event",
+                    format!(
+                        "NPC_EVENT status=committed kind={} source_line_id={}",
+                        proposal.kind.label(),
+                        proposal.source_line_id
+                    ),
+                    serde_json::Map::from_iter([
+                        ("status".into(), serde_json::json!("committed")),
+                        ("kind".into(), serde_json::json!(proposal.kind.label())),
+                        (
+                            "source_line_id".into(),
+                            serde_json::json!(proposal.source_line_id),
+                        ),
+                    ]),
+                    &[("gameplay.npc.reply_event.status", "committed".into())],
+                );
+                self.table_log.push(
+                    &proposal.actor_id,
+                    rpc::TableRole::Npc,
+                    0,
+                    rpc::TableKind::Action,
+                    &format!("NPC event committed: {}", proposal.kind.label()),
+                );
+                Ok(NpcEventOutcome {
+                    status: "committed",
+                    revision: format!(
+                        "{}:{}",
+                        receipt.basis().revision.epoch().get(),
+                        receipt.basis().revision.sequence()
+                    ),
+                })
+            }
+            SubmissionOutcome::Refused(error) => Err(error),
+            SubmissionOutcome::OperationConflict => {
+                Err(tonic::Status::aborted("NPC event conflict"))
+            }
+            SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => Err(
+                tonic::Status::unavailable("NPC event commit outcome unavailable"),
+            ),
+        }
     }
 
     /// One development jump (DEVCTL-001 milestones 2/3), reduced on the owner
@@ -2948,6 +3156,11 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
+                Call::NpcEvent { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite demonstration call budget exhausted",
+                    )));
+                }
                 Call::Dialogue { reply, .. } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
                         "finite dialogue budget exhausted",
@@ -3062,6 +3275,15 @@ impl Reducer<Call> for Actor {
                 self.begin_test_fight(credential, &asked, &result);
                 reply.send(result).is_ok()
             }
+            Call::NpcEvent {
+                credential,
+                proposal,
+                reply,
+            } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    self.npc_event(&credential, proposal)
+                }))
+                .is_ok(),
             Call::View {
                 credential,
                 request,

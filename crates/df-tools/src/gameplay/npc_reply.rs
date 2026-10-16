@@ -1735,7 +1735,15 @@ impl NpcVoice {
                     )
                     .await;
                 match result {
-                    Ok(proposal) => {
+                    Ok(mut proposal) => {
+                        if proposal.kind == super::npc_event_classifier::EventKind::IntentToGive {
+                            proposal.recipient_id = room
+                                .model
+                                .people
+                                .iter()
+                                .find(|person| person.name.eq_ignore_ascii_case(&context.hero_name))
+                                .map(|person| person.id.clone());
+                        }
                         super::actor::record_audit_diagnostic(
                             "gameplay.npc.reply_event",
                             format!(

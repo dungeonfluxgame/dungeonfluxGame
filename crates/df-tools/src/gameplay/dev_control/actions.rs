@@ -1248,6 +1248,7 @@ pub(super) async fn say(
     let mut npc_outcome = None;
     let mut npc_fallback = None;
     let mut npc_event_proposal = None;
+    let mut npc_event_result = None;
     let result = match answer {
         super::super::dialogue::DialogueReply::Raw(response, npc) => {
             let npc_reply = match npc {
@@ -1265,17 +1266,33 @@ pub(super) async fn say(
                         Some(exchange) => {
                             npc_outcome = Some(exchange.outcome);
                             npc_fallback = exchange.fallback.map(|reason| reason.label());
-                            npc_event_proposal = exchange.event_proposal.map(|proposal| {
-                                json!({
+                            if let Some(proposal) = exchange.event_proposal {
+                                let proposal_view = json!({
                                     "kind": proposal.kind.label(),
-                                    "actor_id": proposal.actor_id,
-                                    "npc_id": proposal.npc_id,
-                                    "item_id": proposal.item_id,
-                                    "source_line_id": proposal.source_line_id,
-                                    "revision": proposal.revision,
+                                    "actor_id": proposal.actor_id.clone(),
+                                    "npc_id": proposal.npc_id.clone(),
+                                    "item_id": proposal.item_id.clone(),
+                                    "recipient_id": proposal.recipient_id.clone(),
+                                    "source_line_id": proposal.source_line_id.clone(),
+                                    "revision": proposal.revision.clone(),
                                     "status": "proposal",
-                                })
-                            });
+                                });
+                                npc_event_proposal = Some(proposal_view);
+                                match state.service.commit_npc_event(credential, proposal).await {
+                                    Ok(outcome) => {
+                                        npc_event_result = Some(json!({
+                                            "status": outcome.status,
+                                            "revision": outcome.revision,
+                                        }));
+                                    }
+                                    Err(status) => {
+                                        npc_event_result = Some(json!({
+                                            "status": "rejected",
+                                            "reason": status.message(),
+                                        }));
+                                    }
+                                }
+                            }
                             exchange.text
                         }
                         None => String::new(),
@@ -1296,6 +1313,7 @@ pub(super) async fn say(
                     "npc_outcome": npc_outcome.map(|outcome| outcome.label()).unwrap_or("no_reply"),
                     "npc_fallback": npc_fallback,
                     "npc_event_proposal": npc_event_proposal,
+                    "npc_event_result": npc_event_result,
                     "npc_actor_id": response.npc_actor_id,
                     "npc_speaker": response.npc_speaker,
                     "confirmation_required": response.confirmation_required,
