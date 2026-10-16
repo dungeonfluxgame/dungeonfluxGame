@@ -528,7 +528,10 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
     let mut owned = Vec::with_capacity(stage.heroes.len() + stage.cast.len());
     for hero in &stage.heroes {
         let art = u8::try_from(hero.index + 1).ok()?;
-        let fallback_art = format!("/assets/ui/generated/figure-hero-{art}-photo.png");
+        let fallback_art = match art {
+            1 | 2 => format!("/assets/ui/generated/figure-hero-{art}-photo.png"),
+            _ => format!("/assets/ui/generated/figure-hero-{art}.webp"),
+        };
         let live_art = state
             .and_then(|state| state.hero_cutouts.get(&hero.name))
             .map(ImageKey::path);
