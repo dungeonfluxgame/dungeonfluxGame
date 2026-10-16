@@ -959,3 +959,50 @@ An old checkpoint correctly refused another build ID, so repair-build acceptance
 must use a fresh quick-start database rather than bypassing its build pin.
 SAM research is saved in `planning/segment-anything-feasibility.md` and indexed
 in the visual resource manual; integration is deferred at the owner's request.
+
+### Same-scene plate refresh and caption runtime acceptance (2026-10-16 UTC)
+
+Fixed native/WASM build `layout-b6cb696d`, source `b6cb696d`, ran room PODOBU,
+database `df_gameplay_demo_play_20261016050159_1369`. CLI quickstart created
+Brakka and Sigrun and stopped in NPC dialogue without combat. Native build passed
+in 44.82 seconds and WASM in 11.68 seconds, with existing warnings. The actual
+in-app browser was explicitly reloaded after installation; an automatically
+reconnected older page alone does not prove that its WASM was updated.
+
+- The complete 332-character social question was visible for 26,950 ms at a
+  1460-pixel viewport, above its 24,080 ms reading budget. Independent Chrome
+  observation measured 27,236 ms. At 1024x768, the unplaceable bubble used named
+  caption line 6 with the exact full text and 26,808 ms visible time. Old terminal
+  events did not overwrite it; successor line 7 acquired ownership cleanly.
+- The named lane was translated -96 px through the live CLI to clear the existing
+  scene-context overlap. Default positioning and the title/sound-control concern
+  remain open. Temporary responsive viewport overrides were reset after testing.
+- A completed Courier reply automatically edited the shown photo `88dbbe...` into
+  `48811fa9...`. Request diagnostics contain the prior photo digest, canonical
+  cast-sheet digest `8e3fdbf7...`, and speaker portrait digest `58eff9c7...`, in that
+  order. Repeating the identical reply did not queue another edit.
+- A different reply produced `429cfcf2...` in 17,792 ms. Immediate browser sampling
+  captured six intermediate incoming opacities, while the outgoing photo remained
+  at opacity one. Zero-to-one took approximately 1.02 seconds at roughly 100 ms
+  observation cadence; no blank frame appeared. The photo activated without a
+  later gameplay input. Medieval photographic styling and cast continuity held
+  in the visible portions; edge-cropped faces cannot establish precise identity.
+- Fixed harbor request events now expose prompt/reference hashes without a
+  manifest. Edited projection latency is null rather than an inflated scene age;
+  original request latency and scene age are separate fields.
+
+The earlier REGESU build `layout-8fd307b8` again reproduced DLG-14: explicitly
+addressing Bandit returned Courier's reply. A descriptive address to the man behind
+Courier instead returned an empty reply after a 5,140 ms model failure; that case
+does not establish a routing result. Source investigation found the authored pack
+path always selected the journey speaker, and plate bubble placement also used
+the focus NPC's head for every NPC. Jev selection from validated public cast IDs,
+persisted actor identity, voice/bubble routing, and per-NPC image head metadata are
+the current implementation task and remain pending installed runtime acceptance.
+
+Dialogue quality remains open: questions about the crest and delivery destination
+still repeatedly defer rather than provide useful detail. Client capture-gap
+aggregates, complete lifecycle coverage, queued-check timing and audible playback
+are not certified by this pass. Evidence is indexed in the coordinator outputs by
+`podobu-build-b6cb696d.json`, `podobu-accepted-caption-refresh-timeline.json`, and
+the `podobu-*-samples.json` and screenshots.

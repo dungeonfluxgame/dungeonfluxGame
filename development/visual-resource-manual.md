@@ -105,11 +105,16 @@ typed `fields`. Relevant event families include:
 
 - `gameplay.imagery.render_requested`, `render_ready`, and `render_failed`:
   image kind/key, prompt character count, reference count and byte lengths,
-  status, failure category, and elapsed milliseconds.
+  status, failure category, and elapsed milliseconds. Request records also carry
+  `request_schema`, `prompt_sha256`, and ordered `reference_sha256`, including in
+  fixed harbor runs without an imagery manifest.
 - `gameplay.living_scene.plate_requested`, `plate_render_requested`,
   `plate_ready`, `plate_failed`, and `plate_projected`: scene id, graph
   revision, plate id/image key identity, state, source selection, and request to
   projection timing.
+- `gameplay.living_scene.plate_story_observed` and `plate_refresh_decision`:
+  committed NPC reply sequence/hash, pending settle, queue admission, suppression,
+  rate limiting and in-flight state. An unchanged reply does not request an edit.
 - Browser `visual-source` presentation records: requested and effective source,
   selected shot, plate state, and page-local asset hashes.
 - `gameplay.music.plan`: the public tempo source, phase/intensity, suite, location
@@ -276,6 +281,37 @@ budget and a 27,206 ms logical lifetime, while both caption components reported
 zero visible time; screenshots confirmed the missing question.
 
 ## Visual review loop
+
+### Same-scene story refresh and caption acceptance
+
+Authored harbor scenes now derive subtle plate edits from completed public NPC
+replies. The current photograph is the first reference, followed by the canonical
+cast sheet and the matching speaker reference when available. This is cosmetic
+continuation: speech cannot open or transfer objects, invent participants, or
+commit a game outcome. Changes settle for 3 seconds and use a single latest
+pending slot with at least the configured interval (20 seconds in the local run).
+Repeated identical speaker/text is suppressed; stale scene/story/revision results
+cannot replace the current plate.
+
+Compare ordered reference hashes between request records. Keep the cast-sheet
+digest stable across edits and verify the first digest identifies the previously
+shown photograph. `request_to_projection_ms` is frozen for the original request;
+edited/directed projections report null when no matching request clock exists.
+`scene_request_age_ms` is separate and must not be described as provider latency.
+
+Build `layout-b6cb696d`, room PODOBU, supplied live acceptance of automatic story
+edits and the caption ownership repair. A repeated 332-character social question
+was visibly held for 26,950 ms at 1460 pixels, above its 24,080 ms reading budget.
+At 1024x768 the named fallback retained the full text and reported 26,808 ms visible
+time. An independent Chrome observer measured 27,236 ms for the full question.
+The named lane used a documented live `subtitle` translation of -96 px to clear
+the existing scene-context overlap; this is not acceptance of the default layout.
+
+For a fresh reply, approximately 100 ms DOM sampling captured incoming opacity
+from zero through six intermediate values to one in about 1.02 seconds. The
+outgoing plate remained fully opaque throughout the fade, then retired. Screenshots
+and timeline evidence are retained by the coordinator. Neither this evidence nor
+a successful provider response certifies dialogue quality or audible playback.
 
 After every browser interaction, take a screenshot and record the current URL,
 scene revision, `data-scene-state`, `data-plate-state`, selected source, and image
