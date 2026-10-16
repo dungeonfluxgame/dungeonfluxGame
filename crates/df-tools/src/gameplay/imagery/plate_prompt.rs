@@ -84,6 +84,10 @@ enum Which {
 const CAMERA: &str = "A wide shot on a 28mm lens from far back among the party: the heroes are small figures \
     at the edges of the picture, each no wider than a quarter of the frame, and the room \
     itself is the subject, its beams, floor and far walls all in view.";
+const REFERENCE_STYLE: &str = "Supplied reference images fix identity, layout and costume only; they may be painted \
+    or illustrative, so do not copy their medium, brushwork or rendering style. The generated output \
+    must be a live-action photographic film still with real materials, real light and natural camera \
+    depth of field.";
 const PLACE_IS: &str = "The place is";
 const INTERIOR: &str = "Indoors, under a ceiling.";
 const EXTERIOR: &str = "Outdoors.";
@@ -369,6 +373,7 @@ fn scene_plate_with(
     }
     let mut parts = vec![
         Part::Fixed(FILM_LOOK),
+        Part::Fixed(REFERENCE_STYLE),
         Part::Fixed(CAMERA),
         Part::Fixed(PLACE_IS),
     ];
@@ -540,6 +545,7 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
     use super::super::shot::{TimeOfDay as Time, vocabulary_lights};
     let mut phrases = vec![
         FILM_LOOK,
+        REFERENCE_STYLE,
         CAMERA,
         PLACE_IS,
         INTERIOR,

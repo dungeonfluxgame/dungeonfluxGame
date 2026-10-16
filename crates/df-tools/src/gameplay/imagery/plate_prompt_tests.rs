@@ -113,6 +113,12 @@ fn a_plate_prompt_is_built_from_fixed_phrases_and_two_kinds_of_fact_only_within_
                                     .unwrap();
                             assert!(prompt.as_str().contains("named film grade"));
                             assert!(prompt.as_str().contains("fine film grain"));
+                            assert!(prompt.as_str().contains(
+                                "Supplied reference images fix identity, layout and costume only"
+                            ));
+                            assert!(prompt.as_str().contains(
+                                "do not copy their medium, brushwork or rendering style"
+                            ));
                             assert!(!prompt.as_str().contains("repaint"));
                             for part in prompt.parts() {
                                 match part {
