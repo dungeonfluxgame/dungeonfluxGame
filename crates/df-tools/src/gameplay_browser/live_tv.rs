@@ -1356,17 +1356,6 @@ fn plate_line_is_reading(stage: &Element, now: f64) -> bool {
         .is_some_and(|at| now - at < PLATE_LINGER_GATE_MS)
 }
 
-/// Capture screen coordinates before a new photographic layout moves the bubble hosts.
-fn caption_positions(stage: &Element) -> Vec<(Element, String)> {
-    let Ok(hosts) = stage.query_selector_all(".tv-fig-bubbles:has(.tv-bubble:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]))") else { return Vec::new(); };
-    (0..hosts.length()).filter_map(|index| {
-        let host = hosts.item(index)?.dyn_into::<Element>().ok()?;
-        let bounds = host.get_bounding_client_rect();
-        let style = format!("position:fixed;left:{}px;top:{}px;width:{}px;right:auto;bottom:auto;transform:none", bounds.left(), bounds.top(), bounds.width());
-        Some((host, style))
-    }).collect()
-}
-
 fn plate_request_ready(root: &Element, image: &Element) -> bool {
     let request = root.get_attribute("data-request");
     if request.is_none() || root.get_attribute("data-failed") == image.get_attribute("data-src") {
@@ -1572,10 +1561,10 @@ fn activate_plate_request_at(
             1_000,
         );
     }
+    let bitmap_changed = stage.get_attribute("data-plate-key").as_deref() != Some(key.as_str());
     let _set = stage.set_attribute("data-plate-key", &key);
     let _set = stage.set_attribute("data-plate-state", "ready");
     let _removed = root.remove_attribute("data-failed");
-    let captions = caption_positions(stage);
     if stage.get_attribute("data-shot").as_deref() != Some("plate")
         && stage
             .query_selector(".tv-lower[data-line-state=lingering]")
@@ -1597,10 +1586,16 @@ fn activate_plate_request_at(
         } else {
             let _removed = root.remove_attribute("style");
         }
+        let has_layout = layout.is_some();
         let _applied = figures.set_plate(layout, size);
-    }
-    for (host, position) in captions {
-        let _preserved = host.set_attribute("style", &position);
+        if bitmap_changed {
+            let _retained = figures.retain_plate_captions_in_named_lane();
+        }
+        if has_layout {
+            let _set = stage.set_attribute("data-plate-layout-key", &key);
+        } else {
+            let _removed = stage.remove_attribute("data-plate-layout-key");
+        }
     }
     let _set = stage.set_attribute("data-plate-loaded", "");
     super::presentation_timing::media(
@@ -2910,12 +2905,6 @@ impl TvStage {
                 StageMode::Scene,
             )?;
         }
-        self.figures.set_check(model.check.as_ref())?;
-        if model.check.is_some() {
-            self.root.set_attribute("data-check-active", "")?;
-        } else {
-            self.root.remove_attribute("data-check-active")?;
-        }
         self.drawn.set(true);
         refresh_timing_visibility(&self.root);
         Ok(())
@@ -3022,6 +3011,37 @@ impl TvStage {
             "a"
         };
         self.root.set_attribute("data-shot-tick", tick)
+    }
+
+    /// Check payloads are presented only at their position in the shared conductor queue.
+    pub(super) fn begin_check(
+        &self,
+        check: &super::live_stage::CheckDisplay,
+        settled: bool,
+    ) -> Result<(), JsValue> {
+        self.figures.begin_check(check, settled)?;
+        self.root.set_attribute("data-check-active", "")?;
+        self.root
+            .set_attribute("data-check-sequence", &check.sequence.to_string())?;
+        refresh_timing_visibility(&self.root);
+        Ok(())
+    }
+
+    pub(super) fn reveal_check(&self, sequence: u64) -> Result<(), JsValue> {
+        self.figures.reveal_check(sequence)?;
+        refresh_timing_visibility(&self.root);
+        Ok(())
+    }
+
+    pub(super) fn finish_check(&self, sequence: u64) -> Result<(), JsValue> {
+        self.figures.finish_check(sequence)?;
+        if self.root.get_attribute("data-check-sequence").as_deref() == Some(&sequence.to_string())
+        {
+            self.root.remove_attribute("data-check-active")?;
+            self.root.remove_attribute("data-check-sequence")?;
+        }
+        refresh_timing_visibility(&self.root);
+        Ok(())
     }
 
     /// The character-line adapter owns both the named fallback and the anchored bubble.
@@ -3225,7 +3245,8 @@ impl TvStage {
             (state, _) => state,
         };
         let Some(url) = usable else {
-            if matches!(state, PlateState::Pending | PlateState::Failed)
+            if (matches!(state, PlateState::Pending | PlateState::Failed)
+                || layer.scene.borrow().as_str() == scene_key)
                 && layer.root.has_attribute("data-active")
                 && self.root.has_attribute("data-plate-loaded")
             {
@@ -3296,6 +3317,7 @@ impl TvStage {
             }
             self.root.set_attribute("data-plate-state", state.name())?;
             self.root.remove_attribute("data-plate-key")?;
+            self.root.remove_attribute("data-plate-layout-key")?;
             self.root.remove_attribute("data-plate-loaded")?;
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
@@ -3333,6 +3355,13 @@ impl TvStage {
                     layer.root.set_attribute("style", &style)?;
                 } else {
                     layer.root.remove_attribute("style")?;
+                }
+                if layout.is_some() {
+                    if let Some(key) = self.root.get_attribute("data-plate-key") {
+                        self.root.set_attribute("data-plate-layout-key", &key)?;
+                    }
+                } else {
+                    self.root.remove_attribute("data-plate-layout-key")?;
                 }
                 self.figures
                     .latch_plate_geometry(layout, layer.picture_size.get())?;
@@ -3479,6 +3508,7 @@ mod tests {
         plate_asset_key, scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
     };
     use crate::stage_machines::LineState;
+    use wasm_bindgen::JsCast;
     fn mounted_stage() -> (web_sys::Element, TvStage) {
         let document = web_sys::window().unwrap().document().unwrap();
         let parent = document.create_element("section").unwrap();
@@ -3750,7 +3780,7 @@ mod tests {
                 &PlateView {
                     state: PlateState::Ready,
                     url: Some("/gameplay/imagery/old".into()),
-                    layout: Some(geometry),
+                    layout: Some(geometry.clone()),
                 },
                 "old-scene",
                 true,
@@ -3788,6 +3818,100 @@ mod tests {
         assert!(!host.has_attribute("data-anchor-line"));
         assert!(!stage.root.has_attribute("data-unplaced-line"));
         assert!(host.get_attribute("style").unwrap().contains("left:"));
+        stage
+            .character_line(slot, 2, LineState::Lingering, &next)
+            .unwrap();
+        stage.root.set_attribute("data-line-id", "2").unwrap();
+        stage
+            .root
+            .set_attribute("data-plate-linger-at", "0")
+            .unwrap();
+        stage
+            .set_plate(
+                &PlateView {
+                    state: PlateState::Ready,
+                    url: Some("/gameplay/imagery/different-composition".into()),
+                    layout: None,
+                },
+                "old-scene",
+                false,
+            )
+            .unwrap();
+        let image = &stage.plate.images[1];
+        let request = stage.plate.root.get_attribute("data-request").unwrap();
+        image.set_attribute("data-decoded", &request).unwrap();
+        stage.plate_clock_at(20000.0).unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-plate-key").as_deref(),
+            Some("different-composition")
+        );
+        assert!(
+            host.has_attribute("hidden"),
+            "old screen position must not attribute a retained line to a different person in the new photo"
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-unplaced-line").as_deref(),
+            Some("2")
+        );
+        assert!(!stage.root.has_attribute("data-plate-layout-key"));
+        stage
+            .figures
+            .set_plate(None, Some((1920.0, 1080.0)))
+            .unwrap();
+        stage
+            .character_line(slot, 3, LineState::Opening, &next)
+            .unwrap();
+        assert!(host.has_attribute("hidden"));
+        assert_eq!(
+            host.get_attribute("data-anchor-fallback").as_deref(),
+            Some("missing-image-layout")
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-unplaced-line").as_deref(),
+            Some("3")
+        );
+        stage
+            .character_line(slot, 2, LineState::Done, &next)
+            .unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-unplaced-line").as_deref(),
+            Some("3")
+        );
+        stage.figures.set_plate(None, None).unwrap();
+        host.set_attribute("hidden", "").unwrap();
+        host.set_attribute(
+            "style",
+            "position:fixed;left:0px;top:0px;width:0px;right:auto;bottom:auto;transform:none",
+        )
+        .unwrap();
+        stage
+            .figures
+            .latch_plate_geometry(Some(geometry), Some((1920.0, 1080.0)))
+            .unwrap();
+        assert!(host.has_attribute("hidden"));
+        assert!(
+            !host
+                .get_attribute("style")
+                .unwrap_or_default()
+                .contains("width:0px"),
+            "hidden zero bounds cannot become a fixed one-glyph column"
+        );
+        stage
+            .character_line(slot, 3, LineState::Lingering, &next)
+            .unwrap();
+        assert!(host.has_attribute("hidden"));
+        host.set_attribute("style", "width:200px;height:80px")
+            .unwrap();
+        stage
+            .character_line(slot, 4, LineState::Opening, &next)
+            .unwrap();
+        assert!(!host.has_attribute("hidden"));
+        assert!(
+            !host
+                .get_attribute("style")
+                .unwrap_or_default()
+                .contains("width:0px")
+        );
         finish_stage(parent, stage);
     }
 
@@ -4129,6 +4253,110 @@ mod tests {
             stage.root.get_attribute("data-plate-state").as_deref(),
             Some("ready")
         );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn photographic_establishing_survives_graph_arrival_until_the_plate_is_activated() {
+        let (parent, stage) = mounted_stage();
+        let document = stage.root.owner_document().unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(&format!(
+            "{}\n{}\n.tv-stage *{{transition:none!important;animation:none!important}}",
+            include_str!("live_stage.css"),
+            include_str!("live_plate.css")
+        )));
+        parent.append_child(&style).unwrap();
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage
+            .root
+            .set_attribute("data-battle-state", "absent")
+            .unwrap();
+        stage.root.set_attribute("data-stage-graph", "").unwrap();
+        stage
+            .root
+            .set_attribute("data-shot", "establishing")
+            .unwrap();
+        let window = web_sys::window().unwrap();
+        let computed = js_sys::Reflect::get(&window, &"getComputedStyle".into())
+            .unwrap()
+            .dyn_into::<js_sys::Function>()
+            .unwrap();
+        let graph = stage
+            .root
+            .query_selector(".tv-scene-graph")
+            .unwrap()
+            .unwrap();
+        let art = stage.root.query_selector(".tv-art").unwrap().unwrap();
+        for state in ["pending", "ready"] {
+            stage.root.set_attribute("data-plate-state", state).unwrap();
+            let css = computed.call1(&window, &graph).unwrap();
+            assert_eq!(
+                js_sys::Reflect::get(&css, &"opacity".into())
+                    .unwrap()
+                    .as_string()
+                    .as_deref(),
+                Some("0")
+            );
+            let css = computed.call1(&window, &art).unwrap();
+            assert_ne!(
+                js_sys::Reflect::get(&css, &"visibility".into())
+                    .unwrap()
+                    .as_string()
+                    .as_deref(),
+                Some("hidden")
+            );
+        }
+        stage.root.set_attribute("data-plate-loaded", "").unwrap();
+        stage.root.set_attribute("data-shot", "plate").unwrap();
+        let css = computed.call1(&window, &stage.plate.root).unwrap();
+        assert_eq!(
+            js_sys::Reflect::get(&css, &"opacity".into())
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&css, &"visibility".into())
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("visible")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn absent_metadata_during_same_scene_refresh_does_not_clear_the_loaded_plate() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        for state in [
+            PlateState::None,
+            PlateState::Unavailable,
+            PlateState::Pending,
+            PlateState::Failed,
+        ] {
+            stage
+                .set_plate(
+                    &PlateView {
+                        state,
+                        ..Default::default()
+                    },
+                    "old-scene",
+                    false,
+                )
+                .unwrap();
+            assert!(stage.root.has_attribute("data-plate-loaded"));
+            assert_eq!(
+                stage.root.get_attribute("data-shot").as_deref(),
+                Some("plate")
+            );
+            assert_eq!(
+                stage.plate.root.get_attribute("data-active").as_deref(),
+                Some("0")
+            );
+        }
         finish_stage(parent, stage);
     }
 

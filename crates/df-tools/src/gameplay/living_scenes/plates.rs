@@ -24,6 +24,7 @@ use std::{
 };
 
 use df_protocol::common as rpc;
+use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::{sync::mpsc, task::JoinSet};
 
 use super::{
@@ -654,7 +655,7 @@ struct Locate {
     key: ImageKey,
     spec: ShotSpec,
     speaker: shot::SpeakerShot,
-    face: Option<ReferenceImage>,
+    actor_references: BTreeMap<String, ReferenceImage>,
 }
 
 enum Done {
@@ -863,10 +864,68 @@ fn locator_targets(
     (focus_id, targets)
 }
 
+fn reference_hashes(references: &BTreeMap<String, ReferenceImage>) -> BTreeMap<String, String> {
+    references
+        .iter()
+        .map(|(id, reference)| (id.clone(), reference.sha256.clone()))
+        .collect()
+}
+
+struct LocatorBatch<'a> {
+    targets: Vec<(String, String)>,
+    reference: &'a ReferenceImage,
+}
+
+/// Each person is the sole target matched to their own pinned reference. Four calls per image;
+/// absent references and people beyond that cap deliberately have no attributed head box.
+fn referenced_locator_batches<'a>(
+    targets: &[(String, String)],
+    actors: &[(String, String)],
+    references: &'a BTreeMap<String, ReferenceImage>,
+) -> Vec<LocatorBatch<'a>> {
+    targets.iter().take(16).filter_map(|target| {
+        // `speaker` is an unbound compatibility slot, never a canonical actor identity.
+        if target.0 == "speaker" { return None; }
+        let id = if let Some(index) = target.0.strip_prefix("npc-").and_then(|id| id.parse::<usize>().ok()) {
+            actors.get(index)?.0.as_str()
+        } else { target.0.as_str() };
+        Some(LocatorBatch {
+            targets: vec![(target.0.clone(), "The exact person in the second reference picture; match their face, hair and costume, never their name, role or position. Omit this target if identity cannot be matched confidently.".to_owned())],
+            reference: references.get(id)?,
+        })
+    }).take(4).collect()
+}
+
+const HEAD_IMAGE_DEADLINE: Duration = Duration::from_secs(25);
+
+struct HeadResult {
+    elapsed_ms: u128,
+    heads: Result<Vec<df_providers::LocatedHead>, ImageFailure>,
+}
+
+/// The image job owns every borrowed request; one deadline drops all unfinished requests.
+async fn collect_head_results<F>(
+    mut pending: FuturesUnordered<F>,
+    count: usize,
+    deadline: tokio::time::Instant,
+) -> Vec<Option<HeadResult>>
+where
+    F: std::future::Future<Output = (usize, HeadResult)>,
+{
+    let mut results: Vec<Option<HeadResult>> = (0..count.min(4)).map(|_| None).collect();
+    while let Ok(Some((index, result))) = tokio::time::timeout_at(deadline, pending.next()).await {
+        if let Some(slot) = results.get_mut(index) {
+            *slot = Some(result);
+        }
+    }
+    results
+}
+
 /// Bounded plate diagnostics share the audit mirror used by the development CLI.
 struct HeadDiagnostic<'a> {
     key: &'a ImageKey,
     stage: &'static str,
+    reference_sha256: Option<&'a str>,
     source: &'static str,
     batch: Option<usize>,
     targets: Vec<String>,
@@ -879,7 +938,9 @@ struct HeadDiagnostic<'a> {
 impl HeadDiagnostic<'_> {
     fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
         let partial = self.located.len() < self.targets.len() || self.failure.is_some();
-        let status = if self.failure.is_some() && self.located.is_empty() {
+        let status = if matches!(self.stage, "requested" | "queued") {
+            self.stage
+        } else if self.failure.is_some() && self.located.is_empty() {
             "failed"
         } else if partial {
             "partial"
@@ -899,6 +960,11 @@ impl HeadDiagnostic<'_> {
             ("outcome".into(), serde_json::json!(status)),
             ("image_key".into(), serde_json::json!(self.key.as_str())),
             ("cache_source".into(), serde_json::json!(self.source)),
+            (
+                "reference_sha256".into(),
+                serde_json::json!(self.reference_sha256),
+            ),
+            ("locator_revision".into(), serde_json::json!(2)),
             ("batch".into(), serde_json::json!(self.batch)),
             (
                 "target_ids".into(),
@@ -986,6 +1052,39 @@ impl HeadDiagnostic<'_> {
     }
 }
 
+fn record_head_result(
+    key: &ImageKey,
+    batch: usize,
+    work: &LocatorBatch<'_>,
+    actors: &[(String, String)],
+    result: &HeadResult,
+) {
+    HeadDiagnostic {
+        key,
+        stage: "head_location",
+        reference_sha256: Some(work.reference.sha256.as_str()),
+        source: "provider",
+        batch: Some(batch),
+        actor_ids: work
+            .targets
+            .iter()
+            .filter_map(|(id, _)| {
+                let index = id.strip_prefix("npc-")?.parse::<usize>().ok()?;
+                Some((id.clone(), actors.get(index)?.0.clone()))
+            })
+            .collect(),
+        targets: work.targets.iter().map(|(id, _)| id.clone()).collect(),
+        located: result
+            .heads
+            .as_ref()
+            .map(|heads| heads.iter().map(|head| head.id.clone()).collect())
+            .unwrap_or_default(),
+        elapsed_ms: result.elapsed_ms,
+        failure: result.heads.as_ref().err().map(|failure| failure.label()),
+    }
+    .record();
+}
+
 fn record_actor_heads(
     key: &ImageKey,
     actors: &[(String, String)],
@@ -997,6 +1096,7 @@ fn record_actor_heads(
     HeadDiagnostic {
         key,
         stage: "actor_heads",
+        reference_sha256: None,
         source,
         batch: None,
         targets: actors.iter().map(|(id, _)| id.clone()).collect(),
@@ -1075,6 +1175,10 @@ struct StoredPlacement {
     actors: Vec<StoredActorHead>,
     #[serde(default)]
     actor_ids: Vec<String>,
+    #[serde(default)]
+    locator_revision: u8,
+    #[serde(default)]
+    actor_reference_sha256: BTreeMap<String, String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -1119,6 +1223,8 @@ impl StoredPlacement {
     fn of(placement: &PlatePlacement) -> Self {
         Self {
             speaker: StoredHead::of(0, &placement.speaker),
+            locator_revision: 2,
+            actor_reference_sha256: BTreeMap::new(),
             actor_ids: placement
                 .actors
                 .iter()
@@ -1838,7 +1944,7 @@ impl Shared {
                             &work.key,
                             &work.spec,
                             &work.speaker,
-                            work.face.as_ref(),
+                            &work.actor_references,
                             &work.actors,
                             work.focus_actor_id.as_deref(),
                         )
@@ -2269,7 +2375,7 @@ impl Shared {
         let started = std::time::Instant::now();
         let mut image_key = None;
         let result = async {
-            let (request, locator_face) =
+            let (request, _locator_face) =
                 self.fresh_request(scene, spec, heroes, faces, None).await?;
             let key = self.inner.imagery.key_for(&request);
             image_key = Some(key.clone());
@@ -2288,7 +2394,11 @@ impl Shared {
             let Some(speaker) = &spec.speaker else {
                 return Ok((key, None, None));
             };
-            if let Some(stored) = self.stored_placement(&key, &scene.locator_actors()).await {
+            let actor_references = self.locator_references(scene, heroes).await;
+            if let Some(stored) = self
+                .stored_placement(&key, &scene.locator_actors(), &actor_references)
+                .await
+            {
                 return Ok((key, Some(stored), None));
             }
             let actors = scene.locator_actors();
@@ -2303,7 +2413,7 @@ impl Shared {
                 key: key.clone(),
                 spec: spec.clone(),
                 speaker: speaker.clone(),
-                face: locator_face,
+                actor_references,
             };
             Ok((key, Some(predicted), Some(Box::new(work))))
         }
@@ -2341,11 +2451,15 @@ impl Shared {
         &self,
         key: &ImageKey,
         actors: &[(String, String)],
+        references: &BTreeMap<String, ReferenceImage>,
     ) -> Option<PlatePlacement> {
         let started = tokio::time::Instant::now();
         let note = self.inner.imagery.read_note(key).await?;
         let stored = serde_json::from_slice::<StoredPlacement>(&note).ok()?;
-        if !actors.iter().all(|(id, _)| stored.actor_ids.contains(id)) {
+        if stored.actor_reference_sha256 != reference_hashes(references)
+            || actors.iter().any(|(id, _)| !stored.actor_ids.contains(id))
+            || stored.locator_revision != 2
+        {
             return None;
         }
         let mut placement = stored.placement()?;
@@ -2373,59 +2487,133 @@ impl Shared {
         key: &ImageKey,
         spec: &ShotSpec,
         speaker: &shot::SpeakerShot,
-        face: Option<&ReferenceImage>,
+        actor_references: &BTreeMap<String, ReferenceImage>,
         actors: &[(String, String)],
         focus_actor_id: Option<&str>,
     ) -> PlatePlacement {
+        let missing_focus_identity =
+            !focus_actor_id.is_some_and(|id| actors.iter().any(|(actor, _)| actor == id));
+        if missing_focus_identity {
+            HeadDiagnostic {
+                key,
+                stage: "head_location",
+                reference_sha256: None,
+                source: "identity_validation",
+                batch: None,
+                actor_ids: Vec::new(),
+                targets: vec!["speaker".to_owned()],
+                located: Vec::new(),
+                elapsed_ms: 0,
+                failure: Some("missing_focus_identity"),
+            }
+            .record();
+        }
         let known = locked(&self.book).image_layouts.get(key.as_str()).cloned();
         if let Some(known) = known {
             record_actor_heads(key, actors, &known, "in_process", 0, None);
             return known;
         }
-        if let Some(stored) = self.stored_placement(key, actors).await {
+        if let Some(stored) = self.stored_placement(key, actors, actor_references).await {
             return stored;
         }
         let (focus_id, targets) = locator_targets(spec, speaker, actors, focus_actor_id);
         let started = tokio::time::Instant::now();
         let mut located = Vec::new();
-        let mut measured_all_batches = targets.len() <= 16;
-        let mut failure = None;
-        for (batch, targets) in targets.chunks(4).take(4).enumerate() {
-            let borrowed: Vec<(&str, &str)> = targets
+        let batches = referenced_locator_batches(&targets, actors, actor_references);
+        let mut measured_all_batches = targets.len() <= 16
+            && actors
                 .iter()
-                .map(|(id, description)| (id.as_str(), description.as_str()))
-                .collect();
-            let batch_started = tokio::time::Instant::now();
-            let found = self
-                .inner
-                .imagery
-                .locate_heads(key, if batch == 0 { face } else { None }, &borrowed)
-                .await;
-            let batch_failure = found.as_ref().err().map(|failure| failure.label());
-            failure = failure.or(batch_failure);
+                .all(|(id, _)| actor_references.contains_key(id))
+            && batches
+                .iter()
+                .map(|batch| batch.targets.len())
+                .sum::<usize>()
+                == targets.len();
+        let mut failure = actors
+            .iter()
+            .any(|(id, _)| !actor_references.contains_key(id))
+            .then_some("missing_reference");
+        if !measured_all_batches {
+            failure = Some("missing_reference_or_batch_limit");
+        }
+        if missing_focus_identity {
+            failure = Some("missing_focus_identity");
+        }
+        for stage in ["requested", "queued"] {
             HeadDiagnostic {
                 key,
-                stage: "head_location",
+                stage,
+                reference_sha256: None,
                 source: "provider",
-                batch: Some(batch),
-                actor_ids: targets
-                    .iter()
-                    .filter_map(|(id, _)| {
-                        let index = id.strip_prefix("npc-")?.parse::<usize>().ok()?;
-                        Some((id.clone(), actors.get(index)?.0.clone()))
-                    })
-                    .collect(),
+                batch: None,
+                actor_ids: Vec::new(),
                 targets: targets.iter().map(|(id, _)| id.clone()).collect(),
-                located: found
-                    .as_ref()
-                    .map(|heads| heads.iter().map(|head| head.id.clone()).collect())
-                    .unwrap_or_default(),
-                elapsed_ms: batch_started.elapsed().as_millis(),
-                failure: batch_failure,
+                located: Vec::new(),
+                elapsed_ms: 0,
+                failure: None,
             }
             .record();
-            measured_all_batches &= found.is_ok();
-            located.extend(found.unwrap_or_default());
+        }
+        let pending = FuturesUnordered::new();
+        for (batch, work) in batches.iter().enumerate() {
+            for stage in ["requested", "queued"] {
+                HeadDiagnostic {
+                    key,
+                    stage,
+                    reference_sha256: Some(work.reference.sha256.as_str()),
+                    source: "provider",
+                    batch: Some(batch),
+                    actor_ids: work
+                        .targets
+                        .iter()
+                        .filter_map(|(id, _)| {
+                            let index = id.strip_prefix("npc-")?.parse::<usize>().ok()?;
+                            Some((id.clone(), actors.get(index)?.0.clone()))
+                        })
+                        .collect(),
+                    targets: work.targets.iter().map(|(id, _)| id.clone()).collect(),
+                    located: Vec::new(),
+                    elapsed_ms: 0,
+                    failure: None,
+                }
+                .record();
+            }
+            pending.push(async move {
+                let borrowed: Vec<(&str, &str)> = work
+                    .targets
+                    .iter()
+                    .map(|(id, description)| (id.as_str(), description.as_str()))
+                    .collect();
+                let heads = self
+                    .inner
+                    .imagery
+                    .locate_heads(key, Some(work.reference), &borrowed)
+                    .await;
+                let result = HeadResult {
+                    elapsed_ms: started.elapsed().as_millis(),
+                    heads,
+                };
+                record_head_result(key, batch, work, actors, &result);
+                (batch, result)
+            });
+        }
+        let results =
+            collect_head_results(pending, batches.len(), started + HEAD_IMAGE_DEADLINE).await;
+        for (batch, (work, result)) in batches.iter().zip(results).enumerate() {
+            let result = match result {
+                Some(result) => result,
+                None => {
+                    let result = HeadResult {
+                        elapsed_ms: started.elapsed().as_millis(),
+                        heads: Err(ImageFailure::DeadlineExceeded),
+                    };
+                    record_head_result(key, batch, work, actors, &result);
+                    result
+                }
+            };
+            failure = failure.or(result.heads.as_ref().err().map(|failure| failure.label()));
+            measured_all_batches &= result.heads.is_ok();
+            located.extend(result.heads.unwrap_or_default());
         }
         if targets.len() > 16 {
             record(
@@ -2495,6 +2683,8 @@ impl Shared {
         );
         let mut stored = StoredPlacement::of(&placement);
         stored.actor_ids = actors.iter().map(|(id, _)| id.clone()).collect();
+        stored.actor_reference_sha256 = reference_hashes(actor_references);
+        stored.locator_revision = 2;
         if measured_all_batches && let Ok(note) = serde_json::to_vec(&stored) {
             self.inner.imagery.write_note(key, note).await;
         }
@@ -2505,6 +2695,43 @@ impl Shared {
         book.image_layouts
             .insert(key.as_str().to_owned(), placement.clone());
         placement
+    }
+
+    /// Use the pinned character bytes, never a role/name guess, for each NPC's lookup.
+    async fn locator_references(
+        &self,
+        scene: &PlateScene,
+        heroes: &[u8],
+    ) -> BTreeMap<String, ReferenceImage> {
+        let mut references = BTreeMap::new();
+        for actor in scene.identity_cast.iter().take(16) {
+            let (figure, face) = self.speaker_art(&actor.sprite).await;
+            let reference = match face.or(figure) {
+                Some(reference) => Some(reference),
+                None if !actor.portrait.is_empty() => {
+                    let (figure, face) = self.speaker_art(&actor.portrait).await;
+                    face.or(figure)
+                }
+                None => None,
+            };
+            if let Some(reference) = reference {
+                references.insert(
+                    actor
+                        .id
+                        .strip_prefix("npc:")
+                        .unwrap_or(&actor.id)
+                        .to_owned(),
+                    reference,
+                );
+            }
+        }
+        for art in heroes.iter().take(16) {
+            let (figure, face) = self.speaker_art(&format!("sprite-hero-{art}")).await;
+            if let Some(reference) = face.or(figure) {
+                references.insert(format!("hero-{art}"), reference);
+            }
+        }
+        references
     }
 
     /// Every edited image owns its measured heads; an earlier photograph's boxes are never reused.
@@ -2520,7 +2747,7 @@ impl Shared {
                 key,
                 &spec,
                 speaker,
-                None,
+                &self.locator_references(scene, heroes).await,
                 &scene.locator_actors(),
                 scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
             )

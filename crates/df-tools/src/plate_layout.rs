@@ -289,9 +289,41 @@ impl Placement {
     }
 }
 
+/// A named rules panel has no head attribution. Choose a measured clear rectangle in the viewport.
+pub(crate) fn place_panel(screen: Rect, size: (f64, f64), avoid: &[Rect]) -> Option<Rect> {
+    let margin = screen.width().min(screen.height()) * MARGIN_FRACTION;
+    let inside = Rect::new(
+        screen.left + margin,
+        screen.top + margin,
+        screen.right - margin,
+        screen.bottom - margin,
+    );
+    if !(size.0 > 0.0 && size.1 > 0.0 && size.0 <= inside.width() && size.1 <= inside.height()) {
+        return None;
+    }
+    let mut best: Option<(f64, Rect)> = None;
+    for x in 0..=10 {
+        for y in 0..=10 {
+            let left = inside.left + (inside.width() - size.0) * f64::from(x) / 10.0;
+            let top = inside.top + (inside.height() - size.1) * f64::from(y) / 10.0;
+            let rect = Rect::new(left, top, left + size.0, top + size.1);
+            if avoid.iter().any(|other| rect.intersects(other)) {
+                continue;
+            }
+            let score = ((left + size.0 / 2.0) - (screen.left + screen.width() / 2.0)).powi(2)
+                + ((top + size.1 / 2.0) - (screen.top + screen.height() * 0.55)).powi(2);
+            if best.as_ref().is_none_or(|(before, _)| score < *before) {
+                best = Some((score, rect));
+            }
+        }
+    }
+    best.map(|(_, rect)| rect)
+}
+
 /// A place above or below the head when neither side has room: centred on the head as far as
 /// the screen allows, in the first of above, below that clears everything. The side reported is
 /// the head's nearer screen half, for the tail.
+#[cfg(test)]
 pub(crate) fn place_bubble_stacked(
     screen: Rect,
     head: Rect,
@@ -361,6 +393,19 @@ mod tests {
                 "under the interface: {placed:?}"
             );
         }
+    }
+
+    #[test]
+    fn neutral_check_panel_clears_subtitle_choices_and_viewport_without_a_head() {
+        let screen = Rect::new(0.0, 0.0, 1024.0, 768.0);
+        let obstacles = [
+            Rect::new(0.0, 0.0, 1024.0, 110.0),
+            Rect::new(100.0, 630.0, 924.0, 768.0),
+        ];
+        let placed = place_panel(screen, (600.0, 300.0), &obstacles).unwrap();
+        assert!(screen.contains(&placed));
+        assert!(!obstacles.iter().any(|other| placed.intersects(other)));
+        assert!(place_panel(screen, (1200.0, 300.0), &obstacles).is_none());
     }
 
     #[test]

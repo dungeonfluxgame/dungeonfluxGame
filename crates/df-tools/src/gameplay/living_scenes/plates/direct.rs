@@ -167,7 +167,7 @@ impl Shared {
         let prepared = self
             .fresh_request(&scene, &spec, &heroes, &faces, Some(&text))
             .await;
-        let (request, locator_face) = match prepared {
+        let (request, _locator_face) = match prepared {
             Ok(prepared) => prepared,
             Err(reason) => {
                 let _ = reply.send(Err(reason));
@@ -212,7 +212,7 @@ impl Shared {
                         &rendered,
                         &spec,
                         speaker,
-                        locator_face.as_ref(),
+                        &self.locator_references(&scene, &heroes).await,
                         &scene.locator_actors(),
                         scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
                     )

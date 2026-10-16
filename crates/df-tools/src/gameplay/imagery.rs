@@ -455,6 +455,13 @@ impl Imagery {
             .iter()
             .map(|(id, description)| LocateTarget { id, description })
             .collect();
+        // Head measurement shares the existing provider concurrency owner with image edits.
+        // Its enclosing image job also bounds time spent waiting for this permit.
+        let _permit = engine
+            .permits
+            .acquire()
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?;
         locator
             .locate(&picture, face.as_deref(), &targets, HEAD_LOCATE_DEADLINE)
             .await

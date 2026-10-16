@@ -360,6 +360,7 @@ impl Shared {
         let prompt = if let Some(story) = &pending.story {
             crate::gameplay::imagery::story_beat_edit(
                 self.inner.rating,
+                &story.actor_id,
                 &story.speaker,
                 &story.text,
             )?
@@ -541,6 +542,8 @@ impl Shared {
                                 &[("reason", failure.label().into())],
                             ),
                         }
+                    } else {
+                        refresh_decision(&mut book, "story", "superseded_by_newer_beat");
                     }
                 }
             }

@@ -29,7 +29,7 @@ use super::live_sfx::{self, Cue};
 use super::*;
 use crate::health_cues::Blow;
 use crate::{
-    plate_layout::{self, PlateFrame, Rect, Side},
+    plate_layout::{self, PlateFrame, Rect},
     presentation::{ActorSlot, MAX_NPCS, PlateGeometry, SceneFamily, StageActor},
     stage_art,
     stage_conductor::IntentKind,
@@ -128,6 +128,7 @@ fn report_removed_presentation_component(element: &Element, reason: &'static str
     );
 }
 
+#[derive(Clone)]
 pub(super) struct CheckDisplay {
     pub(super) sequence: u64,
     pub(super) hero_name: String,
@@ -159,6 +160,10 @@ impl CheckDisplay {
 
 /// Keep the roll and finding phases explicit. The finding gets its full reading budget after the
 /// roll, then a short fade; no part of its budget is spent inside the fade animation.
+pub(super) fn check_roll_read_ms() -> u32 {
+    CHECK_ROLL_MS.saturating_add(CHECK_FINDING_REVEAL_MS)
+}
+
 fn check_result_phase_ms(finding: &str) -> (u32, u32, u32) {
     let read_ms = crate::stage_machines::reading_time_ms(finding);
     let finding_ms = read_ms.saturating_add(CHECK_FINDING_PADDING_MS);
@@ -1077,7 +1082,64 @@ impl Figures {
             })
     }
 
+    #[cfg(test)]
     pub(super) fn set_check(&self, check: Option<&CheckDisplay>) -> Result<(), JsValue> {
+        self.set_check_mode(check, false, false)
+    }
+
+    pub(super) fn begin_check(&self, check: &CheckDisplay, settled: bool) -> Result<(), JsValue> {
+        self.set_check_mode(Some(check), true, settled)
+    }
+
+    pub(super) fn reveal_check(&self, sequence: u64) -> Result<(), JsValue> {
+        for figure in &self.figures {
+            if let Some(panel) = figure.bubbles.query_selector(&format!(
+                ".tv-check-result[data-check-sequence=\"{sequence}\"]"
+            ))? {
+                if panel.get_attribute("data-check-phase").as_deref() != Some("result") {
+                    panel.set_attribute("data-check-phase", "result")?;
+                    let id = panel
+                        .get_attribute("data-component-id")
+                        .and_then(|id| id.parse::<u64>().ok())
+                        .unwrap_or(sequence);
+                    let read_ms = panel
+                        .get_attribute("data-check-read-ms")
+                        .and_then(|read| read.parse::<u32>().ok())
+                        .unwrap_or(0);
+                    super::presentation_timing::component(
+                        Some(&panel),
+                        PresentationComponent::CheckCard,
+                        id,
+                        &self.scene.borrow(),
+                        ComponentPhase::Readable,
+                        "ready",
+                        read_ms,
+                    );
+                }
+                self.place_bubble(figure);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish_check(&self, sequence: u64) -> Result<(), JsValue> {
+        for figure in &self.figures {
+            if let Some(panel) = figure.bubbles.query_selector(&format!(
+                ".tv-check-result[data-check-sequence=\"{sequence}\"]"
+            ))? {
+                panel.remove();
+                self.report_removed_component(&panel, 0, "read-complete");
+            }
+        }
+        Ok(())
+    }
+
+    fn set_check_mode(
+        &self,
+        check: Option<&CheckDisplay>,
+        managed: bool,
+        settled: bool,
+    ) -> Result<(), JsValue> {
         let Some(check) = check else {
             for (position, figure) in self.figures.iter().enumerate() {
                 while let Some(panel) = figure.bubbles.query_selector(".tv-check-result")? {
@@ -1135,6 +1197,12 @@ impl Figures {
             "",
         )?;
         panel.set_attribute("data-check-signature", &signature)?;
+        panel.set_attribute("data-check-sequence", &check.sequence.to_string())?;
+        panel.set_attribute("data-check-read-ms", &finding_ms.to_string())?;
+        if managed {
+            panel.set_attribute("data-check-managed", "")?;
+            panel.set_attribute("data-check-phase", if settled { "result" } else { "roll" })?;
+        }
         figure.last_check.set(Some(check.sequence));
         panel.set_attribute("data-component-id", &component_id.to_string())?;
         panel.set_attribute("data-component-scene", &scene)?;
@@ -1242,36 +1310,48 @@ impl Figures {
             "ready",
             finding_ms,
         );
-        super::presentation_timing::schedule_component_transition(
-            panel.clone(),
-            PresentationComponent::CheckCard,
-            component_id,
-            scene.clone(),
-            ComponentPhase::Readable,
-            "ready",
-            finding_ms,
-            roll_ms.saturating_add(CHECK_FINDING_REVEAL_MS),
-        );
-        super::presentation_timing::schedule_component_transition(
-            panel.clone(),
-            PresentationComponent::CheckCard,
-            component_id,
-            scene.clone(),
-            ComponentPhase::Closing,
-            "timeout",
-            finding_ms,
-            total_ms.saturating_sub(CHECK_FADE_MS),
-        );
-        super::presentation_timing::schedule_component_transition(
-            panel,
-            PresentationComponent::CheckCard,
-            component_id,
-            scene,
-            ComponentPhase::Hidden,
-            "timeout",
-            finding_ms,
-            total_ms,
-        );
+        if !managed {
+            super::presentation_timing::schedule_component_transition(
+                panel.clone(),
+                PresentationComponent::CheckCard,
+                component_id,
+                scene.clone(),
+                ComponentPhase::Readable,
+                "ready",
+                finding_ms,
+                roll_ms.saturating_add(CHECK_FINDING_REVEAL_MS),
+            );
+            super::presentation_timing::schedule_component_transition(
+                panel.clone(),
+                PresentationComponent::CheckCard,
+                component_id,
+                scene.clone(),
+                ComponentPhase::Closing,
+                "timeout",
+                finding_ms,
+                total_ms.saturating_sub(CHECK_FADE_MS),
+            );
+            super::presentation_timing::schedule_component_transition(
+                panel,
+                PresentationComponent::CheckCard,
+                component_id,
+                scene,
+                ComponentPhase::Hidden,
+                "timeout",
+                finding_ms,
+                total_ms,
+            );
+        } else if settled {
+            super::presentation_timing::component(
+                Some(&panel),
+                PresentationComponent::CheckCard,
+                component_id,
+                &scene,
+                ComponentPhase::Readable,
+                "settled",
+                finding_ms,
+            );
+        }
         Ok(())
     }
 
@@ -1460,13 +1540,181 @@ impl Figures {
     /// centre of the screen first), then narrower, until the bubble overlaps no other figure's
     /// head, the roll panel or the screen edge. When none fits, the narrowest stays.
     fn place_bubble(&self, speaker: &Figure) {
+        if speaker
+            .bubbles
+            .query_selector(".tv-check-result[data-check-managed]")
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            self.place_check_panel(speaker);
+            return;
+        }
+        self.place_bubble_at_actor(speaker);
+        if speaker.bubbles.has_attribute("hidden")
+            && speaker
+                .bubbles
+                .query_selector(".tv-check-result")
+                .ok()
+                .flatten()
+                .is_some()
+        {
+            self.place_check_panel(speaker);
+        }
+    }
+
+    /// Rules findings stay readable even when this bitmap has no safe character anchor.
+    fn place_check_panel(&self, speaker: &Figure) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let (Some(width), Some(height)) = (
+            window.inner_width().ok().and_then(|n| n.as_f64()),
+            window.inner_height().ok().and_then(|n| n.as_f64()),
+        ) else {
+            return;
+        };
+        let host = &speaker.bubbles;
+        let _moved = self.plate_bubbles.append_child(host);
+        let _shown = host.remove_attribute("hidden");
+        let _tail = host.remove_attribute("data-tail");
+        let _reason = host.set_attribute("data-anchor-fallback", "named-check-panel");
+        let portal = self.plate_bubbles.get_bounding_client_rect();
+        let scale_x = if self.plate_bubbles.client_width() > 0 {
+            portal.width() / f64::from(self.plate_bubbles.client_width())
+        } else {
+            1.0
+        };
+        let scale_y = if self.plate_bubbles.client_height() > 0 {
+            portal.height() / f64::from(self.plate_bubbles.client_height())
+        } else {
+            1.0
+        };
+        let mut avoid = Vec::new();
+        for selector in BUBBLE_UI_OBSTACLES.into_iter().chain([
+            ".tv-hud[data-party-hud=visible]",
+            ".tv-lower",
+            ".tv-dm",
+        ]) {
+            if let Ok(Some(node)) = self
+                .root
+                .parent_element()
+                .unwrap_or_else(|| self.root.clone())
+                .query_selector(selector)
+                && let Ok(Some(style)) = window.get_computed_style(&node)
+                && style.get_property_value("display").ok().as_deref() != Some("none")
+                && (matches!(
+                    node.get_attribute("data-line-state").as_deref(),
+                    Some("opening" | "speaking" | "lingering")
+                ) || (style.get_property_value("visibility").ok().as_deref() != Some("hidden")
+                    && style.get_property_value("opacity").ok().as_deref() != Some("0")))
+            {
+                let bounds = node.get_bounding_client_rect();
+                if bounds.width() > 0.0 && bounds.height() > 0.0 {
+                    avoid.push(Rect::new(
+                        bounds.left(),
+                        bounds.top(),
+                        bounds.right(),
+                        bounds.bottom(),
+                    ));
+                }
+            }
+        }
+        for (maximum_width, scroll) in [(600.0_f64, false), (960.0_f64, false), (960.0_f64, true)] {
+            let overflow = if scroll {
+                "max-height:25vh;overflow:auto;"
+            } else {
+                ""
+            };
+            let _measure = host.set_attribute(
+                "style",
+                &format!(
+                    "left:0;top:0;right:auto;pointer-events:auto;width:{}px;{overflow}",
+                    (width - 32.0).min(maximum_width) / scale_x
+                ),
+            );
+            let size = host.get_bounding_client_rect();
+            if let Some(rect) = plate_layout::place_panel(
+                Rect::new(0.0, 0.0, width, height),
+                (size.width(), size.height()),
+                &avoid,
+            ) {
+                let _placed = host.set_attribute(
+                    "style",
+                    &format!(
+                        "left:{}px;top:{}px;right:auto;pointer-events:auto;width:{}px;{overflow}",
+                        (rect.left - portal.left()) / scale_x,
+                        (rect.top - portal.top()) / scale_y,
+                        rect.width() / scale_x
+                    ),
+                );
+                return;
+            }
+        }
+        let _hidden = host.set_attribute("hidden", "");
+        let _reason = host.set_attribute("data-anchor-fallback", "check-panel-no-clear-space");
+    }
+
+    /// Hidden/zero/offscreen boxes are not screen positions and must never become fixed widths.
+    fn retained_caption_bounds(&self, host: &Element) -> Option<Rect> {
+        let window = web_sys::window()?;
+        let screen = Rect::new(
+            0.0,
+            0.0,
+            window.inner_width().ok()?.as_f64()?,
+            window.inner_height().ok()?.as_f64()?,
+        );
+        let mut ancestor = Some(host.clone());
+        while let Some(element) = ancestor {
+            if element.has_attribute("hidden") {
+                return None;
+            }
+            let style = window.get_computed_style(&element).ok()??;
+            if style.get_property_value("display").ok()?.as_str() == "none"
+                || style.get_property_value("visibility").ok()?.as_str() == "hidden"
+                || style
+                    .get_property_value("opacity")
+                    .ok()?
+                    .parse::<f64>()
+                    .ok()
+                    .is_some_and(|opacity| opacity <= 0.0)
+            {
+                return None;
+            }
+            ancestor = element.parent_element();
+        }
+        let bounds = host.get_bounding_client_rect();
+        let rect = Rect::new(bounds.left(), bounds.top(), bounds.right(), bounds.bottom());
+        (rect.width() >= 120.0
+            && rect.height() > 0.0
+            && screen.contains(&rect)
+            && [rect.left, rect.top, rect.right, rect.bottom]
+                .iter()
+                .all(|value| value.is_finite()))
+        .then_some(rect)
+    }
+
+    fn place_bubble_at_actor(&self, speaker: &Figure) {
         if let Some(id) = speaker.bubbles.get_attribute("data-anchor-line") {
-            if speaker.bubbles.query_selector(&format!("[data-line-id=\"{id}\"]:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])")).ok().flatten().is_some() { return; }
+            if speaker.bubbles.query_selector(&format!("[data-line-id=\"{id}\"]:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])")).ok().flatten().is_some() {
+                if self.retained_caption_bounds(&speaker.bubbles).is_none() {
+                    let _hidden = speaker.bubbles.set_attribute("hidden", "");
+                    let _cleared = speaker.bubbles.remove_attribute("style");
+                }
+                return;
+            }
             let _removed = speaker.bubbles.remove_attribute("data-anchor-line");
         }
         let _shown = speaker.bubbles.remove_attribute("hidden");
         // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
         let geometry = self.plate.borrow().clone();
+        if geometry.is_none() && self.plate_size.get().is_some() {
+            let _hidden = speaker.bubbles.set_attribute("hidden", "");
+            let _reason = speaker
+                .bubbles
+                .set_attribute("data-anchor-fallback", "missing-image-layout");
+            return;
+        }
         if let Some(geometry) = geometry {
             if let Some((picture_width, picture_height)) = self.plate_size.get() {
                 self.place_bubble_on_plate(speaker, geometry, picture_width, picture_height);
@@ -1571,6 +1819,27 @@ impl Figures {
         let _hidden = speaker.bubbles.set_attribute("hidden", "");
     }
 
+    /// A retained caption must not point at the old position in a different photograph.
+    /// Its text stays in the named lane until a successor can use the new image's geometry.
+    pub(super) fn retain_plate_captions_in_named_lane(&self) -> Result<(), JsValue> {
+        let Some(stage) = self.root.parent_element() else {
+            return Ok(());
+        };
+        let current = stage.get_attribute("data-line-id");
+        for figure in &self.figures {
+            if let Some(line) = figure.bubbles.query_selector(".tv-bubble:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])")?
+                && let Some(id) = line.get_attribute("data-line-id") {
+                figure.bubbles.set_attribute("data-anchor-line", &id)?;
+                figure.bubbles.set_attribute("hidden", "")?;
+                figure.bubbles.set_attribute("data-anchor-fallback", "bitmap-changed")?;
+                if current.as_deref() == Some(id.as_str()) {
+                    stage.set_attribute("data-unplaced-line", &id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Same-bitmap measurements become available to successors without moving readable text.
     pub(super) fn latch_plate_geometry(
         &self,
@@ -1607,7 +1876,7 @@ impl Figures {
                 .bubbles
                 .parent_element()
                 .is_some_and(|parent| parent.is_same_node(Some(self.plate_bubbles.as_ref())));
-            if geometry.is_some() && !host_is_plate {
+            if picture_size.is_some() && !host_is_plate {
                 // Moving a bubble in the page restarts its entrance animation: the line being
                 // spoken must not pop in again as the plate takes over, so its bubbles skip it.
                 let mut bubble = figure.bubbles.first_element_child();
@@ -1618,12 +1887,38 @@ impl Figures {
                 let retained = figure
                     .bubbles
                     .has_attribute("data-anchor-line")
-                    .then(|| figure.bubbles.get_bounding_client_rect());
+                    .then(|| self.retained_caption_bounds(&figure.bubbles))
+                    .flatten();
                 self.plate_bubbles.append_child(&figure.bubbles)?;
                 if let Some(bounds) = retained {
-                    figure.bubbles.set_attribute("style", &format!("position:fixed;left:{}px;top:{}px;width:{}px;right:auto;bottom:auto;transform:none", bounds.left(), bounds.top(), bounds.width()))?;
+                    let portal = self.plate_bubbles.get_bounding_client_rect();
+                    let sx = if portal.width() > 0.0 && self.plate_bubbles.client_width() > 0 {
+                        portal.width() / f64::from(self.plate_bubbles.client_width())
+                    } else {
+                        1.0
+                    };
+                    let sy = if portal.height() > 0.0 && self.plate_bubbles.client_height() > 0 {
+                        portal.height() / f64::from(self.plate_bubbles.client_height())
+                    } else {
+                        1.0
+                    };
+                    figure.bubbles.set_attribute(
+                        "style",
+                        &format!(
+                            "left:{}px;top:{}px;width:{}px;right:auto;bottom:auto;transform:none",
+                            (bounds.left - portal.left()) / sx,
+                            (bounds.top - portal.top()) / sy,
+                            bounds.width() / sx
+                        ),
+                    )?;
+                } else if figure.bubbles.has_attribute("data-anchor-line") {
+                    figure.bubbles.remove_attribute("style")?;
+                    figure.bubbles.set_attribute("hidden", "")?;
+                    figure
+                        .bubbles
+                        .set_attribute("data-anchor-fallback", "unmeasurable-retained-caption")?;
                 }
-            } else if geometry.is_none() && host_is_plate {
+            } else if picture_size.is_none() && host_is_plate {
                 figure
                     .root
                     .insert_before(&figure.bubbles, figure.root.first_child().as_ref())?;
@@ -1648,6 +1943,13 @@ impl Figures {
         picture_height: f64,
     ) {
         let _shown = bubble_owner.bubbles.remove_attribute("hidden");
+        if let Some(stage) = self.root.parent_element()
+            && let Some(key) = stage.get_attribute("data-plate-key")
+        {
+            let _key = bubble_owner
+                .bubbles
+                .set_attribute("data-anchor-image-key", &key);
+        }
         let Some(window) = web_sys::window() else {
             return;
         };
@@ -1704,14 +2006,12 @@ impl Figures {
             .root
             .get_attribute("data-slot")
             .unwrap_or_default();
-        // A hero's bubble stands beside the hero's head when the server found it, and otherwise
-        // under that hero's card in the party strip (the plate's own staging of the heroes is not
-        // known then, and a guess would put the bubble over somebody else).
+        // A missing measured identity uses the named lane; a cut-out or HUD position cannot
+        // identify the person in this exact photograph.
         let hero_index = slot
             .strip_prefix("hero-")
             .and_then(|number| number.parse::<usize>().ok())
             .and_then(|number| number.checked_sub(1));
-        let mut on_card = false;
         let (head, side, mut avoid) = match hero_index {
             Some(index) => match geometry.heroes.iter().find(|hero| hero.index == index) {
                 Some(hero) => (
@@ -1720,30 +2020,11 @@ impl Figures {
                     vec![speaker_head],
                 ),
                 None => {
-                    let hud_visible = self
-                        .root
-                        .query_selector(".tv-hud[data-party-hud=visible]")
-                        .ok()
-                        .flatten()
-                        .is_some();
-                    if !hud_visible {
-                        let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
-                        let _reason = bubble_owner
-                            .bubbles
-                            .set_attribute("data-anchor-fallback", "missing-hero-head");
-                        return;
-                    }
-                    on_card = true;
-                    let card = self.hud.get(index).map(|card| rectangle(&card.root));
-                    let (left, top, right, bottom) = card.unwrap_or((0.0, 0.0, 1.0, 1.0));
+                    let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
                     let _reason = bubble_owner
                         .bubbles
-                        .remove_attribute("data-anchor-fallback");
-                    (
-                        Rect::new(left, top, right, bottom),
-                        Side::Right,
-                        vec![speaker_head],
-                    )
+                        .set_attribute("data-anchor-fallback", "missing-hero-head");
+                    return;
                 }
             },
             None => {
@@ -1866,11 +2147,8 @@ impl Figures {
                 f64::from(container.client_width()) * scale_x,
                 f64::from(container.client_height()) * scale_y,
             );
-            placement = if on_card {
-                plate_layout::place_bubble_stacked(screen, head, size, &avoid)
-            } else {
-                plate_layout::place_bubble_near_head(screen, head, side, size, tail_offset, &avoid)
-            };
+            placement =
+                plate_layout::place_bubble_near_head(screen, head, side, size, tail_offset, &avoid);
             if placement.is_some() {
                 break;
             }
@@ -1896,11 +2174,7 @@ impl Figures {
         };
         let _set = container.set_attribute("data-side", placed.side.name());
         let (edge, tail_x, tail_y) = placed.tail(head);
-        let _set = if on_card {
-            container.remove_attribute("data-tail")
-        } else {
-            container.set_attribute("data-tail", edge)
-        };
+        let _set = container.set_attribute("data-tail", edge);
         let _set = container.set_attribute(
             "style",
             &format!(
@@ -2513,6 +2787,165 @@ mod tests {
         art_candidates, check_result_phase_ms, line_component_phase, typed_line_anchor,
     };
     use df_observe::presentation::ComponentPhase;
+
+    #[test]
+    fn check_without_image_heads_has_a_measured_named_panel_with_roll_and_finding() {
+        use super::{CheckDisplay, Figures};
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        parent.set_attribute("class", "tv-stage").unwrap();
+        parent.set_attribute("data-tv-mode", "scene").unwrap();
+        parent.set_attribute("data-shot", "plate").unwrap();
+        parent
+            .set_attribute("style", "position:relative;width:100vw;height:100vh")
+            .unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(&format!(
+            "{}\n{}",
+            include_str!("live_stage.css"),
+            include_str!("live_plate.css")
+        )));
+        parent.append_child(&style).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        let hero = &figures.figures[0];
+        hero.root.set_attribute("data-present", "true").unwrap();
+        *hero.name_text.borrow_mut() = "Brakka".into();
+        figures.set_plate(None, Some((1920.0, 1080.0))).unwrap();
+        figures
+            .set_check(Some(&CheckDisplay {
+                sequence: 5,
+                hero_name: "Brakka".into(),
+                ability_skill: "Investigation".into(),
+                faces: vec![(8, true)],
+                roll_mode: 0,
+                modifier: 0,
+                total: 8,
+                succeeded: false,
+                finding: "The seal is intact; the crest is visible.".into(),
+            }))
+            .unwrap();
+        assert!(!hero.bubbles.has_attribute("hidden"));
+        assert_eq!(
+            hero.bubbles
+                .get_attribute("data-anchor-fallback")
+                .as_deref(),
+            Some("named-check-panel")
+        );
+        let panel = hero
+            .bubbles
+            .query_selector(".tv-check-result")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            panel
+                .query_selector(".tv-check-hero")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .as_deref(),
+            Some("Brakka")
+        );
+        assert_eq!(
+            panel
+                .query_selector(".tv-check-total")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .as_deref(),
+            Some("8")
+        );
+        assert!(
+            panel
+                .query_selector(".tv-check-finding")
+                .unwrap()
+                .unwrap()
+                .text_content()
+                .unwrap()
+                .contains("seal is intact")
+        );
+        let bounds = hero.bubbles.get_bounding_client_rect();
+        assert!(bounds.width() > 0.0 && bounds.height() > 0.0);
+        assert!(bounds.left() >= 0.0 && bounds.top() >= 0.0);
+        assert!(bounds.right() <= window.inner_width().unwrap().as_f64().unwrap());
+        assert!(bounds.bottom() <= window.inner_height().unwrap().as_f64().unwrap());
+        figures.dispose();
+        parent.remove();
+    }
+
+    #[test]
+    fn managed_checks_reveal_and_finish_only_the_matching_queued_payload() {
+        use super::{CheckDisplay, Figures};
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        let hero = &figures.figures[0];
+        hero.root.set_attribute("data-present", "true").unwrap();
+        *hero.name_text.borrow_mut() = "Brakka".into();
+        let mut first = CheckDisplay {
+            sequence: 5,
+            hero_name: "Brakka".into(),
+            ability_skill: "Investigation".into(),
+            faces: vec![(8, true)],
+            roll_mode: 0,
+            modifier: 0,
+            total: 8,
+            succeeded: false,
+            finding: "The seal remains intact.".into(),
+        };
+        figures.begin_check(&first, false).unwrap();
+        let old = hero
+            .bubbles
+            .query_selector("[data-check-sequence=\"5\"]")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            old.get_attribute("data-check-phase").as_deref(),
+            Some("roll")
+        );
+        assert!(old.has_attribute("data-check-managed"));
+        first.sequence = 6;
+        figures.begin_check(&first, false).unwrap();
+        let next = hero
+            .bubbles
+            .query_selector("[data-check-sequence=\"6\"]")
+            .unwrap()
+            .unwrap();
+        figures.reveal_check(5).unwrap();
+        assert_eq!(
+            old.get_attribute("data-check-phase").as_deref(),
+            Some("result")
+        );
+        assert_eq!(
+            next.get_attribute("data-check-phase").as_deref(),
+            Some("roll")
+        );
+        figures.finish_check(5).unwrap();
+        assert!(!old.is_connected());
+        assert!(next.is_connected());
+        figures.reveal_check(6).unwrap();
+        figures.finish_check(5).unwrap();
+        assert!(
+            next.is_connected(),
+            "stale predecessor finish cannot retire successor card"
+        );
+        figures.finish_check(6).unwrap();
+        first.sequence = 7;
+        figures.begin_check(&first, true).unwrap();
+        assert_eq!(
+            hero.bubbles
+                .query_selector("[data-check-sequence=\"7\"]")
+                .unwrap()
+                .unwrap()
+                .get_attribute("data-check-phase")
+                .as_deref(),
+            Some("result")
+        );
+        figures.dispose();
+        parent.remove();
+    }
 
     #[test]
     fn retired_check_does_not_replay_or_replace_the_next_line_but_new_roll_does() {

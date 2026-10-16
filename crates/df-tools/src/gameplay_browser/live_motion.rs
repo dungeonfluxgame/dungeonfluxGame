@@ -25,7 +25,7 @@ use crate::{
     },
     stage_director::{StageState, ViewDiff},
     stage_machines::{ActorState, BattleState, ClipState, LineState, SceneState, reading_time_ms},
-    voice_line::{VoiceLine, display_lines},
+    voice_line::{CheckVoiceLine, VoiceLine, check_voice_line, display_lines},
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -133,6 +133,12 @@ struct LineDetail {
     fight_line: bool,
     /// The clip the server voices this line with, when it is voiced at all.
     voice: Option<VoiceLine>,
+    /// The resolved check sequence carried by the DM result line.  The stage uses this to join
+    /// the line's actual voice timing to the matching result card without guessing from text.
+    check_sequence: Option<u64>,
+    /// Silent queue item that opens the matching check card when it reaches the conductor front.
+    check_roll: Option<super::live_stage::CheckDisplay>,
+    check_settled: bool,
 }
 
 impl LineDetail {
@@ -144,6 +150,9 @@ impl LineDetail {
             text: line.text.clone(),
             fight_line: false,
             voice: None,
+            check_sequence: None,
+            check_roll: None,
+            check_settled: false,
         }
     }
 }
@@ -361,6 +370,9 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
             text: text.to_owned(),
             fight_line: true,
             voice: Some(voice),
+            check_sequence: None,
+            check_roll: None,
+            check_settled: false,
         }),
     })
 }
@@ -405,6 +417,9 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                     text: line.text.clone(),
                     fight_line: true,
                     voice: Some(voice),
+                    check_sequence: None,
+                    check_roll: None,
+                    check_settled: false,
                 }),
             })
         })
@@ -484,6 +499,63 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
             text: narration.to_owned(),
             fight_line: false,
             voice,
+            check_sequence: None,
+            check_roll: None,
+            check_settled: false,
+        }),
+    }
+}
+
+fn check_voice_script_line(
+    check: &CheckVoiceLine,
+    voices: &[VoiceLine],
+    settled: bool,
+) -> ScriptLine<Detail> {
+    let voice = voice_for(voices, None, &check.voice.text);
+    ScriptLine {
+        voiceable: voice.is_some(),
+        read_ms: reading_time_ms(&check.voice.text),
+        slot: None,
+        settled,
+        detail: Detail::Line(LineDetail {
+            speaker: NARRATOR_NAME.to_owned(),
+            role: TableRole::Narrator,
+            kind: TableKind::Speech,
+            text: check.voice.text.clone(),
+            fight_line: false,
+            voice,
+            check_sequence: Some(check.sequence),
+            check_roll: None,
+            check_settled: false,
+        }),
+    }
+}
+
+fn check_roll_script_line(
+    check: &CheckVoiceLine,
+    payload: super::live_stage::CheckDisplay,
+    settled: bool,
+) -> ScriptLine<Detail> {
+    ScriptLine {
+        voiceable: false,
+        // The card owns this phase duration; the line keeps the DM result behind its reveal.
+        read_ms: if settled {
+            0
+        } else {
+            super::live_stage::check_roll_read_ms()
+        },
+        slot: None,
+        settled,
+        detail: Detail::Line(LineDetail {
+            speaker: NARRATOR_NAME.to_owned(),
+            role: TableRole::Narrator,
+            kind: TableKind::Action,
+            text: String::new(),
+            fight_line: false,
+            voice: None,
+            check_sequence: Some(check.sequence),
+            check_roll: Some(payload),
+            check_settled: settled,
         }),
     }
 }
@@ -544,6 +616,8 @@ fn script_line(
         detail.speaker = NARRATOR_NAME.to_owned();
     }
     detail.voice = voice.clone();
+    detail.check_sequence = None;
+    detail.check_roll = None;
     Some(ScriptLine {
         voiceable: voice.is_some(),
         read_ms: reading_time_ms(&line.text),
@@ -594,11 +668,25 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         .iter()
         .map(|member| member.hit_points)
         .collect();
-    let (narration, voices) = match &view.audience {
+    let (narration, voices, check_voice, check_roll) = match &view.audience {
         Some(rpc::view_message::Audience::Display(display)) => {
-            (display.narration.clone(), display_lines(display))
+            let check_voice = check_voice_line(display);
+            let check_roll = display
+                .check
+                .as_ref()
+                .zip(display.journey.as_ref())
+                .zip(check_voice.as_ref())
+                .and_then(|((check, journey), voice)| {
+                    super::live_tv::check_display(check, journey, &voice.finding).ok()
+                });
+            (
+                display.narration.clone(),
+                display_lines(display),
+                check_voice,
+                check_roll,
+            )
         }
-        _ => (String::new(), Vec::new()),
+        _ => (String::new(), Vec::new(), None, None),
     };
     let intents = intent_marks(journey);
     let standing = presentation::standing_cells(journey);
@@ -624,6 +712,12 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             .iter()
             .filter(|line| remember(&mut motion.seen, line.sequence))
             .collect();
+        let fresh_check = check_roll.is_some()
+            && check_voice.as_ref().is_some_and(|check| {
+                fresh
+                    .iter()
+                    .any(|line| line.sequence == check.result_sequence)
+            });
         let scripted = fresh
             .iter()
             .rev()
@@ -641,6 +735,9 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         if restart {
             // A reload shows the current line silently, attributed to its speaker; with no
             // speaker line, the narration stands in the box.
+            if let (Some(check), Some(payload)) = (check_voice.as_ref(), check_roll.clone()) {
+                script.push(check_roll_script_line(check, payload, true));
+            }
             let settled = reply_now.or(scripted.filter(|line| line.role == TableRole::Npc));
             match settled {
                 Some(line) => script.extend(script_line(line, &cast, &voices, true, fighting)),
@@ -653,6 +750,12 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             if !narration.is_empty() {
                 script.push(narration_line(&narration, &voices, false));
             }
+            if fresh_check && let Some(check) = check_voice.as_ref() {
+                if let Some(payload) = check_roll.clone() {
+                    script.push(check_roll_script_line(check, payload, false));
+                }
+                script.push(check_voice_script_line(check, &voices, false));
+            }
             if let Some(line) = scripted {
                 script.extend(script_line(line, &cast, &voices, false, fighting));
             }
@@ -661,6 +764,12 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             // a reply to table talk never replays the narration already told.
             if !in_fight && let Some(added) = added_narration(&motion.narration, &narration) {
                 script.push(narration_line(&added, &voices, false));
+            }
+            if fresh_check && let Some(check) = check_voice.as_ref() {
+                if let Some(payload) = check_roll.clone() {
+                    script.push(check_roll_script_line(check, payload, false));
+                }
+                script.push(check_voice_script_line(check, &voices, false));
             }
             script.extend(
                 fresh
@@ -1763,6 +1872,18 @@ fn line_command(
     let Detail::Line(line) = detail else {
         return Ok(());
     };
+    if let Some(check) = line.check_roll.as_ref() {
+        let state_ref = client.borrow();
+        if let Some(stage) = state_ref.live.tv.as_ref() {
+            match state {
+                LineState::Opening if !line.check_settled => stage.begin_check(check, false)?,
+                LineState::Lingering if line.check_settled => stage.begin_check(check, true)?,
+                LineState::Lingering => stage.reveal_check(check.sequence)?,
+                _ => {}
+            }
+        }
+        return Ok(());
+    }
     mirror_splash_caption(state, line, slot);
     if battlefield_speech(id, state, line) {
         if line.fight_line {
@@ -1797,6 +1918,28 @@ fn line_command(
             }
         }
     };
+    if line.check_sequence.is_some() && state == LineState::Opening {
+        let state_ref = client.borrow();
+        if let Some(stage) = state_ref.live.tv.as_ref()
+            && let Some(sequence) = line.check_sequence
+        {
+            stage.reveal_check(sequence)?;
+        }
+    }
+    if let Some(sequence) = line.check_sequence {
+        let state_ref = client.borrow();
+        if let Some(stage) = state_ref.live.tv.as_ref() {
+            if line.check_roll.is_none()
+                && matches!(
+                    state,
+                    LineState::Closing | LineState::Done | LineState::Cancelled
+                )
+            {
+                stage.finish_check(sequence)?;
+            }
+            mark_check_voice_line(stage.root(), id, sequence, state, line);
+        }
+    }
     if shown && state == LineState::Opening && slot.is_some() {
         live_sfx::play(Cue::BubblePop, Duration::ZERO);
     }
@@ -1804,6 +1947,29 @@ fn line_command(
         record_fight_line(id, state, line, slot);
     }
     Ok(())
+}
+
+/// Keep the resolved check identity beside the actual narrator line.  The check card owner uses
+/// this existing line element as the queue boundary, so a later check cannot overwrite an earlier
+/// card's payload and no text matching or guessed CSS clock is needed.
+fn mark_check_voice_line(
+    root: &Element,
+    id: LineId,
+    sequence: u64,
+    state: LineState,
+    line: &LineDetail,
+) {
+    let selector = format!("[data-line-id=\"{id}\"]");
+    let Ok(Some(element)) = root.query_selector(&selector) else {
+        return;
+    };
+    let _ = element.set_attribute("data-check-sequence", &sequence.to_string());
+    let _ = element.set_attribute("data-check-line-id", &id.to_string());
+    let _ = element.set_attribute("data-check-line-state", state.name());
+    let _ = element.set_attribute(
+        "data-check-read-ms",
+        &reading_time_ms(&line.text).to_string(),
+    );
 }
 
 fn record_fight_line(id: LineId, state: LineState, line: &LineDetail, slot: Option<usize>) {
@@ -2294,10 +2460,137 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
 #[cfg(test)]
 mod tests {
     use super::{
-        Detail, fight_line_stage, fight_scripts, fresh_outcomes, merge_battlefield_beat_log,
+        CheckVoiceLine, Detail, check_roll_script_line, check_voice_script_line, fight_line_stage,
+        fight_scripts, fresh_outcomes, merge_battlefield_beat_log, narration_line,
         restore_pending_move_origin, take_pending_fight_voice, timing_clip_state,
     };
+    use crate::stage_conductor::{Command, Conductor, ViewPlan};
+    use crate::stage_machines::LineState;
+    use crate::voice_line::VoiceLine;
     use std::collections::HashMap;
+
+    fn check_pair(sequence: u64) -> (CheckVoiceLine, super::super::live_stage::CheckDisplay) {
+        let finding = format!("Finding for check {sequence}.");
+        (
+            CheckVoiceLine {
+                sequence,
+                result_sequence: sequence + 1,
+                finding: finding.clone(),
+                voice: VoiceLine {
+                    role: crate::voice_line::NARRATOR_ROLE.to_owned(),
+                    text: format!("Perception check {sequence} total 12. {finding}"),
+                },
+            },
+            super::super::live_stage::CheckDisplay {
+                sequence,
+                hero_name: "Brakka".into(),
+                ability_skill: "Wisdom (Perception)".into(),
+                faces: vec![(12, true)],
+                roll_mode: 0,
+                modifier: 0,
+                total: 12,
+                succeeded: true,
+                finding,
+            },
+        )
+    }
+
+    #[test]
+    fn queued_checks_preserve_prior_line_roll_reveal_voice_and_each_sequence() {
+        let (first, first_payload) = check_pair(8);
+        let (second, second_payload) = check_pair(10);
+        let voices = vec![first.voice.clone(), second.voice.clone()];
+        let old = narration_line("The courier is still speaking.", &[], false);
+        let script = vec![
+            old,
+            check_roll_script_line(&first, first_payload, false),
+            check_voice_script_line(&first, &voices, false),
+            check_roll_script_line(&second, second_payload, false),
+            check_voice_script_line(&second, &voices, false),
+        ];
+        let mut conductor = Conductor::new();
+        let mut commands = conductor.restart(
+            0,
+            ViewPlan {
+                diff: Default::default(),
+                script,
+                cast: Vec::new(),
+            },
+        );
+        for now in (1..=60).map(|second| second * 1_000) {
+            commands.extend(conductor.on_tick(now));
+        }
+
+        let events: Vec<(LineState, Option<u64>, String)> = commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Line { state, detail, .. } => match detail {
+                    Detail::Line(line) => Some((*state, line.check_sequence, line.text.clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let old_open = events
+            .iter()
+            .position(|(state, sequence, text)| {
+                *state == LineState::Opening
+                    && sequence.is_none()
+                    && text == "The courier is still speaking."
+            })
+            .expect("prior line remains queued first");
+        let first_roll = events
+            .iter()
+            .position(|(state, sequence, text)| {
+                *state == LineState::Opening && *sequence == Some(8) && text.is_empty()
+            })
+            .expect("first check roll opens");
+        let first_reveal = events
+            .iter()
+            .position(|(state, sequence, text)| {
+                *state == LineState::Lingering && *sequence == Some(8) && text.is_empty()
+            })
+            .expect("first check reaches reveal");
+        let first_dm_open = events
+            .iter()
+            .position(|(state, sequence, text)| {
+                *state == LineState::Opening
+                    && *sequence == Some(8)
+                    && text.contains("Perception check 8")
+            })
+            .expect("first DM line opens after reveal");
+        let second_roll = events
+            .iter()
+            .position(|(state, sequence, text)| {
+                *state == LineState::Opening && *sequence == Some(10) && text.is_empty()
+            })
+            .expect("second check roll opens");
+        assert!(old_open < first_roll);
+        assert!(first_roll < first_reveal);
+        assert!(first_reveal < first_dm_open);
+        assert!(first_dm_open < second_roll);
+        assert!(events.iter().any(|(state, sequence, text)| {
+            *state == LineState::Closing
+                && *sequence == Some(8)
+                && text.contains("Perception check 8")
+        }));
+    }
+
+    #[test]
+    fn settled_check_item_is_silent_and_enters_at_lingering_state() {
+        let (check, payload) = check_pair(20);
+        let script = check_roll_script_line(&check, payload, true);
+
+        assert!(script.settled);
+        assert!(!script.voiceable);
+        assert_eq!(script.read_ms, 0);
+        let Detail::Line(line) = script.detail else {
+            panic!("settled check must remain a line queue item");
+        };
+        assert_eq!(line.check_sequence, Some(20));
+        assert!(line.check_settled);
+        assert!(line.voice.is_none());
+    }
 
     #[test]
     fn canonical_background_actor_id_selects_its_bubble_slot_without_focus_fallback() {

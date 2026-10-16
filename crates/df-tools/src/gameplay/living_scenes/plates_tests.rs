@@ -1609,6 +1609,18 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
     assert_eq!(edit.references[1].sha256, request.references[1].sha256);
     assert_eq!(edit.references[2].sha256, courier.sha256);
     assert!(edit.prompt.as_str().contains("The enforcer listens."));
+    assert!(edit.prompt.as_str().contains("clearly readable change"));
+    assert!(
+        edit.prompt
+            .as_str()
+            .contains("An eyebrow-only expression tweak is insufficient")
+    );
+    assert!(
+        edit.prompt
+            .as_str()
+            .contains("Preserve the camera and framing")
+    );
+    assert!(edit.prompt.as_str().contains("actor_id"));
     assert!(
         edit.prompt
             .as_str()
@@ -1974,7 +1986,7 @@ async fn a_failed_measurement_is_remembered_in_process_without_repeating_the_loc
             &key('a'),
             &spec,
             spec.speaker.as_ref().unwrap(),
-            None,
+            &BTreeMap::new(),
             &scene.locator_actors(),
             Some("keeper"),
         )
@@ -1991,6 +2003,7 @@ fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_t
     let partial = HeadDiagnostic {
         key: &image,
         stage: "head_location",
+        reference_sha256: None,
         source: "provider",
         batch: Some(0),
         targets: vec!["npc-0".into(), "npc-1".into()],
@@ -2014,6 +2027,7 @@ fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_t
     let failed = HeadDiagnostic {
         key: &image,
         stage: "head_location",
+        reference_sha256: None,
         source: "provider",
         batch: Some(1),
         targets: vec!["npc-1".into()],
@@ -2028,6 +2042,7 @@ fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_t
     let failed_complete = HeadDiagnostic {
         key: &image,
         stage: "actor_heads",
+        reference_sha256: None,
         source: "provider",
         batch: None,
         targets: vec!["bandit".into()],
@@ -2044,6 +2059,7 @@ fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_t
     let cached = HeadDiagnostic {
         key: &image,
         stage: "actor_heads",
+        reference_sha256: None,
         source: "durable_note",
         batch: None,
         targets: vec!["bandit".into()],
@@ -2059,6 +2075,7 @@ fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_t
     let bounded = HeadDiagnostic {
         key: &image,
         stage: "actor_heads",
+        reference_sha256: None,
         source: "in_process",
         batch: None,
         targets: vec!["x".repeat(1000); 100],
@@ -2072,4 +2089,232 @@ fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_t
     assert_eq!(bounded["target_ids"].as_array().unwrap().len(), 16);
     assert!(serde_json::to_vec(&bounded).unwrap().len() < 4096);
     assert!(partial.get("prompt").is_none());
+}
+
+#[test]
+fn every_locator_batch_correlates_its_sole_target_with_its_own_pinned_reference() {
+    let courier = ReferenceImage::new(
+        df_providers::ImageFormat::Webp,
+        bytes::Bytes::from_static(b"courier"),
+    );
+    let bandit = ReferenceImage::new(
+        df_providers::ImageFormat::Webp,
+        bytes::Bytes::from_static(b"bandit"),
+    );
+    let references = BTreeMap::from([
+        ("courier".into(), courier.clone()),
+        ("bandit".into(), bandit.clone()),
+        (
+            "hero-1".into(),
+            ReferenceImage::new(
+                df_providers::ImageFormat::Webp,
+                bytes::Bytes::from_static(b"brakka"),
+            ),
+        ),
+        (
+            "hero-2".into(),
+            ReferenceImage::new(
+                df_providers::ImageFormat::Webp,
+                bytes::Bytes::from_static(b"sigrun"),
+            ),
+        ),
+    ]);
+    let actors = vec![
+        ("courier".into(), "Courier".into()),
+        ("bandit".into(), "Bandit".into()),
+    ];
+    let targets = vec![
+        ("npc-0".into(), "Courier".into()),
+        ("hero-1".into(), "hero".into()),
+        ("hero-2".into(), "hero".into()),
+        ("npc-1".into(), "Bandit".into()),
+    ];
+    let batches = referenced_locator_batches(&targets, &actors, &references);
+    assert_eq!(batches.len(), 4);
+    for (batch, expected) in batches.iter().zip(["npc-0", "hero-1", "hero-2", "npc-1"]) {
+        assert_eq!(batch.targets.len(), 1);
+        assert_eq!(batch.targets[0].0, expected);
+    }
+    assert_eq!(batches[0].reference.sha256, courier.sha256);
+    assert_eq!(batches[1].reference.sha256, references["hero-1"].sha256);
+    assert_eq!(batches[2].reference.sha256, references["hero-2"].sha256);
+    assert_eq!(batches[3].reference.sha256, bandit.sha256);
+    let missing = BTreeMap::from([("courier".into(), courier)]);
+    let batches = referenced_locator_batches(&targets, &actors, &missing);
+    assert!(
+        !batches
+            .iter()
+            .flat_map(|batch| &batch.targets)
+            .any(|target| target.0 == "npc-1"),
+        "missing canonical art never becomes a filename-only identity guess"
+    );
+    let many = (0..20)
+        .map(|index| (format!("npc-{index}"), "actor".into()))
+        .collect::<Vec<_>>();
+    let actors = (0..20)
+        .map(|index| (format!("actor-{index}"), "actor".into()))
+        .collect::<Vec<_>>();
+    let references = actors
+        .iter()
+        .map(|(id, _)| (id.clone(), bandit.clone()))
+        .collect();
+    assert_eq!(
+        referenced_locator_batches(&many, &actors, &references).len(),
+        4
+    );
+}
+
+#[test]
+fn locator_cache_provenance_changes_with_each_canonical_source() {
+    let reference = ReferenceImage::new(
+        df_providers::ImageFormat::Webp,
+        bytes::Bytes::from_static(b"old"),
+    );
+    let mut references = BTreeMap::from([("bandit".into(), reference)]);
+    let old = reference_hashes(&references);
+    references.insert(
+        "bandit".into(),
+        ReferenceImage::new(
+            df_providers::ImageFormat::Webp,
+            bytes::Bytes::from_static(b"new"),
+        ),
+    );
+    assert_ne!(old, reference_hashes(&references));
+    let legacy = serde_json::json!({"speaker":{"art":0,"x":500,"y":300,"width":100,"height":100,"bubble_left":true},"heroes":[]});
+    let legacy: StoredPlacement = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        legacy.locator_revision, 0,
+        "unreferenced historic notes cannot satisfy revision2"
+    );
+}
+
+#[tokio::test]
+async fn reference_measurements_are_polled_concurrently_inside_one_owned_deadline() {
+    let barrier = tokio::sync::Barrier::new(4);
+    let pending = FuturesUnordered::new();
+    for index in 0..4 {
+        let barrier = &barrier;
+        pending.push(async move {
+            barrier.wait().await;
+            (
+                index,
+                HeadResult {
+                    elapsed_ms: 1,
+                    heads: Ok(Vec::new()),
+                },
+            )
+        });
+    }
+    let results = collect_head_results(
+        pending,
+        4,
+        tokio::time::Instant::now() + Duration::from_secs(1),
+    )
+    .await;
+    assert!(
+        results.iter().all(Option::is_some),
+        "all four must be polled before the barrier can release; serial dispatch cannot finish"
+    );
+}
+
+#[tokio::test]
+async fn image_measurement_deadline_preserves_completed_heads_and_drops_unfinished_requests() {
+    let dropped = std::sync::atomic::AtomicBool::new(false);
+    struct Dropped<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for Dropped<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let pending = FuturesUnordered::new();
+    for index in 0..2 {
+        let dropped = &dropped;
+        pending.push(async move {
+            if index == 1 {
+                let _owned = Dropped(dropped);
+                std::future::pending::<()>().await;
+            }
+            (
+                index,
+                HeadResult {
+                    elapsed_ms: 0,
+                    heads: Ok(Vec::new()),
+                },
+            )
+        });
+    }
+    let results = collect_head_results(
+        pending,
+        2,
+        tokio::time::Instant::now() + Duration::from_millis(5),
+    )
+    .await;
+    assert!(results[0].is_some());
+    assert!(results[1].is_none());
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn missing_focus_identity_never_borrows_a_named_or_speaker_reference() {
+    let scene = PlateScene::of(&scene(SceneKey::Opening, "The Wharf", Some("Kestrel"))).unwrap();
+    let spec = scene.stage(&[]).unwrap();
+    let actors = vec![
+        ("keeper".into(), "Kestrel".into()),
+        ("speaker".into(), "Another canonical NPC".into()),
+    ];
+    let keeper = ReferenceImage::new(
+        df_providers::ImageFormat::Webp,
+        bytes::Bytes::from_static(b"keeper"),
+    );
+    let other = ReferenceImage::new(
+        df_providers::ImageFormat::Webp,
+        bytes::Bytes::from_static(b"other-speaker"),
+    );
+    let references = BTreeMap::from([
+        ("keeper".into(), keeper.clone()),
+        ("speaker".into(), other.clone()),
+    ]);
+    for focus in [None, Some("not-present")] {
+        let (focus, targets) =
+            locator_targets(&spec, spec.speaker.as_ref().unwrap(), &actors, focus);
+        assert_eq!(focus, "speaker");
+        let batches = referenced_locator_batches(&targets, &actors, &references);
+        assert_eq!(
+            batches.len(),
+            2,
+            "known canonical people remain independently measurable"
+        );
+        assert!(batches.iter().all(|batch| batch.targets[0].0 != "speaker"));
+        assert_eq!(batches[0].reference.sha256, keeper.sha256);
+        assert_eq!(batches[1].reference.sha256, other.sha256);
+    }
+    let (focus, targets) = locator_targets(
+        &spec,
+        spec.speaker.as_ref().unwrap(),
+        &actors,
+        Some("speaker"),
+    );
+    assert_eq!(
+        focus, "npc-1",
+        "an explicitly validated canonical ID uses the indexed target, never the unbound slot"
+    );
+    let batches = referenced_locator_batches(&targets, &actors, &references);
+    assert_eq!(batches[0].targets[0].0, "npc-1");
+    assert_eq!(batches[0].reference.sha256, other.sha256);
+    let diagnostic = HeadDiagnostic {
+        key: &key('a'),
+        stage: "head_location",
+        reference_sha256: None,
+        source: "identity_validation",
+        batch: None,
+        actor_ids: vec![],
+        targets: vec!["speaker".into()],
+        located: vec![],
+        elapsed_ms: 0,
+        failure: Some("missing_focus_identity"),
+    }
+    .fields();
+    assert_eq!(diagnostic["status"], "failed");
+    assert_eq!(diagnostic["failure_category"], "missing_focus_identity");
+    assert_eq!(diagnostic["cache_source"], "identity_validation");
 }
