@@ -302,7 +302,7 @@ fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'stati
     let mut candidates = Vec::new();
     let sprite_stem = stage_art::stem_of(sprite);
     if full_body && let Some(stem) = stage_depth::full_body_stem(sprite_stem) {
-        let stem = photographic_stem(stem).unwrap_or(stem);
+        let stem = photographic_stem(&stem).unwrap_or(stem.as_str());
         candidates.push(("figure", format!("{GENERATED}/{stem}")));
     }
     if !sprite.is_empty() {
