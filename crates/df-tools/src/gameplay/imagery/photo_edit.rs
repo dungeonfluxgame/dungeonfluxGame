@@ -134,6 +134,8 @@ mod tests {
                 .as_str()
                 .contains("adult woman at right is party performer 2")
         );
-        assert!(prompt.as_str().chars().count() <= 4000);
+        assert!(
+            prompt.as_str().chars().count() <= df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS
+        );
     }
 }
