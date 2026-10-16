@@ -1384,7 +1384,9 @@ impl Inner {
                     }
                 }
             }
-            let canonical_jobs = locked(&self.state).canonical.take_jobs();
+            let canonical_jobs = locked(&self.state)
+                .canonical
+                .take_jobs_up_to(super::imagery::MAXIMUM_IN_FLIGHT.saturating_sub(tasks.len()));
             for job in canonical_jobs {
                 self.spawn(&mut tasks, job);
             }

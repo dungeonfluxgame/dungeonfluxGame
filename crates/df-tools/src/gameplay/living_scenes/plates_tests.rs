@@ -20,6 +20,51 @@ fn key(byte: char) -> ImageKey {
     ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
 }
 
+#[test]
+fn failed_canonical_dependency_projects_terminal_plate_failure_without_redispatch() {
+    use crate::gameplay::adventure::scene_model::SceneModel;
+    let (shared, mut queue) = shared(16);
+    shared
+        .inner
+        .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+    let mut authored = scene(SceneKey::DialogueSeal, "Failed room", Some("Kestrel"));
+    authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        time_of_day: "morning".to_owned(),
+        weather: "clear".to_owned(),
+        people: Vec::new(),
+        things: Vec::new(),
+        ways_out: Vec::new(),
+        offers: Vec::new(),
+    });
+    let viewed = view(&authored, &[], false);
+    shared.observe_with(&viewed, Some(authored.clone()), Vec::new());
+    assert!(drain(&mut queue).is_empty());
+    let jobs = locked(&shared.inner.state).canonical.take_jobs();
+    assert_eq!(jobs.len(), 1);
+    for job in jobs {
+        let super::super::Job::Canonical(work) = job else {
+            panic!("canonical job");
+        };
+        shared.inner.finish(super::super::Done::Canonical {
+            work,
+            result: Err(ImageFailure::Provider),
+        });
+    }
+    shared.observe_with(&viewed, Some(authored.clone()), Vec::new());
+    let mut message = display_message(&authored);
+    apply(&shared, &mut message);
+    let Some(rpc::view_message::Audience::Display(display)) = message.audience else {
+        panic!("display view");
+    };
+    assert_eq!(
+        display.scene.unwrap().plate_state,
+        rpc::PlateState::Failed as i32
+    );
+    shared.observe_with(&viewed, Some(authored), Vec::new());
+    assert!(drain(&mut queue).is_empty());
+    assert!(locked(&shared.inner.state).canonical.take_jobs().is_empty());
+}
+
 #[tokio::test]
 async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographic_plate_request() {
     use crate::gameplay::{

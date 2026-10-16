@@ -83,6 +83,8 @@ struct PlateScene {
     identity_cast: Vec<IdentityReference>,
     snapshot: Option<crate::gameplay::adventure::scene_model::SceneNow>,
     hero_names: Vec<String>,
+    authored_room: Option<crate::gameplay::adventure::scene_model::SceneModel>,
+    room_revision: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -150,6 +152,11 @@ impl PlateScene {
                 .collect(),
             snapshot: crate::gameplay::adventure::scene_model::current_scene(scene),
             hero_names: Vec::new(),
+            authored_room: setting.model.clone(),
+            room_revision: setting
+                .model
+                .as_ref()
+                .and_then(super::canonical::room_revision),
         })
     }
 
@@ -211,13 +218,14 @@ impl PlateScene {
             .map(|(art, key)| format!("{art}{}", &key.as_str()[..8]))
             .collect();
         format!(
-            "{}|{}|{:?}|speaker={}|{party}|{hurt}",
+            "{}|{}|{:?}|speaker={}|{party}|{hurt}|room={}",
             self.title,
             self.place_id,
             self.key,
             self.speaker
                 .as_ref()
                 .map_or("none", |speaker| speaker.id.as_str()),
+            self.room_revision.as_deref().unwrap_or("legacy"),
         )
     }
 
@@ -1497,6 +1505,20 @@ impl Shared {
         } else {
             state_images::reset_scene(&mut book, view);
         }
+        let canonical_changed = located
+            .as_ref()
+            .and_then(|scene| PlateScene::for_view(view, scene))
+            .is_some_and(|scene| {
+                if let Some(model) = &scene.authored_room {
+                    self.inner.admit_canonical_room(&scene.place_id, model);
+                }
+                let faces = self.inner.hero_face_keys(&view.hero_names);
+                let id = self.canonical_plate_id(&scene, &view.heroes, &faces, view.graph_revision);
+                book.current
+                    .as_ref()
+                    .and_then(|current| current.id.as_ref())
+                    .is_some_and(|current| *current != id)
+            });
         let scene_changed = book
             .current
             .as_ref()
@@ -1534,7 +1556,7 @@ impl Shared {
         // background every line, with a new composition and the figures gone (the owner,
         // 2026-10-14: "changes background too often where all the characters disappear").
         // Visible changes to a modelled scene's state are settled edits (state_images).
-        if scene_changed || party_changed || speaker_changed {
+        if scene_changed || party_changed || speaker_changed || canonical_changed {
             let mut scene = located
                 .as_ref()
                 .and_then(|scene| PlateScene::for_view(view, scene))
@@ -1555,9 +1577,9 @@ impl Shared {
                     .collect();
             }
             let faces = self.inner.hero_face_keys(&view.hero_names);
-            let id = scene
-                .as_ref()
-                .map(|scene| scene.plate_id(&view.heroes, &faces, view.graph_revision));
+            let id = scene.as_ref().map(|scene| {
+                self.canonical_plate_id(scene, &view.heroes, &faces, view.graph_revision)
+            });
             let old_id = graph_changed
                 .then(|| book.current.as_ref().and_then(|current| current.id.clone()))
                 .flatten();
@@ -1680,6 +1702,26 @@ impl Shared {
         }
     }
 
+    fn canonical_plate_id(
+        &self,
+        scene: &PlateScene,
+        heroes: &[u8],
+        faces: &[(u8, ImageKey)],
+        graph_revision: u64,
+    ) -> String {
+        let id = scene.plate_id(heroes, faces, graph_revision);
+        match self.inner.canonical_cast_binding(
+            heroes,
+            scene
+                .identity_cast
+                .iter()
+                .map(|identity| identity.id.strip_prefix("npc:").unwrap_or(&identity.id)),
+        ) {
+            Some(binding) => format!("{id}|cast={binding}"),
+            None => id,
+        }
+    }
+
     /// Asks for the plate of `scene` for this party unless the book already knows it.
     fn ensure(
         &self,
@@ -1690,31 +1732,58 @@ impl Shared {
         graph_revision: u64,
         ahead: bool,
     ) {
-        // Accepted canonical sources must be complete before a photographic plate is
-        // admitted. A ready reference wakes watchers and this same path retries admission.
-        let pending = |status| {
-            matches!(
-                status,
-                super::canonical::ReferenceStatus::Pending
-                    | super::canonical::ReferenceStatus::Failed(_)
-            )
-        };
-        if pending(self.inner.canonical_room_status(&scene.place_id))
-            || heroes
-                .iter()
-                .any(|seat| pending(self.inner.canonical_hero_status(*seat)))
-            || scene.identity_cast.iter().any(|identity| {
-                pending(
-                    self.inner.canonical_npc_status(
-                        identity.id.strip_prefix("npc:").unwrap_or(&identity.id),
-                    ),
-                )
-            })
-        {
+        if let Some(model) = &scene.authored_room {
+            self.inner.admit_canonical_room(&scene.place_id, model);
+        }
+        let id = self.canonical_plate_id(scene, heroes, faces, graph_revision);
+        if book.entries.contains_key(&id) {
             return;
         }
-        let id = scene.plate_id(heroes, faces, graph_revision);
-        if book.entries.contains_key(&id) {
+        let mut dependencies = heroes
+            .iter()
+            .map(|seat| self.inner.canonical_hero_status(*seat))
+            .collect::<Vec<_>>();
+        dependencies.extend(scene.identity_cast.iter().map(|identity| {
+            self.inner
+                .canonical_npc_status(identity.id.strip_prefix("npc:").unwrap_or(&identity.id))
+        }));
+        if let Some(revision) = &scene.room_revision {
+            dependencies.push(
+                self.inner
+                    .canonical_room_status_at(&scene.place_id, revision),
+            );
+        }
+        if let Some(failure) = dependencies.iter().find_map(|status| match status {
+            super::canonical::ReferenceStatus::Failed(failure) => Some(*failure),
+            _ => None,
+        }) {
+            record_plate_diagnostic(
+                "gameplay.living_scene.plate_reference_failed",
+                format!(
+                    "PLATE failed scene_id={} reason=canonical_reference_{}",
+                    df_observe::presentation::local_identity(&scene.title),
+                    failure.label()
+                ),
+                serde_json::Map::from_iter([
+                    ("status".to_owned(), serde_json::json!("failed")),
+                    (
+                        "failure_category".to_owned(),
+                        serde_json::json!(failure.label()),
+                    ),
+                    (
+                        "requested_source".to_owned(),
+                        serde_json::json!("canonical_reference"),
+                    ),
+                    (
+                        "plate_id".to_owned(),
+                        serde_json::json!(df_observe::presentation::local_identity(&id)),
+                    ),
+                ]),
+            );
+            book.insert(id, Entry::Failed);
+            return;
+        }
+        if dependencies.contains(&super::canonical::ReferenceStatus::Pending) {
             return;
         }
         let spec = match scene.stage(heroes) {
@@ -2301,12 +2370,17 @@ impl Shared {
         } else {
             scene.asset.clone()
         };
-        let canonical = self.inner.canonical_room_reference(&scene.place_id).await;
+        let canonical = match scene.room_revision.as_deref() {
+            Some(revision) => {
+                self.inner
+                    .canonical_room_reference_at(&scene.place_id, revision)
+                    .await
+            }
+            None => None,
+        };
         let place = match canonical {
             Some(reference) => Ok(reference),
-            None if self.inner.canonical_room_status(&scene.place_id)
-                != super::canonical::ReferenceStatus::Missing =>
-            {
+            None if scene.room_revision.is_some() => {
                 return Err(ImageFailure::Interrupted);
             }
             None => self.inner.load_plate_reference(base).await,

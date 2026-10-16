@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub(super) enum Target {
     Hero(EntityId),
     Npc(String),
-    Room(String),
+    Room { place: String, revision: String },
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +57,7 @@ pub(super) struct References {
     scope: String,
     entries: BTreeMap<Target, Entry>,
     seats: BTreeMap<u8, EntityId>,
+    selected_rooms: BTreeMap<String, Target>,
 }
 
 pub(super) struct WorkerLifetime(pub(super) Arc<Inner>);
@@ -117,16 +118,20 @@ impl References {
         );
     }
 
+    #[cfg(test)]
     pub(super) fn take_jobs(&mut self) -> Vec<Job> {
+        self.take_jobs_up_to(imagery::MAXIMUM_IN_FLIGHT)
+    }
+
+    pub(super) fn take_jobs_up_to(&mut self, available: usize) -> Vec<Job> {
         self.entries
             .values_mut()
-            .filter_map(|entry| {
-                if !matches!(entry.status, Status::Queued) {
-                    return None;
-                }
+            .filter(|entry| matches!(entry.status, Status::Queued))
+            .take(available)
+            .map(|entry| {
                 entry.status = Status::Generating;
                 diagnostic(&entry.work, "requested", None);
-                Some(Job::Canonical(entry.work.clone()))
+                Job::Canonical(entry.work.clone())
             })
             .collect()
     }
@@ -157,7 +162,14 @@ impl References {
     }
 
     pub(super) fn room(&self, place: &str) -> Option<ImageKey> {
-        self.ready(&Target::Room(place.to_owned()))
+        self.ready(self.selected_rooms.get(place)?)
+    }
+
+    fn room_at(&self, place: &str, revision: &str) -> Option<ImageKey> {
+        self.ready(&Target::Room {
+            place: place.to_owned(),
+            revision: revision.to_owned(),
+        })
     }
 
     pub(super) fn npc(&self, id: &str) -> Option<ImageKey> {
@@ -193,8 +205,21 @@ mod tests {
     }
 
     fn room(references: &mut References, revision: &str) {
+        references.selected_rooms.insert(
+            "same-place".to_owned(),
+            Target::Room {
+                place: "same-place".to_owned(),
+                revision: revision.to_owned(),
+            },
+        );
+        references
+            .entries
+            .retain(|target, _| !matches!(target, Target::Room { .. }));
         references.select(
-            Target::Room("same-place".to_owned()),
+            Target::Room {
+                place: "same-place".to_owned(),
+                revision: revision.to_owned(),
+            },
             Source::Room {
                 model: model(),
                 place: "same-place".to_owned(),
@@ -275,14 +300,15 @@ mod tests {
     }
 
     #[test]
-    fn stale_completion_cannot_replace_new_layout_and_failure_is_terminal_for_the_binding() {
+    fn stale_run_completion_cannot_replace_current_room_and_failure_is_terminal_for_the_binding() {
         let mut canonical = references("run-a");
         room(&mut canonical, "layout-a");
         let Job::Canonical(old) = canonical.take_jobs().remove(0) else {
             panic!("canonical job");
         };
-        room(&mut canonical, "layout-b");
-        let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
+        let mut replacement = references("run-b");
+        room(&mut replacement, "layout-b");
+        let inner = inner(Imagery::disabled(ImageryOff::Qualification), replacement);
         inner.finish_canonical(old, Ok(ImageKey::parse(&"a".repeat(64)).unwrap()));
         assert_eq!(
             inner.canonical_room_status("same-place"),
@@ -329,13 +355,78 @@ mod tests {
         assert_eq!(inner.render_canonical(&work).await.unwrap(), key);
         assert_eq!(fixture.calls(), 1, "cache hit must not pay twice");
     }
+
+    #[test]
+    fn same_place_authored_layouts_coexist_and_select_the_exact_current_room() {
+        let mut canonical = references("same-run-pack");
+        let morning = model();
+        let mut evening = morning.clone();
+        evening.time_of_day = "evening".to_owned();
+        let morning_revision = room_revision(&morning).unwrap();
+        let evening_revision = room_revision(&evening).unwrap();
+        canonical.admit_room("shared-place", &morning, true);
+        canonical.admit_room("shared-place", &evening, true);
+        assert_eq!(canonical.entries.len(), 2);
+        let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
+        let work = locked(&inner.state).canonical.take_jobs();
+        assert_eq!(work.len(), imagery::MAXIMUM_IN_FLIGHT);
+        for (index, job) in work.into_iter().enumerate() {
+            let Job::Canonical(work) = job else {
+                panic!("canonical work");
+            };
+            inner.finish_canonical(
+                work,
+                Ok(ImageKey::parse(&format!("{:064x}", index + 1)).unwrap()),
+            );
+        }
+        let state = locked(&inner.state);
+        let first = state
+            .canonical
+            .room_at("shared-place", &morning_revision)
+            .unwrap();
+        let second = state
+            .canonical
+            .room_at("shared-place", &evening_revision)
+            .unwrap();
+        assert_ne!(first, second);
+        assert_eq!(state.canonical.room("shared-place"), Some(second));
+        drop(state);
+        locked(&inner.state)
+            .canonical
+            .admit_room("shared-place", &morning, true);
+        assert_eq!(inner.canonical_room_key("shared-place"), Some(first));
+        assert!(
+            locked(&inner.state).canonical.take_jobs().is_empty(),
+            "returning to accepted room reuses its pack"
+        );
+    }
+
+    #[test]
+    fn canonical_dispatch_obeys_the_existing_media_capacity_and_cancellation_is_terminal() {
+        let mut canonical = references("capacity-run");
+        for place in ["one", "two", "three"] {
+            canonical.admit_room(place, &model(), true);
+        }
+        assert_eq!(canonical.take_jobs_up_to(1).len(), 1);
+        assert!(canonical.take_jobs_up_to(0).is_empty());
+        let inner = Arc::new(inner(
+            Imagery::disabled(ImageryOff::Qualification),
+            canonical,
+        ));
+        drop(WorkerLifetime(inner.clone()));
+        assert_eq!(
+            inner.canonical_room_status("one"),
+            ReferenceStatus::Failed(ImageFailure::Interrupted)
+        );
+        assert!(locked(&inner.state).canonical.take_jobs().is_empty());
+    }
 }
 
 fn diagnostic(work: &Work, status: &str, key: Option<&ImageKey>) {
     let target = match &work.target {
         Target::Hero(entity) => format!("hero:{}", digest(entity.as_bytes())),
         Target::Npc(id) => format!("npc:{id}"),
-        Target::Room(id) => format!("room:{id}"),
+        Target::Room { place, revision } => format!("room:{place}:{revision}"),
     };
     let key = key.map_or("", ImageKey::as_str);
     super::super::actor::record_audit_diagnostic(
@@ -430,7 +521,7 @@ impl Inner {
                 continue;
             };
             let revision = format!(
-                "{:?}|{:?}",
+                "{:?}|{:?}|{species}|{gear:?}",
                 checkpoint
                     .state()
                     .entities
@@ -458,11 +549,6 @@ impl Inner {
             .canonical
             .entries
             .retain(|target, _| !matches!(target, Target::Hero(_)) || accepted.contains(target));
-        if let Some(pack) = pack::active() {
-            for scene in &pack.pack.scenes {
-                state.canonical.observe_room(scene);
-            }
-        }
     }
 
     pub(super) async fn render_canonical(&self, work: &Work) -> Result<ImageKey, ImageFailure> {
@@ -546,9 +632,42 @@ impl Inner {
     }
 
     pub(super) fn canonical_room_status(&self, place: &str) -> ReferenceStatus {
+        let state = locked(&self.state);
+        state
+            .canonical
+            .selected_rooms
+            .get(place)
+            .map_or(ReferenceStatus::Missing, |target| {
+                state.canonical.status(target)
+            })
+    }
+
+    pub(super) fn admit_canonical_room(&self, place: &str, model: &SceneModel) {
         locked(&self.state)
             .canonical
-            .status(&Target::Room(place.to_owned()))
+            .admit_room(place, model, false);
+    }
+
+    pub(super) fn canonical_room_status_at(&self, place: &str, revision: &str) -> ReferenceStatus {
+        locked(&self.state).canonical.status(&Target::Room {
+            place: place.to_owned(),
+            revision: revision.to_owned(),
+        })
+    }
+
+    pub(super) async fn canonical_room_reference_at(
+        &self,
+        place: &str,
+        revision: &str,
+    ) -> Option<ReferenceImage> {
+        let key = locked(&self.state).canonical.room_at(place, revision)?;
+        let reference = self.runtime_reference(key.clone()).await?;
+        (locked(&self.state)
+            .canonical
+            .room_at(place, revision)
+            .as_ref()
+            == Some(&key))
+        .then_some(reference)
     }
 
     pub(super) fn canonical_npc_status(&self, id: &str) -> ReferenceStatus {
@@ -562,6 +681,28 @@ impl Inner {
             .canonical
             .hero_at_seat(seat)
             .map_or(ReferenceStatus::Missing, |(_, status)| status)
+    }
+
+    pub(super) fn canonical_cast_binding<'a>(
+        &self,
+        heroes: &[u8],
+        npcs: impl Iterator<Item = &'a str>,
+    ) -> Option<String> {
+        let state = locked(&self.state);
+        let mut bindings = Vec::new();
+        for seat in heroes {
+            if let Some(entity) = state.canonical.seats.get(seat)
+                && let Some(entry) = state.canonical.entries.get(&Target::Hero(*entity))
+            {
+                bindings.push(entry.work.binding.as_str());
+            }
+        }
+        for id in npcs {
+            if let Some(entry) = state.canonical.entries.get(&Target::Npc(id.to_owned())) {
+                bindings.push(entry.work.binding.as_str());
+            }
+        }
+        (!bindings.is_empty()).then(|| digest(bindings.join("|").as_bytes()))
     }
 
     async fn runtime_reference(&self, key: ImageKey) -> Option<ReferenceImage> {
@@ -600,32 +741,51 @@ impl Inner {
     }
 }
 
+pub(super) fn room_revision(model: &SceneModel) -> Option<String> {
+    let layout = model.picture_state().ok()?;
+    Some(digest(serde_json::json!({"layout": layout, "goods": model.offers.iter().map(|offer| (&offer.id, &offer.description)).collect::<Vec<_>>()}).to_string().as_bytes()))
+}
+
 impl References {
     pub(super) fn observe_room(&mut self, scene: &pack::Scene) {
-        if self.scope.is_empty() {
-            return;
-        }
         let Some(setting) = scene.setting.as_ref() else {
             return;
         };
         let Some(model) = setting.model.as_ref() else {
             return;
         };
-        // This is the accepted authored model, not a mutable presentation snapshot. Dialogue,
-        // holder changes and reconnect therefore cannot regenerate the immutable room pack.
-        let Ok(layout) = model.picture_state() else {
+        self.admit_room(&setting.place_id, model, true);
+    }
+
+    fn admit_room(&mut self, place: &str, model: &SceneModel, select: bool) {
+        if self.scope.is_empty() {
+            return;
+        }
+        let Some(revision) = room_revision(model) else {
             return;
         };
-        let revision = serde_json::json!({"layout": layout, "goods": model.offers.iter().map(|offer| (&offer.id, &offer.description)).collect::<Vec<_>>()});
+        let target = Target::Room {
+            place: place.to_owned(),
+            revision: revision.clone(),
+        };
+        if select {
+            self.selected_rooms.insert(place.to_owned(), target.clone());
+        }
         self.select(
-            Target::Room(setting.place_id.clone()),
+            target,
             Source::Room {
                 model: model.clone(),
-                place: setting.place_id.clone(),
+                place: place.to_owned(),
             },
-            &digest(revision.to_string().as_bytes()),
+            &revision,
         );
         for person in &model.people {
+            // Lookahead may prepare a new person but cannot redefine an identity already
+            // selected by the current accepted room merely because that person is doing
+            // something different in a successor's authored description.
+            if !select && self.entries.contains_key(&Target::Npc(person.id.clone())) {
+                continue;
+            }
             let revision = digest(
                 serde_json::json!({"id": person.id, "description": person.description})
                     .to_string()

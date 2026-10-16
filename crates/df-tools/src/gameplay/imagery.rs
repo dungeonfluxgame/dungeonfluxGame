@@ -99,7 +99,7 @@ const MANIFEST_NAME: &str = "imagery.jsonl";
 const MAXIMUM_REGISTERED: usize = 512;
 const MAXIMUM_FAILED: usize = 256;
 const MAXIMUM_IMAGE_BYTES: u64 = 6 * 1024 * 1024;
-const MAXIMUM_IN_FLIGHT: usize = 2;
+pub(super) const MAXIMUM_IN_FLIGHT: usize = 2;
 const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 /// How long one head-location call may take.
 const HEAD_LOCATE_DEADLINE: Duration = Duration::from_secs(25);
