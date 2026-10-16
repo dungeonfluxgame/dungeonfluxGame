@@ -59,13 +59,14 @@ const BUBBLE_OUT_ANIMATION: &str = "df-bubble-out";
 const FLOAT_ANIMATION: &str = "df-float-up";
 // PLAY-L01: the animation that fades a replaced cut-out away (see `live_imagery.css`).
 const GHOST_ANIMATION: &str = "df-sprite-ghost";
-const BUBBLE_UI_OBSTACLES: [&str; 4] = [
+const BUBBLE_UI_OBSTACLES: [&str; 5] = [
     ".tv-headline",
     ".tv-rules",
+    ".tv-scene-context",
     ".tv-choices",
     ".combat-roll-panel",
 ];
-const BUBBLE_FIXED_OBSTACLES: [&str; 2] = [".tv-headline", ".tv-rules"];
+const BUBBLE_FIXED_OBSTACLES: [&str; 3] = [".tv-headline", ".tv-rules", ".tv-scene-context"];
 const CHECK_ROLL_MS: u32 = 5_000;
 const CHECK_FINDING_PADDING_MS: u32 = 1_000;
 const CHECK_FADE_MS: u32 = 500;

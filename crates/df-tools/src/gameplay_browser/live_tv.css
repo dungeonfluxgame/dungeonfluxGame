@@ -167,7 +167,7 @@ body:has(.tv-stage[data-sound-gate]) .tv-voice-control,body:has(.tv-stage[data-s
 .tv-stage[data-tv-mode=scene] .tv-narration{max-width:52ch;color:#f1efe9;font-family:Georgia,serif;line-height:1.38;text-shadow:0 1px 12px #000}
 
 /* Settled context on reconnect is static, separate from the active subtitle lane. */
-.tv-scene-context{position:absolute;z-index:24;top:11vh;left:4vw;width:min(46vw,55ch);padding:.5em .8em;background:#03060e9c;color:#e5e3dd;font:400 clamp(20px,1.4vw,30px)/1.4 Georgia,serif;text-shadow:0 1px 8px #000;pointer-events:none}
+.tv-scene-context{position:absolute;z-index:24;top:calc(5vh + var(--u)*8.5);left:4vw;width:min(46vw,55ch);max-height:22vh;overflow:hidden;padding:.5em .8em;background:#03060e9c;color:#e5e3dd;font:400 clamp(20px,1.4vw,30px)/1.4 Georgia,serif;text-shadow:0 1px 8px #000;pointer-events:none}
 .tv-stage[data-tv-mode=lobby] .tv-scene-context,.tv-stage[data-battlefield-live=true] .tv-scene-context,.tv-stage[data-ended] .tv-scene-context{display:none}
 
 .tv-bigcard-rewards{color:#eee8da;font:400 clamp(22px,1.6vw,42px)/1.4 Georgia,serif}.tv-bigcard-reward{margin:.3em 0}
