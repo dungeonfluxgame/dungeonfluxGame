@@ -108,6 +108,7 @@ pub(in crate::gameplay) fn quote_candidate(
     if merchant_reply.contains('?') {
         return Err(QuoteRejection::NoMerchantCommitment);
     }
+    let price_cp = explicit_price_cp(merchant_reply)?;
     // The NPC's exact public line must itself bind its price to the selected item or its
     // unambiguous conversational reference. A player's earlier item mention cannot make a
     // separate price line into a quote for that item.
@@ -118,7 +119,6 @@ pub(in crate::gameplay) fn quote_candidate(
         return Err(QuoteRejection::ItemUnclear);
     }
 
-    let price_cp = explicit_price_cp(merchant_reply)?;
     if price_cp < terms.minimum_price_cp || price_cp > terms.maximum_price_cp {
         return Err(QuoteRejection::OutOfRange);
     }
@@ -1130,6 +1130,7 @@ fn is_present_commitment(reply: &str) -> bool {
         "we will offer",
         "i can sell it for",
         "i can sell that for",
+        "i can sell",
         "i'll sell it for",
         "i will sell it for",
         "i'd sell it for",
