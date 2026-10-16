@@ -65,7 +65,16 @@
           "lit": { "type": "boolean" },
           "broken": { "type": "boolean" },
           "searched_by": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 96 } },
-          "aliases": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 64 } }
+          "aliases": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 64 } },
+          "provenance": {
+            "type": "object", "additionalProperties": false,
+            "required": ["kind", "source_id"],
+            "properties": {
+              "kind": { "type": "string", "minLength": 1, "maxLength": 48 },
+              "source_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+              "seller_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 96 }
+            }
+          }
         }
       }
     },

@@ -188,6 +188,24 @@ fn a_taken_object_and_open_door_survive_checkpoint_encoding_without_advancing_th
 }
 
 #[test]
+fn explicit_steal_text_routes_to_server_inventory_interaction() {
+    taproom(|| {
+        let (current, _member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let thing = model
+            .things
+            .iter()
+            .find(|thing| thing.portable && !thing.in_use && thing.holder_id.is_none())
+            .unwrap();
+        assert_eq!(
+            living_scene::interaction_for_line(&scene, &format!("I steal the {}.", thing.name),),
+            Some((thing.id.clone(), "steal"))
+        );
+    });
+}
+
+#[test]
 fn a_purchase_spends_exact_copper_and_cannot_overdraw_the_heros_purse() {
     taproom(|| {
         let (current, member) = opened();

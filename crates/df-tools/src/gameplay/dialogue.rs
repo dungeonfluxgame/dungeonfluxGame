@@ -841,7 +841,7 @@ impl Service {
         {
             let hero = journey::living_scene::hero(after.state(), operation)
                 .map_err(actor::unavailable)?;
-            if matches!(option, "examine" | "take" | "share")
+            if matches!(option, "examine" | "take" | "steal" | "share")
                 && let Err(reason) =
                     self.living
                         .request_item(&hero, &thing.id, None, option == "share")

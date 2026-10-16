@@ -154,6 +154,82 @@ fn merchant_shop_has_named_interactable_background_people_and_stock() {
 }
 
 #[test]
+fn location_inventory_keeps_stock_identity_separate_from_custody() {
+    let model = merchant_shop();
+    let stock = model.inventory();
+    let clothes = stock
+        .iter()
+        .find(|entry| entry.source_id == "clothes-travelers")
+        .expect("shop stock has a stable clothes entry");
+    assert_eq!(clothes.item_id, "stock-clothes-travelers");
+    assert_eq!(clothes.provenance_kind, "generated_offer");
+    assert_eq!(
+        clothes.location,
+        super::scene_model::SceneInventoryLocation::Stock
+    );
+    assert!(clothes.available);
+
+    let purchased = model
+        .as_it_is_now(
+            super::super::pack::SceneKey::Opening,
+            &[SceneChange {
+                entity_id: "clothes-travelers".into(),
+                description: "Brynn buys traveler's clothes.".into(),
+                kind: SceneChangeKind::Purchased {
+                    holder_id: "Brynn".into(),
+                    seller_id: "patron".into(),
+                },
+            }],
+        )
+        .expect("purchase is a valid committed scene change");
+    let snapshot: serde_json::Value = serde_json::from_str(&purchased).expect("snapshot JSON");
+    let inventory = snapshot["model"]["things"]
+        .as_array()
+        .expect("purchased item remains in the model")
+        .iter()
+        .find(|thing| thing["id"] == "purchased-clothes-travelers")
+        .expect("exactly one purchased instance exists");
+    assert_eq!(inventory["provenance"]["kind"], "generated_offer");
+    assert_eq!(inventory["provenance"]["source_id"], "clothes-travelers");
+    assert_eq!(inventory["holder_id"], "Brynn");
+    assert_eq!(inventory["owner_id"], "Brynn");
+}
+
+#[test]
+fn theft_moves_custody_without_rewriting_owner() {
+    let mut model = merchant_shop();
+    model.things[0].owner_id = Some("patron".into());
+    let target = model
+        .things
+        .iter()
+        .find(|thing| thing.owner_id.is_some() && thing.portable)
+        .expect("shop has an owned portable object")
+        .clone();
+    let snapshot = model
+        .as_it_is_now(
+            super::super::pack::SceneKey::Opening,
+            &[SceneChange {
+                entity_id: target.id.clone(),
+                description: "Brynn steals the object.".into(),
+                kind: SceneChangeKind::Stolen {
+                    holder_id: "Brynn".into(),
+                },
+            }],
+        )
+        .expect("theft is a durable custody change");
+    let snapshot: serde_json::Value = serde_json::from_str(&snapshot).expect("snapshot JSON");
+    let item = snapshot["model"]["things"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|thing| thing["id"] == target.id)
+        .unwrap();
+    assert_eq!(item["owner_id"], target.owner_id.as_deref().unwrap());
+    assert_eq!(item["holder_id"], "Brynn");
+    assert_eq!(item["position"], "held by Brynn");
+}
+
+#[test]
 fn authored_purchased_prefix_object_survives_without_a_purchase_journal() {
     let mut model = merchant_shop();
     model.things[0].id = "purchased-authored-cloth".into();

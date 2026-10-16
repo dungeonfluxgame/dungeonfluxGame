@@ -9,7 +9,11 @@ must have a stable ID, a job, a position, and a truthful relationship to the nam
 List every visible person and foreground object that the plate should depict. Give each a
 player-friendly position phrase such as "at the back on the left", "by the hearth", or "on the
 bar in front". Include who owns each object and whether it is currently in use. Do not place
-unlisted people or objects in picture descriptions.
+unlisted people or objects in picture descriptions. Every portable object is one stable item
+instance: give it an optional provenance object with `kind` (`authored_location` or
+`generated_offer`), a stable `source_id`, and a seller ID only for generated stock. Ownership,
+current holder, and room position are separate fields; never replace an item with a second copy
+when the plate is refreshed.
 
 <!-- Why: an NPC must answer about the same room the players see, without inventing facts. -->
 For each person, provide three short knowledge entries: one about this place, one about the
@@ -28,8 +32,11 @@ evidence and do not state the hidden fact outright.
 Give each thing a two-to-four-sentence detailed description, a one-line list label, a picture
 description, a closer-look result, its check skill and DC, whether it can be picked up, exact
 coin value only when supplied, and a one-sentence use effect. Give shops only established goods
-at the supplied SRD prices. Do not decide check outcomes, inventory changes, purchases, or story
-outcomes; the server resolves them.
+at the supplied SRD prices. Do not decide check outcomes, inventory changes, purchases, thefts,
+or story outcomes; the server resolves them. Generated offers are finite stock entries whose IDs
+remain stable until a purchase creates the one corresponding item instance. A theft changes
+custody while preserving ownership and should be described as a witnessed or discoverable event
+only when the supplied scene facts support it.
 
 <!-- Why: bounded, grounded structured output can safely be stored with the generated adventure. -->
 Return only JSON matching the supplied schema. Every required field must be present. Keep all

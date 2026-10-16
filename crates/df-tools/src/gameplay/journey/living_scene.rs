@@ -356,7 +356,10 @@ pub(in crate::gameplay) fn item_for(
             }
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
                 format!("purchased-{}", entry.target)
-            } else if matches!(entry.option.as_str(), "examine" | "take" | "share") {
+            } else if matches!(
+                entry.option.as_str(),
+                "examine" | "take" | "steal" | "share"
+            ) {
                 was_take = entry.option == "take";
                 entry.target
             } else {
@@ -532,6 +535,7 @@ pub(in crate::gameplay) fn interaction_for_line(
         "i pick up ",
         "i take the ",
         "i grab the ",
+        "i steal ",
         "i open the ",
         "i close the ",
         "i buy ",
@@ -563,6 +567,8 @@ pub(in crate::gameplay) fn interaction_for_line(
         "gift"
     } else if lower.starts_with("i give ") {
         "give"
+    } else if lower.starts_with("i steal ") {
+        "steal"
     } else if ["pick up", "take the ", "grab the "]
         .iter()
         .any(|verb| lower.contains(verb))
@@ -709,6 +715,21 @@ pub(super) fn stage(
                         entity_id: thing.id.clone(),
                         description: description.clone(),
                         kind: SceneChangeKind::Taken {
+                            holder_id: hero.clone(),
+                        },
+                    });
+                    description
+                }
+                "steal" if !thing.portable => format!("{} cannot be carried away.", thing.name),
+                "steal" if thing.holder_id.is_some() => {
+                    format!("{} is already being held.", thing.name)
+                }
+                "steal" => {
+                    let description = format!("{hero} steals {}.", thing.name);
+                    change = Some(SceneChange {
+                        entity_id: thing.id.clone(),
+                        description: description.clone(),
+                        kind: SceneChangeKind::Stolen {
                             holder_id: hero.clone(),
                         },
                     });

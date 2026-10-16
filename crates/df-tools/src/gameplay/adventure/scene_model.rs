@@ -145,6 +145,44 @@ pub(crate) struct SceneThing {
     pub(crate) broken: bool,
     pub(crate) searched_by: Vec<String>,
     pub(crate) aliases: Vec<String>,
+    /// Stable provenance for the item instance. Ownership and physical custody are
+    /// deliberately separate: a scene refresh must never manufacture a second item.
+    #[serde(default)]
+    pub(crate) provenance: SceneItemProvenance,
+}
+
+/// Identifies where an item instance came from without conflating its owner, holder,
+/// or current scene position. `source_id` is stable within the generated location pack.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SceneItemProvenance {
+    pub(crate) kind: String,
+    pub(crate) source_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) seller_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SceneInventoryLocation {
+    Stock,
+    Scene { position: String },
+    Held { holder_id: String },
+}
+
+/// Audience-safe inventory projection. It contains stable item identity and public
+/// placement/price state, while private clues and NPC knowledge remain on SceneThing.
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SceneInventoryEntry {
+    pub(crate) item_id: String,
+    pub(crate) source_id: String,
+    pub(crate) provenance_kind: String,
+    pub(crate) owner_id: Option<String>,
+    pub(crate) holder_id: Option<String>,
+    pub(crate) location: SceneInventoryLocation,
+    pub(crate) available: bool,
+    pub(crate) cost_cp: Option<u32>,
 }
 
 fn default_shared_visible() -> bool {
@@ -209,6 +247,11 @@ pub(crate) enum SceneChangeKind {
         seller_id: String,
     },
     Taken {
+        holder_id: String,
+    },
+    /// Custody changes without transferring ownership. The owner can react through
+    /// ordinary NPC interaction once the theft is witnessed or discovered.
+    Stolen {
         holder_id: String,
     },
     Given {
@@ -295,6 +338,69 @@ impl SceneModel {
                 .iter()
                 .any(|thing| thing.id == format!("purchased-{id}"))
     }
+
+    /// Returns the canonical, audience-safe inventory for this location. Offers are
+    /// represented as stock until purchased; a purchase replaces that stock entry with
+    /// the one durable `SceneThing` carrying the same source ID. This is intentionally a
+    /// projection of the scene model, so reconnects and image plate rebuilds cannot create
+    /// additional item instances.
+    pub(crate) fn inventory(&self) -> Vec<SceneInventoryEntry> {
+        let mut entries = self
+            .things
+            .iter()
+            .filter(|thing| thing.in_scene || thing.holder_id.is_some())
+            .map(|thing| {
+                let source_id = if thing.provenance.source_id.is_empty() {
+                    thing.id.clone()
+                } else {
+                    thing.provenance.source_id.clone()
+                };
+                SceneInventoryEntry {
+                    item_id: thing.id.clone(),
+                    source_id,
+                    provenance_kind: if thing.provenance.kind.is_empty() {
+                        "authored_location".into()
+                    } else {
+                        thing.provenance.kind.clone()
+                    },
+                    owner_id: thing.owner_id.clone(),
+                    holder_id: thing.holder_id.clone(),
+                    location: thing.holder_id.as_ref().map_or_else(
+                        || SceneInventoryLocation::Scene {
+                            position: thing.position.clone(),
+                        },
+                        |holder_id| SceneInventoryLocation::Held {
+                            holder_id: holder_id.clone(),
+                        },
+                    ),
+                    available: thing.holder_id.is_none() && thing.in_scene && thing.portable,
+                    cost_cp: thing.value_cp,
+                }
+            })
+            .collect::<Vec<_>>();
+        entries.extend(
+            self.offers
+                .iter()
+                .filter(|offer| self.offer_available(&offer.id))
+                .map(|offer| SceneInventoryEntry {
+                    item_id: format!("stock-{}", offer.id),
+                    source_id: offer.id.clone(),
+                    provenance_kind: "generated_offer".into(),
+                    owner_id: Some(offer.seller_id.clone()),
+                    holder_id: None,
+                    location: SceneInventoryLocation::Stock,
+                    available: true,
+                    cost_cp: Some(offer.cost_cp),
+                }),
+        );
+        entries.sort_by(|left, right| left.item_id.cmp(&right.item_id));
+        entries
+    }
+
+    pub(crate) fn inventory_json(&self) -> Result<Value, SceneModelError> {
+        serde_json::to_value(self.inventory()).map_err(|_| SceneModelError::Serialization)
+    }
+
     pub(crate) fn public_contents(&self) -> Result<String, SceneModelError> {
         let mut contents: Value = serde_json::from_str(&self.picture_state()?)
             .map_err(|_| SceneModelError::Serialization)?;
@@ -302,7 +408,7 @@ impl SceneModel {
             for (view, thing) in things.iter_mut().zip(&self.things) {
                 view["short"] = Value::String(thing.short.clone());
                 view["actions"] = serde_json::json!(if thing.portable {
-                    vec!["look", "take", "use"]
+                    vec!["look", "take", "steal", "use"]
                 } else {
                     vec!["look", "use"]
                 });
@@ -320,6 +426,7 @@ impl SceneModel {
                 })
                 .collect::<Vec<_>>()
         );
+        contents["inventory"] = self.inventory_json()?;
         serde_json::to_string(&contents).map_err(|_| SceneModelError::Serialization)
     }
 
@@ -461,6 +568,14 @@ impl SceneModel {
                     .owner_id
                     .as_ref()
                     .is_some_and(|id| !ids.contains(id.as_str()))
+                || (!thing.provenance.kind.is_empty()
+                    && (!valid_text(&thing.provenance.kind, 48)
+                        || !valid_text(&thing.provenance.source_id, 96)
+                        || thing
+                            .provenance
+                            .seller_id
+                            .as_ref()
+                            .is_some_and(|id| !ids.contains(id.as_str()))))
             {
                 return Err(SceneModelError::InvalidBounds);
             }
@@ -522,8 +637,16 @@ impl SceneModel {
         canonical_facts: &BTreeMap<String, String>,
         finding_ids: &BTreeSet<String>,
     ) -> Result<Self, SceneModelError> {
-        let model: Self =
+        let mut model: Self =
             serde_json::from_value(value).map_err(|_| SceneModelError::InvalidShape)?;
+        for thing in &mut model.things {
+            if thing.provenance.kind.is_empty() {
+                thing.provenance.kind = "authored_location".into();
+            }
+            if thing.provenance.source_id.is_empty() {
+                thing.provenance.source_id = thing.id.clone();
+            }
+        }
         model.validate_structure()?;
         for person in &model.people {
             if !person.is_background && cast.get(&person.id).is_none_or(|name| name != &person.name)
@@ -688,7 +811,8 @@ impl SceneModel {
                 SceneChangeKind::Purchased { .. } => {
                     return Err(SceneModelError::Contradiction);
                 }
-                SceneChangeKind::Taken { holder_id } => {
+                SceneChangeKind::Taken { holder_id }
+                | SceneChangeKind::Stolen { holder_id } => {
                     thing.holder_id = Some(holder_id.clone());
                     thing.in_scene = person_ids.contains(holder_id.as_str());
                     thing.position = format!("held by {holder_id}");
@@ -782,6 +906,11 @@ impl SceneModel {
                 broken: false,
                 searched_by: Vec::new(),
                 aliases: offer.aliases.clone(),
+                provenance: SceneItemProvenance {
+                    kind: "generated_offer".into(),
+                    source_id: offer.id.clone(),
+                    seller_id: Some(_seller_id.clone()),
+                },
             });
             return Ok(());
         }
@@ -1787,6 +1916,11 @@ fn things(
                 aliases: {
                     aliases.push(template.position.to_owned());
                     std::mem::take(&mut aliases)
+                },
+                provenance: SceneItemProvenance {
+                    kind: "authored_location".into(),
+                    source_id: format!("{}-thing-{}", setting.place_id, index + 1),
+                    seller_id: None,
                 },
             })
         })
