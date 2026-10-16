@@ -21,7 +21,7 @@ pub(crate) fn opening_dressing(model: &super::scene_model::SceneModel, place_nam
         format!(
             "{} is {} at {}.",
             person.name,
-            person.description.trim_end_matches('.'),
+            person.description.trim_end_matches('.').replace(';', ","),
             person.position
         )
     }));
@@ -30,14 +30,14 @@ pub(crate) fn opening_dressing(model: &super::scene_model::SceneModel, place_nam
             .things
             .iter()
             .filter(|thing| thing.in_scene)
-            .take(2)
+            .take(1)
             .map(|thing| format!("You can see {} at {}.", thing.name, thing.position)),
     );
     sentences.extend(
         model
             .ways_out
             .iter()
-            .take(2)
+            .take(1)
             .map(|way| format!("The {} is at {}.", way.name, way.position)),
     );
     sentences.join(" ")
@@ -681,9 +681,14 @@ pub(crate) fn generate_with_prose(
             antagonist_present.to_string(),
         );
         if let (Some(key), Some(model)) = (scene_key, place.model.as_ref()) {
+            let public_model = model.for_scene(key);
             scene_context.insert(
                 "scene.model".into(),
-                super::scene_model::prompt_context(model, key)?,
+                if slot == "narration" {
+                    public_model.picture_state()?
+                } else {
+                    super::scene_model::prompt_context(model, key)?
+                },
             );
         }
         if scene_key == Some(SceneKey::Combat) {
@@ -800,7 +805,7 @@ pub(crate) fn generate_with_prose(
         .get("hook.job")
         .ok_or_else(|| GenerateError::Pattern("hook.job".into()))?;
     let opening_brief = format!(
-        "{} {} {job}. If it fails, {}.",
+        "{} {} The job is to {job}. If it fails, {}.",
         template("opening_narration")?,
         opening_dressing,
         stake.failure

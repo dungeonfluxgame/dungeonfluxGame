@@ -591,6 +591,15 @@ fn storyteller_facts_are_scoped_to_each_scene_and_unresolved_outcomes() {
     assert!(!opening_text.contains("wants"));
     assert!(!opening_text.contains("attitudes"));
     assert!(opening["approved_appearance"]["ways_out"].is_array());
+    let opening_sheet = baseline
+        .fact_sheet
+        .iter()
+        .find(|sheet| sheet.scene.as_deref() == Some("opening") && sheet.slot == "narration")
+        .unwrap();
+    let public_model = &opening_sheet.facts["scene.model"];
+    assert!(!public_model.contains("knowledge"));
+    assert!(!public_model.contains("wants"));
+    assert!(!public_model.contains("attitudes"));
     assert!(serde_json::to_vec(&facts).unwrap().len() <= 16 * 1024);
 }
 

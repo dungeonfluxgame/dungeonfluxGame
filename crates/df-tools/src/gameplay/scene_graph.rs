@@ -325,6 +325,10 @@ pub(in crate::gameplay) fn with_model(
             }
         };
         let actor = &mut graph.actors[index];
+        if actor.id.starts_with("hero-") && person.position == "foreground" {
+            actor.pose = person.description.clone();
+            continue;
+        }
         actor.spot = person.position.clone();
         let (x, y, depth) = model_anchor(&person.position);
         let neighbors = model.people[..person_index]
@@ -523,7 +527,24 @@ mod tests {
             .unwrap()
             .for_scene(SceneKey::Opening);
         let (base, _, _) = graph_for(scene, None, None, 0);
+        let hero_anchors = base
+            .actors
+            .iter()
+            .filter(|actor| actor.id.starts_with("hero-"))
+            .map(|actor| (actor.id.clone(), actor.anchor_x_permille))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let graph = with_model(base.clone(), &model).unwrap();
+        for (id, anchor) in hero_anchors {
+            assert_eq!(
+                graph
+                    .actors
+                    .iter()
+                    .find(|actor| actor.id == id)
+                    .unwrap()
+                    .anchor_x_permille,
+                anchor
+            );
+        }
         for person in &model.people {
             let actor = graph
                 .actors
