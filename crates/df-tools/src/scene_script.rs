@@ -394,6 +394,7 @@ mod tests {
         let answered_lines = [purchase, buy_reply.clone(), question, answer.clone()];
         let answered = SceneScript {
             narration: OPENING,
+            previous_narration: OPENING,
             lines: &answered_lines,
             fresh: &[&answer],
             ..Default::default()
