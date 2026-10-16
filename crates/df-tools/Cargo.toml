@@ -16,6 +16,7 @@ name = "df-transport-fixture"
 path = "src/main.rs"
 
 [dependencies]
+prost.workspace = true
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 df-assets = { path = "../df-assets" }
@@ -57,7 +58,6 @@ df-rules = { path = "../df-rules" }
 df-session = { path = "../df-session" }
 df-tempo = { path = "../df-tempo" }
 df-render = { path = "../df-render" }
-prost.workspace = true
 serde_path_to_error = "=0.1.20"
 tokio-postgres = "=0.7.15"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
@@ -88,7 +88,6 @@ web-sys = { workspace = true, features = ["MediaDevices", "MediaStream", "MediaS
 
 [dev-dependencies]
 df-types = { path = "../df-types" }
-prost.workspace = true
 prost-types = "0.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

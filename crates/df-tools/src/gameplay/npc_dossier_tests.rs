@@ -872,6 +872,8 @@ fn the_heros_own_view_lists_each_present_npcs_attitude_and_the_display_gets_none
                 live_plate_graph_revision: 0,
                 check: None,
                 encounter_xp: None,
+                layout_json: String::new(),
+                layout_revision: 0,
             },
         )),
     };

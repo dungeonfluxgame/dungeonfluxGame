@@ -7,7 +7,9 @@ use std::{
 
 pub(crate) const MAX_ELEMENTS: usize = 512;
 pub(crate) const MAX_OVERRIDES: usize = 128;
-pub(crate) const MAX_READBACK_BYTES: usize = 384 * 1024;
+pub(crate) const MAX_READBACK_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_PAGE_BYTES: usize = 48 * 1024;
+pub(crate) const MAX_PAGES: usize = 128;
 pub(crate) const MAX_DOCUMENT_BYTES: usize = 64 * 1024;
 const MAX_COORDINATE: f64 = 4096.0;
 
@@ -18,7 +20,9 @@ pub(crate) enum LayoutError {
     Id,
     Limit,
     Revision,
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     UnknownId,
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     Unavailable,
 }
 impl fmt::Display for LayoutError {
@@ -29,7 +33,9 @@ impl fmt::Display for LayoutError {
             Self::Id => "invalid layout ID",
             Self::Limit => "layout capacity exceeded",
             Self::Revision => "stale or future layout revision",
+            #[cfg(any(not(target_arch = "wasm32"), test))]
             Self::UnknownId => "unknown or stale layout ID; refresh layout list",
+            #[cfg(any(not(target_arch = "wasm32"), test))]
             Self::Unavailable => "layout controls unavailable",
         })
     }
@@ -63,6 +69,7 @@ pub(crate) enum Unit {
     Percent,
 }
 impl Unit {
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn suffix(self) -> &'static str {
         match self {
             Self::Px => "px",
@@ -104,6 +111,7 @@ impl Transform {
         }
         Ok(())
     }
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn merge(&mut self, patch: Self) {
         if patch.translate_x.is_some() {
             self.translate_x = patch.translate_x;
@@ -123,6 +131,7 @@ impl Transform {
     }
     /// Only independent transform properties are owned. Removing this rule exposes the
     /// application's CURRENT CSS and inline styles, including animation transforms.
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn rule(&self, id: &str) -> Result<String, LayoutError> {
         validate_id(id)?;
         self.validate()?;
@@ -165,6 +174,7 @@ pub(crate) struct LayoutDocument {
     pub(crate) overrides: BTreeMap<String, Transform>,
 }
 impl LayoutDocument {
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn parse(text: &str) -> Result<Self, LayoutError> {
         if text.len() > MAX_DOCUMENT_BYTES {
             return Err(LayoutError::Limit);
@@ -179,11 +189,13 @@ impl LayoutDocument {
         }
         Ok(document)
     }
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn stylesheet(&self) -> Result<String, LayoutError> {
         self.overrides.iter().map(|(id, t)| t.rule(id)).collect()
     }
 }
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TransformRequest {
@@ -197,6 +209,7 @@ pub(crate) struct TransformRequest {
     pub(crate) scale_y: Option<f64>,
     pub(crate) rotate: Option<f64>,
 }
+#[cfg(any(not(target_arch = "wasm32"), test))]
 impl TransformRequest {
     pub(crate) fn patch(&self) -> Result<Transform, LayoutError> {
         validate_id(&self.id)?;
@@ -223,6 +236,7 @@ impl TransformRequest {
         Ok(p)
     }
 }
+#[cfg(any(not(target_arch = "wasm32"), test))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MoveRequest {
@@ -232,6 +246,7 @@ pub(crate) struct MoveRequest {
     pub(crate) x: Option<f64>,
     pub(crate) y: Option<f64>,
 }
+#[cfg(any(not(target_arch = "wasm32"), test))]
 impl MoveRequest {
     pub(crate) fn patch(&self) -> Result<Transform, LayoutError> {
         validate_id(&self.id)?;
@@ -253,6 +268,7 @@ impl MoveRequest {
         Ok(p)
     }
 }
+#[cfg(any(not(target_arch = "wasm32"), test))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResetRequest {
@@ -315,13 +331,67 @@ pub(crate) struct LayoutReadback {
     pub(crate) overflow: usize,
 }
 impl LayoutReadback {
-    pub(crate) fn parse(text: &str) -> Result<Self, LayoutError> {
-        if text.len() > MAX_READBACK_BYTES {
+    /// Split by actual UTF-8 JSON bytes, leaving 1 KiB for page metadata. Each page is
+    /// comfortably below the unchanged 64 KiB RPC message limit, even after protobuf framing.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn pages(&self) -> Result<Vec<LayoutPage>, LayoutError> {
+        self.validate()?;
+        if serde_json::to_vec(self)
+            .map_err(|_| LayoutError::Shape)?
+            .len()
+            > MAX_READBACK_BYTES
+        {
             return Err(LayoutError::Limit);
         }
-        let report: Self = serde_json::from_str(text).map_err(|_| LayoutError::Shape)?;
-        report.validate()?;
-        Ok(report)
+        let mut groups = Vec::new();
+        let mut current = Vec::new();
+        let mut bytes = 0;
+        for element in &self.elements {
+            let size = serde_json::to_vec(element)
+                .map_err(|_| LayoutError::Shape)?
+                .len()
+                + 1;
+            if size > MAX_PAGE_BYTES - 1024 {
+                return Err(LayoutError::Limit);
+            }
+            if bytes + size > MAX_PAGE_BYTES - 1024 && !current.is_empty() {
+                groups.push(current);
+                current = Vec::new();
+                bytes = 0;
+            }
+            current.push(element.clone());
+            bytes += size;
+        }
+        if !current.is_empty() || groups.is_empty() {
+            groups.push(current);
+        }
+        if groups.len() > MAX_PAGES {
+            return Err(LayoutError::Limit);
+        }
+        let pages = groups.len();
+        groups
+            .into_iter()
+            .enumerate()
+            .map(|(page, elements)| {
+                let part = LayoutPage {
+                    sample: self.sample,
+                    revision: self.revision,
+                    page,
+                    pages,
+                    viewport: self.viewport.clone(),
+                    overflow: self.overflow,
+                    elements,
+                };
+                if serde_json::to_vec(&part)
+                    .map_err(|_| LayoutError::Shape)?
+                    .len()
+                    > MAX_PAGE_BYTES
+                {
+                    return Err(LayoutError::Limit);
+                }
+                Ok(part)
+            })
+            .collect()
     }
     pub(crate) fn validate(&self) -> Result<(), LayoutError> {
         if self.sample == 0 {
@@ -396,6 +466,39 @@ impl LayoutReadback {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LayoutPage {
+    pub(crate) sample: u64,
+    pub(crate) revision: u64,
+    pub(crate) page: usize,
+    pub(crate) pages: usize,
+    pub(crate) viewport: Viewport,
+    pub(crate) overflow: usize,
+    pub(crate) elements: Vec<ElementReadback>,
+}
+impl LayoutPage {
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(crate) fn parse(text: &str) -> Result<Self, LayoutError> {
+        if text.len() > MAX_PAGE_BYTES {
+            return Err(LayoutError::Limit);
+        }
+        let page: Self = serde_json::from_str(text).map_err(|_| LayoutError::Shape)?;
+        if page.pages == 0 || page.pages > MAX_PAGES || page.page >= page.pages {
+            return Err(LayoutError::Shape);
+        }
+        LayoutReadback {
+            sample: page.sample,
+            revision: page.revision,
+            viewport: page.viewport.clone(),
+            elements: page.elements.clone(),
+            overflow: page.overflow,
+        }
+        .validate()?;
+        Ok(page)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +554,101 @@ mod tests {
         assert!(!css.contains("left:"));
         assert!(t.rule("x\"]{display:none}").is_err());
         assert_eq!(LayoutDocument::default().stylesheet().unwrap(), "");
+    }
+    #[test]
+    fn maximum_inventory_pages_fit_the_existing_rpc_limit_with_worst_allowed_utf8_metadata() {
+        use prost::Message;
+        let elements = (0..MAX_ELEMENTS)
+            .map(|index| ElementReadback {
+                id: format!("v{index}-{}", "x".repeat(88)),
+                tag: "x".repeat(32),
+                classes: "x".repeat(192),
+                owner: Some(VisualOwner {
+                    id: "o".repeat(128),
+                    name: Some("é".repeat(64)),
+                }),
+                configured: None,
+                effective: Some(EffectiveTransform {
+                    translate: "\\".repeat(512),
+                    scale: "\\".repeat(512),
+                    rotate: "\\".repeat(512),
+                    matrix: "\\".repeat(512),
+                }),
+                rect: Some(Bounds {
+                    left: 0.0,
+                    top: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                }),
+                status: ElementStatus::Applied,
+            })
+            .collect();
+        let report = LayoutReadback {
+            sample: 1,
+            revision: 1,
+            viewport: Viewport {
+                width: 1920.0,
+                height: 1080.0,
+            },
+            overflow: 0,
+            elements,
+        };
+        let pages = report.pages().unwrap();
+        assert!(pages.len() > 1);
+        assert_eq!(
+            pages.iter().map(|p| p.elements.len()).sum::<usize>(),
+            MAX_ELEMENTS
+        );
+        for page in pages {
+            let text = serde_json::to_string(&page).unwrap();
+            assert!(text.len() <= MAX_PAGE_BYTES);
+            let request = df_protocol::common::PresentedRequest {
+                sequence: 0,
+                display_instance: 1,
+                layout_readback_json: text,
+            };
+            assert!(request.encoded_len() <= df_rpc_bridge::RPC_MESSAGE_BYTES - 1024);
+        }
+    }
+
+    #[test]
+    fn equal_game_revision_merges_layout_without_scene_changes_and_rejects_old_metadata() {
+        use df_protocol::common::{DisplayGameplayView, ViewMessage, view_message::Audience};
+        let mut shown = ViewMessage {
+            audience: Some(Audience::Display(DisplayGameplayView {
+                narration: "still reading".into(),
+                layout_json: serde_json::to_string(&LayoutDocument::default()).unwrap(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let new = ViewMessage {
+            audience: Some(Audience::Display(DisplayGameplayView {
+                narration: "must not replace current words".into(),
+                layout_revision: 1,
+                layout_json: serde_json::to_string(&LayoutDocument {
+                    revision: 1,
+                    ..Default::default()
+                })
+                .unwrap(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(merge_layout(&mut shown, &new));
+        let Some(Audience::Display(display)) = &shown.audience else {
+            panic!()
+        };
+        assert_eq!(display.narration, "still reading");
+        assert_eq!(display.layout_revision, 1);
+        let stale = ViewMessage {
+            audience: Some(Audience::Display(DisplayGameplayView {
+                layout_json: serde_json::to_string(&LayoutDocument::default()).unwrap(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(!merge_layout(&mut shown, &stale));
     }
 }
 

@@ -3,7 +3,7 @@
 use super::{Client, request, rpc};
 use crate::layout_contract::{
     self as contract, Bounds, EffectiveTransform, ElementReadback, ElementStatus, LayoutDocument,
-    LayoutReadback, Viewport,
+    LayoutReadback, Viewport, VisualOwner,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -19,6 +19,7 @@ const MAX_SCAN: usize = 16384;
 thread_local! {
     static ACTIVE:RefCell<Option<Controller>>=const{RefCell::new(None)};
     static GENERATION:Cell<u64>=const{Cell::new(0)};
+    static SAMPLE:Cell<u64>=const{Cell::new(0)};
 }
 struct Controller {
     client: Weak<RefCell<Client>>,
@@ -102,7 +103,10 @@ fn priority(element: &Element) -> bool {
         )
 }
 fn visual_owner(element: &Element) -> Result<Option<VisualOwner>, JsValue> {
-    let Some(owner) = element.closest("[data-slot],[data-actor-id],[data-layout-owner-id]")? else {
+    let owner = element
+        .closest("[data-slot],[data-actor-id]")?
+        .or(element.closest("[data-layout-owner-id]")?);
+    let Some(owner) = owner else {
         return Ok(None);
     };
     let id = owner
@@ -114,7 +118,6 @@ fn visual_owner(element: &Element) -> Result<Option<VisualOwner>, JsValue> {
     };
     let name = owner
         .get_attribute("data-name")
-        .or_else(|| owner.get_attribute("data-layout-owner-name"))
         .or_else(|| {
             owner
                 .query_selector(".tv-hud-name,.tv-bubble-name")
@@ -122,6 +125,7 @@ fn visual_owner(element: &Element) -> Result<Option<VisualOwner>, JsValue> {
                 .flatten()
                 .and_then(|name| name.text_content())
         })
+        .or_else(|| owner.get_attribute("alt"))
         .or_else(|| {
             owner
                 .query_selector("img[alt]")
@@ -129,6 +133,7 @@ fn visual_owner(element: &Element) -> Result<Option<VisualOwner>, JsValue> {
                 .flatten()
                 .and_then(|image| image.get_attribute("alt"))
         })
+        .or_else(|| owner.get_attribute("data-layout-owner-name"))
         .filter(|name| {
             !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)
         });
@@ -223,8 +228,9 @@ impl Controller {
                         "visual"
                     };
                     let id = format!(
-                        "{kind}-{}-{}",
+                        "{kind}-{}-{}-{}",
                         super::live_motion::display_instance(),
+                        self.generation,
                         self.next_id
                     );
                     element.set_attribute("data-layout-id", &id)?;
@@ -250,10 +256,14 @@ impl Controller {
             .inner_height()?
             .as_f64()
             .ok_or_else(|| JsValue::from_str("layout viewport height unavailable"))?;
-        self.sample = self
-            .sample
-            .checked_add(1)
-            .ok_or_else(|| JsValue::from_str("layout sample capacity exhausted"))?;
+        self.sample = SAMPLE.with(|sample| {
+            let next = sample
+                .get()
+                .checked_add(1)
+                .ok_or_else(|| JsValue::from_str("layout sample capacity exhausted"))?;
+            sample.set(next);
+            Ok::<_, JsValue>(next)
+        })?;
         let mut elements = Vec::new();
         for (id, element) in &self.registry {
             let rect = element.get_bounding_client_rect();
@@ -356,10 +366,13 @@ pub(super) fn apply(
                 .ok_or_else(|| JsValue::from_str("layout stylesheet host unavailable"))?
                 .append_child(&style)?;
             let generation = GENERATION.with(|g| {
-                let next = g.get().wrapping_add(1);
+                let next = g
+                    .get()
+                    .checked_add(1)
+                    .ok_or_else(|| JsValue::from_str("layout owner capacity exhausted"))?;
                 g.set(next);
-                next
-            });
+                Ok::<_, JsValue>(next)
+            })?;
             *active = Some(Controller {
                 client: Rc::downgrade(client),
                 root: root.clone(),
@@ -429,11 +442,15 @@ fn tick() {
             (sessions, c.credential.clone())
         };
         let report = controller.sample()?;
-        let text = serde_json::to_string(&report)
-            .map_err(|_| JsValue::from_str("layout report encoding failed"))?;
-        if text.len() > contract::MAX_READBACK_BYTES {
-            return Err(JsValue::from_str("layout report byte capacity exceeded"));
-        }
+        let pages = report
+            .pages()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?
+            .into_iter()
+            .map(|page| {
+                serde_json::to_string(&page)
+                    .map_err(|_| JsValue::from_str("layout page encoding failed"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         controller.inflight = true;
         controller.dirty = false;
         controller.last_sent = now;
@@ -443,7 +460,7 @@ fn tick() {
         Ok(Some((
             sessions,
             credential,
-            text,
+            pages,
             report.revision,
             controller.generation,
         )))
@@ -461,24 +478,39 @@ fn tick() {
             return;
         }
     };
-    let Some((mut sessions, credential, text, revision, generation)) = work else {
+    let Some((mut sessions, credential, pages, revision, generation)) = work else {
         return;
     };
     wasm_bindgen_futures::spawn_local(async move {
         let outcome = async {
-            let mut call = request(
-                rpc::PresentedRequest {
+            let started = js_sys::Date::now();
+            for text in pages {
+                if !ACTIVE.with(|active| {
+                    active
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|c| c.generation == generation)
+                }) {
+                    return Err(JsValue::from_str("layout owner retired"));
+                }
+                if js_sys::Date::now() - started > 5000.0 {
+                    return Err(JsValue::from_str("layout upload deadline expired"));
+                }
+                let message = rpc::PresentedRequest {
                     sequence: 0,
                     display_instance: super::live_motion::display_instance(),
                     layout_readback_json: text,
-                },
-                &credential,
-            )?;
-            call.set_timeout(Duration::from_millis(2000));
-            sessions
-                .report_presented(call)
-                .await
-                .map_err(|_| JsValue::from_str("layout report rejected"))?;
+                };
+                if prost::Message::encoded_len(&message) > df_rpc_bridge::RPC_MESSAGE_BYTES - 1024 {
+                    return Err(JsValue::from_str("layout page exceeds RPC budget"));
+                }
+                let mut call = request(message, &credential)?;
+                call.set_timeout(Duration::from_millis(2000));
+                sessions
+                    .report_presented(call)
+                    .await
+                    .map_err(|_| JsValue::from_str("layout report rejected"))?;
+            }
             Ok::<_, JsValue>(())
         }
         .await;
@@ -502,4 +534,184 @@ fn tick() {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout_contract::{Distance, Transform, Unit};
+    fn controller(html: &str) -> Controller {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        root.set_inner_html(html);
+        document.body().unwrap().append_child(&root).unwrap();
+        let stylesheet = document.create_element("style").unwrap();
+        document
+            .query_selector("head")
+            .unwrap()
+            .unwrap()
+            .append_child(&stylesheet)
+            .unwrap();
+        Controller {
+            client: Weak::new(),
+            root,
+            stylesheet,
+            document: LayoutDocument::default(),
+            registry: BTreeMap::new(),
+            next_id: 0,
+            sample: 0,
+            generation: 1,
+            dirty: true,
+            inflight: false,
+            last_sent: 0.0,
+            overflow: 0,
+            clock: None,
+        }
+    }
+    #[test]
+    fn every_nested_visual_gets_a_unique_stable_id_and_dynamic_nodes_join_inventory() {
+        let mut c = controller(
+            "<div class='tv-stagebox'><p class='tv-narration'><span>Words</span></p></div><figure class='tv-fig' data-slot='hero-1'><img alt='Brakka'><div class='tv-fig-bubbles'><span class='tv-bubble-name'>Brakka</span></div></figure><button>Continue</button><script type='application/json'>{}</script>",
+        );
+        c.refresh().unwrap();
+        assert!(c.registry.contains_key("dm-overlay"));
+        assert!(c.registry.contains_key("actor-hero-1"));
+        assert!(c.registry.contains_key("bubbles-hero-1"));
+        let span = c
+            .root
+            .query_selector(".tv-narration span")
+            .unwrap()
+            .unwrap();
+        let id = span.get_attribute("data-layout-id").unwrap();
+        c.refresh().unwrap();
+        assert_eq!(span.get_attribute("data-layout-id").unwrap(), id);
+        assert!(
+            c.root
+                .query_selector("script")
+                .unwrap()
+                .unwrap()
+                .get_attribute("data-layout-id")
+                .is_none()
+        );
+        let loader = c
+            .root
+            .owner_document()
+            .unwrap()
+            .create_element("div")
+            .unwrap();
+        loader.set_attribute("class", "thinking-loader").unwrap();
+        c.root.append_child(&loader).unwrap();
+        c.refresh().unwrap();
+        assert!(loader.has_attribute("data-layout-id"));
+        let report = c.sample().unwrap();
+        let actor = report
+            .elements
+            .iter()
+            .find(|e| e.id == "actor-hero-1")
+            .unwrap();
+        assert_eq!(
+            actor.owner.as_ref().unwrap().name.as_deref(),
+            Some("Brakka")
+        );
+        c.root.remove();
+    }
+    #[test]
+    fn stylesheet_updates_and_reset_preserve_current_application_inline_styles() {
+        let mut c = controller(
+            "<div class='tv-stagebox' style='left:20px;transform:translateX(12px);animation: original-motion 10s infinite'>Words</div>",
+        );
+        c.refresh().unwrap();
+        let element = c.registry["dm-overlay"].clone();
+        let before = element.get_attribute("style");
+        c.document.overrides.insert(
+            "dm-overlay".into(),
+            Transform {
+                translate_y: Some(Distance {
+                    value: 100.0,
+                    unit: Unit::Px,
+                }),
+                rotate: Some(10.0),
+                ..Default::default()
+            },
+        );
+        c.stylesheet
+            .set_text_content(Some(&c.document.stylesheet().unwrap()));
+        assert_eq!(element.get_attribute("style"), before);
+        let style = web_sys::window()
+            .unwrap()
+            .get_computed_style(&element)
+            .unwrap()
+            .unwrap();
+        assert!(
+            style
+                .get_property_value("translate")
+                .unwrap()
+                .contains("100px")
+        );
+        assert_eq!(
+            style.get_property_value("animation-name").unwrap(),
+            "original-motion"
+        );
+        element
+            .set_attribute(
+                "style",
+                "left:40px;transform:rotate(3deg);animation: new-motion 5s infinite",
+            )
+            .unwrap();
+        c.document.overrides.clear();
+        c.stylesheet
+            .set_text_content(Some(&c.document.stylesheet().unwrap()));
+        assert_eq!(
+            element.get_attribute("style").as_deref(),
+            Some("left:40px;transform:rotate(3deg);animation: new-motion 5s infinite")
+        );
+        let style = web_sys::window()
+            .unwrap()
+            .get_computed_style(&element)
+            .unwrap()
+            .unwrap();
+        assert_eq!(style.get_property_value("translate").unwrap(), "none");
+        assert_eq!(
+            style.get_property_value("animation-name").unwrap(),
+            "new-motion"
+        );
+        c.root.remove();
+    }
+    #[test]
+    fn overflow_is_explicit_and_removed_targets_report_absent() {
+        let mut c = controller("<div class='tv-stagebox'>DM</div>");
+        for _ in 0..550 {
+            let node = c
+                .root
+                .owner_document()
+                .unwrap()
+                .create_element("span")
+                .unwrap();
+            c.root.append_child(&node).unwrap();
+        }
+        c.refresh().unwrap();
+        assert_eq!(c.registry.len(), contract::MAX_ELEMENTS);
+        assert!(c.overflow > 0);
+        assert!(c.registry.contains_key("dm-overlay"));
+        c.document.overrides.insert(
+            "dm-overlay".into(),
+            Transform {
+                rotate: Some(10.0),
+                ..Default::default()
+            },
+        );
+        c.registry["dm-overlay"].remove();
+        c.refresh().unwrap();
+        let report = c.sample().unwrap();
+        assert_eq!(
+            report
+                .elements
+                .iter()
+                .find(|e| e.id == "dm-overlay")
+                .unwrap()
+                .status,
+            ElementStatus::Absent
+        );
+        c.root.remove();
+    }
 }

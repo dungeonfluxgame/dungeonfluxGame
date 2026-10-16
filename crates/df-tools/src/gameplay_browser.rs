@@ -2108,10 +2108,9 @@ fn receive_view(
     if matches!(
         acceptance,
         ConnectionViewAcceptance::View(ViewAcceptance::Applied | ViewAcceptance::Duplicate { .. })
-    ) {
-        if let Some(rpc::view_message::Audience::Display(display)) = &view.audience {
-            layout::apply(client, &display.layout_json, display.layout_revision)?;
-        }
+    ) && let Some(rpc::view_message::Audience::Display(display)) = &view.audience
+    {
+        layout::apply(client, &display.layout_json, display.layout_revision)?;
     }
     if acceptance != ConnectionViewAcceptance::ObsoleteGeneration {
         // Any view (even one already held) proves the connection is good again.

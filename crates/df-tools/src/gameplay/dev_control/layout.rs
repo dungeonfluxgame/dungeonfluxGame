@@ -1,8 +1,8 @@
 //! Authenticated layout state. One mutex makes revision, configuration and acknowledgments atomic.
 use super::{Outcome, Shared, authorized, bad_request};
 use crate::layout_contract::{
-    self as contract, ElementStatus, LayoutDocument, LayoutError, LayoutReadback, MoveRequest,
-    ResetRequest, Transform, TransformRequest,
+    self as contract, ElementStatus, LayoutDocument, LayoutError, LayoutPage, LayoutReadback,
+    MoveRequest, ResetRequest, Transform, TransformRequest,
 };
 use axum::{
     extract::{Query, State as AxumState},
@@ -32,10 +32,22 @@ pub(crate) struct LayoutState {
 struct LayoutInner {
     document: LayoutDocument,
     clients: BTreeMap<u64, ClientReadback>,
+    assemblies: BTreeMap<u64, Assembly>,
 }
 struct ClientReadback {
     report: LayoutReadback,
     seen: Instant,
+}
+const ASSEMBLY_LIFETIME: Duration = Duration::from_secs(10);
+struct Assembly {
+    started: Instant,
+    sample: u64,
+    revision: u64,
+    viewport: contract::Viewport,
+    overflow: usize,
+    parts: Vec<Option<Vec<contract::ElementReadback>>>,
+    received: usize,
+    bytes: usize,
 }
 impl LayoutState {
     pub(crate) fn new() -> Self {
@@ -44,6 +56,7 @@ impl LayoutState {
             state: Arc::new(Mutex::new(LayoutInner {
                 document: LayoutDocument::default(),
                 clients: BTreeMap::new(),
+                assemblies: BTreeMap::new(),
             })),
             enabled: Arc::new(AtomicBool::new(false)),
             changed,
@@ -69,6 +82,9 @@ impl LayoutState {
             display.layout_revision = state.document.revision;
             display.layout_json =
                 serde_json::to_string(&state.document).map_err(|_| LayoutError::Shape)?;
+            if display.layout_json.len() > contract::MAX_DOCUMENT_BYTES {
+                return Err(LayoutError::Limit);
+            }
         }
         Ok(())
     }
@@ -83,16 +99,16 @@ impl LayoutState {
                 else if id.is_some()&&elements.is_empty()||elements.iter().any(|e|e.status==ElementStatus::Absent) { "absent" } else { "applied" };
             json!({"display_instance":instance,"status":status,"reported_revision":client.report.revision,"sample":client.report.sample,"viewport":client.report.viewport,"overflow":client.report.overflow,"elements":elements})
         }).collect();
-        if let Some(id) = id {
-            if !state.document.overrides.contains_key(id)
-                && !state
-                    .clients
-                    .values()
-                    .any(|client| client.report.elements.iter().any(|e| e.id == id))
-            {
-                return Err(LayoutError::UnknownId);
-            }
+        if let Some(id) = id
+            && !state.document.overrides.contains_key(id)
+            && !state
+                .clients
+                .values()
+                .any(|client| client.report.elements.iter().any(|e| e.id == id))
+        {
+            return Err(LayoutError::UnknownId);
         }
+        let pending_pages:Vec<_>=state.assemblies.iter().map(|(instance,a)|json!({"display_instance":instance,"revision":a.revision,"sample":a.sample,"received":a.received,"pages":a.parts.len(),"status":if a.started.elapsed()<=ASSEMBLY_LIFETIME{"receiving"}else{"expired"}})).collect();
         let overrides: BTreeMap<_, _> = state
             .document
             .overrides
@@ -100,7 +116,7 @@ impl LayoutState {
             .filter(|(key, _)| id.is_none_or(|id| id == key.as_str()))
             .collect();
         Ok(
-            json!({"revision":state.document.revision,"status":if clients.is_empty(){"pending"}else if clients.iter().all(|c|c["status"]=="applied"){"applied"}else{"pending"},"overrides":overrides,"clients":clients,"capacity":contract::MAX_ELEMENTS}),
+            json!({"revision":state.document.revision,"status":if clients.is_empty(){"pending"}else if clients.iter().all(|c|c["status"]=="applied"){"applied"}else{"pending"},"overrides":overrides,"clients":clients,"capacity":contract::MAX_ELEMENTS,"pending_pages":pending_pages}),
         )
     }
     pub(crate) async fn readback(&self, instance: u64, text: &str) -> Result<(), LayoutError> {
@@ -110,16 +126,124 @@ impl LayoutState {
         if instance == 0 {
             return Err(LayoutError::Id);
         }
-        let report = LayoutReadback::parse(text)?;
+        let page = LayoutPage::parse(text)?;
+        let report = {
+            let mut state = self.state.lock().await;
+            state
+                .assemblies
+                .retain(|_, a| a.started.elapsed() <= ASSEMBLY_LIFETIME);
+            state
+                .clients
+                .retain(|_, c| c.seen.elapsed() <= INVENTORY_LIFETIME);
+            if page.revision > state.document.revision {
+                return Err(LayoutError::Revision);
+            }
+            if let Some(previous) = state.clients.get(&instance) {
+                if page.sample == previous.report.sample
+                    && page.revision == previous.report.revision
+                    && page.viewport == previous.report.viewport
+                    && page.overflow == previous.report.overflow
+                    && page
+                        .elements
+                        .iter()
+                        .all(|e| previous.report.elements.contains(e))
+                {
+                    return Ok(());
+                }
+                if page.sample <= previous.report.sample || page.revision < previous.report.revision
+                {
+                    return Err(LayoutError::Revision);
+                }
+            }
+            if state
+                .assemblies
+                .get(&instance)
+                .is_none_or(|a| a.sample != page.sample)
+            {
+                if page.page != 0
+                    || state
+                        .assemblies
+                        .get(&instance)
+                        .is_some_and(|a| page.sample <= a.sample)
+                {
+                    return Err(LayoutError::Revision);
+                }
+                let clients: std::collections::BTreeSet<_> = state
+                    .clients
+                    .keys()
+                    .chain(state.assemblies.keys())
+                    .copied()
+                    .collect();
+                if !clients.contains(&instance) && clients.len() >= MAX_CLIENTS {
+                    return Err(LayoutError::Limit);
+                }
+                state.assemblies.insert(
+                    instance,
+                    Assembly {
+                        started: Instant::now(),
+                        sample: page.sample,
+                        revision: page.revision,
+                        viewport: page.viewport.clone(),
+                        overflow: page.overflow,
+                        parts: vec![None; page.pages],
+                        received: 0,
+                        bytes: 0,
+                    },
+                );
+            }
+            let assembly = state
+                .assemblies
+                .get_mut(&instance)
+                .ok_or(LayoutError::Revision)?;
+            if assembly.revision != page.revision
+                || assembly.parts.len() != page.pages
+                || assembly.viewport != page.viewport
+                || assembly.overflow != page.overflow
+            {
+                return Err(LayoutError::Shape);
+            }
+            let part = assembly
+                .parts
+                .get_mut(page.page)
+                .ok_or(LayoutError::Shape)?;
+            if let Some(previous) = part {
+                if *previous != page.elements {
+                    return Err(LayoutError::Shape);
+                }
+            } else {
+                if assembly.bytes + text.len() > contract::MAX_READBACK_BYTES {
+                    return Err(LayoutError::Limit);
+                }
+                assembly.bytes += text.len();
+                assembly.received += 1;
+                *part = Some(page.elements);
+            }
+            if assembly.received != assembly.parts.len() {
+                return Ok(());
+            }
+            let assembly = state
+                .assemblies
+                .remove(&instance)
+                .ok_or(LayoutError::Revision)?;
+            let report = LayoutReadback {
+                sample: assembly.sample,
+                revision: assembly.revision,
+                viewport: assembly.viewport,
+                overflow: assembly.overflow,
+                elements: assembly.parts.into_iter().flatten().flatten().collect(),
+            };
+            report.validate()?;
+            report
+        };
         let mut state = self.state.lock().await;
         if report.revision > state.document.revision {
             return Err(LayoutError::Revision);
         }
-        if let Some(previous) = state.clients.get(&instance) {
-            if report.sample <= previous.report.sample || report.revision < previous.report.revision
-            {
-                return Err(LayoutError::Revision);
-            }
+        if let Some(previous) = state.clients.get(&instance)
+            && (report.sample <= previous.report.sample
+                || report.revision < previous.report.revision)
+        {
+            return Err(LayoutError::Revision);
         }
         if report.revision == state.document.revision {
             for element in &report.elements {
@@ -155,6 +279,12 @@ impl LayoutState {
                         .map(|e| (&e.id, e.status, &e.configured))
                         .collect::<Vec<_>>()
         });
+        let applied: Vec<_> = report
+            .elements
+            .iter()
+            .filter(|e| e.configured.is_some() && e.status == ElementStatus::Applied)
+            .map(|e| e.id.clone())
+            .collect();
         let absent: Vec<_> = report
             .elements
             .iter()
@@ -170,20 +300,18 @@ impl LayoutState {
         );
         drop(state);
         if changed {
-            event(
-                "gameplay.layout.applied",
-                revision,
-                None,
-                if revision != current {
-                    "stale"
-                } else if !absent.is_empty() {
-                    "absent"
-                } else {
-                    "applied"
-                },
-            );
-            for id in absent {
-                event("gameplay.layout.absent", revision, Some(&id), "absent");
+            if revision != current {
+                event("gameplay.layout.readback", revision, None, "stale");
+            } else {
+                if applied.is_empty() && absent.is_empty() {
+                    event("gameplay.layout.applied", revision, None, "applied");
+                }
+                for id in applied {
+                    event("gameplay.layout.applied", revision, Some(&id), "applied");
+                }
+                for id in absent {
+                    event("gameplay.layout.absent", revision, Some(&id), "absent");
+                }
             }
         }
         Ok(())
@@ -230,15 +358,14 @@ impl LayoutState {
             contract::validate_id(id)?;
         }
         let mut state = self.state.lock().await;
-        if let Some(id) = id {
-            if !state.document.overrides.contains_key(id)
-                && !state.clients.values().any(|c| {
-                    c.seen.elapsed() <= INVENTORY_LIFETIME
-                        && c.report.elements.iter().any(|e| e.id == id)
-                })
-            {
-                return Err(LayoutError::UnknownId);
-            }
+        if let Some(id) = id
+            && !state.document.overrides.contains_key(id)
+            && !state.clients.values().any(|c| {
+                c.seen.elapsed() <= INVENTORY_LIFETIME
+                    && c.report.elements.iter().any(|e| e.id == id)
+            })
+        {
+            return Err(LayoutError::UnknownId);
         }
         let revision = state
             .document
@@ -394,9 +521,12 @@ mod tests {
         instance: u64,
         report: &LayoutReadback,
     ) -> Result<(), LayoutError> {
-        state
-            .readback(instance, &serde_json::to_string(report).unwrap())
-            .await
+        for page in report.pages()? {
+            state
+                .readback(instance, &serde_json::to_string(&page).unwrap())
+                .await?;
+        }
+        Ok(())
     }
     #[tokio::test]
     async fn inventory_admission_partial_updates_and_exact_revision_ack() {
@@ -485,6 +615,88 @@ mod tests {
                 .readback(1, "{\"revision\":0,\"css\":\"x\"}")
                 .await
                 .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn paged_inventory_is_atomic_and_mismatched_or_incomplete_samples_never_admit_ids() {
+        let state = LayoutState::new();
+        state.enable();
+        let mut full = report(0, 1, "visual-0", None);
+        full.elements = (0..512)
+            .map(|index| {
+                let mut element = full.elements[0].clone();
+                element.id = format!("visual-{index}");
+                element.effective.as_mut().unwrap().matrix = "x".repeat(512);
+                element
+            })
+            .collect();
+        let pages = full.pages().unwrap();
+        assert!(pages.len() > 1);
+        for page in pages.iter().take(pages.len() - 1) {
+            state
+                .readback(1, &serde_json::to_string(page).unwrap())
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            state
+                .mutate(
+                    "visual-511",
+                    Transform {
+                        rotate: Some(10.0),
+                        ..Default::default()
+                    }
+                )
+                .await,
+            Err(LayoutError::UnknownId)
+        );
+        assert_eq!(
+            state.snapshot(None).await.unwrap()["pending_pages"][0]["received"],
+            pages.len() - 1
+        );
+        let last = pages.last().unwrap();
+        state
+            .readback(1, &serde_json::to_string(last).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.snapshot(None).await.unwrap()["clients"][0]["elements"]
+                .as_array()
+                .unwrap()
+                .len(),
+            512
+        );
+        state
+            .readback(1, &serde_json::to_string(last).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .mutate(
+                    "visual-511",
+                    Transform {
+                        rotate: Some(10.0),
+                        ..Default::default()
+                    }
+                )
+                .await
+                .unwrap(),
+            1
+        );
+        let mut wrong = pages[0].clone();
+        wrong.sample = 2;
+        wrong.revision = 1;
+        state
+            .readback(2, &serde_json::to_string(&wrong).unwrap())
+            .await
+            .unwrap();
+        wrong.page = 1;
+        wrong.revision = 0;
+        assert_eq!(
+            state
+                .readback(2, &serde_json::to_string(&wrong).unwrap())
+                .await,
+            Err(LayoutError::Shape)
         );
     }
 }

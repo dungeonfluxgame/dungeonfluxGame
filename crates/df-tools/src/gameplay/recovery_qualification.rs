@@ -228,6 +228,8 @@ impl RunningActor {
             return Err(io::Error::other("qualification actor handoff failed").into());
         }
         let service = Service {
+            display_credential: [0x82; 32],
+            layout: super::dev_control::layout::LayoutState::new(),
             actor: sender.clone(),
             updates: receiver,
             streams: Arc::new(Semaphore::new(6)),
