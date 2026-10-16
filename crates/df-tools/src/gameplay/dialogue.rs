@@ -1774,7 +1774,7 @@ impl Service {
                     match self.commit_npc_event(credential, proposal).await {
                         Ok(outcome) if outcome.status == "committed" => {
                             npc_event_result = Some(serde_json::json!({
-                                "status": outcome.status.clone(),
+                                "status": outcome.status,
                                 "revision": outcome.revision.clone(),
                             }));
                             response.revision =
