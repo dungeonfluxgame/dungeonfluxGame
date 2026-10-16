@@ -194,6 +194,12 @@ pub(crate) struct SceneChange {
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum SceneChangeKind {
+    /// Converts one finite catalog offer into a durable, held scene thing.
+    /// The offer id remains the ledger key so replay is deterministic.
+    Purchased {
+        holder_id: String,
+        seller_id: String,
+    },
     Taken {
         holder_id: String,
     },
@@ -643,6 +649,9 @@ impl SceneModel {
             .find(|thing| thing.id == change.entity_id)
         {
             match &change.kind {
+                SceneChangeKind::Purchased { .. } => {
+                    return Err(SceneModelError::Contradiction);
+                }
                 SceneChangeKind::Taken { holder_id } | SceneChangeKind::Given { holder_id } => {
                     thing.holder_id = Some(holder_id.clone());
                     thing.in_scene = person_ids.contains(holder_id.as_str());
@@ -663,6 +672,47 @@ impl SceneModel {
                     return Err(SceneModelError::UnknownEntity);
                 }
             }
+            return Ok(());
+        }
+        if let SceneChangeKind::Purchased {
+            holder_id,
+            seller_id,
+        } = &change.kind
+        {
+            let offer = self
+                .offers
+                .iter()
+                .find(|offer| offer.id == change.entity_id)
+                .ok_or(SceneModelError::UnknownEntity)?;
+            let item_id = format!("purchased-{}", offer.id);
+            if self.things.iter().any(|thing| thing.id == item_id) {
+                return Err(SceneModelError::Contradiction);
+            }
+            self.things.push(SceneThing {
+                id: item_id,
+                name: offer.name.clone(),
+                short: offer.name.clone(),
+                detail: offer.description.clone(),
+                picture_description: offer.description.clone(),
+                closer_look: offer.description.clone(),
+                skill: FindingSkill::Investigation,
+                dc: 0,
+                finding_id: None,
+                clue_fact_id: None,
+                portable: true,
+                value_cp: Some(offer.cost_cp),
+                use_effect: format!("Uses {}.", offer.description.trim_end_matches('.')),
+                position: format!("held by {holder_id}"),
+                owner_id: Some(seller_id.clone()),
+                in_use: false,
+                in_scene: true,
+                holder_id: Some(holder_id.clone()),
+                open: false,
+                lit: false,
+                broken: false,
+                searched_by: Vec::new(),
+                aliases: offer.aliases.clone(),
+            });
             return Ok(());
         }
         if let Some(person) = self

@@ -500,6 +500,53 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
                 .unwrap()
                 .is_none()
         );
+        let owned_id = format!("purchased-{}", offer.id);
+        let owned = living_scene::snapshot(after.state(), &scene)
+            .unwrap()
+            .unwrap()
+            .model
+            .things
+            .into_iter()
+            .find(|thing| thing.id == owned_id)
+            .expect("purchase must create a durable held scene thing");
+        assert_eq!(owned.holder_id.as_deref(), Some("Brynn"));
+        assert!(owned.in_scene);
+        let codec = df_persistence::NativeCodecLimits {
+            maximum_document_bytes: 2 * 1024 * 1024,
+            maximum_allocated_bytes: 2 * 1024 * 1024,
+            maximum_collection_items: 4096,
+            maximum_text_bytes: 4096,
+        };
+        let bytes =
+            df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&after, codec).unwrap();
+        let restored = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+            &bytes,
+            after.basis(),
+            &model::pins().unwrap(),
+            &model::recovery().unwrap(),
+            codec,
+        )
+        .unwrap();
+        assert_eq!(
+            living_scene::snapshot(restored.state(), &scene).unwrap(),
+            living_scene::snapshot(after.state(), &scene).unwrap()
+        );
+        let balance_after_first =
+            living_scene::balance_cp(after.state(), player_entity(member, &after).unwrap())
+                .unwrap();
+        let repeated = interact(&after, member, 32, &offer.id, "buy");
+        assert_eq!(
+            living_scene::balance_cp(repeated.state(), player_entity(member, &repeated).unwrap())
+                .unwrap(),
+            balance_after_first,
+            "a finite offer cannot charge twice"
+        );
+        assert!(
+            living_scene::last_line(repeated.state())
+                .unwrap()
+                .unwrap()
+                .contains("already sold")
+        );
     });
 }
 

@@ -608,13 +608,29 @@ pub(super) fn stage(
         if option != "buy" && option != "use" {
             return Err(invalid());
         }
-        if balance_cp(current.state(), *who)? < u64::from(offer.cost_cp) {
+        let purchased_id = format!("purchased-{}", offer.id);
+        if snapshot
+            .model
+            .things
+            .iter()
+            .any(|thing| thing.id == purchased_id)
+        {
+            format!("{} is already sold.", offer.name)
+        } else if balance_cp(current.state(), *who)? < u64::from(offer.cost_cp) {
             format!(
                 "{} costs {} CP; you do not have enough coin.",
                 offer.name, offer.cost_cp
             )
         } else {
             paid_cp = offer.cost_cp;
+            change = Some(SceneChange {
+                entity_id: offer.id.clone(),
+                description: format!("{hero} buys {}.", offer.name),
+                kind: SceneChangeKind::Purchased {
+                    holder_id: hero.clone(),
+                    seller_id: offer.seller_id.clone(),
+                },
+            });
             let seller = snapshot
                 .model
                 .people
