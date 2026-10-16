@@ -475,3 +475,34 @@ the browser. An integration test must prove that a ready plate, a failed plate,
 and a stale completion produce the same effective source and identity before and
 after the move. Until those stages land, this manual and the existing typed
 summaries are the authoritative navigation guide.
+
+## Dialogue and speech quality (2026-10-16)
+
+The reply owner is `gameplay/npc_reply.rs`. It gathers listener-safe facts from
+`npc_facts.rs`, applies the NPC policy/profile in `npc_dossier.rs`, and sends
+accepted speech through `table_log.rs` and `voice_line.rs` into `gameplay/voice.rs`.
+The provider boundary is `df-providers/src/speech_adapter.rs`. Change this path
+together; a second text rewrite at TTS would break caption/speech agreement.
+
+NPC replies now prioritize the latest question, use public history for follow-ups,
+avoid forced names and unrelated biography, and use Medium reasoning with the same
+450-token output cap. The model, casting and speech-provider settings are unchanged.
+The text cache key already includes style, facts and the complete call profile.
+These are provisional source changes; a new running game and audible review remain
+required. Do not infer speech quality from HTTP 200 or a browser `playing` event.
+
+The ignored `live_npc_talk_transcripts` test has a `natural-conversation` scenario:
+12 turns with canonical cast/location placeholders, compound questions, follow-ups,
+apology, uncertainty and reward questions. Keep the existing witness/private cases.
+With the documented N06 key, seeds, cache, output and budget environment configured:
+
+```powershell
+$env:DF_N06_ONLY='natural-conversation'
+cargo test -p df-tools --lib live_npc_talk_transcripts -- --ignored --nocapture
+```
+
+Compare full replies with the approved facts, then inspect the CLI `text_model`,
+`voice` and display lifecycle timelines. Listen for identity, pronunciation,
+conversational pacing and pauses; verify the spoken words match the caption.
+Prompt-only experiments and the remaining build/audio gates are recorded in
+`planning/issue-triage.md` under dialogue refinement.

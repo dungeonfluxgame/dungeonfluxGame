@@ -1088,3 +1088,34 @@ placement, readability and plate continuity. Default caption/context positioning
 still uses the -96 px live subtitle override. Audio was not auditioned; client
 capture gaps, narrative deferrals/memory quality, title/control layout and queued
 check timing remain separate open work.
+
+### Dialogue refinement investigation (2026-10-16 UTC; acceptance pending)
+
+Current source had conflicting history instructions, forced hero-name addressing,
+and generic fact paraphrasing. Changes in `npc_dossier.rs` and `npc_facts.rs`
+prioritize the latest turn and relevant answers, preserve public follow-up context,
+separate voice hints from facts, and make names optional. NPC reasoning moves from
+Low to Medium within the existing 450-token cap. Added the canonical 12-turn
+`natural-conversation` scenario in `npc_talk_live_tests.rs`; old adversarial and
+private-listener scenarios remain.
+
+Five bounded direct Responses experiments produced 70 replies / 118,256
+supplier-reported tokens (120,000 total cap): 32 baseline/v1 comparisons, 16 v2 Low
+samples, 8 model/reasoning comparisons, 12 Medium canaries and 2 capture replays.
+Four calls benchmarked Sol; the game model was not changed. Contexts were synthetic
+public states derived from retained Perrin fixtures, not running game sessions.
+The first candidates were rejected for unrelated footrace/guild padding and an
+invented negative book action. Medium Luna samples replaced these with grounded
+limits and resolved the location follow-up. A simple destination became
+"Take it to the Old Hayloft." Missing family data received a short boundary rather
+than self-ignorance or invented children. This is bounded prompt evidence only.
+
+Remaining: run current native/WASM and live canaries through actual validators,
+retries, fallback, persistence and both players. Repeated canonical facts can still
+hit the four-content-word repeat rule. Unknown/irrelevant fact selection and exhausted
+subject fallbacks need dedicated fixtures; a prompt cannot prove semantic grounding.
+Review both content ratings, private/public continuity and actual audio delivery.
+The final source policy was shortened after experiments to preserve the existing
+guidance headroom gate (Restrained 3,118; Mature 3,692; style 467 characters).
+Formatting/whitespace checks passed. Builds, browser play and audio audition remain
+blocked by zero free C: bytes and the stopped local server. No quality-complete claim.

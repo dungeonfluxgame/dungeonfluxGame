@@ -67,7 +67,7 @@ struct Scenario {
     lines: &'static [&'static str],
 }
 
-const SCENARIOS: [Scenario; 12] = [
+const SCENARIOS: [Scenario; 13] = [
     Scenario {
         name: "patron-earnest",
         seed: 0,
@@ -82,6 +82,29 @@ const SCENARIOS: [Scenario; 12] = [
             "Who or what might stand in our way on the road to {destination}?",
             "How long do we have, and what should we watch for?",
             "Anything else before we set out?",
+        ],
+    },
+    Scenario {
+        name: "natural-conversation",
+        seed: 0,
+        scene: SceneKey::Opening,
+        speaker: NpcRole::Patron,
+        tone: Tone::Earnest,
+        clue: Clue::NotInvolved,
+        hero: "Brakka",
+        lines: &[
+            "{npc}, what is this errand, and where are we going?",
+            "Who is {contact_full}, and where will we find them?",
+            "You said {contact_full} is at {destination}. Where exactly?",
+            "Why can't you go yourself?",
+            "How long do we have?",
+            "I'm sorry I pressed you. We will help.",
+            "What do you know about the road?",
+            "What don't you know about this errand?",
+            "Where will we find them?",
+            "What landmark should we follow?",
+            "What reward is already promised for this work?",
+            "Thanks. Is there anything else we should know?",
         ],
     },
     Scenario {
