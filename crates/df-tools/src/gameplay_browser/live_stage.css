@@ -224,10 +224,10 @@
    readable while the result card is on screen. */
 .tv-check-result{--check-soot:#1a1814;--check-walnut:#322a20;--check-ash:#d8d0bb;--check-bronze:#a68b5b;box-sizing:border-box;container:check-card / inline-size;display:grid;grid-template-columns:minmax(0,1fr) max(142px,calc(var(--u)*10.5));width:100%;max-inline-size:100%;max-block-size:calc(100vh - var(--u)*2);min-width:0;overflow:auto;padding:0;border:1px solid #a68b5b66;border-radius:2px;background:var(--check-soot);box-shadow:0 calc(var(--u)*.35) calc(var(--u)*1.1) #0009;text-align:left;text-shadow:none;color:var(--check-ash);scrollbar-color:var(--check-bronze) var(--check-soot);animation:df-check-result-out var(--check-fade-duration,500ms) ease var(--check-close-delay,10s) both}
 .tv-check-result:focus-visible{outline:2px solid var(--check-ash);outline-offset:3px}
-.tv-check-entry{display:flex;flex-direction:column;align-items:flex-start;gap:max(8px,calc(var(--u)*.55));padding:max(18px,calc(var(--u)*1.25)) max(20px,calc(var(--u)*1.5))}
+.tv-check-entry{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:max(8px,calc(var(--u)*.55));padding:max(18px,calc(var(--u)*1.25)) max(20px,calc(var(--u)*1.5))}
 .tv-check-hero{font:400 max(24px,calc(var(--u)*1.55))/1.1 var(--serif);color:var(--check-ash);overflow-wrap:anywhere}
 .tv-check-intention{width:100%;margin:0;font:600 max(28px,calc(var(--u)*1.95))/1.18 var(--serif);letter-spacing:-.015em;color:#ede7d9;overflow-wrap:anywhere;text-wrap:pretty}
-.tv-check-skill{display:block;margin-top:auto;padding-top:max(7px,calc(var(--u)*.45));font:400 max(18px,calc(var(--u)*1.2))/1.35 system-ui,sans-serif;color:#bbb3a0;overflow-wrap:anywhere}
+.tv-check-skill{display:block;padding-top:max(7px,calc(var(--u)*.45));font:400 max(18px,calc(var(--u)*1.2))/1.35 system-ui,sans-serif;color:#bbb3a0;overflow-wrap:anywhere}
 .tv-check-roll{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:max(9px,calc(var(--u)*.65));min-width:0;padding:max(14px,calc(var(--u)*1)) max(10px,calc(var(--u)*.7));border-inline-start:1px solid #a68b5b4d;background:linear-gradient(110deg,#322a2066,#1a181400);text-align:center}
 .tv-check-dice{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px;width:100%;padding-bottom:18px}
 .tv-check-die-label{flex-basis:100%;font:400 max(18px,calc(var(--u)*1.15))/1 system-ui,sans-serif;color:#bbb3a0}
@@ -240,6 +240,7 @@
 .tv-check-modifier,.tv-check-operator{color:#bbb3a0}
 .tv-check-total{font:600 max(29px,calc(var(--u)*1.95))/1 var(--serif);color:#ede7d9}
 .tv-check-mode{font:400 max(18px,calc(var(--u)*1.1))/1.25 system-ui,sans-serif;color:#bbb3a0;overflow-wrap:anywhere}
+.tv-check-result[data-roll-mode="0"] .tv-check-mode{display:none}
 .tv-check-resolution{grid-column:1/-1;display:flex;flex-direction:column;align-items:flex-start;gap:max(7px,calc(var(--u)*.45));padding:max(15px,calc(var(--u)*1)) max(20px,calc(var(--u)*1.5));border-top:1px solid #a68b5b4d;background:#322a204d}
 .tv-check-outcome{font:600 max(24px,calc(var(--u)*1.55))/1.1 var(--serif);color:#adb79a}
 .tv-check-result[data-succeeded=false] .tv-check-outcome{color:#bd9584}
