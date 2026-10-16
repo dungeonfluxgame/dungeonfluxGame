@@ -588,7 +588,8 @@ impl Plates {
                     self.shared.apply(&scene_key, scene).unwrap_or_default();
                 self.shared.project_scene_clip(&scene_key, scene);
                 self.shared.project_scene_contents(scene, None);
-                self.shared.record_projection(&scene_key, scene);
+                self.shared
+                    .record_projection(&scene_key, scene, display.live_plate_graph_revision);
             }
             Some(rpc::view_message::Audience::Player(player)) => {
                 let Some(scene) = player.scene.as_mut() else {
@@ -1247,7 +1248,12 @@ impl Shared {
         None
     }
 
-    fn record_projection(&self, scene_key: &str, scene: &rpc::GameplayScene) {
+    fn record_projection(
+        &self,
+        scene_key: &str,
+        scene: &rpc::GameplayScene,
+        plate_graph_revision: u64,
+    ) {
         let (line, fields) = {
             let mut book = locked(&self.book);
             let Some(current) = book.current.as_mut() else {
@@ -1267,7 +1273,7 @@ impl Shared {
             };
             let projection = PlateProjection {
                 graph_revision: current.graph_revision,
-                plate_graph_revision: scene.live_plate_graph_revision,
+                plate_graph_revision,
                 plate_id: current.id.clone(),
                 plate_state: scene.plate_state,
                 source: source.to_owned(),
@@ -1318,7 +1324,7 @@ impl Shared {
                 ),
                 (
                     "plate_graph_revision".to_owned(),
-                    serde_json::json!(scene.live_plate_graph_revision),
+                    serde_json::json!(plate_graph_revision),
                 ),
                 ("plate_id".to_owned(), serde_json::json!(plate_id)),
                 ("plate_state".to_owned(), serde_json::json!(state)),
