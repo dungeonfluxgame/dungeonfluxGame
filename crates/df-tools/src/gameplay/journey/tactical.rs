@@ -594,6 +594,7 @@ fn creature_can_speak(kind: tactical_rules::CreatureKind) -> bool {
         tactical_rules::CreatureKind::GiantRat => "giant-rat",
         tactical_rules::CreatureKind::GiantWeasel => "giant-weasel",
         tactical_rules::CreatureKind::Mastiff => "mastiff",
+        tactical_rules::CreatureKind::Commoner => "commoner",
         tactical_rules::CreatureKind::Scout => "scout",
         tactical_rules::CreatureKind::Hero => return true,
     };
@@ -1181,6 +1182,7 @@ pub(super) fn start(
             .ok_or(RepositoryError::InvalidCandidate),
     )?;
     let map = noted("fight-scene-map", scene_map(bytes, &layout.id))?;
+    let scene_binding = encounter_admission::scene_attack_target(current, command)?;
     let mut specs = Vec::new();
     let mut actors = Vec::new();
     for (index, entity) in noted(
@@ -1246,7 +1248,12 @@ pub(super) fn start(
         specs.push(spec);
         actors.push((id, entity));
     }
-    for (index, (who, source_id, ammunition)) in noted("fight-enemy-roster", enemies())?
+    let enemy_roster = if let Some(binding) = scene_binding {
+        vec![(binding.entity, binding.creature.id.to_owned(), 0_u16)]
+    } else {
+        enemies()?
+    };
+    for (index, (who, source_id, ammunition)) in noted("fight-enemy-roster", Ok(enemy_roster))?
         .into_iter()
         .enumerate()
     {
@@ -1261,23 +1268,37 @@ pub(super) fn start(
             "fight-enemy-spec",
             CombatantSpec::creature(id, &source_id, cell, ammunition).map_err(bad),
         )?;
-        if state.entities.iter().any(|entity| entity.id == who) {
+        if state.entities.iter().any(|entity| entity.id == who) && scene_binding.is_none() {
             return noted(
                 "fight-enemy-duplicate",
                 Err(RepositoryError::InvalidCandidate),
             );
         }
-        state.entities.push(WorldEntity {
-            id: who,
-            definition: model::content("bandit")?,
-            location: Some(room_entity()?),
-            position: Some(Position {
+        if let Some(entity) = state.entities.iter_mut().find(|entity| entity.id == who) {
+            entity.location = Some(room_entity()?);
+            entity.position = Some(Position {
                 x: i64::from(cell.0) * 5,
                 y: i64::from(cell.1) * 5,
                 z: 0,
-            }),
-            identity_revision: model::label("tactical-srd521-1")?,
-        });
+            });
+        } else if scene_binding.is_some() {
+            // A scene assault must use the authored canonical NPC already in
+            // the scene. Never synthesize a Bandit-shaped replacement when
+            // that identity is missing.
+            return noted("fight-scene-entity", Err(RepositoryError::InvalidCandidate));
+        } else {
+            state.entities.push(WorldEntity {
+                id: who,
+                definition: model::content("bandit")?,
+                location: Some(room_entity()?),
+                position: Some(Position {
+                    x: i64::from(cell.0) * 5,
+                    y: i64::from(cell.1) * 5,
+                    z: 0,
+                }),
+                identity_revision: model::label("tactical-srd521-1")?,
+            });
+        }
         for (key, value) in [
             ("hit-points", i64::from(spec.hit_points)),
             ("armor-class", i64::from(spec.armor_class)),
@@ -1393,7 +1414,9 @@ pub(super) fn start(
         participants: actors.iter().map(|(_, who)| *who).collect(),
         turn_order: Vec::new(),
         active_turn: None,
-        objectives: vec![model::content("defend-courier")?],
+        objectives: vec![model::content(
+            scene_binding.map_or("defend-courier", |binding| binding.objective),
+        )?],
         combat_policy: model::content("tactical-srd521-cover-policy")?,
         tactical: Some(TacticalSnapshot {
             schema: 1,
@@ -1407,18 +1430,22 @@ pub(super) fn start(
     });
     noted("fight-store", store(state, &result.battle))?;
     noted("fight-beat", beat(state, "combat"))?;
-    noted(
-        "fight-enemy-turns",
-        enemy_turns(
-            current,
-            state,
-            result.battle,
-            command.operation,
-            draws,
-            outcomes,
-            supplier,
-        ),
-    )
+    if scene_binding.is_some() {
+        Ok(())
+    } else {
+        noted(
+            "fight-enemy-turns",
+            enemy_turns(
+                current,
+                state,
+                result.battle,
+                command.operation,
+                draws,
+                outcomes,
+                supplier,
+            ),
+        )
+    }
 }
 fn weapon(actor: &tactical_rules::Combatant, weapon: Weapon) -> AttackUse {
     AttackUse {
@@ -2201,19 +2228,31 @@ pub(super) fn validate_phase(
         return Err(RepositoryError::InvalidCandidate);
     }
     let defend = model::content("defend-courier")?;
+    let assault = model::content("scene-npc-assault")?;
+    let objective = state
+        .encounters
+        .first()
+        .map(|encounter| encounter.objectives.as_slice())
+        .ok_or(RepositoryError::InvalidCandidate)?;
     if phase == rpc::JourneyPhase::Combat {
         if read(state)?.finished()
             || state.narrative.completed_beats != prefix
-            || state
-                .encounters
-                .first()
-                .is_none_or(|encounter| encounter.objectives != [defend.clone()])
+            || state.encounters.first().is_none_or(|encounter| {
+                encounter.objectives != [defend.clone()]
+                    && encounter.objectives != [assault.clone()]
+            })
         {
             return Err(RepositoryError::InvalidCandidate);
         }
         return Ok(());
     }
     let victory = victory(state)?;
+    let start_entry = if objective == [assault.clone()] {
+        "scene-npc-assault"
+    } else {
+        "defend-courier"
+    };
+    let start = narrative_phase::source(state, start_entry, rpc::JourneyPhase::Combat)?;
     let end = completion_source(state, start, victory, true)?;
     let mut completed = prefix.to_vec();
     completed.push(model::content("combat")?);
@@ -2622,6 +2661,7 @@ pub(in crate::gameplay) fn project_member(
             C::GiantWeasel => "giant-weasel",
             C::Mastiff => "mastiff",
             C::Scout => "scout",
+            C::Commoner => "commoner",
             C::Hero => return Err(RepositoryError::InvalidCandidate),
         };
         format!("portrait-ant-{source}")

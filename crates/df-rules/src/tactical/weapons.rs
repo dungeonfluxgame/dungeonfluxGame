@@ -13,6 +13,7 @@ pub enum Weapon {
     LightCrossbow,
     Dagger,
     Sickle,
+    Club,
     Bite,
     Slam,
     UnarmedStrike,
@@ -61,6 +62,7 @@ impl Weapon {
             Self::LightCrossbow => "light-crossbow",
             Self::Dagger => "dagger",
             Self::Sickle => "ritual-sickle",
+            Self::Club => "club",
             Self::Bite => "bite",
             Self::Slam => "slam",
             Self::UnarmedStrike => "unarmed-strike",
@@ -73,6 +75,7 @@ impl Weapon {
             Self::Javelin | Self::Longbow | Self::LightCrossbow => Some(Mastery::Slow),
             Self::Shortbow | Self::Shortsword => Some(Mastery::Vex),
             Self::Scimitar | Self::Dagger | Self::Sickle => Some(Mastery::Nick),
+            Self::Club => Some(Mastery::Sap),
             Self::Bite | Self::Slam | Self::UnarmedStrike => None,
         }
     }

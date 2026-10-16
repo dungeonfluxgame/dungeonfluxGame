@@ -30,6 +30,7 @@ pub enum CreatureKind {
     GiantWeasel,
     Mastiff,
     Scout,
+    Commoner,
 }
 
 /// Caller-owned combatant data. Construction validates the bounded supported subset.
@@ -79,6 +80,7 @@ impl CreatureKind {
             Self::GiantWeasel => "giant-weasel",
             Self::Mastiff => "mastiff",
             Self::Scout => "scout",
+            Self::Commoner => "commoner",
         })
     }
 
@@ -211,10 +213,17 @@ impl CombatantSpec {
     /// Exact supported SRD 5.2.1 stat block, including speed/actions/traits in resolution.
     /// Night/normal sight only; sunlight/hidden/alternate movement modes are outside this slice.
     pub fn creature(id: u32, srd_id: &str, cell: Cell, ammunition: u16) -> Result<Self, RuleError> {
-        let source = crate::SRD_521_CREATURES
-            .iter()
-            .find(|creature| creature.id == srd_id)
-            .ok_or(RuleError::UnsupportedCreature)?;
+        // Commoner is an authored scene-NPC profile, intentionally kept out of
+        // the generated antagonist table. It is legal only when a caller has
+        // already admitted a typed scene combat binding.
+        let source = if srd_id == "commoner" {
+            &crate::SCENE_COMMONER
+        } else {
+            crate::SRD_521_CREATURES
+                .iter()
+                .find(|creature| creature.id == srd_id)
+                .ok_or(RuleError::UnsupportedCreature)?
+        };
         let (kind, size, speed, weapons, shield) = match srd_id {
             "bandit" => (
                 CreatureKind::Bandit,
@@ -298,6 +307,13 @@ impl CombatantSpec {
                 Size::Medium,
                 30,
                 vec![Weapon::Shortsword, Weapon::Longbow],
+                false,
+            ),
+            "commoner" => (
+                CreatureKind::Commoner,
+                Size::Medium,
+                30,
+                vec![Weapon::Club],
                 false,
             ),
             _ => return Err(RuleError::UnsupportedCreature),
@@ -1139,6 +1155,7 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             CreatureKind::GiantWeasel => "giant-weasel",
             CreatureKind::Mastiff => "mastiff",
             CreatureKind::Scout => "scout",
+            CreatureKind::Commoner => "commoner",
             CreatureKind::Hero => return Err(RuleError::InvalidBuild),
         };
         let mut expected = CombatantSpec::creature(spec.id, source_id, spec.cell, spec.arrows)?;

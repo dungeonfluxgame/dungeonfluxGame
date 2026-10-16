@@ -335,20 +335,21 @@ pub(super) fn admission<'a>(
             link.character
                 .ok_or(ParticipantError::Owner(RepositoryError::InvalidCandidate))
         })
-        .chain(if super::tactical::enabled() {
-            super::tactical::enemies()
-                .map_err(ParticipantError::Owner)?
-                .into_iter()
-                .map(|(id, _, _)| Ok(id))
-                .collect::<Vec<_>>()
-        } else if scene_attack_target(current, command)
-            .map_err(ParticipantError::Owner)?
-            .is_some()
-        {
-            vec![super::courier_reaction::courier().map_err(ParticipantError::Owner)]
-        } else {
-            vec![entity(BANDIT).map_err(ParticipantError::Owner)]
-        })
+        .chain(
+            if let Some(binding) =
+                scene_attack_target(current, command).map_err(ParticipantError::Owner)?
+            {
+                vec![Ok(binding.entity)]
+            } else if super::tactical::enabled() {
+                super::tactical::enemies()
+                    .map_err(ParticipantError::Owner)?
+                    .into_iter()
+                    .map(|(id, _, _)| Ok(id))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![entity(BANDIT).map_err(ParticipantError::Owner)]
+            },
+        )
         .collect::<Result<Vec<_>, _>>()?;
     if expected.len() < 3
         || (!super::tactical::enabled() && expected.len() != 3)

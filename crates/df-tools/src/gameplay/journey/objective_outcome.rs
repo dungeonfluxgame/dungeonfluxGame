@@ -8,8 +8,8 @@ use df_protocol::common as rpc;
 use df_session::submission::RepositoryError;
 
 use super::{
-    BANDIT, ENCOUNTER, THREAD_POLICY, accepted, entity, model, narrative_phase, offered, phase,
-    player_entity, rule, value,
+    ENCOUNTER, THREAD_POLICY, accepted, model, narrative_phase, offered, phase, player_entity,
+    rule, value,
 };
 
 fn invalid<T>() -> Result<T, RepositoryError> {
@@ -95,7 +95,8 @@ pub(super) fn pending(
     let GameCommand::ProposeAction { actor, action, .. } = &command.command else {
         return invalid();
     };
-    if encounter.objectives != [model::content("defend-courier")?]
+    if !(encounter.objectives == [model::content("defend-courier")?]
+        || encounter.objectives == [model::content("scene-npc-assault")?])
         || *actor != player_entity(command.member, before)?
         || !(if super::tactical::present(state) {
             super::wire::action_kind(action.entry.as_str())
@@ -123,7 +124,7 @@ pub(super) fn pending(
         .collect::<Result<Vec<_>, _>>()?
         .iter()
         .all(|value| *value == 1);
-    let monster_down = value(state, entity(BANDIT)?, "unconscious")? == 1;
+    let monster_down = value(state, super::combat_enemy(state)?, "unconscious")? == 1;
     if party_down == monster_down {
         return invalid();
     }
@@ -169,12 +170,17 @@ fn terminal(
                 != party
                     .iter()
                     .copied()
-                    .chain([entity(BANDIT)?])
+                    .chain([super::combat_enemy(state)?])
                     .collect::<Vec<_>>())
     {
         return invalid();
     }
-    let start = narrative_phase::source(state, "defend-courier", rpc::JourneyPhase::Combat)?;
+    let start_entry = if encounter.objectives == [model::content("scene-npc-assault")?] {
+        "scene-npc-assault"
+    } else {
+        "defend-courier"
+    };
+    let start = narrative_phase::source(state, start_entry, rpc::JourneyPhase::Combat)?;
     if start.audience != AudienceScope::Shared
         || !matches!(&start.value, FactValue::ContentEvent { subjects, .. } if subjects.is_empty())
     {
@@ -294,9 +300,12 @@ pub(super) fn outcome(state: &GameState) -> Result<bool, RepositoryError> {
         return invalid();
     };
     let defend = model::content("defend-courier")?;
+    let assault = model::content("scene-npc-assault")?;
     for (entry, victory) in [("combat-victory", true), ("combat-defeat", false)] {
         let result = model::content(entry)?;
-        if encounter.objectives == [defend.clone(), result.clone()] {
+        if encounter.objectives == [defend.clone(), result.clone()]
+            || encounter.objectives == [assault.clone(), result.clone()]
+        {
             return Ok(victory);
         }
         if encounter.objectives == [result] {
@@ -311,7 +320,9 @@ pub(super) fn defend_history(state: &GameState) -> Result<bool, RepositoryError>
     let [encounter] = state.encounters.as_slice() else {
         return invalid();
     };
-    if encounter.objectives == [model::content("defend-courier")?] {
+    if encounter.objectives == [model::content("defend-courier")?]
+        || encounter.objectives == [model::content("scene-npc-assault")?]
+    {
         return Ok(true);
     }
     outcome(state)?;
@@ -352,6 +363,7 @@ impl ObjectivePolicyOwner for CurrentObjective<'_> {
             else {
                 return invalid();
             };
+            let assault_objective = model::content("scene-npc-assault")?;
             let cause = terminal(current.state(), self.victory, false)?;
             let kind = super::wire::action_kind(action.entry.as_str())
                 .ok_or(RepositoryError::InvalidCandidate)?;
@@ -370,7 +382,20 @@ impl ObjectivePolicyOwner for CurrentObjective<'_> {
                 || !matches!(&cause.action.value, FactValue::ContentEvent { definition, .. } if definition == action)
                 || transition.encounter != RecordId::from_bytes(&ENCOUNTER).map_err(super::bad)?
                 || transition.objective_index != 0
-                || transition.expected != &model::content("defend-courier")?
+                || transition.expected
+                    != &model::content(
+                        if self
+                            .before
+                            .state()
+                            .encounters
+                            .first()
+                            .is_some_and(|encounter| encounter.objectives == [assault_objective])
+                        {
+                            "scene-npc-assault"
+                        } else {
+                            "defend-courier"
+                        },
+                    )?
                 || transition.replacement
                     != &model::content(if self.victory {
                         "combat-victory"
@@ -409,16 +434,27 @@ pub(super) fn stage(
         .decisions
         .last()
         .ok_or(RepositoryError::InvalidCandidate)?;
+    let enemy = super::combat_enemy(candidate.state())?;
     let victory = if super::tactical::present(candidate.state()) {
         super::tactical::victory(candidate.state())?
     } else {
         accepted(last)?
             .combat
             .iter()
-            .any(|outcome| outcome.knocked_out && outcome.target_id.as_slice() == BANDIT.as_slice())
+            .any(|outcome| outcome.knocked_out && outcome.target_id.as_slice() == enemy.as_bytes())
     };
     let cause = terminal(candidate.state(), victory, false)?;
-    let expected = model::content("defend-courier")?;
+    let assault_objective = model::content("scene-npc-assault")?;
+    let expected = if candidate
+        .state()
+        .encounters
+        .first()
+        .is_some_and(|encounter| encounter.objectives == [assault_objective])
+    {
+        model::content("scene-npc-assault")?
+    } else {
+        model::content("defend-courier")?
+    };
     let replacement = model::content(if victory {
         "combat-victory"
     } else {

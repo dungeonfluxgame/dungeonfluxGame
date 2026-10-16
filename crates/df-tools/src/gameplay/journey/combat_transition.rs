@@ -10,7 +10,7 @@ use df_protocol::common as rpc;
 use df_session::submission::RepositoryError;
 
 use super::{
-    AttackOptions, BANDIT, DiceSource, ENTITIES, attack, choice, entity, finish_combat,
+    AttackOptions, DiceSource, ENTITIES, attack, choice, combat_enemy, entity, finish_combat,
     held_weapon_id, model, phase, room_entity, rule, rules, set, value,
 };
 
@@ -72,6 +72,7 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
             .iter()
             .find(|character| character.entity == *actor && character.build == build)
             .ok_or(RepositoryError::InvalidCandidate)?;
+        let scene_assault = encounter.objectives == [model::content("scene-npc-assault")?];
         if !ENTITIES.contains(actor.as_bytes())
             || !self
                 .state
@@ -79,10 +80,16 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
                 .iter()
                 .any(|link| link.member == character.owner && link.character == Some(*actor))
             || encounter.definition != model::content("combat")?
-            || encounter.combat_policy != model::content("normal-nonlethal-melee")?
-            || encounter.objectives != [model::content("defend-courier")?]
+            || encounter.combat_policy
+                != model::content(if scene_assault {
+                    "tactical-srd521-cover-policy"
+                } else {
+                    "normal-nonlethal-melee"
+                })?
+            || !(encounter.objectives == [model::content("defend-courier")?]
+                || encounter.objectives == [model::content("scene-npc-assault")?])
             || !encounter.participants.contains(actor)
-            || !encounter.participants.contains(&entity(BANDIT)?)
+            || !encounter.participants.contains(&combat_enemy(self.state)?)
         {
             return Err(RepositoryError::InvalidCandidate);
         }
@@ -96,7 +103,7 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
         candidate: &GreatswordAttack,
     ) -> Result<bool, RepositoryError> {
         if candidate.actor != *actor
-            || candidate.target != entity(BANDIT)?
+            || candidate.target != combat_enemy(self.state)?
             || candidate.weapon != held_weapon_id(*actor)?
             || candidate.definition != model::content(&super::pack::hero_weapon_item())?
             || candidate.source != rule()?
@@ -120,6 +127,7 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
         let [encounter] = self.state.encounters.as_slice() else {
             return Err(RepositoryError::InvalidCandidate);
         };
+        let scene_assault = encounter.objectives == [model::content("scene-npc-assault")?];
         if weapon.definition != candidate.definition
             || weapon.identity_revision != model::label("source-starting-equipment-1")?
             || item.owner != *actor
@@ -129,8 +137,12 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
             || item.attunement_owner.is_some()
             || actor_entity.definition != model::content("joined-player")?
             || actor_entity.identity_revision != model::label("joined-player-1")?
-            || target.definition != model::content("bandit")?
-            || target.identity_revision != model::label("srd521-bandit-1")?
+            || (!scene_assault
+                && (target.definition != model::content("bandit")?
+                    || target.identity_revision != model::label("srd521-bandit-1")?))
+            || (scene_assault
+                && (target.definition != model::content("lantern-wharf-courier")?
+                    || target.identity_revision != model::label("lantern-wharf-courier-1")?))
         {
             return Err(RepositoryError::InvalidCandidate);
         }
@@ -149,7 +161,11 @@ impl LegalOfferOwner for CurrentPlayerAttack<'_> {
             && actor_entity.location == Some(room_entity()?)
             && actor_entity.position == Some(actor_position)
             && target.location == Some(room_entity()?)
-            && target.position == Some(Position { x: 0, y: 0, z: 0 })
+            && if scene_assault {
+                target.position.is_some()
+            } else {
+                target.position == Some(Position { x: 0, y: 0, z: 0 })
+            }
             && weapon.location == Some(*actor)
             && weapon.position.is_none()
             && self.resource(*actor, "held-weapon")? == 1
@@ -203,7 +219,7 @@ fn admit(
     }
     let candidate = GreatswordAttack {
         actor,
-        target: entity(BANDIT)?,
+        target: combat_enemy(state)?,
         weapon: held_weapon_id(actor)?,
         definition: model::content(&super::pack::hero_weapon_item())?,
         source: rule()?,
