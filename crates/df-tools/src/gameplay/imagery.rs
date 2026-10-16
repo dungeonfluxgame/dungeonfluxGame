@@ -17,6 +17,7 @@
 //! recorded in a run-local manifest (`imagery.jsonl`) with its provenance.
 mod artifact;
 mod party_sheet;
+mod photo_edit;
 mod plate_prompt;
 mod prompt;
 mod references;
@@ -74,6 +75,7 @@ pub(super) use prompt::{PromptRefusal, VettedFact};
 // PLAY-V09: the scene plate's party sheet and prompts.
 use party_sheet::SheetError;
 pub(super) use party_sheet::{party_sheet, vision_picture};
+pub(super) use photo_edit::harbor_photo_edit;
 pub(super) use plate_prompt::{PlateReferences, hero_locator_phrase, plate_moment, scene_plate};
 #[allow(
     unused_imports,

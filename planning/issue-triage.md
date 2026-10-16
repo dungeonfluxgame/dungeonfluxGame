@@ -825,3 +825,28 @@ have alpha zero. Browser compositing and the integrated provider-generated plate
 remain required independent acceptance checks. Four isolated native routing
 tests passed; authored changed Rust files pass rustfmt and diff whitespace checks.
 Full native/WASM checks and live output acceptance belong to the coordinator.
+
+
+### PIC-17 generated plate regression and photographic edit attempt (2026-10-15)
+
+Independent live acceptance of `97f88c56`, room GADUME, rejected ready plate
+`da28150425464bbdec413929084cef2ca6d4228a030cfb365db507b4a288945a`.
+The lobby and candid dialogue preview read as photographs, but the 2560-pixel
+runtime plate again showed CGI finish. Its 3,761-character ShotSpec prompt still
+requested a crisp best-lit speaker facing the camera, deep warm lights, and cold
+blue dusk against warm practical light. The reviewed empty harbor was a secondary
+style-only reference after separate actor cutouts; no complete photographic frame
+was being preserved. The failed screenshot is retained by the coordinator as
+`gadume-generated-plate-still-stylized.png`.
+
+This attempt uses the reviewed candid harbor as image 1 for the fixed exterior
+salt-quay scene, followed by party/cast identity photographs within the four-image
+limit. A separate short edit prompt retains that frame's actual optical capture
+and excludes the shot director's aesthetic restaging, extras and lighting grade.
+The scene's speaker task/expression, traveler activities and required other cast
+remain explicit. A canonical SceneModel, when present, retains its complete JSON,
+including time, weather and changed object states. Other locations use their
+existing pipeline; the static lobby and cast preview are unchanged. Two native
+test-call compile regressions were repaired alongside request-order and canonical
+state coverage. This is an implementation candidate: only another full-display
+provider/browser observation can establish that the generated output is improved.

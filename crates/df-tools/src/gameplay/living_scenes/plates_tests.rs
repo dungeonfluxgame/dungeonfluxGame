@@ -151,7 +151,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         wake: tokio::sync::watch::channel(0).0,
         origin: Instant::now(),
     });
-    let (jobs, _queue) = mpsc::channel(16);
+    let (jobs, mut queue) = mpsc::channel(16);
     let shared = Arc::new(Shared {
         inner,
         book: Mutex::new(Book::new()),
@@ -650,7 +650,7 @@ async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() 
         panic!("fresh plate");
     };
     let (base, placement, _) = shared
-        .render_fresh(&scene, &spec, &heroes, &faces)
+        .render_fresh(&scene, &spec, &heroes, &faces, &id, 1, false)
         .await
         .unwrap();
     locked(&shared.book).insert(
@@ -1291,7 +1291,7 @@ async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_referen
         wake: tokio::sync::watch::channel(0).0,
         origin: Instant::now(),
     });
-    let (jobs, mut queue) = mpsc::channel(16);
+    let (jobs, _queue) = mpsc::channel(16);
     let shared = Shared {
         inner,
         book: Mutex::new(Book::new()),
@@ -1319,6 +1319,75 @@ async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_referen
         .render(request)
         .await
         .expect("provider-free fixture should accept the shaped request");
+}
+
+#[tokio::test]
+async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references() {
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let references = super::super::ReferenceStore::photographic(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+    );
+    let base = references
+        .load_photographic("scene-salt-quay-candid")
+        .unwrap();
+    let courier = references.load_photographic("sprite-courier").unwrap();
+    let inner = Arc::new(Inner {
+        imagery: Imagery::disabled(ImageryOff::Qualification),
+        references,
+        social: SocialLedger::none(),
+        rating: ContentRating::Restrained,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    let (jobs, _queue) = mpsc::channel(16);
+    let shared = Shared {
+        inner,
+        book: Mutex::new(Book::new()),
+        jobs,
+    };
+    let document: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../../../content/harbor-journey/pack.json"
+    ))
+    .unwrap();
+    let current: pack::Scene = document["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| serde_json::from_value::<pack::Scene>(value.clone()).unwrap())
+        .find(|scene| scene.key == SceneKey::DialogueSeal)
+        .unwrap();
+    let mut scene = PlateScene::of(&current).unwrap();
+    let spec = scene.stage(&[1, 2]).unwrap();
+    let (request, _) = shared
+        .fresh_request(&scene, &spec, &[1, 2], &[], None)
+        .await
+        .unwrap();
+    assert_eq!(request.references.len(), 4);
+    assert_eq!(request.references[0].sha256, base.sha256);
+    assert_eq!(request.references[2].sha256, courier.sha256);
+    assert!(
+        request
+            .prompt
+            .as_str()
+            .starts_with("Image 1 is the actual photograph to edit")
+    );
+    assert!(!request.prompt.as_str().contains("best-lit person"));
+    assert!(!request.prompt.as_str().contains("deep blue light outside"));
+
+    scene.place_id = "another-quay".to_owned();
+    let (other, _) = shared
+        .fresh_request(&scene, &spec, &[1, 2], &[], None)
+        .await
+        .unwrap();
+    assert_ne!(other.references[0].sha256, base.sha256);
+    assert!(
+        !other
+            .prompt
+            .as_str()
+            .starts_with("Image 1 is the actual photograph to edit")
+    );
 }
 
 #[tokio::test]

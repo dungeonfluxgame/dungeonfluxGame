@@ -1496,6 +1496,17 @@ impl Shared {
         direction: Option<&str>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
         let mut references = Vec::new();
+        let edit_documentary_photo = self.inner.references.photographic_only()
+            && scene.exterior
+            && scene.place_id == "salt-quay"
+            && scene.asset.contains("scene-salt-quay-arrival");
+        if edit_documentary_photo {
+            references.push(
+                self.inner
+                    .load_plate_reference("scene-salt-quay-candid".to_owned())
+                    .await?,
+            );
+        }
         let mut has_party_sheet = false;
         let mut sorted = heroes.to_vec();
         sorted.sort_unstable();
@@ -1551,16 +1562,20 @@ impl Shared {
         if has_speaker_face {
             references.extend(face);
         }
-        let place = self
-            .inner
-            .load_plate_reference(scene.asset.clone())
-            .await
-            .ok();
+        let place = if edit_documentary_photo {
+            None
+        } else {
+            self.inner
+                .load_plate_reference(scene.asset.clone())
+                .await
+                .ok()
+        };
         let has_place = place.is_some();
         references.extend(place);
         // A reviewed location photograph anchors the medium even when this scene has no
         // photographic place art. It supplies no scene facts; the prompt makes that explicit.
-        let photographic_style_reference = !has_place && self.inner.references.photographic_only();
+        let photographic_style_reference =
+            !edit_documentary_photo && !has_place && self.inner.references.photographic_only();
         if photographic_style_reference {
             references.push(
                 self.inner
@@ -1588,7 +1603,14 @@ impl Shared {
             references.push(self.inner.neutral_photographic_reference().await?);
             neutral_reference = true;
         }
-        let prompt = if let Some(snapshot) = &scene.snapshot {
+        let prompt = if edit_documentary_photo {
+            super::super::imagery::harbor_photo_edit(
+                self.inner.rating,
+                spec,
+                scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+                &scene.hero_names,
+            )?
+        } else if let Some(snapshot) = &scene.snapshot {
             super::super::imagery::model_plate(
                 self.inner.rating,
                 &snapshot.model,

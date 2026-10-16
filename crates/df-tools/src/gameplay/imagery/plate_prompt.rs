@@ -245,7 +245,7 @@ fn mood_phrase(mood: Mood) -> &'static str {
     }
 }
 
-fn expression_phrase_of(expression: Expression) -> &'static str {
+pub(super) fn expression_phrase_of(expression: Expression) -> &'static str {
     match expression {
         Expression::Warm => "a warm, knowing half-smile.",
         Expression::Wary => "wary, eyes narrowed and watchful.",
