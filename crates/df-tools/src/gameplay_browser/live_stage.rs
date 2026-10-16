@@ -71,7 +71,6 @@ const BUBBLE_FIXED_OBSTACLES: [&str; 3] = [".tv-headline", ".tv-rules", ".tv-sce
 const CHECK_ROLL_MS: u32 = 5_000;
 const CHECK_FINDING_PADDING_MS: u32 = 1_000;
 const CHECK_FADE_MS: u32 = 500;
-const PARTY_HUD_TIMING_ID: u64 = 1;
 const PARTY_HUD_FADE_MS: u32 = 700;
 const PARTY_HUD_SCENE: &str = "party_hud";
 
@@ -371,6 +370,9 @@ pub(super) struct Figures {
     animation_end: Closure<dyn FnMut(Event)>,
     scene: RefCell<String>,
     party_hud_visible: Cell<Option<bool>>,
+    /// Monotonic identity for each opening transition. A new identity lets the existing
+    /// presentation capture reject a stale Readable callback after an interrupted fade.
+    party_hud_transition_id: Cell<u64>,
     document: Document,
 }
 
@@ -557,6 +559,7 @@ impl Figures {
             animation_end,
             scene: RefCell::new(String::new()),
             party_hud_visible: Cell::new(None),
+            party_hud_transition_id: Cell::new(0),
             document: document.clone(),
         })
     }
@@ -699,14 +702,27 @@ impl Figures {
 
     fn sync_party_hud(&self, mode: StageMode) -> Result<(), JsValue> {
         let visible = mode == StageMode::Combat;
-        if self.party_hud_visible.get() == Some(visible) {
-            return Ok(());
-        }
-        self.party_hud_visible.set(Some(visible));
         let hud = self
             .root
             .query_selector(".tv-hud")?
             .ok_or_else(|| JsValue::from_str("party HUD root absent"))?;
+        if self.party_hud_visible.get() == Some(visible) {
+            // Repair a reconnect or DOM replacement without restarting the fade for a stable
+            // authoritative phase.
+            let expected = if visible { "visible" } else { "hidden" };
+            if hud.get_attribute("data-party-hud").as_deref() != Some(expected) {
+                hud.set_attribute("data-party-hud", expected)?;
+            }
+            return Ok(());
+        }
+        self.party_hud_visible.set(Some(visible));
+        let id = if visible {
+            let id = self.party_hud_transition_id.get().saturating_add(1).max(1);
+            self.party_hud_transition_id.set(id);
+            id
+        } else {
+            self.party_hud_transition_id.get().max(1)
+        };
         hud.set_attribute("data-party-hud", if visible { "visible" } else { "hidden" })?;
         let phase = if visible {
             ComponentPhase::Opened
@@ -716,7 +732,7 @@ impl Figures {
         super::presentation_timing::component(
             Some(&hud),
             PresentationComponent::PartyHud,
-            PARTY_HUD_TIMING_ID,
+            id,
             PARTY_HUD_SCENE,
             phase,
             if visible {
@@ -729,7 +745,7 @@ impl Figures {
         super::presentation_timing::schedule_component_transition(
             hud,
             PresentationComponent::PartyHud,
-            PARTY_HUD_TIMING_ID,
+            id,
             PARTY_HUD_SCENE.to_owned(),
             if visible {
                 ComponentPhase::Readable
@@ -2666,6 +2682,159 @@ mod tests {
         );
         assert!(!candidates.is_empty());
         assert!(candidates.iter().all(|(_, path)| path.contains("photo")));
+    }
+
+    #[test]
+    fn party_hud_tracks_authoritative_scene_combat_scene_boundaries() {
+        use super::{Figures, SceneFamily, StageMode};
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        let hud = figures.root.query_selector(".tv-hud").unwrap().unwrap();
+
+        figures
+            .update(&[], "scene", "inn", SceneFamily::Interior, StageMode::Scene)
+            .unwrap();
+        assert_eq!(
+            hud.get_attribute("data-party-hud").as_deref(),
+            Some("hidden")
+        );
+        figures
+            .update(
+                &[],
+                "combat",
+                "inn",
+                SceneFamily::Interior,
+                StageMode::Combat,
+            )
+            .unwrap();
+        assert_eq!(
+            hud.get_attribute("data-party-hud").as_deref(),
+            Some("visible")
+        );
+        figures
+            .update(&[], "scene", "inn", SceneFamily::Interior, StageMode::Scene)
+            .unwrap();
+        assert_eq!(
+            hud.get_attribute("data-party-hud").as_deref(),
+            Some("hidden")
+        );
+
+        figures.dispose();
+        parent.remove();
+    }
+
+    #[test]
+    fn party_hud_same_phase_repairs_dom_without_restarting_transition() {
+        use super::{Figures, SceneFamily, StageMode};
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        figures
+            .update(
+                &[],
+                "combat",
+                "inn",
+                SceneFamily::Interior,
+                StageMode::Combat,
+            )
+            .unwrap();
+        let transition_id = figures.party_hud_transition_id.get();
+        let hud = figures.root.query_selector(".tv-hud").unwrap().unwrap();
+        hud.set_attribute("data-party-hud", "stale").unwrap();
+        figures
+            .update(
+                &[],
+                "combat",
+                "inn",
+                SceneFamily::Interior,
+                StageMode::Combat,
+            )
+            .unwrap();
+        assert_eq!(
+            hud.get_attribute("data-party-hud").as_deref(),
+            Some("visible")
+        );
+        assert_eq!(figures.party_hud_transition_id.get(), transition_id);
+
+        figures.dispose();
+        parent.remove();
+    }
+
+    #[test]
+    fn party_hud_retargets_with_fresh_identity_and_reconnects_without_flash() {
+        use super::{Figures, SceneFamily, StageMode};
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        figures
+            .update(
+                &[],
+                "combat",
+                "inn",
+                SceneFamily::Interior,
+                StageMode::Combat,
+            )
+            .unwrap();
+        let first_id = figures.party_hud_transition_id.get();
+        figures
+            .update(&[], "scene", "inn", SceneFamily::Interior, StageMode::Scene)
+            .unwrap();
+        figures
+            .update(
+                &[],
+                "combat",
+                "inn",
+                SceneFamily::Interior,
+                StageMode::Combat,
+            )
+            .unwrap();
+        assert!(figures.party_hud_transition_id.get() > first_id);
+        assert_eq!(
+            figures
+                .root
+                .query_selector(".tv-hud")
+                .unwrap()
+                .unwrap()
+                .get_attribute("data-party-hud")
+                .as_deref(),
+            Some("visible")
+        );
+        figures.dispose();
+        parent.remove();
+
+        let reconnect_parent = document.create_element("section").unwrap();
+        document
+            .body()
+            .unwrap()
+            .append_child(&reconnect_parent)
+            .unwrap();
+        let reconnect = Figures::mount(&document, &reconnect_parent).unwrap();
+        reconnect
+            .update(
+                &[],
+                "combat",
+                "inn",
+                SceneFamily::Interior,
+                StageMode::Combat,
+            )
+            .unwrap();
+        assert_eq!(reconnect.party_hud_transition_id.get(), 1);
+        assert_eq!(
+            reconnect
+                .root
+                .query_selector(".tv-hud")
+                .unwrap()
+                .unwrap()
+                .get_attribute("data-party-hud")
+                .as_deref(),
+            Some("visible")
+        );
+        reconnect.dispose();
+        reconnect_parent.remove();
     }
 
     #[test]
