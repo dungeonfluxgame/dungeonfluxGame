@@ -1,5 +1,8 @@
 # Visual resource operations manual
 
+Current saved shop session, exact launch flags, build provenance and open acceptance
+checks: [Merchant playtest handoff](merchant-playtest-handoff.md).
+
 This is the short path for inspecting generated art, scene plates, fallbacks, and
 their timing in local Story and Freeplay runs. It is an operational guide for
 agents. The design contracts remain in `planning/asset-engine.md`,
