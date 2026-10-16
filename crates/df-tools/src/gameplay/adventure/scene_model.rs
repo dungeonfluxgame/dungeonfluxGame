@@ -135,12 +135,20 @@ pub(crate) struct SceneThing {
     pub(crate) owner_id: Option<String>,
     pub(crate) in_use: bool,
     pub(crate) in_scene: bool,
+    /// Explicit consent that a held object may appear on the shared display.
+    /// Old authored scenes default to visible so existing public props retain behavior.
+    #[serde(default = "default_shared_visible")]
+    pub(crate) publicly_visible: bool,
     pub(crate) holder_id: Option<String>,
     pub(crate) open: bool,
     pub(crate) lit: bool,
     pub(crate) broken: bool,
     pub(crate) searched_by: Vec<String>,
     pub(crate) aliases: Vec<String>,
+}
+
+fn default_shared_visible() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -205,6 +213,10 @@ pub(crate) enum SceneChangeKind {
     },
     Given {
         holder_id: String,
+        /// Present only when the giver is the current owner. A borrowed observation
+        /// changes hands without minting ownership for the recipient.
+        #[serde(default)]
+        owner_id: Option<String>,
     },
     Returned {
         position: String,
@@ -330,6 +342,7 @@ impl SceneModel {
                 serde_json::json!({
                     "id": thing.id, "name": thing.name, "look": thing.picture_description,
                     "position": thing.position, "in_scene": thing.in_scene,
+                    "publicly_visible": thing.publicly_visible,
                     "holder": thing.holder_id, "open": thing.open, "lit": thing.lit,
                     "broken": thing.broken,
                 })
@@ -675,10 +688,18 @@ impl SceneModel {
                 SceneChangeKind::Purchased { .. } => {
                     return Err(SceneModelError::Contradiction);
                 }
-                SceneChangeKind::Taken { holder_id } | SceneChangeKind::Given { holder_id } => {
+                SceneChangeKind::Taken { holder_id } => {
                     thing.holder_id = Some(holder_id.clone());
-                    if matches!(change.kind, SceneChangeKind::Given { .. }) {
-                        thing.owner_id = Some(holder_id.clone());
+                    thing.in_scene = person_ids.contains(holder_id.as_str());
+                    thing.position = format!("held by {holder_id}");
+                }
+                SceneChangeKind::Given {
+                    holder_id,
+                    owner_id,
+                } => {
+                    thing.holder_id = Some(holder_id.clone());
+                    if let Some(owner_id) = owner_id {
+                        thing.owner_id = Some(owner_id.clone());
                     }
                     thing.in_scene = person_ids.contains(holder_id.as_str());
                     thing.position = format!("held by {holder_id}");
@@ -754,6 +775,7 @@ impl SceneModel {
                 owner_id: Some(holder_id.clone()),
                 in_use: false,
                 in_scene: true,
+                publicly_visible: true,
                 holder_id: Some(holder_id.clone()),
                 open: false,
                 lit: false,
@@ -1754,6 +1776,7 @@ fn things(
                 owner_id,
                 in_use: template.in_use,
                 in_scene: true,
+                publicly_visible: true,
                 holder_id: None,
                 open: template.name.starts_with("open "),
                 lit: template.name.contains("hearth")

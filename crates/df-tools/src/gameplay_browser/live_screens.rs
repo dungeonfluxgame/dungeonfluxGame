@@ -1085,12 +1085,15 @@ fn render_hand_items(
             .iter()
             .map(|item| {
                 format!(
-                    "{}:{}:{}:{}:{}",
+                    "{}:{}:{}:{}:{}:{}:{}:{}",
                     item.thing_id,
+                    item.name,
+                    item.detail,
                     item.state_revision,
                     item.holder,
                     item.image_path,
-                    item.image_state
+                    item.image_state,
+                    item.observation_only
                 )
             })
             .collect::<Vec<_>>()
@@ -1113,8 +1116,15 @@ fn render_hand_items(
         .iter()
         .map(|item| {
             format!(
-                "{}:{}:{}:{}:{}",
-                item.thing_id, item.state_revision, item.holder, item.image_path, item.image_state
+                "{}:{}:{}:{}:{}:{}:{}:{}",
+                item.thing_id,
+                item.name,
+                item.detail,
+                item.state_revision,
+                item.holder,
+                item.image_path,
+                item.image_state,
+                item.observation_only
             )
         })
         .collect::<Vec<_>>()

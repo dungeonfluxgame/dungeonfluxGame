@@ -364,6 +364,7 @@ fn scene_now_applies_item_and_person_changes_to_the_prompt_projection() {
             description: "Brakka gave the tankard to Sigrun".into(),
             kind: SceneChangeKind::Given {
                 holder_id: "hero-sigrun".into(),
+                owner_id: Some("hero-sigrun".into()),
             },
         },
         SceneChange {
@@ -425,6 +426,45 @@ fn scene_now_applies_item_and_person_changes_to_the_prompt_projection() {
         snapshot["changes"].as_array().map(Vec::len),
         Some(changes.len())
     );
+}
+
+#[test]
+fn giving_a_borrowed_observation_changes_holder_without_minting_ownership() {
+    let model = taproom();
+    let mug_id = model
+        .things
+        .iter()
+        .find(|thing| thing.name == "dented pewter tankard")
+        .expect("taproom model has its bar tankard")
+        .id
+        .clone();
+    let changes = [
+        SceneChange {
+            entity_id: mug_id.clone(),
+            description: "Brakka took the tankard for a closer look".into(),
+            kind: SceneChangeKind::Taken {
+                holder_id: "hero-brakka".into(),
+            },
+        },
+        SceneChange {
+            entity_id: mug_id.clone(),
+            description: "Brakka handed the tankard to Sigrun for inspection".into(),
+            kind: SceneChangeKind::Given {
+                holder_id: "hero-sigrun".into(),
+                owner_id: None,
+            },
+        },
+    ];
+    let prompt = model
+        .as_it_is_now(super::super::pack::SceneKey::Opening, &changes)
+        .expect("borrowed handoff remains a valid scene projection");
+    let snapshot: serde_json::Value = serde_json::from_str(&prompt).expect("snapshot is JSON");
+    let tankard = snapshot["model"]["things"]
+        .as_array()
+        .and_then(|things| things.iter().find(|thing| thing["id"] == mug_id))
+        .expect("tankard remains in the scene snapshot");
+    assert_eq!(tankard["holder_id"], "hero-sigrun");
+    assert!(tankard["owner_id"].is_null());
 }
 
 fn canonical_facts(model: &SceneModel) -> BTreeMap<String, String> {

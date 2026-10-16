@@ -495,6 +495,8 @@ impl Shared {
                     .values()
                     .filter(|item| {
                         item.thing.id == card.thing_id
+                            && item.thing.name == card.name
+                            && item.thing.detail == card.detail
                             && item.thing.holder_id.as_deref() == Some(card.holder.as_str())
                     })
                     .max_by_key(|item| item.requested_at)
@@ -512,6 +514,8 @@ impl Shared {
                 .filter(|item| {
                     item.shared
                         && item.thing.id == card.thing_id
+                        && item.thing.name == card.name
+                        && item.thing.detail == card.detail
                         && item.thing.holder_id.as_deref() == Some(card.holder.as_str())
                 })
                 .max_by_key(|item| item.requested_at)

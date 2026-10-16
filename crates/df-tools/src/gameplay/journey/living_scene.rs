@@ -446,6 +446,7 @@ pub(in crate::gameplay) fn hand_items(
             thing.in_scene
                 && thing.holder_id.is_some()
                 && thing.owner_id.as_deref() != thing.holder_id.as_deref()
+                && (holder.is_some() || thing.publicly_visible)
                 && holder.is_none_or(|expected| thing.holder_id.as_deref() == Some(expected))
         })
         .map(|thing| rpc::SceneItemCard {
@@ -791,11 +792,14 @@ pub(super) fn stage(
                     } else {
                         let description =
                             format!("{hero} gives {} to {}.", thing.name, person.name);
+                        let owner_id =
+                            (thing.owner_id.as_deref() == Some(hero)).then(|| recipient.to_owned());
                         change = Some(SceneChange {
                             entity_id: thing.id.clone(),
                             description: description.clone(),
                             kind: SceneChangeKind::Given {
                                 holder_id: recipient.to_owned(),
+                                owner_id,
                             },
                         });
                         description
