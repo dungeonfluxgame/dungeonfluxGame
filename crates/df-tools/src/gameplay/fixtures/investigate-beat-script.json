@@ -297,7 +297,7 @@
       "narration": "Fresh rope binds the crates. A chalk arrow points toward the courier\u2019s destination.",
       "speaker": "Courier",
       "dialogue": "",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
       "cast": [
         {
           "id": "courier",
@@ -309,7 +309,15 @@
           "gender": "he",
           "age": "young"
         }
-      ]
+      ],
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      }
     },
     "desk": {
       "key": "opening",
@@ -317,7 +325,7 @@
       "narration": "On the desk, a public shipping list names the road ahead. The ink is still wet.",
       "speaker": "Courier",
       "dialogue": "",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
       "cast": [
         {
           "id": "courier",
@@ -329,7 +337,15 @@
           "gender": "he",
           "age": "young"
         }
-      ]
+      ],
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      }
     }
   }
 }

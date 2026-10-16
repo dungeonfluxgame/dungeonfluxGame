@@ -269,7 +269,12 @@ fn snapshots(approach: &str, defeat: bool) -> Vec<Checkpoint> {
                 &input(current, member, operation, entry, choices),
                 dice,
             )
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!(
+                    "snapshot operation={operation}, entry={entry}, approach={approach}, defeat={defeat}, step={:?}: {error:?}",
+                    super::refusal_detail::take()
+                )
+            });
             history.push(next);
         };
         perform(first, 5, "begin-story", vec![], &mut |_| {

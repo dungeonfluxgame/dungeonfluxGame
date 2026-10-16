@@ -206,7 +206,7 @@
       "narration": "Warm light falls across the eastern quay. The contact greets your party beside a table of charts.",
       "speaker": "Courier",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
-      "asset": "assets/concept-art/scene-tavern-barkeep-talk-rain.webp",
+      "asset": "assets/ui/generated/scene-salt-quay-interior",
       "cast": [
         {
           "id": "courier",
@@ -218,7 +218,15 @@
           "gender": "he",
           "age": "young"
         }
-      ]
+      ],
+      "setting": {
+        "place_id": "harbor-inn",
+        "name": "the Harbor Inn",
+        "short": "the warm harbor inn",
+        "kind": "net-loft",
+        "exterior": false,
+        "art_key": "loc-salt-quay-interior"
+      }
     },
     "west-arrival": {
       "key": "inn",
@@ -226,7 +234,7 @@
       "narration": "The western lodge smells of cedar and woodsmoke. The contact sets another kettle on the hearth.",
       "speaker": "Courier",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
-      "asset": "assets/concept-art/scene-tavern-barkeep-talk-rain.webp",
+      "asset": "assets/ui/generated/scene-salt-quay-interior",
       "cast": [
         {
           "id": "courier",
@@ -238,7 +246,15 @@
           "gender": "he",
           "age": "young"
         }
-      ]
+      ],
+      "setting": {
+        "place_id": "harbor-inn",
+        "name": "the Harbor Inn",
+        "short": "the warm harbor inn",
+        "kind": "net-loft",
+        "exterior": false,
+        "art_key": "loc-salt-quay-interior"
+      }
     }
   }
 }

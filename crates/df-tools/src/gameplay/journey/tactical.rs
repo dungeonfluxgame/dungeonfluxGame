@@ -3940,7 +3940,16 @@ pub(super) mod tests {
             assert!(recorded.next().is_none());
             let bytes =
                 df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&current, codec())
-                    .unwrap();
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "checkpoint operation={operation}, kind={kind:?}, seed={seed:?}, phase={:?}, step={:?}, decisions={}, facts={}, max_semantic_bytes={}: {error:?}",
+                            phase(&current),
+                            super::super::refusal_detail::take(),
+                            current.state().decisions.len(),
+                            current.state().facts.len(),
+                            current.state().decisions.iter().filter_map(|decision| decision.semantic_output.as_ref().map(String::len)).max().unwrap_or(0)
+                        )
+                    });
             let view = wire::journey_view(
                 &current,
                 df_persistence::local_demo_scope::LocalDemoRole::Player,

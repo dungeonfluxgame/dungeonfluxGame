@@ -382,7 +382,7 @@
       "narration": "The courier listens as you lay out a calm plan. His shoulders ease; he will follow your lead.",
       "speaker": "Courier",
       "dialogue": "If you help me reach the inn, I'll tell Vell what I saw aboard that ship. But he won't let us leave.",
-      "asset": "assets/ui/scenes/mara-harbor-v4.png",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival",
       "cast": [
         {
           "id": "courier",
@@ -404,7 +404,15 @@
           "gender": "he",
           "age": "adult"
         }
-      ]
+      ],
+      "setting": {
+        "place_id": "salt-quay",
+        "name": "the Lantern Wharf",
+        "short": "the rain-soaked wharf",
+        "kind": "quay",
+        "exterior": true,
+        "art_key": "loc-salt-quay-arrival"
+      }
     }
   }
 }
