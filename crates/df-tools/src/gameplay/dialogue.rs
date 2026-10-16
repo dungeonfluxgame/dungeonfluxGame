@@ -27,6 +27,7 @@ const MAXIMUM_PENDING_BYTES: usize = 64 * 1024 * 1024;
 pub(super) enum DialogueRequest {
     SyncNotes,
     Raw(Vec<u8>),
+    RawTarget { bytes: Vec<u8>, actor_id: String },
     Confirm(Vec<u8>),
     Cancel(Vec<u8>),
 }
@@ -144,6 +145,9 @@ impl DialogueRequest {
     pub(super) fn retained_heap_bytes(&self) -> usize {
         match self {
             Self::SyncNotes => 0,
+            Self::RawTarget { bytes, actor_id } => {
+                bytes.capacity().saturating_add(actor_id.capacity())
+            }
             Self::Raw(bytes) | Self::Confirm(bytes) | Self::Cancel(bytes) => bytes.capacity(),
         }
     }
@@ -187,6 +191,69 @@ fn encode<M: Message>(request: &M) -> Result<Vec<u8>, Status> {
         .encode(&mut bytes)
         .map_err(|_| Status::invalid_argument("dialogue encoding invalid"))?;
     Ok(bytes)
+}
+
+fn record_target_route(
+    request: &rpc::RawDialogueRequest,
+    actor_id: Option<&str>,
+    source: &str,
+    reason: &str,
+    elapsed_ms: u128,
+    validation: &str,
+) {
+    let input_id = request
+        .input_id
+        .as_ref()
+        .and_then(|id| id.value.as_ref())
+        .filter(|value| value.len() == 16)
+        .map(|value| journey::hex(value))
+        .unwrap_or_default();
+    let model_call = source == "jev" || reason == "provider_failure";
+    let resource_type = if model_call { "text_model" } else { "state" };
+    let attributes = [
+        ("gameplay.resource.type", resource_type.to_owned()),
+        ("routing.input_id", input_id.clone()),
+        ("routing.actor_id", actor_id.unwrap_or_default().to_owned()),
+        ("routing.source", source.to_owned()),
+        ("routing.reason", reason.to_owned()),
+        ("routing.validation", validation.to_owned()),
+        ("routing.elapsed_ms", elapsed_ms.to_string()),
+        (
+            "routing.model",
+            if model_call { "jev-latest" } else { "none" }.to_owned(),
+        ),
+    ];
+    actor::record_audit_diagnostic(
+        "gameplay.npc_target",
+        format!(
+            "NPC target input_id={input_id} actor_id={} source={source} validation={validation} reason={reason} elapsed_ms={elapsed_ms}",
+            actor_id.unwrap_or("none")
+        ),
+        serde_json::Map::from_iter([
+            ("resource_type".to_owned(), serde_json::json!(resource_type)),
+            ("stage".to_owned(), serde_json::json!("npc_addressee")),
+            ("status".to_owned(), serde_json::json!(validation)),
+            ("input_id".to_owned(), serde_json::json!(input_id)),
+            ("actor_id".to_owned(), serde_json::json!(actor_id)),
+            ("source".to_owned(), serde_json::json!(source)),
+            ("reason".to_owned(), serde_json::json!(reason)),
+            ("validation".to_owned(), serde_json::json!(validation)),
+            ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+            (
+                "model".to_owned(),
+                serde_json::json!(if model_call { "jev-latest" } else { "none" }),
+            ),
+            (
+                "provider".to_owned(),
+                serde_json::json!(if model_call {
+                    "system_one_choice"
+                } else {
+                    "none"
+                }),
+            ),
+        ]),
+        &attributes,
+    );
 }
 
 fn observation_thing_label(thing: &str) -> Option<String> {
@@ -421,8 +488,61 @@ impl Service {
         {
             request.text = format!("note: {}", request.text);
         }
-        self.dialogue_call(credential, DialogueRequest::Raw(encode(&request)?))
-            .await
+        let mut target = None;
+        if finality(request.finality)? == InputFinality::Final
+            && matches!(
+                rpc::DialogueContext::try_from(request.context),
+                Ok(rpc::DialogueContext::Question
+                    | rpc::DialogueContext::Social
+                    | rpc::DialogueContext::Joke)
+            )
+        {
+            let cast = wire::scene_cast(&scene);
+            let decision = self
+                .npc_voice
+                .resolve_addressee(&request.text, &cast, &scene.speaker)
+                .await;
+            let (selected, validation) = match &decision.target {
+                super::npc_target::Target::Actor(id)
+                    if super::npc_target::current(&cast, id).is_some() =>
+                {
+                    (Some(id.clone()), "selected")
+                }
+                super::npc_target::Target::Actor(_) => (None, "invalid_actor_id"),
+                super::npc_target::Target::Ambiguous => (None, "ambiguous"),
+                super::npc_target::Target::Absent => (None, "absent"),
+                super::npc_target::Target::Description
+                | super::npc_target::Target::PossibleAddress => {
+                    (None, "unresolved_explicit_target")
+                }
+                super::npc_target::Target::Unspecified => (None, "no_npc"),
+            };
+            record_target_route(
+                &request,
+                selected.as_deref(),
+                decision.source,
+                decision.reason,
+                decision.elapsed_ms,
+                validation,
+            );
+            if !matches!(validation, "selected" | "no_npc") {
+                return Err(Status::failed_precondition(match validation {
+                    "ambiguous" => "Name one present character to address.",
+                    "absent" => "The explicitly addressed character is not present.",
+                    "unresolved_explicit_target" => {
+                        "The addressed character could not be resolved; use their name."
+                    }
+                    _ => "The addressed character is not available.",
+                }));
+            }
+            target = selected;
+        }
+        let bytes = encode(&request)?;
+        let request = match target {
+            Some(actor_id) => DialogueRequest::RawTarget { bytes, actor_id },
+            None => DialogueRequest::Raw(bytes),
+        };
+        self.dialogue_call(credential, request).await
     }
 
     async fn observation_call(
@@ -571,6 +691,8 @@ impl Service {
             confirmation_token: Vec::new(),
             revision: receipt.revision,
             npc_reply: line,
+            npc_actor_id: String::new(),
+            npc_speaker: String::new(),
         })
     }
 
@@ -699,6 +821,8 @@ impl Service {
                 disposition: rpc::DialogueDisposition::Action as i32,
                 revision: receipt.revision,
                 npc_reply: line,
+                npc_actor_id: String::new(),
+                npc_speaker: String::new(),
                 ..Default::default()
             },
             None,
@@ -717,7 +841,8 @@ impl rpc::dialogue_service_server::DialogueService for Service {
             DialogueReply::Raw(mut response, npc) => {
                 // The model call runs here, off the actor thread; on any failure the
                 // response is exactly the classification the actor produced.
-                if let Some(context) = npc {
+                if let Some(mut context) = npc {
+                    context.watch_publication(self.updates.clone());
                     // The table sees the hero's line cleaned up (within its deadline), then
                     // the speaker thinking until the reply (or the lack of one) is in; the
                     // mark clears when this scope ends.
@@ -1106,7 +1231,13 @@ impl actor::Actor {
             DialogueRequest::Raw(bytes) => {
                 let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
                     .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
-                self.raw_dialogue(credential, request)
+                self.raw_dialogue(credential, request, None)
+                    .map(|(response, npc)| DialogueReply::Raw(response, npc))
+            }
+            DialogueRequest::RawTarget { bytes, actor_id } => {
+                let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
+                    .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
+                self.raw_dialogue(credential, request, Some(&actor_id))
                     .map(|(response, npc)| DialogueReply::Raw(response, npc))
             }
             DialogueRequest::Confirm(bytes) => {
@@ -1128,6 +1259,7 @@ impl actor::Actor {
         &mut self,
         credential: [u8; 32],
         request: rpc::RawDialogueRequest,
+        target: Option<&str>,
     ) -> Result<(rpc::DialogueResponse, Option<NpcReplyContext>), Status> {
         let member = self.dialogue_member(&credential)?;
         if self.fenced || self.owner.has_uncertain_operation() {
@@ -1154,8 +1286,40 @@ impl actor::Actor {
         if session != basis.session || run != basis.run || observed != basis.revision {
             return Err(Status::failed_precondition("dialogue basis changed"));
         }
+        if let Some(id) = target {
+            let projection = wire::project_journey(current, LocalDemoRole::Player, member)
+                .map_err(actor::unavailable)?;
+            let present = match &projection.view.audience {
+                Some(rpc::view_message::Audience::Player(player)) => player
+                    .scene
+                    .as_ref()
+                    .is_some_and(|scene| super::npc_target::current(&scene.cast, id).is_some()),
+                _ => false,
+            };
+            record_target_route(
+                &request,
+                Some(id),
+                "actor",
+                if present {
+                    "current_cast"
+                } else {
+                    "stale_target"
+                },
+                0,
+                if present { "validated" } else { "stale" },
+            );
+            if !present {
+                return Err(Status::failed_precondition(
+                    "The addressed character is no longer present.",
+                ));
+            }
+        }
+        // Conversation addressed to the scene's speaker is answered in character; a pending
+        // confirmation ticket means the player is clarifying an action, which is not.
         let finality = finality(request.finality)?;
         let declared = context(request.context)?;
+        let influence_speech = declared == DiscourseContext::Social
+            && super::social::classify_keywords(&request.text).is_influence_attempt();
         let reference = RawInputRef {
             input: input_id,
             member,
@@ -1241,17 +1405,13 @@ impl actor::Actor {
                 PendingConfirmation {
                     input: reference,
                     token: proof,
-                    offer: request.offer_id,
+                    offer: request.offer_id.clone(),
                     kind,
                     selection: None,
                     charge,
                 },
             );
         }
-        // Conversation addressed to the scene's speaker is answered in character; a pending
-        // confirmation ticket means the player is clarifying an action, which is not.
-        let influence_speech = declared == DiscourseContext::Social
-            && super::social::classify_keywords(&request.text).is_influence_attempt();
         let npc = (token.is_empty()
             && finality == InputFinality::Final
             && (influence_speech
@@ -1262,7 +1422,7 @@ impl actor::Actor {
                         | IntentDisposition::Joke
                         | IntentDisposition::Clarify
                 )))
-        .then(|| self.npc_reply_context(member, &request.text))
+        .then(|| self.npc_reply_context(member, &request.text, target))
         .flatten();
         if finality == InputFinality::Final
             && declared != DiscourseContext::Meta
@@ -1292,6 +1452,14 @@ impl actor::Actor {
                 confirmation_token: token,
                 revision: Some(wire::revision(basis.revision)),
                 npc_reply: String::new(),
+                npc_actor_id: npc
+                    .as_ref()
+                    .map(|context| context.actor_id.clone())
+                    .unwrap_or_default(),
+                npc_speaker: npc
+                    .as_ref()
+                    .map(|context| context.speaker.clone())
+                    .unwrap_or_default(),
             },
             npc,
         ))
@@ -1299,7 +1467,12 @@ impl actor::Actor {
 
     /// The facts for the speaker's reply, taken from this member's own view. Failing to build
     /// them only means this line gets today's response without a spoken reply.
-    fn npc_reply_context(&self, member: MemberId, typed: &str) -> Option<NpcReplyContext> {
+    fn npc_reply_context(
+        &self,
+        member: MemberId,
+        typed: &str,
+        target: Option<&str>,
+    ) -> Option<NpcReplyContext> {
         let current = self.owner.checkpoint();
         let scene = match super::beat_script_runtime::scene(current.state()) {
             Ok(scene) => scene,
@@ -1324,13 +1497,14 @@ impl actor::Actor {
         let projection =
             wire::project_journey(self.owner.checkpoint(), LocalDemoRole::Player, member).ok()?;
         let story = super::pack::with_content(StoryFacts::from_pack);
-        NpcReplyContext::for_cast(
+        NpcReplyContext::for_target(
             &projection.view,
             member,
             typed,
             &story,
             &self.social,
             &format!("{:?}", projection.scene),
+            target,
         )
     }
 
@@ -1485,6 +1659,8 @@ impl actor::Actor {
             confirmation_required: false,
             revision: Some(wire::revision(self.owner.checkpoint().basis().revision)),
             npc_reply: String::new(),
+            npc_actor_id: String::new(),
+            npc_speaker: String::new(),
         })
     }
 }

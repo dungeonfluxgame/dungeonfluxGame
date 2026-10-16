@@ -3031,7 +3031,8 @@ impl Reducer<Call> for Actor {
                 reply,
             } => {
                 let say = match &request {
-                    super::dialogue::DialogueRequest::Raw(bytes) => {
+                    super::dialogue::DialogueRequest::Raw(bytes)
+                    | super::dialogue::DialogueRequest::RawTarget { bytes, .. } => {
                         rpc::RawDialogueRequest::decode(bytes.as_slice()).ok()
                     }
                     super::dialogue::DialogueRequest::Confirm(_)

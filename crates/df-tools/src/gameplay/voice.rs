@@ -128,6 +128,7 @@ impl Age {
 /// One speaking character of the adventure, as the caller knows them at startup.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct SpeakerCasting {
+    pub(super) actor_ids: Vec<String>,
     /// The name the dialogue is attributed to (the display's speaker).
     pub(super) name: String,
     pub(super) gender: Gender,
@@ -225,6 +226,7 @@ struct Casting {
     forced: Option<ChosenVoice>,
     /// Cast voices by lowercase speaker name.
     by_speaker: HashMap<String, ChosenVoice>,
+    by_actor: HashMap<String, ChosenVoice>,
     fallback: ChosenVoice,
 }
 
@@ -240,7 +242,10 @@ impl Casting {
         let speaker = line.speaker().unwrap_or_default();
         self.forced
             .as_ref()
-            .or_else(|| self.by_speaker.get(&speaker_key(speaker)))
+            .or_else(|| match line.actor_id() {
+                Some(id) => self.by_actor.get(id),
+                None => self.by_speaker.get(&speaker_key(speaker)),
+            })
             .unwrap_or(&self.fallback)
     }
 }
@@ -373,11 +378,15 @@ impl Voice {
             configuration.cache_dir.display()
         );
         let mut by_speaker = HashMap::new();
+        let mut by_actor = HashMap::new();
         if forced.is_none() {
             for speaker in speakers {
                 let Some(voice) = cast.get(&speaker.name).and_then(|id| roster.voice(id)) else {
                     continue;
                 };
+                for id in &speaker.actor_ids {
+                    by_actor.insert(id.clone(), ChosenVoice::from_roster(voice, false));
+                }
                 let known = by_speaker
                     .insert(
                         speaker_key(&speaker.name),
@@ -411,6 +420,7 @@ impl Voice {
             },
             forced,
             by_speaker,
+            by_actor,
             fallback: ChosenVoice::from_roster(&roster.fallback, true),
         };
         let synthesis = Synthesis {
@@ -1403,8 +1413,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn canonical_actor_id_selects_voice_before_legacy_public_name() {
+        let voice = |id: &str| ChosenVoice {
+            voice_id: id.into(),
+            name: id.into(),
+            fallback: false,
+        };
+        let casting = Casting {
+            narrator: voice("narrator"),
+            forced: None,
+            by_speaker: HashMap::from([("courier".into(), voice("courier-voice"))]),
+            by_actor: HashMap::from([("bandit".into(), voice("bandit-voice"))]),
+            fallback: voice("neutral"),
+        };
+        let line = VoiceLine {
+            role: "npc-id:bandit|Courier".into(),
+            text: "Who sent you?".into(),
+        };
+        assert_eq!(casting.voice_for(&line).voice_id, "bandit-voice");
+        let stale = VoiceLine {
+            role: "npc-id:departed|Courier".into(),
+            text: line.text,
+        };
+        assert_eq!(casting.voice_for(&stale).voice_id, "neutral");
+    }
+
     fn speaker(name: &str, gender: Gender, age: Option<Age>, tone: &str) -> SpeakerCasting {
         SpeakerCasting {
+            actor_ids: Vec::new(),
             name: name.to_owned(),
             gender,
             age,

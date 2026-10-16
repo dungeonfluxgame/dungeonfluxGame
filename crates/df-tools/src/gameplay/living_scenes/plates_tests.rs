@@ -161,6 +161,7 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
     let id = fresh_ids(&drain(&mut queue)).remove(0);
     ready(&shared, &id, 'a');
     let story = |sequence, text: &str| StoryBeat {
+        actor_id: String::new(),
         sequence,
         speaker: "Kestrel".into(),
         text: text.into(),
@@ -925,6 +926,7 @@ fn ready(shared: &Shared, id: &str, plate: char) {
         result: Ok((
             key(plate),
             Some(PlatePlacement {
+                actors: Vec::new(),
                 speaker: layout(),
                 heroes: vec![HeroHead {
                     art: 2,
@@ -1188,6 +1190,7 @@ async fn a_plate_is_shown_with_its_predicted_layout_and_the_measured_heads_repla
         key: key('a'),
         elapsed: Duration::from_secs(20),
         placement: PlatePlacement {
+            actors: Vec::new(),
             speaker: shot::measured_layout(0.30, 0.20, 0.40, 0.36),
             heroes: Vec::new(),
         },
@@ -1205,6 +1208,7 @@ async fn a_plate_is_shown_with_its_predicted_layout_and_the_measured_heads_repla
         key: key('b'),
         elapsed: Duration::from_secs(20),
         placement: PlatePlacement {
+            actors: Vec::new(),
             speaker: shot::measured_layout(0.80, 0.20, 0.90, 0.36),
             heroes: Vec::new(),
         },
@@ -1297,6 +1301,16 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
         panic!("an edit of the plate, not a fresh render");
     };
     assert_eq!((base, *face), (&key('a'), angry));
+    let mut edited_layout = layout();
+    edited_layout.head_x_permille = 700;
+    locked(&shared.book).image_layouts.insert(
+        key('b').as_str().into(),
+        PlatePlacement {
+            speaker: edited_layout,
+            heroes: vec![],
+            actors: vec![],
+        },
+    );
     shared.finish(Done::Edit {
         scene_key: "Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp".to_owned(),
         speaker_id: Some("keeper".to_owned()),
@@ -1309,7 +1323,7 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
     assert_eq!(
         shown_scene(&message).live_plate,
         format!("/gameplay/imagery/{}", "b".repeat(64)),
-        "the edited plate replaces the first one, with the same layout"
+        "the edited plate replaces the first one, with its own measured layout"
     );
     assert_eq!(
         shown_scene(&message)
@@ -1317,7 +1331,7 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
             .as_ref()
             .unwrap()
             .head_x_permille,
-        640
+        700
     );
     locked(&shared.inner.state)
         .plate_wants
@@ -1569,6 +1583,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
     let id = fresh_ids(&drain(&mut queue)).remove(0);
     ready(&shared, &id, 'a');
     story_view.story = Some(StoryBeat {
+        actor_id: String::new(),
         sequence: 7,
         speaker: current.speaker.clone(),
         text: "The enforcer listens.".into(),
@@ -1808,6 +1823,7 @@ async fn a_hurt_hero_stands_in_the_plate_as_their_health_variant_and_makes_anoth
 #[test]
 fn a_measured_placement_survives_the_note_beside_the_cached_plate_and_a_damaged_note_is_refused() {
     let placement = PlatePlacement {
+        actors: Vec::new(),
         speaker: layout(),
         heroes: vec![HeroHead {
             art: 1,
@@ -1830,4 +1846,110 @@ fn a_measured_placement_survives_the_note_beside_the_cached_plate_and_a_damaged_
             .is_none(),
         "numbers outside the plate are not trusted"
     );
+}
+
+#[test]
+fn locator_deduplicates_focus_and_maps_all_four_harbor_people_to_admitted_ids() {
+    let mut scene = scene(SceneKey::Opening, "The Wharf", Some("Kestrel"));
+    scene.cast.push(member(
+        "bandit",
+        "Bandit",
+        "figure-bandit-documentary-photo",
+        pack::CastRole::Antagonist,
+    ));
+    let scene = PlateScene::of(&scene).unwrap();
+    let spec = scene.stage(&[1, 2]).unwrap();
+    let (focus, targets) = locator_targets(
+        &spec,
+        spec.speaker.as_ref().unwrap(),
+        &scene.locator_actors(),
+        Some("keeper"),
+    );
+    assert_eq!(focus, "npc-0");
+    assert_eq!(
+        targets
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["npc-0", "hero-1", "hero-2", "npc-1"]
+    );
+    assert!(targets.chunks(4).all(|batch| batch.len() <= 4));
+    assert!(targets.iter().all(|(id, description)| {
+        id.len() <= 16
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && description.chars().count() <= 300
+    }));
+}
+#[test]
+fn edited_image_never_borrows_actor_heads_from_a_different_image_key() {
+    let mut book = Book::new();
+    let old = PlatePlacement {
+        speaker: layout(),
+        heroes: vec![],
+        actors: vec![ActorHead {
+            actor_id: "bandit".into(),
+            layout: layout(),
+        }],
+    };
+    book.state_images.shown = Some((key('a'), Some(old.clone())));
+    book.image_layouts
+        .insert(key('a').as_str().into(), old.clone());
+    book.edit = Edit::Ready {
+        face: Face::AUTHORED,
+        key: key('b'),
+    };
+    assert!(book.shown().unwrap().1.is_none());
+    book.image_layouts
+        .insert(key('b').as_str().into(), old.clone());
+    assert_eq!(book.shown().unwrap().1, Some(old));
+}
+
+#[tokio::test]
+async fn four_person_locator_batch_reaches_the_real_provider_adapter_fixture() {
+    use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
+    use df_providers::{HeadLocateConfig, HeadLocateError, LocateTarget, NativeHeadLocator};
+    let endpoint = FakeEndpoint::start(vec![Reply::Status(503, serde_json::json!({}))]);
+    let locator = NativeHeadLocator::new(
+        HeadLocateConfig::loopback_fixture(endpoint.address).unwrap(),
+        "fixture",
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let mut scene = scene(SceneKey::Opening, "The Wharf", Some("Kestrel"));
+    scene.cast.push(member(
+        "bandit",
+        "Bandit",
+        "figure-bandit-documentary-photo",
+        pack::CastRole::Antagonist,
+    ));
+    let scene = PlateScene::of(&scene).unwrap();
+    let spec = scene.stage(&[1, 2]).unwrap();
+    let (_, targets) = locator_targets(
+        &spec,
+        spec.speaker.as_ref().unwrap(),
+        &scene.locator_actors(),
+        Some("keeper"),
+    );
+    let borrowed = targets
+        .iter()
+        .map(|(id, description)| LocateTarget { id, description })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        locator
+            .locate(b"jpeg-fixture", None, &borrowed, Duration::from_secs(2))
+            .await,
+        Err(HeadLocateError::Provider(503))
+    );
+    assert_eq!(
+        endpoint.connections(),
+        1,
+        "local admission allowed the actual four-person request"
+    );
+    let body = &endpoint.bodies()[0];
+    let instruction = body["messages"][0]["content"][0]["text"].as_str().unwrap();
+    for (id, _) in targets {
+        assert_eq!(instruction.matches(&format!("{id}: ")).count(), 1);
+    }
 }

@@ -37,7 +37,7 @@ use super::{
         pack::{self, Age, Gender, SceneKey},
         scene_mood::Face,
         shot::{
-            self, HeroHead, PlateLayout, PlatePlacement, ShotError, ShotInput, ShotSpec,
+            self, ActorHead, HeroHead, PlateLayout, PlatePlacement, ShotError, ShotInput, ShotSpec,
             SpeakerInput,
         },
     },
@@ -149,6 +149,25 @@ impl PlateScene {
             snapshot: crate::gameplay::adventure::scene_model::current_scene(scene),
             hero_names: Vec::new(),
         })
+    }
+
+    fn locator_actors(&self) -> Vec<(String, String)> {
+        self.identity_cast
+            .iter()
+            .map(|actor| {
+                (
+                    actor
+                        .id
+                        .strip_prefix("npc:")
+                        .unwrap_or(&actor.id)
+                        .to_owned(),
+                    format!(
+                        "{} ({}), the same canonical person in this photograph",
+                        actor.name, actor.sprite
+                    ),
+                )
+            })
+            .collect()
     }
 
     /// The plate of this scene for this party: the same scene and party always have one name.
@@ -315,6 +334,7 @@ struct View {
 
 #[derive(Clone, Debug)]
 struct StoryBeat {
+    actor_id: String,
     sequence: u64,
     speaker: String,
     text: String,
@@ -345,10 +365,11 @@ fn committed_story(journey: &rpc::JourneyView) -> Option<StoryBeat> {
     let text = line.text.trim().to_owned();
     Some(StoryBeat {
         sequence: line.sequence,
+        actor_id: line.actor_id.clone(),
         speaker: line.speaker.clone(),
         sha256: format!(
             "{:x}",
-            Sha256::digest(format!("{}\0{text}", line.speaker).as_bytes())
+            Sha256::digest(format!("{}\0{}\0{text}", line.actor_id, line.speaker).as_bytes())
         ),
         text,
     })
@@ -478,6 +499,7 @@ impl FaceRefresh {
 }
 
 struct Book {
+    image_layouts: BTreeMap<String, PlatePlacement>,
     current: Option<Current>,
     entries: BTreeMap<String, Entry>,
     order: VecDeque<String>,
@@ -518,6 +540,7 @@ fn refresh_decision(book: &mut Book, pipeline: &'static str, reason: &'static st
 impl Book {
     fn new() -> Self {
         Self {
+            image_layouts: BTreeMap::new(),
             current: None,
             entries: BTreeMap::new(),
             order: VecDeque::new(),
@@ -560,13 +583,17 @@ impl Book {
     fn shown(&self) -> Option<(ImageKey, Option<PlatePlacement>)> {
         if let Some(shown) = &self.state_images.shown {
             return Some(match &self.edit {
-                Edit::Ready { key, .. } => (key.clone(), shown.1.clone()),
+                Edit::Ready { key, .. } => {
+                    (key.clone(), self.image_layouts.get(key.as_str()).cloned())
+                }
                 _ => shown.clone(),
             });
         }
         if let Some(shown) = &self.direct.shown {
             return match &self.edit {
-                Edit::Ready { key, .. } => Some((key.clone(), shown.1.clone())),
+                Edit::Ready { key, .. } => {
+                    Some((key.clone(), self.image_layouts.get(key.as_str()).cloned()))
+                }
                 _ => Some(shown.clone()),
             };
         }
@@ -574,7 +601,10 @@ impl Book {
             return None;
         };
         match &self.edit {
-            Edit::Ready { key: edited, .. } => Some((edited.clone(), placement.clone())),
+            Edit::Ready { key: edited, .. } => Some((
+                edited.clone(),
+                self.image_layouts.get(edited.as_str()).cloned(),
+            )),
             _ => Some((key.clone(), placement.clone())),
         }
     }
@@ -619,6 +649,8 @@ enum Job {
 
 /// What finding the heads in a finished plate needs.
 struct Locate {
+    focus_actor_id: Option<String>,
+    actors: Vec<(String, String)>,
     key: ImageKey,
     spec: ShotSpec,
     speaker: shot::SpeakerShot,
@@ -797,6 +829,40 @@ fn record_plate_render_diagnostic(
     record_plate_diagnostic(event, line, fields);
 }
 
+/// The locator accepts four short plain IDs per call. Canonical IDs remain in the indexed mapping.
+fn locator_targets(
+    spec: &ShotSpec,
+    speaker: &shot::SpeakerShot,
+    actors: &[(String, String)],
+    focus_actor_id: Option<&str>,
+) -> (String, Vec<(String, String)>) {
+    let focus = actors
+        .iter()
+        .position(|(id, _)| Some(id.as_str()) == focus_actor_id);
+    let focus_id = focus.map_or_else(|| "speaker".to_owned(), |index| format!("npc-{index}"));
+    let bounded = |text: String| text.chars().take(300).collect::<String>();
+    let mut targets = vec![(
+        focus_id.clone(),
+        bounded(format!("{}, {}", speaker.look, speaker.task)),
+    )];
+    targets.extend(spec.heroes.iter().map(|hero| {
+        (
+            format!("hero-{}", hero.art),
+            bounded(hero_locator_phrase(hero.art).to_owned()),
+        )
+    }));
+    targets.extend(
+        actors
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| Some(*index) != focus)
+            .map(|(index, (_, description))| {
+                (format!("npc-{index}"), bounded(description.clone()))
+            }),
+    );
+    (focus_id, targets)
+}
+
 fn wire_side(side: shot::Side) -> i32 {
     (match side {
         shot::Side::Left => rpc::PlateSide::Left,
@@ -812,6 +878,18 @@ fn wire_layout(placement: &PlatePlacement) -> rpc::PlateLayout {
         head_y_permille: u32::from(speaker.head_y_permille),
         head_width_permille: u32::from(speaker.head_width_permille),
         head_height_permille: u32::from(speaker.head_height_permille),
+        actors: placement
+            .actors
+            .iter()
+            .map(|actor| rpc::PlateActorHead {
+                actor_id: actor.actor_id.clone(),
+                bubble_side: wire_side(actor.layout.bubble_side),
+                head_x_permille: u32::from(actor.layout.head_x_permille),
+                head_y_permille: u32::from(actor.layout.head_y_permille),
+                head_width_permille: u32::from(actor.layout.head_width_permille),
+                head_height_permille: u32::from(actor.layout.head_height_permille),
+            })
+            .collect(),
         heroes: placement
             .heroes
             .iter()
@@ -844,6 +922,16 @@ struct StoredHead {
 struct StoredPlacement {
     speaker: StoredHead,
     heroes: Vec<StoredHead>,
+    #[serde(default)]
+    actors: Vec<StoredActorHead>,
+    #[serde(default)]
+    actor_ids: Vec<String>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct StoredActorHead {
+    actor_id: String,
+    head: StoredHead,
 }
 
 impl StoredHead {
@@ -882,6 +970,19 @@ impl StoredPlacement {
     fn of(placement: &PlatePlacement) -> Self {
         Self {
             speaker: StoredHead::of(0, &placement.speaker),
+            actor_ids: placement
+                .actors
+                .iter()
+                .map(|actor| actor.actor_id.clone())
+                .collect(),
+            actors: placement
+                .actors
+                .iter()
+                .map(|actor| StoredActorHead {
+                    actor_id: actor.actor_id.clone(),
+                    head: StoredHead::of(0, &actor.layout),
+                })
+                .collect(),
             heroes: placement
                 .heroes
                 .iter()
@@ -903,6 +1004,16 @@ impl StoredPlacement {
             .collect();
         Some(PlatePlacement {
             speaker: self.speaker.layout()?,
+            actors: self
+                .actors
+                .iter()
+                .filter_map(|actor| {
+                    Some(ActorHead {
+                        actor_id: actor.actor_id.clone(),
+                        layout: actor.head.layout()?,
+                    })
+                })
+                .collect(),
             heroes,
         })
     }
@@ -1579,6 +1690,8 @@ impl Shared {
                             &work.spec,
                             &work.speaker,
                             work.face.as_ref(),
+                            &work.actors,
+                            work.focus_actor_id.as_deref(),
                         )
                         .await;
                     Done::Located {
@@ -1599,6 +1712,9 @@ impl Shared {
                 tasks.spawn(async move {
                     let started = tokio::time::Instant::now();
                     let result = shared.render_edit(&scene, &base, face, &heroes).await;
+                    if let Ok(key) = &result {
+                        shared.measure_scene_plate(key, &scene, &heroes).await;
+                    }
                     Done::Edit {
                         scene_key,
                         speaker_id: scene.speaker.map(|speaker| speaker.id),
@@ -2023,14 +2139,18 @@ impl Shared {
             let Some(speaker) = &spec.speaker else {
                 return Ok((key, None, None));
             };
-            if let Some(stored) = self.stored_placement(&key).await {
+            if let Some(stored) = self.stored_placement(&key, &scene.locator_actors()).await {
                 return Ok((key, Some(stored), None));
             }
+            let actors = scene.locator_actors();
             let predicted = PlatePlacement {
                 speaker: speaker.layout,
                 heroes: Vec::new(),
+                actors: Vec::new(),
             };
             let work = Locate {
+                focus_actor_id: scene.speaker.as_ref().map(|speaker| speaker.id.clone()),
+                actors,
                 key: key.clone(),
                 spec: spec.clone(),
                 speaker: speaker.clone(),
@@ -2068,11 +2188,21 @@ impl Shared {
     }
 
     /// The placement kept beside a cached plate by an earlier measurement, when it is intact.
-    async fn stored_placement(&self, key: &ImageKey) -> Option<PlatePlacement> {
+    async fn stored_placement(
+        &self,
+        key: &ImageKey,
+        actors: &[(String, String)],
+    ) -> Option<PlatePlacement> {
         let note = self.inner.imagery.read_note(key).await?;
-        serde_json::from_slice::<StoredPlacement>(&note)
-            .ok()?
-            .placement()
+        let stored = serde_json::from_slice::<StoredPlacement>(&note).ok()?;
+        if !actors.iter().all(|(id, _)| stored.actor_ids.contains(id)) {
+            return None;
+        }
+        let mut placement = stored.placement()?;
+        placement
+            .actors
+            .retain(|head| actors.iter().any(|(id, _)| id == &head.actor_id));
+        Some(placement)
     }
 
     /// Where the heads are in the finished plate, as the vision model finds them: the speaker's
@@ -2086,45 +2216,64 @@ impl Shared {
         spec: &ShotSpec,
         speaker: &shot::SpeakerShot,
         face: Option<&ReferenceImage>,
+        actors: &[(String, String)],
+        focus_actor_id: Option<&str>,
     ) -> PlatePlacement {
-        if let Some(stored) = self.stored_placement(key).await {
+        if let Some(stored) = self.stored_placement(key, actors).await {
             return stored;
         }
-        let speaker_description = format!("{}, {}", speaker.look, speaker.task);
-        let hero_ids: Vec<String> = spec
-            .heroes
-            .iter()
-            .map(|hero| format!("hero-{}", hero.art))
-            .collect();
-        let mut targets: Vec<(&str, &str)> = vec![("speaker", speaker_description.as_str())];
-        for (hero, id) in spec.heroes.iter().zip(&hero_ids) {
-            targets.push((id.as_str(), hero_locator_phrase(hero.art)));
-        }
+        let (focus_id, targets) = locator_targets(spec, speaker, actors, focus_actor_id);
         let started = tokio::time::Instant::now();
-        let found = self.inner.imagery.locate_heads(key, face, &targets).await;
-        record(
-            "gameplay.living_scene.head_located",
-            &[
-                (
-                    "scene.outcome",
-                    found
-                        .as_ref()
-                        .map_or_else(|failure| failure.label(), |_| "located")
-                        .to_owned(),
-                ),
-                (
-                    "scene.elapsed_ms",
-                    started.elapsed().as_millis().to_string(),
-                ),
-            ],
-        );
-        let located = found.unwrap_or_default();
-        let Some(head) = located.iter().find(|head| head.id == "speaker") else {
-            return PlatePlacement {
-                speaker: speaker.layout,
-                heroes: Vec::new(),
-            };
-        };
+        let mut located = Vec::new();
+        for (batch, targets) in targets.chunks(4).take(4).enumerate() {
+            let borrowed: Vec<(&str, &str)> = targets
+                .iter()
+                .map(|(id, description)| (id.as_str(), description.as_str()))
+                .collect();
+            let found = self
+                .inner
+                .imagery
+                .locate_heads(key, if batch == 0 { face } else { None }, &borrowed)
+                .await;
+            record(
+                "gameplay.living_scene.head_located",
+                &[
+                    (
+                        "scene.outcome",
+                        found
+                            .as_ref()
+                            .map_or_else(|failure| failure.label(), |_| "located")
+                            .to_owned(),
+                    ),
+                    (
+                        "scene.elapsed_ms",
+                        started.elapsed().as_millis().to_string(),
+                    ),
+                    ("image_key", key.as_str().to_owned()),
+                    ("batch", batch.to_string()),
+                    (
+                        "target_ids",
+                        targets
+                            .iter()
+                            .map(|(id, _)| id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+                ],
+            );
+            located.extend(found.unwrap_or_default());
+        }
+        if targets.len() > 16 {
+            record(
+                "gameplay.living_scene.head_overflow",
+                &[
+                    ("image_key", key.as_str().to_owned()),
+                    ("target_count", targets.len().to_string()),
+                    ("status", "named_lane_after_16_people".to_owned()),
+                ],
+            );
+        }
+        let focus_head = located.iter().find(|head| head.id == focus_id);
         let heroes = spec
             .heroes
             .iter()
@@ -2142,19 +2291,92 @@ impl Shared {
                 })
             })
             .collect();
+        let actor_heads = actors
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (id, _))| {
+                let found = located
+                    .iter()
+                    .find(|head| head.id == format!("npc-{index}"))?;
+                Some(ActorHead {
+                    actor_id: id.clone(),
+                    layout: shot::measured_layout(
+                        found.head.left,
+                        found.head.top,
+                        found.head.right,
+                        found.head.bottom,
+                    ),
+                })
+            })
+            .collect();
         let placement = PlatePlacement {
-            speaker: shot::measured_layout(
-                head.head.left,
-                head.head.top,
-                head.head.right,
-                head.head.bottom,
-            ),
+            actors: actor_heads,
+            speaker: focus_head.map_or(speaker.layout, |head| {
+                shot::measured_layout(
+                    head.head.left,
+                    head.head.top,
+                    head.head.right,
+                    head.head.bottom,
+                )
+            }),
             heroes,
         };
-        if let Ok(note) = serde_json::to_vec(&StoredPlacement::of(&placement)) {
+        record(
+            "gameplay.living_scene.actor_heads",
+            &[
+                ("image_key", key.as_str().to_owned()),
+                (
+                    "requested_actor_ids",
+                    actors
+                        .iter()
+                        .map(|(id, _)| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+                (
+                    "located_actor_ids",
+                    placement
+                        .actors
+                        .iter()
+                        .map(|head| head.actor_id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+                ("missing_head_surface", "named_lane".to_owned()),
+            ],
+        );
+        let mut stored = StoredPlacement::of(&placement);
+        stored.actor_ids = actors.iter().map(|(id, _)| id.clone()).collect();
+        if let Ok(note) = serde_json::to_vec(&stored) {
             self.inner.imagery.write_note(key, note).await;
         }
         placement
+    }
+
+    /// Every edited image owns its measured heads; an earlier photograph's boxes are never reused.
+    async fn measure_scene_plate(&self, key: &ImageKey, scene: &PlateScene, heroes: &[u8]) {
+        let Ok(spec) = scene.stage(heroes) else {
+            return;
+        };
+        let Some(speaker) = spec.speaker.as_ref() else {
+            return;
+        };
+        let placement = self
+            .measured_or_predicted(
+                key,
+                &spec,
+                speaker,
+                None,
+                &scene.locator_actors(),
+                scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
+            )
+            .await;
+        let mut book = locked(&self.book);
+        if book.image_layouts.len() >= MAXIMUM_ENTRIES {
+            book.image_layouts.pop_first();
+        }
+        book.image_layouts
+            .insert(key.as_str().to_owned(), placement);
     }
 
     async fn render_edit(

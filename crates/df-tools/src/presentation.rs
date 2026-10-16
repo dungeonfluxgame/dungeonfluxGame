@@ -501,6 +501,7 @@ pub(crate) const MAX_NPCS: usize = 3;
 /// One character standing in the scene.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StageActor {
+    pub(crate) actor_id: String,
     pub(crate) slot: ActorSlot,
     pub(crate) name: String,
     pub(crate) role: String,
@@ -629,6 +630,16 @@ pub(crate) struct PlateHero {
 /// Where the speaker's head is in the plate (permille of the plate) and which side of it is calm,
 /// and where the heroes' heads are when the server found them.
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlateActor {
+    pub(crate) actor_id: String,
+    pub(crate) bubble_side: crate::plate_layout::Side,
+    pub(crate) head_x: u32,
+    pub(crate) head_y: u32,
+    pub(crate) head_width: u32,
+    pub(crate) head_height: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlateGeometry {
     pub(crate) bubble_side: crate::plate_layout::Side,
     pub(crate) head_x: u32,
@@ -636,6 +647,7 @@ pub(crate) struct PlateGeometry {
     pub(crate) head_width: u32,
     pub(crate) head_height: u32,
     pub(crate) heroes: Vec<PlateHero>,
+    pub(crate) actors: Vec<PlateActor>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -664,6 +676,28 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
     };
     let layout = scene.plate_layout.as_ref().and_then(|layout| {
         Some(PlateGeometry {
+            actors: layout
+                .actors
+                .iter()
+                .filter_map(|head| {
+                    if !scene.cast.iter().any(|actor| actor.id == head.actor_id)
+                        || head.head_x_permille > 1000
+                        || head.head_y_permille > 1000
+                        || !(1..=400).contains(&head.head_width_permille)
+                        || !(1..=500).contains(&head.head_height_permille)
+                    {
+                        return None;
+                    }
+                    Some(PlateActor {
+                        actor_id: head.actor_id.clone(),
+                        bubble_side: side_of(head.bubble_side)?,
+                        head_x: head.head_x_permille,
+                        head_y: head.head_y_permille,
+                        head_width: head.head_width_permille,
+                        head_height: head.head_height_permille,
+                    })
+                })
+                .collect(),
             bubble_side: side_of(layout.bubble_side)?,
             head_x: layout.head_x_permille,
             head_y: layout.head_y_permille,
@@ -752,6 +786,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
         .filter(|(_, member)| member.character_ready)
         .map(|(index, member)| StageActor {
             slot: ActorSlot::Hero(index),
+            actor_id: String::new(),
             name: member.name.clone(),
             role: HERO_ROLE.to_owned(),
             sprite: format!("{GENERATED}/sprite-hero-{}", index + 1),
@@ -785,6 +820,7 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
                     .find(|participant| participant.name == actor.name);
                 StageActor {
                     slot: ActorSlot::Npc(position),
+                    actor_id: actor.id.clone(),
                     name: actor.name.clone(),
                     role: String::new(),
                     sprite: asset_url(&actor.sprite).unwrap_or_default(),
@@ -824,6 +860,7 @@ pub(crate) enum TableKind {
 /// One short line the whole room can follow.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TableLine {
+    pub(crate) actor_id: String,
     /// The server's increasing sequence. Consumers show a line once per sequence, so a redraw
     /// of the same view never repeats it.
     pub(crate) sequence: u64,
@@ -887,6 +924,9 @@ fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) ->
     };
     Some(TableLine {
         sequence: fnv(&[title.as_bytes(), speaker.as_bytes(), text.as_bytes()]),
+        actor_id: scene
+            .and_then(|scene| scene.cast.iter().find(|actor| actor.name == speaker))
+            .map_or_else(String::new, |actor| actor.id.clone()),
         speaker: speaker.to_owned(),
         role,
         kind: TableKind::Speech,
@@ -1050,6 +1090,7 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
         };
         Some(TableLine {
             sequence: line.sequence,
+            actor_id: line.actor_id.clone(),
             speaker: line.speaker.clone(),
             role,
             kind,
@@ -2041,11 +2082,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plate_actor_heads_are_validated_against_exact_current_cast_identity() {
+        let mut scene = plate_scene(
+            rpc::PlateState::Ready,
+            &format!("/gameplay/imagery/{}", "a".repeat(64)),
+            rpc::PlateSide::Left,
+        );
+        scene.cast.push(rpc::SceneActor {
+            id: "bandit".into(),
+            name: "Bandit".into(),
+            ..Default::default()
+        });
+        let head = rpc::PlateActorHead {
+            actor_id: "bandit".into(),
+            bubble_side: rpc::PlateSide::Left as i32,
+            head_x_permille: 800,
+            head_y_permille: 300,
+            head_width_permille: 100,
+            head_height_permille: 120,
+        };
+        scene.plate_layout.as_mut().unwrap().actors = vec![
+            head.clone(),
+            rpc::PlateActorHead {
+                actor_id: "departed".into(),
+                ..head.clone()
+            },
+            rpc::PlateActorHead {
+                actor_id: "bandit".into(),
+                head_x_permille: 2000,
+                ..head
+            },
+        ];
+        let actors = plate_of(&scene).layout.unwrap().actors;
+        assert_eq!(actors.len(), 1);
+        assert_eq!(actors[0].actor_id, "bandit");
+        assert_eq!(actors[0].head_x, 800);
+    }
+
     fn plate_scene(state: rpc::PlateState, path: &str, side: rpc::PlateSide) -> rpc::GameplayScene {
         rpc::GameplayScene {
             live_plate: path.to_owned(),
             plate_state: state as i32,
             plate_layout: Some(rpc::PlateLayout {
+                actors: Vec::new(),
                 bubble_side: side as i32,
                 head_x_permille: 640,
                 head_y_permille: 370,
@@ -2375,6 +2455,7 @@ mod tests {
         text: &str,
     ) -> rpc::TableLine {
         rpc::TableLine {
+            actor_id: String::new(),
             sequence,
             speaker: speaker.to_owned(),
             role: role as i32,

@@ -208,8 +208,15 @@ impl Shared {
             self.wait_for_roll(&scene_key, generation).await?;
             let placement = match &spec.speaker {
                 Some(speaker) => Some(
-                    self.measured_or_predicted(&rendered, &spec, speaker, locator_face.as_ref())
-                        .await,
+                    self.measured_or_predicted(
+                        &rendered,
+                        &spec,
+                        speaker,
+                        locator_face.as_ref(),
+                        &scene.locator_actors(),
+                        scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
+                    )
+                    .await,
                 ),
                 None => None,
             };

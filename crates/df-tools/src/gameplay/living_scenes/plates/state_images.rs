@@ -280,7 +280,7 @@ impl Shared {
             .last_shown
             .is_none_or(|last| now.saturating_sub(last) >= BAKE_INTERVAL);
         if can_show && let Some((key, revision)) = book.state_images.ready.take() {
-            let layout = book.shown().and_then(|shown| shown.1);
+            let layout = book.image_layouts.get(key.as_str()).cloned();
             book.edit = Edit::Idle;
             book.state_images.shown = Some((key, layout));
             book.state_images.baked_revision = Some(revision);
@@ -387,11 +387,13 @@ impl Shared {
                 .await?;
             references.push(sheet);
             if let Some(story) = &pending.story
-                && let Some(speaker) = identity
-                    .scene
-                    .identity_cast
-                    .iter()
-                    .find(|member| member.name == story.speaker)
+                && let Some(speaker) = identity.scene.identity_cast.iter().find(|member| {
+                    if story.actor_id.is_empty() {
+                        member.name == story.speaker
+                    } else {
+                        member.id.strip_prefix("npc:") == Some(story.actor_id.as_str())
+                    }
+                })
             {
                 let (figure, face) = self.speaker_art(&speaker.sprite).await;
                 references.extend(face.or(figure));
@@ -430,7 +432,12 @@ impl Shared {
                             identities.as_deref(),
                         )
                         .await?;
-                    self.inner.imagery.render(request).await
+                    let key = self.inner.imagery.render(request).await?;
+                    if let Some(identity) = identities.as_deref() {
+                        self.measure_scene_plate(&key, &identity.scene, &identity.heroes)
+                            .await;
+                    }
+                    Ok(key)
                 }
                 .await;
                 crate::gameplay::actor::record_audit_line(
@@ -522,7 +529,7 @@ impl Shared {
                                 {
                                     book.state_images.ready = Some((key, revision));
                                 } else {
-                                    let layout = book.shown().and_then(|shown| shown.1);
+                                    let layout = book.image_layouts.get(key.as_str()).cloned();
                                     book.edit = Edit::Idle;
                                     book.state_images.shown = Some((key, layout));
                                     book.state_images.baked_revision = Some(revision);

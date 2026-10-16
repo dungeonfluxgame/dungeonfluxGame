@@ -41,8 +41,9 @@ message DisplaySceneActor { string id = 1; string name = 2; string art = 3; stri
 enum PlateState { PLATE_STATE_UNSPECIFIED = 0; PLATE_STATE_PENDING = 1; PLATE_STATE_READY = 2; PLATE_STATE_FAILED = 3; PLATE_STATE_UNAVAILABLE = 4; }
 enum PlateSide { PLATE_SIDE_UNSPECIFIED = 0; PLATE_SIDE_LEFT = 1; PLATE_SIDE_RIGHT = 2; }
 // Positions are permille of the plate (0 to 1000 across and down); the head box is centred on the head position.
-message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; repeated PlateHead heroes = 6; }
+message PlateLayout { PlateSide bubble_side = 1; uint32 head_x_permille = 2; uint32 head_y_permille = 3; uint32 head_width_permille = 4; uint32 head_height_permille = 5; repeated PlateHead heroes = 6; repeated PlateActorHead actors = 7; }
 // Where one hero's head is in the plate (the party member at `hero_index`, counted from 0) and which side of it a speech bubble stands on, toward the middle of the frame. Only heroes the vision model found are listed.
+message PlateActorHead { string actor_id = 1; PlateSide bubble_side = 2; uint32 head_x_permille = 3; uint32 head_y_permille = 4; uint32 head_width_permille = 5; uint32 head_height_permille = 6; }
 message PlateHead { uint32 hero_index = 1; PlateSide bubble_side = 2; uint32 head_x_permille = 3; uint32 head_y_permille = 4; uint32 head_width_permille = 5; uint32 head_height_permille = 6; }
 enum SceneRole { SCENE_ROLE_UNSPECIFIED = 0; PATRON = 1; ANTAGONIST = 2; CONTACT = 3; BYSTANDER = 4; }
 // live_sprite (display only): a server-generated expression variant of this character's cut-out, `/gameplay/imagery/<key>`; empty when none. Presentation only.
@@ -106,7 +107,7 @@ enum TableRole { TABLE_ROLE_UNSPECIFIED = 0; HERO = 1; NPC = 2; NARRATOR = 3; }
 enum TableKind { TABLE_KIND_UNSPECIFIED = 0; ACTION = 1; SPEECH = 2; }
 // Player view only: how a present NPC feels about this hero. attitude: 0 unknown, 1 hostile, 2 indifferent, 3 friendly (standard 2024 scale).
 message NpcStanding { string npc_id = 1; string name = 2; uint32 attitude = 3; string perceived_reaction = 4; }
-message TableLine { uint64 sequence = 1; string speaker = 2; TableRole role = 3; uint32 hero_index = 4; TableKind kind = 5; string text = 6; }
+message TableLine { uint64 sequence = 1; string speaker = 2; TableRole role = 3; uint32 hero_index = 4; TableKind kind = 5; string text = 6; string actor_id = 7; }
 
 service DialogueService {
   rpc Submit(RawDialogueRequest) returns (DialogueResponse);
@@ -127,7 +128,7 @@ enum ComposeKind { COMPOSE_KIND_UNSPECIFIED = 0; COMPOSE_KIND_TYPING = 1; COMPOS
 message ComposeRequest { ComposeKind kind = 1; }
 message ComposeResponse {}
 message ComposingHero { uint32 hero_index = 1; ComposeKind kind = 2; }
-message DialogueResponse { OperationId input_id = 1; DialogueDisposition disposition = 2; bytes confirmation_token = 3; SessionRevision revision = 4; bool confirmation_required = 5; string npc_reply = 6; }
+message DialogueResponse { OperationId input_id = 1; DialogueDisposition disposition = 2; bytes confirmation_token = 3; SessionRevision revision = 4; bool confirmation_required = 5; string npc_reply = 6; string npc_actor_id = 7; string npc_speaker = 8; }
 
 // Public presentation only. Sequence is monotonic within the native owner lifetime; reset on authenticated watch reconnect.
 enum TempoPhase { TEMPO_PHASE_UNSPECIFIED = 0; TEMPO_PHASE_CALM = 1; TEMPO_PHASE_BUILD = 2; TEMPO_PHASE_ANTICIPATION = 3; TEMPO_PHASE_PEAK = 4; TEMPO_PHASE_RELEASE = 5; }

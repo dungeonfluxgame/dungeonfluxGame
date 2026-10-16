@@ -57,6 +57,7 @@ mod npc_reply;
 mod npc_talk_live_tests;
 #[cfg(test)]
 mod npc_talk_rules;
+mod npc_target;
 mod pack;
 #[cfg(test)]
 mod pack_tests;
@@ -468,6 +469,16 @@ fn speaker_castings() -> Vec<voice::SpeakerCasting> {
         .into_iter()
         .filter_map(|speaker| {
             Some(voice::SpeakerCasting {
+                actor_ids: pack::with_content(|pack| {
+                    pack.scenes
+                        .iter()
+                        .flat_map(|scene| &scene.cast)
+                        .filter(|actor| actor.name == speaker.name)
+                        .map(|actor| actor.id.clone())
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect()
+                }),
                 name: speaker.name,
                 gender: match speaker.gender? {
                     pack::Gender::He => voice::Gender::He,

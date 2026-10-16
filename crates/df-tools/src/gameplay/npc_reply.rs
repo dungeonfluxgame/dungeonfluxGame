@@ -46,13 +46,12 @@ const MAXIMUM_PLAYER_CHARACTERS: usize = 500;
 /// How much of an offered line the reply must say for the line to count as said.
 const USED_COVERAGE: f64 = 0.45;
 
-const STYLE: &str = "A spoken line in character, in the first person, with no quotation marks, \
-shaped by facts.npc (role, voice). Short plain words, one thought at a time, never a semicolon \
-or a colon. It deflects only what facts.forbidden or the scene hides; when \
-the hero was told the secret, it speaks of it plainly and quietly instead. An enemy taunts, \
-threatens or bargains and never helps. It never promises mechanical results. There are no menus \
-in this room, only people talking: never name choice labels and never tell the player what to \
-click or ask. Plain and brief.";
+const STYLE: &str = "Speak in first person as facts.npc, using its role and voice. No quotation \
+marks, colon or semicolon. Brief plain words, one thought at a time. Deflect forbidden or hidden \
+facts; allude quietly to a secret the hero already knows. Enemies taunt, threaten or bargain, \
+never help. Never promise mechanical results or name menus, choices, clicks or what to ask. \
+Honor your_previous_public_lines as your own spoken knowledge; do not contradict them or invent \
+a revelation.";
 
 /// What the pack says about the story that a reply needs: the private clue, the phrases that
 /// give it away and who each speaking character is.
@@ -180,8 +179,11 @@ fn private_clue_refusal(turn: &Turn) -> (String, String) {
 /// elsewhere.
 pub(super) struct NpcReplyContext {
     member: MemberId,
+    scene_identity: String,
+    publication_guard: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub(super) facts: Value,
     pub(super) speaker: String,
+    pub(super) actor_id: String,
     hero_name: String,
     hero_index: u32,
     pub(super) typed_words: String,
@@ -268,9 +270,60 @@ fn addressee<'a>(
 }
 
 impl NpcReplyContext {
+    pub(super) fn watch_publication(
+        &mut self,
+        updates: tokio::sync::watch::Receiver<df_model::checkpoint::Checkpoint>,
+    ) {
+        let expected = self.scene_identity.clone();
+        let member = self.member;
+        let actor_id = self.actor_id.clone();
+        self.publication_guard = Some(Arc::new(move || {
+            let current = updates.borrow();
+            let Ok(projection) = super::wire::project_journey(
+                &current,
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+                member,
+            ) else {
+                return false;
+            };
+            let Some(rpc::view_message::Audience::Player(player)) = &projection.view.audience
+            else {
+                return false;
+            };
+            let Some(scene) = &player.scene else {
+                return false;
+            };
+            format!("{}|{}", scene.title, scene.scene_asset) == expected
+                && (actor_id.is_empty()
+                    || super::npc_target::current(&scene.cast, &actor_id).is_some())
+        }));
+    }
+
+    fn publication_current(&self) -> bool {
+        let valid = self.publication_guard.as_ref().is_none_or(|guard| guard());
+        if !valid {
+            super::actor::record_audit_diagnostic(
+                "gameplay.npc_target",
+                "NPC reply publication suppressed: stale scene or actor".into(),
+                serde_json::Map::from_iter([
+                    ("resource_type".into(), json!("state")),
+                    ("stage".into(), json!("npc_reply_publication")),
+                    ("status".into(), json!("stale")),
+                    ("actor_id".into(), json!(self.actor_id)),
+                ]),
+                &[
+                    ("gameplay.resource.type", "state".into()),
+                    ("routing.validation", "stale_publication".into()),
+                ],
+            );
+        }
+        valid
+    }
+
     /// The context for a line typed to whoever on stage it addresses: an NPC with a dossier
     /// when the adventure has them, otherwise (and for packs without dossiers) the scene's
     /// single speaker as before. `scene` names the current scene for the attitude bounds.
+    #[cfg(test)]
     pub(super) fn for_cast(
         view: &rpc::ViewMessage,
         member: MemberId,
@@ -279,12 +332,47 @@ impl NpcReplyContext {
         social: &Arc<SocialLedger>,
         scene: &str,
     ) -> Option<Self> {
+        let cast = match &view.audience {
+            Some(rpc::view_message::Audience::Player(player)) => player
+                .scene
+                .as_ref()
+                .map(|scene| scene.cast.as_slice())
+                .unwrap_or_default(),
+            _ => return None,
+        };
+        let target = match super::npc_target::exact(typed, cast) {
+            super::npc_target::Target::Actor(id) => Some(id),
+            super::npc_target::Target::Ambiguous
+            | super::npc_target::Target::Absent
+            | super::npc_target::Target::Description
+            | super::npc_target::Target::PossibleAddress => return None,
+            super::npc_target::Target::Unspecified => None,
+        };
+        Self::for_target(view, member, typed, story, social, scene, target.as_deref())
+    }
+
+    pub(super) fn for_target(
+        view: &rpc::ViewMessage,
+        member: MemberId,
+        typed: &str,
+        story: &StoryFacts,
+        social: &Arc<SocialLedger>,
+        scene: &str,
+        target: Option<&str>,
+    ) -> Option<Self> {
+        if let Some(id) = target {
+            let Some(rpc::view_message::Audience::Player(player)) = &view.audience else {
+                return None;
+            };
+            super::npc_target::current(&player.scene.as_ref()?.cast, id)?;
+        }
         if social.is_active()
-            && let Some(context) = Self::with_dossier(view, member, typed, story, social, scene)
+            && let Some(context) =
+                Self::with_dossier(view, member, typed, story, social, scene, target)
         {
             return Some(context);
         }
-        Self::from_view(view, member, typed, story)
+        Self::from_view_target(view, member, typed, story, target)
     }
 
     fn with_dossier(
@@ -294,6 +382,7 @@ impl NpcReplyContext {
         story: &StoryFacts,
         social: &Arc<SocialLedger>,
         scene_key: &str,
+        target: Option<&str>,
     ) -> Option<Self> {
         let Some(rpc::view_message::Audience::Player(player)) = &view.audience else {
             return None;
@@ -380,9 +469,13 @@ impl NpcReplyContext {
                     })
                     .copied()
             });
-        let (actor, dossier) = explicitly_named
-            .or(addressed)
-            .or_else(|| addressee(&present, &words))?;
+        let (actor, dossier) = if let Some(id) = target {
+            present.iter().find(|(actor, _)| actor.id == id).copied()
+        } else {
+            explicitly_named
+                .or(addressed)
+                .or_else(|| addressee(&present, &words))
+        }?;
         let choices: Vec<&str> = player
             .offers
             .iter()
@@ -472,6 +565,7 @@ impl NpcReplyContext {
         if let Some(room) = &room {
             facts["now"]["room"] = room::facts(room, dossier, &withheld);
         }
+        facts["npc"]["actor_id"] = json!(actor.id);
         facts["hero_visible"] = visible_hero(hero);
         let answer_offered = ["answer_from", "you_told_this_hero_in_private"]
             .iter()
@@ -507,9 +601,16 @@ impl NpcReplyContext {
             .and_then(|position| u32::try_from(position).ok())
             .unwrap_or(0);
         Some(Self {
+            scene_identity: player
+                .scene
+                .as_ref()
+                .map(|scene| format!("{}|{}", scene.title, scene.scene_asset))
+                .unwrap_or_default(),
+            publication_guard: None,
             member,
             facts,
             speaker: actor.name.clone(),
+            actor_id: actor.id.clone(),
             hero_name: hero.name.clone(),
             hero_index,
             typed_words: words,
@@ -533,20 +634,58 @@ impl NpcReplyContext {
 
     /// Builds the context from the asking player's own view. `None` when nobody is speaking
     /// to the party, the hero is not ready, or the typed text is empty.
+    #[cfg(test)]
     pub(super) fn from_view(
         view: &rpc::ViewMessage,
         member: MemberId,
         typed: &str,
         story: &StoryFacts,
     ) -> Option<Self> {
+        Self::from_view_target(view, member, typed, story, None)
+    }
+
+    fn from_view_target(
+        view: &rpc::ViewMessage,
+        member: MemberId,
+        typed: &str,
+        story: &StoryFacts,
+        target: Option<&str>,
+    ) -> Option<Self> {
         let Some(rpc::view_message::Audience::Player(player)) = &view.audience else {
             return None;
         };
         let journey = player.journey.as_ref()?;
         let hero = journey.own_character.as_ref()?;
-        if journey.speaker.is_empty() || journey.dialogue.is_empty() {
+        let cast = player
+            .scene
+            .as_ref()
+            .map(|scene| scene.cast.as_slice())
+            .unwrap_or_default();
+        let actor = match target {
+            Some(id) => Some(super::npc_target::current(cast, id)?),
+            None if !cast.is_empty() => {
+                let resolved = match super::npc_target::exact(typed, cast) {
+                    super::npc_target::Target::Unspecified => {
+                        super::npc_target::focus(cast, &journey.speaker)
+                    }
+                    resolved => resolved,
+                };
+                match resolved {
+                    super::npc_target::Target::Actor(id) => {
+                        Some(super::npc_target::current(cast, &id)?)
+                    }
+                    _ => return None,
+                }
+            }
+            None => None,
+        };
+        let speaker = actor.map_or(journey.speaker.as_str(), |actor| actor.name.as_str());
+        let actor_id = actor.map_or("", |actor| actor.id.as_str());
+        if speaker.is_empty() || actor.is_none() && journey.dialogue.is_empty() {
             return None;
         }
+        let focus = speaker == journey.speaker;
+        let scripted = if focus { journey.dialogue.as_str() } else { "" };
         let words = sanitize_player_words(typed);
         if words.is_empty() || hero.name.is_empty() {
             return None;
@@ -561,10 +700,10 @@ impl NpcReplyContext {
         let profile = story
             .speakers
             .iter()
-            .find(|speaker| speaker.name == journey.speaker);
+            .find(|profile| profile.name == speaker);
         let mut facts = json!({
             "npc": {
-                "name": journey.speaker,
+                "name": speaker,
                 "role": profile.map_or("the speaker the scene narration describes", |speaker| {
                     speaker.role.as_str()
                 }),
@@ -574,12 +713,17 @@ impl NpcReplyContext {
                 "title": title.unwrap_or_default(),
                 "narration": player.narration,
             },
-            "npc_current_scripted_line": journey.dialogue,
+            "npc_current_scripted_line": scripted,
+            "characters_present": cast.iter().map(|actor| json!({"id": actor.id, "name": actor.name, "role": actor.role, "focus": actor.speaking})).collect::<Vec<_>>(),
+            "your_previous_public_lines": journey.table_log.iter().rev().filter(|line| line.role == rpc::TableRole::Npc as i32 && line.kind == rpc::TableKind::Speech as i32 && (line.actor_id == actor_id && !actor_id.is_empty() || line.actor_id.is_empty() && line.speaker == speaker)).take(8).map(|line| line.text.as_str()).collect::<Vec<_>>(),
             "player": {"hero_name": hero.name, "exact_words": words},
             // Menu labels stay out of the facts: a reply that names them reads the phone's
             // menu aloud instead of answering in character.
             "offered_choices": Vec::<&str>::new(),
         });
+        if !actor_id.is_empty() {
+            facts["npc"]["id"] = json!(actor_id);
+        }
         add_character_limits(&mut facts, profile);
         // Typed conversation is public table talk, so the secret's terms stay forbidden for
         // every asker; the room hears the reply.
@@ -592,7 +736,9 @@ impl NpcReplyContext {
             choices.join(" "),
         );
         facts["forbidden"] = json!(unheard_secret_terms(story, &public));
-        if player.private_clue.is_empty() {
+        let clue_speaker =
+            focus && actor.is_none_or(|actor| actor.role == rpc::SceneRole::Patron as i32);
+        if player.private_clue.is_empty() || !clue_speaker {
             facts["listener_knowledge"] = json!(
                 "This hero has NOT been told the secret. Never reveal it or hint at the \
                  forbidden terms; deflect questions about them in character."
@@ -611,9 +757,16 @@ impl NpcReplyContext {
             .and_then(|position| u32::try_from(position).ok())
             .unwrap_or(0);
         Some(Self {
+            scene_identity: player
+                .scene
+                .as_ref()
+                .map(|scene| format!("{}|{}", scene.title, scene.scene_asset))
+                .unwrap_or_default(),
+            publication_guard: None,
             member,
             facts,
-            speaker: journey.speaker.clone(),
+            speaker: speaker.to_owned(),
+            actor_id: actor_id.to_owned(),
             hero_name: hero.name.clone(),
             hero_index,
             typed_words: words,
@@ -629,6 +782,9 @@ impl NpcReplyContext {
     /// version (see `line_cleanup`); the raw words stay what the reply reasons about. A hero who
     /// was told a clue in private may type its terms, but the table does not read them.
     pub(super) fn publish_typed_line(&self, log: &TableLog, shown: &str) {
+        if !self.publication_current() {
+            return;
+        }
         let spoken = match &self.turn {
             Some(turn) => turn.withheld.hide_released(shown),
             None => shown.to_owned(),
@@ -833,6 +989,17 @@ impl NpcVoice {
         (self.storyteller.as_ref(), &self.approach_model)
     }
 
+    pub(super) async fn resolve_addressee(
+        &self,
+        words: &str,
+        cast: &[rpc::SceneActor],
+        focus: &str,
+    ) -> super::npc_target::Decision {
+        self.approach_model
+            .resolve_addressee(words, cast, focus)
+            .await
+    }
+
     pub(super) async fn resolve_investigation_target(
         &self,
         words: &str,
@@ -892,8 +1059,28 @@ impl NpcVoice {
         log: &TableLog,
     ) -> Option<String> {
         let speaker = context.speaker.clone();
+        let actor_id = context.actor_id.clone();
+        let guard = context.publication_guard.clone();
         let reply = self.reply(context).await?;
-        log.push(
+        if guard.as_ref().is_some_and(|guard| !guard()) {
+            super::actor::record_audit_diagnostic(
+                "gameplay.npc_target",
+                "NPC reply publication suppressed: stale scene or actor".into(),
+                serde_json::Map::from_iter([
+                    ("resource_type".into(), json!("state")),
+                    ("stage".into(), json!("npc_reply_publication")),
+                    ("status".into(), json!("stale")),
+                    ("actor_id".into(), json!(actor_id)),
+                ]),
+                &[
+                    ("gameplay.resource.type", "state".into()),
+                    ("routing.validation", "stale_publication".into()),
+                ],
+            );
+            return None;
+        }
+        log.push_actor(
+            &actor_id,
             &speaker,
             rpc::TableRole::Npc,
             0,
@@ -985,6 +1172,7 @@ impl NpcVoice {
         let mut appraised_reaction = None;
         let mut reaction_note = None;
         let mut influence_willingness = None;
+        let publication_guard = context.publication_guard.clone();
         if let Some(turn) = context.turn.as_mut() {
             let similar_asks = if approach == Approach::Question {
                 turn.ledger.note_question(
@@ -1016,6 +1204,9 @@ impl NpcVoice {
                     similar_asks,
                 )
                 .await;
+            if publication_guard.as_ref().is_some_and(|guard| !guard()) {
+                return None;
+            }
             let (appraisal, source) = match appraisal {
                 Some(appraisal) => (Some(appraisal), "jev"),
                 None if approach != Approach::Intimidation => (
@@ -1247,6 +1438,9 @@ impl NpcVoice {
         } else {
             self.model_dialogue(&context).await
         };
+        if !context.publication_current() {
+            return None;
+        }
         let turn = context.turn.as_ref()?;
         let (text, fallback) = match modeled {
             // Jev (or the keyword fallback) decided before the reaction and reply.
@@ -1316,7 +1510,8 @@ impl NpcVoice {
         let private = !turn.withheld.released().is_empty()
             && !(done_now || never_forgive_now || unwilling_now || hesitant_now);
         if private {
-            log.push(
+            log.push_actor(
+                &context.actor_id,
                 &context.speaker,
                 rpc::TableRole::Npc,
                 context.hero_index,
@@ -1324,7 +1519,8 @@ impl NpcVoice {
                 &format!("murmurs to {}", context.hero_name),
             );
         } else {
-            log.push(
+            log.push_actor(
+                &context.actor_id,
                 &context.speaker,
                 rpc::TableRole::Npc,
                 context.hero_index,
@@ -1358,7 +1554,8 @@ impl NpcVoice {
             _ => None,
         });
         if let Some(note) = reaction_note {
-            log.push(
+            log.push_actor(
+                &context.actor_id,
                 &context.speaker,
                 rpc::TableRole::Npc,
                 context.hero_index,
@@ -1534,6 +1731,78 @@ mod tests {
 
     const CLUE: &str = "The courier quietly tells you: the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.";
 
+    #[test]
+    fn authored_background_actor_uses_its_own_persona_and_canonical_identity() {
+        assert!(
+            STYLE.chars().count() <= 600,
+            "the shared storyteller admits this style"
+        );
+        let mut told = view(CLUE, "Courier");
+        let Some(rpc::view_message::Audience::Player(player)) = &mut told.audience else {
+            panic!()
+        };
+        player.scene.as_mut().unwrap().cast = vec![
+            rpc::SceneActor {
+                id: "courier".into(),
+                name: "Courier".into(),
+                speaking: true,
+                ..Default::default()
+            },
+            rpc::SceneActor {
+                id: "bandit".into(),
+                name: "Bandit".into(),
+                ..Default::default()
+            },
+        ];
+        player
+            .journey
+            .as_mut()
+            .unwrap()
+            .table_log
+            .push(rpc::TableLine {
+                sequence: 1,
+                actor_id: "bandit".into(),
+                speaker: "Bandit".into(),
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                text: "Give me that packet.".into(),
+                ..Default::default()
+            });
+        let context = NpcReplyContext::from_view_target(
+            &told,
+            member(1),
+            "Bandit, who sent you?",
+            &listed_story(),
+            Some("bandit"),
+        )
+        .unwrap();
+        assert_eq!(context.actor_id, "bandit");
+        assert_eq!(context.speaker, "Bandit");
+        assert_eq!(context.facts["npc"]["id"], "bandit");
+        assert_eq!(context.facts["npc"]["voice"], "sneering and rough");
+        assert_eq!(context.facts["npc_current_scripted_line"], "");
+        assert!(
+            context
+                .facts
+                .get("secret_clue_this_player_was_privately_told")
+                .is_none()
+        );
+        assert_eq!(
+            context.facts["your_previous_public_lines"][0],
+            "Give me that packet."
+        );
+        let courier = NpcReplyContext::from_view_target(
+            &told,
+            member(1),
+            "Courier, who sent you?",
+            &listed_story(),
+            Some("courier"),
+        )
+        .unwrap();
+        assert_eq!(courier.actor_id, "courier");
+        assert_eq!(courier.facts["npc"]["voice"], "hurried and anxious");
+        assert_eq!(courier.facts["your_previous_public_lines"], json!([]));
+    }
     /// A pack from before the explicit lists: only the clue text is known.
     #[test]
     fn the_names_the_scenes_speak_aloud_are_not_withheld_but_the_secret_phrase_still_is() {
@@ -2099,6 +2368,97 @@ mod tests {
         assert!(sent.contains("Who is following you?"));
         assert!(sent.contains("\"forbidden\":[\"Vell\",\"Harbor Inn\",\"Inn\"]"));
         assert!(!sent.contains("addressed to"));
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reply_completion_revalidates_its_publication_scope_before_the_table_log() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let current = Arc::new(AtomicBool::new(true));
+        let changed = current.clone();
+        let endpoint = FakeEndpoint::start(vec![Reply::Compute(Arc::new(move |_| {
+            changed.store(false, Ordering::SeqCst);
+            json!({"reply":"Keep your voice low, friend."})
+        }))]);
+        let (voice, cache) = voice(&endpoint, "routing-stale-publication");
+        let mut context = question("Who is following you?");
+        context.publication_guard = Some(Arc::new(move || current.load(Ordering::SeqCst)));
+        let log = TableLog::new();
+        assert!(voice.reply_in_public(context, &log).await.is_none());
+        assert!(
+            log.lines().is_empty(),
+            "a model completion from a departed actor is never published"
+        );
+        assert_eq!(endpoint.connections(), 1);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn authored_target_identity_survives_model_reply_public_log_and_voice_projection() {
+        let endpoint = FakeEndpoint::start(vec![
+            Reply::Output(json!({"reply":"Give me that packet."})),
+            Reply::Output(json!({"reply":"Keep it safe, friend."})),
+        ]);
+        let (voice, cache) = voice(&endpoint, "routing-distinct-public-actors");
+        let mut told = view("", "Courier");
+        let Some(rpc::view_message::Audience::Player(player)) = &mut told.audience else {
+            panic!()
+        };
+        let scene = player.scene.as_mut().unwrap();
+        scene.cast = vec![
+            rpc::SceneActor {
+                id: "courier".into(),
+                name: "Courier".into(),
+                speaking: true,
+                ..Default::default()
+            },
+            rpc::SceneActor {
+                id: "bandit".into(),
+                name: "Bandit".into(),
+                ..Default::default()
+            },
+        ];
+        let cast = scene.clone();
+        let log = TableLog::new();
+        for (id, name) in [("bandit", "Bandit"), ("courier", "Courier")] {
+            let context = NpcReplyContext::from_view_target(
+                &told,
+                member(1),
+                &format!("{name}, who sent you?"),
+                &listed_story(),
+                Some(id),
+            )
+            .unwrap();
+            assert!(voice.converse(context, &log).await.is_some());
+            let line = log.lines().last().unwrap().clone();
+            assert_eq!(line.actor_id, id);
+            assert_eq!(line.speaker, name);
+            let display = rpc::DisplayGameplayView {
+                scene: Some(cast.clone()),
+                journey: Some(rpc::JourneyView {
+                    table_log: vec![line],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let voices = crate::voice_line::display_lines(&display);
+            assert_eq!(voices.last().unwrap().actor_id(), Some(id));
+            assert_eq!(voices.last().unwrap().speaker(), Some(name));
+        }
+        assert_eq!(endpoint.connections(), 2);
+        let bodies = endpoint.bodies();
+        assert!(
+            bodies[0]["input"]
+                .as_str()
+                .unwrap()
+                .contains("sneering and rough")
+        );
+        assert!(
+            bodies[1]["input"]
+                .as_str()
+                .unwrap()
+                .contains("hurried and anxious")
+        );
         std::fs::remove_dir_all(cache).unwrap();
     }
 

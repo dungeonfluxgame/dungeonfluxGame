@@ -266,6 +266,8 @@ fn scene_json(scene: &rpc::GameplayScene) -> Value {
     json!({"title": scene.title, "place": scene.place, "rules_note": scene.rules_note,
         "location_id":scene.location_id, "scene_asset":scene.scene_asset, "live_backdrop":scene.live_backdrop,
         "live_plate":scene.live_plate, "plate_state":scene.plate_state,
+        "plate_actor_heads": scene.plate_layout.as_ref().map(|layout| layout.actors.iter().map(|head| json!({"actor_id":head.actor_id,"image_path":scene.live_plate,"bubble_side":head.bubble_side,"head_x_permille":head.head_x_permille,"head_y_permille":head.head_y_permille,"head_width_permille":head.head_width_permille,"head_height_permille":head.head_height_permille})).collect::<Vec<_>>()).unwrap_or_default(),
+        "plate_anchor_fallbacks": scene.cast.iter().filter(|actor| !scene.plate_layout.as_ref().is_some_and(|layout| layout.actors.iter().any(|head| head.actor_id == actor.id))).map(|actor| json!({"actor_id":actor.id,"reason":"missing-actor-head","surface":"named-lane"})).collect::<Vec<_>>(),
         "visual_assets":visual_asset_summary(scene),
         "scene_video_state":scene.scene_video_state, "scene_video_path":scene.scene_video_path,
         "cast":scene.cast.iter().map(|actor| json!({"id":actor.id,"name":actor.name,"role":actor.role,"sprite":actor.sprite,"live_sprite":actor.live_sprite,"speaking":actor.speaking})).collect::<Vec<_>>(),
@@ -624,6 +626,7 @@ fn journey_json(journey: &rpc::JourneyView) -> Value {
 fn line_json(line: &rpc::TableLine) -> Value {
     json!({
         "sequence": line.sequence,
+        "actor_id": line.actor_id,
         "speaker": line.speaker,
         "hero_index": line.hero_index,
         "role": table_role_name(line.role),

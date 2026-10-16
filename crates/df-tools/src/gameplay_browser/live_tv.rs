@@ -3531,6 +3531,7 @@ mod tests {
             .figures
             .update(
                 &[StageActor {
+                    actor_id: String::new(),
                     slot: ActorSlot::Hero(0),
                     name: "Brakka".into(),
                     role: "hero".into(),
@@ -3551,6 +3552,7 @@ mod tests {
             .figures
             .set_plate(
                 Some(PlateGeometry {
+                    actors: Vec::new(),
                     bubble_side: crate::plate_layout::Side::Right,
                     head_x: 500,
                     head_y: 200,
@@ -3617,6 +3619,46 @@ mod tests {
         assert_eq!(
             stage.root.get_attribute("data-unplaced-line").as_deref(),
             Some("2")
+        );
+        let npc = LineBubble {
+            kind: BubbleKind::Speech,
+            speaker: "Courier",
+            text: "An earlier NPC reply",
+            voiced: false,
+        };
+        stage
+            .character_line(2, 3, LineState::Opening, &npc)
+            .unwrap();
+        stage
+            .character_line(0, 4, LineState::Opening, &current)
+            .unwrap();
+        stage
+            .character_line(0, 4, LineState::Speaking, &current)
+            .unwrap();
+        stage
+            .character_line(2, 3, LineState::Closing, &npc)
+            .unwrap();
+        stage.character_line(2, 3, LineState::Done, &npc).unwrap();
+        assert_eq!(
+            stage
+                .lower
+                .root
+                .get_attribute("data-component-id")
+                .as_deref(),
+            Some("4")
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-unplaced-line").as_deref(),
+            Some("4")
+        );
+        assert!(
+            host.query_selector("[data-line-id=\"4\"]")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            stage.lower.text.text_content().as_deref(),
+            Some(text.as_str())
         );
         finish_stage(parent, stage);
     }

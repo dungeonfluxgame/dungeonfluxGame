@@ -710,6 +710,10 @@ impl Figures {
     fn apply(&self, figure: &Figure, actor: &StageActor, depth: Depth) -> Result<(), JsValue> {
         let root = &figure.root;
         root.set_attribute("data-present", "true")?;
+        root.set_attribute("data-actor-id", &actor.actor_id)?;
+        figure
+            .bubbles
+            .set_attribute("data-actor-id", &actor.actor_id)?;
         flag(root, "data-down", actor.down)?;
         if *figure.name_text.borrow() != actor.name {
             *figure.name_text.borrow_mut() = actor.name.clone();
@@ -738,6 +742,7 @@ impl Figures {
             return Ok(());
         };
         card.root.set_attribute("data-present", "true")?;
+        card.root.set_attribute("data-actor-id", &actor.actor_id)?;
         flag(&card.root, "data-down", actor.down)?;
         card.name.set_text_content(Some(&actor.name));
         card.role.set_text_content(Some(&actor.role));
@@ -1594,8 +1599,60 @@ impl Figures {
                     )
                 }
             },
-            None => (speaker_head, geometry.bubble_side, Vec::new()),
+            None => {
+                let id = bubble_owner
+                    .root
+                    .get_attribute("data-actor-id")
+                    .unwrap_or_default();
+                let Some(actor) = geometry
+                    .actors
+                    .iter()
+                    .find(|actor| actor.actor_id == id && !id.is_empty())
+                else {
+                    let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
+                    let _reason = bubble_owner
+                        .bubbles
+                        .set_attribute("data-anchor-fallback", "missing-actor-head");
+                    return;
+                };
+                let _reason = bubble_owner
+                    .bubbles
+                    .remove_attribute("data-anchor-fallback");
+                (
+                    frame.head_box(
+                        actor.head_x,
+                        actor.head_y,
+                        actor.head_width,
+                        actor.head_height,
+                    ),
+                    actor.bubble_side,
+                    Vec::new(),
+                )
+            }
         };
+        for hero in &geometry.heroes {
+            let box_ = frame.head_box(hero.head_x, hero.head_y, hero.head_width, hero.head_height);
+            if Some(hero.index) != hero_index {
+                avoid.push(box_);
+            }
+            fallback_avoid.push(box_);
+        }
+        let owner_id = bubble_owner
+            .root
+            .get_attribute("data-actor-id")
+            .unwrap_or_default();
+        for actor in &geometry.actors {
+            let box_ = frame.head_box(
+                actor.head_x,
+                actor.head_y,
+                actor.head_width,
+                actor.head_height,
+            );
+            if actor.actor_id != owner_id {
+                avoid.push(box_);
+            }
+            fallback_avoid.push(box_);
+        }
         let mut interface = Vec::new();
         let mut keep_clear = |element: &Element| {
             let (left, top, right, bottom) = rectangle(element);
@@ -2367,6 +2424,7 @@ mod tests {
         figures
             .set_plate(
                 Some(PlateGeometry {
+                    actors: Vec::new(),
                     bubble_side: Side::Right,
                     head_x: 500,
                     head_y: 200,

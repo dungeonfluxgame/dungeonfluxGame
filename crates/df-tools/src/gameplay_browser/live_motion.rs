@@ -443,7 +443,13 @@ fn cast_slots(cast: &[StageActor]) -> Vec<usize> {
 
 /// The non-player figure that carries a line: the one named like its speaker; for a scripted
 /// line also the one speaking, else the first non-player figure present.
-fn npc_slot(cast: &[StageActor], name: &str, anywhere: bool) -> Option<usize> {
+fn npc_slot(cast: &[StageActor], actor_id: &str, name: &str, anywhere: bool) -> Option<usize> {
+    if !actor_id.is_empty() {
+        return cast
+            .iter()
+            .find(|actor| actor.actor_id == actor_id && matches!(actor.slot, ActorSlot::Npc(_)))
+            .and_then(|actor| super::live_stage::slot_index(actor.slot));
+    }
     let npc = |actor: &&StageActor| matches!(actor.slot, ActorSlot::Npc(_));
     let named = cast.iter().filter(npc).find(|actor| actor.name == name);
     let chosen = if anywhere {
@@ -506,7 +512,7 @@ fn script_line(
 ) -> Option<ScriptLine<Detail>> {
     let slot = match line.role {
         TableRole::Hero(index) => super::live_stage::slot_index(ActorSlot::Hero(index)),
-        TableRole::Npc => npc_slot(cast, &line.speaker, line.scripted),
+        TableRole::Npc => npc_slot(cast, &line.actor_id, &line.speaker, line.scripted),
         TableRole::Narrator => None,
     };
     // In a fight a speaker the flat stage has no figure for (a sixth hero, a fourth enemy) still
@@ -519,7 +525,17 @@ fn script_line(
         return None;
     }
     let voice = match (line.kind, line.role) {
-        (TableKind::Speech, TableRole::Npc) => voice_for(voices, Some(&line.speaker), &line.text),
+        (TableKind::Speech, TableRole::Npc) => voices
+            .iter()
+            .find(|voice| {
+                voice.text.trim() == line.text.trim()
+                    && if line.actor_id.is_empty() {
+                        voice.speaker() == Some(line.speaker.as_str())
+                    } else {
+                        voice.actor_id() == Some(line.actor_id.as_str())
+                    }
+            })
+            .cloned(),
         (TableKind::Speech, TableRole::Narrator) => voice_for(voices, None, &line.text),
         _ => None,
     };
@@ -2285,6 +2301,42 @@ mod tests {
         restore_pending_move_origin, take_pending_fight_voice, timing_clip_state,
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn canonical_background_actor_id_selects_its_bubble_slot_without_focus_fallback() {
+        use df_protocol::common as rpc;
+        let view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    journey: Some(rpc::JourneyView::default()),
+                    scene: Some(rpc::GameplayScene {
+                        cast: vec![
+                            rpc::SceneActor {
+                                id: "courier".into(),
+                                name: "Courier".into(),
+                                speaking: true,
+                                ..Default::default()
+                            },
+                            rpc::SceneActor {
+                                id: "bandit".into(),
+                                name: "Bandit".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let cast = crate::presentation::scene_cast(&view);
+        assert_eq!(
+            super::npc_slot(&cast, "bandit", "Courier", true),
+            super::super::live_stage::slot_index(crate::presentation::ActorSlot::Npc(1))
+        );
+        assert!(super::npc_slot(&cast, "departed", "Courier", true).is_none());
+    }
 
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
     #[test]

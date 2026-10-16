@@ -428,6 +428,7 @@ mod tests {
 
     fn speaker(name: &str, gender: Gender, age: Option<Age>, tone: &str) -> SpeakerCasting {
         SpeakerCasting {
+            actor_ids: Vec::new(),
             name: name.to_owned(),
             gender,
             age,

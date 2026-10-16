@@ -858,12 +858,19 @@ pub(in crate::gameplay) struct HeroHead {
     pub(in crate::gameplay) layout: PlateLayout,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct ActorHead {
+    pub(in crate::gameplay) actor_id: String,
+    pub(in crate::gameplay) layout: PlateLayout,
+}
+
 /// Where the heads are in a finished plate: the speaker's and those of heroes the vision model
 /// could find (a hero seen from behind is not always found).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::gameplay) struct PlatePlacement {
     pub(in crate::gameplay) speaker: PlateLayout,
     pub(in crate::gameplay) heroes: Vec<HeroHead>,
+    pub(in crate::gameplay) actors: Vec<ActorHead>,
 }
 
 /// The layout for a head that was found in the finished plate (fractions of the picture): the

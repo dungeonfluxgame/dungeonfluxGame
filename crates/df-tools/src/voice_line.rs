@@ -42,9 +42,18 @@ impl VoiceLine {
         self.speaker().is_some()
     }
 
+    pub(crate) fn actor_id(&self) -> Option<&str> {
+        self.role
+            .strip_prefix("npc-id:")
+            .and_then(|value| value.split_once('|').map(|(id, _)| id))
+    }
+
     /// The speaker name of a named-speaker line; `None` for the narrator.
     pub(crate) fn speaker(&self) -> Option<&str> {
-        self.role.strip_prefix(NPC_ROLE_PREFIX)
+        self.role
+            .strip_prefix("npc-id:")
+            .and_then(|value| value.split_once('|').map(|(_, name)| name))
+            .or_else(|| self.role.strip_prefix(NPC_ROLE_PREFIX))
     }
 }
 
@@ -185,8 +194,22 @@ fn conversation_reply(display: &rpc::DisplayGameplayView) -> Option<VoiceLine> {
     let spoken_by_npc = rpc::TableRole::try_from(last.role) == Ok(rpc::TableRole::Npc)
         && rpc::TableKind::try_from(last.kind) == Ok(rpc::TableKind::Speech);
     let (speaker, text) = (last.speaker.trim(), last.text.trim());
+    if !last.actor_id.is_empty()
+        && !display
+            .scene
+            .as_ref()?
+            .cast
+            .iter()
+            .any(|actor| actor.id == last.actor_id && actor.name == speaker)
+    {
+        return None;
+    }
     (spoken_by_npc && !speaker.is_empty() && !text.is_empty()).then(|| VoiceLine {
-        role: format!("{NPC_ROLE_PREFIX}{speaker}"),
+        role: if last.actor_id.is_empty() {
+            format!("{NPC_ROLE_PREFIX}{speaker}")
+        } else {
+            format!("npc-id:{}|{speaker}", last.actor_id)
+        },
         text: text.to_owned(),
     })
 }
@@ -205,6 +228,55 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn canonical_actor_identity_controls_reply_voice_and_cache_key() {
+        let mut display = display("", "Courier", "");
+        display.scene = Some(rpc::GameplayScene {
+            cast: vec![rpc::SceneActor {
+                id: "bandit".into(),
+                name: "Bandit".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        display
+            .journey
+            .as_mut()
+            .unwrap()
+            .table_log
+            .push(rpc::TableLine {
+                actor_id: "bandit".into(),
+                speaker: "Bandit".into(),
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                text: "Give me the packet.".into(),
+                ..Default::default()
+            });
+        let reply = conversation_reply(&display).unwrap();
+        assert_eq!(reply.actor_id(), Some("bandit"));
+        assert_eq!(reply.speaker(), Some("Bandit"));
+        assert_ne!(
+            reply.key(),
+            VoiceLine {
+                role: "npc:Courier".into(),
+                text: reply.text.clone()
+            }
+            .key()
+        );
+        display
+            .journey
+            .as_mut()
+            .unwrap()
+            .table_log
+            .last_mut()
+            .unwrap()
+            .actor_id = "courier".into();
+        assert!(
+            conversation_reply(&display).is_none(),
+            "stale actor identity cannot borrow another voice"
+        );
     }
 
     #[test]
@@ -332,6 +404,7 @@ mod tests {
         text: &str,
     ) -> rpc::TableLine {
         rpc::TableLine {
+            actor_id: String::new(),
             sequence: 1,
             speaker: speaker.to_owned(),
             role: role as i32,

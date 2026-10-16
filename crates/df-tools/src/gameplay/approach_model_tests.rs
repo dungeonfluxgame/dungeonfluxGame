@@ -532,3 +532,114 @@ fn startup_reads_only_the_supplied_key_and_base_url_without_logging_values() {
         "APPROACH on model=jev-latest"
     );
 }
+
+fn routing_cast() -> Vec<df_protocol::common::SceneActor> {
+    vec![
+        df_protocol::common::SceneActor {
+            id: "courier".into(),
+            name: "Courier".into(),
+            speaking: true,
+            ..Default::default()
+        },
+        df_protocol::common::SceneActor {
+            id: "bandit".into(),
+            name: "Bandit".into(),
+            ..Default::default()
+        },
+    ]
+}
+#[tokio::test(flavor = "current_thread")]
+async fn jev_routes_public_background_description_to_the_present_bandit() {
+    use super::super::npc_target::Target;
+    let endpoint = FakeEndpoint::start(vec![answer("o2")]);
+    let result = model(&endpoint)
+        .resolve_addressee(
+            "To the man standing behind the courier: what do you want from him, and who sent you?",
+            &routing_cast(),
+            "Courier",
+        )
+        .await;
+    assert_eq!(result.target, Target::Actor("bandit".into()));
+    assert_eq!(result.source, "jev");
+    let sent = &endpoint.bodies()[0];
+    assert_eq!(sent["model"], "jev-latest");
+    assert_eq!(sent["state"]["present_cast"][1]["id"], "bandit");
+    assert_eq!(sent["state"]["present_cast"][1]["position"], "background");
+    assert!(sent["state"].get("private_clue").is_none());
+}
+#[tokio::test(flavor = "current_thread")]
+async fn unresolved_description_never_silently_becomes_the_focus() {
+    use super::super::npc_target::Target;
+    let cast = routing_cast();
+    let words = "To the man standing behind the courier: who sent you?";
+    assert_eq!(
+        ApproachModel::default()
+            .resolve_addressee(words, &cast, "Courier")
+            .await
+            .target,
+        Target::Description
+    );
+    let endpoint = FakeEndpoint::start(vec![answer("o3")]);
+    assert_eq!(
+        model(&endpoint)
+            .resolve_addressee(words, &cast, "Courier")
+            .await
+            .target,
+        Target::Description
+    );
+    let endpoint = FakeEndpoint::start(vec![Reply::Status(503, json!({}))]);
+    assert_eq!(
+        model(&endpoint)
+            .resolve_addressee(words, &cast, "Courier")
+            .await
+            .target,
+        Target::Description
+    );
+    assert_eq!(
+        ApproachModel::default()
+            .resolve_addressee("Bandit, who sent you?", &cast, "Courier")
+            .await
+            .target,
+        Target::Actor("bandit".into())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jev_distinguishes_discourse_prefixes_from_an_absent_named_addressee() {
+    use super::super::npc_target::Target;
+    let endpoint =
+        FakeEndpoint::start(vec![answer("o3"), answer("o3"), answer("o3"), answer("o5")]);
+    let model = model(&endpoint);
+    for words in [
+        "Wait, who are you?",
+        "Actually, who sent you?",
+        "Yes, but who owns the packet?",
+    ] {
+        assert_eq!(
+            model
+                .resolve_addressee(words, &routing_cast(), "Courier")
+                .await
+                .target,
+            Target::Actor("courier".into()),
+            "{words}"
+        );
+    }
+    assert_eq!(
+        model
+            .resolve_addressee(
+                "Harbourmaster, who owns the crest on this packet?",
+                &routing_cast(),
+                "Courier"
+            )
+            .await
+            .target,
+        Target::Absent
+    );
+    assert_eq!(
+        ApproachModel::default()
+            .resolve_addressee("Harbourmaster, who owns this?", &routing_cast(), "Courier")
+            .await
+            .target,
+        Target::PossibleAddress
+    );
+}

@@ -369,7 +369,19 @@ impl TableLog {
         kind: rpc::TableKind,
         text: &str,
     ) {
-        self.push_line(None, speaker, role, hero_index, kind, text);
+        self.push_line(None, (speaker, ""), role, hero_index, kind, text);
+    }
+
+    pub(super) fn push_actor(
+        &self,
+        actor_id: &str,
+        speaker: &str,
+        role: rpc::TableRole,
+        hero_index: u32,
+        kind: rpc::TableKind,
+        text: &str,
+    ) {
+        self.push_line(None, (speaker, actor_id), role, hero_index, kind, text);
     }
 
     pub(super) fn push_speech(&self, speaker: &str, hero_index: u32, text: &str) {
@@ -392,7 +404,14 @@ impl TableLog {
         kind: rpc::TableKind,
         text: &str,
     ) {
-        self.push_line(reservation.sequence, speaker, role, hero_index, kind, text);
+        self.push_line(
+            reservation.sequence,
+            (speaker, ""),
+            role,
+            hero_index,
+            kind,
+            text,
+        );
     }
 
     /// A check is rules narration; the hero's name and outcome belong in its text.
@@ -415,12 +434,13 @@ impl TableLog {
     fn push_line(
         &self,
         reserved_sequence: Option<u64>,
-        speaker: &str,
+        speaker: (&str, &str),
         role: rpc::TableRole,
         hero_index: u32,
         kind: rpc::TableKind,
         text: &str,
     ) {
+        let (speaker, actor_id) = speaker;
         if let Some((entry_kind, title, scene)) = notebook_entry_log_fields(text) {
             let context = df_observe::OperationContext {
                 trace_parent: String::new(),
@@ -476,6 +496,7 @@ impl TableLog {
                 position,
                 rpc::TableLine {
                     sequence,
+                    actor_id: actor_id.to_owned(),
                     speaker: speaker.chars().take(48).collect(),
                     role: role as i32,
                     hero_index,

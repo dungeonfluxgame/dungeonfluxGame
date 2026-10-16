@@ -1247,7 +1247,8 @@ pub(super) async fn say(
     let result = match answer {
         super::super::dialogue::DialogueReply::Raw(response, npc) => {
             let npc_reply = match npc {
-                Some(context) => {
+                Some(mut context) => {
+                    context.watch_publication(state.service.updates.clone());
                     let shown = state.service.npc_voice.display_line(&context).await;
                     context.publish_typed_line(&state.service.table_log, &shown);
                     let _thinking = state.service.table_log.reply_pending(&context.speaker);
@@ -1266,6 +1267,8 @@ pub(super) async fn say(
                     "status": "said",
                     "disposition": disposition_name(response.disposition),
                     "npc_reply": npc_reply,
+                    "npc_actor_id": response.npc_actor_id,
+                    "npc_speaker": response.npc_speaker,
                     "confirmation_required": response.confirmation_required,
                     "input_id":response.input_id.as_ref().and_then(|id|id.value.as_ref()).map(|bytes|crate::gameplay::journey::hex(bytes)),
                     "confirmation_token":crate::gameplay::journey::hex(&response.confirmation_token),
