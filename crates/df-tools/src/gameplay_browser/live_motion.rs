@@ -174,7 +174,9 @@ struct Motion {
     /// Recent fight lines, retained briefly so late actual voice callbacks are recorded.
     fight_lines: VecDeque<LineId>,
     /// Actual clip callbacks can arrive just before the opened line is passed to the adapter.
-    pending_fight_voice: VecDeque<(LineId, ClipState, u64)>,
+    pending_voice: VecDeque<(LineId, ClipState, u64)>,
+    /// Voice callbacks that arrived before their ordinary (non-fight) line opened.
+    open_voice_lines: VecDeque<LineId>,
     seen: VecDeque<u64>,
     generation: u64,
     roll_tick: bool,
@@ -236,7 +238,8 @@ fn ensure_motion(client: &Rc<RefCell<Client>>) {
                 cells: HashMap::new(),
                 battlefield_lines: Vec::new(),
                 fight_lines: VecDeque::new(),
-                pending_fight_voice: VecDeque::new(),
+                pending_voice: VecDeque::new(),
+                open_voice_lines: VecDeque::new(),
                 seen: VecDeque::new(),
                 generation: 0,
                 roll_tick: false,
@@ -514,7 +517,9 @@ fn check_voice_script_line(
     let voice = voice_for(voices, None, &check.voice.text);
     ScriptLine {
         voiceable: voice.is_some(),
-        read_ms: reading_time_ms(&check.voice.text),
+        // The finding stays visible on the card while the short authoritative result is read;
+        // retain it until the longer of those two existing reading budgets has elapsed.
+        read_ms: reading_time_ms(&check.voice.text).max(reading_time_ms(&check.finding)),
         slot: None,
         settled,
         detail: Detail::Line(LineDetail {
@@ -747,7 +752,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 None => {}
             }
         } else if scene_changed {
-            if !narration.is_empty() {
+            if !fresh_check && !narration.is_empty() {
                 script.push(narration_line(&narration, &voices, false));
             }
             if fresh_check && let Some(check) = check_voice.as_ref() {
@@ -762,7 +767,10 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         } else {
             // What the story adds to a scene already on stage (a look's result) is narrated once;
             // a reply to table talk never replays the narration already told.
-            if !in_fight && let Some(added) = added_narration(&motion.narration, &narration) {
+            if !fresh_check
+                && !in_fight
+                && let Some(added) = added_narration(&motion.narration, &narration)
+            {
                 script.push(narration_line(&added, &voices, false));
             }
             if fresh_check && let Some(check) = check_voice.as_ref() {
@@ -1879,6 +1887,9 @@ fn line_command(
                 LineState::Opening if !line.check_settled => stage.begin_check(check, false)?,
                 LineState::Lingering if line.check_settled => stage.begin_check(check, true)?,
                 LineState::Lingering => stage.reveal_check(check.sequence)?,
+                LineState::Closing | LineState::Done | LineState::Cancelled => {
+                    stage.finish_check(check.sequence)?
+                }
                 _ => {}
             }
         }
@@ -1918,6 +1929,21 @@ fn line_command(
             }
         }
     };
+    if state == LineState::Opening && line.voice.is_some() && !line.fight_line {
+        let pending = with_motion(|motion| {
+            if !motion.open_voice_lines.contains(&id) {
+                motion.open_voice_lines.push_back(id);
+                if motion.open_voice_lines.len() > 128 {
+                    motion.open_voice_lines.pop_front();
+                }
+            }
+            take_pending_voice(&mut motion.pending_voice, id)
+        })
+        .unwrap_or_default();
+        for (pending_state, at_ms) in pending {
+            super::presentation_timing::voice_at(id, pending_state, at_ms);
+        }
+    }
     if line.check_sequence.is_some() && state == LineState::Opening {
         let state_ref = client.borrow();
         if let Some(stage) = state_ref.live.tv.as_ref()
@@ -1932,7 +1958,13 @@ fn line_command(
             if line.check_roll.is_none()
                 && matches!(
                     state,
-                    LineState::Closing | LineState::Done | LineState::Cancelled
+                    // Lingering is emitted only after the clip has ended (or failed) and the
+                    // line's minimum reading time has elapsed. Finish managed cards here so a
+                    // final check does not depend on the conductor's ordinary final-linger cap.
+                    LineState::Lingering
+                        | LineState::Closing
+                        | LineState::Done
+                        | LineState::Cancelled
                 )
             {
                 stage.finish_check(sequence)?;
@@ -1983,7 +2015,7 @@ fn record_fight_line(id: LineId, state: LineState, line: &LineDetail, slot: Opti
             }
         }
         if motion.fight_lines.contains(&id) {
-            take_pending_fight_voice(&mut motion.pending_fight_voice, id)
+            take_pending_voice(&mut motion.pending_voice, id)
         } else {
             Vec::new()
         }
@@ -2002,7 +2034,7 @@ fn record_fight_line(id: LineId, state: LineState, line: &LineDetail, slot: Opti
     }
 }
 
-fn take_pending_fight_voice(
+fn take_pending_voice(
     pending: &mut VecDeque<(LineId, ClipState, u64)>,
     id: LineId,
 ) -> Vec<(ClipState, u64)> {
@@ -2104,15 +2136,15 @@ pub(super) fn clip_signal(id: LineId, signal: ClipSignal) {
         super::presentation_timing::report_loss(1);
     }
     let voice_observation = with_motion(|motion| {
-        if motion.fight_lines.contains(&id) {
+        if motion.fight_lines.contains(&id) || motion.open_voice_lines.contains(&id) {
             voice_observation
         } else {
             if let Some((state, at_ms)) = voice_observation {
-                if motion.pending_fight_voice.len() == 128 {
-                    motion.pending_fight_voice.pop_front();
+                if motion.pending_voice.len() == 128 {
+                    motion.pending_voice.pop_front();
                     super::presentation_timing::report_loss(1);
                 }
-                motion.pending_fight_voice.push_back((id, state, at_ms));
+                motion.pending_voice.push_back((id, state, at_ms));
             }
             None
         }
@@ -2164,7 +2196,7 @@ pub(super) fn clock_needs_work(
 }
 
 fn clock_busy(motion: &Motion) -> bool {
-    if motion.conductor.is_busy() {
+    if motion.conductor.is_busy() || motion.conductor.has_settled_silent_line() {
         return true;
     }
     motion
@@ -2462,9 +2494,9 @@ mod tests {
     use super::{
         CheckVoiceLine, Detail, check_roll_script_line, check_voice_script_line, fight_line_stage,
         fight_scripts, fresh_outcomes, merge_battlefield_beat_log, narration_line,
-        restore_pending_move_origin, take_pending_fight_voice, timing_clip_state,
+        restore_pending_move_origin, take_pending_voice, timing_clip_state,
     };
-    use crate::stage_conductor::{Command, Conductor, ViewPlan};
+    use crate::stage_conductor::{ClipOp, ClipSignal, Command, Conductor, ViewPlan};
     use crate::stage_machines::LineState;
     use crate::voice_line::VoiceLine;
     use std::collections::HashMap;
@@ -2478,7 +2510,7 @@ mod tests {
                 finding: finding.clone(),
                 voice: VoiceLine {
                     role: crate::voice_line::NARRATOR_ROLE.to_owned(),
-                    text: format!("Perception check {sequence} total 12. {finding}"),
+                    text: format!("Success. Finding for check {sequence}."),
                 },
             },
             super::super::live_stage::CheckDisplay {
@@ -2556,7 +2588,7 @@ mod tests {
             .position(|(state, sequence, text)| {
                 *state == LineState::Opening
                     && *sequence == Some(8)
-                    && text.contains("Perception check 8")
+                    && text == "Success. Finding for check 8."
             })
             .expect("first DM line opens after reveal");
         let second_roll = events
@@ -2572,7 +2604,7 @@ mod tests {
         assert!(events.iter().any(|(state, sequence, text)| {
             *state == LineState::Closing
                 && *sequence == Some(8)
-                && text.contains("Perception check 8")
+                && text == "Success. Finding for check 8."
         }));
     }
 
@@ -2584,12 +2616,112 @@ mod tests {
         assert!(script.settled);
         assert!(!script.voiceable);
         assert_eq!(script.read_ms, 0);
-        let Detail::Line(line) = script.detail else {
+        let Detail::Line(line) = &script.detail else {
             panic!("settled check must remain a line queue item");
         };
         assert_eq!(line.check_sequence, Some(20));
         assert!(line.check_settled);
         assert!(line.voice.is_none());
+
+        let mut conductor = Conductor::new();
+        let _ = conductor.restart(
+            0,
+            ViewPlan {
+                diff: Default::default(),
+                script: vec![script],
+                cast: Vec::new(),
+            },
+        );
+        assert!(conductor.has_settled_silent_line());
+        let terminal = conductor.on_tick(45_000);
+        assert!(terminal.iter().any(|command| {
+            matches!(
+                command,
+                Command::Line {
+                    state: LineState::Closing,
+                    detail: Detail::Line(line),
+                    ..
+                } if line.check_sequence == Some(20)
+            )
+        }));
+    }
+
+    #[test]
+    fn final_check_voice_finished_signal_reaches_lingering_without_successor() {
+        let (mut check, mut payload) = check_pair(30);
+        let finding =
+            "The rain soaked wharf reveals a long trail of footprints beside the sealed gate.";
+        check.finding = finding.to_owned();
+        payload.finding = finding.to_owned();
+        let mut conductor = Conductor::new();
+        conductor.set_sound(true);
+        let mut commands = conductor.restart(
+            0,
+            ViewPlan {
+                diff: Default::default(),
+                script: vec![
+                    check_roll_script_line(&check, payload, false),
+                    check_voice_script_line(&check, std::slice::from_ref(&check.voice), false),
+                ],
+                cast: Vec::new(),
+            },
+        );
+
+        fn pump(
+            conductor: &mut Conductor<Detail>,
+            now: u64,
+            commands: Vec<Command<Detail>>,
+        ) -> Vec<Command<Detail>> {
+            let mut queue = std::collections::VecDeque::from(commands);
+            let mut observed = Vec::new();
+            while let Some(command) = queue.pop_front() {
+                match command {
+                    Command::Clip { id, op, .. } => {
+                        let signal = match op {
+                            ClipOp::Request => ClipSignal::Loaded,
+                            ClipOp::Play => ClipSignal::Started {
+                                duration_ms: Some(1_000),
+                            },
+                            ClipOp::Cancel => continue,
+                        };
+                        queue.extend(conductor.on_clip(now, id, signal));
+                    }
+                    other => observed.push(other),
+                }
+            }
+            observed
+        }
+
+        commands = pump(&mut conductor, 0, commands);
+        commands.extend(conductor.on_tick(5_200));
+        commands = pump(&mut conductor, 5_200, commands);
+        commands.extend(conductor.on_tick(8_000));
+        commands = pump(&mut conductor, 8_000, commands);
+        commands.extend(conductor.on_clip(13_000, 2, ClipSignal::Finished));
+        commands.extend(conductor.on_tick(13_000));
+
+        assert!(!commands.iter().any(|command| {
+            matches!(
+                command,
+                Command::Line {
+                    state: LineState::Lingering,
+                    detail: Detail::Line(line),
+                    ..
+                } if line.check_sequence == Some(30)
+            )
+        }));
+        commands.extend(conductor.on_tick(20_000));
+
+        assert!(commands.iter().any(|command| {
+            matches!(
+                command,
+                Command::Line {
+                    state: LineState::Lingering,
+                    detail: Detail::Line(line),
+                    ..
+                } if line.check_sequence == Some(30)
+            )
+        }));
     }
 
     #[test]
@@ -2753,7 +2885,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            take_pending_fight_voice(&mut pending, 41),
+            take_pending_voice(&mut pending, 41),
             [
                 (crate::stage_machines::ClipState::Playing, 10),
                 (crate::stage_machines::ClipState::Ended, 30)

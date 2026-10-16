@@ -161,9 +161,8 @@ pub(crate) fn display_lines(display: &rpc::DisplayGameplayView) -> Vec<VoiceLine
     lines
 }
 
-/// Join the exact public roll and finding rows for one DM announcement.  The rows are already
-/// resolved by the server, so this deliberately preserves their text and never adds a DC,
-/// outcome, reward, or model-generated wording.
+/// Pair the public roll with its immediately following finding row. The card displays the
+/// finding; the DM voice announces only the public outcome and that same finding.
 pub(crate) fn check_voice_line(display: &rpc::DisplayGameplayView) -> Option<CheckVoiceLine> {
     display.check.as_ref()?;
     let journey = display.journey.as_ref()?;
@@ -186,9 +185,36 @@ pub(crate) fn check_voice_line(display: &rpc::DisplayGameplayView) -> Option<Che
         finding: result.text.trim().to_owned(),
         voice: VoiceLine {
             role: NARRATOR_ROLE.to_owned(),
-            text: format!("{} {}", roll.text.trim(), result.text.trim()),
+            text: check_voice_text(display.check.as_ref()?, result.text.trim()),
         },
     })
+}
+
+fn check_voice_text(check: &rpc::AbilityCheckResult, finding: &str) -> String {
+    let finding = finding.trim();
+    if !check.succeeded {
+        return if finding.is_empty() {
+            "The attempt was unsuccessful.".to_owned()
+        } else {
+            finding.to_owned()
+        };
+    }
+    if finding.is_empty() {
+        return "Success.".to_owned();
+    }
+    let finding = if finding
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_lowercase())
+    {
+        let fragment = finding.trim_end_matches(['.', '!', '?']).trim_end();
+        format!("You notice {fragment}.")
+    } else if finding.ends_with(['.', '!', '?']) {
+        finding.to_owned()
+    } else {
+        format!("You notice {finding}.")
+    };
+    format!("Success. {finding}")
 }
 
 /// A battle cry or Dungeon Master fight line as a speakable line, in outcome order with
@@ -434,9 +460,13 @@ mod tests {
     }
 
     #[test]
-    fn check_voice_line_preserves_public_roll_and_finding_without_hidden_fields() {
+    fn check_voice_line_announces_outcome_and_authoritative_finding_only() {
         let mut view = display("", "", "");
-        view.check = Some(rpc::AbilityCheckResult::default());
+        view.check = Some(rpc::AbilityCheckResult {
+            total: 8,
+            succeeded: true,
+            ..Default::default()
+        });
         view.journey.as_mut().unwrap().table_log = vec![
             rpc::TableLine {
                 sequence: 8,
@@ -461,17 +491,41 @@ mod tests {
         assert_eq!(check.result_sequence, 9);
         assert_eq!(check.finding, "You find nothing unusual.");
         assert_eq!(check.voice.role, NARRATOR_ROLE);
-        assert_eq!(
-            check.voice.text,
-            "Brakka searches the packet: Wisdom (Perception) 8 + 0 = 8. You find nothing unusual."
-        );
+        assert_eq!(check.voice.text, "Success. You find nothing unusual.");
+        assert!(check.voice.text.contains("You find nothing unusual."));
+        assert!(!check.voice.text.contains("Brakka"));
+        assert!(!check.voice.text.contains("Wisdom"));
+        assert!(!check.voice.text.contains("14"));
         assert!(!check.voice.text.contains("DC"));
+    }
+
+    #[test]
+    fn check_voice_line_uses_public_failure_without_finding_text() {
+        let mut view = display("", "", "");
+        view.check = Some(rpc::AbilityCheckResult {
+            total: 5,
+            succeeded: false,
+            ..Default::default()
+        });
+        view.journey.as_mut().unwrap().table_log = vec![
+            line_with_sequence(20, "Roll", "Wisdom (Perception) 5 + 0 = 5."),
+            line_with_sequence(21, "", "The seal remains shut."),
+        ];
+
+        let check = check_voice_line(&view).expect("public failed check result");
+
+        assert_eq!(check.voice.text, "The seal remains shut.");
+        assert!(!check.voice.text.contains("5"));
     }
 
     #[test]
     fn check_voice_line_requires_a_public_result_after_the_roll() {
         let mut view = display("", "", "");
-        view.check = Some(rpc::AbilityCheckResult::default());
+        view.check = Some(rpc::AbilityCheckResult {
+            total: 14,
+            succeeded: true,
+            ..Default::default()
+        });
         view.journey.as_mut().unwrap().table_log = vec![rpc::TableLine {
             sequence: 8,
             role: rpc::TableRole::Narrator as i32,
@@ -500,7 +554,11 @@ mod tests {
     #[test]
     fn check_voice_line_selects_the_latest_complete_check_pair() {
         let mut view = display("", "", "");
-        view.check = Some(rpc::AbilityCheckResult::default());
+        view.check = Some(rpc::AbilityCheckResult {
+            total: 14,
+            succeeded: true,
+            ..Default::default()
+        });
         view.journey.as_mut().unwrap().table_log = vec![
             line_with_sequence(8, "Roll", "Wisdom (Perception) 8 + 0 = 8."),
             line_with_sequence(9, "", "The packet is ordinary."),
@@ -513,8 +571,8 @@ mod tests {
         assert_eq!(check.sequence, 10);
         assert_eq!(check.result_sequence, 11);
         assert_eq!(check.finding, "The seal is warm to the touch.");
-        assert!(check.voice.text.contains("14 + 0 = 14"));
-        assert!(check.voice.text.ends_with("The seal is warm to the touch."));
+        assert_eq!(check.voice.text, "Success. The seal is warm to the touch.");
+        assert!(!check.voice.text.contains("14"));
     }
 
     fn line_with_sequence(sequence: u64, speaker: &str, text: &str) -> rpc::TableLine {
