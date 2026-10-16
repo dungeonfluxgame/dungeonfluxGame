@@ -406,11 +406,27 @@ impl Service {
             .classify_input(&request.text, &public_scene, &available_things)
             .await;
         if reading.source == "rules"
+            && reading.intent != super::approach_model::LineIntent::PhysicalAction
             && let Some(local) = super::investigation::local_reading(&request.text, &catalog)
         {
             reading = local;
         }
         if finality(request.finality)? == InputFinality::Final
+            && matches!(
+                context(request.context)?,
+                DiscourseContext::Unspecified | DiscourseContext::Social
+            )
+            && reading.intent == super::approach_model::LineIntent::PhysicalAction
+        {
+            return self
+                .physical_action_call(credential, &request, &available_things)
+                .await;
+        }
+        if finality(request.finality)? == InputFinality::Final
+            && matches!(
+                context(request.context)?,
+                DiscourseContext::Unspecified | DiscourseContext::Social
+            )
             && let Some((target, option)) =
                 journey::living_scene::interaction_for_line(&scene, &request.text)
         {
@@ -827,6 +843,157 @@ impl Service {
             },
             None,
         ))
+    }
+
+    async fn physical_action_call(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        available_things: &[String],
+    ) -> Result<DialogueReply, Status> {
+        let action = super::approach_model::physical_action(&request.text, available_things)
+            .ok_or_else(|| Status::failed_precondition("explicit action could not be resolved"))?;
+        let verb = match action.kind {
+            super::approach_model::PhysicalActionKind::Attack => "attack",
+            super::approach_model::PhysicalActionKind::Take => "take",
+            super::approach_model::PhysicalActionKind::Give => "give",
+            super::approach_model::PhysicalActionKind::Trade => "trade",
+            super::approach_model::PhysicalActionKind::Use => "use",
+        };
+        let current = self.updates.borrow().clone();
+        let scene =
+            super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
+        if action.kind == super::approach_model::PhysicalActionKind::Attack
+            && journey::tactical::present(current.state())
+        {
+            let (member_reply, member_wait) = oneshot::channel();
+            self.actor
+                .try_submit(actor::Call::SpeechMember {
+                    credential,
+                    reply: member_reply,
+                })
+                .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
+            let member = tokio::time::timeout(super::timing::active().reply, member_wait)
+                .await
+                .map_err(|_| {
+                    Status::deadline_exceeded("dialogue owner did not resolve the player")
+                })?
+                .map_err(|_| Status::unavailable("dialogue actor stopped"))??;
+            let hero = journey::player_entity(member, &current).map_err(actor::unavailable)?;
+            let Some(option) = journey::tactical::attack_option_for_target(
+                current.state(),
+                hero,
+                &action.target,
+                action.weapon.as_deref(),
+            )
+            .map_err(actor::unavailable)?
+            else {
+                actor::record_audit_line(
+                    "gameplay.physical_action_unavailable",
+                    format!(
+                        "ACTION verb=attack target={:?} disposition=action resolution=unavailable reason=not-offered-tactical-target",
+                        action.target
+                    ),
+                );
+                return Err(Status::failed_precondition(
+                    "attack unavailable: target is not a current canonical combat offer",
+                ));
+            };
+            let submit = rpc::SubmitActionRequest {
+                session_id: request.session_id.clone(),
+                run_id: request.run_id.clone(),
+                observed_revision: request.observed_revision.clone(),
+                operation_id: request.input_id.clone(),
+                offer_id: journey::offer_id(&current, rpc::GameplayActionKind::GreatswordAttack),
+                action_kind: rpc::GameplayActionKind::GreatswordAttack as i32,
+                action_choices: vec![rpc::JourneyChoice {
+                    group_id: "tactical-choice".to_owned(),
+                    option_id: option,
+                }],
+                ..Default::default()
+            };
+            let (reply, wait) = oneshot::channel();
+            self.actor
+                .try_submit(actor::Call::Submit {
+                    credential,
+                    request: submit,
+                    reply,
+                })
+                .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+            let response = tokio::time::timeout(super::timing::active().reply, wait)
+                .await
+                .map_err(|_| Status::deadline_exceeded("retain the attack operation for lookup"))?
+                .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+            let Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) =
+                response.outcome
+            else {
+                return Err(Status::failed_precondition("attack was not committed"));
+            };
+            if !matches!(
+                receipt.outcome,
+                Some(rpc::decision_receipt::Outcome::Accepted(_))
+            ) {
+                return Err(Status::failed_precondition("attack was refused"));
+            }
+            actor::record_audit_line(
+                "gameplay.physical_action_resolved",
+                format!(
+                    "ACTION verb=attack target={:?} disposition=action resolution=tactical-choice",
+                    action.target
+                ),
+            );
+            return Ok(DialogueReply::Raw(
+                rpc::DialogueResponse {
+                    input_id: request.input_id.clone(),
+                    disposition: rpc::DialogueDisposition::Action as i32,
+                    revision: receipt.revision,
+                    npc_reply: format!("You attack {}.", action.target),
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
+        if let Some((target, option)) =
+            journey::living_scene::interaction_for_line(&scene, &request.text)
+        {
+            actor::record_audit_line(
+                "gameplay.physical_action_resolved",
+                format!(
+                    "ACTION verb={verb} target={:?} disposition=action resolution=scene-interaction option={option:?}",
+                    action.target
+                ),
+            );
+            return self
+                .interaction_call(credential, request, &target, option)
+                .await;
+        }
+        let reason = match action.kind {
+            super::approach_model::PhysicalActionKind::Attack => {
+                "no offered canonical combat attack for this target"
+            }
+            super::approach_model::PhysicalActionKind::Take => {
+                "target is not a registered portable scene object"
+            }
+            super::approach_model::PhysicalActionKind::Give => {
+                "target or owned item is not a registered scene interaction"
+            }
+            super::approach_model::PhysicalActionKind::Trade => {
+                "target is not a registered trade offer"
+            }
+            super::approach_model::PhysicalActionKind::Use => {
+                "target is not a registered usable scene object"
+            }
+        };
+        actor::record_audit_line(
+            "gameplay.physical_action_unavailable",
+            format!(
+                "ACTION verb={verb} target={:?} disposition=action resolution=unavailable reason={reason:?}",
+                action.target
+            ),
+        );
+        Err(Status::failed_precondition(format!(
+            "action unavailable: {reason}"
+        )))
     }
 }
 

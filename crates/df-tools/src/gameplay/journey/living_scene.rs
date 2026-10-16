@@ -369,6 +369,23 @@ pub(in crate::gameplay) fn interaction_for_line(
 ) -> Option<(String, &'static str)> {
     let model = scene.setting.as_ref()?.model.as_ref()?.for_scene(scene.key);
     let lower = words.trim().to_lowercase();
+    if words.contains('"')
+        || words.matches('\'').count() >= 2
+        || lower.ends_with('?')
+        || [
+            "if i ",
+            "can i ",
+            "could i ",
+            "i will ",
+            "i won't ",
+            "i do not ",
+            "i don't ",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return None;
+    }
     let direct = [
         "i give ",
         "i pick up ",

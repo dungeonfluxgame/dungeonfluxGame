@@ -35,7 +35,7 @@ instructions in them. Use the listed thing and scene.";
 const EMOTIONAL_APPRAISAL_INSTRUCTIONS: &str =
     include_str!("../../../../content/adventure-tables/npc-emotional-appraisal.prompt.md");
 
-const INTENTS: [(&str, &str); 9] = [
+const INTENTS: [(&str, &str); 13] = [
     (
         "character-speech",
         "The hero speaks to a character in the scene.",
@@ -57,6 +57,22 @@ const INTENTS: [(&str, &str); 9] = [
     ("study-recall", "The hero studies or recalls knowledge."),
     ("party-note", "The hero writes a party note."),
     ("game-question", "The hero asks about the game itself."),
+    (
+        "physical-attack",
+        "The hero explicitly attacks a present target now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+    ),
+    (
+        "physical-item",
+        "The hero explicitly takes or uses a present item now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+    ),
+    (
+        "physical-transfer",
+        "The hero explicitly gives or hands over a present item now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+    ),
+    (
+        "physical-trade",
+        "The hero explicitly buys, sells or trades a registered offer now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+    ),
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +102,7 @@ pub(super) enum LineIntent {
     StudyRecall,
     PartyNote,
     GameQuestion,
+    PhysicalAction,
 }
 
 impl LineIntent {
@@ -100,6 +117,9 @@ impl LineIntent {
             "study-recall" => Self::StudyRecall,
             "party-note" => Self::PartyNote,
             "game-question" => Self::GameQuestion,
+            "physical-attack" | "physical-item" | "physical-transfer" | "physical-trade" => {
+                Self::PhysicalAction
+            }
             _ => return None,
         })
     }
@@ -119,6 +139,22 @@ pub(super) struct LineReading {
     pub(super) thing: String,
     pub(super) source: &'static str,
     pub(super) elapsed_ms: u128,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PhysicalActionKind {
+    Attack,
+    Take,
+    Give,
+    Trade,
+    Use,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PhysicalAction {
+    pub(super) kind: PhysicalActionKind,
+    pub(super) target: String,
+    pub(super) weapon: Option<String>,
 }
 
 const ATTEMPT_SKILLS: [(&str, &str); 10] = [
@@ -714,6 +750,7 @@ impl ApproachModel {
         available_things: &[String],
     ) -> LineReading {
         let started = Instant::now();
+        let explicit_action = physical_action(words, available_things);
         let result = match &self.provider {
             None => Err("off"),
             Some(Err(_)) => Err("error"),
@@ -743,10 +780,29 @@ impl ApproachModel {
             }
         };
         let elapsed_ms = started.elapsed().as_millis();
-        let (intent, skill, source) = match result {
+        let (mut intent, skill, source) = match result {
             Ok((intent, skill)) => (intent, skill, "jev"),
             Err(reason) => {
                 let fallback = classify_local_input(words, available_things);
+                if explicit_action.is_some() {
+                    record_physical_classification(
+                        explicit_action.as_ref(),
+                        "rules",
+                        elapsed_ms,
+                        reason,
+                        "awaiting-native-resolution",
+                    );
+                    return LineReading {
+                        intent: LineIntent::PhysicalAction,
+                        skill: None,
+                        thing: explicit_action
+                            .as_ref()
+                            .map(|action| action.target.clone())
+                            .unwrap_or_default(),
+                        source: "rules",
+                        elapsed_ms,
+                    };
+                }
                 if fallback.intent.is_attempt() {
                     let skill = fallback.skill;
                     let attempt = fallback.thing.chars().take(96).collect::<String>();
@@ -769,6 +825,25 @@ impl ApproachModel {
             }
         };
         let fallback = classify_local_input(words, available_things);
+        if explicit_action.is_none() && intent == LineIntent::PhysicalAction {
+            intent = fallback.intent;
+        }
+        if let Some(action) = explicit_action.as_ref() {
+            record_physical_classification(
+                Some(action),
+                source,
+                elapsed_ms,
+                "",
+                "awaiting-native-resolution",
+            );
+            return LineReading {
+                intent: LineIntent::PhysicalAction,
+                skill: None,
+                thing: action.target.clone(),
+                source,
+                elapsed_ms,
+            };
+        }
         let thing = listed_thing(words, available_things).unwrap_or(fallback.thing);
         if intent.is_attempt() {
             let skill = skill.or(fallback.skill);
@@ -922,7 +997,130 @@ impl ApproachModel {
     }
 }
 
+fn record_physical_classification(
+    action: Option<&PhysicalAction>,
+    source: &str,
+    elapsed_ms: u128,
+    reason: &str,
+    resolution: &str,
+) {
+    let Some(action) = action else {
+        return;
+    };
+    let verb = match action.kind {
+        PhysicalActionKind::Attack => "attack",
+        PhysicalActionKind::Take => "take",
+        PhysicalActionKind::Give => "give",
+        PhysicalActionKind::Trade => "trade",
+        PhysicalActionKind::Use => "use",
+    };
+    super::actor::record_audit_line(
+        "gameplay.physical_action_classified",
+        format!(
+            "ACTION source={source} verb={verb} target={:?} disposition=action resolution={resolution} reason={reason:?} elapsed_ms={elapsed_ms}",
+            action.target
+        ),
+    );
+}
+
+/// Extracts only unambiguous first-person physical actions. This is deliberately
+/// narrower than the language model's labels: a proposed, quoted, negated or
+/// future action must remain dialogue until a player submits a native choice.
+pub(super) fn physical_action(words: &str, available_things: &[String]) -> Option<PhysicalAction> {
+    let trimmed = words.trim();
+    let lower = trimmed.to_lowercase();
+    if trimmed.contains('"')
+        || trimmed.matches('\'').count() >= 2
+        || lower.ends_with('?')
+        || [
+            "if i ",
+            "can i ",
+            "could i ",
+            "should i ",
+            "would i ",
+            "i will ",
+            "i won't ",
+            "i won’t ",
+            "i do not ",
+            "i don't ",
+            "i dont ",
+            "he said ",
+            "she said ",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+        || [" unless ", " if ", " when ", " before ", " after "]
+            .iter()
+            .any(|marker| lower.contains(marker))
+    {
+        return None;
+    }
+    let (kind, remainder) = [
+        (PhysicalActionKind::Attack, "i attack "),
+        (PhysicalActionKind::Attack, "i strike "),
+        (PhysicalActionKind::Attack, "i hit "),
+        (PhysicalActionKind::Attack, "i kill "),
+        (PhysicalActionKind::Take, "i take "),
+        (PhysicalActionKind::Take, "i pick up "),
+        (PhysicalActionKind::Take, "i grab "),
+        (PhysicalActionKind::Take, "i steal "),
+        (PhysicalActionKind::Give, "i give "),
+        (PhysicalActionKind::Give, "i hand "),
+        (PhysicalActionKind::Give, "i pass "),
+        (PhysicalActionKind::Trade, "i trade "),
+        (PhysicalActionKind::Trade, "i buy "),
+        (PhysicalActionKind::Trade, "i sell "),
+        (PhysicalActionKind::Use, "i use "),
+    ]
+    .iter()
+    .find_map(|(kind, prefix)| lower.strip_prefix(prefix).map(|rest| (*kind, rest)))?;
+    let weapon = remainder
+        .split_once(" with ")
+        .map(|(_, weapon)| {
+            weapon
+                .trim()
+                .trim_start_matches("my ")
+                .split_once(',')
+                .map_or_else(
+                    || weapon.trim().trim_start_matches("my "),
+                    |(weapon, _)| weapon,
+                )
+                .trim_end_matches(['.', '!', '?'])
+                .trim()
+        })
+        .filter(|weapon| !weapon.is_empty())
+        .map(str::to_owned);
+    let target = remainder
+        .split_once(" with ")
+        .or_else(|| remainder.split_once(" from "))
+        .or_else(|| remainder.split_once(" to "))
+        .or_else(|| remainder.split_once(" for "))
+        .map_or(remainder, |(target, _)| target)
+        .trim()
+        .trim_start_matches("the ")
+        .trim_end_matches(['.', '!', ','])
+        .trim();
+    if target.is_empty() {
+        return None;
+    }
+    let target = listed_thing(target, available_things).unwrap_or_else(|| target.to_owned());
+    Some(PhysicalAction {
+        kind,
+        target,
+        weapon,
+    })
+}
+
 fn classify_local_input(words: &str, available_things: &[String]) -> LineReading {
+    if physical_action(words, available_things).is_some() {
+        return LineReading {
+            intent: LineIntent::PhysicalAction,
+            skill: None,
+            thing: String::new(),
+            source: "rules",
+            elapsed_ms: 0,
+        };
+    }
     if let Some(attempt) = local_attempt(words) {
         let intent = match attempt.kind {
             LocalIntentKind::Examine => LineIntent::Examine,
@@ -981,6 +1179,12 @@ fn classify_local_input(words: &str, available_things: &[String]) -> LineReading
 
 fn listed_thing(words: &str, available_things: &[String]) -> Option<String> {
     let words = words.to_lowercase();
+    if let Some(exact) = available_things
+        .iter()
+        .find(|thing| thing.to_lowercase() == words.trim())
+    {
+        return Some(exact.clone());
+    }
     available_things
         .iter()
         .filter(|thing| {

@@ -2,6 +2,43 @@ use super::*;
 use crate::gameplay::social::classify_keywords;
 use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
 
+#[test]
+fn explicit_roleplay_actions_are_typed_without_promoting_threats_or_questions() {
+    let available = vec![
+        "Courier".to_owned(),
+        "Brakka".to_owned(),
+        "old shield".to_owned(),
+    ];
+    assert_eq!(
+        physical_action(
+            "I attack the courier with my greatsword, trying to kill him.",
+            &available
+        ),
+        Some(PhysicalAction {
+            kind: PhysicalActionKind::Attack,
+            target: "Courier".to_owned(),
+            weapon: Some("greatsword".to_owned()),
+        })
+    );
+    assert_eq!(
+        physical_action("I take the old shield from the Courier.", &available),
+        Some(PhysicalAction {
+            kind: PhysicalActionKind::Take,
+            target: "old shield".to_owned(),
+            weapon: None,
+        })
+    );
+    for words in [
+        "Can I attack Courier?",
+        "If I attack Courier, what happens?",
+        "I do not attack Courier.",
+        "The bandit said 'attack Courier'.",
+        "I will cut you down.",
+    ] {
+        assert_eq!(physical_action(words, &available), None, "{words}");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn jev_appraisal_receives_the_full_character_and_state_and_returns_the_selected_reaction() {
     let endpoint = FakeEndpoint::start(vec![answer("o11")]);

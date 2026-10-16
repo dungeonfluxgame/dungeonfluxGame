@@ -1713,6 +1713,33 @@ fn options(
     }
     Ok(candidates)
 }
+
+/// Returns the existing canonical attack choice for a named target. Natural-language
+/// callers may select this id, but cannot create a new target or bypass the tactical
+/// offer/turn checks performed by `options` and the session transition.
+pub(in crate::gameplay) fn attack_option_for_target(
+    state: &GameState,
+    entity: EntityId,
+    target: &str,
+    weapon: Option<&str>,
+) -> Result<Option<String>, RepositoryError> {
+    let actor = actor_id(state, entity)?;
+    let target = target.to_lowercase();
+    let weapon = weapon.map(str::to_lowercase);
+    Ok(
+        options(state, actor, rpc::GameplayActionKind::GreatswordAttack)?
+            .into_iter()
+            .find(|(_, _, label)| {
+                let label = label.to_lowercase();
+                label.contains(&target)
+                    && weapon
+                        .as_ref()
+                        .is_none_or(|weapon| label.starts_with(weapon))
+                    && !label.contains(" · ")
+            })
+            .map(|(id, _, _)| id),
+    )
+}
 pub(in crate::gameplay) fn groups(
     current: &Checkpoint,
     member: MemberId,
