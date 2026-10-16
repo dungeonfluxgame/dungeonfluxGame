@@ -152,6 +152,7 @@ pub(super) fn setup(
             startup_line: None,
         });
     }
+    layout.enable();
     let database_name = database.get_dbname().unwrap_or_default().to_owned();
     if database_name.is_empty() {
         return Err(io::Error::other("dev control needs a named database"));
@@ -197,9 +198,18 @@ pub(super) fn setup(
         .route("/dev/log", get(reads::game_log))
         .route("/dev/timeline", get(reads::timeline))
         .route("/dev/layout", get(layout::list))
-        .route("/dev/layout/transform", post(layout::transform))
-        .route("/dev/layout/move", post(layout::move_to))
-        .route("/dev/layout/reset", post(layout::reset))
+        .route(
+            "/dev/layout/transform",
+            post(layout::transform).layer(axum::extract::DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/dev/layout/move",
+            post(layout::move_to).layer(axum::extract::DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/dev/layout/reset",
+            post(layout::reset).layer(axum::extract::DefaultBodyLimit::max(4096)),
+        )
         .route("/dev/notes", get(notebook::read))
         .route("/dev/note", post(notebook::add))
         .route("/dev/checkpoint", post(reads::save_checkpoint))

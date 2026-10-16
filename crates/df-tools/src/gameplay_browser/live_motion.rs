@@ -965,7 +965,7 @@ thread_local! {
 }
 
 /// This page's display instance (never zero, which the server reads as legacy).
-fn display_instance() -> u64 {
+pub(super) fn display_instance() -> u64 {
     DISPLAY_INSTANCE.with(|cell| {
         if cell.get() == 0 {
             let seed = (js_sys::Math::random() * 9_007_199_254_740_991.0) as u64;
@@ -977,37 +977,16 @@ fn display_instance() -> u64 {
 
 /// Sends one presentation report; returns the server's released sequence after it.
 async fn send_report(client: &Rc<RefCell<Client>>, sequence: u64) -> Option<u64> {
-    let (sessions, credential, layout_readback) = {
+    let (sessions, credential) = {
         let state = client.borrow();
-        let layout_readback = if state.role == "display" {
-            state
-                .root
-                .query_selector(".tv-stage")
-                .ok()
-                .flatten()
-                .map(|stage| {
-                    let revision = stage
-                        .get_attribute("data-layout-revision")
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or_default();
-                    super::layout::readback(&stage, revision)
-                })
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        (
-            state.sessions.clone()?,
-            state.credential.clone(),
-            layout_readback,
-        )
+        (state.sessions.clone()?, state.credential.clone())
     };
     let mut sessions = sessions;
     let mut call = request(
         rpc::PresentedRequest {
             sequence,
             display_instance: display_instance(),
-            layout_readback_json: layout_readback,
+            layout_readback_json: String::new(),
         },
         &credential,
     )
@@ -1015,13 +994,6 @@ async fn send_report(client: &Rc<RefCell<Client>>, sequence: u64) -> Option<u64>
     call.set_timeout(Duration::from_millis(2_000));
     let outcome = sessions.report_presented(call).await;
     let root = client.borrow().root.clone();
-    if outcome.is_ok() {
-        if let Some(stage) = root.query_selector(".tv-stage").ok().flatten() {
-            if let Some(revision) = stage.get_attribute("data-layout-revision") {
-                let _ = root.set_attribute("data-layout-reported-revision", &revision);
-            }
-        }
-    }
     let _marked = root.set_attribute(
         "data-presented-report",
         if outcome.is_ok() { "sent" } else { "failed" },
@@ -1042,23 +1014,9 @@ fn report_presented(client: &Rc<RefCell<Client>>) {
         return;
     }
     let now = now_ms();
-    let layout_due = {
-        let state = client.borrow();
-        state
-            .root
-            .query_selector(".tv-stage")
-            .ok()
-            .flatten()
-            .and_then(|stage| stage.get_attribute("data-layout-revision"))
-            .map(|revision| {
-                let old = state.root.get_attribute("data-layout-reported-revision");
-                old.as_deref() != Some(revision.as_str())
-            })
-            .unwrap_or(false)
-    };
     let due = with_motion(|motion| {
         let presented = effective_presented(motion);
-        if presented == 0 && !layout_due {
+        if presented == 0 {
             return None;
         }
         let changed = presented != motion.reported_seq;
@@ -1071,7 +1029,7 @@ fn report_presented(client: &Rc<RefCell<Client>>) {
         Some(presented)
     })
     .flatten();
-    let Some(sequence) = due.or_else(|| layout_due.then_some(0)) else {
+    let Some(sequence) = due else {
         return;
     };
     let id = REPORT_LOOP.with(|current| {

@@ -176,7 +176,10 @@ impl Service {
         self.living.apply(&mut message);
         // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
         home_video::apply(&mut message);
-        self.layout.attach(&mut message).await;
+        self.layout
+            .attach(&mut message)
+            .await
+            .map_err(|error| Status::internal(error.to_string()))?;
         Ok((role, message))
     }
 }
@@ -343,8 +346,22 @@ impl rpc::session_service_server::SessionService for Service {
     ) -> Result<Response<rpc::PresentedResponse>, Status> {
         let credential = credential(&request)?;
         let request = request.into_inner();
-        if !request.layout_readback_json.is_empty() && credential == self.display_credential {
-            let _ = self.layout.readback(&request.layout_readback_json).await;
+        if !request.layout_readback_json.is_empty() {
+            if credential != self.display_credential {
+                return Err(Status::permission_denied(
+                    "layout report requires display authorization",
+                ));
+            }
+            self.layout
+                .readback(request.display_instance, &request.layout_readback_json)
+                .await
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            // Metadata-only reports never enter the gameplay actor or release a combat beat.
+            if request.sequence == 0 {
+                return Ok(Response::new(rpc::PresentedResponse {
+                    released_sequence: 0,
+                }));
+            }
         }
         let (reply, wait) = oneshot::channel();
         self.actor

@@ -1,303 +1,490 @@
-//! Authenticated, bounded display layout controls used by the development CLI.
-use axum::{extract::State as AxumState, http::HeaderMap, response::Json};
-use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc};
-use tokio::sync::{Mutex, watch};
-
+//! Authenticated layout state. One mutex makes revision, configuration and acknowledgments atomic.
 use super::{Outcome, Shared, authorized, bad_request};
-
-const MAX_COORDINATE: f64 = 4096.0;
-const MAX_SCALE: f64 = 8.0;
-const MAX_ROTATION: f64 = 360.0;
-
-const KNOWN_IDS: &[&str] = &[
-    "stage",
-    "background",
-    "plate",
-    "scene-context",
-    "headline",
-    "rules",
-    "narration",
-    "choices",
-    "title",
-    "partybar",
-    "hud",
-    "item-card",
-    "loader",
-    "check-card",
-    "overlay",
-    "speech-bubbles",
-    "images",
-];
+use crate::layout_contract::{
+    self as contract, ElementStatus, LayoutDocument, LayoutError, LayoutReadback, MoveRequest,
+    ResetRequest, Transform, TransformRequest,
+};
+use axum::{
+    extract::{Query, State as AxumState},
+    http::{HeaderMap, StatusCode},
+    response::Json,
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+use tokio::sync::{Mutex, watch};
+const MAX_CLIENTS: usize = 8;
+const INVENTORY_LIFETIME: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub(crate) struct LayoutState {
     state: Arc<Mutex<LayoutInner>>,
-    readback: Arc<Mutex<Value>>,
+    enabled: Arc<AtomicBool>,
     changed: watch::Sender<u64>,
 }
-
 struct LayoutInner {
-    revision: u64,
-    overrides: BTreeMap<String, Value>,
+    document: LayoutDocument,
+    clients: BTreeMap<u64, ClientReadback>,
 }
-
+struct ClientReadback {
+    report: LayoutReadback,
+    seen: Instant,
+}
 impl LayoutState {
     pub(crate) fn new() -> Self {
         let (changed, _) = watch::channel(0);
         Self {
             state: Arc::new(Mutex::new(LayoutInner {
-                revision: 0,
-                overrides: BTreeMap::new(),
+                document: LayoutDocument::default(),
+                clients: BTreeMap::new(),
             })),
-            readback: Arc::new(Mutex::new(json!({"viewport": null, "elements": []}))),
+            enabled: Arc::new(AtomicBool::new(false)),
             changed,
         }
     }
-
+    pub(super) fn enable(&self) {
+        self.enabled.store(true, Ordering::Release);
+    }
     pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
     }
-
-    pub(super) async fn snapshot(&self) -> Value {
-        let state = self.state.lock().await;
-        let readback = self.readback.lock().await.clone();
-        json!({"revision": state.revision, "overrides": state.overrides, "readback": readback})
-    }
-
-    pub(crate) async fn attach(&self, message: &mut df_protocol::common::ViewMessage) {
+    pub(crate) async fn attach(
+        &self,
+        message: &mut df_protocol::common::ViewMessage,
+    ) -> Result<(), LayoutError> {
+        if !self.enabled.load(Ordering::Acquire) {
+            return Ok(());
+        }
         if let Some(df_protocol::common::view_message::Audience::Display(display)) =
             message.audience.as_mut()
         {
-            let snapshot = self.snapshot().await;
-            display.layout_revision = snapshot
-                .get("revision")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            display.layout_json = snapshot.to_string();
+            let state = self.state.lock().await;
+            display.layout_revision = state.document.revision;
+            display.layout_json =
+                serde_json::to_string(&state.document).map_err(|_| LayoutError::Shape)?;
         }
+        Ok(())
     }
-
-    pub(crate) async fn readback(&self, text: &str) -> Result<(), String> {
-        if text.len() > 64 * 1024 {
-            return Err("layout readback is too large".into());
+    async fn snapshot(&self, id: Option<&str>) -> Result<Value, LayoutError> {
+        if let Some(id) = id {
+            contract::validate_id(id)?;
         }
-        let value: Value =
-            serde_json::from_str(text).map_err(|_| "layout readback is invalid JSON")?;
-        let elements = value
-            .get("elements")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "layout readback needs elements".to_owned())?;
-        if elements.len() > 256 {
-            return Err("layout readback has too many elements".into());
+        let state = self.state.lock().await;
+        let clients:Vec<Value>=state.clients.iter().map(|(instance,client)| {
+            let elements:Vec<_>=client.report.elements.iter().filter(|element|id.is_none_or(|id|id==element.id)).collect();
+            let status=if client.report.revision!=state.document.revision||client.seen.elapsed()>INVENTORY_LIFETIME { "stale" }
+                else if id.is_some()&&elements.is_empty()||elements.iter().any(|e|e.status==ElementStatus::Absent) { "absent" } else { "applied" };
+            json!({"display_instance":instance,"status":status,"reported_revision":client.report.revision,"sample":client.report.sample,"viewport":client.report.viewport,"overflow":client.report.overflow,"elements":elements})
+        }).collect();
+        if let Some(id) = id {
+            if !state.document.overrides.contains_key(id)
+                && !state
+                    .clients
+                    .values()
+                    .any(|client| client.report.elements.iter().any(|e| e.id == id))
+            {
+                return Err(LayoutError::UnknownId);
+            }
         }
-        for element in elements {
-            let id = element
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "layout readback element needs id".to_owned())?;
-            validate_id(id)?;
-            for field in ["left", "top", "right", "bottom", "width", "height"] {
-                let number = element
-                    .get(field)
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| format!("layout readback {field} must be finite"))?;
-                if !number.is_finite() || number.abs() > MAX_COORDINATE * 4.0 {
-                    return Err("layout readback element is outside its bound".into());
+        let overrides: BTreeMap<_, _> = state
+            .document
+            .overrides
+            .iter()
+            .filter(|(key, _)| id.is_none_or(|id| id == key.as_str()))
+            .collect();
+        Ok(
+            json!({"revision":state.document.revision,"status":if clients.is_empty(){"pending"}else if clients.iter().all(|c|c["status"]=="applied"){"applied"}else{"pending"},"overrides":overrides,"clients":clients,"capacity":contract::MAX_ELEMENTS}),
+        )
+    }
+    pub(crate) async fn readback(&self, instance: u64, text: &str) -> Result<(), LayoutError> {
+        if !self.enabled.load(Ordering::Acquire) {
+            return Err(LayoutError::Unavailable);
+        }
+        if instance == 0 {
+            return Err(LayoutError::Id);
+        }
+        let report = LayoutReadback::parse(text)?;
+        let mut state = self.state.lock().await;
+        if report.revision > state.document.revision {
+            return Err(LayoutError::Revision);
+        }
+        if let Some(previous) = state.clients.get(&instance) {
+            if report.sample <= previous.report.sample || report.revision < previous.report.revision
+            {
+                return Err(LayoutError::Revision);
+            }
+        }
+        if report.revision == state.document.revision {
+            for element in &report.elements {
+                if element.configured.as_ref() != state.document.overrides.get(&element.id) {
+                    return Err(LayoutError::Shape);
+                }
+            }
+            for id in state.document.overrides.keys() {
+                if !report.elements.iter().any(|e| e.id == *id) {
+                    return Err(LayoutError::Shape);
                 }
             }
         }
-        let reported_revision = value.get("revision").and_then(Value::as_u64).unwrap_or(0);
-        let current_revision = self.state.lock().await.revision;
-        let status = if reported_revision == current_revision
-            && value.get("viewport").is_some()
-            && value.get("elements").is_some()
-        {
-            "applied"
-        } else {
-            "stale"
-        };
-        *self.readback.lock().await = json!({
-            "status": status,
-            "reported_revision": reported_revision,
-            "current_revision": current_revision,
-            "payload": value,
+        state
+            .clients
+            .retain(|_, client| client.seen.elapsed() <= INVENTORY_LIFETIME);
+        if !state.clients.contains_key(&instance) && state.clients.len() >= MAX_CLIENTS {
+            return Err(LayoutError::Limit);
+        }
+        let revision = report.revision;
+        let current = state.document.revision;
+        let changed = state.clients.get(&instance).is_none_or(|old| {
+            old.report.revision != revision
+                || old
+                    .report
+                    .elements
+                    .iter()
+                    .map(|e| (&e.id, e.status, &e.configured))
+                    .collect::<Vec<_>>()
+                    != report
+                        .elements
+                        .iter()
+                        .map(|e| (&e.id, e.status, &e.configured))
+                        .collect::<Vec<_>>()
         });
+        let absent: Vec<_> = report
+            .elements
+            .iter()
+            .filter(|e| e.status == ElementStatus::Absent)
+            .map(|e| e.id.clone())
+            .collect();
+        state.clients.insert(
+            instance,
+            ClientReadback {
+                report,
+                seen: Instant::now(),
+            },
+        );
+        drop(state);
+        if changed {
+            event(
+                "gameplay.layout.applied",
+                revision,
+                None,
+                if revision != current {
+                    "stale"
+                } else if !absent.is_empty() {
+                    "absent"
+                } else {
+                    "applied"
+                },
+            );
+            for id in absent {
+                event("gameplay.layout.absent", revision, Some(&id), "absent");
+            }
+        }
         Ok(())
     }
-
-    async fn mutate(&self, id: &str, value: Value) -> Result<u64, String> {
-        validate_id(id)?;
+    async fn mutate(&self, id: &str, patch: Transform) -> Result<u64, LayoutError> {
+        contract::validate_id(id)?;
+        patch.validate()?;
         let mut state = self.state.lock().await;
-        state.overrides.insert(id.to_owned(), value);
-        state.revision = state.revision.saturating_add(1);
-        let revision = state.revision;
-        let _ = self.changed.send_replace(revision);
+        let admitted = state.clients.values().any(|client| {
+            client.seen.elapsed() <= INVENTORY_LIFETIME
+                && client
+                    .report
+                    .elements
+                    .iter()
+                    .any(|e| e.id == id && e.status == ElementStatus::Applied)
+        });
+        if !admitted {
+            return Err(LayoutError::UnknownId);
+        }
+        if !state.document.overrides.contains_key(id)
+            && state.document.overrides.len() >= contract::MAX_OVERRIDES
+        {
+            return Err(LayoutError::Limit);
+        }
+        let revision = state
+            .document
+            .revision
+            .checked_add(1)
+            .ok_or(LayoutError::Limit)?;
+        state
+            .document
+            .overrides
+            .entry(id.to_owned())
+            .or_default()
+            .merge(patch);
+        state.document.revision = revision;
+        self.changed.send_replace(revision);
+        drop(state);
+        event("gameplay.layout.accepted", revision, Some(id), "pending");
         Ok(revision)
     }
-
-    async fn reset(&self, id: Option<&str>) -> Result<u64, String> {
+    async fn reset(&self, id: Option<&str>) -> Result<u64, LayoutError> {
         if let Some(id) = id {
-            validate_id(id)?;
+            contract::validate_id(id)?;
         }
         let mut state = self.state.lock().await;
         if let Some(id) = id {
-            state.overrides.remove(id);
+            if !state.document.overrides.contains_key(id)
+                && !state.clients.values().any(|c| {
+                    c.seen.elapsed() <= INVENTORY_LIFETIME
+                        && c.report.elements.iter().any(|e| e.id == id)
+                })
+            {
+                return Err(LayoutError::UnknownId);
+            }
+        }
+        let revision = state
+            .document
+            .revision
+            .checked_add(1)
+            .ok_or(LayoutError::Limit)?;
+        if let Some(id) = id {
+            state.document.overrides.remove(id);
         } else {
-            state.overrides.clear();
+            state.document.overrides.clear();
         }
-        state.revision = state.revision.saturating_add(1);
-        let revision = state.revision;
-        let _ = self.changed.send_replace(revision);
+        state.document.revision = revision;
+        self.changed.send_replace(revision);
+        drop(state);
+        event("gameplay.layout.reset", revision, id, "pending");
         Ok(revision)
     }
 }
-
-fn validate_id(id: &str) -> Result<(), String> {
-    if id.is_empty()
-        || id.len() > 96
-        || !id
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b':')
-    {
-        return Err("layout id must be a bounded stable name".into());
-    }
-    if KNOWN_IDS.contains(&id)
-        || id.starts_with("hero-")
-        || id.starts_with("npc-")
-        || id.starts_with("bubble-")
-        || id.starts_with("loader-")
-        || id.starts_with("card-")
-        || id.starts_with("image-")
-        || id.starts_with("hud-")
-    {
-        return Ok(());
-    }
-    Err(format!("unknown layout id {id:?}"))
+fn event(name: &'static str, revision: u64, id: Option<&str>, status: &str) {
+    let fields = serde_json::Map::from_iter([
+        ("layout_revision".to_owned(), json!(revision)),
+        ("target_id".to_owned(), json!(id)),
+        ("status".to_owned(), json!(status)),
+    ]);
+    crate::gameplay::actor::record_audit_diagnostic(
+        name,
+        format!(
+            "LAYOUT revision={revision} target={} status={status}",
+            id.unwrap_or("all")
+        ),
+        fields,
+        &[
+            ("layout.revision", revision.to_string()),
+            ("layout.status", status.to_owned()),
+        ],
+    );
 }
-
-fn finite(value: Option<&Value>, name: &str, limit: f64) -> Result<Option<f64>, String> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let number = value
-        .as_f64()
-        .ok_or_else(|| format!("{name} must be finite"))?;
-    if !number.is_finite() || number.abs() > limit {
-        return Err(format!("{name} is outside its bound"));
-    }
-    Ok(Some(number))
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Selection {
+    id: Option<String>,
 }
-
-fn unit(body: &Value, name: &str) -> Result<&'static str, String> {
-    match body.get(name).and_then(Value::as_str) {
-        Some("px") => Ok("px"),
-        Some("percent") => Ok("percent"),
-        _ => Err(format!("{name} must be px or percent")),
-    }
-}
-
-pub(super) async fn list(AxumState(state): AxumState<Arc<Shared>>, headers: HeaderMap) -> Outcome {
+pub(super) async fn list(
+    AxumState(state): AxumState<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(selection): Query<Selection>,
+) -> Outcome {
     authorized(&headers, &state.token)?;
     Ok((
-        axum::http::StatusCode::OK,
-        Json(state.layout.snapshot().await),
+        StatusCode::OK,
+        Json(
+            state
+                .layout
+                .snapshot(selection.id.as_deref())
+                .await
+                .map_err(|e| bad_request(e.to_string()))?,
+        ),
     ))
 }
-
 pub(super) async fn transform(
     AxumState(state): AxumState<Arc<Shared>>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    Json(body): Json<TransformRequest>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    let id = body
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("layout transform needs id"))?;
-    let tx = finite(body.get("translate_x"), "translate_x", MAX_COORDINATE).map_err(bad_request)?;
-    let ty = finite(body.get("translate_y"), "translate_y", MAX_COORDINATE).map_err(bad_request)?;
-    let sx = finite(
-        body.get("scale_x").or_else(|| body.get("scale")),
-        "scale_x",
-        MAX_SCALE,
-    )
-    .map_err(bad_request)?;
-    let sy = finite(
-        body.get("scale_y").or_else(|| body.get("scale")),
-        "scale_y",
-        MAX_SCALE,
-    )
-    .map_err(bad_request)?;
-    let rotate = finite(body.get("rotate"), "rotate", MAX_ROTATION).map_err(bad_request)?;
-    let translate_unit = unit(&body, "unit").map_err(bad_request)?;
-    if tx.is_none() && ty.is_none() && sx.is_none() && sy.is_none() && rotate.is_none() {
-        return Err(bad_request("layout transform needs a transform value"));
-    }
-    let revision = state.layout.mutate(id, json!({"kind":"transform","translate_x":tx,"translate_y":ty,"unit":translate_unit,"scale_x":sx,"scale_y":sy,"rotate":rotate})).await.map_err(bad_request)?;
+    let patch = body.patch().map_err(|e| bad_request(e.to_string()))?;
+    let revision = state
+        .layout
+        .mutate(&body.id, patch)
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
     Ok((
-        axum::http::StatusCode::OK,
-        Json(json!({"status":"applied","id":id,"revision":revision})),
+        StatusCode::OK,
+        Json(json!({"status":"pending","id":body.id,"revision":revision})),
     ))
 }
-
 pub(super) async fn move_to(
     AxumState(state): AxumState<Arc<Shared>>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    Json(body): Json<MoveRequest>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    let id = body
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("layout move needs id"))?;
-    let left = finite(body.get("left"), "left", MAX_COORDINATE).map_err(bad_request)?;
-    let top = finite(body.get("top"), "top", MAX_COORDINATE).map_err(bad_request)?;
-    let width = finite(body.get("width"), "width", MAX_COORDINATE).map_err(bad_request)?;
-    let height = finite(body.get("height"), "height", MAX_COORDINATE).map_err(bad_request)?;
-    let position_unit = unit(&body, "unit").map_err(bad_request)?;
-    if left.is_none() && top.is_none() && width.is_none() && height.is_none() {
-        return Err(bad_request("layout move needs a position or size"));
-    }
-    let revision = state.layout.mutate(id, json!({"kind":"move","left":left,"top":top,"width":width,"height":height,"unit":position_unit})).await.map_err(bad_request)?;
+    let patch = body.patch().map_err(|e| bad_request(e.to_string()))?;
+    let revision = state
+        .layout
+        .mutate(&body.id, patch)
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
     Ok((
-        axum::http::StatusCode::OK,
-        Json(json!({"status":"applied","id":id,"revision":revision})),
+        StatusCode::OK,
+        Json(json!({"status":"pending","id":body.id,"revision":revision})),
     ))
 }
-
 pub(super) async fn reset(
     AxumState(state): AxumState<Arc<Shared>>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    Json(body): Json<ResetRequest>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    let id = body.get("id").and_then(Value::as_str);
-    let revision = state.layout.reset(id).await.map_err(bad_request)?;
+    let revision = state
+        .layout
+        .reset(body.id.as_deref())
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
     Ok((
-        axum::http::StatusCode::OK,
-        Json(json!({"status":"reset","id":id,"revision":revision})),
+        StatusCode::OK,
+        Json(json!({"status":"pending","id":body.id,"revision":revision})),
     ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{finite, validate_id};
-    use serde_json::json;
-
-    #[test]
-    fn accepts_known_and_dynamic_visual_ids_but_rejects_selectors() {
-        assert!(validate_id("background").is_ok());
-        assert!(validate_id("bubble-seat-1-42").is_ok());
-        assert!(validate_id("hero-seat-1").is_ok());
-        assert!(validate_id(".tv-stage").is_err());
-        assert!(validate_id("unknown").is_err());
+    use super::*;
+    use crate::layout_contract::{Bounds, EffectiveTransform, ElementReadback, Viewport};
+    fn report(
+        revision: u64,
+        sample: u64,
+        id: &str,
+        configured: Option<Transform>,
+    ) -> LayoutReadback {
+        LayoutReadback {
+            sample,
+            revision,
+            viewport: Viewport {
+                width: 1920.0,
+                height: 1080.0,
+            },
+            overflow: 0,
+            elements: vec![ElementReadback {
+                id: id.into(),
+                tag: "div".into(),
+                classes: String::new(),
+                owner: None,
+                configured,
+                effective: Some(EffectiveTransform {
+                    translate: "none".into(),
+                    scale: "none".into(),
+                    rotate: "none".into(),
+                    matrix: "none".into(),
+                }),
+                rect: Some(Bounds {
+                    left: 0.0,
+                    top: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                }),
+                status: ElementStatus::Applied,
+            }],
+        }
     }
-
-    #[test]
-    fn rejects_non_finite_and_unbounded_values() {
-        assert!(finite(Some(&json!(1.0)), "x", 2.0).unwrap().is_some());
-        assert!(finite(Some(&json!(3.0)), "x", 2.0).is_err());
-        assert!(finite(Some(&json!("NaN")), "x", 2.0).is_err());
+    async fn admit(
+        state: &LayoutState,
+        instance: u64,
+        report: &LayoutReadback,
+    ) -> Result<(), LayoutError> {
+        state
+            .readback(instance, &serde_json::to_string(report).unwrap())
+            .await
+    }
+    #[tokio::test]
+    async fn inventory_admission_partial_updates_and_exact_revision_ack() {
+        let state = LayoutState::new();
+        state.enable();
+        let mut wake = state.subscribe();
+        assert_eq!(
+            state.mutate("hero-made-up", Transform::default()).await,
+            Err(LayoutError::UnknownId)
+        );
+        admit(&state, 1, &report(0, 1, "dm-overlay", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .mutate(
+                    "dm-overlay",
+                    Transform {
+                        rotate: Some(10.0),
+                        ..Default::default()
+                    }
+                )
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(*wake.borrow_and_update(), 1);
+        assert_eq!(
+            state.snapshot(None).await.unwrap()["clients"][0]["status"],
+            "stale"
+        );
+        state
+            .mutate(
+                "dm-overlay",
+                Transform {
+                    scale_x: Some(2.0),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let configured = state.state.lock().await.document.overrides["dm-overlay"].clone();
+        assert_eq!(configured.rotate, Some(10.0));
+        assert_eq!(
+            admit(&state, 1, &report(2, 2, "dm-overlay", None)).await,
+            Err(LayoutError::Shape)
+        );
+        admit(&state, 1, &report(2, 3, "dm-overlay", Some(configured)))
+            .await
+            .unwrap();
+        assert_eq!(state.snapshot(None).await.unwrap()["status"], "applied");
+        assert_eq!(
+            admit(&state, 1, &report(0, 2, "dm-overlay", None)).await,
+            Err(LayoutError::Revision)
+        );
+        state.reset(Some("dm-overlay")).await.unwrap();
+        assert_eq!(state.snapshot(None).await.unwrap()["status"], "pending");
+        admit(&state, 2, &report(3, 1, "dm-overlay", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            state.snapshot(None).await.unwrap()["clients"][1]["status"],
+            "applied"
+        );
+    }
+    #[tokio::test]
+    async fn vanished_ids_and_future_or_malformed_readbacks_do_not_fabricate_success() {
+        let state = LayoutState::new();
+        state.enable();
+        admit(&state, 1, &report(0, 1, "dm-overlay", None))
+            .await
+            .unwrap();
+        let mut empty = report(0, 2, "other", None);
+        empty.elements.clear();
+        admit(&state, 1, &empty).await.unwrap();
+        assert_eq!(
+            state.mutate("dm-overlay", Transform::default()).await,
+            Err(LayoutError::UnknownId)
+        );
+        assert_eq!(
+            admit(&state, 1, &report(1, 3, "other", None)).await,
+            Err(LayoutError::Revision)
+        );
+        assert!(
+            state
+                .readback(1, "{\"revision\":0,\"css\":\"x\"}")
+                .await
+                .is_err()
+        );
     }
 }

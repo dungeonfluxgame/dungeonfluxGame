@@ -7,6 +7,8 @@
 
 use std::{ffi::OsString, time::Duration};
 
+#[path = "dev_cli/layout.rs"]
+mod layout;
 #[path = "dev_cli/play.rs"]
 mod play;
 
@@ -379,28 +381,7 @@ async fn dispatch(
             }
             get(client, &path).await
         }
-        "layout" => {
-            let action = positional.get(1).map(String::as_str).unwrap_or("list");
-            match action {
-                "list" | "get" => get(client, "/dev/layout").await,
-                "transform" => {
-                    let mut body = json!({"id": positional.get(2).cloned().unwrap_or_default()});
-                    for (key, flag_name) in [("translate_x", "--translate-x"), ("translate_y", "--translate-y"), ("unit", "--unit"), ("scale", "--scale"), ("scale_x", "--scale-x"), ("scale_y", "--scale-y"), ("rotate", "--rotate")] {
-                        if let Some(value) = flag(flag_name) { body[key] = if key == "unit" { Value::String(value) } else { match value.parse::<f64>() { Ok(number) if number.is_finite() => json!(number), _ => return client.print_error(format!("{flag_name} must be finite")), } }; }
-                    }
-                    post(client, "/dev/layout/transform", &body).await
-                }
-                "move" => {
-                    let mut body = json!({"id": positional.get(2).cloned().unwrap_or_default()});
-                    for (key, flag_name) in [("left", "--left"), ("top", "--top"), ("width", "--width"), ("height", "--height"), ("unit", "--unit")] {
-                        if let Some(value) = flag(flag_name) { body[key] = if key == "unit" { Value::String(value) } else { match value.parse::<f64>() { Ok(number) if number.is_finite() => json!(number), _ => return client.print_error(format!("{flag_name} must be finite")), } }; }
-                    }
-                    post(client, "/dev/layout/move", &body).await
-                }
-                "reset" => post(client, "/dev/layout/reset", &json!({"id": positional.get(2)})).await,
-                _ => client.print_error("layout needs list, get, transform <id>, move <id> or reset [id]"),
-            }
-        }
+        "layout" => layout::run(client, positional, options).await,
         "play" => play::run(client, options).await,
         "wait" => wait(client, options).await,
         "checkpoint" => match positional.get(1).map(String::as_str).unwrap_or("") {

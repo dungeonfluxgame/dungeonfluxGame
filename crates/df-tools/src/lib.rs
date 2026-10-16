@@ -11,10 +11,10 @@ mod file_identity;
 pub mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gameplay;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod runtime;
 #[cfg(target_arch = "wasm32")]
 mod gameplay_browser;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtime;
 #[cfg(all(target_arch = "wasm32", feature = "public-scene-delivery-fixture"))]
 pub use gameplay_browser::fixture as public_scene_delivery_fixture;
 #[cfg(target_arch = "wasm32")]
@@ -26,6 +26,7 @@ mod qualification;
 #[cfg(target_arch = "wasm32")]
 mod qualification_verdict;
 
+mod layout_contract;
 mod music_score;
 #[cfg(any(target_arch = "wasm32", test))]
 mod reconnect;

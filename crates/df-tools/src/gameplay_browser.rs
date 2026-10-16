@@ -2092,14 +2092,27 @@ fn receive_view(
         if matches!(
             accepted,
             ConnectionViewAcceptance::View(ViewAcceptance::Duplicate { .. })
-        ) && views.accept_art_update(generation, scope, &view, crate::live_art::merge_art)
-        {
+        ) && views.accept_art_update(generation, scope, &view, |shown, new| {
+            crate::layout_contract::merge_layout(shown, new)
+                | crate::live_art::merge_art(shown, new)
+        }) {
             drop(state);
+            if let Some(rpc::view_message::Audience::Display(display)) = &view.audience {
+                layout::apply(client, &display.layout_json, display.layout_revision)?;
+            }
             redraw_current(client)?;
             return live_health::phone_sync(client);
         }
         accepted
     };
+    if matches!(
+        acceptance,
+        ConnectionViewAcceptance::View(ViewAcceptance::Applied | ViewAcceptance::Duplicate { .. })
+    ) {
+        if let Some(rpc::view_message::Audience::Display(display)) = &view.audience {
+            layout::apply(client, &display.layout_json, display.layout_revision)?;
+        }
+    }
     if acceptance != ConnectionViewAcceptance::ObsoleteGeneration {
         // Any view (even one already held) proves the connection is good again.
         {
@@ -2237,12 +2250,7 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
     };
     render_view(client, view)?;
     if let Some((json, revision)) = display_layout {
-        if !json.is_empty() {
-            let root = client.borrow().root.clone();
-            if let Some(stage) = root.query_selector(".tv-stage")? {
-                layout::apply(&stage, &json, revision)?;
-            }
-        }
+        layout::apply(client, &json, revision)?;
     }
     phone_controls::bind(client)?;
     presentation_timing::paint(client);
