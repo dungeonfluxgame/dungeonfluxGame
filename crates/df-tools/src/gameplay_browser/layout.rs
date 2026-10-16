@@ -16,6 +16,7 @@ use web_sys::Element;
 const CLOCK_MS: u32 = 500;
 const REPORT_MS: f64 = 1000.0;
 const MAX_SCAN: usize = 16384;
+const MISSING_ARIA_VALUE: &str = "__df_layout_aria_missing__";
 thread_local! {
     static ACTIVE:RefCell<Option<Controller>>=const{RefCell::new(None)};
     static GENERATION:Cell<u64>=const{Cell::new(0)};
@@ -41,7 +42,7 @@ impl Drop for Controller {
         self.clock.take();
         for element in self.registry.values() {
             if let Some(original) = element.get_attribute("data-layout-original-aria-hidden") {
-                if original.is_empty() {
+                if original == MISSING_ARIA_VALUE {
                     let _ = element.remove_attribute("aria-hidden");
                 } else {
                     let _ = element.set_attribute("aria-hidden", &original);
@@ -182,12 +183,12 @@ impl Controller {
                 let original = element.get_attribute("aria-hidden");
                 element.set_attribute(
                     "data-layout-original-aria-hidden",
-                    original.as_deref().unwrap_or(""),
+                    original.as_deref().unwrap_or(MISSING_ARIA_VALUE),
                 )?;
             }
             element.set_attribute("aria-hidden", "true")?;
         } else if let Some(original) = element.get_attribute("data-layout-original-aria-hidden") {
-            if original.is_empty() {
+            if original == MISSING_ARIA_VALUE {
                 element.remove_attribute("aria-hidden")?;
             } else {
                 element.set_attribute("aria-hidden", &original)?;
@@ -734,6 +735,48 @@ mod tests {
             style.get_property_value("animation-name").unwrap(),
             "new-motion"
         );
+        c.root.remove();
+    }
+    #[test]
+    fn hide_show_fixture_blocks_pointer_access_and_restores_both_aria_forms() {
+        let mut c = controller(
+            "<div class='tv-stagebox' aria-hidden=''>DM</div><figure class='tv-fig' data-slot='hero-1'>Hero</figure>",
+        );
+        c.refresh().unwrap();
+        let overlay = c.registry["dm-overlay"].clone();
+        let actor = c.registry["actor-hero-1"].clone();
+        c.document
+            .visibility
+            .insert("dm-overlay".into(), ElementVisibility::Hidden);
+        c.document
+            .visibility
+            .insert("actor-hero-1".into(), ElementVisibility::Hidden);
+        c.apply_visibility("dm-overlay", &overlay).unwrap();
+        c.apply_visibility("actor-hero-1", &actor).unwrap();
+        c.stylesheet
+            .set_text_content(Some(&c.document.stylesheet().unwrap()));
+        assert_eq!(
+            overlay.get_attribute("aria-hidden").as_deref(),
+            Some("true")
+        );
+        assert_eq!(actor.get_attribute("aria-hidden").as_deref(), Some("true"));
+        assert!(
+            c.stylesheet
+                .text_content()
+                .unwrap()
+                .contains("display:none")
+        );
+        assert!(
+            c.stylesheet
+                .text_content()
+                .unwrap()
+                .contains("pointer-events:none")
+        );
+        c.document.visibility.clear();
+        c.apply_visibility("dm-overlay", &overlay).unwrap();
+        c.apply_visibility("actor-hero-1", &actor).unwrap();
+        assert_eq!(overlay.get_attribute("aria-hidden").as_deref(), Some(""));
+        assert!(actor.get_attribute("aria-hidden").is_none());
         c.root.remove();
     }
     #[test]

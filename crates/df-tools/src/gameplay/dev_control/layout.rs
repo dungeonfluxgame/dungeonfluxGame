@@ -285,6 +285,26 @@ impl LayoutState {
         }
         let revision = report.revision;
         let current = state.document.revision;
+        let visibility_changes: Vec<_> = state
+            .clients
+            .get(&instance)
+            .map(|previous| {
+                report
+                    .elements
+                    .iter()
+                    .filter_map(|element| {
+                        let old = previous
+                            .report
+                            .elements
+                            .iter()
+                            .find(|candidate| candidate.id == element.id)
+                            .map(|candidate| candidate.visibility);
+                        (old.is_some() && old != Some(element.visibility))
+                            .then_some((element.id.clone(), element.visibility))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let changed = state.clients.get(&instance).is_none_or(|old| {
             old.report.revision != revision
                 || old
@@ -331,6 +351,17 @@ impl LayoutState {
                 }
                 for id in absent {
                     event("gameplay.layout.absent", revision, Some(&id), "absent");
+                }
+                for (id, visibility) in visibility_changes {
+                    event(
+                        "gameplay.layout.visibility",
+                        revision,
+                        Some(&id),
+                        match visibility {
+                            contract::ElementVisibility::Hidden => "hidden",
+                            contract::ElementVisibility::Visible => "visible",
+                        },
+                    );
                 }
             }
         }
