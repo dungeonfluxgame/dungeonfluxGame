@@ -1973,8 +1973,30 @@ pub(super) fn sound_changed(on: bool) {
     with_motion(|motion| motion.conductor.set_sound(on));
 }
 
-/// Arms one animation frame and one fallback timer while the conductor is busy; both stop
-/// re-arming when idle.
+/// Media readiness wakes the same owner used by the conductor, even after a final idle line.
+pub(super) fn wake_plate_clock() {
+    ensure_frame();
+}
+
+pub(super) fn clock_needs_work(
+    conductor_busy: bool,
+    stage: Option<&super::live_tv::TvStage>,
+) -> bool {
+    conductor_busy || stage.is_some_and(|stage| stage.plate_needs_clock())
+}
+
+fn clock_busy(motion: &Motion) -> bool {
+    if motion.conductor.is_busy() {
+        return true;
+    }
+    motion
+        .client
+        .upgrade()
+        .is_some_and(|client| clock_needs_work(false, client.borrow().live.tv.as_ref()))
+}
+
+/// One animation frame and one fallback timer serve conductor and decoded-plate work.
+/// Both stop re-arming once those owners are idle.
 fn ensure_frame() {
     arm_frame();
     arm_timer();
@@ -1982,7 +2004,7 @@ fn ensure_frame() {
 
 fn arm_frame() {
     let armed = with_motion(|motion| {
-        if motion.frame_armed || !motion.conductor.is_busy() {
+        if motion.frame_armed || !clock_busy(motion) {
             return false;
         }
         if motion.frame.is_none() {
@@ -2011,7 +2033,7 @@ fn arm_frame() {
 
 fn arm_timer() {
     let armed = with_motion(|motion| {
-        if motion.timer_armed || !motion.conductor.is_busy() {
+        if motion.timer_armed || !clock_busy(motion) {
             return false;
         }
         if motion.timer.is_none() {

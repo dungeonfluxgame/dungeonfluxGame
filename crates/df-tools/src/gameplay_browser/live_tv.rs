@@ -1042,6 +1042,7 @@ fn bind_plate_events(
                             &decode_layout,
                             &decode_picture_size,
                         );
+                        super::live_motion::wake_plate_clock();
                     } else {
                         fail_plate_request(
                             &decode_stage,
@@ -1224,6 +1225,7 @@ fn bind_plate_events(
                 &pending_layout,
                 &picture_size,
             );
+            super::live_motion::wake_plate_clock();
         }) as Box<dyn FnMut(Event)>);
         video.add_event_listener_with_callback("canplay", ready.as_ref().unchecked_ref())?;
         layer.video_ready_listeners.push((video, "canplay", ready));
@@ -1349,12 +1351,12 @@ fn plate_caption_active(stage: &Element) -> bool {
     stage.query_selector(".tv-bubble:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]),.tv-dm:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]),.tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])").ok().flatten().is_some()
 }
 
-fn plate_line_is_reading(stage: &Element) -> bool {
+fn plate_line_is_reading(stage: &Element, now: f64) -> bool {
     if stage.query_selector(".tv-bubble:is([data-line-state=opening],[data-line-state=speaking]),.tv-dm:is([data-line-state=opening],[data-line-state=speaking]),.tv-lower:is([data-line-state=opening],[data-line-state=speaking])").ok().flatten().is_some() { return true; }
     stage
         .get_attribute("data-plate-linger-at")
         .and_then(|at| at.parse::<f64>().ok())
-        .is_some_and(|at| js_sys::Date::now() - at < PLATE_LINGER_GATE_MS)
+        .is_some_and(|at| now - at < PLATE_LINGER_GATE_MS)
 }
 
 /// Capture screen coordinates before a new photographic layout moves the bubble hosts.
@@ -1368,31 +1370,14 @@ fn caption_positions(stage: &Element) -> Vec<(Element, String)> {
     }).collect()
 }
 
-fn activate_plate_request(
-    stage: &Element,
-    root: &Element,
-    image: &Element,
-    figures: &Weak<Figures>,
-    pending_layout: &Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
-    picture_size: &Rc<Cell<Option<(f64, f64)>>>,
-) {
-    if !plate_request_matches(root, image) {
-        return;
-    }
-    // The conductor retries from set_speaker after its line transitions. Activating a plate
-    // also moves bubble anchors and changes caption lanes; finish the current readable line
-    // before applying either picture or layout. No independent presentation timer is needed.
-    if plate_line_is_reading(stage) {
-        return;
-    }
+fn plate_request_ready(root: &Element, image: &Element) -> bool {
     let request = root.get_attribute("data-request");
-    if request.is_some() && root.get_attribute("data-applied-request") == request {
-        return;
+    if request.is_none() || root.get_attribute("data-failed") == image.get_attribute("data-src") {
+        return false;
     }
-    let image_decoded = image.get_attribute("data-decoded") == request;
     let frame = image.parent_element();
-    if !scene_plate_media_ready(
-        image_decoded,
+    scene_plate_media_ready(
+        image.get_attribute("data-decoded") == request,
         frame
             .as_ref()
             .and_then(|frame| frame.get_attribute("data-video-want"))
@@ -1401,7 +1386,51 @@ fn activate_plate_request(
             .as_ref()
             .and_then(|frame| frame.get_attribute("data-video-ready"))
             .as_deref(),
-    ) {
+    )
+}
+
+fn activate_plate_request(
+    stage: &Element,
+    root: &Element,
+    image: &Element,
+    figures: &Weak<Figures>,
+    pending_layout: &Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
+    picture_size: &Rc<Cell<Option<(f64, f64)>>>,
+) {
+    activate_plate_request_at(
+        stage,
+        root,
+        image,
+        figures,
+        pending_layout,
+        picture_size,
+        js_sys::Date::now(),
+    );
+}
+
+fn activate_plate_request_at(
+    stage: &Element,
+    root: &Element,
+    image: &Element,
+    figures: &Weak<Figures>,
+    pending_layout: &Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
+    picture_size: &Rc<Cell<Option<(f64, f64)>>>,
+    now: f64,
+) {
+    if !plate_request_matches(root, image) {
+        return;
+    }
+    // The owned conductor clock retries after the reading gate expires. Activating a plate
+    // also moves bubble anchors and changes caption lanes; finish the current readable line
+    // before applying either picture or layout. No independent presentation timer is needed.
+    if plate_line_is_reading(stage, now) {
+        return;
+    }
+    let request = root.get_attribute("data-request");
+    if request.is_some() && root.get_attribute("data-applied-request") == request {
+        return;
+    }
+    if !plate_request_ready(root, image) {
         return;
     }
     let Some(image_index) = image.get_attribute("data-i") else {
@@ -1478,6 +1507,7 @@ fn activate_plate_request(
     if let Some(previous) = root.get_attribute("data-active") {
         let _set = root.set_attribute("data-previous", &previous);
     }
+    let frame = image.parent_element();
     // Resolve the inactive frame's zero opacity before changing its selector. Cached images
     // may decode in the mounting task, before the browser has painted the first frame.
     if let Some(frame) = &frame
@@ -1486,7 +1516,7 @@ fn activate_plate_request(
         let _initial_width = frame.offset_width();
     }
     let _set = root.set_attribute("data-transition", &image_index);
-    let _set = root.set_attribute("data-transition-at", &js_sys::Date::now().to_string());
+    let _set = root.set_attribute("data-transition-at", &now.to_string());
     let _set = root.set_attribute("data-active", &image_index);
     if let Some(frame) = &frame {
         let _set = image.set_attribute("data-component-id", &incoming_id.to_string());
@@ -2274,6 +2304,21 @@ impl TvStage {
         } else {
             self.root.set_attribute("data-speaker", speaker)?;
         }
+        self.plate_clock_at(js_sys::Date::now())
+    }
+
+    /// Decoded requests and active dissolves keep the existing presentation clock alive.
+    pub(super) fn plate_needs_clock(&self) -> bool {
+        self.plate.root.has_attribute("data-transition")
+            || self.plate.images.iter().any(|image| {
+                plate_request_matches(&self.plate.root, image)
+                    && plate_request_ready(&self.plate.root, image)
+                    && self.plate.root.get_attribute("data-applied-request")
+                        != self.plate.root.get_attribute("data-request")
+            })
+    }
+
+    fn plate_clock_at(&self, now: f64) -> Result<(), JsValue> {
         // The existing conductor clock owns recovery when transitionend is lost (for
         // example a background tab). No detached timeout may retire a newer dissolve.
         if self.plate.root.has_attribute("data-transition")
@@ -2282,7 +2327,7 @@ impl TvStage {
                 .root
                 .get_attribute("data-transition-at")
                 .and_then(|at| at.parse::<f64>().ok())
-                .is_some_and(|at| js_sys::Date::now() - at >= 1100.0)
+                .is_some_and(|at| now - at >= 1100.0)
         {
             self.plate.root.remove_attribute("data-transition")?;
             self.plate.root.remove_attribute("data-previous")?;
@@ -2294,13 +2339,14 @@ impl TvStage {
             }
         }
         for image in &self.plate.images {
-            activate_plate_request(
+            activate_plate_request_at(
                 &self.root,
                 &self.plate.root,
                 image,
                 &Rc::downgrade(&self.figures),
                 &self.plate.pending_layout,
                 &self.plate.picture_size,
+                now,
             );
         }
         Ok(())
@@ -3568,6 +3614,63 @@ mod tests {
             &stage.plate.picture_size,
         );
         assert_eq!(stage.plate.root.get_attribute("data-push"), push);
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn idle_clock_keeps_decoded_plate_until_linger_then_retires_lost_transition() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        stage
+            .lower_third(7, "Courier", "Keep this line steady.", LineState::Speaking)
+            .unwrap();
+        let plate = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/clock-next".to_owned()),
+            ..Default::default()
+        };
+        stage.apply_plate(&plate, "next-scene").unwrap();
+        let request = stage.plate.root.get_attribute("data-request").unwrap();
+        stage.plate.images[1]
+            .set_attribute("data-decoded", &request)
+            .unwrap();
+        // Use the scheduler's actual work predicate, with an idle conductor, rather than
+        // supplying another view or speaker update to make the image activate.
+        let busy = || super::super::live_motion::clock_needs_work(false, Some(&stage));
+        assert!(busy());
+        stage.plate_clock_at(1000.0).unwrap();
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        stage
+            .lower_third(7, "Courier", "Keep this line steady.", LineState::Lingering)
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-plate-linger-at", "1000")
+            .unwrap();
+        stage.plate_clock_at(3499.0).unwrap();
+        assert!(busy());
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        stage.plate_clock_at(3500.0).unwrap();
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("1")
+        );
+        assert!(busy());
+        stage.plate_clock_at(4500.0).unwrap();
+        assert!(stage.plate.root.has_attribute("data-previous"));
+        stage.plate_clock_at(4600.0).unwrap();
+        assert!(!stage.plate.root.has_attribute("data-previous"));
+        assert!(!busy());
+        assert_eq!(
+            stage.lower.text.text_content().as_deref(),
+            Some("Keep this line steady.")
+        );
         finish_stage(parent, stage);
     }
 
