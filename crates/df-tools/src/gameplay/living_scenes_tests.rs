@@ -848,6 +848,7 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     plate_update_pending: false,
                     scene_contents_json: String::new(),
                     item: None,
+                    hand_items: Vec::new(),
                 }),
                 journey: Some(rpc::JourneyView {
                     phase: if in_combat {
