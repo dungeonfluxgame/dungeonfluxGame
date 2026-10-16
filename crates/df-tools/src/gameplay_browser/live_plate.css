@@ -102,7 +102,6 @@
    present in combat and ordinary stage shots; only narrator copy and mechanical cards use their
    own presentation. */
 .tv-stage .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
-.tv-stage[data-shot=establishing] .tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .45s ease,transform .45s ease,visibility 0s}
 /* A retained character line and the choices share normal flow: wrapped labels determine
    their own height instead of rising into the independently positioned speech panel. */
 .tv-caption-lane{display:contents}

@@ -3071,7 +3071,8 @@ impl TvStage {
         Ok(())
     }
 
-    /// The character-line adapter owns both the named fallback and the anchored bubble.
+    /// The character-line adapter routes dialogue to the portrait lane and leaves action callouts
+    /// on the figure layer.
     pub(super) fn character_line(
         &self,
         position: usize,
@@ -3086,6 +3087,13 @@ impl TvStage {
             bubble.kind,
             super::live_stage::BubbleKind::Speech | super::live_stage::BubbleKind::Typed
         ) {
+            if state.is_active()
+                && let Some(stage) = self.root.parent_element()
+            {
+                // Action call-outs still use the figure layer and can leave this fallback marker
+                // set; clear that real predecessor when dialogue takes ownership of the lane.
+                stage.remove_attribute("data-unplaced-line")?;
+            }
             let opened = self
                 .lower
                 .root
@@ -3110,9 +3118,8 @@ impl TvStage {
         self.figures.set_line(position, id, state, bubble)
     }
 
-    /// PLAY-V12: shows what a character says in the lower third, with the speaker's portrait and
-    /// name, so the establishing shot always says who is talking. The stylesheet draws it only
-    /// over an establishing shot and only while the line is the one being heard.
+    /// Shows what a character says in the lower third, with the speaker's portrait and name, for
+    /// every ordinary, plate, and combat-stage dialogue beat.
     pub(super) fn lower_third(
         &self,
         id: u64,
@@ -3179,13 +3186,6 @@ impl TvStage {
             self.root.remove_attribute("data-plate-caption-retained")?;
         }
         let lower = &self.lower;
-        if let Some(stage) = self.root.parent_element()
-            && state.is_active()
-        {
-            // A previous build may have left the old fallback marker behind.  Dialogue now owns
-            // the lower lane directly, so it must not also make a floating fallback visible.
-            stage.remove_attribute("data-unplaced-line")?;
-        }
         if lower.text.text_content().as_deref() != Some(text)
             || lower.name.text_content().as_deref() != Some(speaker)
         {
@@ -3826,8 +3826,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "dialogue is intentionally no longer anchored to figure bubbles"]
-    fn legacy_late_same_bitmap_heads_latch_during_lingering_and_anchor_the_successor_line() {
+    fn late_same_bitmap_geometry_does_not_create_dialogue_bubbles() {
         use super::super::live_stage::{BubbleKind, LineBubble, StageMode};
         use crate::{
             plate_layout::Side,
@@ -3932,10 +3931,7 @@ mod tests {
             "the retained named lane remains readable in its original place"
         );
         assert_eq!(host.get_attribute("style"), before);
-        assert_eq!(
-            stage.root.get_attribute("data-unplaced-line").as_deref(),
-            Some("1")
-        );
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
         let next = LineBubble {
             kind: BubbleKind::Speech,
             speaker: "Bandit",
@@ -3947,14 +3943,10 @@ mod tests {
         stage
             .character_line(slot, 2, LineState::Opening, &next)
             .unwrap();
-        assert!(
-            !host.has_attribute("hidden"),
-            "the successor uses the latched canonical Bandit head"
-        );
+        assert!(host.has_attribute("hidden"));
         assert!(!host.has_attribute("data-anchor-fallback"));
         assert!(!host.has_attribute("data-anchor-line"));
         assert!(!stage.root.has_attribute("data-unplaced-line"));
-        assert!(host.get_attribute("style").unwrap().contains("left:"));
         stage
             .character_line(slot, 2, LineState::Lingering, &next)
             .unwrap();
@@ -3986,10 +3978,7 @@ mod tests {
             host.has_attribute("hidden"),
             "old screen position must not attribute a retained line to a different person in the new photo"
         );
-        assert_eq!(
-            stage.root.get_attribute("data-unplaced-line").as_deref(),
-            Some("2")
-        );
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
         assert!(!stage.root.has_attribute("data-plate-layout-key"));
         stage
             .figures
@@ -4003,17 +3992,11 @@ mod tests {
             host.get_attribute("data-anchor-fallback").as_deref(),
             Some("missing-image-layout")
         );
-        assert_eq!(
-            stage.root.get_attribute("data-unplaced-line").as_deref(),
-            Some("3")
-        );
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
         stage
             .character_line(slot, 2, LineState::Done, &next)
             .unwrap();
-        assert_eq!(
-            stage.root.get_attribute("data-unplaced-line").as_deref(),
-            Some("3")
-        );
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
         stage.figures.set_plate(None, None).unwrap();
         host.set_attribute("hidden", "").unwrap();
         host.set_attribute(
@@ -4042,7 +4025,7 @@ mod tests {
         stage
             .character_line(slot, 4, LineState::Opening, &next)
             .unwrap();
-        assert!(!host.has_attribute("hidden"));
+        assert!(host.has_attribute("hidden"));
         assert!(
             !host
                 .get_attribute("style")
