@@ -367,6 +367,7 @@ pub(crate) fn gap_hold_active(ms_since_line: f64) -> bool {
 /// reading-time rule, reused here — never a second rule. The line machine itself stays in
 /// its speaking state for this long, so following the machine holds through the reading;
 /// the player additionally floors a newly seen caption line at the minimum below.
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn unvoiced_hold_ms(text: &str) -> u32 {
     crate::stage_machines::reading_time_ms(text)
 }
