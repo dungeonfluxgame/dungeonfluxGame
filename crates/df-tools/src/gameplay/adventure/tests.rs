@@ -102,6 +102,46 @@ fn merchant_shop_opening_cast_includes_every_authored_background_person() {
             })
             .all(|sheet| sheet.facts.get("scene.antagonist_present") == Some(&"false".to_owned()))
     );
+    let meeting_model = adventure.settings.meeting.model.as_ref().unwrap();
+    let cast_merchant = adventure
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::pack::SceneKey::Opening)
+        .and_then(|scene| scene.cast.iter().find(|actor| actor.id == "merchant"))
+        .expect("merchant cast actor");
+    let model_merchant = meeting_model
+        .people
+        .iter()
+        .find(|person| person.id == "patron")
+        .expect("canonical merchant model actor");
+    assert_eq!(model_merchant.name, cast_merchant.name);
+    for key in [
+        super::super::pack::SceneKey::DialogueSeal,
+        super::super::pack::SceneKey::DialogueEscort,
+    ] {
+        let people = meeting_model.for_scene(key).people;
+        assert!(
+            people.iter().all(|person| person.role != "antagonist"),
+            "shop scene model should not draw the antagonist in {key:?}"
+        );
+        assert!(people.iter().any(|person| person.id == "patron"));
+        assert!(people.iter().any(|person| person.role == "adventurer"));
+        assert!(people.iter().any(|person| person.role == "soldier"));
+    }
+    let confrontation_people = adventure
+        .settings
+        .confrontation
+        .model
+        .as_ref()
+        .unwrap()
+        .for_scene(super::super::pack::SceneKey::Combat)
+        .people;
+    assert!(
+        confrontation_people
+            .iter()
+            .any(|person| person.id == "antagonist")
+    );
 }
 
 #[test]

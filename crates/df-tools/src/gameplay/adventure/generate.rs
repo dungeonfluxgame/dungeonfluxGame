@@ -544,7 +544,7 @@ pub(crate) fn generate_with_prose(
         atmos.insert(text.clone());
         context.insert(format!("loc.atmos_{letter}"), text);
     }
-    let settings = super::setting::roll_settings(
+    let mut settings = super::setting::roll_settings(
         tables,
         loc,
         &patron.id,
@@ -553,6 +553,16 @@ pub(crate) fn generate_with_prose(
         &mut roller,
         &mut context,
     )?;
+    // Scene models use the authored patron.full fact for prose, while the public cast uses the
+    // canonical spoken first name. Keep the model's actor identity exactly equal to that cast
+    // identity so plate assembly can join by the stable `patron` id and name without fuzzy
+    // matching or an empty-art duplicate.
+    if let Some(model) = settings.meeting.model.as_mut()
+        && let Some(patron_person) = model.people.iter_mut().find(|person| person.id == "patron")
+    {
+        patron_person.name = patron_first.clone();
+        patron_person.aliases.push(patron_first.clone());
+    }
     let opening_dressing = settings
         .meeting
         .model

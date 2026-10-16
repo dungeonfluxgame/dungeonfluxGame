@@ -859,16 +859,22 @@ fn named_people(
                     .map(|key| (*key).to_owned())
                     .collect(),
             )?;
-            add(
-                "antagonist",
-                "ant",
-                "ant.full",
-                "ant.group",
-                "ant.short",
-                "at the room's edge",
-                vec!["the enemy".to_owned(), "the stranger".to_owned()],
-                vec!["dialogue_seal".to_owned(), "dialogue_escort".to_owned()],
-            )?;
+            // A Shop meeting is a quiet public scene. The antagonist remains authored in the
+            // chapter and is projected into the confrontation model, but is not a person in the
+            // shop's dialogue phases. Keeping the model projection in lockstep with pack.cast
+            // prevents the plate from drawing an uncast creature behind the merchant.
+            if setting.kind != SettingKind::Shop {
+                add(
+                    "antagonist",
+                    "ant",
+                    "ant.full",
+                    "ant.group",
+                    "ant.short",
+                    "at the room's edge",
+                    vec!["the enemy".to_owned(), "the stranger".to_owned()],
+                    vec!["dialogue_seal".to_owned(), "dialogue_escort".to_owned()],
+                )?;
+            }
         }
         ScenePlace::Confrontation => add(
             "antagonist",
