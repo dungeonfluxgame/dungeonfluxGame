@@ -1649,6 +1649,7 @@ fn the_foreshadowed_threat_matches_the_fight_choice_for_two_hundred_seeds() {
     let mut failed_seeds = Vec::new();
     for seed in 0..200 {
         let adventure = generated_story_seed(&tables, seed);
+        let quiet_shop = adventure.settings.meeting.kind == super::setting::SettingKind::Shop;
         let script = adventure.pack.beat_script.as_ref().unwrap();
         let opening = script.find("opening").unwrap();
         let threat = adventure.facts.get("ant.full").unwrap().to_lowercase();
@@ -1703,7 +1704,29 @@ fn the_foreshadowed_threat_matches_the_fight_choice_for_two_hundred_seeds() {
                     .iter()
                     .any(|member| member.name == adventure.pack.bandit.name)
             });
-        if !(branches_name_threat && choice_names_threat && threat_appears) {
+        let quiet_shop_is_coherent = adventure
+            .pack
+            .scenes
+            .iter()
+            .filter(|scene| {
+                matches!(
+                    scene.key,
+                    crate::gameplay::pack::SceneKey::DialogueSeal
+                        | crate::gameplay::pack::SceneKey::DialogueEscort
+                )
+            })
+            .all(|scene| {
+                !scene.narration.to_lowercase().contains(&threat)
+                    && !scene
+                        .cast
+                        .iter()
+                        .any(|member| member.name.to_lowercase().contains(&threat))
+            });
+        if if quiet_shop {
+            !quiet_shop_is_coherent || !threat_appears
+        } else {
+            !(branches_name_threat && choice_names_threat && threat_appears)
+        } {
             failed_seeds.push(seed);
         }
     }
