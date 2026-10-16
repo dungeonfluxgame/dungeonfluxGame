@@ -186,17 +186,21 @@ impl Drop for ServerImage {
 
 fn art(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> (String, &'static str) {
     let (stem, fallback) = fallback_art(phase, scene);
-    // The room display may carry an older generated backdrop from the server projection. Keep
-    // that stale layer out of the lobby entirely so it cannot win the CSS background stack over
-    // the photographic establishing shot.
-    let painting = if phase == rpc::JourneyPhase::Room {
+    // The public harbor phases may carry an older generated backdrop from the server projection.
+    // Keep that stale layer out of the visible fallback stack so it cannot win over the
+    // photographic harbor shot when a fresh plate is unavailable.
+    let photographic_harbor = matches!(
+        phase,
+        rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening | rpc::JourneyPhase::Dialogue
+    ) && scene.destination != rpc::HarborDestination::HarborInn as i32;
+    let painting = if photographic_harbor {
         HARBOR_ESTABLISHING.to_owned()
     } else {
         asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}"))
     };
     // PLAY-L01: a server-generated re-render of the painting leads when the view carries one; the
     // authored painting stays beneath it in the CSS layers should the image fail to load.
-    let painting = match (phase != rpc::JourneyPhase::Room)
+    let painting = match (!photographic_harbor)
         .then(|| crate::presentation::imagery_url(&scene.live_backdrop))
         .flatten()
     {
