@@ -208,6 +208,21 @@ fn private_clue_refusal(turn: &Turn) -> (String, String) {
         })
 }
 
+fn revision_key(view: &rpc::ViewMessage) -> String {
+    let Some(revision) = view.revision.as_ref() else {
+        return "0:0".to_owned();
+    };
+    format!(
+        "{}:{}",
+        revision
+            .epoch
+            .as_ref()
+            .and_then(|epoch| epoch.value)
+            .unwrap_or(0),
+        revision.sequence.unwrap_or(0),
+    )
+}
+
 /// Everything one reply needs, captured by the actor and owned so the model call can run
 /// elsewhere.
 pub(super) struct NpcReplyContext {
@@ -231,6 +246,9 @@ pub(super) struct NpcReplyContext {
     private_reply: bool,
     private_terms: Vec<String>,
     room: Option<super::adventure::scene_model::SceneNow>,
+    /// The session basis observed when this reply was routed.  Event proposals are stale when
+    /// the owner commits against any other basis.
+    observed_revision: String,
     /// Set when the addressed NPC has a backstory: the reply then draws on it and moves the
     /// NPC's attitude toward this hero.
     pub(super) turn: Option<Box<Turn>>,
@@ -249,6 +267,8 @@ pub(super) struct Exchange {
     pub(super) shift: Option<Shift>,
     /// The reply spoke of what was whispered to this hero alone, so only this hero was shown it.
     pub(super) private: bool,
+    /// A Jev proposal for the owner; this is never an authoritative scene mutation.
+    pub(super) event_proposal: Option<super::npc_event_classifier::Proposal>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -295,6 +315,13 @@ impl Exchange {
                 ("social.shift", format!("{:?}", self.shift)),
                 ("social.private", self.private.to_string()),
                 ("social.outcome", self.outcome.label().to_owned()),
+                (
+                    "social.event_proposal",
+                    self.event_proposal
+                        .as_ref()
+                        .map_or("none", |proposal| proposal.kind.label())
+                        .to_owned(),
+                ),
             ],
         );
         // One line per fallback, closed vocabulary, never reply text: today nothing records
@@ -743,6 +770,7 @@ impl NpcReplyContext {
             private_reply: false,
             private_terms: Vec::new(),
             room,
+            observed_revision: revision_key(view),
             turn: Some(Box::new(Turn {
                 ledger: social.clone(),
                 dossier: turn_dossier,
@@ -927,6 +955,7 @@ impl NpcReplyContext {
             private_terms,
             turn: None,
             room: None,
+            observed_revision: revision_key(view),
         })
     }
 
@@ -1270,6 +1299,7 @@ impl NpcVoice {
             fallback,
             shift: None,
             private,
+            event_proposal: None,
         };
         exchange.observe();
         Some(exchange)
@@ -1690,6 +1720,70 @@ impl NpcVoice {
         let private = outcome == ExchangeOutcome::Spoken
             && !turn.withheld.released().is_empty()
             && !(done_now || never_forgive_now || unwilling_now || hesitant_now);
+        let event_proposal = if outcome == ExchangeOutcome::Spoken {
+            if let Some(room) = context.room.as_ref() {
+                let result = self
+                    .approach_model
+                    .classify_npc_reply_event(
+                        &context.actor_id,
+                        &turn.dossier.npc_id,
+                        &context.scene_identity,
+                        &context.observed_revision,
+                        &context.typed_words,
+                        &text,
+                        room,
+                    )
+                    .await;
+                match result {
+                    Ok(proposal) => {
+                        super::actor::record_audit_diagnostic(
+                            "gameplay.npc.reply_event",
+                            format!(
+                                "NPC_EVENT kind={} actor={} npc={} item={} revision={} disposition=proposal",
+                                proposal.kind.label(),
+                                proposal.actor_id,
+                                proposal.npc_id,
+                                proposal.item_id.as_deref().unwrap_or("none"),
+                                proposal.revision,
+                            ),
+                            serde_json::Map::from_iter([
+                                ("kind".into(), json!(proposal.kind.label())),
+                                ("actor_id".into(), json!(proposal.actor_id)),
+                                ("npc_id".into(), json!(proposal.npc_id)),
+                                ("item_id".into(), json!(proposal.item_id)),
+                                ("source_line_id".into(), json!(proposal.source_line_id)),
+                                ("revision".into(), json!(proposal.revision)),
+                                ("status".into(), json!("proposal")),
+                            ]),
+                            &[
+                                (
+                                    "gameplay.npc.reply_event.kind",
+                                    proposal.kind.label().into(),
+                                ),
+                                ("gameplay.npc.reply_event.status", "proposal".into()),
+                            ],
+                        );
+                        Some(proposal)
+                    }
+                    Err(reason) => {
+                        super::actor::record_audit_diagnostic(
+                            "gameplay.npc.reply_event",
+                            format!("NPC_EVENT status=unavailable reason={reason}"),
+                            serde_json::Map::from_iter([
+                                ("status".into(), json!("unavailable")),
+                                ("reason".into(), json!(reason)),
+                            ]),
+                            &[("gameplay.npc.reply_event.status", "unavailable".into())],
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if outcome == ExchangeOutcome::Withheld {
             super::actor::record_audit_line(
                 "gameplay.social.withheld",
@@ -1778,6 +1872,7 @@ impl NpcVoice {
             fallback,
             shift: recorded.shift,
             private,
+            event_proposal,
         };
         exchange.observe();
         Some(exchange)

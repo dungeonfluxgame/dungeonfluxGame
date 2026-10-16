@@ -1247,6 +1247,7 @@ pub(super) async fn say(
         .map_err(|status| failed(status.message()))?;
     let mut npc_outcome = None;
     let mut npc_fallback = None;
+    let mut npc_event_proposal = None;
     let result = match answer {
         super::super::dialogue::DialogueReply::Raw(response, npc) => {
             let npc_reply = match npc {
@@ -1264,6 +1265,17 @@ pub(super) async fn say(
                         Some(exchange) => {
                             npc_outcome = Some(exchange.outcome);
                             npc_fallback = exchange.fallback.map(|reason| reason.label());
+                            npc_event_proposal = exchange.event_proposal.map(|proposal| {
+                                json!({
+                                    "kind": proposal.kind.label(),
+                                    "actor_id": proposal.actor_id,
+                                    "npc_id": proposal.npc_id,
+                                    "item_id": proposal.item_id,
+                                    "source_line_id": proposal.source_line_id,
+                                    "revision": proposal.revision,
+                                    "status": "proposal",
+                                })
+                            });
                             exchange.text
                         }
                         None => String::new(),
@@ -1283,6 +1295,7 @@ pub(super) async fn say(
                     "npc_reply": npc_reply,
                     "npc_outcome": npc_outcome.map(|outcome| outcome.label()).unwrap_or("no_reply"),
                     "npc_fallback": npc_fallback,
+                    "npc_event_proposal": npc_event_proposal,
                     "npc_actor_id": response.npc_actor_id,
                     "npc_speaker": response.npc_speaker,
                     "confirmation_required": response.confirmation_required,

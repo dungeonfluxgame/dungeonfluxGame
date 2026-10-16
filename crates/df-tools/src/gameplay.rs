@@ -52,6 +52,7 @@ mod npc_dossier;
 mod npc_dossier_live_tests;
 #[cfg(test)]
 mod npc_dossier_tests;
+mod npc_event_classifier;
 mod npc_facts;
 mod npc_reply;
 #[cfg(test)]
