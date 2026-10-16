@@ -12,6 +12,14 @@
 .tv-plate{position:absolute;z-index:3;inset:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 1s ease,visibility 0s 1s}
 .tv-stage[data-shot=plate] .tv-plate{opacity:1;visibility:visible;transition:opacity 1s ease,visibility 0s}
 .tv-stage[data-tv-mode=lobby] .tv-plate{display:none}
+/* A quiet status mark lives in the stage corner while a requested plate is still loading and
+   decoding. It is independent of the picture layer, so it remains visible over the establishing
+   shot without masking the story or implying progress for a queued or failed request. */
+.tv-plate-loading{position:absolute;z-index:8;top:calc(var(--u)*4.2);right:calc(var(--u)*3.2);display:flex;align-items:center;gap:calc(var(--u)*.7);padding:calc(var(--u)*.45) calc(var(--u)*.7);border:1px solid #d9b77a4d;border-radius:999px;background:#090e14a6;color:#ead7b2;font:400 var(--fs-label)/1.1 var(--serif);letter-spacing:.02em;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .55s ease,visibility 0s .55s}
+.tv-plate-loading::before{content:'';width:calc(var(--u)*.7);height:calc(var(--u)*.7);border:1px solid #e8cb94b3;border-right-color:transparent;border-radius:50%;animation:df-plate-loading-turn 1.8s linear infinite}
+.tv-stage[data-plate-loading] .tv-plate-loading{opacity:.82;visibility:visible;transition:opacity .55s ease,visibility 0s}
+@keyframes df-plate-loading-turn{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.tv-plate-loading::before{animation:none}.tv-plate-loading{transition:none}}
 .tv-plate-zoom{position:absolute;inset:0;transform-origin:var(--head-x,50%) var(--head-y,45%);will-change:transform}
 .tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:none}
 .tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;filter:blur(0)}

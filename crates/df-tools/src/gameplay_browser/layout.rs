@@ -50,6 +50,7 @@ const ALIASES: &[(&str, &str)] = &[
     (".tv-scene-context", "scene-context"),
     (".tv-art:not(.tv-art-previous)", "background"),
     (".tv-plate", "plate"),
+    (".tv-plate-loading", "plate-loading"),
     (".tv-lower", "subtitle"),
     (".tv-hud", "hud"),
     (".tv-choices", "choices"),

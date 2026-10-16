@@ -959,6 +959,18 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
         frames.push(frame);
         images.push(image);
     }
+    let loading = node(
+        document,
+        stage,
+        "div",
+        "tv-plate-loading",
+        "Updating scene…",
+    )?;
+    loading.set_attribute("role", "status")?;
+    loading.set_attribute("aria-live", "polite")?;
+    loading.set_attribute("aria-atomic", "true")?;
+    loading.set_attribute("data-layout-id", "plate-loading")?;
+    loading.set_attribute("data-layout-owner-id", "plate")?;
     node(document, &root, "div", "tv-plate-dust", "")?;
     node(document, &root, "div", "tv-plate-vignette", "")?;
     Ok(PlateLayer {
@@ -1608,6 +1620,8 @@ fn activate_plate_request_at(
         }
     }
     let _set = stage.set_attribute("data-plate-loaded", "");
+    let _removed = root.remove_attribute("data-loading");
+    let _removed = stage.remove_attribute("data-plate-loading");
     super::presentation_timing::media(
         "plate-crossfade",
         &stage.get_attribute("data-scene-key").unwrap_or_default(),
@@ -1630,6 +1644,8 @@ fn fail_plate_request(
     if !plate_request_matches(root, image) {
         return;
     }
+    let _removed = root.remove_attribute("data-loading");
+    let _removed = stage.remove_attribute("data-plate-loading");
     let Some(url) = image.get_attribute("data-src") else {
         return;
     };
@@ -1994,6 +2010,7 @@ impl TvStage {
                 self.plate
                     .root
                     .set_attribute("data-request", &request.to_string())?;
+                self.root.set_attribute("data-plate-loading", "")?;
                 self.plate
                     .root
                     .set_attribute("data-want-i", &target.to_string())?;
@@ -2001,6 +2018,7 @@ impl TvStage {
                 self.plate.root.set_attribute("data-pull", "focus")?;
                 image.set_attribute("data-request", &request.to_string())?;
                 image.set_attribute("data-src", &url)?;
+                image.remove_attribute("data-decoded")?;
                 image.remove_attribute("src")?;
                 image.set_attribute("src", &url)?;
                 self.plate.next.set(index);
@@ -3314,6 +3332,8 @@ impl TvStage {
             // completion: that decode belongs to the scene the conductor just left.
             layer.root.remove_attribute("data-request")?;
             layer.root.remove_attribute("data-want")?;
+            layer.root.remove_attribute("data-loading")?;
+            self.root.remove_attribute("data-plate-loading")?;
         }
         let failed = layer.root.get_attribute("data-failed");
         let usable = match (&plate.state, &plate.url) {
@@ -3399,6 +3419,8 @@ impl TvStage {
             self.root.remove_attribute("data-plate-key")?;
             self.root.remove_attribute("data-plate-layout-key")?;
             self.root.remove_attribute("data-plate-loaded")?;
+            layer.root.remove_attribute("data-loading")?;
+            self.root.remove_attribute("data-plate-loading")?;
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
             layer.root.remove_attribute("data-pull")?;
@@ -3478,6 +3500,8 @@ impl TvStage {
         layer
             .root
             .set_attribute("data-request", &request.to_string())?;
+        layer.root.set_attribute("data-loading", "")?;
+        self.root.set_attribute("data-plate-loading", "")?;
         image.set_attribute("data-request", &request.to_string())?;
         layer.root.set_attribute("data-want-i", &next.to_string())?;
         layer.next.set(1 - next);
@@ -3498,6 +3522,7 @@ impl TvStage {
         }
         *layer.seen.borrow_mut() = scene_key.to_owned();
         image.set_attribute("data-src", url)?;
+        image.remove_attribute("data-decoded")?;
         image.set_attribute("src", url)?;
         super::presentation_timing::component(
             None,
@@ -4120,6 +4145,27 @@ mod tests {
     }
 
     #[test]
+    fn plate_loading_status_is_polite_and_layout_addressable() {
+        let (parent, stage) = mounted_stage();
+        let loading = stage
+            .root
+            .query_selector(".tv-plate-loading")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loading.get_attribute("role").as_deref(), Some("status"));
+        assert_eq!(
+            loading.get_attribute("aria-live").as_deref(),
+            Some("polite")
+        );
+        assert_eq!(
+            loading.get_attribute("data-layout-id").as_deref(),
+            Some("plate-loading")
+        );
+        assert_eq!(loading.text_content().as_deref(), Some("Updating scene…"));
+        finish_stage(parent, stage);
+    }
+
+    #[test]
     fn narration_in_a_new_scene_does_not_hide_the_plate_awaiting_its_successor() {
         let (parent, stage) = mounted_stage();
         seed_active_plate(&stage);
@@ -4169,6 +4215,7 @@ mod tests {
             &stage.plate.pending_layout,
             &stage.plate.picture_size,
         );
+        assert!(!stage.root.has_attribute("data-plate-loading"));
         let push = stage.plate.root.get_attribute("data-push");
         super::activate_plate_request(
             &stage.root,
@@ -4376,6 +4423,7 @@ mod tests {
             stage.plate.root.get_attribute("data-active").as_deref(),
             Some("0")
         );
+        assert!(stage.root.has_attribute("data-plate-loading"));
         assert_eq!(
             stage.plate.root.get_attribute("data-want-i").as_deref(),
             Some("1")
@@ -4405,6 +4453,7 @@ mod tests {
             stage.root.get_attribute("data-plate-state").as_deref(),
             Some("ready")
         );
+        assert!(!stage.root.has_attribute("data-plate-loading"));
         finish_stage(parent, stage);
     }
 
@@ -4529,11 +4578,13 @@ mod tests {
         stage.plate.images[1]
             .set_attribute("data-request", "1")
             .unwrap();
+        stage.root.set_attribute("data-plate-loading", "").unwrap();
 
         stage.plate.images[1]
             .dispatch_event(&web_sys::Event::new("error").unwrap())
             .unwrap();
 
+        assert!(!stage.root.has_attribute("data-plate-loading"));
         assert_eq!(
             stage.plate.root.get_attribute("data-active").as_deref(),
             Some("0")
