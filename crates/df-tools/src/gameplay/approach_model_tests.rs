@@ -539,11 +539,13 @@ fn routing_cast() -> Vec<df_protocol::common::SceneActor> {
             id: "courier".into(),
             name: "Courier".into(),
             speaking: true,
+            role: df_protocol::common::SceneRole::Patron as i32,
             ..Default::default()
         },
         df_protocol::common::SceneActor {
             id: "bandit".into(),
             name: "Bandit".into(),
+            role: df_protocol::common::SceneRole::Antagonist as i32,
             ..Default::default()
         },
     ]
@@ -551,7 +553,7 @@ fn routing_cast() -> Vec<df_protocol::common::SceneActor> {
 #[tokio::test(flavor = "current_thread")]
 async fn jev_routes_public_background_description_to_the_present_bandit() {
     use super::super::npc_target::Target;
-    let endpoint = FakeEndpoint::start(vec![answer("o2")]);
+    let endpoint = FakeEndpoint::start(vec![answer("o5")]);
     let result = model(&endpoint)
         .resolve_addressee(
             "To the man standing behind the courier: what do you want from him, and who sent you?",
@@ -608,7 +610,7 @@ async fn unresolved_description_never_silently_becomes_the_focus() {
 async fn jev_distinguishes_discourse_prefixes_from_an_absent_named_addressee() {
     use super::super::npc_target::Target;
     let endpoint =
-        FakeEndpoint::start(vec![answer("o3"), answer("o3"), answer("o3"), answer("o5")]);
+        FakeEndpoint::start(vec![answer("o3"), answer("o3"), answer("o3"), answer("o1")]);
     let model = model(&endpoint);
     for words in [
         "Wait, who are you?",
@@ -642,4 +644,48 @@ async fn jev_distinguishes_discourse_prefixes_from_an_absent_named_addressee() {
             .target,
         Target::PossibleAddress
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "opt-in bounded paid classifier probe; requires existing configured Jev credentials"]
+async fn live_addressee_probe_absent_discourse_and_background() {
+    use super::super::npc_target::Target;
+    let settings = crate::gameplay::startup_configuration::approach_settings(
+        std::env::var("DF_JEV_API_KEY"),
+        std::env::var("DF_JEV_BASE_URL"),
+    )
+    .unwrap()
+    .expect("Jev must be configured for this opt-in probe");
+    let model = ApproachModel::configured(Some(settings));
+    let mut observed = Vec::new();
+    for (case, words, expected) in [
+        (
+            "absent",
+            "Harbourmaster, who owns the crest on this packet?",
+            Target::Absent,
+        ),
+        (
+            "discourse",
+            "Wait, who are you?",
+            Target::Actor("courier".into()),
+        ),
+        (
+            "background",
+            "To the man standing behind the courier: what do you want from him, and who sent you?",
+            Target::Actor("bandit".into()),
+        ),
+    ] {
+        let decision = model
+            .resolve_addressee(words, &routing_cast(), "Courier")
+            .await;
+        println!(
+            "ROUTE PROBE case={case} source={} reason={} target={:?} elapsed_ms={}",
+            decision.source, decision.reason, decision.target, decision.elapsed_ms
+        );
+        observed.push((case, decision.source, decision.target, expected));
+    }
+    for (case, source, actual, expected) in observed {
+        assert_eq!(source, "jev", "{case}: real provider must answer");
+        assert_eq!(actual, expected, "{case}");
+    }
 }

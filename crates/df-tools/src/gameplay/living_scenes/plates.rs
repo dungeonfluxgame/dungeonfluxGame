@@ -878,7 +878,7 @@ struct HeadDiagnostic<'a> {
 
 impl HeadDiagnostic<'_> {
     fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
-        let partial = self.located.len() < self.targets.len();
+        let partial = self.located.len() < self.targets.len() || self.failure.is_some();
         let status = if self.failure.is_some() && self.located.is_empty() {
             "failed"
         } else if partial {

@@ -2025,6 +2025,22 @@ fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_t
     .fields();
     assert_eq!(failed["status"], "failed");
     assert_eq!(failed["failure_category"], "provider_failed");
+    let failed_complete = HeadDiagnostic {
+        key: &image,
+        stage: "actor_heads",
+        source: "provider",
+        batch: None,
+        targets: vec!["bandit".into()],
+        located: vec!["bandit".into()],
+        actor_ids: vec![],
+        elapsed_ms: 10,
+        failure: Some("provider_failed"),
+    }
+    .fields();
+    assert_eq!(
+        failed_complete["status"], "partial",
+        "a failed batch cannot be reported ready"
+    );
     let cached = HeadDiagnostic {
         key: &image,
         stage: "actor_heads",
