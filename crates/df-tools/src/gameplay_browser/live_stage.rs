@@ -302,10 +302,15 @@ fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'stati
     let mut candidates = Vec::new();
     let sprite_stem = stage_art::stem_of(sprite);
     if full_body && let Some(stem) = stage_depth::full_body_stem(sprite_stem) {
+        let stem = photographic_stem(stem).unwrap_or(stem);
         candidates.push(("figure", format!("{GENERATED}/{stem}")));
     }
     if !sprite.is_empty() {
-        candidates.push(("sprite", sprite.to_owned()));
+        if let Some(stem) = photographic_stem(sprite_stem) {
+            candidates.push(("sprite", format!("{GENERATED}/{stem}")));
+        } else {
+            candidates.push(("sprite", sprite.to_owned()));
+        }
     }
     let stem = stage_art::stem_of(portrait);
     if stem.starts_with("portrait-") {
@@ -315,6 +320,20 @@ fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'stati
         candidates.push(("card", portrait.to_owned()));
     }
     candidates
+}
+
+fn photographic_stem(stem: &str) -> Option<&'static str> {
+    match stem {
+        "sprite-hero-1" => Some("sprite-hero-1-photo"),
+        "sprite-hero-2" => Some("sprite-hero-2-photo"),
+        "sprite-hero-3" => Some("sprite-hero-3-photo"),
+        "sprite-courier" | "figure-courier" => Some("sprite-courier-photo"),
+        "sprite-bandit" | "figure-bandit" => Some("sprite-bandit-photo"),
+        "figure-hero-1" => Some("figure-hero-1-photo"),
+        "figure-hero-2" => Some("figure-hero-2-photo"),
+        "figure-hero-3" => Some("figure-hero-3-photo"),
+        _ => None,
+    }
 }
 
 fn use_candidate(figure: &Element, image: &Element, kind: &str, url: &str) -> Result<(), JsValue> {
