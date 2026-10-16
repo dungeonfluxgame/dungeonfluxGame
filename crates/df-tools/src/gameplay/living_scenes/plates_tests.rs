@@ -1466,6 +1466,7 @@ async fn a_new_scene_requests_its_plate_and_its_successors_once_and_never_waits(
         shown_scene(&message).plate_state,
         rpc::PlateState::Pending as i32
     );
+    assert!(shown_scene(&message).plate_update_pending);
     assert!(shown_scene(&message).live_plate.is_empty());
 }
 
@@ -1501,6 +1502,7 @@ async fn a_ready_plate_reaches_the_display_and_the_phones_with_its_layout() {
         apply(&shared, &mut message);
         let scene = shown_scene(&message);
         assert_eq!(scene.plate_state, rpc::PlateState::Ready as i32);
+        assert!(!scene.plate_update_pending);
         assert_eq!(
             scene.live_plate,
             format!("/gameplay/imagery/{}", "a".repeat(64))
@@ -1587,6 +1589,7 @@ async fn a_failed_plate_changes_nothing_but_the_state_and_is_asked_for_again_whe
     apply(&shared, &mut message);
     let scene_after = shown_scene(&message).clone();
     assert_eq!(scene_after.plate_state, rpc::PlateState::Failed as i32);
+    assert!(!scene_after.plate_update_pending);
     assert!(scene_after.live_plate.is_empty() && scene_after.plate_layout.is_none());
     assert!(!locked(&shared.inner.state).plate_covers);
     // Another scene, then back: the failed plate is requested once more.

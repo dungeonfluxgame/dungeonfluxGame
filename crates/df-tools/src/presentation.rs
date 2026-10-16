@@ -653,6 +653,9 @@ pub(crate) struct PlateGeometry {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlateView {
     pub(crate) state: PlateState,
+    /// Server-owned work for the current visible scene, including a replacement while the old
+    /// plate remains on screen. Successor prefetches never set this flag.
+    pub(crate) update_pending: bool,
     /// A well-formed imagery path, present only when the plate is ready.
     pub(crate) url: Option<String>,
     pub(crate) layout: Option<PlateGeometry>,
@@ -723,15 +726,18 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
     match (state, url) {
         (PlateState::Ready, None) => PlateView {
             state: PlateState::Failed,
+            update_pending: scene.plate_update_pending,
             ..PlateView::default()
         },
         (PlateState::Ready, Some(url)) => PlateView {
             state,
             url: Some(url),
             layout,
+            update_pending: scene.plate_update_pending,
         },
         (state, _) => PlateView {
             state,
+            update_pending: scene.plate_update_pending,
             ..PlateView::default()
         },
     }

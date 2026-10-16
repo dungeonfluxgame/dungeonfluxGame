@@ -645,6 +645,20 @@ impl Book {
             && (self.direct.shown.is_some()
                 || matches!(self.current_entry(), Some(Entry::Ready { .. })))
     }
+
+    fn current_update_pending(&self, scene_key: &str) -> bool {
+        let Some(current) = self.current.as_ref() else {
+            return false;
+        };
+        current.scene_key == scene_key
+            && current.scene.is_some()
+            && !current.in_combat
+            && (matches!(self.current_entry(), Some(Entry::Pending))
+                || matches!(self.edit, Edit::Pending(_))
+                || self.state_images.pending.is_some()
+                || self.state_images.flying
+                || self.direct.pending)
+    }
 }
 
 /// One request for the worker.
@@ -1761,6 +1775,7 @@ impl Shared {
         if current.scene_key != scene_key || current.in_combat {
             return None;
         }
+        scene.plate_update_pending = book.current_update_pending(scene_key);
         if book.direct.shown.is_some()
             && let Some((key, placement)) = book.shown()
         {
