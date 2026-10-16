@@ -1,5 +1,35 @@
 # Merchant playtest handoff
 
+## Follow-up: Sigrun haggle, 2026-10-16
+
+The game was restarted at the user's request after this handoff. Current live
+room is `ZAVAFO`, database `df_gameplay_demo_play_20261016220527_1826`,
+build `commerce-sigrun-v6`, tested source `30f249a9`.
+The server remains running. Browser tab 3 controls Sigrun; its reclaim revoked
+her CLI seat credential. Tab 2 still points at the preserved older room.
+
+Sigrun asked the price, offered 150 CP, then 180 CP. Marek refused both discounts
+and kept the listed 200 CP. Her explicit 2-GP purchase committed at revision
+1:8. Her phone visibly shows 16 GP and permanent `item-clothes-travelers`.
+The initial 200-CP quote was durably closed as hero_declined during haggling.
+Display screenshots were inspected after every interaction. This proves a
+haggle/refusal followed by a full-price purchase, not an accepted discounted sale.
+
+**Resume correction:** launching saved ZOGAMU with the newer build label rejected
+`Checkpoint(BuildMismatch)`. Its database was preserved; the fresh room above
+was used. Checkpoint admission pins source/native/WASM/configuration/content.
+The earlier resume recipe is conditional on those exact pins matching; changing
+`DF_FIXTURE_BUILD` and rebuilding is not a migration. Do not falsify build pins.
+To resume the new database with its existing compiled artifacts, use the launch
+flags below with `DF_FIXTURE_BUILD=commerce-sigrun-v6` and
+`--no-build --database df_gameplay_demo_play_20261016220527_1826`.
+Do not start a second server while the current one occupies port 63319.
+
+Evidence: `outputs/merchant-shop-scene/sigrun-v6-*.json`,
+`commerce-sigrun-v6-build-startup.txt` (resume rejection) and
+`commerce-sigrun-v6-fresh-startup.txt` (current server log), under the same
+projectless evidence directory listed below.
+
 Stopped at the user's request on 2026-10-16, about 18:01 EDT.
 Repository: `C:\Users\mreca\Desktop\dungeonfluxGame`, branch `main`.
 
