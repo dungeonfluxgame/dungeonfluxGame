@@ -337,9 +337,12 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         cast: Vec::new(),
         place: input.scene.place.clone(),
         rules_note: input.scene.rules_note.clone(),
-        // A display has no player offers; its choices come from the public server projection.
-        choices: input.journey.table_choices.clone(),
-        choice_hints_hidden: input.journey.choice_hints_hidden,
+        // Action affordances belong on the player device. The shared display is a
+        // read-only stage for the table, so never project the public choice labels
+        // into its numbered chip row. The server offers remain available to the
+        // player projection below and are still submitted through the same path.
+        choices: Vec::new(),
+        choice_hints_hidden: true,
         family: crate::presentation::scene_family(&input.scene.scene_asset),
         scene_key: input.scene.title.clone(),
         visual_scene_id: format!("{}|{}", input.scene.title, input.scene.scene_asset),
@@ -1456,7 +1459,7 @@ mod tests {
     }
 
     #[test]
-    fn tv_and_phone_show_the_same_server_scene_choices() {
+    fn display_hides_action_hints_while_phone_keeps_server_scene_choices() {
         let offers = [
             rpc::GameplayActionOffer {
                 offer_id: "look-around".to_owned(),
@@ -1504,9 +1507,9 @@ mod tests {
             .map(|offer| phone_choice_label(&offer.label, &journey.table_choices))
             .collect::<Vec<_>>();
 
-        assert_eq!(tv_choices, phone_choices);
+        assert!(tv_choices.is_empty());
         assert_eq!(
-            tv_choices,
+            phone_choices,
             vec![
                 "Look around".to_owned(),
                 "Ask Perrin".to_owned(),
