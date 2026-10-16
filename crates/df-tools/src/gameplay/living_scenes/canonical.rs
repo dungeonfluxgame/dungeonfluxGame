@@ -226,27 +226,14 @@ mod tests {
     }
 
     fn room(references: &mut References, revision: &str) {
-        references.selected_rooms.insert(
-            "same-place".to_owned(),
-            Target::Room {
-                place: "same-place".to_owned(),
-                revision: revision.to_owned(),
-            },
-        );
-        references
-            .entries
-            .retain(|target, _| !matches!(target, Target::Room { .. }));
-        references.select(
-            Target::Room {
-                place: "same-place".to_owned(),
-                revision: revision.to_owned(),
-            },
-            Source::Room {
-                model: model(),
-                place: "same-place".to_owned(),
-            },
-            revision,
-        );
+        let mut authored = model();
+        authored.weather = revision.to_owned();
+        references.admit_room("same-place", &authored, true);
+    }
+
+    fn selected_room_binding(references: &References) -> &str {
+        let target = references.selected_rooms.get("same-place").unwrap();
+        &references.entries.get(target).unwrap().work.binding
     }
 
     fn inner(imagery: Imagery, canonical: References) -> Inner {
@@ -271,27 +258,18 @@ mod tests {
     fn run_pack_layout_and_entity_identity_are_distinct_and_unrelated_observations_dedupe() {
         let mut first = references("session-a/run-a/pack-a");
         room(&mut first, "layout-a");
-        let first_binding = first.entries.values().next().unwrap().work.binding.clone();
+        let first_binding = selected_room_binding(&first).to_owned();
         assert_eq!(first.take_jobs().len(), 1);
         room(&mut first, "layout-a");
         assert!(first.take_jobs().is_empty());
         room(&mut first, "layout-b");
-        assert_ne!(
-            first.entries.values().next().unwrap().work.binding,
-            first_binding
-        );
+        assert_ne!(selected_room_binding(&first), first_binding);
         let mut second = references("session-a/run-b/pack-a");
         room(&mut second, "layout-a");
-        assert_ne!(
-            second.entries.values().next().unwrap().work.binding,
-            first_binding
-        );
+        assert_ne!(selected_room_binding(&second), first_binding);
         second.scope = "session-a/run-a/pack-b".to_owned();
         room(&mut second, "layout-a");
-        assert_ne!(
-            second.entries.values().next().unwrap().work.binding,
-            first_binding
-        );
+        assert_ne!(selected_room_binding(&second), first_binding);
         let source = Source::Hero {
             identity: Identity::from_menus(&[]).unwrap(),
             species: "orc".to_owned(),
@@ -368,6 +346,14 @@ mod tests {
         inner.spawn(&mut tasks, Job::Canonical(work.clone()));
         inner.finish(tasks.join_next().await.unwrap().unwrap());
         let key = inner.canonical_room_key("same-place").unwrap();
+        for _ in 0..3 {
+            room(&mut locked(&inner.state).canonical, "accepted-layout");
+            assert!(
+                locked(&inner.state).canonical.take_jobs().is_empty(),
+                "reobserving accepted authoring preserves ready work"
+            );
+            assert_eq!(inner.canonical_room_key("same-place"), Some(key.clone()));
+        }
         let loaded = inner.canonical_room_reference("same-place").await.unwrap();
         let Lookup::Image { bytes, format } = fixture.imagery.image(key.as_str()).await else {
             panic!("runtime bytes");
@@ -420,6 +406,43 @@ mod tests {
             locked(&inner.state).canonical.take_jobs().is_empty(),
             "returning to accepted room reuses its pack"
         );
+    }
+
+    #[test]
+    fn actual_room_admission_preserves_terminal_provider_outcomes_on_reobservation() {
+        for failure in [
+            ImageFailure::Provider,
+            ImageFailure::Refused,
+            ImageFailure::BudgetExhausted,
+            ImageFailure::Interrupted,
+        ] {
+            let mut canonical = references("terminal-admission-run");
+            room(&mut canonical, "unchanged-authored-layout");
+            let binding = selected_room_binding(&canonical).to_owned();
+            let Job::Canonical(work) = canonical.take_jobs().remove(0) else {
+                panic!("canonical work");
+            };
+            let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
+            inner.finish_canonical(work, Err(failure));
+            for _ in 0..3 {
+                room(
+                    &mut locked(&inner.state).canonical,
+                    "unchanged-authored-layout",
+                );
+                assert_eq!(
+                    inner.canonical_room_status("same-place"),
+                    ReferenceStatus::Failed(failure)
+                );
+                assert_eq!(
+                    selected_room_binding(&locked(&inner.state).canonical),
+                    binding
+                );
+                assert!(
+                    locked(&inner.state).canonical.take_jobs().is_empty(),
+                    "accepted unchanged authoring cannot redispatch a terminal paid job"
+                );
+            }
+        }
     }
 
     #[test]
