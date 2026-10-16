@@ -526,24 +526,29 @@ pub(crate) fn generate_with_prose(
         .model
         .as_ref()
         .map(|model| {
+            let model = model.for_scene(SceneKey::Opening);
             let people = model
                 .people
                 .iter()
-                .take(3)
-                .map(|person| format!("{} at {}", person.name, person.position))
+                .map(|person| format!("{} the {} at {}", person.name, person.role, person.position))
                 .collect::<Vec<_>>()
                 .join("; ");
             let goods = model
                 .things
                 .iter()
                 .filter(|thing| thing.in_scene)
-                .take(2)
                 .map(|thing| format!("{} at {}", thing.name, thing.position))
                 .collect::<Vec<_>>()
                 .join("; ");
+            let ways_out = model
+                .ways_out
+                .iter()
+                .map(|way| format!("{} {}", way.name, way.position))
+                .collect::<Vec<_>>()
+                .join("; ");
             format!(
-                "{} holds {people}. Visible goods: {goods}.",
-                settings.meeting.name
+                "{} in the {} with {}: {}. Visible goods: {}. Ways out: {}.",
+                settings.meeting.name, model.time_of_day, model.weather, people, goods, ways_out
             )
         })
         .unwrap_or_else(|| settings.meeting.name.clone());
@@ -995,7 +1000,7 @@ pub(crate) fn generate_with_prose(
         };
         scene.title = expression(Some(scene.key), beat, "title", speaker, &title, 32)?;
         let narration_bound = if scene.key == SceneKey::Opening {
-            480
+            900
         } else {
             220
         };

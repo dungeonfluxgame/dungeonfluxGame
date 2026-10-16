@@ -284,7 +284,7 @@ fn longest_coherent_opening_fits_the_narration_bound() {
         .iter()
         .find(|s| s.key == super::super::pack::SceneKey::Opening)
         .unwrap();
-    assert!(opening.narration.chars().count() <= 480);
+    assert!(opening.narration.chars().count() <= 900);
     assert!(
         opening
             .narration

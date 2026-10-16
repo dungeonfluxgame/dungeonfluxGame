@@ -94,7 +94,7 @@ fn two_hundred_seeds_cover_all_sixteen_data_defined_scripts_settings_slots_and_d
             assert!(
                 scene.narration.chars().count()
                     <= if scene.key == pack::SceneKey::Opening {
-                        480
+                        900
                     } else {
                         220
                     }

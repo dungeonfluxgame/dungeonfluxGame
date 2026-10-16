@@ -331,7 +331,10 @@ pub(in crate::gameplay) fn with_model(
             .iter()
             .filter(|other| other.position == person.position)
             .count() as u32;
-        actor.anchor_x_permille = (x + neighbors * 60).min(950);
+        // Keep accepted same-spot people legible in a wide composition. The model's named
+        // position remains authoritative; this bounded lateral offset only separates bodies that
+        // would otherwise occupy the same foreground pixels.
+        actor.anchor_x_permille = (x + neighbors * 140).min(950);
         actor.anchor_y_permille = y;
         actor.depth_permille = depth;
         actor.pose = person.description.clone();
@@ -521,6 +524,13 @@ mod tests {
                 .find(|actor| actor.name == person.name)
                 .unwrap();
             assert_eq!(actor.spot, person.position);
+        }
+        for (left, right) in graph.actors.iter().enumerate() {
+            for other in graph.actors.iter().skip(left + 1) {
+                if right.spot == other.spot {
+                    assert!(right.anchor_x_permille.abs_diff(other.anchor_x_permille) >= 100);
+                }
+            }
         }
         let mut current = model;
         current.weather = "a light rain outside".into();
