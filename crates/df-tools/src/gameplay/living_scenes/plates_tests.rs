@@ -374,6 +374,39 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
                 .finish(super::super::Done::Canonical { work, result });
         }
     }
+    let current_room_revision =
+        super::super::canonical::room_revision(&before).expect("authored room revision");
+    let mut alternate = current.clone();
+    let mut alternate_model = before.clone();
+    alternate_model.weather = "overcast".into();
+    let alternate_room_revision =
+        super::super::canonical::room_revision(&alternate_model).expect("alternate room revision");
+    assert_ne!(current_room_revision, alternate_room_revision);
+    alternate.setting.as_mut().unwrap().model = Some(alternate_model);
+    locked(&shared.inner.state)
+        .canonical
+        .observe_room(&alternate);
+    for job in locked(&shared.inner.state).canonical.take_jobs() {
+        let super::super::Job::Canonical(work) = job else {
+            panic!("canonical reference job")
+        };
+        shared.inner.finish(super::super::Done::Canonical {
+            work,
+            result: Err(ImageFailure::Provider),
+        });
+    }
+    assert_eq!(
+        shared
+            .inner
+            .canonical_room_status_at("cloth-shop", &current_room_revision),
+        super::super::canonical::ReferenceStatus::Ready
+    );
+    assert_eq!(
+        shared
+            .inner
+            .canonical_room_status_at("cloth-shop", &alternate_room_revision),
+        super::super::canonical::ReferenceStatus::Failed(ImageFailure::Provider)
+    );
     let initial = view(&current, &[1], false);
     shared.observe_with(&initial, Some(current.clone()), Vec::new());
     let Job::Fresh {
@@ -438,7 +471,7 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
         request.references[1].sha256,
         shared
             .inner
-            .canonical_room_reference("cloth-shop")
+            .canonical_room_reference_at("cloth-shop", &current_room_revision)
             .await
             .unwrap()
             .sha256
@@ -473,6 +506,76 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
             .load_photographic("sprite-patron-merchant")
             .unwrap()
             .sha256
+    );
+    let mut ordinary_story = (*pending).clone();
+    ordinary_story.focus = None;
+    let ordinary_story_request = shared
+        .state_image_request(
+            &ordinary_story,
+            base_reference.clone(),
+            identities.as_deref(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ordinary_story_request.references.len(), 4);
+    assert_eq!(
+        ordinary_story_request.references[1].sha256,
+        request.references[1].sha256
+    );
+    assert_eq!(
+        ordinary_story_request.references[2].sha256,
+        request.references[2].sha256
+    );
+    assert_eq!(
+        ordinary_story_request.references[3].sha256,
+        canonical_speaker.sha256
+    );
+    assert!(
+        ordinary_story_request
+            .prompt
+            .as_str()
+            .contains("Image 2 is the canonical photograph")
+    );
+    assert!(
+        ordinary_story_request
+            .prompt
+            .as_str()
+            .contains("Image 4 is the canonical photographic identity reference")
+    );
+
+    ordinary_story.story = None;
+    let ordinary_state_request = shared
+        .state_image_request(
+            &ordinary_story,
+            base_reference.clone(),
+            identities.as_deref(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ordinary_state_request.references.len(), 4);
+    assert_eq!(
+        ordinary_state_request.references[1].sha256,
+        request.references[1].sha256
+    );
+    assert_eq!(
+        ordinary_state_request.references[2].sha256,
+        request.references[2].sha256
+    );
+    assert_eq!(
+        ordinary_state_request.references[3].sha256,
+        canonical_speaker.sha256
+    );
+    assert!(
+        ordinary_state_request
+            .prompt
+            .as_str()
+            .contains("Image 2 is the canonical photograph")
+    );
+    assert!(
+        ordinary_state_request
+            .prompt
+            .as_str()
+            .contains("Image 4 is the canonical photographic identity reference")
     );
     assert!(request.prompt.as_str().contains("clothes-fine"));
     assert!(request.prompt.as_str().contains("1500"));

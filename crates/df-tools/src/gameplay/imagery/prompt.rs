@@ -151,6 +151,28 @@ impl AssembledPrompt {
         self
     }
 
+    pub(in crate::gameplay) fn with_canonical_room_reference(
+        mut self,
+        image_number: usize,
+    ) -> Self {
+        self.text.push_str(&format!(
+            "\nImage {image_number} is the canonical photograph of this exact authored room. Use it to preserve the room's architecture, geography, materials and lighting while keeping the current photograph's composition and camera."
+        ));
+        self
+    }
+
+    pub(in crate::gameplay) fn with_canonical_speaker_reference(
+        mut self,
+        image_number: usize,
+        actor_id: &str,
+        actor_name: &str,
+    ) -> Self {
+        self.text.push_str(&format!(
+            "\nImage {image_number} is the canonical photographic identity reference for actor id {actor_id}, named {actor_name}. Match this exact person's face, age, hair and clothing while preserving their established position and the current photograph's composition. The reference identifies the person only; do not copy its background or pose."
+        ));
+        self
+    }
+
     /// Bind the camera's conversational focus to the canonical actor selected by the story
     /// record. The complete cast remains in the scene; this only identifies who must be readable.
     pub(in crate::gameplay) fn with_focus_actor(

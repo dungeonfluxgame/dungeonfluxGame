@@ -28,6 +28,7 @@ pub(super) struct Book {
     focus: Option<Presentation>,
 }
 
+#[cfg_attr(test, derive(Clone))]
 pub(super) struct Pending {
     snapshot: Option<SceneNow>,
     pub(super) story: Option<Box<StoryBeat>>,
@@ -121,6 +122,46 @@ fn story_camera(
         story.sequence,
         story.dialogue,
     ))
+}
+
+fn cast_identity<'a>(
+    identity: &'a IdentitySnapshot,
+    actor_id: &str,
+) -> Option<&'a IdentityReference> {
+    let actor_id = actor_id.strip_prefix("npc:").unwrap_or(actor_id);
+    identity
+        .scene
+        .identity_cast
+        .iter()
+        .find(|member| member.id.strip_prefix("npc:").unwrap_or(&member.id) == actor_id)
+}
+
+fn state_speaker<'a>(
+    pending: &Pending,
+    identity: &'a IdentitySnapshot,
+) -> Result<Option<&'a IdentityReference>, ImageFailure> {
+    if let Some(focus) = &pending.focus {
+        return cast_identity(identity, &focus.speaker_actor_id)
+            .map(Some)
+            .ok_or(ImageFailure::InvalidRequest);
+    }
+    if let Some(story) = &pending.story {
+        let speaker =
+            if story.actor_id.is_empty() {
+                identity.scene.identity_cast.iter().find(|member| {
+                    crate::voice_line::speaker_names_match(&member.name, &story.speaker)
+                })
+            } else {
+                cast_identity(identity, &story.actor_id)
+            };
+        return speaker.map(Some).ok_or(ImageFailure::InvalidRequest);
+    }
+    match &identity.scene.speaker {
+        Some(speaker) => cast_identity(identity, &speaker.id)
+            .map(Some)
+            .ok_or(ImageFailure::InvalidRequest),
+        None => Ok(None),
+    }
 }
 
 #[derive(Clone)]
@@ -405,23 +446,52 @@ fn observe_story(book: &mut super::Book, view: &View, scene: &PlateScene, now: D
 }
 
 impl Shared {
-    fn focus_reference_status(
+    fn state_reference_status(
         &self,
+        pending: &Pending,
         identity: &IdentitySnapshot,
     ) -> super::super::canonical::ReferenceStatus {
         use super::super::canonical::ReferenceStatus;
         let mut waiting = false;
-        let statuses = std::iter::once(self.inner.canonical_room_status(&identity.scene.place_id))
-            .chain(identity.scene.identity_cast.iter().map(|actor| {
+        let mut statuses = Vec::new();
+        if pending.focus.is_some() || identity.scene.room_revision.is_some() {
+            statuses.push(identity.scene.room_revision.as_deref().map_or_else(
+                || {
+                    if pending.focus.is_some() {
+                        ReferenceStatus::Failed(ImageFailure::InvalidRequest)
+                    } else {
+                        ReferenceStatus::Ready
+                    }
+                },
+                |revision| {
+                    self.inner
+                        .canonical_room_status_at(&identity.scene.place_id, revision)
+                },
+            ));
+        }
+        if pending.focus.is_some() {
+            statuses.extend(identity.scene.identity_cast.iter().map(|actor| {
                 self.inner
                     .canonical_npc_status(actor.id.strip_prefix("npc:").unwrap_or(&actor.id))
-            }))
-            .chain(
+            }));
+            statuses.extend(
                 identity
                     .heroes
                     .iter()
                     .map(|seat| self.inner.canonical_hero_status(*seat)),
             );
+        }
+        if self.inner.references.photographic_only() || pending.focus.is_some() {
+            match state_speaker(pending, identity) {
+                Ok(Some(speaker)) => {
+                    statuses.push(self.inner.canonical_npc_status(
+                        speaker.id.strip_prefix("npc:").unwrap_or(&speaker.id),
+                    ))
+                }
+                Ok(None) => {}
+                Err(failure) => return ReferenceStatus::Failed(failure),
+            }
+        }
         for status in statuses {
             match status {
                 ReferenceStatus::Failed(failure) => return ReferenceStatus::Failed(failure),
@@ -612,35 +682,42 @@ impl Shared {
             refresh_decision(&mut book, "state", "no_visible_change");
             return;
         };
-        if pending.focus.is_some() {
+        let is_focus = pending.focus.is_some();
+        if is_focus || self.inner.references.photographic_only() {
             use super::super::canonical::ReferenceStatus;
             let status = identities
                 .as_ref()
                 .map_or(ReferenceStatus::Missing, |identity| {
-                    self.focus_reference_status(identity)
+                    self.state_reference_status(pending, identity)
                 });
             match status {
                 ReferenceStatus::Missing | ReferenceStatus::Pending => {
                     refresh_decision(
                         &mut book,
-                        "narrative_focus",
+                        if is_focus { "narrative_focus" } else { "state" },
                         "awaiting_canonical_references",
                     );
                     return;
                 }
                 ReferenceStatus::Failed(failure) => {
                     if let Some(pending) = book.state_images.pending.take() {
-                        focus_progress(
-                            &mut book.state_images,
-                            &pending.state,
-                            pending.revision,
-                            Stage::Failed,
-                            None,
-                            now,
-                            Some(failure.label()),
-                        );
+                        if is_focus {
+                            focus_progress(
+                                &mut book.state_images,
+                                &pending.state,
+                                pending.revision,
+                                Stage::Failed,
+                                None,
+                                now,
+                                Some(failure.label()),
+                            );
+                        }
                     }
-                    refresh_decision(&mut book, "narrative_focus", "canonical_reference_failed");
+                    refresh_decision(
+                        &mut book,
+                        if is_focus { "narrative_focus" } else { "state" },
+                        "canonical_reference_failed",
+                    );
                     self.wake();
                     return;
                 }
@@ -782,54 +859,57 @@ impl Shared {
                 )?,
             }
         };
+        let photo_anchored = self.inner.references.photographic_only() || pending.focus.is_some();
         let mut references = vec![base];
-        if pending.focus.is_some() {
+        if photo_anchored {
             let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
-            references.push(
-                self.inner
-                    .canonical_room_reference(&identity.scene.place_id)
-                    .await
-                    .ok_or(ImageFailure::InvalidRequest)?,
-            );
+            match identity.scene.room_revision.as_deref() {
+                Some(revision) => references.push(
+                    self.inner
+                        .canonical_room_reference_at(&identity.scene.place_id, revision)
+                        .await
+                        .ok_or(ImageFailure::Interrupted)?,
+                ),
+                None if pending.focus.is_some() => return Err(ImageFailure::InvalidRequest),
+                None => {}
+            }
         }
-        let prompt = if self.inner.references.photographic_only() || pending.focus.is_some() {
+        let prompt = if photo_anchored {
             let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
             let (sheet, legend) = self
                 .identity_sheet(&identity.scene, &identity.heroes)
                 .await?;
             let sheet_number = references.len() + 1;
             references.push(sheet);
-            if let Some(focus) = pending.focus.as_ref() {
-                let actor = focus
-                    .speaker_actor_id
-                    .strip_prefix("npc:")
-                    .unwrap_or(&focus.speaker_actor_id);
+            let active_speaker = state_speaker(pending, identity)?;
+            let speaker_number = active_speaker.map(|_| references.len() + 1);
+            if let Some(speaker) = active_speaker {
+                let actor = speaker.id.strip_prefix("npc:").unwrap_or(&speaker.id);
                 references.push(
                     self.inner
                         .canonical_npc_reference(actor)
                         .await
                         .ok_or(ImageFailure::Interrupted)?,
                 );
-            } else if let Some(story) = pending.story.as_ref()
-                && let Some(speaker) = identity.scene.identity_cast.iter().find(|member| {
-                    if story.actor_id.is_empty() {
-                        member.name == story.speaker
-                    } else {
-                        member.id.strip_prefix("npc:").unwrap_or(&member.id)
-                            == story
-                                .actor_id
-                                .strip_prefix("npc:")
-                                .unwrap_or(&story.actor_id)
-                    }
-                })
-            {
-                let (figure, face) = self.speaker_art(&speaker.sprite).await;
-                references.extend(face.or(figure));
             }
-            prompt.with_cast_sheet(sheet_number, &legend)
+            let mut prompt = prompt;
+            if pending.focus.is_none() && identity.scene.room_revision.is_some() {
+                prompt = prompt.with_canonical_room_reference(2);
+            }
+            prompt = prompt.with_cast_sheet(sheet_number, &legend);
+            if pending.focus.is_none()
+                && let (Some(number), Some(speaker)) = (speaker_number, active_speaker)
+            {
+                prompt =
+                    prompt.with_canonical_speaker_reference(number, &speaker.id, &speaker.name);
+            }
+            prompt
         } else {
             prompt
         };
+        if prompt.character_count() > df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS {
+            return Err(ImageFailure::InvalidRequest);
+        }
         Ok(ImageRequest {
             kind: ImageKind::ScenePlateEdit,
             references,

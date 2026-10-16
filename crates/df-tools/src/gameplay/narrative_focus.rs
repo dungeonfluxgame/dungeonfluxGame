@@ -64,6 +64,7 @@ impl Subject {
             } => model.things.iter().any(|thing| {
                 thing.id == *id
                     && thing.in_scene
+                    && thing.publicly_visible
                     && thing.name == *name
                     && thing.picture_description == *description
                     && thing.holder_id == *holder_id
@@ -154,7 +155,11 @@ pub(super) fn select(model: &SceneModel, dialogue: Dialogue<'_>) -> Option<Narra
             ));
         }
     }
-    for thing in model.things.iter().filter(|thing| thing.in_scene) {
+    for thing in model
+        .things
+        .iter()
+        .filter(|thing| thing.in_scene && thing.publicly_visible)
+    {
         if let Some(specificity) = mentioned(&words, &thing.name, &thing.aliases) {
             candidates.push((
                 specificity,
@@ -173,13 +178,36 @@ pub(super) fn select(model: &SceneModel, dialogue: Dialogue<'_>) -> Option<Narra
         .iter()
         .map(|(specificity, _)| *specificity)
         .max()?;
-    let mut matches = candidates
+    let matches = candidates
         .into_iter()
         .filter(|(specificity, _)| *specificity == most_specific);
-    let (_, subject) = matches.next()?;
-    if matches.next().is_some() {
+    let mut matches = matches.collect::<Vec<_>>();
+    let held_thing = matches.iter().position(|(_, subject)| {
+        matches!(
+            subject,
+            Subject::Thing {
+                holder_id: Some(_),
+                ..
+            }
+        )
+    });
+    if let Some(index) = held_thing
+        && matches
+            .iter()
+            .enumerate()
+            .all(|(other, (_, subject))| other == index || matches!(subject, Subject::Offer { .. }))
+    {
+        let (_, subject) = matches.swap_remove(index);
+        return Some(NarrativeFocus {
+            dialogue_sequence: dialogue.sequence,
+            speaker_actor_id: dialogue.actor_id.to_owned(),
+            subject,
+        });
+    }
+    if matches.len() != 1 {
         return None;
     }
+    let (_, subject) = matches.pop()?;
     Some(NarrativeFocus {
         dialogue_sequence: dialogue.sequence,
         speaker_actor_id: dialogue.actor_id.to_owned(),
@@ -327,6 +355,82 @@ pub(super) mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn committed_stock_dialogue_prefers_the_public_current_held_item_and_keeps_custody() {
+        let mut model = shop();
+        model.people[0].id = "merchant".into();
+        for offer in &mut model.offers {
+            offer.seller_id = "merchant".into();
+        }
+        let offer = model
+            .offers
+            .iter()
+            .find(|offer| offer.id == "clothes-fine")
+            .unwrap()
+            .clone();
+        let mut held = model.things[0].clone();
+        held.id = offer.id.clone();
+        held.name = offer.name.clone();
+        held.picture_description = offer.description.clone();
+        held.aliases = offer.aliases.clone();
+        held.position = "in Sigrun's hands".into();
+        held.owner_id = Some("merchant".into());
+        held.holder_id = Some("sigrun".into());
+        held.in_scene = true;
+        held.publicly_visible = true;
+        model.things.push(held);
+
+        let focus = select(
+            &model,
+            Dialogue {
+                sequence: 43,
+                actor_id: "merchant",
+                text: "The fine clothes are fifteen hundred copper.",
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            &focus.subject,
+            Subject::Thing {
+                id,
+                owner_id: Some(owner),
+                holder_id: Some(holder),
+                position,
+                ..
+            } if id == "clothes-fine"
+                && owner == "merchant"
+                && holder == "sigrun"
+                && position == "in Sigrun's hands"
+        ));
+        assert!(focus.subject.remains_current(&model));
+        assert!(
+            model.offer_available("clothes-fine"),
+            "mentioning held goods must not imply a sale of current stock"
+        );
+
+        let mut private = model.clone();
+        private
+            .things
+            .iter_mut()
+            .find(|thing| thing.id == "clothes-fine")
+            .unwrap()
+            .publicly_visible = false;
+        assert!(!focus.subject.remains_current(&private));
+        assert!(matches!(
+            select(
+                &private,
+                Dialogue {
+                    sequence: 44,
+                    actor_id: "merchant",
+                    text: "The fine clothes are fifteen hundred copper.",
+                }
+            )
+            .unwrap()
+            .subject,
+            Subject::Offer { .. }
+        ));
     }
 
     #[test]
