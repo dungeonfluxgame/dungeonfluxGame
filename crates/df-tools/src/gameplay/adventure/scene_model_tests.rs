@@ -161,7 +161,7 @@ fn location_inventory_keeps_stock_identity_separate_from_custody() {
         .iter()
         .find(|entry| entry.source_id == "clothes-travelers")
         .expect("shop stock has a stable clothes entry");
-    assert_eq!(clothes.item_id, "stock-clothes-travelers");
+    assert_eq!(clothes.item_id, "item-clothes-travelers");
     assert_eq!(clothes.provenance_kind, "generated_offer");
     assert_eq!(
         clothes.location,
@@ -187,12 +187,47 @@ fn location_inventory_keeps_stock_identity_separate_from_custody() {
         .as_array()
         .expect("purchased item remains in the model")
         .iter()
-        .find(|thing| thing["id"] == "clothes-travelers")
+        .find(|thing| thing["id"] == "item-clothes-travelers")
         .expect("exactly one purchased instance exists");
     assert_eq!(inventory["provenance"]["kind"], "generated_offer");
     assert_eq!(inventory["provenance"]["source_id"], "clothes-travelers");
     assert_eq!(inventory["holder_id"], "Brynn");
     assert_eq!(inventory["owner_id"], "Brynn");
+}
+
+#[test]
+fn npc_purchase_uses_actor_purse_and_promotes_same_stock_item() {
+    let model = merchant_shop();
+    let snapshot = model
+        .as_it_is_now(
+            super::super::pack::SceneKey::Opening,
+            &[SceneChange {
+                entity_id: "clothes-travelers".into(),
+                description: "Corin buys traveler's clothes.".into(),
+                kind: SceneChangeKind::NpcPurchased {
+                    holder_id: "cloth-shop-bystander-1".into(),
+                    seller_id: "patron".into(),
+                    cost_cp: 200,
+                },
+            }],
+        )
+        .expect("NPC purchase is a valid committed scene change");
+    let snapshot: serde_json::Value = serde_json::from_str(&snapshot).expect("snapshot JSON");
+    let patron = snapshot["model"]["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|person| person["id"] == "cloth-shop-bystander-1")
+        .unwrap();
+    assert_eq!(patron["coin_cp"], 300);
+    let item = snapshot["model"]["things"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|thing| thing["id"] == "item-clothes-travelers")
+        .unwrap();
+    assert_eq!(item["holder_id"], "cloth-shop-bystander-1");
+    assert_eq!(item["owner_id"], "cloth-shop-bystander-1");
 }
 
 #[test]

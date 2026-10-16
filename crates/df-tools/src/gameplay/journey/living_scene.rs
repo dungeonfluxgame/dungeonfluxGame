@@ -63,7 +63,8 @@ struct Interaction {
 
 /// A server-authorized action proposed by the narrative/interaction layer for a named NPC.
 /// It enters the same durable scene journal as a player interaction; prose alone cannot
-/// move an item. `payer` is required for purchases because NPC money is not implicit state.
+/// move an item. NPC purchases always use the actor's canonical purse in the scene model;
+/// callers cannot substitute a player or another NPC as payer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NpcInventoryProposal {
     pub(crate) operation: OperationId,
@@ -71,7 +72,6 @@ pub(crate) struct NpcInventoryProposal {
     pub(crate) actor_id: String,
     pub(crate) target_id: String,
     pub(crate) action: NpcInventoryAction,
-    pub(crate) payer: Option<EntityId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,7 +100,6 @@ pub(crate) fn commit_npc_inventory_action(
         .iter()
         .find(|person| person.id == proposal.actor_id)
         .ok_or_else(invalid)?;
-    let payer = proposal.payer;
     let mut paid_cp = 0;
     let mut recipient = String::new();
     let (target_id, change, line) = match proposal.action {
@@ -168,16 +167,13 @@ pub(crate) fn commit_npc_inventory_action(
             )
         }
         NpcInventoryAction::Purchase => {
-            let payer = payer.clone().ok_or_else(invalid)?;
             let offer = snapshot
                 .model
                 .offers
                 .iter()
                 .find(|offer| offer.id == proposal.target_id)
                 .ok_or_else(invalid)?;
-            if !snapshot.model.offer_available(&offer.id)
-                || balance_cp(current.state(), payer)? < u64::from(offer.cost_cp)
-            {
+            if !snapshot.model.offer_available(&offer.id) || actor.coin_cp < offer.cost_cp {
                 return Err(invalid());
             }
             paid_cp = offer.cost_cp;
@@ -187,9 +183,10 @@ pub(crate) fn commit_npc_inventory_action(
                 Some(SceneChange {
                     entity_id: offer.id.clone(),
                     description: line.clone(),
-                    kind: SceneChangeKind::Purchased {
+                    kind: SceneChangeKind::NpcPurchased {
                         holder_id: actor.id.clone(),
                         seller_id: offer.seller_id.clone(),
+                        cost_cp: offer.cost_cp,
                     },
                 }),
                 line,
@@ -212,7 +209,7 @@ pub(crate) fn commit_npc_inventory_action(
         hero: actor.id.clone(),
         change,
         paid_cp,
-        actor: payer.map_or_else(|| hex(actor.id.as_bytes()), |payer| hex(payer.as_bytes())),
+        actor: hex(actor.id.as_bytes()),
         recipient,
         line,
         accepted: hex(&accepted.encode_to_vec()),
@@ -339,6 +336,7 @@ pub(in crate::gameplay) fn snapshot(
                 attitudes: Default::default(),
                 knowledge: Vec::new(),
                 wants: "Stay with the party.".into(),
+                coin_cp: 0,
             });
         }
     }
@@ -535,7 +533,11 @@ pub(in crate::gameplay) fn item_for(
                 continue;
             }
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
-                entry.target
+                model
+                    .offers
+                    .iter()
+                    .find(|offer| offer.id == entry.target)
+                    .map_or(entry.target, |offer| offer.item_id.clone())
             } else if matches!(
                 entry.option.as_str(),
                 "examine" | "take" | "steal" | "share"

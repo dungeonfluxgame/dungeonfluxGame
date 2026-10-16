@@ -268,7 +268,7 @@
   "offers": [
     {
       "id": "clothes-travelers",
-      "item_id": "clothes-travelers",
+      "item_id": "item-clothes-travelers",
       "seller_id": "merchant",
       "name": "traveler’s clothes",
       "aliases": [

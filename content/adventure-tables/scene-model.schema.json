@@ -33,7 +33,8 @@
               }
             }
           },
-          "wants": { "type": "string", "minLength": 1, "maxLength": 100 }
+          "wants": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "coin_cp": { "type": "integer", "minimum": 0 }
         }
       }
     },

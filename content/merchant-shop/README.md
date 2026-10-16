@@ -21,7 +21,7 @@ IDs in the scene model, public cast and their role-prefixed private dossier IDs.
 Public room knowledge excludes the dossiers' trust-gated and forbidden details.
 
 The finite `clothes-travelers` offer costs exactly 200 CP and advertises the concrete
-item ID `clothes-travelers` before anyone buys it. A committed purchase transfers that
+item ID `item-clothes-travelers` before anyone buys it. A committed purchase transfers that
 same durable item ID; replay and item cards resolve it without manufacturing a clone.
 Catalog entries alone never establish ownership. Sold offers are removed
 from public stock and NPC wares, while the authoritative catalog retains the key

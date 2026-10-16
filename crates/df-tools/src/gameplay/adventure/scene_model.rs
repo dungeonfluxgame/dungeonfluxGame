@@ -98,6 +98,9 @@ pub(crate) struct ScenePerson {
     pub(crate) attitudes: BTreeMap<String, StartingAttitude>,
     pub(crate) knowledge: Vec<SceneKnowledge>,
     pub(crate) wants: String,
+    /// Private purse used only by server-authorized NPC commerce actions.
+    #[serde(default)]
+    pub(crate) coin_cp: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -248,6 +251,11 @@ pub(crate) enum SceneChangeKind {
     Purchased {
         holder_id: String,
         seller_id: String,
+    },
+    NpcPurchased {
+        holder_id: String,
+        seller_id: String,
+        cost_cp: u32,
     },
     Taken {
         holder_id: String,
@@ -604,6 +612,13 @@ impl SceneModel {
             if !ids.insert(offer.id.as_str()) {
                 return Err(SceneModelError::DuplicateId);
             }
+            // Offer handles and concrete item identities use separate namespaces in
+            // authoring, but both must be unique in the canonical scene graph. A purchase
+            // promotes this item ID into `things`; rejecting collisions here prevents a
+            // second stock entry or an authored object from shadowing that identity.
+            if !ids.insert(offer.item_id.as_str()) {
+                return Err(SceneModelError::DuplicateId);
+            }
             if !valid_text(&offer.id, 96)
                 || !valid_text(&offer.item_id, 96)
                 || !valid_text(&offer.seller_id, 96)
@@ -614,14 +629,6 @@ impl SceneModel {
             {
                 return Err(SceneModelError::InvalidBounds);
             }
-        }
-        let mut item_ids = BTreeSet::new();
-        if self
-            .offers
-            .iter()
-            .any(|offer| !item_ids.insert(offer.item_id.as_str()))
-        {
-            return Err(SceneModelError::DuplicateId);
         }
         let person_ids = self
             .people
@@ -822,7 +829,7 @@ impl SceneModel {
             .find(|thing| thing.id == change.entity_id)
         {
             match &change.kind {
-                SceneChangeKind::Purchased { .. } => {
+                SceneChangeKind::Purchased { .. } | SceneChangeKind::NpcPurchased { .. } => {
                     return Err(SceneModelError::Contradiction);
                 }
                 SceneChangeKind::Taken { holder_id }
@@ -865,11 +872,19 @@ impl SceneModel {
             }
             return Ok(());
         }
-        if let SceneChangeKind::Purchased {
-            holder_id,
-            seller_id: _seller_id,
-        } = &change.kind
-        {
+        let purchase = match &change.kind {
+            SceneChangeKind::Purchased {
+                holder_id,
+                seller_id,
+            } => Some((holder_id, seller_id, None)),
+            SceneChangeKind::NpcPurchased {
+                holder_id,
+                seller_id,
+                cost_cp,
+            } => Some((holder_id, seller_id, Some(*cost_cp))),
+            _ => None,
+        };
+        if let Some((holder_id, _seller_id, npc_cost)) = purchase {
             let offer = self
                 .offers
                 .iter()
@@ -885,6 +900,22 @@ impl SceneModel {
                 .find(|person| person.id.as_str() == _seller_id.as_str())
                 .map(|person| person.name.as_str())
                 .unwrap_or("the seller");
+            if let Some(cost_cp) = npc_cost {
+                if cost_cp != offer.cost_cp {
+                    return Err(SceneModelError::Contradiction);
+                }
+                let Some(payer) = self
+                    .people
+                    .iter_mut()
+                    .find(|person| person.id == *holder_id)
+                else {
+                    return Err(SceneModelError::UnknownPerson);
+                };
+                payer.coin_cp = payer
+                    .coin_cp
+                    .checked_sub(cost_cp)
+                    .ok_or(SceneModelError::Contradiction)?;
+            }
             let detail = format!(
                 "{}. It was bought from {}.",
                 offer.description.trim_end_matches('.'),
@@ -1046,6 +1077,11 @@ fn named_people(
                 },
             ],
             wants: format!("wants the party's errand concerning {stake} to reach a clear end"),
+            coin_cp: if setting.kind == SettingKind::Shop {
+                5_000
+            } else {
+                500
+            },
         });
         Ok(())
     };
@@ -1192,6 +1228,7 @@ fn background_people(
                 },
             ],
             wants,
+            coin_cp: 500,
         });
     }
     Ok(people)
@@ -2112,7 +2149,7 @@ fn offer(
 ) -> SceneOffer {
     SceneOffer {
         id: id.into(),
-        item_id: id.into(),
+        item_id: format!("item-{id}"),
         seller_id: seller_id.into(),
         name: name.into(),
         aliases: aliases.iter().map(|alias| (*alias).into()).collect(),
