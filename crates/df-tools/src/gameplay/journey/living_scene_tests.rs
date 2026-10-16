@@ -202,6 +202,26 @@ fn explicit_steal_text_routes_to_server_inventory_interaction() {
             living_scene::interaction_for_line(&scene, &format!("I steal the {}.", thing.name),),
             Some((thing.id.clone(), "steal"))
         );
+        let attempted = interact(&current, _member, 20, &thing.id, "steal");
+        let after = living_scene::snapshot(attempted.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after
+                .model
+                .things
+                .iter()
+                .find(|candidate| candidate.id == thing.id)
+                .unwrap()
+                .holder_id,
+            None
+        );
+        assert!(
+            living_scene::last_line(attempted.state())
+                .unwrap()
+                .unwrap()
+                .contains("requires an adjudicated check")
+        );
     });
 }
 
@@ -286,7 +306,7 @@ fn a_purchase_spends_exact_copper_and_cannot_overdraw_the_heros_purse() {
                 .model
                 .things
                 .iter()
-                .any(|thing| thing.id == format!("purchased-{}", offer.id))
+                .any(|thing| thing.id == offer.item_id)
         );
     });
 }
@@ -569,7 +589,7 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
         let card = living_scene::item_for(after.state(), &scene, "Brynn")
             .unwrap()
             .unwrap();
-        assert_eq!(card.thing_id, format!("purchased-{}", offer.id));
+        assert_eq!(card.thing_id, offer.item_id);
         assert!(
             card.detail
                 .contains(offer.description.trim_end_matches('.'))
@@ -579,7 +599,7 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
                 .unwrap()
                 .is_none()
         );
-        let owned_id = format!("purchased-{}", offer.id);
+        let owned_id = offer.item_id.clone();
         let owned = living_scene::snapshot(after.state(), &scene)
             .unwrap()
             .unwrap()

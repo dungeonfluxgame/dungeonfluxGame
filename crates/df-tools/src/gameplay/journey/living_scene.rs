@@ -355,7 +355,7 @@ pub(in crate::gameplay) fn item_for(
                 continue;
             }
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
-                format!("purchased-{}", entry.target)
+                entry.target
             } else if matches!(
                 entry.option.as_str(),
                 "examine" | "take" | "steal" | "share"
@@ -644,7 +644,9 @@ pub(super) fn stage(
     let option = get("scene-option").ok_or_else(invalid)?;
     let named_recipient = get("scene-recipient");
     if choices.len()
-        != if matches!(option, "gift" | "trade") || option == "give" && named_recipient.is_some() {
+        != if matches!(option, "gift" | "trade")
+            || matches!(option, "buy" | "give") && named_recipient.is_some()
+        {
             3
         } else {
             2
@@ -724,17 +726,10 @@ pub(super) fn stage(
                 "steal" if thing.holder_id.is_some() => {
                     format!("{} is already being held.", thing.name)
                 }
-                "steal" => {
-                    let description = format!("{hero} steals {}.", thing.name);
-                    change = Some(SceneChange {
-                        entity_id: thing.id.clone(),
-                        description: description.clone(),
-                        kind: SceneChangeKind::Stolen {
-                            holder_id: hero.clone(),
-                        },
-                    });
-                    description
-                }
+                "steal" => format!(
+                    "Stealing {} requires an adjudicated check before custody can change.",
+                    thing.name
+                ),
                 "open" | "close" => {
                     let description = format!(
                         "{hero} {} {}.",
@@ -895,11 +890,20 @@ pub(super) fn stage(
             )
         } else {
             paid_cp = offer.cost_cp;
+            let buyer = named_recipient.unwrap_or(&hero);
+            if !snapshot
+                .model
+                .people
+                .iter()
+                .any(|person| person.id == buyer)
+            {
+                return Err(invalid());
+            }
             change = Some(SceneChange {
                 entity_id: offer.id.clone(),
-                description: format!("{hero} buys {}.", offer.name),
+                description: format!("{buyer} buys {}.", offer.name),
                 kind: SceneChangeKind::Purchased {
-                    holder_id: hero.clone(),
+                    holder_id: buyer.to_owned(),
                     seller_id: offer.seller_id.clone(),
                 },
             });

@@ -1677,7 +1677,7 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
     assert_eq!(private.item.as_ref().unwrap().state_revision, 8);
     private.scene_contents_json = "{\"authoritative_revision\":9}".into();
     private.item = Some(rpc::SceneItemCard {
-        thing_id: "purchased-clothes-travelers".into(),
+        thing_id: "clothes-travelers".into(),
         name: "traveler’s clothes".into(),
         detail: "The durable purchase belongs to Brakka.".into(),
         state_revision: 9,

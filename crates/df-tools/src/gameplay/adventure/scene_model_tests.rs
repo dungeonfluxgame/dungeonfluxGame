@@ -187,7 +187,7 @@ fn location_inventory_keeps_stock_identity_separate_from_custody() {
         .as_array()
         .expect("purchased item remains in the model")
         .iter()
-        .find(|thing| thing["id"] == "purchased-clothes-travelers")
+        .find(|thing| thing["id"] == "clothes-travelers")
         .expect("exactly one purchased instance exists");
     assert_eq!(inventory["provenance"]["kind"], "generated_offer");
     assert_eq!(inventory["provenance"]["source_id"], "clothes-travelers");
@@ -232,11 +232,11 @@ fn theft_moves_custody_without_rewriting_owner() {
 #[test]
 fn authored_purchased_prefix_object_survives_without_a_purchase_journal() {
     let mut model = merchant_shop();
-    model.things[0].id = "purchased-authored-cloth".into();
+    model.things[0].id = "authored-purchased-cloth".into();
     let snapshot = model
         .as_it_is_now(super::super::pack::SceneKey::DialogueSeal, &[])
-        .expect("authored purchased-prefixed object remains valid");
-    assert!(snapshot.contains("purchased-authored-cloth"));
+        .expect("authored item remains valid");
+    assert!(snapshot.contains("authored-purchased-cloth"));
 }
 
 #[test]

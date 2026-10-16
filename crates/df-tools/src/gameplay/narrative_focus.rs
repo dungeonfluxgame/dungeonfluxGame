@@ -287,12 +287,7 @@ pub(super) mod tests {
             matches!(&focus.subject, Subject::Offer { cost_cp: 1500, seller_id, .. } if seller_id == "patron")
         );
         assert_eq!(serde_json::to_value(&model).unwrap(), before);
-        assert!(
-            !model
-                .things
-                .iter()
-                .any(|thing| thing.id == "purchased-clothes-fine")
-        );
+        assert!(!model.things.iter().any(|thing| thing.id == "clothes-fine"));
     }
 
     #[test]

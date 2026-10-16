@@ -33,10 +33,10 @@ Give each thing a two-to-four-sentence detailed description, a one-line list lab
 description, a closer-look result, its check skill and DC, whether it can be picked up, exact
 coin value only when supplied, and a one-sentence use effect. Give shops only established goods
 at the supplied SRD prices. Do not decide check outcomes, inventory changes, purchases, thefts,
-or story outcomes; the server resolves them. Generated offers are finite stock entries whose IDs
-remain stable until a purchase creates the one corresponding item instance. A theft changes
-custody while preserving ownership and should be described as a witnessed or discoverable event
-only when the supplied scene facts support it.
+or story outcomes; the server resolves them. Generated offers are finite stock entries with a
+concrete `item_id` that remains stable before and after purchase. A theft changes custody only
+after an adjudicated rules result while preserving ownership, and should be described as a
+witnessed or discoverable event only when the supplied scene facts support it.
 
 <!-- Why: bounded, grounded structured output can safely be stored with the generated adventure. -->
 Return only JSON matching the supplied schema. Every required field must be present. Keep all

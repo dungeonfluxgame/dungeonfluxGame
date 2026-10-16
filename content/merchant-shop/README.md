@@ -20,9 +20,10 @@ Marek (`merchant`), Corin (`shop-adventurer`) and Jessa (`shop-soldier`) keep th
 IDs in the scene model, public cast and their role-prefixed private dossier IDs.
 Public room knowledge excludes the dossiers' trust-gated and forbidden details.
 
-The finite `clothes-travelers` offer costs exactly 200 CP. A committed purchase
-creates `purchased-clothes-travelers`; replay and item cards resolve that durable
-thing. Catalog entries alone never establish ownership. Sold offers are removed
+The finite `clothes-travelers` offer costs exactly 200 CP and advertises the concrete
+item ID `clothes-travelers` before anyone buys it. A committed purchase transfers that
+same durable item ID; replay and item cards resolve it without manufacturing a clone.
+Catalog entries alone never establish ownership. Sold offers are removed
 from public stock and NPC wares, while the authoritative catalog retains the key
 to refuse another purchase without charging again.
 

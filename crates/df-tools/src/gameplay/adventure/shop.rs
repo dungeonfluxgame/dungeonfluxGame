@@ -369,7 +369,7 @@ mod tests {
             let card = journey::living_scene::item_for(bought.state(), &scene, "Brynn")
                 .unwrap()
                 .unwrap();
-            assert_eq!(card.thing_id, "purchased-clothes-travelers");
+            assert_eq!(card.thing_id, "clothes-travelers");
             let projected =
                 wire::journey_view(&bought, LocalDemoRole::Player, native::first()).unwrap();
             let Some(df_protocol::common::view_message::Audience::Player(projected)) =
@@ -430,7 +430,7 @@ mod tests {
             assert!(repeated.state().narrative.open_threads.is_empty());
             let mut checked = repeated;
             for (operation, target) in [
-                (13, "thing-purchased-clothes-travelers"),
+                (13, "thing-clothes-travelers"),
                 (14, "thing-folded-label"),
             ] {
                 let choices = [
@@ -533,7 +533,7 @@ mod tests {
             let given = interaction_with_choices(
                 &traded,
                 8,
-                "purchased-clothes-travelers",
+                "clothes-travelers",
                 "give",
                 &[("scene-recipient", "shop-adventurer")],
             );
@@ -548,7 +548,7 @@ mod tests {
                 .unwrap()
                 .things
                 .iter()
-                .find(|thing| thing.id == "purchased-clothes-travelers")
+                .find(|thing| thing.id == "clothes-travelers")
                 .unwrap();
             assert_eq!(item.holder_id.as_deref(), Some("shop-adventurer"));
             assert_eq!(item.owner_id.as_deref(), Some("shop-adventurer"));

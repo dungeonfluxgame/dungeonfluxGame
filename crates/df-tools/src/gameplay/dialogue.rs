@@ -778,17 +778,19 @@ impl Service {
                 option_id: amount.to_string(),
             });
         }
-        if option == "give" {
+        if matches!(option, "give" | "buy") {
             let current = self.updates.borrow().clone();
             let scene =
                 super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
             if let Some(recipient) =
                 journey::living_scene::recipient_for_line(&scene, &request.text)
             {
-                submit.action_choices.push(rpc::JourneyChoice {
-                    group_id: "scene-recipient".into(),
-                    option_id: recipient,
-                });
+                if option == "give" || request.text.to_lowercase().contains(" to ") {
+                    submit.action_choices.push(rpc::JourneyChoice {
+                        group_id: "scene-recipient".into(),
+                        option_id: recipient,
+                    });
+                }
             }
         }
         if option == "trade" {
@@ -858,8 +860,7 @@ impl Service {
         {
             let hero = journey::living_scene::hero(after.state(), operation)
                 .map_err(actor::unavailable)?;
-            let purchased = format!("purchased-{target}");
-            if let Err(reason) = self.living.request_item(&hero, &purchased, None, false) {
+            if let Err(reason) = self.living.request_item(&hero, target, None, false) {
                 actor::record_audit_line(
                     "gameplay.scene_item_request",
                     format!("IMAGERY kind=item target={target:?} status=text reason={reason:?}"),

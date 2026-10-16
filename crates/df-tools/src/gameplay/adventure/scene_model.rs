@@ -205,6 +205,9 @@ pub(crate) struct SceneWayOut {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SceneOffer {
     pub(crate) id: String,
+    /// The concrete item instance represented by this finite stock offer. It exists
+    /// before purchase in the inventory projection and is never replaced by a clone.
+    pub(crate) item_id: String,
     pub(crate) seller_id: String,
     pub(crate) name: String,
     pub(crate) aliases: Vec<String>,
@@ -333,10 +336,12 @@ impl SceneModel {
     /// consumes that offer by creating its canonical owned thing.
     pub(crate) fn offer_available(&self, id: &str) -> bool {
         self.offers.iter().any(|offer| offer.id == id)
-            && !self
-                .things
-                .iter()
-                .any(|thing| thing.id == format!("purchased-{id}"))
+            && !self.things.iter().any(|thing| {
+                self.offers
+                    .iter()
+                    .find(|offer| offer.id == id)
+                    .is_some_and(|offer| thing.id == offer.item_id)
+            })
     }
 
     /// Returns the canonical, audience-safe inventory for this location. Offers are
@@ -383,7 +388,7 @@ impl SceneModel {
                 .iter()
                 .filter(|offer| self.offer_available(&offer.id))
                 .map(|offer| SceneInventoryEntry {
-                    item_id: format!("stock-{}", offer.id),
+                    item_id: offer.item_id.clone(),
                     source_id: offer.id.clone(),
                     provenance_kind: "generated_offer".into(),
                     owner_id: Some(offer.seller_id.clone()),
@@ -600,6 +605,7 @@ impl SceneModel {
                 return Err(SceneModelError::DuplicateId);
             }
             if !valid_text(&offer.id, 96)
+                || !valid_text(&offer.item_id, 96)
                 || !valid_text(&offer.seller_id, 96)
                 || !valid_text(&offer.name, 64)
                 || !valid_text(&offer.description, 120)
@@ -608,6 +614,14 @@ impl SceneModel {
             {
                 return Err(SceneModelError::InvalidBounds);
             }
+        }
+        let mut item_ids = BTreeSet::new();
+        if self
+            .offers
+            .iter()
+            .any(|offer| !item_ids.insert(offer.item_id.as_str()))
+        {
+            return Err(SceneModelError::DuplicateId);
         }
         let person_ids = self
             .people
@@ -861,7 +875,7 @@ impl SceneModel {
                 .iter()
                 .find(|offer| offer.id == change.entity_id)
                 .ok_or(SceneModelError::UnknownEntity)?;
-            let item_id = format!("purchased-{}", offer.id);
+            let item_id = offer.item_id.clone();
             if self.things.iter().any(|thing| thing.id == item_id) {
                 return Err(SceneModelError::Contradiction);
             }
@@ -2098,6 +2112,7 @@ fn offer(
 ) -> SceneOffer {
     SceneOffer {
         id: id.into(),
+        item_id: id.into(),
         seller_id: seller_id.into(),
         name: name.into(),
         aliases: aliases.iter().map(|alias| (*alias).into()).collect(),
