@@ -185,12 +185,36 @@ mod tests {
         let (loaded, record) = super::super::record::reload(&documents).unwrap();
         assert!(record.rolls.is_empty());
         assert_eq!(record.dossiers.len(), 3);
+        let notebook = crate::gameplay::notebook::NotebookLedger::open(
+            &record.seed,
+            record.dossiers.clone(),
+            record.fact_sheet.clone(),
+            None,
+        )
+        .unwrap();
         let social = SocialLedger::open(record.dossiers, &record.seed, None).unwrap();
         let story = StoryFacts::from_pack(&loaded.pack);
         pack::with_test_pack(loaded, || {
             let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
             assert!(opening.state().narrative.open_threads.is_empty());
             assert!(opening.state().encounters.is_empty());
+            let stage = runtime::scene(opening.state()).unwrap();
+            notebook
+                .observe_scene(native::first(), "Brynn", &stage, "", false)
+                .unwrap();
+            let notes = notebook.visible_to(native::first());
+            assert!(
+                !notes
+                    .iter()
+                    .any(|entry| entry.kind == crate::gameplay::notebook::Kind::Task)
+            );
+            assert_eq!(
+                notes
+                    .iter()
+                    .filter(|entry| entry.kind == crate::gameplay::notebook::Kind::Person)
+                    .count(),
+                3
+            );
             assert!(
                 !opening
                     .state()

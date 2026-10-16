@@ -490,6 +490,9 @@ impl NotebookLedger {
         }
 
         if scene.key == super::pack::SceneKey::Opening
+            && super::beat_script::with_script(|script| {
+                script.mode == super::beat_script::ScriptMode::Story
+            })
             && !scene.speaker.trim().is_empty()
             && !scene.dialogue.trim().is_empty()
             && scene.cast.iter().any(|actor| {
