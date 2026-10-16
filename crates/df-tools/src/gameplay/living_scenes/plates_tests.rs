@@ -279,7 +279,11 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
         jobs,
     });
     let mut current = scene(SceneKey::Opening, "The cloth shop", Some("Marek"));
-    let model = crate::gameplay::narrative_focus::tests::shop();
+    let mut model = crate::gameplay::narrative_focus::tests::shop();
+    model.people[0].id = "merchant".into();
+    for offer in &mut model.offers {
+        offer.seller_id = "merchant".into();
+    }
     current.cast = model
         .people
         .iter()
@@ -306,6 +310,25 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
     current.setting.as_mut().unwrap().place_id = "cloth-shop".into();
     current.setting.as_mut().unwrap().model = Some(model);
     let before = current.setting.as_ref().unwrap().model.clone().unwrap();
+    shared
+        .inner
+        .observe_checkpoint(&crate::gameplay::beat_script_tests::prepared_story());
+    locked(&shared.inner.state).canonical.observe_room(&current);
+    loop {
+        let canonical_jobs = locked(&shared.inner.state).canonical.take_jobs();
+        if canonical_jobs.is_empty() {
+            break;
+        }
+        for job in canonical_jobs {
+            let super::super::Job::Canonical(work) = job else {
+                panic!("canonical reference job")
+            };
+            let result = shared.inner.render_canonical(&work).await;
+            shared
+                .inner
+                .finish(super::super::Done::Canonical { work, result });
+        }
+    }
     let initial = view(&current, &[1], false);
     shared.observe_with(&initial, Some(current.clone()), Vec::new());
     let Job::Fresh {
@@ -323,9 +346,6 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
         .render_fresh(&scene, &spec, &heroes, &faces, &id, 1, false)
         .await
         .unwrap();
-    locked(&shared.inner.state)
-        .canonical_backdrops
-        .insert("cloth-shop".into(), base.clone());
     locked(&shared.book).insert(
         id,
         Entry::Ready {
@@ -385,7 +405,7 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
             .contains("Image 3 is the canonical photographic identity contact sheet")
     );
     assert!(request.prompt.as_str().contains("npc:merchant"));
-    assert!(request.prompt.as_str().contains("hero:1"));
+    assert!(request.prompt.as_str().contains("hero:"));
     for actor in &current.cast {
         assert!(
             request
@@ -394,6 +414,21 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
                 .contains(&format!("npc:{}", actor.id))
         );
     }
+    let canonical_speaker = shared
+        .inner
+        .canonical_npc_reference("merchant")
+        .await
+        .unwrap();
+    assert_eq!(request.references[3].sha256, canonical_speaker.sha256);
+    assert_ne!(
+        request.references[3].sha256,
+        shared
+            .inner
+            .references
+            .load_photographic("sprite-patron-merchant")
+            .unwrap()
+            .sha256
+    );
     assert!(request.prompt.as_str().contains("clothes-fine"));
     assert!(request.prompt.as_str().contains("1500"));
     assert!(request.prompt.as_str().contains("no ownership transfer"));
@@ -430,6 +465,73 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
     assert!(
         drain(&mut queue).is_empty(),
         "one committed reveal, no repeated render"
+    );
+}
+
+#[test]
+fn narrative_focus_waits_for_pending_references_and_reports_terminal_reference_failure() {
+    let (shared, mut queue) = shared(16);
+    let mut current = scene(
+        SceneKey::Opening,
+        "Focus reference lifecycle",
+        Some("Marek"),
+    );
+    current.cast[0].id = "patron".into();
+    current.cast[0].name = "Marek".into();
+    current.setting.as_mut().unwrap().model = Some(crate::gameplay::narrative_focus::tests::shop());
+    shared
+        .inner
+        .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+    locked(&shared.inner.state).canonical.observe_room(&current);
+    shared.observe_with(
+        &view(&current, &[], false),
+        Some(current.clone()),
+        Vec::new(),
+    );
+    let mut focused = view(&current, &[], false);
+    focused.graph_revision = 2;
+    focused.story = committed_story(&rpc::JourneyView {
+        table_log: vec![public_npc_line(
+            42,
+            &current.cast[0],
+            "The fine clothes are fifteen hundred copper.",
+        )],
+        ..Default::default()
+    });
+    shared.observe_with(&focused, Some(current.clone()), Vec::new());
+    shared.poll_state_images_at(Duration::from_secs(4));
+    assert!(locked(&shared.book).state_images.pending.is_some());
+    assert!(drain(&mut queue).is_empty());
+    loop {
+        let jobs = locked(&shared.inner.state).canonical.take_jobs();
+        if jobs.is_empty() {
+            break;
+        }
+        for job in jobs {
+            let super::super::Job::Canonical(work) = job else {
+                panic!("canonical reference job")
+            };
+            shared.inner.finish(super::super::Done::Canonical {
+                work,
+                result: Err(ImageFailure::Provider),
+            });
+        }
+    }
+    shared.poll_state_images_at(Duration::from_secs(8));
+    assert!(locked(&shared.book).state_images.pending.is_none());
+    assert!(drain(&mut queue).is_empty());
+    let mut projection = rpc::GameplayScene {
+        title: current.title,
+        scene_asset: current.asset,
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut projection, None);
+    let contents: serde_json::Value =
+        serde_json::from_str(&projection.scene_contents_json).unwrap();
+    assert_eq!(contents["narrative_focus"]["stage"], "failed");
+    assert_eq!(
+        contents["narrative_focus"]["focus"]["subject"]["id"],
+        "clothes-fine"
     );
 }
 

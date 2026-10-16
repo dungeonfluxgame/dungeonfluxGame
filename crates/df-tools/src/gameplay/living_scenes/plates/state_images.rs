@@ -390,6 +390,37 @@ fn observe_story(book: &mut super::Book, view: &View, scene: &PlateScene, now: D
 }
 
 impl Shared {
+    fn focus_reference_status(
+        &self,
+        identity: &IdentitySnapshot,
+    ) -> super::super::canonical::ReferenceStatus {
+        use super::super::canonical::ReferenceStatus;
+        let mut waiting = false;
+        let statuses = std::iter::once(self.inner.canonical_room_status(&identity.scene.place_id))
+            .chain(identity.scene.identity_cast.iter().map(|actor| {
+                self.inner
+                    .canonical_npc_status(actor.id.strip_prefix("npc:").unwrap_or(&actor.id))
+            }))
+            .chain(
+                identity
+                    .heroes
+                    .iter()
+                    .map(|seat| self.inner.canonical_hero_status(*seat)),
+            );
+        for status in statuses {
+            match status {
+                ReferenceStatus::Failed(failure) => return ReferenceStatus::Failed(failure),
+                ReferenceStatus::Missing | ReferenceStatus::Pending => waiting = true,
+                ReferenceStatus::Ready => {}
+            }
+        }
+        if waiting {
+            ReferenceStatus::Pending
+        } else {
+            ReferenceStatus::Ready
+        }
+    }
+
     pub(super) fn project_scene_contents(
         &self,
         scene: &mut rpc::GameplayScene,
@@ -539,19 +570,40 @@ impl Shared {
             refresh_decision(&mut book, "state", "no_visible_change");
             return;
         };
-        if pending.focus.is_some()
-            && identities.as_ref().is_none_or(|identity| {
-                self.inner
-                    .canonical_room_key(&identity.scene.place_id)
-                    .is_none()
-            })
-        {
-            refresh_decision(
-                &mut book,
-                "narrative_focus",
-                "awaiting_canonical_room_reference",
-            );
-            return;
+        if pending.focus.is_some() {
+            use super::super::canonical::ReferenceStatus;
+            let status = identities
+                .as_ref()
+                .map_or(ReferenceStatus::Missing, |identity| {
+                    self.focus_reference_status(identity)
+                });
+            match status {
+                ReferenceStatus::Missing | ReferenceStatus::Pending => {
+                    refresh_decision(
+                        &mut book,
+                        "narrative_focus",
+                        "awaiting_canonical_references",
+                    );
+                    return;
+                }
+                ReferenceStatus::Failed(failure) => {
+                    if let Some(pending) = book.state_images.pending.take() {
+                        focus_progress(
+                            &mut book.state_images,
+                            &pending.state,
+                            pending.revision,
+                            Stage::Failed,
+                            None,
+                            now,
+                            Some(failure.label()),
+                        );
+                    }
+                    refresh_decision(&mut book, "narrative_focus", "canonical_reference_failed");
+                    self.wake();
+                    return;
+                }
+                ReferenceStatus::Ready => {}
+            }
         }
         let interval = if pending.story.is_some() && pending.focus.is_none() {
             self.inner.timing.interval.max(BAKE_INTERVAL)
@@ -705,25 +757,30 @@ impl Shared {
                 .await?;
             let sheet_number = references.len() + 1;
             references.push(sheet);
-            let actor = pending
-                .focus
-                .as_ref()
-                .map(|focus| focus.speaker_actor_id.as_str())
-                .or_else(|| pending.story.as_ref().map(|story| story.actor_id.as_str()));
-            if let Some(speaker) = identity.scene.identity_cast.iter().find(|member| {
-                if actor.is_none_or(str::is_empty) {
-                    pending
-                        .story
-                        .as_ref()
-                        .is_some_and(|story| member.name == story.speaker)
-                } else {
-                    member.id.strip_prefix("npc:").unwrap_or(&member.id)
-                        == actor
-                            .unwrap_or_default()
-                            .strip_prefix("npc:")
-                            .unwrap_or(actor.unwrap_or_default())
-                }
-            }) {
+            if let Some(focus) = pending.focus.as_ref() {
+                let actor = focus
+                    .speaker_actor_id
+                    .strip_prefix("npc:")
+                    .unwrap_or(&focus.speaker_actor_id);
+                references.push(
+                    self.inner
+                        .canonical_npc_reference(actor)
+                        .await
+                        .ok_or(ImageFailure::Interrupted)?,
+                );
+            } else if let Some(story) = pending.story.as_ref()
+                && let Some(speaker) = identity.scene.identity_cast.iter().find(|member| {
+                    if story.actor_id.is_empty() {
+                        member.name == story.speaker
+                    } else {
+                        member.id.strip_prefix("npc:").unwrap_or(&member.id)
+                            == story
+                                .actor_id
+                                .strip_prefix("npc:")
+                                .unwrap_or(&story.actor_id)
+                    }
+                })
+            {
                 let (figure, face) = self.speaker_art(&speaker.sprite).await;
                 references.extend(face.or(figure));
             }
