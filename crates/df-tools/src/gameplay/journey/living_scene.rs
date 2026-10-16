@@ -2421,6 +2421,13 @@ fn stage_inner(
                     "You must name a recipient before giving {} away.",
                     thing.name
                 ),
+                "give" if thing.owner_id.as_deref().is_some_and(|owner| owner != hero) => {
+                    format!(
+                        "{} belongs to someone else; return it to its owner.",
+                        thing.name
+                    )
+                }
+                "give" => format!("You are not holding {}.", thing.name),
                 "trade" if quoted_id.is_some() => {
                     let receipt = &stored_quote.as_ref().ok_or_else(invalid)?.quote;
                     let exact_payment = payment.and_then(|amount| amount.parse::<u32>().ok());
