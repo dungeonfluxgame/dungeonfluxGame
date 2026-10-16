@@ -473,6 +473,28 @@ impl Director {
         Ok(wanted)
     }
 
+    /// A mute click must stop the output now; the normal mixer poll and master glide are for
+    /// score changes and volume changes, not for a user's explicit mute choice.
+    fn set_sound_output(&mut self, enabled: bool) -> Result<(), JsValue> {
+        self.enabled = enabled;
+        if let Some(graph) = self.graph.as_ref() {
+            let now = graph.context.current_time();
+            let output = graph.music_master.gain();
+            output.cancel_scheduled_values(now)?;
+            output.set_value_at_time(if enabled { 1.0 } else { 0.0 }, now)?;
+            if !enabled {
+                let master = graph.master.gain();
+                master.cancel_scheduled_values(now)?;
+                master.set_value_at_time(0.0, now)?;
+            }
+        }
+        if !enabled && let Some(applied) = self.applied.as_mut() {
+            applied.master = 0.0;
+        }
+        self.publish();
+        Ok(())
+    }
+
     /// A jump in the effects engine's counter means an effect played since the last tick; a big
     /// one (by its logged cue name) holds the shallow dip open. First sight only adopts the
     /// counter so a page load never dips.
@@ -1310,6 +1332,11 @@ fn on_gesture(shared: &Shared) {
     let Ok(mut state) = shared.try_borrow_mut() else {
         return;
     };
+    if let Some(sound) = live_voice::sound_state()
+        && let Err(error) = state.set_sound_output(sound.enabled)
+    {
+        state.fail(&error);
+    }
     if state.graph.is_none() {
         match Graph::new() {
             Ok(graph) => state.graph = Some(graph),
