@@ -544,6 +544,15 @@ pub(super) fn stage(
                     description
                 }
                 "use" => format!("{hero} uses {}. {}", thing.name, thing.use_effect),
+                "give"
+                    if thing.holder_id.as_deref() == Some(&hero)
+                        && thing.owner_id.as_deref() == Some(hero.as_str()) =>
+                {
+                    format!(
+                        "You must name a recipient before giving {} away.",
+                        thing.name
+                    )
+                }
                 "give" if thing.holder_id.as_deref() == Some(&hero) && thing.owner_id.is_some() => {
                     let recipient = thing.owner_id.as_ref().ok_or_else(invalid)?;
                     let person = snapshot
@@ -562,6 +571,10 @@ pub(super) fn stage(
                     });
                     description
                 }
+                "give" if thing.holder_id.as_deref() == Some(&hero) => format!(
+                    "You must name a recipient before giving {} away.",
+                    thing.name
+                ),
                 "join" => {
                     let description = format!("{hero} sits beside {}.", thing.name);
                     change = Some(SceneChange {

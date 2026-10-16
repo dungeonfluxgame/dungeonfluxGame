@@ -676,7 +676,7 @@ impl SceneModel {
         }
         if let SceneChangeKind::Purchased {
             holder_id,
-            seller_id,
+            seller_id: _seller_id,
         } = &change.kind
         {
             let offer = self
@@ -703,7 +703,9 @@ impl SceneModel {
                 value_cp: Some(offer.cost_cp),
                 use_effect: format!("Uses {}.", offer.description.trim_end_matches('.')),
                 position: format!("held by {holder_id}"),
-                owner_id: Some(seller_id.clone()),
+                // Ownership transfers to the buyer; seller_id remains in the
+                // durable purchase change as provenance for the transaction.
+                owner_id: Some(holder_id.clone()),
                 in_use: false,
                 in_scene: true,
                 holder_id: Some(holder_id.clone()),

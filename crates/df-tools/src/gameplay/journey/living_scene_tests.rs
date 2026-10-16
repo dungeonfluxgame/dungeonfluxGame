@@ -243,6 +243,15 @@ fn a_purchase_spends_exact_copper_and_cannot_overdraw_the_heros_purse() {
                 .unwrap()
                 .contains("not have enough coin")
         );
+        assert!(
+            !living_scene::snapshot(refused.state(), &scene)
+                .unwrap()
+                .unwrap()
+                .model
+                .things
+                .iter()
+                .any(|thing| thing.id == format!("purchased-{}", offer.id))
+        );
     });
 }
 
@@ -510,6 +519,7 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
             .find(|thing| thing.id == owned_id)
             .expect("purchase must create a durable held scene thing");
         assert_eq!(owned.holder_id.as_deref(), Some("Brynn"));
+        assert_eq!(owned.owner_id.as_deref(), Some("Brynn"));
         assert!(owned.in_scene);
         let codec = df_persistence::NativeCodecLimits {
             maximum_document_bytes: 2 * 1024 * 1024,
@@ -531,10 +541,24 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
             living_scene::snapshot(restored.state(), &scene).unwrap(),
             living_scene::snapshot(after.state(), &scene).unwrap()
         );
+        let examined = interact(&after, member, 32, &owned_id, "examine");
+        assert!(
+            living_scene::last_line(examined.state())
+                .unwrap()
+                .unwrap()
+                .contains("It belongs to Brynn.")
+        );
+        let attempted_give = interact(&after, member, 33, &owned_id, "give");
+        assert!(
+            living_scene::last_line(attempted_give.state())
+                .unwrap()
+                .unwrap()
+                .contains("must name a recipient")
+        );
         let balance_after_first =
             living_scene::balance_cp(after.state(), player_entity(member, &after).unwrap())
                 .unwrap();
-        let repeated = interact(&after, member, 32, &offer.id, "buy");
+        let repeated = interact(&after, member, 34, &offer.id, "buy");
         assert_eq!(
             living_scene::balance_cp(repeated.state(), player_entity(member, &repeated).unwrap())
                 .unwrap(),
