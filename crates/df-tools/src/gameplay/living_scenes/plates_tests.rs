@@ -1428,25 +1428,14 @@ async fn a_visible_change_before_the_first_plate_stays_pending_until_that_plate_
 }
 
 fn layout() -> PlateLayout {
-    shot::direct(&ShotInput {
-        scene_key: SceneKey::Opening,
-        place_id: "p",
-        place_kind: "bell-chamber",
-        exterior: false,
-        title: "t",
-        story_text: "",
-        speaker: Some(SpeakerInput {
-            sprite: "sprite-patron-bell-ringer",
-            gender: None,
-            age: None,
-        }),
-        others: &[],
-        heroes: &[1],
-    })
-    .unwrap()
-    .speaker
-    .unwrap()
-    .layout
+    // Ready-image geometry is a fixed provider result, independent of the director's camera.
+    PlateLayout {
+        bubble_side: shot::Side::Left,
+        head_x_permille: 640,
+        head_y_permille: 380,
+        head_width_permille: 160,
+        head_height_permille: 180,
+    }
 }
 
 #[tokio::test]
