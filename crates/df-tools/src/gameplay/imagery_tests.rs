@@ -1231,6 +1231,21 @@ fn request_diagnostics_count_prompt_and_reference_sizes_without_content() {
     .to_string();
 
     assert_eq!(fields["prompt_char_count"], prompt.chars().count());
+    assert_eq!(fields["request_schema"], "df-imagery/1");
+    assert_eq!(
+        fields["prompt_sha256"],
+        format!("{:x}", Sha256::digest(prompt.as_bytes()))
+    );
+    assert_eq!(
+        fields["reference_sha256"],
+        serde_json::json!(
+            request
+                .references
+                .iter()
+                .map(|reference| &reference.sha256)
+                .collect::<Vec<_>>()
+        )
+    );
     assert_eq!(fields["reference_count"], 2);
     assert_eq!(
         fields["reference_byte_lengths"],

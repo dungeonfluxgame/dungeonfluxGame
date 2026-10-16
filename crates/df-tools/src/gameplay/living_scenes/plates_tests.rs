@@ -77,11 +77,191 @@ fn view(scene: &pack::Scene, heroes: &[u8], in_combat: bool) -> View {
         in_roll: false,
         graph_revision: 1,
         heroes: heroes.to_vec(),
+        story: None,
         hero_names: heroes
             .iter()
             .map(|art| (*art, format!("Hero {art}")))
             .collect(),
     }
+}
+
+#[test]
+fn later_plate_edits_do_not_inherit_the_original_scene_request_latency() {
+    let mut first = None;
+    assert_eq!(
+        projection_request_latency(&mut first, Some(6_324), Some("original"), Some("original")),
+        Some(6_324)
+    );
+    assert_eq!(
+        projection_request_latency(&mut first, Some(56_801), Some("original"), Some("original")),
+        Some(6_324)
+    );
+    assert_eq!(
+        projection_request_latency(&mut first, Some(578_302), Some("edited"), Some("original")),
+        None
+    );
+    assert_eq!(
+        projection_request_latency(&mut first, Some(578_302), None, Some("original")),
+        None
+    );
+    assert_eq!(first, Some(6_324));
+}
+
+#[test]
+fn authored_story_reads_only_committed_npc_reply_after_the_scene_action_boundary() {
+    let mut journey = rpc::JourneyView {
+        table_log: vec![
+            rpc::TableLine {
+                sequence: 1,
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                speaker: "Courier".into(),
+                text: "Earlier scene".into(),
+                ..Default::default()
+            },
+            rpc::TableLine {
+                sequence: 2,
+                role: rpc::TableRole::Hero as i32,
+                kind: rpc::TableKind::Action as i32,
+                text: "Enter the quay".into(),
+                ..Default::default()
+            },
+            rpc::TableLine {
+                sequence: 3,
+                role: rpc::TableRole::Hero as i32,
+                kind: rpc::TableKind::Speech as i32,
+                text: "Player instructions must not become image context".into(),
+                ..Default::default()
+            },
+        ],
+        dialogue: "partial reply streaming".into(),
+        ..Default::default()
+    };
+    assert!(committed_story(&journey).is_none());
+    journey.table_log.push(rpc::TableLine {
+        sequence: 4,
+        role: rpc::TableRole::Npc as i32,
+        kind: rpc::TableKind::Speech as i32,
+        speaker: "Courier".into(),
+        text: "Keep your voice low.".into(),
+        ..Default::default()
+    });
+    let first = committed_story(&journey).unwrap();
+    assert_eq!(first.sequence, 4);
+    assert_eq!(first.text, "Keep your voice low.");
+    journey.table_log.last_mut().unwrap().sequence = 5;
+    assert_eq!(committed_story(&journey).unwrap().sha256, first.sha256);
+}
+
+#[tokio::test]
+async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_configured_interval() {
+    let current = scene(SceneKey::Opening, "Harbor story", Some("Kestrel"));
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    let story = |sequence, text: &str| StoryBeat {
+        sequence,
+        speaker: "Kestrel".into(),
+        text: text.into(),
+        sha256: format!("hash-{text}"),
+    };
+    let mut next = view(&current, &[1], false);
+    next.story = Some(story(2, "Keep your voice low."));
+    next.graph_revision = 2;
+    shared.observe_with(&next, Some(current.clone()), Vec::new());
+    shared.poll_state_images_at(Duration::from_secs(2));
+    assert!(drain(&mut queue).is_empty());
+    shared.poll_state_images_at(Duration::from_secs(4));
+    let Job::State(state_images::Job::Bake { pending, base, .. }) = drain(&mut queue).remove(0)
+    else {
+        panic!("story edit")
+    };
+    assert_eq!(base, key('a'));
+    assert_eq!(pending.story.as_ref().unwrap().sequence, 2);
+    shared.finish_state_image_at(
+        state_images::Done::Bake {
+            scene: next.scene_key.clone(),
+            state: pending.state,
+            revision: pending.revision,
+            result: Ok(key('b')),
+        },
+        Duration::from_secs(5),
+    );
+    // The same text with a new log sequence does not cost another image.
+    next.story.as_mut().unwrap().sequence = 3;
+    next.graph_revision = 3;
+    shared.observe_with(&next, Some(current.clone()), Vec::new());
+    shared.poll_state_images_at(Duration::from_secs(40));
+    assert!(drain(&mut queue).is_empty());
+    for (sequence, text) in [(4, "I glance at the enforcer."), (5, "I lower my voice.")] {
+        next.story = Some(story(sequence, text));
+        next.graph_revision = sequence;
+        shared.observe_with(&next, Some(current.clone()), Vec::new());
+    }
+    shared.poll_state_images_at(Duration::from_secs(33));
+    assert!(drain(&mut queue).is_empty());
+    shared.poll_state_images_at(Duration::from_secs(34));
+    let Job::State(state_images::Job::Bake { pending, base, .. }) = drain(&mut queue).remove(0)
+    else {
+        panic!("latest story edit")
+    };
+    assert_eq!(
+        base,
+        key('b'),
+        "edit the currently shown known-good picture"
+    );
+    assert_eq!(pending.story.as_ref().unwrap().sequence, 5);
+    assert!(
+        drain(&mut queue).is_empty(),
+        "one bounded pending story, not one job per reply"
+    );
+}
+
+#[test]
+fn modelled_face_refresh_settles_and_has_a_shared_cadence() {
+    let angry = Some(Face {
+        expression: Expression::Angry,
+        tier: HealthTier::Healthy,
+    });
+    let mut gate = FaceRefresh::default();
+    assert!(!gate.ready(angry, Duration::ZERO));
+    assert!(gate.ready(angry, Duration::from_secs(3)));
+    gate.last_started = Some(Duration::from_secs(3));
+    assert!(!gate.ready(None, Duration::from_secs(4)));
+    assert!(!gate.ready(None, Duration::from_secs(7)));
+    assert!(gate.ready(None, Duration::from_secs(13)));
+}
+
+#[test]
+fn retained_narrator_findings_do_not_hold_the_plate_roll_guard() {
+    let current = scene(SceneKey::Opening, "Harbor", Some("Kestrel"));
+    let mut message = display_message(&current);
+    let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+        panic!("display")
+    };
+    display.journey = Some(rpc::JourneyView {
+        table_log: vec![rpc::TableLine {
+            role: rpc::TableRole::Narrator as i32,
+            kind: rpc::TableKind::Action as i32,
+            speaker: "Roll".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    assert!(view_of(&message, 1).unwrap().in_roll);
+    let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
+        panic!("display")
+    };
+    display
+        .journey
+        .as_mut()
+        .unwrap()
+        .table_log
+        .last_mut()
+        .unwrap()
+        .speaker = "Dungeon Master".into();
+    assert!(!view_of(&message, 1).unwrap().in_roll);
 }
 
 #[test]
@@ -795,7 +975,7 @@ async fn ten_lines_in_one_scene_request_only_one_plate_for_the_party() {
 }
 
 #[tokio::test]
-async fn a_modelled_room_keeps_its_plate_when_only_the_speakers_expression_changes() {
+async fn a_modelled_room_coalesces_lasting_expression_changes_into_one_edit() {
     let generated = crate::gameplay::npc_dossier_tests::adventure(41);
     let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
     current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
@@ -810,9 +990,17 @@ async fn a_modelled_room_keeps_its_plate_when_only_the_speakers_expression_chang
             tier: HealthTier::Healthy,
         },
     );
-    shared.poll_face();
+    shared.poll_face_at(Duration::ZERO);
+    shared.poll_face_at(Duration::from_secs(2));
     assert!(drain(&mut queue).is_empty());
     assert_eq!(locked(&shared.book).shown().unwrap().0, key('a'));
+    shared.poll_face_at(Duration::from_secs(3));
+    assert_eq!(drain(&mut queue).len(), 1);
+    shared.poll_face_at(Duration::from_secs(20));
+    assert!(
+        drain(&mut queue).is_empty(),
+        "same target cannot spawn repeated edits"
+    );
 }
 
 #[tokio::test]
@@ -1344,7 +1532,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
         wake: tokio::sync::watch::channel(0).0,
         origin: Instant::now(),
     });
-    let (jobs, _queue) = mpsc::channel(16);
+    let (jobs, mut queue) = mpsc::channel(16);
     let shared = Shared {
         inner,
         book: Mutex::new(Book::new()),
@@ -1375,6 +1563,49 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
     for identity in &scene.identity_cast {
         assert!(request.prompt.as_str().contains(&identity.id));
     }
+    // The authored automatic-story path keeps the same canonical reference contract.
+    let mut story_view = view(&current, &[1, 2], false);
+    shared.observe_with(&story_view, Some(current.clone()), Vec::new());
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    story_view.story = Some(StoryBeat {
+        sequence: 7,
+        speaker: current.speaker.clone(),
+        text: "The enforcer listens.".into(),
+        sha256: "test-story-hash".into(),
+    });
+    story_view.graph_revision = 2;
+    shared.observe_with(&story_view, Some(current.clone()), Vec::new());
+    shared.poll_state_images_at(shared.inner.now() + Duration::from_secs(4));
+    let Job::State(state_images::Job::Bake {
+        mut pending,
+        identities,
+        ..
+    }) = drain(&mut queue).remove(0)
+    else {
+        panic!("automatic story edit")
+    };
+    let edit = shared
+        .state_image_request(&pending, base.clone(), identities.as_deref())
+        .await
+        .unwrap();
+    assert_eq!(edit.references.len(), 3);
+    assert_eq!(edit.references[0].sha256, base.sha256);
+    assert_eq!(edit.references[1].sha256, request.references[1].sha256);
+    assert_eq!(edit.references[2].sha256, courier.sha256);
+    assert!(edit.prompt.as_str().contains("The enforcer listens."));
+    assert!(
+        edit.prompt
+            .as_str()
+            .contains("Do not infer or enact mechanical outcomes")
+    );
+    let edit_key = shared.inner.imagery.key_for(&edit);
+    pending.story.as_mut().unwrap().text = "Keep your voice low.".into();
+    let changed = shared
+        .state_image_request(&pending, base.clone(), identities.as_deref())
+        .await
+        .unwrap();
+    assert_ne!(edit_key, shared.inner.imagery.key_for(&changed));
     let (rebuilt, _) = shared
         .fresh_request(&scene, &spec, &[2, 1], &[], None)
         .await

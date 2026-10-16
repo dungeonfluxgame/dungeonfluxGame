@@ -23,7 +23,7 @@ mod plate_prompt;
 mod prompt;
 mod references;
 mod scene_prompt;
-pub(super) use scene_prompt::{graph_edit, item_picture, model_plate, state_edit};
+pub(super) use scene_prompt::{graph_edit, item_picture, model_plate, state_edit, story_beat_edit};
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -1016,12 +1016,27 @@ fn image_request_diagnostics(
         .iter()
         .map(|reference| reference.bytes.len())
         .collect();
+    let reference_sha256: Vec<&str> = request
+        .references
+        .iter()
+        .map(|reference| reference.sha256.as_str())
+        .collect();
+    let prompt_sha256 = format!("{:x}", Sha256::digest(request.prompt.as_str().as_bytes()));
     let reference_bytes_total = reference_byte_lengths.iter().sum::<usize>();
     let reference_count = reference_byte_lengths.len();
     let line = format!(
         "IMAGERY request kind={kind} id={key} prompt_chars={prompt_char_count} references={reference_count} reference_bytes={reference_bytes_total}"
     );
     let fields = serde_json::Map::from_iter([
+        (
+            "request_schema".to_owned(),
+            serde_json::json!(REQUEST_SCHEMA),
+        ),
+        ("prompt_sha256".to_owned(), serde_json::json!(prompt_sha256)),
+        (
+            "reference_sha256".to_owned(),
+            serde_json::json!(reference_sha256),
+        ),
         ("kind".to_owned(), serde_json::json!(kind)),
         ("image_key".to_owned(), serde_json::json!(key)),
         (
@@ -1042,6 +1057,12 @@ fn image_request_diagnostics(
         ),
     ]);
     let attributes = vec![
+        ("gameplay.imagery.request_schema", REQUEST_SCHEMA.to_owned()),
+        ("gameplay.imagery.prompt_sha256", prompt_sha256),
+        (
+            "gameplay.imagery.reference_sha256",
+            reference_sha256.join(","),
+        ),
         ("gameplay.imagery.kind", kind.to_owned()),
         ("gameplay.imagery.image_key", key.to_owned()),
         (
@@ -1112,13 +1133,15 @@ fn record_image_result(
     crate::gameplay::actor::record_audit_diagnostic(event, line, fields, &attributes);
 }
 
+const REQUEST_SCHEMA: &str = "df-imagery/1";
+
 fn request_key(request: &ImageRequest, model: &str, quality: &str, rating: &str) -> ImageKey {
     let mut hasher = Sha256::new();
     let mut part = |text: &str| {
         hasher.update(text.as_bytes());
         hasher.update(b"\n");
     };
-    part("df-imagery/1");
+    part(REQUEST_SCHEMA);
     part(request.kind.label());
     part(model);
     part(quality);

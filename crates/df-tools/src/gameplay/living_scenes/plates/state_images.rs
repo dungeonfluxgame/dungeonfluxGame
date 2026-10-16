@@ -16,7 +16,7 @@ pub(super) struct Book {
     observed_graph: u64,
     pub(super) pending: Option<Pending>,
     pub(super) flying: bool,
-    last_started: Option<Duration>,
+    pub(super) last_started: Option<Duration>,
     last_shown: Option<Duration>,
     pub(super) shown: Option<(ImageKey, Option<PlatePlacement>)>,
     pub(super) baked_revision: Option<u64>,
@@ -26,10 +26,11 @@ pub(super) struct Book {
 }
 
 pub(super) struct Pending {
-    snapshot: SceneNow,
+    snapshot: Option<SceneNow>,
+    pub(super) story: Option<StoryBeat>,
     reason: String,
-    state: String,
-    revision: u64,
+    pub(super) state: String,
+    pub(super) revision: u64,
     changed_at: Duration,
     graph: Option<crate::gameplay::shot::scene_graph::SceneGraph>,
 }
@@ -79,6 +80,7 @@ pub(super) enum Done {
 
 pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, now: Duration) {
     let Some(snapshot) = &scene.snapshot else {
+        observe_story(book, view, now);
         return;
     };
     let Ok(state) = snapshot.model.picture_state() else {
@@ -118,13 +120,67 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
         format!("{}; {reason}", pending.reason)
     });
     images.pending = Some(Pending {
-        snapshot: snapshot.clone(),
+        snapshot: Some(snapshot.clone()),
+        story: None,
         reason,
         state,
         revision: view.graph_revision,
         changed_at: now,
         graph: None,
     });
+}
+
+fn observe_story(book: &mut super::Book, view: &View, now: Duration) {
+    let images = &mut book.state_images;
+    if images.scene != view.scene_key {
+        *images = Book {
+            scene: view.scene_key.clone(),
+            ..Book::default()
+        };
+    }
+    let Some(story) = &view.story else {
+        refresh_decision(book, "story", "no_committed_npc_reply");
+        return;
+    };
+    if images.observed == story.sha256 {
+        refresh_decision(book, "story", "unchanged_reply");
+        return;
+    }
+    images.observed = story.sha256.clone();
+    images.observed_graph = view.graph_revision;
+    images.ready = None;
+    images.pending = Some(Pending {
+        snapshot: None,
+        story: Some(story.clone()),
+        reason: "completed NPC story beat".to_owned(),
+        state: story.sha256.clone(),
+        revision: view.graph_revision,
+        changed_at: now,
+        graph: None,
+    });
+    crate::gameplay::actor::record_audit_diagnostic(
+        "gameplay.living_scene.plate_story_observed",
+        format!(
+            "PLATE story sequence={} sha256={} revision={}",
+            story.sequence, story.sha256, view.graph_revision
+        ),
+        serde_json::Map::from_iter([
+            (
+                "story_sequence".to_owned(),
+                serde_json::json!(story.sequence),
+            ),
+            ("story_sha256".to_owned(), serde_json::json!(story.sha256)),
+            (
+                "graph_revision".to_owned(),
+                serde_json::json!(view.graph_revision),
+            ),
+        ]),
+        &[
+            ("story.sequence", story.sequence.to_string()),
+            ("story.sha256", story.sha256.clone()),
+        ],
+    );
+    refresh_decision(book, "story", "pending_settle");
 }
 
 impl Shared {
@@ -199,7 +255,17 @@ impl Shared {
         let Some(current) = &book.current else {
             return;
         };
-        if current.in_combat || current.in_roll || book.state_images.flying {
+        let blocked = if current.in_combat {
+            Some("combat")
+        } else if current.in_roll {
+            Some("roll")
+        } else if book.state_images.flying {
+            Some("render_in_flight")
+        } else {
+            None
+        };
+        if let Some(reason) = blocked {
+            refresh_decision(&mut book, "state", reason);
             return;
         }
         let scene = current.scene_key.clone();
@@ -222,19 +288,31 @@ impl Shared {
             self.wake();
         }
         let Some(pending) = &book.state_images.pending else {
+            refresh_decision(&mut book, "state", "no_visible_change");
             return;
+        };
+        let interval = if pending.story.is_some() {
+            self.inner.timing.interval.max(BAKE_INTERVAL)
+        } else {
+            BAKE_INTERVAL
         };
         if now.saturating_sub(pending.changed_at) < SETTLE
             || book
                 .state_images
                 .last_started
-                .is_some_and(|last| now.saturating_sub(last) < BAKE_INTERVAL)
+                .is_some_and(|last| now.saturating_sub(last) < interval)
+            || book
+                .face_refresh
+                .last_started
+                .is_some_and(|last| now.saturating_sub(last) < interval)
         {
+            refresh_decision(&mut book, "state", "settling_or_rate_limited");
             return;
         }
         // Keep the settled change pending until the original plate is ready to edit.
         // Re-requesting a fresh plate here used to restage the room and lose the pending edit.
         let Some(base) = book.shown().map(|shown| shown.0) else {
+            refresh_decision(&mut book, "state", "awaiting_base_plate");
             return;
         };
         let Some(pending) = book.state_images.pending.take() else {
@@ -260,15 +338,74 @@ impl Shared {
                 crate::gameplay::actor::record_audit_line("gameplay.imagery.request", request_line);
                 book.state_images.flying = true;
                 book.state_images.last_started = Some(now);
+                refresh_decision(&mut book, "state", "queued");
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(super::Job::State(Job::Bake {
                 pending,
                 ..
             }))) => {
                 book.state_images.pending = Some(pending);
+                refresh_decision(&mut book, "state", "queue_full");
             }
             Err(_) => record("gameplay.living_scene.worker_closed", &[]),
         }
+    }
+
+    pub(super) async fn state_image_request(
+        &self,
+        pending: &Pending,
+        base: ReferenceImage,
+        identities: Option<&IdentitySnapshot>,
+    ) -> Result<ImageRequest, ImageFailure> {
+        let prompt = if let Some(story) = &pending.story {
+            crate::gameplay::imagery::story_beat_edit(
+                self.inner.rating,
+                &story.speaker,
+                &story.text,
+            )?
+        } else {
+            match &pending.graph {
+                Some(graph) => {
+                    crate::gameplay::imagery::graph_edit(self.inner.rating, graph, &pending.reason)?
+                }
+                None => state_edit(
+                    self.inner.rating,
+                    &pending
+                        .snapshot
+                        .as_ref()
+                        .ok_or(ImageFailure::InvalidRequest)?
+                        .model,
+                    &pending.reason,
+                )?,
+            }
+        };
+        let mut references = vec![base];
+        let prompt = if self.inner.references.photographic_only() {
+            let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
+            let (sheet, legend) = self
+                .identity_sheet(&identity.scene, &identity.heroes)
+                .await?;
+            references.push(sheet);
+            if let Some(story) = &pending.story
+                && let Some(speaker) = identity
+                    .scene
+                    .identity_cast
+                    .iter()
+                    .find(|member| member.name == story.speaker)
+            {
+                let (figure, face) = self.speaker_art(&speaker.sprite).await;
+                references.extend(face.or(figure));
+            }
+            prompt.with_cast_sheet(2, &legend)
+        } else {
+            prompt
+        };
+        Ok(ImageRequest {
+            kind: ImageKind::ScenePlateEdit,
+            references,
+            prompt,
+            output: OutputSpec::PLATE,
+        })
     }
 
     pub(super) async fn render_state_image(&self, job: Job) -> Done {
@@ -286,36 +423,14 @@ impl Shared {
                     else {
                         return Err(ImageFailure::InvalidRequest);
                     };
-                    let prompt = match &pending.graph {
-                        Some(graph) => crate::gameplay::imagery::graph_edit(
-                            self.inner.rating,
-                            graph,
-                            &pending.reason,
-                        )?,
-                        None => {
-                            state_edit(self.inner.rating, &pending.snapshot.model, &pending.reason)?
-                        }
-                    };
-                    let mut references = vec![ReferenceImage::new(format, bytes)];
-                    let prompt = if self.inner.references.photographic_only() {
-                        let identity = identities.as_ref().ok_or(ImageFailure::InvalidRequest)?;
-                        let (sheet, legend) = self
-                            .identity_sheet(&identity.scene, &identity.heroes)
-                            .await?;
-                        references.push(sheet);
-                        prompt.with_cast_sheet(2, &legend)
-                    } else {
-                        prompt
-                    };
-                    self.inner
-                        .imagery
-                        .render(ImageRequest {
-                            kind: ImageKind::ScenePlateEdit,
-                            references,
-                            prompt,
-                            output: OutputSpec::PLATE,
-                        })
-                        .await
+                    let request = self
+                        .state_image_request(
+                            &pending,
+                            ReferenceImage::new(format, bytes),
+                            identities.as_deref(),
+                        )
+                        .await?;
+                    self.inner.imagery.render(request).await
                 }
                 .await;
                 crate::gameplay::actor::record_audit_line(

@@ -3028,6 +3028,18 @@ impl TvStage {
         self.root.set_attribute("data-shot-tick", tick)
     }
 
+    /// The character-line adapter owns both the named fallback and the anchored bubble.
+    pub(super) fn character_line(
+        &self,
+        position: usize,
+        id: u64,
+        state: LineState,
+        bubble: &super::live_stage::LineBubble<'_>,
+    ) -> Result<bool, JsValue> {
+        self.lower_third(id, bubble.speaker, bubble.text, state)?;
+        self.figures.set_line(position, id, state, bubble)
+    }
+
     /// PLAY-V12: shows what a character says in the lower third, with the speaker's portrait and
     /// name, so the establishing shot always says who is talking. The stylesheet draws it only
     /// over an establishing shot and only while the line is the one being heard.
@@ -3038,6 +3050,32 @@ impl TvStage {
         text: &str,
         state: LineState,
     ) -> Result<(), JsValue> {
+        // A predecessor closes after the successor may already own the named lane.
+        // Its terminal event must not replace the successor's text, identity or visibility.
+        if matches!(
+            state,
+            LineState::Closing | LineState::Done | LineState::Cancelled
+        ) && self
+            .lower
+            .root
+            .get_attribute("data-component-id")
+            .as_deref()
+            != Some(&id.to_string())
+        {
+            super::presentation_timing::component(
+                None,
+                df_observe::presentation::PresentationComponent::Subtitle,
+                id,
+                &self
+                    .root
+                    .get_attribute("data-scene-key")
+                    .unwrap_or_default(),
+                super::live_stage::line_component_phase(state),
+                "successor",
+                0,
+            );
+            return Ok(());
+        }
         let scene = self
             .root
             .get_attribute("data-scene-key")
@@ -3481,6 +3519,106 @@ mod tests {
     fn finish_stage(parent: web_sys::Element, stage: TvStage) {
         stage.dispose().unwrap();
         parent.remove();
+    }
+
+    #[test]
+    fn predecessor_done_cannot_replace_the_successors_unplaced_named_caption() {
+        use super::super::live_stage::{BubbleKind, LineBubble, StageMode};
+        use crate::presentation::{ActorSlot, PlateGeometry, SceneFamily, StageActor};
+        let (parent, stage) = mounted_stage();
+        stage.root.set_attribute("data-shot", "plate").unwrap();
+        stage
+            .figures
+            .update(
+                &[StageActor {
+                    slot: ActorSlot::Hero(0),
+                    name: "Brakka".into(),
+                    role: "hero".into(),
+                    sprite: String::new(),
+                    portrait: String::new(),
+                    hit_points: None,
+                    speaking: false,
+                    down: false,
+                    live_sprite: None,
+                }],
+                "scene",
+                "",
+                SceneFamily::Exterior,
+                StageMode::Scene,
+            )
+            .unwrap();
+        stage
+            .figures
+            .set_plate(
+                Some(PlateGeometry {
+                    bubble_side: crate::plate_layout::Side::Right,
+                    head_x: 500,
+                    head_y: 200,
+                    head_width: 100,
+                    head_height: 100,
+                    heroes: vec![],
+                }),
+                Some((1920.0, 1080.0)),
+            )
+            .unwrap();
+        let host = stage
+            .root
+            .query_selector(".tv-plate-bubbles>.tv-fig-bubbles")
+            .unwrap()
+            .unwrap();
+        host.set_attribute("style", "width:10000px;height:10000px")
+            .unwrap();
+        let previous = LineBubble {
+            kind: BubbleKind::Typed,
+            speaker: "Brakka",
+            text: "Earlier line",
+            voiced: false,
+        };
+        let text = format!("Courier {}", "a".repeat(324));
+        assert_eq!(text.chars().count(), 332);
+        let current = LineBubble {
+            kind: BubbleKind::Typed,
+            speaker: "Brakka",
+            text: &text,
+            voiced: false,
+        };
+        stage
+            .character_line(0, 1, LineState::Opening, &previous)
+            .unwrap();
+        stage
+            .character_line(0, 2, LineState::Opening, &current)
+            .unwrap();
+        stage
+            .character_line(0, 1, LineState::Closing, &previous)
+            .unwrap();
+        stage
+            .character_line(0, 2, LineState::Speaking, &current)
+            .unwrap();
+        stage
+            .character_line(0, 1, LineState::Done, &previous)
+            .unwrap();
+        assert_eq!(
+            stage.lower.text.text_content().as_deref(),
+            Some(text.as_str())
+        );
+        assert_eq!(stage.lower.name.text_content().as_deref(), Some("Brakka"));
+        assert_eq!(
+            stage
+                .lower
+                .root
+                .get_attribute("data-component-id")
+                .as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            stage.lower.root.get_attribute("data-line-state").as_deref(),
+            Some("speaking")
+        );
+        assert_eq!(
+            stage.root.get_attribute("data-unplaced-line").as_deref(),
+            Some("2")
+        );
+        finish_stage(parent, stage);
     }
 
     #[test]

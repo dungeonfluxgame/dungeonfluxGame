@@ -86,6 +86,7 @@ struct PlateScene {
 #[derive(Clone, Debug)]
 struct IdentityReference {
     id: String,
+    name: String,
     sprite: String,
     portrait: String,
 }
@@ -140,6 +141,7 @@ impl PlateScene {
                 .iter()
                 .map(|member| IdentityReference {
                     id: format!("npc:{}", member.id),
+                    name: member.name.clone(),
                     sprite: member.sprite.clone(),
                     portrait: member.portrait.clone(),
                 })
@@ -308,6 +310,48 @@ struct View {
     heroes: Vec<u8>,
     /// Their names, to find a hero's health variant.
     hero_names: Vec<(u8, String)>,
+    story: Option<StoryBeat>,
+}
+
+#[derive(Clone, Debug)]
+struct StoryBeat {
+    sequence: u64,
+    speaker: String,
+    text: String,
+    sha256: String,
+}
+
+fn committed_story(journey: &rpc::JourneyView) -> Option<StoryBeat> {
+    use sha2::{Digest, Sha256};
+    let scene_boundary = journey
+        .table_log
+        .iter()
+        .filter(|line| {
+            rpc::TableRole::try_from(line.role).ok() == Some(rpc::TableRole::Hero)
+                && rpc::TableKind::try_from(line.kind).ok() == Some(rpc::TableKind::Action)
+        })
+        .map(|line| line.sequence)
+        .max()
+        .unwrap_or(0);
+    let line = journey.table_log.iter().rev().find(|line| {
+        line.sequence > scene_boundary
+            && rpc::TableRole::try_from(line.role).ok() == Some(rpc::TableRole::Npc)
+            && rpc::TableKind::try_from(line.kind).ok() == Some(rpc::TableKind::Speech)
+            && !line.text.trim().is_empty()
+    })?;
+    if line.text.chars().count() > 4096 {
+        return None;
+    }
+    let text = line.text.trim().to_owned();
+    Some(StoryBeat {
+        sequence: line.sequence,
+        speaker: line.speaker.clone(),
+        sha256: format!(
+            "{:x}",
+            Sha256::digest(format!("{}\0{text}", line.speaker).as_bytes())
+        ),
+        text,
+    })
 }
 
 fn scene_identity(display_asset: &str, scene: &rpc::GameplayScene) -> (String, String) {
@@ -330,6 +374,8 @@ fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
     let in_roll = journey.is_some_and(|journey| {
         journey.table_log.last().is_some_and(|line| {
             rpc::TableKind::try_from(line.kind).ok() == Some(rpc::TableKind::Action)
+                && rpc::TableRole::try_from(line.role).ok() == Some(rpc::TableRole::Narrator)
+                && line.speaker == "Roll"
         })
     });
     let hero_names: Vec<(u8, String)> = journey
@@ -357,6 +403,7 @@ fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
         graph_revision,
         heroes,
         hero_names,
+        story: journey.and_then(committed_story),
     })
 }
 
@@ -396,6 +443,7 @@ struct Current {
     in_roll: bool,
     graph_revision: u64,
     request_started: Option<std::time::Instant>,
+    first_projection_ms: Option<u128>,
     last_projection: Option<PlateProjection>,
 }
 
@@ -409,6 +457,26 @@ struct PlateProjection {
     asset: String,
 }
 
+/// Modelled scenes coalesce visible expression changes rather than restaging every line.
+#[derive(Default)]
+struct FaceRefresh {
+    target: Option<(Option<Face>, Duration)>,
+    last_started: Option<Duration>,
+}
+
+impl FaceRefresh {
+    fn ready(&mut self, wanted: Option<Face>, now: Duration) -> bool {
+        if self.target.is_none_or(|(target, _)| target != wanted) {
+            self.target = Some((wanted, now));
+        }
+        self.target
+            .is_some_and(|(_, changed)| now.saturating_sub(changed) >= Duration::from_secs(3))
+            && self
+                .last_started
+                .is_none_or(|last| now.saturating_sub(last) >= Duration::from_secs(10))
+    }
+}
+
 struct Book {
     current: Option<Current>,
     entries: BTreeMap<String, Entry>,
@@ -417,6 +485,34 @@ struct Book {
     edit: Edit,
     direct: direct::Book,
     state_images: state_images::Book,
+    face_refresh: FaceRefresh,
+    refresh_decisions: BTreeMap<&'static str, (u64, &'static str)>,
+}
+
+fn refresh_decision(book: &mut Book, pipeline: &'static str, reason: &'static str) {
+    let revision = book
+        .current
+        .as_ref()
+        .map_or(0, |current| current.graph_revision);
+    if book.refresh_decisions.get(pipeline) == Some(&(revision, reason)) {
+        return;
+    }
+    book.refresh_decisions.insert(pipeline, (revision, reason));
+    let attributes = [
+        ("refresh.pipeline", pipeline.to_owned()),
+        ("refresh.reason", reason.to_owned()),
+        ("graph.revision", revision.to_string()),
+    ];
+    crate::gameplay::actor::record_audit_diagnostic(
+        "gameplay.living_scene.plate_refresh_decision",
+        format!("PLATE refresh pipeline={pipeline} reason={reason} revision={revision}"),
+        serde_json::Map::from_iter([
+            ("pipeline".to_owned(), serde_json::json!(pipeline)),
+            ("reason".to_owned(), serde_json::json!(reason)),
+            ("graph_revision".to_owned(), serde_json::json!(revision)),
+        ]),
+        &attributes,
+    );
 }
 
 impl Book {
@@ -429,6 +525,8 @@ impl Book {
             edit: Edit::Idle,
             direct: direct::Book::default(),
             state_images: state_images::Book::default(),
+            face_refresh: FaceRefresh::default(),
+            refresh_decisions: BTreeMap::new(),
         }
     }
 
@@ -627,6 +725,21 @@ impl Plates {
             None => {}
         }
     }
+}
+
+fn projection_request_latency(
+    first: &mut Option<u128>,
+    scene_age_ms: Option<u128>,
+    projected: Option<&str>,
+    original: Option<&str>,
+) -> Option<u128> {
+    if projected.is_none() || projected != original {
+        return None;
+    }
+    if first.is_none() {
+        *first = scene_age_ms;
+    }
+    *first
 }
 
 fn record_plate_diagnostic(
@@ -962,6 +1075,8 @@ impl Shared {
             }
             if scene_changed || graph_changed {
                 book.edit = Edit::Idle;
+                book.face_refresh = FaceRefresh::default();
+                book.refresh_decisions.clear();
                 book.direct.reset();
                 // A plate that failed is asked for again once when its scene comes back.
                 if let Some(id) = &id
@@ -990,6 +1105,7 @@ impl Shared {
                 in_roll: view.in_roll,
                 graph_revision: view.graph_revision,
                 request_started,
+                first_projection_ms: None,
                 last_projection: None,
             });
             // The lobby has no plate; the opening plate is requested when that scene becomes current.
@@ -1274,6 +1390,10 @@ impl Shared {
     ) {
         let (line, fields) = {
             let mut book = locked(&self.book);
+            let original_key = match book.current_entry() {
+                Some(Entry::Ready { key, .. }) => Some(key.as_str().to_owned()),
+                _ => None,
+            };
             let Some(current) = book.current.as_mut() else {
                 return;
             };
@@ -1309,7 +1429,7 @@ impl Shared {
             let scene_id = df_observe::presentation::local_identity(scene_key);
             let state = rpc::PlateState::try_from(scene.plate_state)
                 .map_or("unrecognized", |state| state.as_str_name());
-            let elapsed_ms = current
+            let scene_request_age_ms = current
                 .request_started
                 .map(|started| started.elapsed().as_millis());
             let live_plate_key = scene
@@ -1317,6 +1437,12 @@ impl Shared {
                 .strip_prefix("/gameplay/imagery/")
                 .filter(|key| key.len() == 64);
             let image_key = ready.then_some(live_plate_key).flatten();
+            let elapsed_ms = projection_request_latency(
+                &mut current.first_projection_ms,
+                scene_request_age_ms,
+                image_key,
+                original_key.as_deref(),
+            );
             let image_key_id = image_key.map(df_observe::presentation::local_identity);
             let plate_id = current
                 .id
@@ -1324,7 +1450,7 @@ impl Shared {
                 .map(df_observe::presentation::local_identity);
             let effective_asset_id = df_observe::presentation::local_identity(asset);
             let line = format!(
-                "PLATE projected scene_id={scene_id} revision={} plate_id={} state={} requested_source={} effective_source={} effective_asset_id={effective_asset_id} image_key={} image_key_id={} request_to_projection_ms={}",
+                "PLATE projected scene_id={scene_id} revision={} plate_id={} state={} requested_source={} effective_source={} effective_asset_id={effective_asset_id} image_key={} image_key_id={} request_to_projection_ms={} scene_request_age_ms={}",
                 current.graph_revision,
                 plate_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
                 state,
@@ -1333,6 +1459,7 @@ impl Shared {
                 image_key.unwrap_or("none"),
                 image_key_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
                 elapsed_ms.map_or_else(|| "none".to_owned(), |ms| ms.to_string()),
+                scene_request_age_ms.map_or_else(|| "none".to_owned(), |ms| ms.to_string()),
             );
             let fields = serde_json::Map::from_iter([
                 ("scene_id".to_owned(), serde_json::json!(scene_id)),
@@ -1360,6 +1487,10 @@ impl Shared {
                 ),
                 ("image_key".to_owned(), serde_json::json!(image_key)),
                 ("image_key_id".to_owned(), serde_json::json!(image_key_id)),
+                (
+                    "scene_request_age_ms".to_owned(),
+                    serde_json::json!(scene_request_age_ms),
+                ),
                 (
                     "request_to_projection_ms".to_owned(),
                     serde_json::json!(elapsed_ms),
@@ -1532,6 +1663,7 @@ impl Shared {
         for art in heroes {
             wanted.push(IdentityReference {
                 id: format!("hero:{art}"),
+                name: String::new(),
                 sprite: format!("sprite-hero-{art}"),
                 portrait: String::new(),
             });
@@ -1541,6 +1673,7 @@ impl Shared {
             id,
             sprite,
             portrait,
+            name: _,
         } in wanted
         {
             let (figure, _) = self.speaker_art(&sprite).await;
@@ -1550,13 +1683,19 @@ impl Shared {
                 None => None,
             };
             let Some(figure) = figure else {
-                record(
+                let scene_id = df_observe::presentation::local_identity(&scene.title);
+                crate::gameplay::actor::record_audit_diagnostic(
                     "gameplay.living_scene.plate_identity_missing",
-                    &[
+                    format!("PLATE identity_missing scene_id={scene_id} cast_id={id}"),
+                    serde_json::Map::from_iter([
+                        ("scene_id".to_owned(), serde_json::json!(scene_id)),
+                        ("cast_id".to_owned(), serde_json::json!(id)),
                         (
-                            "scene.id",
-                            df_observe::presentation::local_identity(&scene.title).to_string(),
+                            "status".to_owned(),
+                            serde_json::json!("missing_photographic_identity"),
                         ),
+                    ]),
+                    &[
                         ("cast.id", id),
                         (
                             "reference.status",
@@ -1568,12 +1707,26 @@ impl Shared {
             };
             cast.push(CastIdentity { id, figure });
         }
+        let sources: Vec<serde_json::Value> = cast.iter().map(|identity| serde_json::json!({"cast_id": identity.id, "source_sha256": identity.figure.sha256})).collect();
         let result = tokio::task::spawn_blocking(move || cast_sheet(cast))
             .await
             .map_err(|_| ImageFailure::Interrupted)?
             .map_err(|_| ImageFailure::InvalidRequest)?;
-        record(
+        crate::gameplay::actor::record_audit_diagnostic(
             "gameplay.living_scene.plate_identity_ready",
+            format!(
+                "PLATE identity sheet_sha256={} cast_count={}",
+                result.0.sha256,
+                sources.len()
+            ),
+            serde_json::Map::from_iter([
+                (
+                    "sheet_sha256".to_owned(),
+                    serde_json::json!(result.0.sha256),
+                ),
+                ("sources".to_owned(), serde_json::json!(sources)),
+                ("status".to_owned(), serde_json::json!("complete_cast")),
+            ]),
             &[
                 ("reference.sha256", result.0.sha256.clone()),
                 ("reference.status", "complete_cast".to_owned()),
@@ -2166,11 +2319,17 @@ impl Shared {
     /// One look at the speaker's wanted face: a lasting change of it edits the current plate, and
     /// a return to the neutral face returns to the first plate.
     fn poll_face(&self) {
+        self.poll_face_at(self.inner.now());
+    }
+
+    fn poll_face_at(&self, now: Duration) {
         let mut book = locked(&self.book);
         if book.state_images.pending.is_some() || book.state_images.flying {
+            refresh_decision(&mut book, "face", "visible_state_pending");
             return;
         }
         if book.direct.pending {
+            refresh_decision(&mut book, "face", "directed_render_pending");
             return;
         }
         let Some(current) = &book.current else {
@@ -2179,11 +2338,6 @@ impl Shared {
         let (Some(scene), false) = (current.scene.clone(), current.in_combat) else {
             return;
         };
-        // Modelled rooms change only through settled visible-state edits. Expressions belong
-        // to the live actor layers; editing the whole plate here restaged an unchanged room.
-        if scene.snapshot.is_some() {
-            return;
-        }
         let Some(speaker) = scene.speaker.clone() else {
             return;
         };
@@ -2207,12 +2361,22 @@ impl Shared {
             return;
         };
         let scene_key = current.scene_key.clone();
+        let heroes = current.heroes.clone();
         let wanted = self
             .inner
             .plate_wanted_face(&speaker.id)
             .filter(|face| *face != Face::AUTHORED);
+        let state_rate_limited = book
+            .state_images
+            .last_started
+            .is_some_and(|last| now.saturating_sub(last) < Duration::from_secs(10));
+        if scene.snapshot.is_some() && (!book.face_refresh.ready(wanted, now) || state_rate_limited)
+        {
+            refresh_decision(&mut book, "face", "settling_or_rate_limited");
+            return;
+        }
         match (wanted, book.edit.clone()) {
-            (None, Edit::Idle) => {}
+            (None, Edit::Idle) => refresh_decision(&mut book, "face", "unchanged"),
             (None, _) => {
                 let had_edit = matches!(book.edit, Edit::Ready { .. });
                 book.edit = Edit::Idle;
@@ -2223,11 +2387,15 @@ impl Shared {
                     self.wake();
                 }
             }
-            (Some(face), Edit::Pending(pending)) if pending == face => {}
+            (Some(face), Edit::Pending(pending)) if pending == face => {
+                refresh_decision(&mut book, "face", "render_in_flight")
+            }
             (Some(face), Edit::Ready { face: shown, .. } | Edit::Failed(shown))
-                if shown == face => {}
+                if shown == face =>
+            {
+                refresh_decision(&mut book, "face", "unchanged_or_failed_target")
+            }
             (Some(face), _) => {
-                let heroes = current.heroes.clone();
                 let job = Job::Edit {
                     heroes,
                     scene_key,
@@ -2240,6 +2408,8 @@ impl Shared {
                         book.direct.shown = None;
                     }
                     book.edit = Edit::Pending(face);
+                    book.face_refresh.last_started = Some(now);
+                    refresh_decision(&mut book, "face", "queued");
                     record(
                         "gameplay.living_scene.plate_edit_requested",
                         &[
