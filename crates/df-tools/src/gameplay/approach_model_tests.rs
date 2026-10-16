@@ -39,6 +39,28 @@ fn explicit_roleplay_actions_are_typed_without_promoting_threats_or_questions() 
     }
 }
 
+#[test]
+fn explicit_action_context_matrix_keeps_plans_questions_and_quoted_speech_inert() {
+    let available = vec!["Courier".to_owned(), "lantern".to_owned()];
+    assert_eq!(
+        physical_action("I use the lantern.", &available),
+        Some(PhysicalAction {
+            kind: PhysicalActionKind::Use,
+            target: "lantern".to_owned(),
+            weapon: None,
+        })
+    );
+    for words in [
+        "Can I use the lantern?",
+        "If I use the lantern, will it help?",
+        "I might use the lantern later.",
+        "The courier said 'use the lantern'.",
+        "I do not use the lantern.",
+    ] {
+        assert_eq!(physical_action(words, &available), None, "{words}");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn jev_appraisal_receives_the_full_character_and_state_and_returns_the_selected_reaction() {
     let endpoint = FakeEndpoint::start(vec![answer("o11")]);

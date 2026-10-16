@@ -899,6 +899,19 @@ impl Service {
                 .map_err(actor::unavailable)?
                 .is_some()
         {
+            if !journey::tactical::enabled() {
+                record_physical_action_event(
+                    "gameplay.physical_action_unavailable",
+                    "attack",
+                    &action.target,
+                    "unavailable",
+                    "scene-npc-assault",
+                    Some("tactical rules are disabled for this session"),
+                );
+                return Err(Status::failed_precondition(
+                    "scene assault unavailable: tactical rules are disabled",
+                ));
+            }
             let submit = rpc::SubmitActionRequest {
                 session_id: request.session_id.clone(),
                 run_id: request.run_id.clone(),
@@ -1046,20 +1059,49 @@ impl Service {
                 None,
             ));
         }
+        let typed_interaction = (action.kind == super::approach_model::PhysicalActionKind::Use)
+            .then(|| {
+                scene
+                    .setting
+                    .as_ref()?
+                    .model
+                    .as_ref()?
+                    .for_scene(scene.key)
+                    .things
+                    .iter()
+                    .find(|thing| {
+                        thing.id.eq_ignore_ascii_case(&action.target)
+                            || thing.name.eq_ignore_ascii_case(&action.target)
+                    })
+                    .map(|thing| (thing.id.clone(), "use"))
+            })
+            .flatten();
         if let Some((target, option)) =
-            journey::living_scene::interaction_for_line(&scene, &request.text)
+            journey::living_scene::interaction_for_line(&scene, &request.text).or(typed_interaction)
         {
-            record_physical_action_event(
-                "gameplay.physical_action_resolved",
-                verb,
-                &action.target,
-                "action",
-                &format!("scene-interaction option={option:?}"),
-                None,
-            );
-            return self
+            let result = self
                 .interaction_call(credential, request, &target, option)
                 .await;
+            if result.is_ok() {
+                record_physical_action_event(
+                    "gameplay.physical_action_resolved",
+                    verb,
+                    &action.target,
+                    "action",
+                    &format!("scene-interaction option={option:?}"),
+                    None,
+                );
+            } else {
+                record_physical_action_event(
+                    "gameplay.physical_action_unavailable",
+                    verb,
+                    &action.target,
+                    "unavailable",
+                    "scene-interaction",
+                    Some("native interaction refused or failed"),
+                );
+            }
+            return result;
         }
         let reason = match action.kind {
             super::approach_model::PhysicalActionKind::Attack => {

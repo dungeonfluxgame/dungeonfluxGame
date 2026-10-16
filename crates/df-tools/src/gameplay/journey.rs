@@ -3121,6 +3121,9 @@ fn start_combat(
 ) -> Result<(), RepositoryError> {
     let operation = command.operation;
     let scene_binding = encounter_admission::scene_attack_target(current, command)?;
+    if scene_binding.is_some() && !tactical::enabled() {
+        return Err(RepositoryError::InvalidCandidate);
+    }
     let monster = scene_binding.map_or(entity(BANDIT)?, |binding| binding.entity);
     let creature =
         scene_binding.map_or(&df_rules::SRD_521_CREATURES[0], |binding| binding.creature);
