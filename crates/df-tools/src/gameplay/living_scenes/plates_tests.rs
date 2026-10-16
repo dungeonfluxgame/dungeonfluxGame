@@ -488,7 +488,14 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
     locked(&shared.inner.state)
         .canonical
         .observe_room(&alternate);
-    for job in locked(&shared.inner.state).canonical.take_jobs() {
+    // `finish` reacquires the canonical state mutex, so take the jobs into a local first.
+    let failed_alternate_jobs = locked(&shared.inner.state).canonical.take_jobs();
+    assert_eq!(
+        failed_alternate_jobs.len(),
+        1,
+        "the changed authored room revision admits one canonical room job"
+    );
+    for job in failed_alternate_jobs {
         let super::super::Job::Canonical(work) = job else {
             panic!("canonical reference job")
         };
