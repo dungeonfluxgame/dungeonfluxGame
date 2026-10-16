@@ -288,9 +288,8 @@ impl LobbyScreen {
         let Some(image) = self.surface.root().query_selector(".scene-art")? else {
             return Ok(());
         };
-        let fallback = Some(format!("/{}", ConceptScene::Campfire.asset_path()));
         *self.scene_asset.borrow_mut() =
-            Some(live_screens::ServerImage::install(image, source, fallback)?);
+            Some(live_screens::ServerImage::install(image, source, None)?);
         Ok(())
     }
 

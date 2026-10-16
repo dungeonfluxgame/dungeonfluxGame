@@ -172,7 +172,10 @@ fn decorate(screen: &ExplorationScreen, model: &ExplorationModel) -> Result<(), 
         screen,
         ".scene-art",
         &model.scene_asset,
-        Some(format!("/{}", model.scene.asset_path())),
+        model
+            .scene_asset
+            .is_none()
+            .then(|| format!("/{}", model.scene.asset_path())),
     )?;
     let portrait_fallback = model
         .speaker

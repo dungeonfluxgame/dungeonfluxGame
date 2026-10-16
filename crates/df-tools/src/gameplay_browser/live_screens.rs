@@ -137,10 +137,29 @@ fn is_fixed_harbor_dialogue(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene
         .any(|stem| scene.scene_asset.contains(stem))
 }
 
+fn is_fixed_harbor_art(scene: &rpc::GameplayScene) -> bool {
+    [
+        "mara-harbor-v4.png",
+        "scene-lobby-harbor",
+        "scene-wharf-arrival",
+        "scene-whisper-in-the-rain",
+        "scene-salt-quay-arrival",
+        "scene-salt-quay-candid",
+    ]
+    .iter()
+    .any(|stem| scene.scene_asset.contains(stem))
+}
+
 fn fallback_art(
     phase: rpc::JourneyPhase,
     scene: &rpc::GameplayScene,
 ) -> (&'static str, &'static str) {
+    if !is_fixed_harbor_art(scene) && scene.destination != rpc::HarborDestination::HarborInn as i32
+    {
+        // Authored locations use their own assets. A pending image exposes the dark base
+        // surface; a different location's photograph cannot stand in for this room.
+        return ("", "");
+    }
     if phase == rpc::JourneyPhase::Room {
         return ("scene-lobby-harbor", HARBOR_ESTABLISHING);
     }
@@ -202,6 +221,7 @@ impl Drop for ServerImage {
 fn art_source(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> VisualSource {
     let photographic_harbor =
         (matches!(phase, rpc::JourneyPhase::Room | rpc::JourneyPhase::Opening)
+            && is_fixed_harbor_art(scene)
             || is_fixed_harbor_dialogue(phase, scene))
             && scene.destination != rpc::HarborDestination::HarborInn as i32;
     if photographic_harbor {
@@ -231,7 +251,13 @@ fn art(
     } else if scene.destination == rpc::HarborDestination::HarborInn as i32 {
         String::new()
     } else {
-        asset_url(&scene.scene_asset).unwrap_or_else(|| format!("/assets/ui/generated/{stem}"))
+        asset_url(&scene.scene_asset).unwrap_or_else(|| {
+            if stem.is_empty() {
+                String::new()
+            } else {
+                format!("/assets/ui/generated/{stem}")
+            }
+        })
     };
     // PLAY-L01: a server-generated re-render of the painting leads when the view carries one; the
     // authored painting stays beneath it in the CSS layers should the image fail to load.
@@ -1333,12 +1359,12 @@ mod tests {
         assert!(painting.starts_with(&live_backdrop));
 
         let photographic = rpc::GameplayScene {
-            scene_asset: "assets/ui/generated/scene-old-illustration".to_owned(),
+            scene_asset: "assets/ui/generated/scene-wharf-arrival".to_owned(),
             ..Default::default()
         };
         let (painting, _, source) = art(rpc::JourneyPhase::Dialogue, &photographic);
         assert_eq!(source, VisualSource::EstablishingPhoto);
-        assert_eq!(painting, HARBOR_ESTABLISHING);
+        assert_eq!(painting, super::HARBOR_DIALOGUE);
 
         let inn = rpc::GameplayScene {
             destination: rpc::HarborDestination::HarborInn as i32,
@@ -1348,6 +1374,29 @@ mod tests {
         assert_eq!(
             art_source(rpc::JourneyPhase::Dialogue, &inn),
             VisualSource::SceneArtwork
+        );
+    }
+
+    #[test]
+    fn authored_shop_uses_its_own_asset_and_a_dark_pending_surface_in_every_early_phase() {
+        let mut scene = rpc::GameplayScene {
+            scene_asset: "assets/ui/generated/scene-mareks-cloth-shop".into(),
+            ..Default::default()
+        };
+        for phase in [
+            rpc::JourneyPhase::Room,
+            rpc::JourneyPhase::Opening,
+            rpc::JourneyPhase::Dialogue,
+        ] {
+            let (asset, fallback, source) = art(phase, &scene);
+            assert_eq!(asset, "/assets/ui/generated/scene-mareks-cloth-shop");
+            assert!(fallback.is_empty());
+            assert_eq!(source, VisualSource::SceneArtwork);
+        }
+        scene.live_backdrop = format!("/gameplay/imagery/{}", "a".repeat(64));
+        assert_eq!(
+            art_source(rpc::JourneyPhase::Opening, &scene),
+            VisualSource::LiveBackdrop
         );
     }
 
