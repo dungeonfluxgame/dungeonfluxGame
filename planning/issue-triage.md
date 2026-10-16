@@ -1303,3 +1303,33 @@ document `search --option look-around`, `watch-<cast-id>`, and positional scene
 names; synthetic `room` is not a legacy finding selection. Awkward intention
 copy ("Brakka searches look around") and generic interaction refusals remain
 open UX/CLI issues. No implementation fix is claimed by this continuation.
+
+### Roleplay action experiments — 2026-10-16
+
+Observed on room SANAPU, build `portrait-ec334de7`, with an actual display
+inspection after each input. Checkpoint `social-action-start` retains the starting
+state. These are failures of the tested runtime; source repairs require a fresh
+build and integrated acceptance before closure.
+
+| ID | Priority | Reproduction and observed result | Required resolution |
+| --- | --- | --- | --- |
+| RPL-01 | 2 | `I take the packet from the Courier.` became a successful Stealth check, **Brakka scouts Courier**, and **Courier is here**. No packet transfer occurred. | Distinct physical intent and canonical object/holder binding. Resolve registered ownership/consent; otherwise explain the unavailable action. Never substitute scouting. |
+| RPL-02 | 2 | `I attack the Courier with my greatsword, trying to kill him.` became social speech and a plea. Direct `attack --target Courier` was unavailable in dialogue. | Recognize attack separately from a spoken threat. Admit authored NPC combat through the session/encounter owner, then ordinary initiative, turn, equipment and attack rules. Unsupported targets need an explicit reason. No automatic kill or Bandit substitution. |
+| RPL-03 | 3 | A one-GP packet offer received a sensible refusal; a direct threat received a fearful plea. Both left game revision unchanged. The fixed scene has no packet object model; both Courier feelings lookups failed. | Separate bargain/proposal, completed transaction, Influence willingness and persistent relationship consequences. Dialogue alone does not prove a sale, roll or state update. |
+| RPL-04 | 2 | The old Jev menu contained speech and observation choices only. Physical requests were forced toward those categories. | Add bounded roleplay action candidates, native resolution and structured CLI traces. Preserve questions, jokes, hypothetical/conditional plans, quoted speech, partial input, ambiguity and stale/retry semantics. |
+
+The test used `plan` context for the two physical declarations, following the
+old observation examples. The repaired path must respect that declared context:
+it may propose a pending action but cannot silently treat a nonexecuting plan as
+permission to commit. Direct execution tests must also cover ordinary unspecified
+input and explicitly selected speech contexts. The earlier runtime nevertheless
+classified these as unrelated scouting/social speech rather than describing the
+actual requested action.
+
+A new merchant-shop mode is being added for realistic interaction coverage:
+merchant, named adventurer and soldier, registered goods and prices. Scene/cast
+presence in source is not proof that all actors render or can be addressed in
+the live display. A purchase must record payment and actual held stock together;
+successful prose alone does not satisfy that check. The baseline evidence is
+`outputs/npc-hostility-playtest-20261016/baseline-observations.md` in the testing
+chat; subsequent acceptance will record its exact candidate source and build.
