@@ -51,6 +51,7 @@ pub(in crate::gameplay) fn canonical_npc(
     rating: ContentRating,
     person: &ScenePerson,
     has_identity_photo: bool,
+    has_identity_figure_photo: bool,
     binding: &str,
 ) -> Result<AssembledPrompt, ImageFailure> {
     let public = serde_json::json!({
@@ -59,10 +60,19 @@ pub(in crate::gameplay) fn canonical_npc(
         "role": person.role,
         "description": person.description,
     });
-    let identity_instruction = if has_identity_photo {
-        "Image 2 is the approved documentary identity photograph. Preserve the same face, age, hair, facial hair, build and clothing identity; do not copy its pose, crop, background or lighting."
-    } else {
-        "The quoted public description defines this person's stable physical identity. Preserve its age, face, hair, facial hair and build across scenes."
+    let identity_instruction = match (has_identity_photo, has_identity_figure_photo) {
+        (true, true) => {
+            "Image 2 is the approved documentary face portrait of this exact person and is authoritative for the face. Image 3 is the approved full-body photograph and is authoritative for body proportions and build. Reproduce the same recognizable face, apparent age, hairline, facial hair and skin tone. Preserve the build and clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
+        }
+        (true, false) => {
+            "Image 2 is the approved documentary identity photograph of this exact person and is authoritative for identity. Reproduce the same recognizable face, apparent age, hairline, facial hair and skin tone. Preserve the build and clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
+        }
+        (false, true) => {
+            "Image 2 is the approved full-body photograph of this exact person and is authoritative for identity. Reproduce the same recognizable face, apparent age, hairline, facial hair, skin tone and body proportions. Preserve the clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
+        }
+        (false, false) => {
+            "The quoted public description defines this person's stable physical identity. Preserve its age, face, hair, facial hair, skin tone and build across scenes; do not de-age, slim, beautify or substitute another person."
+        }
     };
     assembled(
         rating,
@@ -223,11 +233,29 @@ mod tests {
             wants: "Sell suitable clothing at a fair price.".to_owned(),
             coin_cp: 5_000,
         };
-        let prompt = canonical_npc(ContentRating::Restrained, &person, true, "marek-binding")
-            .unwrap();
+        let prompt = canonical_npc(
+            ContentRating::Restrained,
+            &person,
+            true,
+            true,
+            "marek-binding",
+        )
+        .unwrap();
         assert!(prompt.as_str().contains("short and round"));
         assert!(prompt.as_str().contains("middle-aged bearded man"));
-        assert!(prompt.as_str().contains("approved documentary identity photograph"));
+        assert!(
+            prompt
+                .as_str()
+                .contains("approved documentary identity photograph")
+        );
+        assert!(prompt.as_str().contains("do not de-age, slim, beautify"));
+        assert!(prompt.as_str().contains("same recognizable face"));
+        assert!(prompt.as_str().contains("approved full-body photograph"));
+        assert!(
+            prompt
+                .as_str()
+                .contains("authoritative for body proportions and build")
+        );
         assert!(prompt.as_str().contains("marek-binding"));
         assert!(!prompt.as_str().contains("PRIVATE_MERCHANT_SECRET"));
         assert!(!prompt.as_str().contains("5_000"));

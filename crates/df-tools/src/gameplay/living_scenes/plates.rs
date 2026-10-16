@@ -101,6 +101,7 @@ struct IdentityReference {
 struct Speaker {
     id: String,
     sprite: String,
+    portrait: String,
     gender: Option<Gender>,
     age: Option<Age>,
 }
@@ -152,6 +153,7 @@ impl PlateScene {
             speaker: speaker.map(|member| Speaker {
                 id: member.id.clone(),
                 sprite: member.sprite.clone(),
+                portrait: member.portrait.clone(),
                 gender: member.gender,
                 age: member.age,
             }),
@@ -186,6 +188,7 @@ impl PlateScene {
         plate.speaker = Some(Speaker {
             id: actor.id.clone(),
             sprite: actor.sprite.clone(),
+            portrait: actor.portrait.clone(),
             gender: actor.gender,
             age: actor.age,
         });
@@ -224,6 +227,12 @@ impl PlateScene {
             &self.title,
             &self.asset,
         )
+    }
+
+    /// Scenes with an authored room model or an exact story variant require references bound to
+    /// that authored source. Static archetype art is reserved for legacy scenes without either.
+    fn requires_canonical_identity(&self) -> bool {
+        self.authored_room.is_some() || self.source_variant_id.is_some()
     }
 
     /// The plate of this scene for this party: the same scene and party always have one name.
@@ -1941,10 +1950,18 @@ impl Shared {
                     .canonical_room_status_at(&scene.place_id, revision),
             );
         }
-        if let Some(failure) = dependencies.iter().find_map(|status| match status {
-            super::canonical::ReferenceStatus::Failed(failure) => Some(*failure),
-            _ => None,
-        }) {
+        if let Some(failure) = dependencies
+            .iter()
+            .find_map(|status| match status {
+                super::canonical::ReferenceStatus::Failed(failure) => Some(*failure),
+                _ => None,
+            })
+            .or_else(|| {
+                (scene.requires_canonical_identity()
+                    && dependencies.contains(&super::canonical::ReferenceStatus::Missing))
+                .then_some(ImageFailure::InvalidRequest)
+            })
+        {
             record_plate_diagnostic(
                 "gameplay.living_scene.plate_reference_failed",
                 format!(
@@ -2428,6 +2445,74 @@ impl Shared {
         (figure, face)
     }
 
+    /// A source-bound cast member always uses its accepted generated identity. A checked-in
+    /// archetype image is only a carrier for scenes that have no canonical binding at all.
+    async fn npc_art(
+        &self,
+        scene: &PlateScene,
+        id: &str,
+        sprite: &str,
+        portrait: &str,
+    ) -> Result<(Option<ReferenceImage>, Option<ReferenceImage>), ImageFailure> {
+        let id = id.strip_prefix("npc:").unwrap_or(id);
+        match self.inner.canonical_npc_status(id) {
+            super::canonical::ReferenceStatus::Ready => self
+                .inner
+                .canonical_npc_reference(id)
+                .await
+                .map(|figure| (Some(figure), None))
+                .ok_or(ImageFailure::Interrupted),
+            super::canonical::ReferenceStatus::Pending => Err(ImageFailure::Interrupted),
+            super::canonical::ReferenceStatus::Failed(failure) => Err(failure),
+            super::canonical::ReferenceStatus::Missing if scene.requires_canonical_identity() => {
+                Err(ImageFailure::InvalidRequest)
+            }
+            super::canonical::ReferenceStatus::Missing => {
+                let (figure, face) = self.speaker_art(sprite).await;
+                if figure.is_some() || portrait.is_empty() {
+                    return Ok((figure, face));
+                }
+                let (portrait_figure, portrait_face) = self.speaker_art(portrait).await;
+                Ok((portrait_figure.or(figure), portrait_face.or(face)))
+            }
+        }
+    }
+
+    async fn speaker_identity_art(
+        &self,
+        scene: &PlateScene,
+        speaker: &Speaker,
+    ) -> Result<(Option<ReferenceImage>, Option<ReferenceImage>), ImageFailure> {
+        self.npc_art(scene, &speaker.id, &speaker.sprite, &speaker.portrait)
+            .await
+    }
+
+    /// Returns a generated accepted hero reference when one is bound to this party seat.
+    /// Scenes with an authored room cannot substitute a static archetype for a missing identity.
+    async fn canonical_hero_identity(
+        &self,
+        scene: &PlateScene,
+        seat: u8,
+    ) -> Result<Option<(String, ReferenceImage)>, ImageFailure> {
+        match self.inner.canonical_hero_status(seat) {
+            super::canonical::ReferenceStatus::Ready => {
+                let (entity, figure) = self
+                    .inner
+                    .canonical_hero_reference(seat)
+                    .await
+                    .ok_or(ImageFailure::Interrupted)?;
+                let entity = format!("{:x}", sha2::Sha256::digest(entity.as_bytes()));
+                Ok(Some((format!("hero:{entity}"), figure)))
+            }
+            super::canonical::ReferenceStatus::Pending => Err(ImageFailure::Interrupted),
+            super::canonical::ReferenceStatus::Failed(failure) => Err(failure),
+            super::canonical::ReferenceStatus::Missing if scene.requires_canonical_identity() => {
+                Err(ImageFailure::InvalidRequest)
+            }
+            super::canonical::ReferenceStatus::Missing => Ok(None),
+        }
+    }
+
     /// All canonical identities fit in one contact sheet, so no cast member loses their
     /// reference when the provider's four-image budget is reached. Missing art is a failure,
     /// distinct from a provider failure; the display retains its known good photograph.
@@ -2439,23 +2524,17 @@ impl Shared {
         let mut wanted = scene.identity_cast.clone();
         let mut cast = Vec::new();
         for art in heroes {
-            if let Some((entity, figure)) = self.inner.canonical_hero_reference(*art).await {
-                let entity = format!("{:x}", sha2::Sha256::digest(entity.as_bytes()));
+            if let Some((id, figure)) = self.canonical_hero_identity(scene, *art).await? {
+                cast.push(CastIdentity { id, figure });
+            } else {
+                let (figure, _) = self.speaker_art(&format!("sprite-hero-{art}")).await;
+                let Some(figure) = figure else {
+                    return Err(ImageFailure::InvalidRequest);
+                };
                 cast.push(CastIdentity {
-                    id: format!("hero:{entity}"),
+                    id: format!("hero:{art}"),
                     figure,
                 });
-            } else if self.inner.canonical_hero_status(*art)
-                == super::canonical::ReferenceStatus::Missing
-            {
-                wanted.push(IdentityReference {
-                    id: format!("hero:{art}"),
-                    name: String::new(),
-                    sprite: format!("sprite-hero-{art}"),
-                    portrait: String::new(),
-                });
-            } else {
-                return Err(ImageFailure::Interrupted);
             }
         }
         for IdentityReference {
@@ -2463,24 +2542,12 @@ impl Shared {
             sprite,
             portrait,
             name: _,
-        } in wanted
+        } in wanted.drain(..)
         {
             let canonical_id = id.strip_prefix("npc:").unwrap_or(&id);
-            if let Some(figure) = self.inner.canonical_npc_reference(canonical_id).await {
-                cast.push(CastIdentity { id, figure });
-                continue;
-            }
-            if self.inner.canonical_npc_status(canonical_id)
-                != super::canonical::ReferenceStatus::Missing
-            {
-                return Err(ImageFailure::Interrupted);
-            }
-            let (figure, _) = self.speaker_art(&sprite).await;
-            let figure = match figure {
-                Some(figure) => Some(figure),
-                None if !portrait.is_empty() => self.speaker_art(&portrait).await.0,
-                None => None,
-            };
+            let (figure, _) = self
+                .npc_art(scene, canonical_id, &sprite, &portrait)
+                .await?;
             let Some(figure) = figure else {
                 let scene_id = df_observe::presentation::local_identity(&scene.source_identity());
                 crate::gameplay::actor::record_audit_diagnostic(
@@ -2579,10 +2646,7 @@ impl Shared {
         // sheet, then optional speaker close-up. Never let a close-up displace another person.
         let mut references = vec![place, sheet];
         let (figure, face) = match &scene.speaker {
-            Some(speaker) => match self.inner.canonical_npc_reference(&speaker.id).await {
-                Some(figure) => (Some(figure), None),
-                None => self.speaker_art(&speaker.sprite).await,
-            },
+            Some(speaker) => self.speaker_identity_art(scene, speaker).await?,
             None => (None, None),
         };
         let locator_face = face.clone().or_else(|| figure.clone());
@@ -2677,6 +2741,10 @@ impl Shared {
         if !sorted.is_empty() {
             let mut figures = Vec::with_capacity(sorted.len());
             for art in &sorted {
+                if let Some((_, figure)) = self.canonical_hero_identity(scene, *art).await? {
+                    figures.push(figure);
+                    continue;
+                }
                 if self.inner.references.photographic_only() {
                     let Ok(figure) = self
                         .inner
@@ -2716,7 +2784,7 @@ impl Shared {
         // go into every plate that shows the speaker, because a figure alone let the same person
         // drift between two scenes' plates.
         let (figure, face) = match &scene.speaker {
-            Some(speaker) => self.speaker_art(&speaker.sprite).await,
+            Some(speaker) => self.speaker_identity_art(scene, speaker).await?,
             None => (None, None),
         };
         let has_speaker_art = figure.is_some();
@@ -2750,12 +2818,14 @@ impl Shared {
         // Keep the remaining cast figures only while the provider's reference limit allows them.
         // They are also named in the prompt, so dropping the lowest-priority art preserves the
         // request's scene facts while keeping the party, speaker and place references intact.
-        for sprite in scene
+        for actor in scene
             .others
             .iter()
             .take(MAXIMUM_PLATE_REFERENCES.saturating_sub(references.len()))
         {
-            let (figure, _) = self.speaker_art(sprite).await;
+            let (figure, _) = self
+                .npc_art(scene, &actor.id, &actor.sprite, &actor.portrait)
+                .await?;
             references.extend(figure);
         }
         // The image edit adapter requires at least one reference even when the scene has no
@@ -2860,7 +2930,7 @@ impl Shared {
             let Some(speaker) = &spec.speaker else {
                 return Ok((key, None, None));
             };
-            let actor_references = self.locator_references(scene, heroes).await;
+            let actor_references = self.locator_references(scene, heroes).await?;
             if let Some(stored) = self
                 .stored_placement(&key, &scene.locator_actors(), &actor_references)
                 .await
@@ -3169,36 +3239,27 @@ impl Shared {
         &self,
         scene: &PlateScene,
         heroes: &[u8],
-    ) -> BTreeMap<String, ReferenceImage> {
+    ) -> Result<BTreeMap<String, ReferenceImage>, ImageFailure> {
         let mut references = BTreeMap::new();
         for actor in scene.identity_cast.iter().take(16) {
-            let (figure, face) = self.speaker_art(&actor.sprite).await;
-            let reference = match face.or(figure) {
-                Some(reference) => Some(reference),
-                None if !actor.portrait.is_empty() => {
-                    let (figure, face) = self.speaker_art(&actor.portrait).await;
-                    face.or(figure)
-                }
-                None => None,
-            };
-            if let Some(reference) = reference {
-                references.insert(
-                    actor
-                        .id
-                        .strip_prefix("npc:")
-                        .unwrap_or(&actor.id)
-                        .to_owned(),
-                    reference,
-                );
-            }
+            let actor_id = actor.id.strip_prefix("npc:").unwrap_or(&actor.id);
+            let (figure, face) = self
+                .npc_art(scene, actor_id, &actor.sprite, &actor.portrait)
+                .await?;
+            let reference = face.or(figure).ok_or(ImageFailure::InvalidRequest)?;
+            references.insert(actor_id.to_owned(), reference);
         }
         for art in heroes.iter().take(16) {
-            let (figure, face) = self.speaker_art(&format!("sprite-hero-{art}")).await;
-            if let Some(reference) = face.or(figure) {
-                references.insert(format!("hero-{art}"), reference);
-            }
+            let reference = match self.canonical_hero_identity(scene, *art).await? {
+                Some((_, reference)) => reference,
+                None => {
+                    let (figure, face) = self.speaker_art(&format!("sprite-hero-{art}")).await;
+                    face.or(figure).ok_or(ImageFailure::InvalidRequest)?
+                }
+            };
+            references.insert(format!("hero-{art}"), reference);
         }
-        references
+        Ok(references)
     }
 
     /// Every edited image owns its measured heads; an earlier photograph's boxes are never reused.
@@ -3209,12 +3270,33 @@ impl Shared {
         let Some(speaker) = spec.speaker.as_ref() else {
             return;
         };
+        let actor_references = match self.locator_references(scene, heroes).await {
+            Ok(references) => references,
+            Err(failure) => {
+                let scene_id = df_observe::presentation::local_identity(&scene.source_identity());
+                crate::gameplay::actor::record_audit_diagnostic(
+                    "gameplay.living_scene.plate_locator_identity_failed",
+                    format!(
+                        "PLATE locator_identity_failed scene_id={scene_id} failure={failure:?}"
+                    ),
+                    serde_json::Map::from_iter([
+                        ("scene_id".to_owned(), serde_json::json!(scene_id)),
+                        (
+                            "failure".to_owned(),
+                            serde_json::json!(format!("{failure:?}")),
+                        ),
+                    ]),
+                    &[("reference.failure", format!("{failure:?}"))],
+                );
+                return;
+            }
+        };
         let _placement = self
             .measured_or_predicted(
                 key,
                 &spec,
                 speaker,
-                &self.locator_references(scene, heroes).await,
+                &actor_references,
                 &scene.locator_actors(),
                 scene.speaker.as_ref().map(|speaker| speaker.id.as_str()),
             )
@@ -3233,7 +3315,7 @@ impl Shared {
         };
         let mut references = vec![ReferenceImage::new(format, bytes)];
         let (figure, _) = match &scene.speaker {
-            Some(speaker) => self.speaker_art(&speaker.sprite).await,
+            Some(speaker) => self.speaker_identity_art(scene, speaker).await?,
             None => (None, None),
         };
         let has_speaker_art = figure.is_some();

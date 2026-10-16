@@ -27,6 +27,7 @@ enum Source {
     Npc {
         person: ScenePerson,
         identity_photo: Option<String>,
+        identity_figure_photo: Option<String>,
     },
     Room {
         model: SceneModel,
@@ -239,6 +240,96 @@ mod tests {
     fn selected_room_binding(references: &References) -> &str {
         let target = references.selected_rooms.get("same-place").unwrap();
         &references.entries.get(target).unwrap().work.binding
+    }
+
+    #[tokio::test]
+    async fn authored_marek_identity_uses_approved_portrait_and_full_body_photos() {
+        use crate::gameplay::{
+            adventure::scene_model::StartingAttitude,
+            pack::{Age, CastRole, Gender, SceneCastMember},
+        };
+
+        let mut authored = model();
+        authored.people.push(ScenePerson {
+            id: "merchant".to_owned(),
+            name: "Marek".to_owned(),
+            role: "cloth merchant".to_owned(),
+            description: "Marek, a short, round middle-aged man with a neatly trimmed beard, wears a rich velvet cap and a measuring ribbon around his neck.".to_owned(),
+            relation_to_speaker: "shopkeeper".to_owned(),
+            position: "behind the wooden counter".to_owned(),
+            aliases: vec!["Marek".to_owned()],
+            is_background: false,
+            present_in: vec!["opening".to_owned()],
+            attitude: StartingAttitude::Friendly,
+            attitudes: Default::default(),
+            knowledge: Vec::new(),
+            wants: String::new(),
+            coin_cp: 0,
+        });
+        let cast = [SceneCastMember {
+            id: "merchant".to_owned(),
+            name: "Marek".to_owned(),
+            role: CastRole::Patron,
+            sprite: "assets/ui/generated/sprite-patron-merchant-documentary-photo".to_owned(),
+            portrait: "assets/ui/generated/portrait-patron-merchant-documentary-photo".to_owned(),
+            voice: "warm".to_owned(),
+            gender: Some(Gender::He),
+            age: Some(Age::Adult),
+        }];
+
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../artifacts/tmp/canonical-reference-tests/marek-{}",
+            std::process::id()
+        ));
+        let fixture = DirectionFixture::photographic(&cache);
+        let mut canonical = references("shop-run");
+        canonical.admit_room("mareks-cloth-shop", &authored, &cast, true);
+        let work = canonical
+            .take_jobs()
+            .into_iter()
+            .find_map(|job| match job {
+                Job::Canonical(work) if work.target == Target::Npc("merchant".to_owned()) => {
+                    Some(work)
+                }
+                _ => None,
+            })
+            .expect("Marek identity job");
+        let Source::Npc {
+            person,
+            identity_photo,
+            identity_figure_photo,
+        } = work.source
+        else {
+            panic!("Marek NPC identity source");
+        };
+
+        assert!(person.description.contains("short, round middle-aged man"));
+        assert_eq!(identity_photo.as_deref(), Some("portrait-patron-merchant"));
+        assert_eq!(
+            identity_figure_photo.as_deref(),
+            Some("sprite-patron-merchant")
+        );
+        let store = ReferenceStore::photographic(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        );
+        assert!(
+            store
+                .load_photographic(identity_photo.as_deref().unwrap())
+                .is_ok()
+        );
+        assert!(
+            store
+                .load_photographic(identity_figure_photo.as_deref().unwrap())
+                .is_ok()
+        );
+
+        let inner = inner(fixture.imagery.clone(), canonical);
+        inner.render_canonical(&work).await.unwrap();
+        assert_eq!(fixture.calls(), 1);
+        assert_eq!(fixture.image_count(), 3);
+        let prompt = fixture.prompt();
+        assert!(prompt.contains("Image 2 is the approved documentary face portrait"));
+        assert!(prompt.contains("Image 3 is the approved full-body photograph"));
     }
 
     fn inner(imagery: Imagery, canonical: References) -> Inner {
@@ -658,9 +749,17 @@ impl Inner {
                     .await?,
             ),
             Source::Npc {
-                identity_photo: Some(photo),
+                identity_photo,
+                identity_figure_photo,
                 ..
-            } => references.push(self.load_photographic(photo.clone()).await?),
+            } => {
+                if let Some(photo) = identity_photo {
+                    references.push(self.load_photographic(photo.clone()).await?);
+                }
+                if let Some(photo) = identity_figure_photo {
+                    references.push(self.load_photographic(photo.clone()).await?);
+                }
+            }
             _ => {}
         }
         if !locked(&self.state)
@@ -694,12 +793,14 @@ impl Inner {
             Source::Npc {
                 person,
                 identity_photo,
+                identity_figure_photo,
             } => (
                 ImageKind::CanonicalCharacter,
                 imagery::canonical_npc(
                     self.rating,
                     person,
                     identity_photo.is_some(),
+                    identity_figure_photo.is_some(),
                     &work.binding,
                 )?,
                 OutputSpec::CUTOUT,
@@ -875,6 +976,15 @@ pub(super) fn room_revision(model: &SceneModel) -> Option<String> {
     ))
 }
 
+fn documentary_photo_stem(asset: &str) -> Option<String> {
+    let filename = asset.rsplit('/').next()?;
+    let stem = filename
+        .strip_suffix(".webp")
+        .or_else(|| filename.strip_suffix(".png"))
+        .unwrap_or(filename);
+    Some(stem.strip_suffix("-documentary-photo")?.to_owned())
+}
+
 impl References {
     pub(super) fn observe_room(&mut self, scene: &pack::Scene) {
         let Some(setting) = scene.setting.as_ref() else {
@@ -927,16 +1037,16 @@ impl References {
             if !select && self.entries.contains_key(&Target::Npc(person.id.clone())) {
                 continue;
             }
-            let identity_photo = cast
+            let matching_cast = cast
                 .iter()
                 .filter(|member| member.id == person.id)
-                .map(|member| member.portrait.as_str())
                 .collect::<Vec<_>>();
-            let identity_photo = match identity_photo.as_slice() {
-                [portrait] => portrait
-                    .strip_suffix("-documentary-photo")
-                    .map(str::to_owned),
-                _ => None,
+            let (identity_photo, identity_figure_photo) = match matching_cast.as_slice() {
+                [member] => (
+                    documentary_photo_stem(&member.portrait),
+                    documentary_photo_stem(&member.sprite),
+                ),
+                _ => (None, None),
             };
             let revision = digest(
                 serde_json::json!({
@@ -945,6 +1055,7 @@ impl References {
                     "role": person.role,
                     "description": person.description,
                     "identity_photo": identity_photo,
+                    "identity_figure_photo": identity_figure_photo,
                 })
                 .to_string()
                 .as_bytes(),
@@ -954,6 +1065,7 @@ impl References {
                 Source::Npc {
                     person: person.clone(),
                     identity_photo,
+                    identity_figure_photo,
                 },
                 &revision,
             );

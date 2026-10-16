@@ -165,9 +165,7 @@ fn wire_projection_carries_the_exact_authored_scene_variant() {
         .clone();
     opening_variant.source_variant_id = Some(OPENING_VARIANT.to_owned());
     let script = loaded.pack.beat_script.as_mut().unwrap();
-    script
-        .scenes
-        .insert(ROOM_VARIANT.to_owned(), room_variant);
+    script.scenes.insert(ROOM_VARIANT.to_owned(), room_variant);
     script
         .scenes
         .insert(OPENING_VARIANT.to_owned(), opening_variant);

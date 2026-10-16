@@ -67,6 +67,194 @@ fn failed_canonical_dependency_projects_terminal_plate_failure_without_redispatc
 }
 
 #[tokio::test]
+async fn authored_room_does_not_substitute_static_npc_or_hero_art_for_missing_bindings() {
+    use crate::gameplay::adventure::scene_model::SceneModel;
+
+    let (shared, _) = shared(8);
+    let mut authored = scene(SceneKey::DialogueSeal, "Bound room", Some("Kestrel"));
+    authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        inventory_version: 1,
+        time_of_day: "morning".to_owned(),
+        weather: "clear".to_owned(),
+        people: Vec::new(),
+        things: Vec::new(),
+        ways_out: Vec::new(),
+        offers: Vec::new(),
+    });
+    let plate = PlateScene::of(&authored).unwrap();
+    let keeper = &plate.identity_cast[0];
+
+    assert!(matches!(
+        shared
+            .npc_art(&plate, "keeper", &keeper.sprite, &keeper.portrait)
+            .await,
+        Err(ImageFailure::InvalidRequest)
+    ));
+    assert!(matches!(
+        shared.canonical_hero_identity(&plate, 1).await,
+        Err(ImageFailure::InvalidRequest)
+    ));
+}
+
+#[test]
+fn exact_story_variant_with_missing_canonical_bindings_is_not_dispatched() {
+    let (shared, mut queue) = shared(8);
+    let mut authored = scene(SceneKey::Opening, "Bound opening", Some("Kestrel"));
+    authored.source_variant_id = Some("bound-opening".to_owned());
+    let plate = PlateScene::of(&authored).unwrap();
+    assert!(plate.requires_canonical_identity());
+
+    let mut book = Book::new();
+    shared.ensure(&mut book, &plate, &[1], &[], 0, false);
+
+    assert!(
+        book.entries
+            .values()
+            .any(|entry| matches!(entry, Entry::Failed))
+    );
+    assert!(drain(&mut queue).is_empty());
+}
+
+#[test]
+fn authored_plate_waits_until_all_canonical_references_are_ready() {
+    use crate::gameplay::adventure::scene_model::{SceneModel, ScenePerson, StartingAttitude};
+
+    let (shared, mut queue) = shared(8);
+    shared
+        .inner
+        .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+    let mut authored = scene(SceneKey::Opening, "Bound opening", Some("Kestrel"));
+    authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        inventory_version: 1,
+        time_of_day: "morning".to_owned(),
+        weather: "clear".to_owned(),
+        people: vec![ScenePerson {
+            id: "keeper".to_owned(),
+            name: "Kestrel".to_owned(),
+            role: "shopkeeper".to_owned(),
+            description: "A middle-aged shopkeeper with gray hair and a plain wool tunic"
+                .to_owned(),
+            relation_to_speaker: String::new(),
+            position: "behind the counter".to_owned(),
+            aliases: Vec::new(),
+            is_background: false,
+            present_in: Vec::new(),
+            attitude: StartingAttitude::Indifferent,
+            attitudes: Default::default(),
+            knowledge: Vec::new(),
+            wants: String::new(),
+            coin_cp: 0,
+        }],
+        things: Vec::new(),
+        ways_out: Vec::new(),
+        offers: Vec::new(),
+    });
+    let plate = PlateScene::of(&authored).unwrap();
+    let mut book = Book::new();
+
+    shared.ensure(&mut book, &plate, &[], &[], 0, false);
+
+    assert!(book.entries.is_empty());
+    assert!(drain(&mut queue).is_empty());
+    assert_eq!(locked(&shared.inner.state).canonical.take_jobs().len(), 2);
+}
+
+#[tokio::test]
+async fn canonical_plate_and_locator_use_generated_speaker_bytes_after_readiness() {
+    use crate::gameplay::{
+        adventure::scene_model::{SceneModel, ScenePerson, StartingAttitude},
+        imagery::tests::DirectionFixture,
+    };
+
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/canonical-reference-tests/speaker-{}",
+        std::process::id()
+    ));
+    let fixture = DirectionFixture::photographic(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: super::super::ReferenceStore::photographic(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
+        social: SocialLedger::none(),
+        rating: ContentRating::Restrained,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    inner.observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+    let mut authored = scene(SceneKey::DialogueSeal, "Canonical room", Some("Kestrel"));
+    authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        inventory_version: 1,
+        time_of_day: "morning".to_owned(),
+        weather: "clear".to_owned(),
+        people: vec![ScenePerson {
+            id: "keeper".to_owned(),
+            name: "Kestrel".to_owned(),
+            role: "shopkeeper".to_owned(),
+            description: "A middle-aged shopkeeper with gray hair and a plain wool tunic"
+                .to_owned(),
+            relation_to_speaker: String::new(),
+            position: "behind the counter".to_owned(),
+            aliases: Vec::new(),
+            is_background: false,
+            present_in: Vec::new(),
+            attitude: StartingAttitude::Indifferent,
+            attitudes: Default::default(),
+            knowledge: Vec::new(),
+            wants: String::new(),
+            coin_cp: 0,
+        }],
+        things: Vec::new(),
+        ways_out: Vec::new(),
+        offers: Vec::new(),
+    });
+    locked(&inner.state).canonical.observe_room(&authored);
+    let (jobs, _queue) = mpsc::channel(8);
+    let shared = Shared {
+        inner: inner.clone(),
+        book: Mutex::new(Book::new()),
+        jobs,
+    };
+    let plate = PlateScene::of(&authored).unwrap();
+    let queued = locked(&inner.state).canonical.take_jobs();
+    let mut tasks = JoinSet::new();
+    for job in queued {
+        inner.spawn(&mut tasks, job);
+    }
+    while let Some(done) = tasks.join_next().await {
+        inner.finish(done.unwrap());
+    }
+
+    let canonical = inner.canonical_npc_reference("keeper").await.unwrap();
+    let (speaker, face) = shared
+        .npc_art(
+            &plate,
+            "keeper",
+            "sprite-patron-bell-ringer",
+            "portrait-patron-bell-ringer",
+        )
+        .await
+        .unwrap();
+    assert_eq!(speaker.unwrap().sha256, canonical.sha256);
+    assert!(face.is_none());
+    assert_eq!(
+        shared.locator_references(&plate, &[]).await.unwrap()["keeper"].sha256,
+        canonical.sha256
+    );
+    assert_ne!(
+        canonical.sha256,
+        inner
+            .references
+            .load_photographic("sprite-patron-bell-ringer")
+            .unwrap()
+            .sha256
+    );
+}
+
+#[tokio::test]
 async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographic_plate_request() {
     use crate::gameplay::{
         adventure::scene_model::{SceneKnowledge, SceneModel, ScenePerson, StartingAttitude},
@@ -268,7 +456,10 @@ fn canonical_lookup_uses_exact_authored_scene_variant() {
         assert_eq!(base.source_variant_id, None);
         let variant = locate(TITLE, ASSET, "opening", "duplicate-opening")
             .expect("exact variant resolves despite matching title and art");
-        assert_eq!(variant.source_variant_id.as_deref(), Some("duplicate-opening"));
+        assert_eq!(
+            variant.source_variant_id.as_deref(),
+            Some("duplicate-opening")
+        );
         assert_eq!(
             locate(TITLE, ASSET, "opening", "missing-opening"),
             Err(LookupFailure::MissingSceneVariant)

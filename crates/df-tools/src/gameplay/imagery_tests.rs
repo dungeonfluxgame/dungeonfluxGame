@@ -814,6 +814,10 @@ impl DirectionFixture {
         self.fake.calls()
     }
 
+    pub(in crate::gameplay) fn image_count(&self) -> usize {
+        self.fake.last_fields().1
+    }
+
     pub(in crate::gameplay) fn prompt(&self) -> String {
         self.fake.last_fields().0["prompt"].clone()
     }
