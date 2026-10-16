@@ -1590,6 +1590,38 @@ impl Actor {
             }
         };
         let current = self.owner.checkpoint().clone();
+        let scene = super::beat_script_runtime::scene(current.state()).map_err(unavailable)?;
+        let snapshot = super::journey::living_scene::snapshot(current.state(), &scene)
+            .map_err(unavailable)?
+            .ok_or_else(|| tonic::Status::failed_precondition("scene snapshot unavailable"))?;
+        let canonical_actor = snapshot
+            .model
+            .people
+            .iter()
+            .find(|person| person.id == proposal.actor_id)
+            .ok_or_else(|| tonic::Status::failed_precondition("NPC actor is not canonical"))?;
+        let dossier_matches_actor = proposal.npc_id == canonical_actor.id
+            || proposal
+                .npc_id
+                .strip_suffix(&format!(":{}", canonical_actor.id))
+                .is_some();
+        if !dossier_matches_actor {
+            return Ok(NpcEventOutcome {
+                status: "ignored_wrong_speaker",
+                revision: proposal.revision,
+            });
+        }
+        let line_is_current = self.table_log.lines().iter().rev().any(|line| {
+            line.role == rpc::TableRole::Npc as i32
+                && line.speaker == canonical_actor.name
+                && line.text == proposal.reply_text
+        });
+        if !line_is_current {
+            return Ok(NpcEventOutcome {
+                status: "ignored_line_not_current",
+                revision: proposal.revision,
+            });
+        }
         let current_revision = format!(
             "{}:{}",
             current.basis().revision.epoch().get(),

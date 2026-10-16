@@ -572,6 +572,7 @@ impl ApproachModel {
             npc_id,
             source_line_id,
             revision.to_owned(),
+            reply.to_owned(),
             &items,
         )
         .map_err(|error| match error {

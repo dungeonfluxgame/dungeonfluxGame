@@ -72,6 +72,8 @@ pub(super) struct Proposal {
     /// Canonical recipient for an explicit, present handoff. This is filled only when the
     /// current scene contains the addressed hero; a future or conditional offer leaves it empty.
     pub(super) recipient_id: Option<String>,
+    /// The bounded, already-spoken line used to bind the proposal to the current table log.
+    pub(super) reply_text: String,
     pub(super) source_line_id: String,
     pub(super) revision: String,
 }
@@ -187,6 +189,7 @@ pub(super) fn proposal(
     npc_id: &str,
     source_line_id: String,
     revision: String,
+    reply_text: String,
     items: &[(String, String)],
 ) -> Result<Proposal, ClassificationError> {
     let (label, item_id) = choice
@@ -208,6 +211,7 @@ pub(super) fn proposal(
         npc_id: npc_id.to_owned(),
         item_id,
         recipient_id: None,
+        reply_text,
         source_line_id,
         revision,
     })
@@ -245,6 +249,7 @@ mod tests {
             "marek",
             "npc-line:test".to_owned(),
             "3:8".to_owned(),
+            "welcome".to_owned(),
             &items(),
         )
         .unwrap();
@@ -263,6 +268,7 @@ mod tests {
                 "marek",
                 "line".to_owned(),
                 "1:1".to_owned(),
+                "reply".to_owned(),
                 &items(),
             ),
             Err(ClassificationError::UnknownItem)
@@ -274,6 +280,7 @@ mod tests {
                 "marek",
                 "line".to_owned(),
                 "1:1".to_owned(),
+                "reply".to_owned(),
                 &items(),
             ),
             Err(ClassificationError::MissingItem)
