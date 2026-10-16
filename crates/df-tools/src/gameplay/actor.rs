@@ -1946,7 +1946,7 @@ impl Actor {
                         "owner_refused_candidate",
                         &current_revision,
                     );
-                    Err(unavailable(error))
+                    return Err(unavailable(error));
                 }
                 SubmissionOutcome::OperationConflict => {
                     record_npc_event_status(
@@ -1955,7 +1955,7 @@ impl Actor {
                         "owner_operation_conflict",
                         &current_revision,
                     );
-                    Err(tonic::Status::aborted("merchant quote conflict"))
+                    return Err(tonic::Status::aborted("merchant quote conflict"));
                 }
                 SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
                     self.fenced = true;
@@ -1965,9 +1965,9 @@ impl Actor {
                         "owner_commit_outcome_indeterminate",
                         &current_revision,
                     );
-                    Err(tonic::Status::unavailable(
+                    return Err(tonic::Status::unavailable(
                         "merchant quote commit outcome unavailable",
-                    ))
+                    ));
                 }
             }
         }
@@ -2446,7 +2446,7 @@ impl Actor {
 
     fn validate_trade_quote_source(
         &self,
-        member: MemberId,
+        member: df_types::MemberId,
         request: &rpc::SubmitActionRequest,
     ) -> Result<(), tonic::Status> {
         let options = request
@@ -3811,6 +3811,7 @@ impl Reducer<Call> for Actor {
                     }
                     super::dialogue::DialogueRequest::Confirm(_)
                     | super::dialogue::DialogueRequest::SyncNotes
+                    | super::dialogue::DialogueRequest::PendingMerchantQuote
                     | super::dialogue::DialogueRequest::Cancel(_) => None,
                 };
                 let result = after_grant_reconnect(reconnected, || {
