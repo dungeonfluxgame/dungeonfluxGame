@@ -10,6 +10,7 @@ const SCHEMA: &str =
     include_str!("../../../../../content/adventure-tables/scene-model.schema.json");
 const PROMPT: &str = include_str!("../../../../../content/adventure-tables/scene-model.prompt.md");
 const MAXIMUM_CHANGES: usize = 64;
+const CURRENT_INVENTORY_VERSION: u8 = 1;
 
 /// Detached presentation copies published by the session owner after loading or committing state.
 /// These copies never resolve an action or replace the durable scene-change ledger.
@@ -73,6 +74,10 @@ pub(crate) enum ScenePlace {
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SceneModel {
+    /// Versioned item identity/custody shape. Missing values identify legacy v0 models,
+    /// which are upgraded at the record or authoring load boundary before validation.
+    #[serde(default)]
+    pub(crate) inventory_version: u8,
     pub(crate) time_of_day: String,
     pub(crate) weather: String,
     pub(crate) people: Vec<ScenePerson>,
@@ -612,6 +617,7 @@ impl SceneModel {
         let ways_out = ways_out(setting, &time_of_day, &weather);
         let offers = offers(setting, &people);
         let model = Self {
+            inventory_version: CURRENT_INVENTORY_VERSION,
             time_of_day,
             weather,
             people,
@@ -635,6 +641,23 @@ impl SceneModel {
         if !(2..=6).contains(&self.people.len())
             || !(4..=6).contains(&self.things.len())
             || !(1..=3).contains(&self.ways_out.len())
+        {
+            return Err(SceneModelError::InvalidBounds);
+        }
+        self.validate_structure_with_party(false)
+    }
+
+    /// Validates durable scene state without the authored room-dressing cardinalities. Purchases
+    /// and stock materialization can grow the current item collection beyond the authoring shape.
+    pub(crate) fn validate_state_structure(&self) -> Result<(), SceneModelError> {
+        self.validate_structure_with_party(true)
+    }
+
+    fn validate_structure_with_party(
+        &self,
+        allow_party_people: bool,
+    ) -> Result<(), SceneModelError> {
+        if self.inventory_version != CURRENT_INVENTORY_VERSION
             || self.offers.len() > 8
             || self.time_of_day.trim().is_empty()
             || self.weather.trim().is_empty()
@@ -648,6 +671,7 @@ impl SceneModel {
             if !ids.insert(person.id.clone()) {
                 return Err(SceneModelError::DuplicateId);
             }
+            let party_person = allow_party_people && person.role == "hero";
             if !valid_text(&person.id, 96)
                 || !valid_text(&person.name, 64)
                 || !valid_text(&person.role, 48)
@@ -658,8 +682,8 @@ impl SceneModel {
                 || person.aliases.is_empty()
                 || person.aliases.len() > 8
                 || person.present_in.is_empty()
-                || person.present_in.len() > 5
-                || person.knowledge.len() != 3
+                || !party_person && person.present_in.len() > 5
+                || !party_person && person.knowledge.len() != 3
                 || person.knowledge.iter().any(|knowledge| {
                     !valid_text(&knowledge.fact_id, 96) || !valid_text(&knowledge.statement, 160)
                 })
@@ -729,7 +753,7 @@ impl SceneModel {
                 }
                 None => {}
             }
-            if item_id != format!("item-{}", offer.id) {
+            if offer.item_id != item_id || item_id != format!("item-{}", offer.id) {
                 return Err(SceneModelError::InvalidShape);
             }
             if !valid_text(&offer.id, 96)
@@ -796,16 +820,7 @@ impl SceneModel {
     ) -> Result<Self, SceneModelError> {
         let mut model: Self =
             serde_json::from_value(value).map_err(|_| SceneModelError::InvalidShape)?;
-        for thing in &mut model.things {
-            if thing.provenance.source_id.is_empty() {
-                thing.provenance.source_id = thing.id.clone();
-            }
-        }
-        for offer in &mut model.offers {
-            if offer.item_id.is_empty() {
-                offer.item_id = format!("item-{}", offer.id);
-            }
-        }
+        model.migrate_inventory_version()?;
         model.validate_structure()?;
         for person in &model.people {
             if !person.is_background && cast.get(&person.id).is_none_or(|name| name != &person.name)
@@ -850,6 +865,30 @@ impl SceneModel {
         Ok(model)
     }
 
+    /// Upgrade legacy scene models before current validation. Version 0 predates explicit item
+    /// provenance, so a missing source ID is deterministically derived from the authored thing
+    /// ID. Explicit malformed version-1 data remains an error.
+    pub(crate) fn migrate_inventory_version(&mut self) -> Result<(), SceneModelError> {
+        match self.inventory_version {
+            0 => {
+                for thing in &mut self.things {
+                    if thing.provenance.source_id.is_empty() {
+                        thing.provenance.source_id = thing.id.clone();
+                    }
+                }
+                for offer in &mut self.offers {
+                    if offer.item_id.is_empty() {
+                        offer.item_id = format!("item-{}", offer.id);
+                    }
+                }
+                self.inventory_version = CURRENT_INVENTORY_VERSION;
+                Ok(())
+            }
+            CURRENT_INVENTORY_VERSION => Ok(()),
+            _ => Err(SceneModelError::InvalidShape),
+        }
+    }
+
     pub(crate) fn for_scene(&self, scene_key: SceneKey) -> Self {
         let key = scene_key_label(scene_key);
         let mut model = self.clone();
@@ -877,6 +916,7 @@ impl SceneModel {
             current.apply(change)?;
             descriptions.push(change.description.clone());
         }
+        current.validate_state_structure()?;
         let snapshot = SceneNow {
             model: current.for_scene(scene_key),
             changes: descriptions,

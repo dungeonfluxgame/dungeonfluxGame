@@ -1,8 +1,9 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["time_of_day", "weather", "people", "things", "ways_out", "offers"],
+  "required": ["inventory_version", "time_of_day", "weather", "people", "things", "ways_out", "offers"],
   "properties": {
+    "inventory_version": { "type": "integer", "const": 1 },
     "time_of_day": { "type": "string", "minLength": 1, "maxLength": 32 },
     "weather": { "type": "string", "minLength": 1, "maxLength": 72 },
     "people": {
@@ -42,7 +43,7 @@
       "type": "array", "minItems": 4, "maxItems": 6,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "name", "short", "detail", "picture_description", "closer_look", "skill", "dc", "finding_id", "clue_fact_id", "portable", "value_cp", "use_effect", "position", "owner_id", "in_use", "in_scene", "holder_id", "open", "lit", "broken", "searched_by", "aliases"],
+        "required": ["id", "name", "short", "detail", "picture_description", "closer_look", "skill", "dc", "finding_id", "clue_fact_id", "portable", "value_cp", "use_effect", "position", "owner_id", "in_use", "in_scene", "holder_id", "open", "lit", "broken", "searched_by", "aliases", "provenance"],
         "properties": {
           "id": { "type": "string", "minLength": 1, "maxLength": 96 },
           "name": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -71,7 +72,7 @@
             "type": "object", "additionalProperties": false,
             "required": ["kind", "source_id"],
             "properties": {
-              "kind": { "type": "string", "minLength": 1, "maxLength": 48 },
+              "kind": { "type": "string", "enum": ["authored_location", "generated_offer"] },
               "source_id": { "type": "string", "minLength": 1, "maxLength": 96 },
               "seller_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 96 }
             }

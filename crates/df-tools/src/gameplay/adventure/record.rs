@@ -474,13 +474,16 @@ pub(crate) fn reload(
     }
     // Compact documents keep models once in the validated record. Hydrate only runtime
     // scenes before checkpoint replay; document bytes and their revision pins stay exact.
-    if let Some(settings) = &record.settings {
+    if let Some(settings) = &mut record.settings {
         for setting in [
-            &settings.meeting,
-            &settings.confrontation,
-            &settings.destination,
+            &mut settings.meeting,
+            &mut settings.confrontation,
+            &mut settings.destination,
         ] {
-            if let Some(model) = &setting.model {
+            if let Some(model) = &mut setting.model {
+                model
+                    .migrate_inventory_version()
+                    .map_err(|_| RecordError::Invalid("record scene model migration"))?;
                 model
                     .validate_structure()
                     .map_err(|_| RecordError::Invalid("record scene model"))?;

@@ -2,6 +2,7 @@ Create the structured, authoritative model of this scene before writing any pros
 
 <!-- Why: the model is the shared source for the scene's narration, characters, actions, and picture. -->
 Use only the supplied adventure facts, cast, place, existing findings, and scene requirements.
+Set `inventory_version` to `1`; this identifies the current stable item identity/custody format.
 Keep named cast IDs and names exact. Background people may be invented for this place, but each
 must have a stable ID, a job, a position, and a truthful relationship to the named cast.
 
@@ -9,9 +10,9 @@ must have a stable ID, a job, a position, and a truthful relationship to the nam
 List every visible person and foreground object that the plate should depict. Give each a
 player-friendly position phrase such as "at the back on the left", "by the hearth", or "on the
 bar in front". Include who owns each object and whether it is currently in use. Do not place
-unlisted people or objects in picture descriptions. Every portable object is one stable item
-instance: give it an optional provenance object with `kind` (`authored_location` or
-`generated_offer`), a stable `source_id`, and a seller ID only for generated stock. Ownership,
+unlisted people or objects in picture descriptions. Every object is one stable item instance:
+give it a required provenance object with `kind` (`authored_location` or `generated_offer`),
+a stable `source_id`, and a seller ID only for generated stock. Ownership,
 current holder, and room position are separate fields; never replace an item with a second copy
 when the plate is refreshed.
 

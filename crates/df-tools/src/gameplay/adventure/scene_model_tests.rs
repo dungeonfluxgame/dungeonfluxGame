@@ -1,6 +1,7 @@
 use super::{
     scene_model::{
-        SceneChange, SceneChangeKind, SceneModel, ScenePlace, SceneTargetKind, StartingAttitude,
+        SceneChange, SceneChangeKind, SceneModel, ScenePerson, ScenePlace, SceneTargetKind,
+        StartingAttitude,
     },
     setting::{SceneSetting, SettingKind},
 };
@@ -60,6 +61,46 @@ fn merchant_shop() -> SceneModel {
     );
     SceneModel::fallback(&setting, ScenePlace::Meeting, SEED, &shop_facts)
         .expect("the merchant shop tables provide all named scene facts")
+}
+
+fn add_test_hero(model: &mut SceneModel, id: &str, name: &str) {
+    model.people.push(ScenePerson {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        role: "hero".into(),
+        description: "Standing with the party.".into(),
+        relation_to_speaker: "visitor".into(),
+        position: "foreground".into(),
+        aliases: vec![name.to_owned()],
+        is_background: false,
+        present_in: vec![
+            "opening".into(),
+            "dialogue_seal".into(),
+            "dialogue_escort".into(),
+            "room".into(),
+            "combat".into(),
+            "defeat".into(),
+            "victory".into(),
+            "inn".into(),
+        ],
+        attitude: StartingAttitude::Indifferent,
+        attitudes: BTreeMap::new(),
+        knowledge: Vec::new(),
+        wants: "Stay with the party.".into(),
+        coin_cp: 0,
+    });
+}
+
+#[test]
+fn authored_merchant_model_declares_current_item_provenance() {
+    let model: SceneModel = serde_json::from_str(include_str!(
+        "../../../../../content/merchant-shop/scene-model.json"
+    ))
+    .expect("authored merchant scene model loads");
+    assert_eq!(model.inventory_version, 1);
+    model
+        .validate_structure()
+        .expect("authored merchant model meets current inventory bounds");
 }
 
 #[test]
@@ -277,11 +318,28 @@ fn generated_offer_item_ids_are_canonical_and_legacy_stock_resolves() {
     );
 
     let mut serialized = serde_json::to_value(&model).expect("model JSON");
+    serialized
+        .as_object_mut()
+        .expect("scene model object")
+        .remove("inventory_version");
+    for thing in serialized["things"].as_array_mut().expect("things array") {
+        thing
+            .as_object_mut()
+            .expect("thing object")
+            .remove("provenance");
+    }
     serialized["offers"][0]
         .as_object_mut()
         .expect("offer object")
         .remove("item_id");
     model = serde_json::from_value(serialized).expect("legacy offer row loads");
+    assert_eq!(model.inventory_version, 0);
+    model
+        .migrate_inventory_version()
+        .expect("legacy item identities upgrade deterministically");
+    model
+        .validate_structure()
+        .expect("migrated legacy model meets current authoring bounds");
     let entry = model
         .inventory()
         .into_iter()
@@ -289,6 +347,80 @@ fn generated_offer_item_ids_are_canonical_and_legacy_stock_resolves() {
         .expect("legacy stock resolves to a concrete item ID");
     assert_eq!(entry.item_id, "item-clothes-travelers");
     assert!(model.offer_available(&entry.item_id));
+}
+
+#[test]
+fn explicit_current_version_does_not_migrate_malformed_item_provenance() {
+    let mut model = merchant_shop();
+    model.things[0].provenance.source_id.clear();
+    assert_eq!(
+        model.validate_structure(),
+        Err(super::scene_model::SceneModelError::InvalidBounds)
+    );
+
+    model.inventory_version = 2;
+    assert_eq!(
+        model.validate_structure(),
+        Err(super::scene_model::SceneModelError::InvalidBounds)
+    );
+}
+
+#[test]
+fn dynamic_inventory_rejects_unknown_custody_actor_references() {
+    let model = merchant_shop();
+    let thing = model
+        .things
+        .iter()
+        .find(|thing| thing.portable && thing.owner_id.is_none() && thing.holder_id.is_none())
+        .expect("shop has an unowned portable prop");
+    let result = model.as_it_is_now(
+        super::super::pack::SceneKey::Opening,
+        &[SceneChange {
+            entity_id: thing.id.clone(),
+            description: "An unknown visitor takes the item.".into(),
+            kind: SceneChangeKind::Taken {
+                holder_id: "untrusted-actor-id".into(),
+            },
+        }],
+    );
+    assert_eq!(
+        result,
+        Err(super::scene_model::SceneModelError::UnknownPerson),
+        "journal custody must reference an actor in the trusted scene/party state"
+    );
+}
+
+#[test]
+fn dynamic_inventory_can_exceed_authored_room_item_count() {
+    let model = merchant_shop();
+    assert!(model.offers.len() > 1);
+    let changes = model
+        .offers
+        .iter()
+        .map(|offer| SceneChange {
+            entity_id: offer.canonical_item_id(),
+            description: format!("Marek lends {} for inspection.", offer.name),
+            kind: SceneChangeKind::Given {
+                holder_id: "shop-adventurer".into(),
+                owner_id: None,
+            },
+        })
+        .collect::<Vec<_>>();
+    let snapshot = model
+        .as_it_is_now(super::super::pack::SceneKey::Opening, &changes)
+        .expect("durable item growth does not reuse authored cardinality bounds");
+    let snapshot: super::scene_model::SceneNow =
+        serde_json::from_str(&snapshot).expect("snapshot JSON");
+    assert!(snapshot.model.things.len() > 6);
+    snapshot
+        .model
+        .validate_state_structure()
+        .expect("dynamic inventory is structurally valid");
+    assert_eq!(
+        snapshot.model.validate_structure(),
+        Err(super::scene_model::SceneModelError::InvalidBounds),
+        "authored room-shape validation remains a separate constraint"
+    );
 }
 
 #[test]
@@ -466,6 +598,7 @@ fn purchase_change_cannot_claim_a_different_seller() {
 #[test]
 fn theft_moves_custody_without_rewriting_owner() {
     let mut model = merchant_shop();
+    add_test_hero(&mut model, "hero-brynn", "Brynn");
     model.things[0].owner_id = Some("patron".into());
     let target = model
         .things
@@ -684,7 +817,9 @@ fn structured_scene_model_accepts_grounded_data_and_rejects_untrusted_claims() {
 
 #[test]
 fn scene_now_applies_item_and_person_changes_to_the_prompt_projection() {
-    let model = taproom();
+    let mut model = taproom();
+    add_test_hero(&mut model, "hero-brakka", "Brakka");
+    add_test_hero(&mut model, "hero-sigrun", "Sigrun");
     let mug_id = model
         .things
         .iter()
@@ -779,7 +914,9 @@ fn scene_now_applies_item_and_person_changes_to_the_prompt_projection() {
 
 #[test]
 fn giving_a_borrowed_observation_changes_holder_without_minting_ownership() {
-    let model = taproom();
+    let mut model = taproom();
+    add_test_hero(&mut model, "hero-brakka", "Brakka");
+    add_test_hero(&mut model, "hero-sigrun", "Sigrun");
     let mug_id = model
         .things
         .iter()
@@ -819,6 +956,8 @@ fn giving_a_borrowed_observation_changes_holder_without_minting_ownership() {
 #[test]
 fn ordinary_given_handoff_preserves_canonical_owner() {
     let mut model = taproom();
+    add_test_hero(&mut model, "hero-brakka", "Brakka");
+    add_test_hero(&mut model, "hero-sigrun", "Sigrun");
     let thing = model
         .things
         .iter_mut()

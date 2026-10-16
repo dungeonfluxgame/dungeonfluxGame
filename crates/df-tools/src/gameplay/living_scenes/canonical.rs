@@ -209,6 +209,7 @@ mod tests {
 
     fn model() -> SceneModel {
         SceneModel {
+            inventory_version: 1,
             time_of_day: "morning".to_owned(),
             weather: "clear".to_owned(),
             people: Vec::new(),

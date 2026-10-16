@@ -1033,6 +1033,59 @@ fn rested_narration_belongs_to_victory_and_defeat_only() {
 }
 
 #[test]
+fn pack_loading_migrates_legacy_scene_inventory_models_before_validation() {
+    let mut pack: Value = serde_json::from_slice(include_bytes!(
+        "../../../../content/merchant-shop/pack.json"
+    ))
+    .expect("merchant pack is JSON");
+    let mut legacy_model: Value = serde_json::from_slice(include_bytes!(
+        "../../../../content/merchant-shop/scene-model.json"
+    ))
+    .expect("merchant scene model is JSON");
+    legacy_model
+        .as_object_mut()
+        .expect("model object")
+        .remove("inventory_version");
+    for thing in legacy_model["things"].as_array_mut().expect("things array") {
+        thing
+            .as_object_mut()
+            .expect("thing object")
+            .remove("provenance");
+    }
+    for offer in legacy_model["offers"].as_array_mut().expect("offers array") {
+        offer
+            .as_object_mut()
+            .expect("offer object")
+            .remove("item_id");
+    }
+    for scene in pack["scenes"].as_array_mut().expect("scenes array") {
+        scene["setting"]["model"] = legacy_model.clone();
+    }
+    let loaded = load_from_bytes(
+        &serde_json::to_vec(&pack).expect("pack serializes"),
+        include_bytes!("../../../../content/merchant-shop/tuning.json"),
+    )
+    .expect("legacy model migrates before structural validation");
+    for scene in loaded.pack.scenes {
+        let model = scene
+            .setting
+            .expect("merchant scene setting")
+            .model
+            .expect("migrated scene model");
+        assert_eq!(model.inventory_version, 1);
+        assert!(model.things.iter().all(|thing| {
+            thing.provenance.source_id == thing.id && thing.provenance.seller_id.is_none()
+        }));
+        assert!(
+            model
+                .offers
+                .iter()
+                .all(|offer| { offer.item_id == format!("item-{}", offer.id) })
+        );
+    }
+}
+
+#[test]
 fn rested_story_text_keeps_short_rest_rules_out_of_narration() {
     let loaded = load_from_bytes(shipped_pack().as_bytes(), shipped_tuning().as_bytes()).unwrap();
 

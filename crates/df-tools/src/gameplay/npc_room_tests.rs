@@ -234,6 +234,60 @@ fn compact_records_hydrate_runtime_scene_models_without_changing_document_pins()
             scene.key
         );
     }
+    let mut legacy = original.clone();
+    let mut value: Value = serde_json::from_slice(&legacy.record).unwrap();
+    for place in ["meeting", "confrontation", "destination"] {
+        let model = value["settings"][place]["model"]
+            .as_object_mut()
+            .expect("legacy setting model object");
+        model.remove("inventory_version");
+        for thing in model["things"].as_array_mut().expect("things array") {
+            thing
+                .as_object_mut()
+                .expect("thing object")
+                .remove("provenance");
+        }
+        for offer in model["offers"].as_array_mut().expect("offers array") {
+            offer
+                .as_object_mut()
+                .expect("offer object")
+                .remove("item_id");
+        }
+    }
+    legacy.record = serde_json::to_vec(&value).unwrap();
+    let (legacy_loaded, legacy_record) =
+        super::super::adventure::record::reload(&legacy).expect("legacy record migrates");
+    let migrated = legacy_record
+        .settings
+        .as_ref()
+        .unwrap()
+        .meeting
+        .model
+        .as_ref()
+        .unwrap();
+    assert_eq!(migrated.inventory_version, 1);
+    assert_eq!(
+        migrated.things[0].provenance.source_id,
+        migrated.things[0].id
+    );
+    assert!(
+        migrated
+            .offers
+            .iter()
+            .all(|offer| { offer.item_id == format!("item-{}", offer.id) })
+    );
+    assert_eq!(
+        legacy_loaded.pack.scenes[0]
+            .setting
+            .as_ref()
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .inventory_version,
+        1
+    );
+
     let mut invalid = original;
     let mut value: Value = serde_json::from_slice(&invalid.record).unwrap();
     value["settings"]["meeting"]["model"]["weather"] = json!("");

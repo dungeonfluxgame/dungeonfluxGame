@@ -44,8 +44,9 @@ pub(crate) fn generate(
 ) -> Result<GeneratedAdventure, GenerateError> {
     // Use the production loader before attaching immutable authoring to the generated record.
     let mut loaded = pack::load_from_bytes(PACK, TUNING).map_err(GenerateError::Pack)?;
-    let model: super::scene_model::SceneModel =
+    let mut model: super::scene_model::SceneModel =
         serde_json::from_slice(MODEL).map_err(|_| GenerateError::Serialization)?;
+    model.migrate_inventory_version()?;
     model.validate_structure()?;
     let dossiers: Vec<Dossier> =
         serde_json::from_slice(DOSSIERS).map_err(|_| GenerateError::Serialization)?;

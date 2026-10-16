@@ -1035,8 +1035,9 @@ pub(super) fn load_from_bytes(
     tuning_bytes: &[u8],
 ) -> Result<LoadedPack, PackError> {
     super::beat_script::preflight(pack_bytes).map_err(PackError::Script)?;
-    let pack: PackFile = parse(SourceFile::Pack, pack_bytes)?;
+    let mut pack: PackFile = parse(SourceFile::Pack, pack_bytes)?;
     require_schema(SourceFile::Pack, &pack.schema, PACK_SCHEMA)?;
+    migrate_scene_inventory_models(&mut pack)?;
     let tuning: TuningFile = parse(SourceFile::Tuning, tuning_bytes)?;
     require_schema(SourceFile::Tuning, &tuning.schema, TUNING_SCHEMA)?;
     validate_pack(&pack)?;
@@ -2260,7 +2261,54 @@ pub(super) fn validate_script_scene(content: &PackFile, scene: &Scene) -> Result
             )
         })?;
     *destination = scene.clone();
+    if let Some(model) = destination
+        .setting
+        .as_mut()
+        .and_then(|setting| setting.model.as_mut())
+    {
+        migrate_scene_inventory_model(model, "beat_script.scenes.setting.model")?;
+    }
     validate_scenes(&scenes, content.is_freeplay())
+}
+
+fn migrate_scene_inventory_models(pack: &mut PackFile) -> Result<(), PackError> {
+    for (index, scene) in pack.scenes.iter_mut().enumerate() {
+        if let Some(model) = scene
+            .setting
+            .as_mut()
+            .and_then(|setting| setting.model.as_mut())
+        {
+            migrate_scene_inventory_model(model, &format!("scenes[{index}].setting.model"))?;
+        }
+    }
+    if let Some(script) = &mut pack.beat_script {
+        for (key, scene) in &mut script.scenes {
+            if let Some(model) = scene
+                .setting
+                .as_mut()
+                .and_then(|setting| setting.model.as_mut())
+            {
+                migrate_scene_inventory_model(
+                    model,
+                    &format!("beat_script.scenes.{key}.setting.model"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn migrate_scene_inventory_model(
+    model: &mut super::adventure::scene_model::SceneModel,
+    path: &str,
+) -> Result<(), PackError> {
+    model
+        .migrate_inventory_version()
+        .map_err(|_| PackError::Malformed {
+            file: SourceFile::Pack,
+            path: path.to_owned(),
+            expected: "supported versioned location inventory model",
+        })
 }
 
 fn validate_cross_references(pack: &PackFile, tuning: &TuningFile) -> Result<(), PackError> {

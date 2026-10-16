@@ -29,6 +29,7 @@ fn failed_canonical_dependency_projects_terminal_plate_failure_without_redispatc
         .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
     let mut authored = scene(SceneKey::DialogueSeal, "Failed room", Some("Kestrel"));
     authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        inventory_version: 1,
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: Vec::new(),
@@ -96,6 +97,7 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
         Some("Kestrel"),
     );
     authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        inventory_version: 1,
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: vec![ScenePerson {
