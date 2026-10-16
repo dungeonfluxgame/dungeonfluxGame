@@ -11,7 +11,15 @@ use super::super::live_tv::GENERATED;
 
 /// The single place that turns a generated-art stem into its served URL.
 pub(super) fn generated_asset_url(stem: &str) -> String {
-    format!("{GENERATED}/{stem}")
+    let photographic = match stem {
+        "portrait-hero-1" | "portrait-hero-1-full" => Some("figure-hero-1-photo.png"),
+        "portrait-hero-2" | "portrait-hero-2-full" => Some("figure-hero-2-photo.png"),
+        _ => None,
+    };
+    photographic.map_or_else(
+        || format!("{GENERATED}/{stem}"),
+        |asset| format!("{GENERATED}/{asset}"),
+    )
 }
 
 /// Combat painting for both roles; the server serves it from the concept-art route.

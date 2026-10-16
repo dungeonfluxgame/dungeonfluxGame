@@ -24,7 +24,10 @@ pub(in crate::gameplay) const FILM_LOOK: &str = "Live-action fantasy film; real 
     prime lens per scene; natural depth of field. Practical light sources visible in scene. Skin \
     pores, worn woven fabric and seams. One named film grade for each place and time of day \
     (Lantern Night, Overcast Day, Hearth Amber): cool shadows, warm practical highlights, fine \
-    film grain. Photographic only; no painting, illustration, concept art, CGI or game art.";
+    film grain. Photograph real adult actors in practical sewn costumes on a built set or real \
+    location; physically imperfect skin, wood, metal, water and props; restrained contrast and \
+    natural atmospheric light. Photographic only; no painting, illustration, concept art, matte \
+    painting, CGI, 3D render, synthetic game art or plastic surfaces.";
 const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
 const NO_REAL_PEOPLE: &str = "No real people, celebrities or likenesses of real persons.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";

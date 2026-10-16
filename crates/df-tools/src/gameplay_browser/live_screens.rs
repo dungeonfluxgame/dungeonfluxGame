@@ -10,8 +10,8 @@ use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
 use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
 
-const HARBOR_ESTABLISHING: &str = "/assets/ui/scenes/mara-harbor-v4.png";
-const HARBOR_WHARF: &str = "/assets/ui/scenes/mara-harbor-v4.png";
+const HARBOR_ESTABLISHING: &str = "/assets/ui/generated/scene-salt-quay-arrival-photo.png";
+const HARBOR_WHARF: &str = "/assets/ui/generated/scene-salt-quay-arrival-photo.png";
 const HARBOR_INN: &str = "/assets/concept-art/scene-tavern-barkeep-talk-rain.webp";
 const WAITING_TEXT: &str = "The story is being told. Your next choice will appear here.";
 const CHOOSE_TEXT: &str = "Choose how your hero responds.";
