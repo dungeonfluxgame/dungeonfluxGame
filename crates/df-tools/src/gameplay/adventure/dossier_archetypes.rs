@@ -404,9 +404,35 @@ mod tests {
     }
 
     #[test]
-    fn library_is_broad_and_has_composable_flavor_axes() {
+    fn checked_in_library_loads_and_composes_every_authored_profile() {
         let library = library();
         assert!(library.archetype_count() >= 200);
+        for source in &library.profiles {
+            let composed = library
+                .compose(
+                    &source.id,
+                    &source.label,
+                    4,
+                    &format!("contact:{}", source.id),
+                )
+                .unwrap()
+                .unwrap_or_else(|| {
+                    panic!("{} did not resolve from the checked-in library", source.id)
+                })
+                .0;
+            assert_eq!(composed.source_id, source.id);
+            assert!(!composed.instincts.is_empty());
+            assert!(!composed.priorities.is_empty());
+            assert!(!composed.boundaries.is_empty());
+            assert!(!composed.knowledge_domains.is_empty());
+            assert!(!composed.speech_habits.is_empty());
+            assert!(!composed.typical_actions.is_empty());
+            assert!(!composed.experience.guidance.is_empty());
+            assert!(!composed.competence.guidance.is_empty());
+            assert!(!composed.temperament.guidance.is_empty());
+            assert!(!composed.motive.guidance.is_empty());
+            assert!(!composed.style.guidance.is_empty());
+        }
         for seed in 0..128 {
             let profile = library
                 .compose("merchant", "cloth merchant", seed, "patron:merchant")
