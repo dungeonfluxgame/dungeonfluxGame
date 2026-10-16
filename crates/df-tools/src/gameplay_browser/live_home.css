@@ -1,6 +1,7 @@
 /* PLAY-V11: the home screen is one composed layout, the same for every place. A 12-column grid
-   inside the 5% TV-safe area holds three blocks: the mark and place title at the left (columns 1 to
-   5), the join card at the right (9 to 12) and the party row across the bottom. The server's theme
+   inside the 5% TV-safe area holds the mark and place title at the left (columns 1 to 5), the join
+   card at the right (9 to 12), a spoken-caption lane above the party row, and the party row across
+   the bottom. The server's theme
    only supplies the place's mood (colours, grade, vignette) and atmosphere; it never places a
    block. Sizes are in --u, so the same composition holds at 720p, 1080p and 4K. The effects are
    always on: no rule here checks the device's motion setting. */
@@ -36,6 +37,12 @@
 .tv-stage[data-tv-mode=lobby] .tv-join-row .tv-code-box{width:100%;margin:0;padding:calc(var(--u)*1) 0 calc(var(--u)*.5);border:0;border-top:1px solid color-mix(in srgb,var(--home-accent) 38%,transparent);background:none}
 .tv-stage[data-tv-mode=lobby] .tv-code{margin:0;padding:0;font-size:min(calc(var(--u)*6),calc(90cqi / var(--chars,6) / .9))}
 .tv-stage[data-tv-mode=lobby] .tv-hint{font-size:max(11px,calc(var(--u)*1.1))}
+
+/* Keep the spoken welcome in its own band above the party cards, with room for the portrait and
+   an untruncated sentence. This lobby-only lane leaves the join card in the upper-right column. */
+.tv-stage[data-tv-mode=lobby] .tv-caption-lane{position:absolute;left:0;right:0;bottom:calc(5vh + var(--u)*11);display:block;z-index:7;pointer-events:none}
+.tv-stage[data-tv-mode=lobby] .tv-caption-lane>.tv-lower{position:relative;left:50%;bottom:auto;width:min(calc(var(--u)*72),90vw);transform:translate(-50%,calc(var(--u)*1))}
+.tv-stage[data-tv-mode=lobby] .tv-caption-lane>.tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]){transform:translate(-50%,0)}
 
 /* Bottom: the party row, as wide as the page grid. Heroes fill seats from the left; open seats are
    quiet outlines; five or six heroes make the seats narrower, never a second row. */
