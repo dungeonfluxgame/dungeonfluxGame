@@ -338,6 +338,7 @@ pub(in crate::gameplay) fn item_for(
         return Ok(None);
     };
     let model = &snapshot.model;
+    let scope = crate::gameplay::beat_script_runtime::scene_scope(state)?;
     let mut projected = scene.clone();
     if let Some(setting) = projected.setting.as_mut() {
         setting.model = Some(model.clone());
@@ -355,9 +356,17 @@ pub(in crate::gameplay) fn item_for(
                 continue;
             }
         } else if decision.source_policy.as_str() == THREAD_POLICY {
-            let Some(check) = accepted(decision)?.check else {
+            // This branch is a registered rules receipt, not this module's optional scene
+            // journal receipt (which deliberately returns None for THREAD_POLICY).
+            let Some(check) = super::accepted(decision)?.check else {
                 continue;
             };
+            if !check
+                .source_revision
+                .starts_with(&format!("srd521-p6:{scope}:"))
+            {
+                continue;
+            }
             let Some((_, _, member)) =
                 crate::gameplay::beat_script_runtime::choice(state, decision)?
             else {
