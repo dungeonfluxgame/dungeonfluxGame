@@ -765,6 +765,51 @@ mod tests {
         assert_eq!(snapshot["status"], "applied");
     }
     #[tokio::test]
+    async fn expired_inventory_cannot_admit_visibility_until_exact_readback_refreshes() {
+        let state = LayoutState::new();
+        state.enable();
+        admit(&state, 1, &report(0, 1, "dm-overlay", None))
+            .await
+            .unwrap();
+
+        state.state.lock().await.clients.get_mut(&1).unwrap().seen =
+            Instant::now() - INVENTORY_LIFETIME - Duration::from_secs(1);
+
+        let stale = state.snapshot(Some("dm-overlay")).await.unwrap();
+        assert_eq!(stale["clients"][0]["status"], "stale");
+        assert_eq!(
+            state
+                .set_visibility(&VisibilityRequest {
+                    id: "dm-overlay".into(),
+                    visible: false,
+                })
+                .await,
+            Err(LayoutError::UnknownId)
+        );
+        assert_eq!(
+            state.mutate("dm-overlay", Transform::default()).await,
+            Err(LayoutError::UnknownId)
+        );
+
+        admit(&state, 1, &report(0, 2, "dm-overlay", None))
+            .await
+            .unwrap();
+        let revision = state
+            .set_visibility(&VisibilityRequest {
+                id: "dm-overlay".into(),
+                visible: false,
+            })
+            .await
+            .unwrap();
+        let mut hidden = report(revision, 3, "dm-overlay", None);
+        hidden.elements[0].visibility = contract::ElementVisibility::Hidden;
+        admit(&state, 1, &hidden).await.unwrap();
+
+        let applied = state.snapshot(Some("dm-overlay")).await.unwrap();
+        assert_eq!(applied["status"], "applied");
+        assert_eq!(applied["visibility"]["dm-overlay"], "hidden");
+    }
+    #[tokio::test]
     async fn vanished_ids_and_future_or_malformed_readbacks_do_not_fabricate_success() {
         let state = LayoutState::new();
         state.enable();

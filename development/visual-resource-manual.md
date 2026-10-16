@@ -346,13 +346,17 @@ $fixture='.\artifacts\build\play\debug\df-transport-fixture.exe'
 
 Use the server URL and token-file environment variables from the quick-start
 section. Never paste a bearer token into commands, screenshots, or reports.
-`layout list` discovers the current game DOM inventory. Stable semantic aliases
-include `scene-context`, `dm-overlay`, `narration`, `subtitle`, `background`,
-`plate`, `choices`, `hud`, and `item-card` when those elements exist. Other nodes
+`layout list` discovers the current game DOM inventory. The browser source assigns
+stable semantic IDs to `game-root`, `dm-overlay`, `narration`, `stage`, `title`,
+`scene-context`, `background`, `plate`, `plate-loading`, `subtitle`, `hud`,
+`choices`, `partybar`, `rules`, `sound-gate`, `safe-content`, `item-card`, and
+`scene-card` when those components exist. Actor figures, HUD cards, scene actors,
+and speech-bubble groups receive IDs in the `actor-<owner>`, `hud-<owner>`,
+`scene-actor-<owner>`, and `bubbles-<owner>` forms. Other eligible DOM nodes
 receive runtime IDs; inspect their classes, owner metadata, and measured bounds
-before selecting one. The registry also covers descendants such as individual
-images, labels, figures, cards, loaders, and controls. A composed photograph is
-one image; people painted into its pixels are not independent DOM elements.
+before selecting one. The registry covers nested images, labels, figures, cards,
+loaders, and controls. A composed photograph is one image; people painted into
+its pixels are not independent DOM elements.
 
 `transform` accepts translation, uniform or separate-axis scale, and rotation in
 degrees. Translation units are `px` or `percent` (percentage of that element's

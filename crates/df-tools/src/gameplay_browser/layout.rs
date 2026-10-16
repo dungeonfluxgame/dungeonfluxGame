@@ -738,45 +738,110 @@ mod tests {
         c.root.remove();
     }
     #[test]
-    fn hide_show_fixture_blocks_pointer_access_and_restores_both_aria_forms() {
+    fn hide_show_fixture_restores_css_transform_accessibility_and_dynamic_nodes() {
         let mut c = controller(
-            "<div class='tv-stagebox' aria-hidden=''>DM</div><figure class='tv-fig' data-slot='hero-1'>Hero</figure>",
+            "<div class='tv-stagebox' aria-hidden='false'>DM</div><figure class='tv-fig' data-slot='hero-1' aria-hidden=''>Hero</figure>",
         );
         c.refresh().unwrap();
         let overlay = c.registry["dm-overlay"].clone();
         let actor = c.registry["actor-hero-1"].clone();
+        let dynamic = c
+            .root
+            .owner_document()
+            .unwrap()
+            .create_element("span")
+            .unwrap();
+        c.root.append_child(&dynamic).unwrap();
+        c.refresh().unwrap();
+        let dynamic_id = dynamic.get_attribute("data-layout-id").unwrap();
+        c.root.remove_child(&dynamic).unwrap();
+        c.refresh().unwrap();
+
+        c.document.overrides.insert(
+            "dm-overlay".into(),
+            Transform {
+                translate_y: Some(Distance {
+                    value: 24.0,
+                    unit: Unit::Px,
+                }),
+                ..Default::default()
+            },
+        );
         c.document
             .visibility
             .insert("dm-overlay".into(), ElementVisibility::Hidden);
         c.document
             .visibility
             .insert("actor-hero-1".into(), ElementVisibility::Hidden);
-        c.apply_visibility("dm-overlay", &overlay).unwrap();
-        c.apply_visibility("actor-hero-1", &actor).unwrap();
+        c.document
+            .visibility
+            .insert(dynamic_id.clone(), ElementVisibility::Hidden);
         c.stylesheet
             .set_text_content(Some(&c.document.stylesheet().unwrap()));
+        c.apply_visibility("dm-overlay", &overlay).unwrap();
+        c.apply_visibility("actor-hero-1", &actor).unwrap();
+        c.root.append_child(&dynamic).unwrap();
+        c.refresh().unwrap();
         assert_eq!(
             overlay.get_attribute("aria-hidden").as_deref(),
             Some("true")
         );
         assert_eq!(actor.get_attribute("aria-hidden").as_deref(), Some("true"));
-        assert!(
-            c.stylesheet
-                .text_content()
-                .unwrap()
-                .contains("display:none")
+        assert_eq!(
+            dynamic.get_attribute("aria-hidden").as_deref(),
+            Some("true")
         );
-        assert!(
-            c.stylesheet
-                .text_content()
-                .unwrap()
-                .contains("pointer-events:none")
+        let hidden_css = c.stylesheet.text_content().unwrap();
+        assert!(hidden_css.contains("display:none!important"));
+        assert!(hidden_css.contains("visibility:hidden!important"));
+        assert!(hidden_css.contains("pointer-events:none!important"));
+        assert!(hidden_css.contains(&format!("[data-layout-id=\"{dynamic_id}\"]")));
+        let hidden_style = web_sys::window()
+            .unwrap()
+            .get_computed_style(&overlay)
+            .unwrap()
+            .unwrap();
+        assert_eq!(hidden_style.get_property_value("display").unwrap(), "none");
+        assert_eq!(
+            hidden_style.get_property_value("visibility").unwrap(),
+            "hidden"
         );
+        assert_eq!(
+            hidden_style.get_property_value("pointer-events").unwrap(),
+            "none"
+        );
+
         c.document.visibility.clear();
         c.apply_visibility("dm-overlay", &overlay).unwrap();
         c.apply_visibility("actor-hero-1", &actor).unwrap();
-        assert_eq!(overlay.get_attribute("aria-hidden").as_deref(), Some(""));
-        assert!(actor.get_attribute("aria-hidden").is_none());
+        c.apply_visibility(&dynamic_id, &dynamic).unwrap();
+        c.stylesheet
+            .set_text_content(Some(&c.document.stylesheet().unwrap()));
+        assert_eq!(
+            overlay.get_attribute("aria-hidden").as_deref(),
+            Some("false")
+        );
+        assert_eq!(actor.get_attribute("aria-hidden").as_deref(), Some(""));
+        assert!(dynamic.get_attribute("aria-hidden").is_none());
+        let shown_css = c.stylesheet.text_content().unwrap();
+        assert!(!shown_css.contains("display:none!important"));
+        assert!(!shown_css.contains("visibility:hidden!important"));
+        assert!(!shown_css.contains("pointer-events:none!important"));
+        assert!(shown_css.contains("translate:0px 24px!important;"));
+        let shown_style = web_sys::window()
+            .unwrap()
+            .get_computed_style(&overlay)
+            .unwrap()
+            .unwrap();
+        assert_ne!(shown_style.get_property_value("display").unwrap(), "none");
+        assert_ne!(
+            shown_style.get_property_value("visibility").unwrap(),
+            "hidden"
+        );
+        assert_ne!(
+            shown_style.get_property_value("pointer-events").unwrap(),
+            "none"
+        );
         c.root.remove();
     }
     #[test]
