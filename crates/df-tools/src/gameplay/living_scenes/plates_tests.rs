@@ -914,11 +914,8 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
         state_images::Done::Bake { result: Ok(_), .. }
     ));
     shared.finish_state_image_at(rendered, Duration::from_secs(5));
-    let mut projection = rpc::GameplayScene {
-        title: current.title.clone(),
-        scene_asset: current.asset.clone(),
-        ..Default::default()
-    };
+    let projection_message = display_message(&current);
+    let mut projection = shown_scene(&projection_message).clone();
     shared.project_scene_contents(&mut projection, None);
     let contents: serde_json::Value =
         serde_json::from_str(&projection.scene_contents_json).unwrap();
