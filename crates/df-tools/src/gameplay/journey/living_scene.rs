@@ -792,8 +792,8 @@ pub(super) fn stage(
                     } else {
                         let description =
                             format!("{hero} gives {} to {}.", thing.name, person.name);
-                        let owner_id =
-                            (thing.owner_id.as_deref() == Some(hero)).then(|| recipient.to_owned());
+                        let owner_id = (thing.owner_id.as_deref() == Some(hero.as_str()))
+                            .then(|| recipient.to_owned());
                         change = Some(SceneChange {
                             entity_id: thing.id.clone(),
                             description: description.clone(),
