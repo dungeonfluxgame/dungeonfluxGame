@@ -476,16 +476,7 @@ fn time_label(time: super::TimeOfDay) -> &'static str {
 }
 
 fn scene_key_label(key: SceneKey) -> &'static str {
-    match key {
-        SceneKey::Room => "room",
-        SceneKey::Opening => "opening",
-        SceneKey::DialogueSeal => "dialogue-seal",
-        SceneKey::DialogueEscort => "dialogue-escort",
-        SceneKey::Combat => "combat",
-        SceneKey::Inn => "inn",
-        SceneKey::Victory => "victory",
-        SceneKey::Defeat => "defeat",
-    }
+    key.source_label()
 }
 
 /// Fields for the diagnostic event when the session owner observes a new graph revision.

@@ -567,6 +567,7 @@ reserved-name dungeonflux.public.v1.HomeTheme title
 reserved-name dungeonflux.public.v1.HomeTheme code
 reserved-name dungeonflux.public.v1.HomeTheme party
 # PLAY-V09: scene plate (GameplayScene 20 live_plate, 21 plate_layout, 22 plate_state)
+# Canonical scene lookup identity (GameplayScene 29 source_scene_key)
 enum dungeonflux.public.v1.PlateSide
 enum dungeonflux.public.v1.PlateState
 enum dungeonflux.public.v1.DisplaySceneCamera
@@ -782,6 +783,9 @@ field dungeonflux.public.v1.AbilityCheckResult 9 roll_mode type=17 label=1 prese
 field dungeonflux.public.v1.DisplayGameplayView 7 check type=11 label=1 presence=false target=.dungeonflux.public.v1.AbilityCheckResult oneof=-
 field dungeonflux.public.v1.GameplayScene 25 scene_contents_json type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 26 item type=11 label=1 presence=false target=.dungeonflux.public.v1.SceneItemCard oneof=-
+field dungeonflux.public.v1.GameplayScene 27 plate_update_pending type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 28 hand_items type=11 label=3 presence=false target=.dungeonflux.public.v1.SceneItemCard oneof=-
+field dungeonflux.public.v1.GameplayScene 29 source_scene_key type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.NpcStanding 4 perceived_reaction type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneItemCard 1 thing_id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneItemCard 2 name type=9 label=1 presence=false target=- oneof=-

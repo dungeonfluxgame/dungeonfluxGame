@@ -2801,6 +2801,7 @@ pub mod fixture {
             .ok_or_else(|| JsValue::from_str("view scope absent"))?;
         let scene = rpc::GameplayScene {
             destination: rpc::HarborDestination::HarborInn as i32,
+            source_scene_key: String::new(),
             title: if tavern {
                 "The harbor inn"
             } else {

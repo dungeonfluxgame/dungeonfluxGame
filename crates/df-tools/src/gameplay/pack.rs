@@ -886,6 +886,27 @@ impl SceneKey {
         Self::Defeat,
     ];
 
+    /// The strict, audience-safe source label carried with a scene view.
+    pub(super) const fn source_label(self) -> &'static str {
+        match self {
+            Self::Room => "room",
+            Self::Opening => "opening",
+            Self::DialogueSeal => "dialogue-seal",
+            Self::DialogueEscort => "dialogue-escort",
+            Self::Combat => "combat",
+            Self::Inn => "inn",
+            Self::Victory => "victory",
+            Self::Defeat => "defeat",
+        }
+    }
+
+    /// Parses only the exact source labels emitted by [`Self::source_label`].
+    pub(super) fn parse_source_label(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|key| key.source_label() == value)
+    }
+
     const fn needs_rested_narration(self) -> bool {
         matches!(self, Self::Victory | Self::Defeat)
     }

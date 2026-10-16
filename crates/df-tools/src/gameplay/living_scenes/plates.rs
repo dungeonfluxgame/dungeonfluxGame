@@ -249,31 +249,35 @@ impl PlateScene {
     }
 }
 
-/// The pack scene a display view shows: matched by its painting and title, the way living scenes
-/// match it.
-pub(super) fn locate(title: &str, asset: &str) -> Option<pack::Scene> {
+/// The pack scene a display view shows. The source key is authoritative; a title and painting
+/// can be shared by different authored beats and cannot identify one by themselves.
+pub(super) fn locate(title: &str, asset: &str, source_scene_key: &str) -> Option<pack::Scene> {
+    let source = pack::SceneKey::parse_source_label(source_scene_key)?;
     pack::with_content(|content| {
         let wanted = asset.trim_start_matches('/');
         let matches = |scene: &pack::Scene, asset: &str| {
-            asset.trim_start_matches('/') == wanted && scene.title == title
+            scene.key == source && asset.trim_start_matches('/') == wanted && scene.title == title
         };
         let overrides = pack::active().map(|loaded| loaded.script_scene_assets.clone());
-        content
+        let mut candidates: Vec<&pack::Scene> = content
             .scenes
             .iter()
-            .find(|scene| matches(scene, &scene.asset))
-            .or_else(|| {
-                content.beat_script.as_ref().and_then(|script| {
-                    script.scenes.iter().find_map(|(id, scene)| {
-                        let asset = overrides
-                            .as_ref()
-                            .and_then(|assets| assets.get(id))
-                            .unwrap_or(&scene.asset);
-                        matches(scene, asset).then_some(scene)
-                    })
-                })
-            })
-            .cloned()
+            .filter(|scene| matches(scene, &scene.asset))
+            .collect();
+        if let Some(script) = content.beat_script.as_ref() {
+            candidates.extend(script.scenes.iter().filter_map(|(id, scene)| {
+                let asset = overrides
+                    .as_ref()
+                    .and_then(|assets| assets.get(id))
+                    .unwrap_or(&scene.asset);
+                matches(scene, asset).then_some(scene)
+            }));
+        }
+        match candidates.as_slice() {
+            [scene] => Some((*scene).clone()),
+            // Missing, invalid and ambiguous source identities are deliberately not planned.
+            _ => None,
+        }
     })
 }
 
@@ -363,8 +367,9 @@ fn successors_in(
 
 /// What one display view says about plates.
 struct View {
-    /// Names the scene the same way living scenes do: the title and the authored painting.
+    /// Names the authored source scene as well as its title and painting.
     scene_key: String,
+    source_scene_key: String,
     title: String,
     asset: String,
     in_combat: bool,
@@ -454,7 +459,9 @@ fn scene_identity(display_asset: &str, scene: &rpc::GameplayScene) -> (String, S
     } else {
         scene.scene_asset.clone()
     };
-    (format!("{}|{}", scene.title, asset), asset)
+    let source = pack::SceneKey::parse_source_label(&scene.source_scene_key)
+        .map_or("unknown", pack::SceneKey::source_label);
+    (format!("{source}|{}|{}", scene.title, asset), asset)
 }
 
 fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
@@ -490,6 +497,7 @@ fn view_of(message: &rpc::ViewMessage, graph_revision: u64) -> Option<View> {
     let (scene_key, asset) = scene_identity(&display.scene_asset, scene);
     Some(View {
         scene_key,
+        source_scene_key: scene.source_scene_key.clone(),
         title: scene.title.clone(),
         asset,
         in_combat,
@@ -887,7 +895,12 @@ fn record_plate_render_diagnostic(
     failure: Option<ImageFailure>,
     elapsed_ms: u128,
 ) {
-    let scene_key = format!("{}|{}", scene.title, scene.asset);
+    let scene_key = format!(
+        "{}|{}|{}",
+        scene.key.source_label(),
+        scene.title,
+        scene.asset
+    );
     let scene_id = df_observe::presentation::local_identity(&scene_key);
     let plate_id = df_observe::presentation::local_identity(plate_id);
     let image_key = image_key.map(ImageKey::as_str);
@@ -1485,11 +1498,14 @@ impl Shared {
             current.scene_key != view.scene_key || current.heroes != view.heroes
         });
         let (located, next) = if changed {
-            let located = locate(&view.title, &view.asset);
+            let located = locate(&view.title, &view.asset, &view.source_scene_key);
             let next = located.as_ref().map(successors).unwrap_or_default();
             (located, next)
         } else {
-            (locate(&view.title, &view.asset), Vec::new())
+            (
+                locate(&view.title, &view.asset, &view.source_scene_key),
+                Vec::new(),
+            )
         };
         self.observe_with(view, located, next);
     }
@@ -1761,7 +1777,12 @@ impl Shared {
                 "gameplay.living_scene.plate_reference_failed",
                 format!(
                     "PLATE failed scene_id={} reason=canonical_reference_{}",
-                    df_observe::presentation::local_identity(&scene.title),
+                    df_observe::presentation::local_identity(&format!(
+                        "{}|{}|{}",
+                        scene.key.source_label(),
+                        scene.title,
+                        scene.asset
+                    )),
                     failure.label()
                 ),
                 serde_json::Map::from_iter([
@@ -1794,8 +1815,10 @@ impl Shared {
                     format!(
                         "PLATE not_planned scene_id={} revision={} reason=invalid_stage",
                         df_observe::presentation::local_identity(&format!(
-                            "{}|{}",
-                            scene.title, scene.asset
+                            "{}|{}|{}",
+                            scene.key.source_label(),
+                            scene.title,
+                            scene.asset
                         )),
                         graph_revision
                     ),
@@ -1803,8 +1826,10 @@ impl Shared {
                         (
                             "scene_id".to_owned(),
                             serde_json::json!(df_observe::presentation::local_identity(&format!(
-                                "{}|{}",
-                                scene.title, scene.asset
+                                "{}|{}|{}",
+                                scene.key.source_label(),
+                                scene.title,
+                                scene.asset
                             ))),
                         ),
                         (
@@ -1845,7 +1870,12 @@ impl Shared {
                 "gameplay.living_scene.plate_requested",
                 &[("scene.kind", "plate".to_owned())],
             );
-            let scene_key = format!("{}|{}", scene.title, scene.asset);
+            let scene_key = format!(
+                "{}|{}|{}",
+                scene.key.source_label(),
+                scene.title,
+                scene.asset
+            );
             let scene_id = df_observe::presentation::local_identity(&scene_key);
             let plate_id = df_observe::presentation::local_identity(&id);
             record_plate_diagnostic(
@@ -1885,8 +1915,10 @@ impl Shared {
                 format!(
                     "PLATE dropped scene_id={} revision={} reason=queue_full plate_id={}",
                     df_observe::presentation::local_identity(&format!(
-                        "{}|{}",
-                        scene.title, scene.asset
+                        "{}|{}|{}",
+                        scene.key.source_label(),
+                        scene.title,
+                        scene.asset
                     )),
                     graph_revision,
                     df_observe::presentation::local_identity(&id),
@@ -1895,8 +1927,10 @@ impl Shared {
                     (
                         "scene_id".to_owned(),
                         serde_json::json!(df_observe::presentation::local_identity(&format!(
-                            "{}|{}",
-                            scene.title, scene.asset
+                            "{}|{}|{}",
+                            scene.key.source_label(),
+                            scene.title,
+                            scene.asset
                         ))),
                     ),
                     (
@@ -2302,7 +2336,12 @@ impl Shared {
                 None => None,
             };
             let Some(figure) = figure else {
-                let scene_id = df_observe::presentation::local_identity(&scene.title);
+                let scene_id = df_observe::presentation::local_identity(&format!(
+                    "{}|{}|{}",
+                    scene.key.source_label(),
+                    scene.title,
+                    scene.asset
+                ));
                 crate::gameplay::actor::record_audit_diagnostic(
                     "gameplay.living_scene.plate_identity_missing",
                     format!("PLATE identity_missing scene_id={scene_id} cast_id={id}"),

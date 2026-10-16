@@ -338,6 +338,7 @@ pub(super) fn destination_scene(beat: &Beat) -> Result<rpc::GameplayScene, Repos
         destination: rpc::HarborDestination::HarborInn as i32,
         title: scene.title,
         scene_asset: scene.asset,
+        source_scene_key: scene.key.source_label().to_owned(),
         speaker_portrait: scene.speaker_portrait,
         cast: Vec::new(),
         rules_note: String::new(),

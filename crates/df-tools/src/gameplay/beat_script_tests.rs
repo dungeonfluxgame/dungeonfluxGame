@@ -6,6 +6,8 @@ use df_types::{MemberId, OperationId};
 const MEMBERS: [[u8; 16]; 2] = [[0x61; 16], [0x62; 16]];
 const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
 const TUNING: &[u8] = include_bytes!("fixtures/harbor-journey-tuning-baseline.json");
+const SHOP_PACK: &[u8] = include_bytes!("../../../../content/merchant-shop/pack.json");
+const SHOP_TUNING: &[u8] = include_bytes!("../../../../content/merchant-shop/tuning.json");
 pub(super) fn input(
     current: &Checkpoint,
     member: MemberId,
@@ -105,6 +107,38 @@ fn opening_story() -> Checkpoint {
         &mut |_| panic!("opening cannot draw"),
     )
     .expect("registered opening")
+}
+
+#[test]
+fn canonical_source_scene_key_survives_wire_projection_when_room_and_opening_share_title_and_art() {
+    let loaded = pack::load_from_bytes(SHOP_PACK, SHOP_TUNING).unwrap();
+    pack::with_test_pack(loaded, || {
+        let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let room = prepared_story();
+        let opening = opening_story();
+        let room_view = wire::journey_view(
+            &room,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap();
+        let opening_view = wire::journey_view(
+            &opening,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            member,
+        )
+        .unwrap();
+        let scene = |view: rpc::ViewMessage| match view.audience.unwrap() {
+            rpc::view_message::Audience::Player(player) => player.scene.unwrap(),
+            _ => panic!("player view"),
+        };
+        let room_scene = scene(room_view);
+        let opening_scene = scene(opening_view);
+        assert_eq!(room_scene.source_scene_key, "room");
+        assert_eq!(opening_scene.source_scene_key, "opening");
+        assert_eq!(room_scene.title, opening_scene.title);
+        assert_eq!(room_scene.scene_asset, opening_scene.scene_asset);
+    });
 }
 
 #[test]

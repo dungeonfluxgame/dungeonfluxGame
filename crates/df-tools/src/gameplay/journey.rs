@@ -1302,6 +1302,7 @@ fn inn_source(current: &Checkpoint) -> Result<Option<FactId>, RepositoryError> {
 pub(super) fn inn_scene() -> rpc::GameplayScene {
     rpc::GameplayScene {
         destination: rpc::HarborDestination::HarborInn as i32,
+        source_scene_key: pack::SceneKey::Inn.source_label().to_owned(),
         title: pack::scene(pack::SceneKey::Inn).title,
         scene_asset: pack::scene(pack::SceneKey::Inn).asset,
         speaker_portrait: pack::scene(pack::SceneKey::Inn).speaker_portrait,

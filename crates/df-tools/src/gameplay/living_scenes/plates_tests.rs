@@ -215,9 +215,108 @@ fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
     }
 }
 
+#[test]
+fn canonical_lookup_uses_scene_key_and_rejects_ambiguous_matches() {
+    const TITLE: &str = "Marek’s Cloth Shop";
+    const ASSET: &str = "assets/ui/generated/scene-mareks-cloth-shop";
+    let load_shop = || {
+        pack::load_from_bytes(
+            include_bytes!("../../../../../content/merchant-shop/pack.json"),
+            include_bytes!("../../../../../content/merchant-shop/tuning.json"),
+        )
+        .unwrap()
+    };
+    for (label, expected) in [("room", SceneKey::Room), ("opening", SceneKey::Opening)] {
+        let loaded = load_shop();
+        pack::with_test_pack(loaded, || {
+            let scene = locate(TITLE, ASSET, label).expect("exact authored scene key resolves");
+            assert_eq!(scene.key, expected);
+            assert_eq!(scene.title, TITLE);
+            assert_eq!(scene.asset, ASSET);
+        });
+    }
+
+    let loaded = load_shop();
+    pack::with_test_pack(loaded, || {
+        assert!(locate(TITLE, ASSET, "").is_none());
+        assert!(locate(TITLE, ASSET, "Opening").is_none());
+        assert!(locate(TITLE, ASSET, "dialogue-seal").is_none());
+    });
+
+    let mut ambiguous = load_shop();
+    let opening = ambiguous
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::Opening)
+        .unwrap()
+        .clone();
+    ambiguous
+        .pack
+        .beat_script
+        .as_mut()
+        .unwrap()
+        .scenes
+        .insert("duplicate-opening".to_owned(), opening);
+    pack::with_test_pack(ambiguous, || {
+        assert!(
+            locate(TITLE, ASSET, "opening").is_none(),
+            "a source key that still matches multiple authored records is not guessed"
+        );
+    });
+}
+
+#[tokio::test]
+async fn displayed_shop_opening_queues_its_plate_when_room_shares_title_and_art() {
+    let loaded =
+        pack::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/merchant-shop"))
+            .unwrap();
+    let opening = loaded
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == SceneKey::Opening)
+        .unwrap()
+        .clone();
+    let (shared, mut queue) = shared(16);
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    let message = display_message(&opening);
+
+    pack::with_test_pack(loaded, || plates.observe(&message, 1));
+
+    let queued = drain(&mut queue);
+    assert!(
+        queued.iter().any(|job| matches!(
+            job,
+            Job::Fresh {
+                scene,
+                ahead: false,
+                ..
+            } if scene.key == SceneKey::Opening
+        )),
+        "the exact Opening source key must resolve and admit the current scene plate"
+    );
+    assert_eq!(
+        locked(&shared.book)
+            .current
+            .as_ref()
+            .map(|current| current.scene_key.as_str()),
+        Some("opening|Marek’s Cloth Shop|assets/ui/generated/scene-mareks-cloth-shop")
+    );
+}
+
 fn view(scene: &pack::Scene, heroes: &[u8], in_combat: bool) -> View {
     View {
-        scene_key: format!("{}|{}", scene.title, scene.asset),
+        scene_key: format!(
+            "{}|{}|{}",
+            scene.key.source_label(),
+            scene.title,
+            scene.asset
+        ),
+        source_scene_key: scene.key.source_label().to_owned(),
         title: scene.title.clone(),
         asset: scene.asset.clone(),
         in_combat,
@@ -1355,7 +1454,12 @@ fn clip_context_exists_only_for_the_displayed_plate_and_is_blocked_during_rolls(
             placement: None,
         },
     );
-    let scene_key = format!("{}|{}", current.title, current.asset);
+    let scene_key = format!(
+        "{}|{}|{}",
+        current.key.source_label(),
+        current.title,
+        current.asset
+    );
 
     let (description, reason, blocked) = shared
         .current_clip_context(&scene_key, plate_key.as_str())
@@ -1405,6 +1509,7 @@ fn display_message(scene: &pack::Scene) -> rpc::ViewMessage {
                 scene: Some(rpc::GameplayScene {
                     title: scene.title.clone(),
                     scene_asset: scene.asset.clone(),
+                    source_scene_key: scene.key.source_label().to_owned(),
                     ..Default::default()
                 }),
                 journey: None,
@@ -1422,6 +1527,7 @@ fn player_message(scene: &pack::Scene) -> rpc::ViewMessage {
                 scene: Some(rpc::GameplayScene {
                     title: scene.title.clone(),
                     scene_asset: scene.asset.clone(),
+                    source_scene_key: scene.key.source_label().to_owned(),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -2417,7 +2523,8 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
         },
     );
     shared.finish(Done::Edit {
-        scene_key: "Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp".to_owned(),
+        scene_key: "opening|Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp"
+            .to_owned(),
         speaker_id: Some("keeper".to_owned()),
         face: angry,
         elapsed: Duration::from_secs(15),
@@ -2471,7 +2578,8 @@ async fn an_edit_that_lands_in_another_scene_is_ignored() {
     let other = scene(SceneKey::DialogueSeal, "Hard Questions", Some("Kestrel"));
     observe(&shared, &other, &[], &[1]);
     shared.finish(Done::Edit {
-        scene_key: "Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp".to_owned(),
+        scene_key: "opening|Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp"
+            .to_owned(),
         speaker_id: Some("keeper".to_owned()),
         face: angry,
         elapsed: Duration::from_secs(15),

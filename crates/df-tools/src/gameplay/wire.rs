@@ -1367,6 +1367,7 @@ pub(super) fn project_journey(
             destination: rpc::HarborDestination::Unspecified as i32,
             title: authored.title.clone(),
             scene_asset: authored.asset.clone(),
+            source_scene_key: authored.key.source_label().to_owned(),
             speaker_portrait: authored.speaker_portrait.clone(),
             cast: Vec::new(),
             rules_note: String::new(),
