@@ -413,6 +413,17 @@ fn archer_creation_as_second_player_accepts_the_complete_phone_selection() {
                 OperationId::from_bytes(&[4; 16]).expect("operation"),
             )
             .expect("second player archer creation is accepted");
+        let receipt = df_session::submission::DecisionReceipt::new(
+            next.basis(),
+            next.state().decisions.last().unwrap().clone(),
+            usize::MAX,
+        )
+        .expect("second player archer receipt can be measured");
+        assert!(receipt.retained_bytes().expect("receipt size") > 4096);
+        assert!(
+            receipt.retained_bytes().expect("receipt size")
+                <= df_persistence::local_demo_scope::RECEIPT_RETAINED_BYTES_MAX
+        );
         let entity = player_entity(second, &next).expect("second hero");
         assert_eq!(value(next.state(), entity, "armor-class"), Ok(15));
         assert!(

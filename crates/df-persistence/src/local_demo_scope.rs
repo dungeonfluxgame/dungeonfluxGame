@@ -222,7 +222,9 @@ impl LocalDemoScopeIssuer {
         new_receipt: Option<&[u8]>,
         codec_limits: NativeCodecLimits,
     ) -> Result<LocalRejectedLookup, RepositoryError> {
-        if new_receipt.is_some_and(|bytes| bytes.is_empty() || bytes.len() > 4096) {
+        if new_receipt
+            .is_some_and(|bytes| bytes.is_empty() || bytes.len() > RECEIPT_RETAINED_BYTES_MAX)
+        {
             return Err(RepositoryError::Capacity);
         }
         let runtime = self.authority.runtime.clone();
@@ -242,7 +244,7 @@ impl LocalDemoScopeIssuer {
                     &scope.tenant.as_slice(), &scope.session.as_bytes().as_slice(),
                     &scope.principal.as_slice(), &scope.namespace.as_slice(), &epoch,
                     &scope.operation.as_bytes().as_slice()];
-                let rejected = transaction.query_opt("SELECT fingerprint_version, typed_receipt_version, canonical_fingerprint, typed_receipt IS NULL AS tombstone, octet_length(typed_receipt)::bigint AS receipt_bytes, CASE WHEN octet_length(typed_receipt) <= 4096 THEN typed_receipt END AS typed_receipt FROM df_local_demo.rejected_operations WHERE tenant_id=$1 AND session_id=$2 AND principal_id=$3 AND command_namespace=$4 AND recovery_epoch=$5::text::numeric AND operation_id=$6",parameters).await.map_err(|_|RepositoryError::Unavailable)?;
+                let rejected = transaction.query_opt(&format!("SELECT fingerprint_version, typed_receipt_version, canonical_fingerprint, typed_receipt IS NULL AS tombstone, octet_length(typed_receipt)::bigint AS receipt_bytes, CASE WHEN octet_length(typed_receipt) <= {RECEIPT_RETAINED_BYTES_MAX} THEN typed_receipt END AS typed_receipt FROM df_local_demo.rejected_operations WHERE tenant_id=$1 AND session_id=$2 AND principal_id=$3 AND command_namespace=$4 AND recovery_epoch=$5::text::numeric AND operation_id=$6"),parameters).await.map_err(|_|RepositoryError::Unavailable)?;
                 use df_session::submission::OperationLookup;
                 let has_accepted = matches!(accepted,OperationLookup::Committed(_) | OperationLookup::Conflict);
                 if has_accepted && rejected.is_some() { return Err(RepositoryError::InvalidReceipt); }
@@ -256,7 +258,7 @@ impl LocalDemoScopeIssuer {
                     else if row.try_get::<_,bool>("tombstone").map_err(|_|RepositoryError::InvalidReceipt)? { LocalRejectedLookup::Expired }
                     else {
                         let length:i64=row.try_get("receipt_bytes").map_err(|_|RepositoryError::InvalidReceipt)?;
-                        if !(1..=4096).contains(&length) { return Err(RepositoryError::InvalidReceipt); }
+                        if !(1..=RECEIPT_RETAINED_BYTES_MAX as i64).contains(&length) { return Err(RepositoryError::InvalidReceipt); }
                         LocalRejectedLookup::Committed(row.try_get("typed_receipt").map_err(|_|RepositoryError::InvalidReceipt)?)
                     }
                 } else if let Some(bytes)=new_receipt {
@@ -706,7 +708,7 @@ async fn initialize_with_adventure(
         CREATE TABLE df_local_demo.grants (credential bytea PRIMARY KEY CHECK(octet_length(credential)=32), tenant_id bytea NOT NULL, principal_id bytea NOT NULL, campaign_id bytea NOT NULL, effective_role bytea NOT NULL, access_revision bytea NOT NULL, session_id bytea NOT NULL, active boolean NOT NULL, expires_at timestamptz NOT NULL);
         CREATE TABLE df_local_demo.room_grants (operation_id bytea PRIMARY KEY CHECK(octet_length(operation_id)=16), canonical_fingerprint bytea NOT NULL CHECK(octet_length(canonical_fingerprint)=32), principal_id bytea NOT NULL UNIQUE CHECK(octet_length(principal_id)=16), credential bytea NOT NULL UNIQUE REFERENCES df_local_demo.grants);
         CREATE TABLE df_local_demo.scope_proofs (binding bytea PRIMARY KEY CHECK(octet_length(binding)=32), credential bytea REFERENCES df_local_demo.grants, tenant_id bytea NOT NULL, principal_id bytea NOT NULL, campaign_id bytea NOT NULL, effective_role bytea NOT NULL, access_revision bytea NOT NULL, session_id bytea NOT NULL, operation_id bytea NOT NULL, command_namespace bytea NOT NULL, recovery_epoch text NOT NULL, fingerprint_version integer NOT NULL, canonical_fingerprint bytea NOT NULL, owner_fence bytea NOT NULL, execution_mode smallint NOT NULL, lookup_only boolean NOT NULL);").await.map_err(|_| DemoInitializationError { stage:"local_schema",class:RepositoryError::Unavailable })?;
-    transaction.batch_execute("CREATE TABLE df_local_demo.rejected_operations (tenant_id bytea NOT NULL, session_id bytea NOT NULL, principal_id bytea NOT NULL, command_namespace bytea NOT NULL, recovery_epoch numeric(20,0) NOT NULL, operation_id bytea NOT NULL, fingerprint_version integer NOT NULL CHECK(fingerprint_version=1), canonical_fingerprint bytea NOT NULL CHECK(octet_length(canonical_fingerprint)=32), checkpoint_epoch numeric(20,0) NOT NULL, checkpoint_sequence numeric(20,0) NOT NULL, typed_receipt_version integer NOT NULL CHECK(typed_receipt_version=1), typed_receipt bytea CHECK(octet_length(typed_receipt)<=4096), PRIMARY KEY(tenant_id,session_id,principal_id,command_namespace,recovery_epoch,operation_id), FOREIGN KEY(tenant_id,session_id,checkpoint_epoch,checkpoint_sequence) REFERENCES df_game.checkpoints(tenant_id,session_id,recovery_epoch,in_epoch_sequence));").await.map_err(|_|DemoInitializationError { stage:"rejected_schema",class:RepositoryError::Unavailable })?;
+    transaction.batch_execute(&format!("CREATE TABLE df_local_demo.rejected_operations (tenant_id bytea NOT NULL, session_id bytea NOT NULL, principal_id bytea NOT NULL, command_namespace bytea NOT NULL, recovery_epoch numeric(20,0) NOT NULL, operation_id bytea NOT NULL, fingerprint_version integer NOT NULL CHECK(fingerprint_version=1), canonical_fingerprint bytea NOT NULL CHECK(octet_length(canonical_fingerprint)=32), checkpoint_epoch numeric(20,0) NOT NULL, checkpoint_sequence numeric(20,0) NOT NULL, typed_receipt_version integer NOT NULL CHECK(typed_receipt_version=1), typed_receipt bytea CHECK(octet_length(typed_receipt)<={RECEIPT_RETAINED_BYTES_MAX}), PRIMARY KEY(tenant_id,session_id,principal_id,command_namespace,recovery_epoch,operation_id), FOREIGN KEY(tenant_id,session_id,checkpoint_epoch,checkpoint_sequence) REFERENCES df_game.checkpoints(tenant_id,session_id,recovery_epoch,in_epoch_sequence));")).await.map_err(|_|DemoInitializationError { stage:"rejected_schema",class:RepositoryError::Unavailable })?;
     transaction
         .batch_execute(include_str!("../migrations/0002_local_room_reclaim.sql"))
         .await
