@@ -462,6 +462,7 @@ impl<D: Clone> Conductor<D> {
     /// A settled silent check card is restored on screen without replaying its roll or voice.
     /// Keep the existing clock alive until the ordinary final linger cap can retire that one
     /// managed item; ordinary settled captions continue to use the event-driven idle path.
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn has_settled_silent_line(&self) -> bool {
         self.lines.iter().any(|run| {
             run.state == LineState::Lingering && run.line.settled && run.line.read_ms == 0
