@@ -1371,6 +1371,7 @@ pub(super) fn project_journey(
             live_plate: String::new(),
             plate_layout: None,
             plate_state: rpc::PlateState::Unspecified as i32,
+            plate_update_pending: false,
             scene_video_state: rpc::HomeVideoState::None as i32,
             scene_video_path: String::new(),
             scene_contents_json: String::new(),
