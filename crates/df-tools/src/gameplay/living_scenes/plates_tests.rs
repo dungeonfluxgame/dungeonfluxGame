@@ -244,7 +244,10 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         panic!("face refresh")
     };
     assert_eq!(edit_base.as_str(), response["key"].as_str().unwrap());
-    shared.render_edit(&scene, &edit_base, angry).await.unwrap();
+    shared
+        .render_edit(&scene, &edit_base, angry, &[1])
+        .await
+        .unwrap();
     assert!(fixture.prompt().ends_with("Brakka unsheathes his sword"));
     plates.clear_direction();
     assert!(locked(&shared.book).direct.keep.is_none());
@@ -1364,14 +1367,24 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
         .fresh_request(&scene, &spec, &[1, 2], &[], None)
         .await
         .unwrap();
-    assert_eq!(request.references.len(), 4);
+    assert_eq!(request.references.len(), 3);
     assert_eq!(request.references[0].sha256, base.sha256);
     assert_eq!(request.references[2].sha256, courier.sha256);
+    assert!(request.prompt.as_str().contains("hero:1"));
+    assert!(request.prompt.as_str().contains("hero:2"));
+    for identity in &scene.identity_cast {
+        assert!(request.prompt.as_str().contains(&identity.id));
+    }
+    let (rebuilt, _) = shared
+        .fresh_request(&scene, &spec, &[2, 1], &[], None)
+        .await
+        .unwrap();
+    assert_eq!(request.references[1].sha256, rebuilt.references[1].sha256);
     assert!(
         request
             .prompt
             .as_str()
-            .starts_with("Image 1 is the actual photograph to edit")
+            .starts_with("Edit image 1 as the actual photograph")
     );
     assert!(!request.prompt.as_str().contains("best-lit person"));
     assert!(!request.prompt.as_str().contains("deep blue light outside"));
@@ -1386,7 +1399,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
         !other
             .prompt
             .as_str()
-            .starts_with("Image 1 is the actual photograph to edit")
+            .starts_with("Edit image 1 as the actual photograph")
     );
 }
 

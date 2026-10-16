@@ -47,8 +47,9 @@ pub(super) struct Item {
 pub(super) enum Job {
     Bake {
         scene: String,
-        pending: Pending,
+        pending: Box<Pending>,
         base: ImageKey,
+        identities: Option<Box<IdentitySnapshot>>,
     },
     Item {
         id: String,
@@ -56,6 +57,11 @@ pub(super) enum Job {
         detail: Option<String>,
         base: Option<ImageKey>,
     },
+}
+
+pub(super) struct IdentitySnapshot {
+    scene: PlateScene,
+    heroes: Vec<u8>,
 }
 
 pub(super) enum Done {
@@ -197,6 +203,12 @@ impl Shared {
             return;
         }
         let scene = current.scene_key.clone();
+        let identities = current.scene.clone().map(|scene| {
+            Box::new(IdentitySnapshot {
+                scene,
+                heroes: current.heroes.clone(),
+            })
+        });
         let can_show = book
             .state_images
             .last_shown
@@ -239,8 +251,9 @@ impl Shared {
         );
         let job = super::Job::State(Job::Bake {
             scene,
-            pending,
+            pending: Box::new(pending),
             base,
+            identities,
         });
         match self.jobs.try_send(job) {
             Ok(()) => {
@@ -252,7 +265,7 @@ impl Shared {
                 pending,
                 ..
             }))) => {
-                book.state_images.pending = Some(pending);
+                book.state_images.pending = Some(*pending);
             }
             Err(_) => record("gameplay.living_scene.worker_closed", &[]),
         }
@@ -265,6 +278,7 @@ impl Shared {
                 scene,
                 pending,
                 base,
+                identities,
             } => {
                 let result = async {
                     let Lookup::Image { bytes, format } =
@@ -282,11 +296,22 @@ impl Shared {
                             state_edit(self.inner.rating, &pending.snapshot.model, &pending.reason)?
                         }
                     };
+                    let mut references = vec![ReferenceImage::new(format, bytes)];
+                    let prompt = if self.inner.references.photographic_only() {
+                        let identity = identities.as_ref().ok_or(ImageFailure::InvalidRequest)?;
+                        let (sheet, legend) = self
+                            .identity_sheet(&identity.scene, &identity.heroes)
+                            .await?;
+                        references.push(sheet);
+                        prompt.with_cast_sheet(2, &legend)
+                    } else {
+                        prompt
+                    };
                     self.inner
                         .imagery
                         .render(ImageRequest {
                             kind: ImageKind::ScenePlateEdit,
-                            references: vec![ReferenceImage::new(format, bytes)],
+                            references,
                             prompt,
                             output: OutputSpec::PLATE,
                         })

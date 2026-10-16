@@ -140,6 +140,17 @@ impl AssembledPrompt {
         &self.text
     }
 
+    pub(in crate::gameplay) fn with_cast_sheet(
+        mut self,
+        image_number: usize,
+        legend: &str,
+    ) -> Self {
+        self.text.push_str(&format!(
+            "\nImage {image_number} is the canonical photographic identity contact sheet. {legend}. Match each named person's exact face, age, hair, hood, clothes and equipment on every rebuild and edit. The sheet identifies performers only: include only canonical scene participants, never copy its grid, numbers or labels into the photograph. Preserve the medieval live-action documentary medium."
+        ));
+        self
+    }
+
     /// Only the authenticated, gated development owner may supply this bounded direction.
     /// Append it after the scene description; retain the original identity and rating clauses.
     pub(in crate::gameplay) fn with_development_direction(mut self, direction: &str) -> Self {

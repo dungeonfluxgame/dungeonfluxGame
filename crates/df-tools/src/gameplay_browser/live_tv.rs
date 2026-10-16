@@ -170,6 +170,8 @@ struct PlateLayer {
     pending_layout: Rc<RefCell<Option<crate::presentation::PlateGeometry>>>,
     /// Intrinsic dimensions of the active picture, used to mirror `object-fit: cover`.
     picture_size: Rc<Cell<Option<(f64, f64)>>>,
+    /// Latest view held while both picture frames belong to the current dissolve.
+    deferred: RefCell<Option<(PlateView, String)>>,
 }
 
 /// How many plate pictures are kept fetched ahead.
@@ -807,6 +809,7 @@ fn mount_plate(document: &Document, stage: &Element) -> Result<PlateLayer, JsVal
         preloads: RefCell::new(Vec::new()),
         pending_layout: Rc::new(RefCell::new(None)),
         picture_size: Rc::new(Cell::new(None)),
+        deferred: RefCell::new(None),
     })
 }
 
@@ -843,13 +846,22 @@ fn bind_plate_events(
                     "ready",
                     0,
                 );
+                // Capture the generation before awaiting: the same DOM image can be reused
+                // for a newer scene (even with the same URL) while decoding is outstanding.
+                let requested_generation = root.get_attribute("data-request");
                 let decoded = image.decode();
                 let (decode_stage, decode_root, decode_figures) =
                     (stage.clone(), root.clone(), figures.clone());
                 let (decode_layout, decode_picture_size) =
                     (Rc::clone(&pending_layout), Rc::clone(&picture_size));
                 wasm_bindgen_futures::spawn_local(async move {
-                    if wasm_bindgen_futures::JsFuture::from(decoded).await.is_ok() {
+                    let decoded = wasm_bindgen_futures::JsFuture::from(decoded).await;
+                    if decode_root.get_attribute("data-request") != requested_generation
+                        || image.get_attribute("data-request") != requested_generation
+                    {
+                        return;
+                    }
+                    if decoded.is_ok() {
                         if plate_request_matches(&decode_root, &image)
                             && let Some(request) = decode_root.get_attribute("data-request")
                             && image.set_attribute("data-decoded", &request).is_ok()
@@ -930,6 +942,7 @@ fn bind_plate_events(
             if is_frame && is_opacity {
                 if active_index == Some(index) && transitioning_index == Some(index) {
                     let _removed = root.remove_attribute("data-transition");
+                    let _removed = root.remove_attribute("data-previous");
                     if let (Some(video_loop), Some(path)) = (
                         video_loops.borrow().get(index),
                         video_paths.borrow().get(index),
@@ -1112,6 +1125,31 @@ fn scene_plate_media_ready(
     image_decoded && wanted_video.is_none_or(|wanted| ready_video == Some(wanted))
 }
 
+const PLATE_LINGER_GATE_MS: f64 = 2500.0;
+
+fn plate_caption_active(stage: &Element) -> bool {
+    stage.query_selector(".tv-bubble:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]),.tv-dm:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]),.tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])").ok().flatten().is_some()
+}
+
+fn plate_line_is_reading(stage: &Element) -> bool {
+    if stage.query_selector(".tv-bubble:is([data-line-state=opening],[data-line-state=speaking]),.tv-dm:is([data-line-state=opening],[data-line-state=speaking]),.tv-lower:is([data-line-state=opening],[data-line-state=speaking])").ok().flatten().is_some() { return true; }
+    stage
+        .get_attribute("data-plate-linger-at")
+        .and_then(|at| at.parse::<f64>().ok())
+        .is_some_and(|at| js_sys::Date::now() - at < PLATE_LINGER_GATE_MS)
+}
+
+/// Capture screen coordinates before a new photographic layout moves the bubble hosts.
+fn caption_positions(stage: &Element) -> Vec<(Element, String)> {
+    let Ok(hosts) = stage.query_selector_all(".tv-fig-bubbles:has(.tv-bubble:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]))") else { return Vec::new(); };
+    (0..hosts.length()).filter_map(|index| {
+        let host = hosts.item(index)?.dyn_into::<Element>().ok()?;
+        let bounds = host.get_bounding_client_rect();
+        let style = format!("position:fixed;left:{}px;top:{}px;width:{}px;right:auto;bottom:auto;transform:none", bounds.left(), bounds.top(), bounds.width());
+        Some((host, style))
+    }).collect()
+}
+
 fn activate_plate_request(
     stage: &Element,
     root: &Element,
@@ -1121,6 +1159,12 @@ fn activate_plate_request(
     picture_size: &Rc<Cell<Option<(f64, f64)>>>,
 ) {
     if !plate_request_matches(root, image) {
+        return;
+    }
+    // The conductor retries from set_speaker after its line transitions. Activating a plate
+    // also moves bubble anchors and changes caption lanes; finish the current readable line
+    // before applying either picture or layout. No independent presentation timer is needed.
+    if plate_line_is_reading(stage) {
         return;
     }
     let request = root.get_attribute("data-request");
@@ -1159,11 +1203,32 @@ fn activate_plate_request(
     if let Some(request) = request {
         let _set = root.set_attribute("data-applied-request", &request);
     }
+    if let Some(previous) = root.get_attribute("data-active") {
+        let _set = root.set_attribute("data-previous", &previous);
+    }
+    // Resolve the inactive frame's zero opacity before changing its selector. Cached images
+    // may decode in the mounting task, before the browser has painted the first frame.
+    if let Some(frame) = &frame
+        && let Some(frame) = frame.dyn_ref::<web_sys::HtmlElement>()
+    {
+        let _initial_width = frame.offset_width();
+    }
     let _set = root.set_attribute("data-transition", &image_index);
+    let _set = root.set_attribute("data-transition-at", &js_sys::Date::now().to_string());
     let _set = root.set_attribute("data-active", &image_index);
     let _set = stage.set_attribute("data-plate-key", &key);
     let _set = stage.set_attribute("data-plate-state", "ready");
     let _removed = root.remove_attribute("data-failed");
+    let captions = caption_positions(stage);
+    if stage.get_attribute("data-shot").as_deref() != Some("plate")
+        && stage
+            .query_selector(".tv-lower[data-line-state=lingering]")
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        let _retained = stage.set_attribute("data-plate-caption-retained", "");
+    }
     if let Some(figures) = figures.upgrade() {
         let layout = pending_layout.borrow().clone();
         let size = image_dimensions(image);
@@ -1178,7 +1243,17 @@ fn activate_plate_request(
         }
         let _applied = figures.set_plate(layout, size);
     }
+    for (host, position) in captions {
+        let _preserved = host.set_attribute("style", &position);
+    }
     let _set = stage.set_attribute("data-plate-loaded", "");
+    super::presentation_timing::media(
+        "plate-crossfade",
+        &stage.get_attribute("data-scene-key").unwrap_or_default(),
+        &key,
+        "started",
+        1000,
+    );
     let _synced = sync_shot(stage);
 }
 
@@ -1681,10 +1756,40 @@ impl TvStage {
     /// caption or the character's bubble accordingly, never both.
     pub(super) fn set_speaker(&self, speaker: &str) -> Result<(), JsValue> {
         if speaker.is_empty() {
-            self.root.remove_attribute("data-speaker")
+            self.root.remove_attribute("data-speaker")?;
         } else {
-            self.root.set_attribute("data-speaker", speaker)
+            self.root.set_attribute("data-speaker", speaker)?;
         }
+        // The existing conductor clock owns recovery when transitionend is lost (for
+        // example a background tab). No detached timeout may retire a newer dissolve.
+        if self.plate.root.has_attribute("data-transition")
+            && self
+                .plate
+                .root
+                .get_attribute("data-transition-at")
+                .and_then(|at| at.parse::<f64>().ok())
+                .is_some_and(|at| js_sys::Date::now() - at >= 1100.0)
+        {
+            self.plate.root.remove_attribute("data-transition")?;
+            self.plate.root.remove_attribute("data-previous")?;
+        }
+        if !self.plate.root.has_attribute("data-transition") {
+            let deferred = self.plate.deferred.borrow_mut().take();
+            if let Some((plate, scene)) = deferred {
+                self.apply_plate(&plate, &scene)?;
+            }
+        }
+        for image in &self.plate.images {
+            activate_plate_request(
+                &self.root,
+                &self.plate.root,
+                image,
+                &Rc::downgrade(&self.figures),
+                &self.plate.pending_layout,
+                &self.plate.picture_size,
+            );
+        }
+        Ok(())
     }
 
     /// Applies one transition of the narrator line's machine to the Dungeon Master's box: the
@@ -1695,6 +1800,10 @@ impl TvStage {
         state: LineState,
         text: &str,
     ) -> Result<bool, JsValue> {
+        if state == LineState::Lingering {
+            self.root
+                .set_attribute("data-plate-linger-at", &js_sys::Date::now().to_string())?;
+        }
         self.last_narrator_line
             .set(self.last_narrator_line.get().max(id));
         // PLAY-V12: the plate may be cut to once the narrator of this scene has spoken; the words
@@ -2188,6 +2297,13 @@ impl TvStage {
         text: &str,
         state: LineState,
     ) -> Result<(), JsValue> {
+        if state == LineState::Lingering {
+            self.root
+                .set_attribute("data-plate-linger-at", &js_sys::Date::now().to_string())?;
+        }
+        if matches!(state, LineState::Closing | LineState::Done) {
+            self.root.remove_attribute("data-plate-caption-retained")?;
+        }
         let lower = &self.lower;
         if lower.text.text_content().as_deref() != Some(text)
             || lower.name.text_content().as_deref() != Some(speaker)
@@ -2230,6 +2346,16 @@ impl TvStage {
 
     fn apply_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
         let layer = &self.plate;
+        if layer.root.has_attribute("data-transition") {
+            *layer.deferred.borrow_mut() = Some((plate.clone(), scene_key.to_owned()));
+            return Ok(());
+        }
+        if layer.seen.borrow().as_str() != scene_key {
+            // A pending successor still retains the old picture, but never its in-flight
+            // completion: that decode belongs to the scene the conductor just left.
+            layer.root.remove_attribute("data-request")?;
+            layer.root.remove_attribute("data-want")?;
+        }
         let failed = layer.root.get_attribute("data-failed");
         let usable = match (&plate.state, &plate.url) {
             (PlateState::Ready, Some(url)) if failed.as_deref() != Some(url.as_str()) => Some(url),
@@ -2277,6 +2403,7 @@ impl TvStage {
             let layout = plate.layout.clone();
             *layer.pending_layout.borrow_mut() = layout.clone();
             if self.root.has_attribute("data-plate-loaded")
+                && !plate_caption_active(&self.root)
                 && layer.root.get_attribute("data-active")
                     == layer.root.get_attribute("data-want-i")
             {
@@ -2417,6 +2544,7 @@ mod tests {
         PlateState, PlateView, TvStage, check_display, first_art_asset, is_loopback_join_host,
         plate_asset_key, scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
     };
+    use crate::stage_machines::LineState;
     fn mounted_stage() -> (web_sys::Element, TvStage) {
         let document = web_sys::window().unwrap().document().unwrap();
         let parent = document.create_element("section").unwrap();
@@ -2587,6 +2715,77 @@ mod tests {
             &stage.plate.picture_size,
         );
         assert_eq!(stage.plate.root.get_attribute("data-push"), push);
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn decoded_plate_waits_for_the_current_line_then_retains_the_outgoing_picture() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        stage
+            .lower_third("Courier", "Keep this line steady.", LineState::Speaking)
+            .unwrap();
+        let plate = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/decoded-next".to_owned()),
+            ..Default::default()
+        };
+        stage.apply_plate(&plate, "next-scene").unwrap();
+        let image = &stage.plate.images[1];
+        let request = stage.plate.root.get_attribute("data-request").unwrap();
+        image.set_attribute("data-decoded", &request).unwrap();
+        stage.set_speaker("character").unwrap();
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        stage
+            .lower_third("Courier", "Keep this line steady.", LineState::Done)
+            .unwrap();
+        stage.set_speaker("").unwrap();
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            stage.plate.root.get_attribute("data-previous").as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            stage.lower.text.text_content().as_deref(),
+            Some("Keep this line steady.")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn pending_successor_invalidates_the_previous_scenes_decode() {
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        let plate = PlateView {
+            state: PlateState::Ready,
+            url: Some("/gameplay/imagery/old-scene".to_owned()),
+            ..Default::default()
+        };
+        stage.apply_plate(&plate, "old-scene").unwrap();
+        let image = &stage.plate.images[1];
+        let request = stage.plate.root.get_attribute("data-request").unwrap();
+        stage
+            .apply_plate(
+                &PlateView {
+                    state: PlateState::Pending,
+                    ..Default::default()
+                },
+                "successor",
+            )
+            .unwrap();
+        image.set_attribute("data-decoded", &request).unwrap();
+        stage.set_speaker("").unwrap();
+        assert_eq!(
+            stage.plate.root.get_attribute("data-active").as_deref(),
+            Some("0")
+        );
+        assert!(!stage.plate.root.has_attribute("data-applied-request"));
         finish_stage(parent, stage);
     }
 

@@ -30,9 +30,9 @@ use super::{
     super::{
         beat_script::{self, Beat, BeatKind, BeatScript, BeatTransition, BeatTrigger},
         imagery::{
-            ImageFailure, ImageKey, ImageKind, ImageRequest, Lookup, OutputSpec, PlaceFacts,
-            PlateReferences, ReferenceImage, hero_locator_phrase, party_sheet, plate_moment,
-            scene_plate,
+            CastIdentity, ImageFailure, ImageKey, ImageKind, ImageRequest, Lookup, OutputSpec,
+            PlaceFacts, PlateReferences, ReferenceImage, cast_sheet, hero_locator_phrase,
+            party_sheet, plate_moment, scene_plate,
         },
         pack::{self, Age, Gender, SceneKey},
         scene_mood::Face,
@@ -78,8 +78,16 @@ struct PlateScene {
     story_text: String,
     speaker: Option<Speaker>,
     others: Vec<String>,
+    identity_cast: Vec<IdentityReference>,
     snapshot: Option<crate::gameplay::adventure::scene_model::SceneNow>,
     hero_names: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct IdentityReference {
+    id: String,
+    sprite: String,
+    portrait: String,
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +135,15 @@ impl PlateScene {
                 age: member.age,
             }),
             others,
+            identity_cast: scene
+                .cast
+                .iter()
+                .map(|member| IdentityReference {
+                    id: format!("npc:{}", member.id),
+                    sprite: member.sprite.clone(),
+                    portrait: member.portrait.clone(),
+                })
+                .collect(),
             snapshot: crate::gameplay::adventure::scene_model::current_scene(scene),
             hero_names: Vec::new(),
         })
@@ -493,6 +510,7 @@ enum Job {
         scene: PlateScene,
         base: ImageKey,
         face: Face,
+        heroes: Vec<u8>,
     },
     /// Finds the heads in a plate that is already shown with its predicted layout.
     Locate {
@@ -1445,10 +1463,11 @@ impl Shared {
                 scene,
                 base,
                 face,
+                heroes,
             } => {
                 tasks.spawn(async move {
                     let started = tokio::time::Instant::now();
-                    let result = shared.render_edit(&scene, &base, face).await;
+                    let result = shared.render_edit(&scene, &base, face, &heroes).await;
                     Done::Edit {
                         scene_key,
                         speaker_id: scene.speaker.map(|speaker| speaker.id),
@@ -1464,9 +1483,23 @@ impl Shared {
     /// The art that shows a speaker in a plate: the full-length portrait (or figure) and the close
     /// portrait of the face, each when it exists.
     async fn speaker_art(&self, sprite: &str) -> (Option<ReferenceImage>, Option<ReferenceImage>) {
+        // Generated campaigns can carry a registered immutable identity directly instead of
+        // a checked-in archetype stem. Pin those exact bytes in the same sheet contract.
+        if let Some(key) = sprite.strip_prefix("/gameplay/imagery/") {
+            return match self.inner.imagery.image(key).await {
+                Lookup::Image { bytes, format } => (Some(ReferenceImage::new(format, bytes)), None),
+                Lookup::Unregistered | Lookup::NotReady => (None, None),
+            };
+        }
         let stem = sprite.rsplit('/').next().unwrap_or(sprite);
         let Some(name) = stem.strip_prefix("sprite-") else {
-            return (None, None);
+            return (
+                self.inner
+                    .load_plate_reference(sprite.to_owned())
+                    .await
+                    .ok(),
+                None,
+            );
         };
         let mut figure = None;
         for candidate in [
@@ -1487,6 +1520,153 @@ impl Shared {
         (figure, face)
     }
 
+    /// All canonical identities fit in one contact sheet, so no cast member loses their
+    /// reference when the provider's four-image budget is reached. Missing art is a failure,
+    /// distinct from a provider failure; the display retains its known good photograph.
+    async fn identity_sheet(
+        &self,
+        scene: &PlateScene,
+        heroes: &[u8],
+    ) -> Result<(ReferenceImage, String), ImageFailure> {
+        let mut wanted = scene.identity_cast.clone();
+        for art in heroes {
+            wanted.push(IdentityReference {
+                id: format!("hero:{art}"),
+                sprite: format!("sprite-hero-{art}"),
+                portrait: String::new(),
+            });
+        }
+        let mut cast = Vec::new();
+        for IdentityReference {
+            id,
+            sprite,
+            portrait,
+        } in wanted
+        {
+            let (figure, _) = self.speaker_art(&sprite).await;
+            let figure = match figure {
+                Some(figure) => Some(figure),
+                None if !portrait.is_empty() => self.speaker_art(&portrait).await.0,
+                None => None,
+            };
+            let Some(figure) = figure else {
+                record(
+                    "gameplay.living_scene.plate_identity_missing",
+                    &[
+                        (
+                            "scene.id",
+                            df_observe::presentation::local_identity(&scene.title).to_string(),
+                        ),
+                        ("cast.id", id),
+                        (
+                            "reference.status",
+                            "missing_photographic_identity".to_owned(),
+                        ),
+                    ],
+                );
+                return Err(ImageFailure::InvalidRequest);
+            };
+            cast.push(CastIdentity { id, figure });
+        }
+        let result = tokio::task::spawn_blocking(move || cast_sheet(cast))
+            .await
+            .map_err(|_| ImageFailure::Interrupted)?
+            .map_err(|_| ImageFailure::InvalidRequest)?;
+        record(
+            "gameplay.living_scene.plate_identity_ready",
+            &[
+                ("reference.sha256", result.0.sha256.clone()),
+                ("reference.status", "complete_cast".to_owned()),
+            ],
+        );
+        Ok(result)
+    }
+
+    async fn photographic_request(
+        &self,
+        scene: &PlateScene,
+        spec: &ShotSpec,
+        heroes: &[u8],
+        direction: Option<&str>,
+    ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
+        let (sheet, legend) = self.identity_sheet(scene, heroes).await?;
+        let edit_harbor = scene.exterior
+            && scene.place_id == "salt-quay"
+            && scene.asset.contains("scene-salt-quay-arrival");
+        let base = if edit_harbor {
+            "scene-salt-quay-candid".to_owned()
+        } else {
+            scene.asset.clone()
+        };
+        let place = self.inner.load_plate_reference(base).await;
+        let (place, style_only) = match place {
+            Ok(place) => (place, false),
+            Err(_) if !edit_harbor => (
+                self.inner
+                    .load_plate_reference("scene-salt-quay-arrival".to_owned())
+                    .await?,
+                true,
+            ),
+            Err(error) => return Err(error),
+        };
+        // Stable ordering on fresh builds and rebuilds: base photograph, complete identity
+        // sheet, then optional speaker close-up. Never let a close-up displace another person.
+        let mut references = vec![place, sheet];
+        let (figure, face) = match &scene.speaker {
+            Some(speaker) => self.speaker_art(&speaker.sprite).await,
+            None => (None, None),
+        };
+        let locator_face = face.clone().or_else(|| figure.clone());
+        references.extend(face.or(figure));
+        let prompt = if edit_harbor {
+            super::super::imagery::harbor_photo_edit(
+                self.inner.rating,
+                spec,
+                scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
+                &scene.hero_names,
+            )?
+        } else if let Some(snapshot) = &scene.snapshot {
+            super::super::imagery::model_plate(
+                self.inner.rating,
+                &snapshot.model,
+                &scene.place_id,
+                &scene.hero_names,
+            )?
+        } else {
+            scene_plate(
+                self.inner.rating,
+                spec,
+                scene.place.as_ref(),
+                PlateReferences {
+                    party_sheet: false,
+                    speaker: false,
+                    speaker_face: false,
+                    place: true,
+                },
+            )
+            .map_err(|_| ImageFailure::InvalidRequest)?
+        };
+        let prompt = if style_only {
+            prompt.with_photographic_style_reference()
+        } else {
+            prompt
+        };
+        let prompt = prompt.with_cast_sheet(2, &legend);
+        let prompt = match direction {
+            Some(direction) => prompt.with_development_direction(direction),
+            None => prompt,
+        };
+        Ok((
+            ImageRequest {
+                kind: ImageKind::ScenePlate,
+                references,
+                prompt,
+                output: OutputSpec::PLATE,
+            },
+            locator_face,
+        ))
+    }
+
     async fn fresh_request(
         &self,
         scene: &PlateScene,
@@ -1495,6 +1675,11 @@ impl Shared {
         faces: &[(u8, ImageKey)],
         direction: Option<&str>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
+        if self.inner.references.photographic_only() {
+            return self
+                .photographic_request(scene, spec, heroes, direction)
+                .await;
+        }
         let mut references = Vec::new();
         let edit_documentary_photo = self.inner.references.photographic_only()
             && scene.exterior
@@ -1824,6 +2009,7 @@ impl Shared {
         scene: &PlateScene,
         base: &ImageKey,
         face: Face,
+        heroes: &[u8],
     ) -> Result<ImageKey, ImageFailure> {
         let Lookup::Image { bytes, format } = self.inner.imagery.image(base.as_str()).await else {
             return Err(ImageFailure::InvalidRequest);
@@ -1842,6 +2028,13 @@ impl Shared {
             has_speaker_art,
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
+        let prompt = if self.inner.references.photographic_only() {
+            let (sheet, legend) = self.identity_sheet(scene, heroes).await?;
+            references.push(sheet);
+            prompt.with_cast_sheet(references.len(), &legend)
+        } else {
+            prompt
+        };
         let direction = locked(&self.book).direct.keep.clone();
         let prompt = match direction {
             Some(direction) => prompt.with_development_direction(&direction),
@@ -2034,7 +2227,9 @@ impl Shared {
             (Some(face), Edit::Ready { face: shown, .. } | Edit::Failed(shown))
                 if shown == face => {}
             (Some(face), _) => {
+                let heroes = current.heroes.clone();
                 let job = Job::Edit {
+                    heroes,
                     scene_key,
                     scene,
                     base,

@@ -16,6 +16,7 @@
 //! model. Generated images are never written under `assets/` and never committed; each is
 //! recorded in a run-local manifest (`imagery.jsonl`) with its provenance.
 mod artifact;
+mod cast_sheet;
 mod party_sheet;
 mod photo_edit;
 mod plate_prompt;
@@ -73,6 +74,7 @@ pub(super) use prompt::{
 )]
 pub(super) use prompt::{PromptRefusal, VettedFact};
 // PLAY-V09: the scene plate's party sheet and prompts.
+pub(super) use cast_sheet::{CastIdentity, cast_sheet};
 use party_sheet::SheetError;
 pub(super) use party_sheet::{party_sheet, vision_picture};
 pub(super) use photo_edit::harbor_photo_edit;

@@ -10,8 +10,8 @@
    (the next picture is a mood edit of the shown one) and `data-push` (a or b: restarts the slow
    push-in for a new scene). */
 
-.tv-plate{position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .6s ease,visibility 0s .6s}
-.tv-stage[data-shot=plate] .tv-plate{opacity:1;visibility:visible;transition:opacity .6s ease,visibility 0s}
+.tv-plate{position:absolute;z-index:3;inset:0;overflow:hidden;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 1s ease,visibility 0s 1s}
+.tv-stage[data-shot=plate] .tv-plate{opacity:1;visibility:visible;transition:opacity 1s ease,visibility 0s}
 .tv-stage[data-tv-mode=lobby] .tv-plate{display:none}
 /* the slow push-in toward the speaker: about 3.6% over a long scene, eased, restarted by a new scene */
 .tv-plate-zoom{position:absolute;inset:0;transform-origin:var(--head-x,50%) var(--head-y,45%);will-change:transform}
@@ -19,15 +19,16 @@
 .tv-plate[data-push=b] .tv-plate-zoom{animation:df-plate-push-b 150s cubic-bezier(.12,.55,.3,1) forwards}
 @keyframes df-plate-push-a{from{transform:scale(1)}to{transform:scale(1.036)}}
 @keyframes df-plate-push-b{from{transform:scale(1)}to{transform:scale(1.036)}}
-.tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:opacity 1.2s ease,filter 1.2s ease}
+.tv-plate-frame{position:absolute;inset:0;z-index:1;opacity:0;filter:blur(0);transition:none}
 .tv-plate-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;z-index:1;filter:blur(0)}
 .tv-plate-frame>.tv-plate-video.tv-loop{z-index:2}
 /* the picture that shows is on top and fades in over the one it replaces, which stays fully drawn
    until the new one is opaque and then goes: the plate never has a thin moment */
-.tv-plate[data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-active="1"] .tv-plate-frame[data-i="1"]{z-index:2;opacity:1;transition:opacity 1.2s ease,filter 1.2s ease}
+.tv-plate[data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-active="1"] .tv-plate-frame[data-i="1"]{z-index:2;opacity:1;transition:opacity 1s ease,filter 1s ease}
+.tv-plate[data-previous="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-previous="1"] .tv-plate-frame[data-i="1"]{opacity:1}
 /* a mood edit of the shown plate: the new picture comes in from a blur, the old one blurs out under it */
-.tv-plate[data-pull=focus] .tv-plate-frame{filter:blur(0);transition:opacity 1.2s ease}
-.tv-plate[data-pull=focus][data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-frame[data-i="1"]{filter:blur(0);transition:opacity 1.2s ease}
+.tv-plate[data-pull=focus] .tv-plate-frame{filter:blur(0);transition:none}
+.tv-plate[data-pull=focus][data-active="0"] .tv-plate-frame[data-i="0"],.tv-plate[data-pull=focus][data-active="1"] .tv-plate-frame[data-i="1"]{filter:blur(0);transition:opacity 1s ease}
 /* drifting dust motes or embers, added to the light (additive), always on */
 .tv-plate-dust{position:absolute;inset:0;mix-blend-mode:screen;opacity:.6;overflow:hidden}
 .tv-plate-dust::before,.tv-plate-dust::after{content:'';position:absolute;inset:-8% 0;background-repeat:repeat}
@@ -46,10 +47,12 @@
 /* The empty-room asset can be the wrong first frame while this scene's composed plate loads. */
 .tv-stage[data-tv-mode=scene][data-plate-state=pending] .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=ready]:not([data-plate-loaded]) .tv-scene-set,.tv-stage[data-tv-mode=scene][data-plate-state=failed]:not([data-plate-loaded]) .tv-scene-set{background-image:radial-gradient(ellipse at 50% 42%,#574c3a 0,#2a2930 48%,#131720 100%)!important}
 /* A composed plate includes the cast; retain their nodes as the fallback and bubble anchors. */
-.tv-stage[data-tv-mode=scene][data-stage-graph][data-shot=plate][data-battle-state=absent] .tv-scene-graph{z-index:4;opacity:1;visibility:visible;transition:none}
-.tv-stage[data-stage-graph][data-shot=plate] .tv-scene-set{visibility:hidden}
+.tv-stage[data-tv-mode=scene][data-stage-graph][data-shot=plate][data-battle-state=absent] .tv-scene-graph{z-index:2;opacity:1;visibility:visible;transition:none}
+.tv-stage[data-stage-graph][data-shot=plate] .tv-scene-set{visibility:hidden;transition:visibility 0s 1s}
 .tv-scene-actors{opacity:1;visibility:inherit;transition:opacity .6s,visibility 0s}
-.tv-stage[data-tv-mode=scene][data-shot=plate] :is(.tv-scene-actors,.tv-fig-body){opacity:0;visibility:hidden;transition:opacity .6s,visibility 0s .6s}
+.tv-stage[data-tv-mode=scene][data-shot=plate] :is(.tv-scene-actors,.tv-fig-body){opacity:0;visibility:hidden;transition:opacity 0s 1s,visibility 0s 1s}
+.tv-stage[data-tv-mode=scene][data-shot=plate] .tv-fig-body{z-index:2}
+.tv-stage[data-tv-mode=scene]>.tv-scrim{z-index:4}
 .tv-stage:is([data-shot=establishing],[data-shot=plate]) .tv-mist{display:none}
 .tv-plate-bubbles{position:absolute;inset:0;z-index:9;pointer-events:none}
 .tv-plate-bubbles>.tv-fig-bubbles{position:absolute;top:0;left:0;right:auto}
@@ -137,3 +140,7 @@
 .live-scene-item-detail{white-space:pre-line;line-height:1.5}
 .live-scene-item[data-display=true]{position:absolute;z-index:35;right:3%;top:18%;width:26%;max-height:62%;overflow:hidden;animation:df-item-share 8s both;pointer-events:none}
 @keyframes df-item-share{0%{opacity:0;transform:translateY(.5rem)}8%,90%{opacity:1;transform:none}100%{opacity:0;visibility:hidden}}
+
+/* A held final caption keeps its original lane while the photograph dissolves underneath. */
+.tv-stage[data-plate-caption-retained] .tv-lower[data-line-state=lingering]{opacity:1;visibility:visible;transform:translate(-50%,0);transition:none}
+.tv-stage[data-plate-caption-retained] .tv-plate-bubbles{visibility:hidden}
