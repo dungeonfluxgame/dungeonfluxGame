@@ -47,7 +47,7 @@ pub(super) struct Item {
 pub(super) enum Job {
     Bake {
         scene: String,
-        pending: Box<Pending>,
+        pending: Pending,
         base: ImageKey,
         identities: Option<Box<IdentitySnapshot>>,
     },
@@ -251,7 +251,7 @@ impl Shared {
         );
         let job = super::Job::State(Job::Bake {
             scene,
-            pending: Box::new(pending),
+            pending,
             base,
             identities,
         });
@@ -265,7 +265,7 @@ impl Shared {
                 pending,
                 ..
             }))) => {
-                book.state_images.pending = Some(*pending);
+                book.state_images.pending = Some(pending);
             }
             Err(_) => record("gameplay.living_scene.worker_closed", &[]),
         }
