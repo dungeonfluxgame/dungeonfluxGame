@@ -758,7 +758,6 @@ pub(super) fn stage(
         if !matches!(option, "buy" | "use" | "trade" | "examine") {
             return Err(invalid());
         }
-        let purchased_id = format!("purchased-{}", offer.id);
         if option == "examine" {
             format!("{} It costs {} CP.", offer.description, offer.cost_cp)
         } else if option == "trade"
@@ -769,12 +768,7 @@ pub(super) fn stage(
                 "{} costs {} CP; that trade has not been agreed.",
                 offer.name, offer.cost_cp
             )
-        } else if snapshot
-            .model
-            .things
-            .iter()
-            .any(|thing| thing.id == purchased_id)
-        {
+        } else if !snapshot.model.offer_available(&offer.id) {
             format!("{} is already sold.", offer.name)
         } else if balance_cp(current.state(), *who)? < u64::from(offer.cost_cp) {
             format!(

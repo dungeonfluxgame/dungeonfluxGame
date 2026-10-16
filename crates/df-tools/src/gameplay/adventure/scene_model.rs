@@ -274,6 +274,15 @@ impl std::fmt::Display for SceneModelError {
 impl std::error::Error for SceneModelError {}
 
 impl SceneModel {
+    /// Finite catalog stock survives in authoring for replay/refusal; a committed purchase
+    /// consumes that offer by creating its canonical owned thing.
+    pub(crate) fn offer_available(&self, id: &str) -> bool {
+        self.offers.iter().any(|offer| offer.id == id)
+            && !self
+                .things
+                .iter()
+                .any(|thing| thing.id == format!("purchased-{id}"))
+    }
     pub(crate) fn public_contents(&self) -> Result<String, SceneModelError> {
         let mut contents: Value = serde_json::from_str(&self.picture_state()?)
             .map_err(|_| SceneModelError::Serialization)?;
@@ -291,12 +300,7 @@ impl SceneModel {
         contents["offers"] = serde_json::json!(
             self.offers
                 .iter()
-                .filter(|offer| {
-                    !self
-                        .things
-                        .iter()
-                        .any(|thing| thing.id == format!("purchased-{}", offer.id))
-                })
+                .filter(|offer| self.offer_available(&offer.id))
                 .map(|offer| {
                     let mut value = serde_json::json!(offer);
                     value["actions"] = serde_json::json!(["look", "buy"]);

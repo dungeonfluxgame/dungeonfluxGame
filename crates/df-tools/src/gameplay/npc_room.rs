@@ -35,7 +35,7 @@ pub(super) fn facts(room: &SceneNow, dossier: &Dossier, withheld: &Withheld) -> 
             "name": way.name, "position": way.position, "beyond": way.beyond, "open": way.open,
         })).collect::<Vec<_>>(),
         "wares": model.offers.iter().filter(|offer| safe(&offer.description)
-            && !model.things.iter().any(|thing| thing.id == format!("purchased-{}", offer.id))).map(|offer| json!({
+            && model.offer_available(&offer.id)).map(|offer| json!({
             "name": offer.name, "description": offer.description, "cost_cp": offer.cost_cp,
             "seller": model.people.iter().find(|person| person.id == offer.seller_id).map(|person| &person.name),
         })).collect::<Vec<_>>(),

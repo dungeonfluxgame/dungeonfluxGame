@@ -834,15 +834,30 @@ async fn serve_run(
                     .iter()
                     .find(|scene| scene.key == pack::SceneKey::Opening)
                     .ok_or("generated opening absent")?;
-                println!(
-                    "ADVENTURE seed={} title={:?} location={} patron={} antagonist={} rolls={}",
-                    prepared.record.seed,
-                    opening.title,
-                    prepared.record.entry("location")?,
-                    prepared.record.entry("patron")?,
-                    prepared.record.entry("antagonist")?,
-                    prepared.record.rolls.len()
-                );
+                if prepared
+                    .loaded
+                    .pack
+                    .beat_script
+                    .as_ref()
+                    .is_some_and(|script| script.mode == beat_script::ScriptMode::Freeplay)
+                {
+                    println!(
+                        "ADVENTURE mode=freeplay seed={} title={:?} cast={} rolls=0",
+                        prepared.record.seed,
+                        opening.title,
+                        opening.cast.len()
+                    );
+                } else {
+                    println!(
+                        "ADVENTURE seed={} title={:?} location={} patron={} antagonist={} rolls={}",
+                        prepared.record.seed,
+                        opening.title,
+                        prepared.record.entry("location")?,
+                        prepared.record.entry("patron")?,
+                        prepared.record.entry("antagonist")?,
+                        prepared.record.rolls.len()
+                    );
+                }
                 println!("ADVENTURE {}", prepared.prose);
                 let directory = prepared.directory.clone();
                 let loaded = prepared.loaded.clone();
