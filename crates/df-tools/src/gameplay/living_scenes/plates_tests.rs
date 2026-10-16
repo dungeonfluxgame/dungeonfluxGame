@@ -167,6 +167,7 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
         text: text.into(),
         sha256: format!("hash-{text}"),
         tempo: crate::gameplay::shot::PublicBeat::Build,
+        dialogue: crate::gameplay::shot::PublicDialogue::FirstReply,
     };
     let mut next = view(&current, &[1], false);
     next.story = Some(story(2, "Keep your voice low."));
@@ -214,6 +215,10 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
         "edit the currently shown known-good picture"
     );
     assert_eq!(pending.story.as_ref().unwrap().sequence, 5);
+    assert_eq!(
+        pending.story.as_ref().unwrap().dialogue,
+        crate::gameplay::shot::PublicDialogue::SameSpeakerFollowup
+    );
     assert!(
         drain(&mut queue).is_empty(),
         "one bounded pending story, not one job per reply"
@@ -1590,6 +1595,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
         text: "The enforcer listens.".into(),
         sha256: "test-story-hash".into(),
         tempo: crate::gameplay::shot::PublicBeat::Build,
+        dialogue: crate::gameplay::shot::PublicDialogue::FirstReply,
     });
     story_view.graph_revision = 2;
     shared.observe_with(&story_view, Some(current.clone()), Vec::new());

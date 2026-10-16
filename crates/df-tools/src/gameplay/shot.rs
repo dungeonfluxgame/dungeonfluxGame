@@ -98,12 +98,20 @@ pub(in crate::gameplay) enum PublicBeat {
     Release,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) enum PublicDialogue {
+    FirstReply,
+    SameSpeakerFollowup,
+    SpeakerChange,
+}
+
 impl Camera {
     pub(in crate::gameplay) fn for_public_beat(
         base: Self,
         scene_key: SceneKey,
         beat: PublicBeat,
         sequence: u64,
+        dialogue: PublicDialogue,
     ) -> Self {
         if matches!(scene_key, SceneKey::Opening | SceneKey::Victory)
             || matches!(beat, PublicBeat::Release)
@@ -115,6 +123,15 @@ impl Camera {
             _ => Self::OverShoulderLeft,
         };
         match beat {
+            PublicBeat::Calm if matches!(dialogue, PublicDialogue::SameSpeakerFollowup) => {
+                Self::SpeakerClose
+            }
+            PublicBeat::Calm if matches!(dialogue, PublicDialogue::SpeakerChange) => side,
+            PublicBeat::Calm => Self::DialogueMedium,
+            PublicBeat::Build if matches!(dialogue, PublicDialogue::SameSpeakerFollowup) => {
+                Self::SpeakerClose
+            }
+            PublicBeat::Build if matches!(dialogue, PublicDialogue::SpeakerChange) => side,
             PublicBeat::Build => Self::DialogueMedium,
             // Peak tension is rare and bounded to a typed public beat; the sequence keeps it
             // deterministic without reacting to arbitrary words in the scene or reply.
@@ -123,10 +140,6 @@ impl Camera {
                 _ => Self::DutchOverShoulderLeft,
             },
             PublicBeat::Peak | PublicBeat::Anticipation => side,
-            PublicBeat::Calm => match scene_key {
-                SceneKey::Inn => Self::SpeakerClose,
-                _ => side,
-            },
             PublicBeat::Release => Self::WideEstablishing,
         }
     }
@@ -1019,7 +1032,7 @@ pub(in crate::gameplay) fn direct(input: &ShotInput<'_>) -> Result<ShotSpec, Sho
         return Err(ShotError::EmptyScene);
     }
     let mood = mood_of(input.scene_key, &story);
-    let default_over_shoulder = || {
+    let mut default_over_shoulder = || {
         if place_stream.below(2) == 0 {
             Camera::OverShoulderLeft
         } else {

@@ -116,15 +116,33 @@ fn the_same_scene_always_gets_the_same_spec_and_other_scenes_can_differ() {
 fn public_story_cues_choose_bounded_camera_variants_deterministically() {
     let base = Camera::OverShoulderRight;
     assert_eq!(
-        Camera::for_public_beat(base, SceneKey::DialogueSeal, PublicBeat::Build, 2),
+        Camera::for_public_beat(
+            base,
+            SceneKey::DialogueSeal,
+            PublicBeat::Build,
+            2,
+            PublicDialogue::FirstReply,
+        ),
         Camera::DialogueMedium
     );
     assert_eq!(
-        Camera::for_public_beat(base, SceneKey::DialogueSeal, PublicBeat::Peak, 8),
+        Camera::for_public_beat(
+            base,
+            SceneKey::DialogueSeal,
+            PublicBeat::Peak,
+            8,
+            PublicDialogue::FirstReply,
+        ),
         Camera::DutchOverShoulderRight
     );
     assert_eq!(
-        Camera::for_public_beat(base, SceneKey::DialogueSeal, PublicBeat::Release, 9),
+        Camera::for_public_beat(
+            base,
+            SceneKey::DialogueSeal,
+            PublicBeat::Release,
+            9,
+            PublicDialogue::FirstReply,
+        ),
         Camera::WideEstablishing
     );
 }

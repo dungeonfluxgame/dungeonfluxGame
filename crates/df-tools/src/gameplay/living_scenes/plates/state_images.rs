@@ -23,6 +23,7 @@ pub(super) struct Book {
     ready: Option<(ImageKey, u64)>,
     pub(super) items: BTreeMap<String, Item>,
     pub(super) latest_items: BTreeMap<String, String>,
+    last_story_actor: Option<String>,
 }
 
 pub(super) struct Pending {
@@ -46,6 +47,7 @@ fn story_camera(
         identities.scene.key,
         story.tempo,
         story.sequence,
+        story.dialogue,
     ))
 }
 
@@ -133,6 +135,16 @@ pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, n
     let reason = images.pending.as_ref().map_or(reason.clone(), |pending| {
         format!("{}; {reason}", pending.reason)
     });
+    let dialogue = match images.last_story_actor.as_deref() {
+        Some(actor) if actor == story.actor_id => {
+            crate::gameplay::shot::PublicDialogue::SameSpeakerFollowup
+        }
+        Some(_) => crate::gameplay::shot::PublicDialogue::SpeakerChange,
+        None => crate::gameplay::shot::PublicDialogue::FirstReply,
+    };
+    images.last_story_actor = Some(story.actor_id.clone());
+    let mut story = story.clone();
+    story.dialogue = dialogue;
     images.pending = Some(Pending {
         snapshot: Some(snapshot.clone()),
         story: None,
@@ -165,7 +177,7 @@ fn observe_story(book: &mut super::Book, view: &View, now: Duration) {
     images.ready = None;
     images.pending = Some(Pending {
         snapshot: None,
-        story: Some(Box::new(story.clone())),
+        story: Some(Box::new(story)),
         reason: "completed NPC story beat".to_owned(),
         state: story.sha256.clone(),
         revision: view.graph_revision,

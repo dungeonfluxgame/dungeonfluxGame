@@ -341,6 +341,7 @@ struct StoryBeat {
     text: String,
     sha256: String,
     tempo: shot::PublicBeat,
+    dialogue: shot::PublicDialogue,
 }
 
 fn public_beat(journey: &rpc::JourneyView) -> shot::PublicBeat {
@@ -389,6 +390,7 @@ fn committed_story(journey: &rpc::JourneyView) -> Option<StoryBeat> {
         ),
         text,
         tempo: public_beat(journey),
+        dialogue: shot::PublicDialogue::FirstReply,
     })
 }
 
