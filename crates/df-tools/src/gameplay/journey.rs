@@ -2195,7 +2195,32 @@ fn stage_authored_threads(
     if super::beat_script::with_script(|script| {
         script.mode == super::beat_script::ScriptMode::Freeplay
     }) {
-        return Ok(candidate);
+        let source = candidate
+            .state()
+            .facts
+            .iter()
+            .find(|fact| fact.id == source_id)
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        if !matches!(&source.value, FactValue::ContentEvent { definition, subjects }
+            if definition.entry.as_str() == "begin-story" && subjects.is_empty())
+        {
+            return Ok(candidate);
+        }
+        // Entering freeplay still consumes its exact accepted entry source. The legacy
+        // thread director performed this bookkeeping while progressing a quest; freeplay
+        // preserves the causal fact without creating that unrelated story thread.
+        if source.audience != AudienceScope::Shared
+            || candidate
+                .state()
+                .narrative
+                .accepted_facts
+                .contains(&source_id)
+        {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        let mut state = candidate.state().clone();
+        state.narrative.accepted_facts.push(source_id);
+        return model::checkpoint(candidate.basis(), state);
     }
     use df_engine::director_staging::{
         DirectorLimits, DirectorStaging, ThreadDirectorLimits, compose_director_thread_progress,

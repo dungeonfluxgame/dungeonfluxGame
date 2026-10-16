@@ -228,8 +228,12 @@ pub(super) fn act(current: &Checkpoint, member: MemberId, operation: u8, id: &st
     );
     let raw = rpc::SubmitActionRequest::decode(raw.encode_to_vec().as_slice()).unwrap();
     let input = wire::journey_input(&raw, member, current).unwrap();
-    journey::stage_with_supplier(current, &input, &mut |sides| Ok(sides))
-        .unwrap_or_else(|error| panic!("action {id} operation {operation}: {error:?}"))
+    journey::stage_with_supplier(current, &input, &mut |sides| Ok(sides)).unwrap_or_else(|error| {
+        panic!(
+            "action {id} operation {operation}: {error:?}; step={:?}",
+            super::refusal_detail::take()
+        )
+    })
 }
 fn act_with_choices(
     current: &Checkpoint,
