@@ -1221,9 +1221,12 @@ impl Figures {
             "data-succeeded",
             if check.succeeded { "true" } else { "false" },
         )?;
+        panel.set_attribute("tabindex", "0")?;
+        panel.set_attribute("aria-label", &format!("{} check", check.hero_name))?;
+        let entry = node(&self.document, &panel, "div", "tv-check-entry", "")?;
         node(
             &self.document,
-            &panel,
+            &entry,
             "span",
             "tv-check-hero",
             &check.hero_name,
@@ -1231,7 +1234,7 @@ impl Figures {
         if !check.intention.trim().is_empty() {
             node(
                 &self.document,
-                &panel,
+                &entry,
                 "p",
                 "tv-check-intention",
                 &check.intention,
@@ -1239,21 +1242,10 @@ impl Figures {
         }
         node(
             &self.document,
-            &panel,
+            &entry,
             "span",
             "tv-check-skill",
             &check.ability_skill,
-        )?;
-        node(
-            &self.document,
-            &panel,
-            "span",
-            "tv-check-mode",
-            match check.roll_mode {
-                -1 => "Disadvantage",
-                1 => "Advantage",
-                _ => "D20 roll",
-            },
         )?;
         let roll = node(&self.document, &panel, "div", "tv-check-roll", "")?;
         let dice = node(&self.document, &roll, "div", "tv-check-dice", "")?;
@@ -1268,6 +1260,7 @@ impl Figures {
             )?;
             if *kept {
                 die.set_attribute("data-kept", "")?;
+                die.set_attribute("aria-label", &format!("{face}, kept"))?;
             }
         }
         let equation = node(&self.document, &roll, "div", "tv-check-equation", "")?;
@@ -1294,6 +1287,18 @@ impl Figures {
         node(
             &self.document,
             &roll,
+            "span",
+            "tv-check-mode",
+            match check.roll_mode {
+                -1 => "Disadvantage",
+                1 => "Advantage",
+                _ => "D20 roll",
+            },
+        )?;
+        let resolution = node(&self.document, &panel, "div", "tv-check-resolution", "")?;
+        node(
+            &self.document,
+            &resolution,
             "strong",
             "tv-check-outcome",
             if check.succeeded {
@@ -1305,7 +1310,7 @@ impl Figures {
         if !check.finding.trim().is_empty() {
             node(
                 &self.document,
-                &panel,
+                &resolution,
                 "p",
                 "tv-check-finding",
                 &check.finding,
