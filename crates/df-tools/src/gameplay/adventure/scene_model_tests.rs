@@ -41,6 +41,27 @@ fn taproom() -> SceneModel {
         .expect("the taproom tables provide all named scene facts")
 }
 
+fn merchant_shop() -> SceneModel {
+    let setting = SceneSetting {
+        place_id: "cloth-shop".into(),
+        name: "the cloth shop near the market".into(),
+        short: "the cloth shop".into(),
+        kind: SettingKind::Shop,
+        exterior: false,
+        art_key: "place-cloth-shop".into(),
+        model: None,
+    };
+    let mut shop_facts = facts();
+    shop_facts.insert("patron.full".into(), "Marten Vell".into());
+    shop_facts.insert("patron.role".into(), "cloth merchant".into());
+    shop_facts.insert(
+        "patron.desc".into(),
+        "a round merchant in a russet wool cap".into(),
+    );
+    SceneModel::fallback(&setting, ScenePlace::Meeting, SEED, &shop_facts)
+        .expect("the merchant shop tables provide all named scene facts")
+}
+
 #[test]
 fn picture_state_changes_for_visible_actions_but_not_a_search_or_private_knowledge() {
     let model = taproom();
@@ -90,6 +111,46 @@ fn fallback_in_scene_has_people_things_exits_and_srd_521_prices_p101() {
             .iter()
             .any(|offer| { offer.name == "one night's poor lodging" && offer.cost_cp == 10 })
     );
+}
+
+#[test]
+fn merchant_shop_has_named_interactable_background_people_and_stock() {
+    let model = merchant_shop();
+    let background = model
+        .people
+        .iter()
+        .filter(|person| person.is_background)
+        .collect::<Vec<_>>();
+    assert_eq!(background.len(), 2);
+    assert!(background.iter().any(|person| person.role == "adventurer"));
+    assert!(background.iter().any(|person| person.role == "soldier"));
+    assert!(model.resolve_target("Talk to the adventurer").is_some());
+    assert!(
+        model
+            .resolve_target("Ask the soldier about the shop")
+            .is_some()
+    );
+    assert!(
+        model
+            .resolve_target("What does the merchant sell?")
+            .is_some()
+    );
+    assert_eq!(model.offers.len(), 3);
+    assert!(
+        model
+            .offers
+            .iter()
+            .any(|offer| offer.name == "traveler's clothes" && offer.cost_cp == 200)
+    );
+    assert!(
+        model
+            .offers
+            .iter()
+            .any(|offer| offer.name == "fine clothes" && offer.cost_cp == 1500)
+    );
+    let picture = model.picture_state().expect("shop picture state");
+    assert!(picture.contains("adventurer"));
+    assert!(picture.contains("soldier"));
 }
 
 #[test]

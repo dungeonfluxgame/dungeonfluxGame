@@ -752,6 +752,9 @@ fn named_people(
             _ => "a named person in the adventure".to_owned(),
         };
         let mut all_aliases = vec![name.clone(), role.clone(), position.to_owned()];
+        if setting.kind == SettingKind::Shop && prefix == "patron" {
+            all_aliases.push("merchant".to_owned());
+        }
         all_aliases.extend(aliases);
         people.push(ScenePerson {
             id: id.to_owned(),
@@ -937,7 +940,10 @@ fn background_roles(kind: SettingKind) -> Vec<String> {
         | SettingKind::ArchivistsStudy
         | SettingKind::ReadingGallery
         | SettingKind::MapRoom => vec!["scribe".into(), "reader".into()],
-        SettingKind::Shop | SettingKind::Apothecary | SettingKind::LanternShop => {
+        SettingKind::Shop => {
+            vec!["adventurer".into(), "soldier".into()]
+        }
+        SettingKind::Apothecary | SettingKind::LanternShop => {
             vec!["shop assistant".into(), "customer".into()]
         }
         SettingKind::Quay | SettingKind::Boathouse | SettingKind::NetLoft => {
@@ -1005,6 +1011,18 @@ fn person_description(
             "waits with a parcel",
             "near the entrance",
             "the customer",
+        ),
+        "adventurer" => (
+            "an adult in a weathered traveling cloak with a scuffed pack",
+            "examines a row of folded cloth",
+            "at the shelves along the back wall",
+            "the adventurer",
+        ),
+        "soldier" => (
+            "an adult soldier in a plain wool uniform beneath a repaired leather baldric",
+            "keeps an eye on the shop door while waiting",
+            "beside the front door",
+            "the soldier",
         ),
         "dock worker" => (
             "a salt-stiff coat",
@@ -1726,9 +1744,6 @@ fn ways_out(setting: &SceneSetting, time: &str, weather: &str) -> Vec<SceneWayOu
 }
 
 fn offers(setting: &SceneSetting, people: &[ScenePerson]) -> Vec<SceneOffer> {
-    if !matches!(setting.kind, SettingKind::Inn | SettingKind::TeaHouse) {
-        return Vec::new();
-    }
     let seller_id = people
         .iter()
         .find(|person| person.id == "patron" || person.id == "contact")
@@ -1737,6 +1752,37 @@ fn offers(setting: &SceneSetting, people: &[ScenePerson]) -> Vec<SceneOffer> {
     let Some(seller_id) = seller_id else {
         return Vec::new();
     };
+    if setting.kind == SettingKind::Shop {
+        return vec![
+            offer(
+                "clothes-travelers",
+                &seller_id,
+                "traveler's clothes",
+                &["traveler's clothes", "travel clothes", "clothes"],
+                "a practical set of traveler's clothes for the road",
+                200,
+            ),
+            offer(
+                "clothes-fine",
+                &seller_id,
+                "fine clothes",
+                &["fine clothes", "fine clothing", "formal clothes"],
+                "a well-made set of fine clothes",
+                1500,
+            ),
+            offer(
+                "costume",
+                &seller_id,
+                "costume",
+                &["costume", "disguise", "theatrical costume"],
+                "a complete costume suitable for a disguise or performance",
+                500,
+            ),
+        ];
+    }
+    if !matches!(setting.kind, SettingKind::Inn | SettingKind::TeaHouse) {
+        return Vec::new();
+    }
     vec![
         offer(
             "ale-mug",

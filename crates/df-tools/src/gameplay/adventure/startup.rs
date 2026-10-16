@@ -303,11 +303,16 @@ fn pattern_adventure(
 }
 /// Development override of the chapter type; the generator refuses ids missing from the tables.
 fn forced_entries(settings: &AdventureSettings) -> ForcedEntries {
-    settings
+    let mut forced = settings
         .chapter_type
         .iter()
         .map(|kind| (super::beat_tables::CHAPTER_TYPE.into(), kind.clone()))
-        .collect()
+        .collect::<ForcedEntries>();
+    if settings.mode == super::super::startup_configuration::AdventureMode::MerchantShop {
+        forced.insert("location".into(), "lamplit-market".into());
+        forced.insert("patron".into(), "merchant".into());
+    }
+    forced
 }
 /// Store state determines fresh/resume; requested seed/tables apply only to a fresh database.
 #[cfg(test)]

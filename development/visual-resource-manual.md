@@ -51,6 +51,21 @@ $env:DF_GAMEPLAY_STT='on'
 & 'C:\Program Files\Git\bin\bash.exe' ./development/run-gameplay.sh --harbor --new-game
 ```
 
+For a deterministic roleplay scene in the merchant's cloth shop, set
+`DF_GAMEPLAY_ADVENTURE=merchant-shop` before starting a fresh run. This pins
+the market location and merchant patron so the canonical scene model contains
+the merchant, a named adventurer, a named soldier, and the shop's registered
+stock.
+
+```powershell
+$env:DF_GAMEPLAY_ADVENTURE='merchant-shop'
+& 'C:\Program Files\Git\bin\bash.exe' ./development/run-gameplay.sh --new-game
+```
+
+Normal server authority and the scene interaction journal still apply:
+background people resolve as conversation targets, while offers expose exact
+copper prices without claiming a purchase until the ordinary buy path accepts it.
+
 Copy the `DEV CONTROL` URL and token file from startup, then run the fixture
 binary. This joins both seats, creates the fixture heroes from the live offers,
 and stops in dialogue before combat.

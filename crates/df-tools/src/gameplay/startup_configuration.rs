@@ -2048,6 +2048,7 @@ pub(super) enum AdventureMode {
     Harbor,
     Random,
     Campaign,
+    MerchantShop,
 }
 pub(super) struct AdventureInputs {
     pub(super) mode: Result<String, VarError>,
@@ -2146,10 +2147,11 @@ pub(super) fn adventure_settings(
         None | Some("harbor") => AdventureMode::Harbor,
         Some("random") => AdventureMode::Random,
         Some("campaign") => AdventureMode::Campaign,
+        Some("merchant-shop") => AdventureMode::MerchantShop,
         _ => {
             return Err(AdventureSettingsError {
                 variable: "DF_GAMEPLAY_ADVENTURE",
-                expected: "harbor, random or campaign",
+                expected: "harbor, random, campaign or merchant-shop",
             });
         }
     };
@@ -2237,6 +2239,16 @@ mod adventure_settings_tests {
             );
         }
     }
+
+    #[test]
+    fn merchant_shop_mode_is_an_explicit_fresh_adventure_preset() {
+        let mut raw = inputs();
+        raw.mode = Ok("merchant-shop".into());
+        let settings = adventure_settings(raw, Path::new("/game")).unwrap();
+        assert_eq!(settings.mode, AdventureMode::MerchantShop);
+        assert_eq!(settings.chapter_type, None);
+    }
+
     #[test]
     fn defaults_and_seed_spellings_are_explicit() {
         let default = adventure_settings(inputs(), Path::new("/game")).unwrap();

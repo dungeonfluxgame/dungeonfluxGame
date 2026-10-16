@@ -813,7 +813,8 @@ async fn serve_run(
                 (directory, loaded)
             }
             startup_configuration::AdventureMode::Random
-            | startup_configuration::AdventureMode::Campaign => {
+            | startup_configuration::AdventureMode::Campaign
+            | startup_configuration::AdventureMode::MerchantShop => {
                 let mut prepared = adventure::startup::prepare(
                     settings,
                     &database,
