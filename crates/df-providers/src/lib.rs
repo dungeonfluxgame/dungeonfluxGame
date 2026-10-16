@@ -3,6 +3,10 @@
 //! Published rates and model pages are research evidence. They do not establish
 //! account access, current capacity, rights, or permission to dispatch provider work.
 
+/// OpenAI Images Edit `prompt` maximum (`maxLength: 32000`), documented at:
+/// <https://developers.openai.com/api/reference/resources/images/methods/edit>.
+pub const MAXIMUM_PROMPT_CHARACTERS: usize = 32_000;
+
 mod http_contract;
 mod output_fetch;
 mod reconciliation;

@@ -80,7 +80,7 @@ pub(in crate::gameplay) fn harbor_photo_edit(
         ContentRating::Restrained => "No gore, nudity or sexual content.",
     }));
     let prompt = AssembledPrompt::from_parts(parts);
-    if prompt.as_str().chars().count() > 4000 {
+    if prompt.as_str().chars().count() > df_providers::MAXIMUM_PROMPT_CHARACTERS {
         return Err(ImageFailure::InvalidRequest);
     }
     Ok(prompt)

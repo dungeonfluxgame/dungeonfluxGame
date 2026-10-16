@@ -27,7 +27,8 @@ use super::{
 };
 
 /// The adapter's prompt limit, in characters.
-pub(in crate::gameplay) const MAXIMUM_PROMPT_CHARACTERS: usize = 4000;
+pub(in crate::gameplay) const MAXIMUM_PROMPT_CHARACTERS: usize =
+    df_providers::MAXIMUM_PROMPT_CHARACTERS;
 
 const FOCAL_CONTEXT: &str = "Keep the primary speaker or foreground goods clearly readable while preserving enough spatial context to show the counter or working surface, the named people nearby, visible goods and the usable ways out whenever those facts are supplied. Dress the established place with only its supplied objects, light, weather and time; never invent clues, ownership or hidden details.";
 

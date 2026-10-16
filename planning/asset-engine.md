@@ -160,13 +160,18 @@ Generated runtime images are written only to the run's cache directory
 provenance manifest (`imagery.jsonl`: key, kind, model, prompt, reference hashes, time,
 bytes, measured cost); never under `assets/`, never committed.
 
-What the candidates offer, from the vendors' own documentation read on 2026-10-11:
+What the candidates offer, from the vendors' own documentation read on 2026-10-16:
 
 | Candidate | Multi-reference edit | Transparent output | Published price | Moderation controls |
 | --- | --- | --- | --- | --- |
 | OpenAI `gpt-image-2.5-flare` / `-sunburst` (`/v1/images/edits`) | `image[]`, several files ([guide](https://developers.openai.com/api/docs/guides/image-generation)) | `background: transparent`, PNG or WebP | tokens: 5 USD text in, 8 image in, 30 out per million ([pricing](https://developers.openai.com/api/docs/pricing), [model](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare)) | `moderation: auto` or `low`; blocked calls return `moderation_blocked` and must not be retried unchanged |
 | fal `fal-ai/nano-banana/edit` | `image_urls` list; data-URI input accepted on the newer model page ([schema](https://fal.ai/models/fal-ai/nano-banana/edit/llms.txt)) | none (needs a background-removal call, about 0.018 USD) | 0.039 USD per image | `safety_tolerance` 1 to 6 is only fal's layer; Google's model-level blocks on sexually explicit and violent content stay ([Google](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-image-responsible-ai)) |
 | fal `flux-kontext/dev`, `qwen-image-edit-plus`, `bytedance/seedream/v4/edit` | single image (Kontext), several (Qwen, up to 10 for Seedream) ([Kontext](https://fal.ai/models/fal-ai/flux-kontext/dev/llms.txt), [Qwen](https://fal.ai/models/fal-ai/qwen-image-edit-plus/llms.txt), [Seedream](https://fal.ai/models/fal-ai/bytedance/seedream/v4/edit/llms.txt)) | none | 0.025 to 0.03 USD per megapixel or image | `enable_safety_checker` can be switched off only with account authorization; unauthorized requests are always checked and flagged output comes back black |
+
+The OpenAI Images Edit reference documents a `prompt` maximum length of 32,000 characters
+(retrieved 2026-10-16): <https://developers.openai.com/api/reference/resources/images/methods/edit>.
+The adapter and gameplay prompt builders use that documented limit; they do not impose a smaller
+development-time scene budget or remove cast and public-state context to fit one.
 
 Decision: **OpenAI `gpt-image-2.5-flare`, medium quality, 1024x1536 transparent PNG for a
 cut-out and 1536x864 JPEG for a backdrop** (`gpt-image-2.5-sunburst`, the "editing precision"

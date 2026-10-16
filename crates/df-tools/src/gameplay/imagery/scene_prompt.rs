@@ -20,7 +20,7 @@ fn assembled(rating: ContentRating, text: String) -> Result<AssembledPrompt, Ima
         Part::Fact(text),
         Part::Fixed(rating),
     ]);
-    if prompt.as_str().chars().count() > 4000 {
+    if prompt.as_str().chars().count() > df_providers::MAXIMUM_PROMPT_CHARACTERS {
         return Err(ImageFailure::InvalidRequest);
     }
     Ok(prompt)

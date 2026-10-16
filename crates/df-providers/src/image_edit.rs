@@ -28,7 +28,6 @@ use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
 
 const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/images/edits";
-const MAXIMUM_PROMPT_CHARACTERS: usize = 4000;
 const MAXIMUM_REFERENCES: usize = 4;
 const MAXIMUM_REFERENCE_BYTES: usize = 4 * 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -343,7 +342,7 @@ fn validate(edit: &ImageEdit<'_>) -> Result<(), ImageEditError> {
         )
     );
     if edit.prompt.trim().is_empty()
-        || edit.prompt.chars().count() > MAXIMUM_PROMPT_CHARACTERS
+        || edit.prompt.chars().count() > crate::MAXIMUM_PROMPT_CHARACTERS
         || !references_ok
         || !sides_ok
         || !(MINIMUM_PIXELS..=MAXIMUM_PIXELS).contains(&pixels)
