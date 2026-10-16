@@ -194,19 +194,21 @@ pub(super) fn journey_input(
         ));
     }
     if let Some(character) = &request.character {
-        if let Some(identity) = character.identity.clone() {
-            // The identity is validated (closed menu values, bounded story text) so a bad one is
-            // refused plainly; storing it with the hero (sheet, portrait, replies) is still to
-            // come, and the log says so rather than dropping it silently.
-            let identity = super::hero_identity::Identity::from_rpc(identity).map_err(|_| {
-                super::refusal_detail::note("hero-identity-invalid");
-                tonic::Status::invalid_argument("Your hero's appearance or story was not accepted.")
-            })?;
-            eprintln!(
-                "HERO identity accepted name={:?} pronouns={} stored=no (storage pending)",
-                character.name,
-                identity.pronouns().join("/")
-            );
+        let identity = match character.identity.clone() {
+            Some(identity) => super::hero_identity::Identity::from_rpc(identity),
+            None => super::hero_identity::Identity::from_menus(&[]),
+        }
+        .map_err(|_| {
+            super::refusal_detail::note("hero-identity-invalid");
+            tonic::Status::invalid_argument("Your hero's appearance or story was not accepted.")
+        })?;
+        // Only closed appearance ids cross the durable creation boundary. Private story
+        // text is never reconstructed into a shared photographic request.
+        for (field, selected) in identity.canonical_appearance_choices() {
+            choices.push((
+                model::label(&format!("identity-appearance:{field}")).map_err(|_| invalid())?,
+                model::label(selected).map_err(|_| invalid())?,
+            ));
         }
         if character.name.len() > 48 || character.choices.len() > 16 {
             return Err(tonic::Status::invalid_argument(
@@ -223,6 +225,9 @@ pub(super) fn journey_input(
             model::label(&encoded_name).map_err(|_| invalid())?,
         ));
         for selection in &character.choices {
+            if selection.group_id.starts_with("identity-appearance:") {
+                return Err(invalid());
+            }
             if selection.group_id.len() > 64 || selection.option_id.len() > 64 {
                 return Err(tonic::Status::invalid_argument(
                     "character option exceeds bound",

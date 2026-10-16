@@ -309,6 +309,24 @@ impl Identity {
 }
 
 impl ValidatedIdentity {
+    pub(crate) fn canonical_appearance_choices(&self) -> Vec<(&'static str, &str)> {
+        self.0.appearance.fields().into_iter().collect()
+    }
+
+    pub(crate) fn from_canonical_appearance_choices(
+        choices: &[(String, String)],
+    ) -> Result<Self, IdentityError> {
+        let selected = choices
+            .iter()
+            .filter_map(|(field, value)| {
+                field
+                    .strip_prefix("identity-appearance:")
+                    .map(|field| (field, value.as_str()))
+            })
+            .collect::<Vec<_>>();
+        Identity::from_menus(&selected)
+    }
+
     pub(crate) fn identity(&self) -> &Identity {
         &self.0
     }

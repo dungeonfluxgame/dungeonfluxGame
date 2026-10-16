@@ -20,6 +20,105 @@ fn key(byte: char) -> ImageKey {
     ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
 }
 
+#[tokio::test]
+async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographic_plate_request() {
+    use crate::gameplay::{
+        adventure::scene_model::{SceneKnowledge, SceneModel, ScenePerson, StartingAttitude},
+        imagery::tests::DirectionFixture,
+    };
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/canonical-reference-tests/plate-{}",
+        std::process::id()
+    ));
+    let fixture = DirectionFixture::photographic(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: super::super::ReferenceStore::photographic(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
+        social: SocialLedger::none(),
+        rating: ContentRating::Restrained,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    inner.observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+    let mut authored = scene(
+        SceneKey::DialogueSeal,
+        "Canonical workshop",
+        Some("Kestrel"),
+    );
+    authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        time_of_day: "morning".to_owned(),
+        weather: "clear".to_owned(),
+        people: vec![ScenePerson {
+            id: "keeper".to_owned(),
+            name: "Kestrel".to_owned(),
+            role: "shopkeeper".to_owned(),
+            description: "An adult with gray hair and a plain wool tunic".to_owned(),
+            relation_to_speaker: String::new(),
+            position: "behind the counter".to_owned(),
+            aliases: Vec::new(),
+            is_background: false,
+            present_in: Vec::new(),
+            attitude: StartingAttitude::Indifferent,
+            attitudes: Default::default(),
+            knowledge: vec![SceneKnowledge {
+                fact_id: "private".to_owned(),
+                statement: "PRIVATE_DO_NOT_SHARE".to_owned(),
+            }],
+            wants: "PRIVATE_DO_NOT_SHARE".to_owned(),
+        }],
+        things: Vec::new(),
+        ways_out: Vec::new(),
+        offers: Vec::new(),
+    });
+    locked(&inner.state).canonical.observe_room(&authored);
+    let (jobs, mut queue) = mpsc::channel(16);
+    let shared = Shared {
+        inner: inner.clone(),
+        book: Mutex::new(Book::new()),
+        jobs,
+    };
+    let plate = PlateScene::of(&authored).unwrap();
+    shared.ensure(&mut locked(&shared.book), &plate, &[], &[], 1, false);
+    assert!(
+        queue.try_recv().is_err(),
+        "a pending identity must never admit a static substitute plate"
+    );
+    let queued = locked(&inner.state).canonical.take_jobs();
+    let mut tasks = JoinSet::new();
+    for job in queued {
+        inner.spawn(&mut tasks, job);
+    }
+    while let Some(done) = tasks.join_next().await {
+        inner.finish(done.unwrap());
+    }
+    let room = inner
+        .canonical_room_reference(&plate.place_id)
+        .await
+        .unwrap();
+    let performer = inner.canonical_npc_reference("keeper").await.unwrap();
+    let (sheet, _) = shared.identity_sheet(&plate, &[]).await.unwrap();
+    let spec = plate.stage(&[]).unwrap();
+    let (request, _) = shared
+        .photographic_request(&plate, &spec, &[], None)
+        .await
+        .unwrap();
+    assert_eq!(request.references[0].sha256, room.sha256);
+    assert_eq!(request.references[1].sha256, sheet.sha256);
+    assert_eq!(request.references[2].sha256, performer.sha256);
+    assert!(!request.prompt.as_str().contains("PRIVATE_DO_NOT_SHARE"));
+    fixture.imagery.render(request).await.unwrap();
+    assert_eq!(
+        fixture.calls(),
+        3,
+        "room, performer and composed scene use the real image boundary"
+    );
+}
+
 fn member(id: &str, name: &str, sprite: &str, role: pack::CastRole) -> pack::SceneCastMember {
     pack::SceneCastMember {
         id: id.to_owned(),

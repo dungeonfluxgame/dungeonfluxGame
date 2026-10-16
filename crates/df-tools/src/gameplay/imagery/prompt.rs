@@ -184,6 +184,13 @@ impl AssembledPrompt {
         self
     }
 
+    pub(in crate::gameplay) fn with_canonical_binding(mut self, binding: &str) -> Self {
+        self.text.push_str(&format!(
+            "\nCanonical identity and authored layout binding: {binding}."
+        ));
+        self
+    }
+
     pub(in crate::gameplay) fn with_photographic_style_reference(mut self) -> Self {
         self.text.push_str(
             "\nThe empty landscape reference supplies only documentary camera finish and materials. Written scene facts alone define location, layout, cast, objects and light.",

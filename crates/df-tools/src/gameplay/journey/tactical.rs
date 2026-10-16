@@ -1216,7 +1216,10 @@ pub(super) fn start(
         let choices = character
             .choices
             .iter()
-            .filter(|choice| choice.offer.as_str() != "name")
+            .filter(|choice| {
+                choice.offer.as_str() != "name"
+                    && !choice.offer.as_str().starts_with("identity-appearance:")
+            })
             .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
             .collect::<Vec<_>>();
         let legal = noted(

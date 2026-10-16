@@ -25,6 +25,7 @@ use std::{
 
 use df_protocol::common as rpc;
 use futures::{StreamExt, stream::FuturesUnordered};
+use sha2::Digest;
 use tokio::{sync::mpsc, task::JoinSet};
 
 use super::{
@@ -1651,7 +1652,7 @@ impl Shared {
             }
             woke = true;
         }
-        if !woke && !view.in_combat && book.current_entry().is_none() {
+        if !view.in_combat && book.current_entry().is_none() {
             // The scene's request was dropped (a full queue): it is made again by this view.
             let retry = book.current.as_ref().and_then(|current| {
                 Some((
@@ -1683,6 +1684,29 @@ impl Shared {
         graph_revision: u64,
         ahead: bool,
     ) {
+        // Accepted canonical sources must be complete before a photographic plate is
+        // admitted. A ready reference wakes watchers and this same path retries admission.
+        let pending = |status| {
+            matches!(
+                status,
+                super::canonical::ReferenceStatus::Pending
+                    | super::canonical::ReferenceStatus::Failed(_)
+            )
+        };
+        if pending(self.inner.canonical_room_status(&scene.place_id))
+            || heroes
+                .iter()
+                .any(|seat| pending(self.inner.canonical_hero_status(*seat)))
+            || scene.identity_cast.iter().any(|identity| {
+                pending(
+                    self.inner.canonical_npc_status(
+                        identity.id.strip_prefix("npc:").unwrap_or(&identity.id),
+                    ),
+                )
+            })
+        {
+            return;
+        }
         let id = scene.plate_id(heroes, faces, graph_revision);
         if book.entries.contains_key(&id) {
             return;
@@ -2158,15 +2182,27 @@ impl Shared {
         heroes: &[u8],
     ) -> Result<(ReferenceImage, String), ImageFailure> {
         let mut wanted = scene.identity_cast.clone();
-        for art in heroes {
-            wanted.push(IdentityReference {
-                id: format!("hero:{art}"),
-                name: String::new(),
-                sprite: format!("sprite-hero-{art}"),
-                portrait: String::new(),
-            });
-        }
         let mut cast = Vec::new();
+        for art in heroes {
+            if let Some((entity, figure)) = self.inner.canonical_hero_reference(*art).await {
+                let entity = format!("{:x}", sha2::Sha256::digest(entity.as_bytes()));
+                cast.push(CastIdentity {
+                    id: format!("hero:{entity}"),
+                    figure,
+                });
+            } else if self.inner.canonical_hero_status(*art)
+                == super::canonical::ReferenceStatus::Missing
+            {
+                wanted.push(IdentityReference {
+                    id: format!("hero:{art}"),
+                    name: String::new(),
+                    sprite: format!("sprite-hero-{art}"),
+                    portrait: String::new(),
+                });
+            } else {
+                return Err(ImageFailure::Interrupted);
+            }
+        }
         for IdentityReference {
             id,
             sprite,
@@ -2174,6 +2210,16 @@ impl Shared {
             name: _,
         } in wanted
         {
+            let canonical_id = id.strip_prefix("npc:").unwrap_or(&id);
+            if let Some(figure) = self.inner.canonical_npc_reference(canonical_id).await {
+                cast.push(CastIdentity { id, figure });
+                continue;
+            }
+            if self.inner.canonical_npc_status(canonical_id)
+                != super::canonical::ReferenceStatus::Missing
+            {
+                return Err(ImageFailure::Interrupted);
+            }
             let (figure, _) = self.speaker_art(&sprite).await;
             let figure = match figure {
                 Some(figure) => Some(figure),
@@ -2249,7 +2295,16 @@ impl Shared {
         } else {
             scene.asset.clone()
         };
-        let place = self.inner.load_plate_reference(base).await;
+        let canonical = self.inner.canonical_room_reference(&scene.place_id).await;
+        let place = match canonical {
+            Some(reference) => Ok(reference),
+            None if self.inner.canonical_room_status(&scene.place_id)
+                != super::canonical::ReferenceStatus::Missing =>
+            {
+                return Err(ImageFailure::Interrupted);
+            }
+            None => self.inner.load_plate_reference(base).await,
+        };
         let (place, style_only) = match place {
             Ok(place) => (place, false),
             Err(_) if !edit_harbor => (
@@ -2264,7 +2319,10 @@ impl Shared {
         // sheet, then optional speaker close-up. Never let a close-up displace another person.
         let mut references = vec![place, sheet];
         let (figure, face) = match &scene.speaker {
-            Some(speaker) => self.speaker_art(&speaker.sprite).await,
+            Some(speaker) => match self.inner.canonical_npc_reference(&speaker.id).await {
+                Some(figure) => (Some(figure), None),
+                None => self.speaker_art(&speaker.sprite).await,
+            },
             None => (None, None),
         };
         let locator_face = face.clone().or_else(|| figure.clone());

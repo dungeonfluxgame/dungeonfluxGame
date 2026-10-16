@@ -587,7 +587,10 @@ pub(super) fn character_sheet(
     let selected = character
         .choices
         .iter()
-        .filter(|choice| choice.offer.as_str() != "name")
+        .filter(|choice| {
+            choice.offer.as_str() != "name"
+                && !choice.offer.as_str().starts_with("identity-appearance:")
+        })
         .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
         .collect::<Vec<_>>();
     let build = pack::validate_character(&name(state, who)?, &selected).map_err(bad)?;
@@ -3312,7 +3315,9 @@ fn accept_character(
     let name = std::str::from_utf8(&encoded_name).map_err(bad)?;
     let options = choices
         .iter()
-        .filter(|(group, _)| group.as_str() != "name")
+        .filter(|(group, _)| {
+            group.as_str() != "name" && !group.as_str().starts_with("identity-appearance:")
+        })
         .map(|(group, option)| (group.as_str(), option.as_str()))
         .collect::<Vec<_>>();
     let build = pack::validate_character(name, &options).map_err(bad)?;

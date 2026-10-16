@@ -16,6 +16,7 @@
 //! model. Generated images are never written under `assets/` and never committed; each is
 //! recorded in a run-local manifest (`imagery.jsonl`) with its provenance.
 mod artifact;
+mod canonical_prompt;
 mod cast_sheet;
 mod party_sheet;
 mod photo_edit;
@@ -23,6 +24,7 @@ mod plate_prompt;
 mod prompt;
 mod references;
 mod scene_prompt;
+pub(super) use canonical_prompt::{canonical_character, canonical_npc, canonical_room};
 pub(super) use scene_prompt::{graph_edit, item_picture, model_plate, state_edit, story_beat_edit};
 
 use std::{
@@ -105,6 +107,8 @@ const CACHE_CONTROL: &str = "private, max-age=86400, immutable";
 /// What a result is for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ImageKind {
+    CanonicalCharacter,
+    CanonicalRoom,
     /// The current backdrop re-framed and re-lit; no people.
     SceneRefresh,
     /// One character's cut-out with another expression; transparent.
@@ -120,6 +124,8 @@ pub(super) enum ImageKind {
 impl ImageKind {
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::CanonicalCharacter => "canonical_character",
+            Self::CanonicalRoom => "canonical_room",
             Self::SceneRefresh => "scene_refresh",
             Self::CastExpression => "cast_expression",
             Self::ArtifactCloseUp => "artifact_close_up",

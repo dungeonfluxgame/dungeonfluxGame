@@ -173,6 +173,8 @@ impl Service {
         // Living scenes watch the display's view and then add their published art to it; the
         // art is presentation only and nothing else in the view changes.
         let (role, mut message) = viewed?;
+        self.living
+            .observe_checkpoint(&self.updates.borrow().clone());
         self.living.observe(&message);
         self.living.apply(&mut message);
         // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
@@ -1513,6 +1515,7 @@ async fn serve_run(
         rating,
         living_scenes::Timing::from_interval(living_interval),
         plates_enabled,
+        receiver.clone(),
     );
     // PLAY-V10: the home screen's looping video, made from the still just in time.
     let home_video_line = home_video::install(

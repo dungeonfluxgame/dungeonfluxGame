@@ -24,6 +24,7 @@ use tokio::{sync::watch, task::JoinSet, time::Instant};
 use crate::health_tier::{Vitals, tier_of};
 
 // PLAY-V09: scene plates (the whole scene as one composed picture), made just in time.
+mod canonical;
 mod plates;
 
 use super::{
@@ -532,9 +533,14 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
             1 | 2 => format!("/assets/ui/generated/figure-hero-{art}-documentary-photo"),
             _ => format!("/assets/ui/generated/figure-hero-{art}-documentary-photo"),
         };
-        let live_art = state
-            .and_then(|state| state.hero_cutouts.get(&hero.name))
-            .map(ImageKey::path);
+        let live_art = state.and_then(|state| {
+            state
+                .canonical
+                .hero_at_seat(art)
+                .and_then(|(entity, _)| state.canonical.hero(entity))
+                .map(|key| key.path())
+                .or_else(|| state.hero_cutouts.get(&hero.name).map(ImageKey::path))
+        });
         owned.push((
             format!("hero-{art}"),
             hero.name.clone(),
@@ -555,7 +561,10 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
             .and_then(|state| state.health_sprites.get(&actor.id))
             .or_else(|| state.and_then(|state| state.sprites.get(&actor.id)))
             .filter(|overlay| overlay.source_sprite == actor.sprite);
-        let live_art = overlay.map(|overlay| overlay.key.path());
+        let live_art = state
+            .and_then(|state| state.canonical.npc(&actor.id))
+            .map(|key| key.path())
+            .or_else(|| overlay.map(|overlay| overlay.key.path()));
         let expression = state
             .and_then(|state| state.plate_wants.get(&actor.id))
             .map(|face| face.expression)
@@ -585,15 +594,20 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
             },
         )
         .collect();
+    let canonical_set = state
+        .and_then(|state| state.canonical.room(place_id))
+        .map(|key| key.path());
     let graph = scene_graph::build(&SceneGraphInput {
         scene_key: scene.key,
         place_id,
         place_name,
         fallback_set: &stage_asset(&scene.asset),
-        refreshed_set: state
-            .filter(|state| state.backdrop.is_some())
-            .and_then(|state| state.backdrop.as_ref())
-            .map(|backdrop| backdrop.key.as_str()),
+        refreshed_set: canonical_set.as_deref().or_else(|| {
+            state
+                .filter(|state| state.backdrop.is_some())
+                .and_then(|state| state.backdrop.as_ref())
+                .map(|backdrop| backdrop.key.as_str())
+        }),
         exterior,
         weather: None,
         shot: &shot,
@@ -806,6 +820,7 @@ struct ReadyBackdrop {
 }
 
 struct State {
+    canonical: canonical::References,
     stage: Option<Stage>,
     facts: Option<SceneFacts>,
     tracker: MoodTracker,
@@ -838,6 +853,7 @@ struct State {
 
 /// What the worker should start.
 enum Job {
+    Canonical(canonical::Work),
     HeroCutout {
         name: String,
         index: usize,
@@ -866,6 +882,10 @@ enum Job {
 }
 
 enum Done {
+    Canonical {
+        work: canonical::Work,
+        result: Result<ImageKey, ImageFailure>,
+    },
     HeroCutout {
         name: String,
         result: Result<ImageKey, ImageFailure>,
@@ -1080,6 +1100,12 @@ fn record(event: &'static str, fields: &[(&'static str, String)]) {
 }
 
 impl LivingScenes {
+    /// Register the committed identity before projecting a view that can request its plate.
+    pub(super) fn observe_checkpoint(&self, checkpoint: &df_model::checkpoint::Checkpoint) {
+        if let Some(inner) = &self.inner {
+            inner.observe_checkpoint(checkpoint);
+        }
+    }
     /// Living scenes that do nothing: imagery is off.
     pub(super) fn disabled() -> Self {
         Self {
@@ -1098,6 +1124,7 @@ impl LivingScenes {
         rating: ContentRating,
         timing: Timing,
         plates_on: bool,
+        checkpoints: watch::Receiver<df_model::checkpoint::Checkpoint>,
     ) -> Self {
         let origin = Instant::now();
         let inner = Arc::new(Inner {
@@ -1110,7 +1137,8 @@ impl LivingScenes {
             wake: watch::channel(0).0,
             origin,
         });
-        let worker = tokio::spawn(Arc::clone(&inner).run());
+        inner.observe_checkpoint(&checkpoints.borrow().clone());
+        let worker = tokio::spawn(Arc::clone(&inner).run(checkpoints));
         let plates = plates_on.then(|| plates::Plates::start(Arc::clone(&inner)));
         Self {
             inner: Some(inner),
@@ -1231,6 +1259,9 @@ impl Inner {
 
     fn observe_at(&self, stage: Stage, now: Duration) {
         let mut state = locked(&self.state);
+        if let Some(scene) = &stage.story_scene {
+            state.canonical.observe_room(scene);
+        }
         let changed_scene = state
             .stage
             .as_ref()
@@ -1288,6 +1319,14 @@ impl Inner {
                     return;
                 }
                 if let Some(scene) = display.scene.as_mut() {
+                    if let Some(key) = stage
+                        .story_scene
+                        .as_ref()
+                        .and_then(|scene| scene.setting.as_ref())
+                        .and_then(|setting| state.canonical.room(&setting.place_id))
+                    {
+                        scene.live_backdrop = key.path();
+                    }
                     // The backdrop and the mood faces are never published in combat; a health
                     // variant is, because it shows how the fight is going.
                     if !stage.in_combat
@@ -1319,13 +1358,23 @@ impl Inner {
     }
 
     /// The worker: ticks, follows the social ledger, and owns every render task it starts.
-    async fn run(self: Arc<Self>) {
+    async fn run(
+        self: Arc<Self>,
+        mut checkpoints: watch::Receiver<df_model::checkpoint::Checkpoint>,
+    ) {
+        let _canonical_lifetime = canonical::WorkerLifetime(Arc::clone(&self));
+        self.observe_checkpoint(&checkpoints.borrow_and_update().clone());
+        let mut checkpoints_open = true;
         let mut ticker = tokio::time::interval(self.timing.tick);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut exchanges = self.social.subscribe_exchanges();
         let mut tasks: JoinSet<Done> = JoinSet::new();
         loop {
             tokio::select! {
+                changed = checkpoints.changed(), if checkpoints_open => {
+                    if changed.is_ok() { self.observe_checkpoint(&checkpoints.borrow_and_update().clone()); }
+                    else { checkpoints_open = false; }
+                }
                 _ = ticker.tick() => {}
                 _ = exchanges.changed() => {}
                 Some(done) = tasks.join_next(), if !tasks.is_empty() => {
@@ -1334,6 +1383,10 @@ impl Inner {
                         self.finish(done);
                     }
                 }
+            }
+            let canonical_jobs = locked(&self.state).canonical.take_jobs();
+            for job in canonical_jobs {
+                self.spawn(&mut tasks, job);
             }
             for job in self.evaluate() {
                 self.spawn(&mut tasks, job);
@@ -1345,6 +1398,16 @@ impl Inner {
         let inner = Arc::clone(self);
         let started = Instant::now();
         match job {
+            Job::Canonical(work) => {
+                tasks.spawn(async move {
+                    use futures::FutureExt;
+                    let result = std::panic::AssertUnwindSafe(inner.render_canonical(&work))
+                        .catch_unwind()
+                        .await
+                        .unwrap_or(Err(ImageFailure::Interrupted));
+                    Done::Canonical { work, result }
+                });
+            }
             Job::HeroCutout { name, index, party } => {
                 tasks.spawn(async move {
                     let result = inner.render_hero_cutout(index, &party).await;
@@ -1602,6 +1665,10 @@ impl Inner {
 
     /// Records a finished render. A scene refresh waits for a quiet moment before it lands.
     fn finish(&self, done: Done) {
+        if let Done::Canonical { work, result } = done {
+            self.finish_canonical(work, result);
+            return;
+        }
         let label_of = |result: &Result<ImageKey, ImageFailure>| {
             result
                 .as_ref()
@@ -1609,6 +1676,7 @@ impl Inner {
                 .to_owned()
         };
         let (kind, outcome) = match &done {
+            Done::Canonical { .. } => return,
             Done::HeroCutout { result, .. } => ("hero_cutout", label_of(result)),
             Done::Expression { result, .. } => ("expression", label_of(result)),
             Done::Refresh { result, .. } => ("refresh", label_of(result)),
@@ -1621,6 +1689,7 @@ impl Inner {
         );
         let mut state = locked(&self.state);
         match done {
+            Done::Canonical { .. } => return,
             Done::HeroCutout { name, result } => {
                 state.hero_cutouts_in_flight.remove(&name);
                 match result {
@@ -1808,6 +1877,13 @@ impl Inner {
         {
             let party: Vec<usize> = stage.heroes.iter().map(|hero| hero.index).collect();
             for (index, hero) in stage.heroes.iter().enumerate() {
+                if u8::try_from(hero.index + 1)
+                    .ok()
+                    .and_then(|seat| state.canonical.hero_at_seat(seat))
+                    .is_some()
+                {
+                    continue;
+                }
                 if state.hero_cutouts.contains_key(&hero.name)
                     || state.hero_cutouts_in_flight.contains(&hero.name)
                     || state.failed_hero_cutouts.contains(&hero.name)
@@ -1992,6 +2068,7 @@ impl Inner {
 impl State {
     fn new(timing: Timing) -> Self {
         Self {
+            canonical: canonical::References::default(),
             stage: None,
             facts: None,
             tracker: MoodTracker::new(timing.hysteresis),

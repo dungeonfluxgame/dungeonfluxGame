@@ -411,6 +411,7 @@ async fn item_image_cache_precedes_the_existing_run_budget() {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Reply {
     Image,
+    DecodableImage,
     Moderation,
     NoImage,
     Failure,
@@ -591,6 +592,14 @@ fn payload_for(reply: Reply, fields: &Fields) -> (&'static str, String) {
         )
     };
     match reply {
+        Reply::DecodableImage => {
+            let format = if webp { image::ImageFormat::WebP } else if png { image::ImageFormat::Png } else { image::ImageFormat::Jpeg };
+            let picture = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(width, height, image::Rgba([54, 82, 96, if transparent { 200 } else { 255 }])));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            if webp || png { picture.write_to(&mut bytes, format).unwrap(); }
+            else { image::DynamicImage::ImageRgb8(picture.to_rgb8()).write_to(&mut bytes, format).unwrap(); }
+            ("200 OK", image(bytes.into_inner()))
+        }
         Reply::Image if png => ("200 OK", image(fake_png(width, height, transparent))),
         Reply::Image if webp => ("200 OK", image(fake_webp(width, height, transparent))),
         Reply::Image => ("200 OK", image(fake_jpeg(width, height, 0))),
@@ -776,6 +785,18 @@ pub(in crate::gameplay) struct DirectionFixture {
 }
 
 impl DirectionFixture {
+    pub(in crate::gameplay) fn photographic(cache: &Path) -> Self {
+        let fake = FakeOpenAi::start(Duration::ZERO, Reply::DecodableImage);
+        let imagery = imagery_in(
+            &fake,
+            cache,
+            None,
+            20,
+            Duration::from_secs(5),
+            ContentRating::Restrained,
+        );
+        Self { imagery, fake }
+    }
     pub(in crate::gameplay) fn new(cache: &Path) -> Self {
         let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
         let imagery = imagery_in(
