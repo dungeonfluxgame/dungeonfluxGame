@@ -151,7 +151,7 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         wake: tokio::sync::watch::channel(0).0,
         origin: Instant::now(),
     });
-    let (jobs, mut queue) = mpsc::channel(16);
+    let (jobs, _queue) = mpsc::channel(16);
     let shared = Arc::new(Shared {
         inner,
         book: Mutex::new(Book::new()),
@@ -1268,6 +1268,57 @@ async fn three_lobby_rosters_request_one_opening_plate_for_the_confirmed_party()
         1,
         "one provider call for the opening plate",
     );
+}
+
+#[tokio::test]
+async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_reference_limit() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/campaign/luna2/R10/reference-limit-{}",
+        std::process::id(),
+    ));
+    let fixture = DirectionFixture::new(&cache);
+    let timing = Timing::from_interval(Duration::from_secs(30));
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: super::super::ReferenceStore::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
+        ),
+        social: SocialLedger::none(),
+        rating: ContentRating::Restrained,
+        timing,
+        state: Mutex::new(State::new(timing)),
+        wake: tokio::sync::watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    let (jobs, mut queue) = mpsc::channel(16);
+    let shared = Shared {
+        inner,
+        book: Mutex::new(Book::new()),
+        jobs,
+    };
+    let mut current = scene(SceneKey::DialogueSeal, "Two on the Stage", Some("Kestrel"));
+    current.cast.push(member(
+        "antagonist",
+        "The Antagonist",
+        "sprite-ant-giant-rat",
+        pack::CastRole::Antagonist,
+    ));
+    let Some(scene) = PlateScene::of(&current) else {
+        panic!("scene should be plannable");
+    };
+    let spec = scene.stage(&[1, 2]).expect("scene should stage");
+    let (request, _) = shared
+        .fresh_request(&scene, &spec, &[1, 2], &[], None)
+        .await
+        .expect("reference shaping should succeed");
+
+    assert_eq!(request.references.len(), 4);
+    fixture
+        .imagery
+        .render(request)
+        .await
+        .expect("provider-free fixture should accept the shaped request");
 }
 
 #[tokio::test]

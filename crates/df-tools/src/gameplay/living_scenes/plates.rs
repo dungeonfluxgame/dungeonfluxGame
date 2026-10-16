@@ -53,6 +53,10 @@ const MAXIMUM_ENTRIES: usize = 32;
 const QUEUE_CAPACITY: usize = 16;
 /// The most successor scenes whose plates are requested ahead of time.
 const MAXIMUM_SUCCESSORS: usize = 6;
+/// The image edit adapter accepts at most four reference images. Keep the party, speaker and
+/// place references first; additional cast figures are useful context but are already named in
+/// the prompt and must not make a valid plate request fail locally.
+const MAXIMUM_PLATE_REFERENCES: usize = 4;
 /// A plate for a scene that may come next waits this long before it is made, so the plate of the
 /// scene on screen is always the first to reach the image service (the service runs two calls at
 /// a time and serves them in the order they arrive).
@@ -1237,8 +1241,14 @@ impl Shared {
         let place = self.inner.load(scene.asset.clone()).await.ok();
         let has_place = place.is_some();
         references.extend(place);
-        // Every named cast member is a reference, including people who are not speaking.
-        for sprite in &scene.others {
+        // Keep the remaining cast figures only while the provider's reference limit allows them.
+        // They are also named in the prompt, so dropping the lowest-priority art preserves the
+        // request's scene facts while keeping the party, speaker and place references intact.
+        for sprite in scene
+            .others
+            .iter()
+            .take(MAXIMUM_PLATE_REFERENCES.saturating_sub(references.len()))
+        {
             let (figure, _) = self.speaker_art(sprite).await;
             references.extend(figure);
         }
