@@ -349,13 +349,15 @@ fn opening_dressing_uses_present_people_and_omits_empty_categories() {
 
     for person in &opening.people {
         assert!(dressing.contains(&person.name));
-        assert!(dressing.contains(
-            person
-                .description
-                .trim_end_matches('.')
-                .replace(';', ",")
-                .as_str()
-        ));
+        assert!(
+            dressing.contains(
+                person
+                    .description
+                    .trim_end_matches('.')
+                    .replace(';', ",")
+                    .as_str()
+            )
+        );
         assert!(dressing.contains(&person.position));
     }
     for person in &model.people {
