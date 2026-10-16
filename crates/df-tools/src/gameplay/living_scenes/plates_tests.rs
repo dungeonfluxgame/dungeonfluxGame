@@ -406,7 +406,9 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
         "../../artifacts/tmp/narrative-stock-focus/{}",
         std::process::id()
     ));
-    let fixture = DirectionFixture::new(&cache);
+    // The photographic path builds a contact sheet from canonical cutouts, so this fake must
+    // return decodable image bytes rather than the opaque image payload used by `new`.
+    let fixture = DirectionFixture::photographic(&cache);
     let timing = Timing::from_interval(Duration::from_secs(30));
     let (jobs, mut queue) = mpsc::channel(16);
     let shared = Arc::new(Shared {
