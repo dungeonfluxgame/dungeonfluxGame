@@ -1156,11 +1156,14 @@ fn render_hand_items(
             wrapper.remove();
             continue;
         };
-        if existing.contains_key(&thing_id) {
-            close_hand_item_cards(&wrapper, "successor")?;
-            wrapper.remove();
-        } else {
-            existing.insert(thing_id, wrapper);
+        match existing.entry(thing_id) {
+            std::collections::btree_map::Entry::Occupied(_) => {
+                close_hand_item_cards(&wrapper, "successor")?;
+                wrapper.remove();
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(wrapper);
+            }
         }
     }
     for item in items {
