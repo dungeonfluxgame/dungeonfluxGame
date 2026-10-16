@@ -14,6 +14,47 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-16T17:02:55-04:00 to 2026-10-16T18:03:02-04:00
+
+Range: ee72773235293ce1e0a6fb6d7f204f7dce6ed609..c0a18abb0cbad37a084e2e5996d115cc686f65d8
+
+- 27d00d53d630ebae49f1e0572aa88e0e03265090 — Record six-hour shop and roleplay integration block
+- a85860e23aadf457f79807e48728787eb0c33bc3 — Keep quickstart portrait metadata out of build validation
+- 31858d928016bccd807e20fe3c3568a3d4699c5f — Use decodable images in goods focus fixture
+- 5fa768c5f87be6935110a6025240490e82d5e5ea — Narrow dev seat credential helper visibility
+- 42308e1d5563c9f4582bd16ebd97bddfabe88abb — Fix lobby caption lane overlap
+- 25ddec74e67c5df2f92e88d7e16c8378d60437fa — Expose owned items in dev view diagnostics
+- 19a03ceed360addaf5d8661c52719499c6825b01 — Journal merchant quote declines and withdrawals
+- f8479a9dc69ff96083b6d31c962a0e25326fde2e — Expose committed merchant item history
+- 7074f92b5d645399790734ecf692903d9a544ea3 — Wire merchant quote closure and buyback context
+- 3fdc7a15470c7064d6387afccf8f1550aabb629e — Fix merchant bargaining caller types
+- c212971455d04ec8fdca1574f10c3df9c054d7f5 — Keep pending scene replies visually current
+- 4d7898224dff7312470fcc779fb2f146772a6bde — Carry exact authored scene variants into plates
+- eb8eaf3fcfc3442bc9d5c1b48035e2cb5fd82a3b — Bind authored plates to canonical identities
+- 2929489337e5ff96ac135bda7d9dd8ec037069b2 — Keep prior reply fixture available for assertions
+- bda809f0f67023002f00816c06f1e2e471ccb0ba — Fix canonical reference consumer compile errors
+- fe2a9042469305df20f7b89d1d2e9b78c20fdd0d — Expose plate lookup error to scene owner
+- 2ed3411dbf4ebcf4eb184c16b5a7a9c0f9833c87 — Fix natural merchant quote parsing
+- 0b13111efe4e62654522a3581dd750377e85d77b — Keep merchant quotes usable after dialogue log eviction
+- 23900eb32ef469e161219b963deb1cfbce4bb4a1 — Model same-scene narration in reply regression
+- f6cfefb72936e227554a6c277d8d2a2664eebbd2 — Keep source identity in goods projection fixture
+- d5b679c2254db897444db8de8939978fc76804b5 — Return a refusal when giving unheld property
+- fc356d89eca8964069464e76e7da451090addfe4 — Use entry API for hand card reconciliation
+- 821dd030251f85f453fbabdfde8ad773815d1da5 — Use matching bounds in natural price test
+- 563f848d8b096dfcfe6327dcccf16f5e9d8b1bfe — Assert refused item transfers keep custody unchanged
+- ec521a83cb731db8d096d5df62d0f3cafaf12520 — Share NPC completion and protect merchant trade replies
+- 4c4717b227e2eacefa2808b4ef2de6c7995b45d8 — Raise lobby captions above party status
+- ac27b8b7cb62a96ffe35dea32d93d9c299a773c2 — Hide stale scene captions while replies are pending
+- 7d534faa5c9f26c6324c5bf3542f991b6c5023d9 — Remove redundant merchant status clone
+- 87d7b1b5c73190e4efbeb7eabd8e7d7f7731d674 — Preserve existing splat stream formatting cleanup
+- c0a18abb0cbad37a084e2e5996d115cc686f65d8 — Document merchant playtest launch flags and continuation state
+
+Session stopped at the user's request. Last running build was commerce-memory-v5
+at 563f848d; default quickstart and natural purchase passed, but buyback dialogue
+failed. Later shared completion/fallback and pending-caption repairs are committed;
+final runtime acceptance remains pending. The saved ZOGAMU database was shut down
+cleanly. See development/merchant-playtest-handoff.md for commands and evidence.
+
 ## 2026-10-16T11:02:55-04:00 to 2026-10-16T17:02:55-04:00
 
 Range: 8b59f6013f446c368f87e74c85e562cc924fb1c7..ee72773235293ce1e0a6fb6d7f204f7dce6ed609
