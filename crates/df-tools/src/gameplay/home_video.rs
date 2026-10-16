@@ -659,6 +659,7 @@ impl Engine {
                     "cached clip unavailable",
                     None,
                     None,
+                    None,
                 );
                 if let Some(living) = &self.living {
                     living.signal_art();
@@ -673,6 +674,7 @@ impl Engine {
                 MODEL,
                 DURATION_SECONDS,
                 "cached",
+                Some(0),
                 Some(0),
                 Some(bytes),
             );
@@ -691,10 +693,21 @@ impl Engine {
             reason,
             None,
             None,
+            None,
         );
 
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             let failure = Failure::Clip("runtime unavailable");
+            record_scene_video(
+                "failed",
+                plate_key,
+                MODEL,
+                DURATION_SECONDS,
+                "runtime unavailable",
+                None,
+                None,
+                None,
+            );
             self.finish_scene_clip(plate_key.to_owned(), Err(failure));
             return;
         };
@@ -729,6 +742,7 @@ impl Engine {
         still: Vec<u8>,
         description: String,
     ) {
+        let started = Instant::now();
         let outcome = self
             .produce_scene_clip(&plate_key, &still, &description)
             .await;
@@ -740,6 +754,7 @@ impl Engine {
                 DURATION_SECONDS,
                 "ambient-scene-loop",
                 Some(*milliseconds),
+                Some(started.elapsed().as_millis()),
                 Some(*bytes),
             ),
             Err(failure) => record_scene_video(
@@ -749,6 +764,7 @@ impl Engine {
                 DURATION_SECONDS,
                 &failure.label(),
                 None,
+                Some(started.elapsed().as_millis()),
                 None,
             ),
         }
@@ -820,19 +836,157 @@ impl Engine {
     async fn produce(&self, painting: &str) -> Result<String, Failure> {
         let still = prepare_still(&self.root, painting).await?;
         let key = clip_key(&still);
+        let request_started = Instant::now();
+        record_video_resource(
+            "gameplay.home_video.requested",
+            &key,
+            "requested",
+            "requested",
+            None,
+            "fal",
+            MODEL,
+            DURATION_SECONDS,
+            None,
+            None,
+            None,
+            "unknown",
+            None,
+            None,
+        );
         if cached_clip(&self.cache_dir, &key).is_some() {
             record_event("cached", &key, None);
+            record_video_resource(
+                "gameplay.home_video.ready",
+                &key,
+                "ready",
+                "cached",
+                None,
+                "cache",
+                MODEL,
+                DURATION_SECONDS,
+                Some(0),
+                None,
+                None,
+                "hit",
+                None,
+                None,
+            );
             return Ok(key);
         }
-        let provider = self.provider()?;
-        let price = self.price(&provider).await?;
-        self.charge()?;
+        let provider = match self.provider() {
+            Ok(provider) => provider,
+            Err(failure) => {
+                record_video_resource(
+                    "gameplay.home_video.failed",
+                    &key,
+                    "failed",
+                    "failed",
+                    Some(video_failure_category(&failure)),
+                    "fal",
+                    MODEL,
+                    DURATION_SECONDS,
+                    Some(request_started.elapsed().as_millis()),
+                    None,
+                    None,
+                    "miss",
+                    None,
+                    None,
+                );
+                return Err(failure);
+            }
+        };
+        let price = match self.price(&provider).await {
+            Ok(price) => price,
+            Err(failure) => {
+                record_video_resource(
+                    "gameplay.home_video.failed",
+                    &key,
+                    "failed",
+                    "failed",
+                    Some(video_failure_category(&failure)),
+                    "fal",
+                    MODEL,
+                    DURATION_SECONDS,
+                    Some(request_started.elapsed().as_millis()),
+                    None,
+                    None,
+                    "miss",
+                    None,
+                    None,
+                );
+                return Err(failure);
+            }
+        };
+        if let Err(failure) = self.charge() {
+            record_video_resource(
+                "gameplay.home_video.failed",
+                &key,
+                "failed",
+                "failed",
+                Some(video_failure_category(&failure)),
+                "fal",
+                MODEL,
+                DURATION_SECONDS,
+                Some(request_started.elapsed().as_millis()),
+                None,
+                None,
+                "miss",
+                None,
+                None,
+            );
+            return Err(failure);
+        }
         let started = Instant::now();
         let outcome = self.make(&provider, &still, &key).await;
         let elapsed = started.elapsed();
+        let request_elapsed_ms = request_started.elapsed().as_millis();
         match &outcome {
-            Ok(()) => record_paid(&key, price, elapsed, "ready"),
-            Err(failure) => record_paid(&key, price, elapsed, &failure.label()),
+            Ok(()) => {
+                record_paid(&key, price, elapsed, request_elapsed_ms, "ready", None);
+                record_video_resource(
+                    "gameplay.home_video.ready",
+                    &key,
+                    "ready",
+                    "ready",
+                    None,
+                    "fal",
+                    MODEL,
+                    DURATION_SECONDS,
+                    Some(request_elapsed_ms),
+                    Some(elapsed.as_millis()),
+                    None,
+                    "stored",
+                    None,
+                    None,
+                );
+            }
+            Err(failure) => {
+                let category = video_failure_category(failure);
+                record_paid(
+                    &key,
+                    price,
+                    elapsed,
+                    request_elapsed_ms,
+                    "failed",
+                    Some(category),
+                );
+                record_video_resource(
+                    "gameplay.home_video.failed",
+                    &key,
+                    "failed",
+                    "failed",
+                    Some(category),
+                    "fal",
+                    MODEL,
+                    DURATION_SECONDS,
+                    Some(request_elapsed_ms),
+                    Some(elapsed.as_millis()),
+                    None,
+                    "miss",
+                    None,
+                    None,
+                );
+            }
         }
         outcome.map(|()| key)
     }
@@ -1361,10 +1515,52 @@ pub(crate) fn span_for(range: Option<&str>, length: u64) -> Span {
 }
 
 async fn serve_clip(RoutePath(key): RoutePath<String>, headers: HeaderMap) -> Response {
-    let Some(engine) = ENGINE.lock().ok().and_then(|engine| engine.clone()) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let started = Instant::now();
+    let response = match ENGINE.lock().ok().and_then(|engine| engine.clone()) {
+        Some(engine) => respond(&engine.cache_dir, &key, &headers).await,
+        None => StatusCode::NOT_FOUND.into_response(),
     };
-    respond(&engine.cache_dir, &key, &headers).await
+    let status_code = response.status().as_u16();
+    let (status, failure_category, cache_result, stage) = match status_code {
+        200 | 206 => ("ready", None, "server_hit", "delivered"),
+        304 => ("not_modified", None, "client_revalidated", "delivered"),
+        404 => ("not_found", Some("not_found"), "miss", "failed"),
+        416 => (
+            "range_refused",
+            Some("range_refused"),
+            "server_hit",
+            "failed",
+        ),
+        _ => ("server_error", Some("server_error"), "error", "failed"),
+    };
+    let byte_length = response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_default();
+    let browser_asset_id = df_observe::presentation::local_identity(&format!("{ROUTE}/{key}"));
+    record_video_resource(
+        "gameplay.media.delivery",
+        &safe_video_resource_id(&key),
+        stage,
+        if failure_category.is_some() {
+            "failed"
+        } else {
+            "delivered"
+        },
+        failure_category,
+        "video_cache",
+        MODEL,
+        DURATION_SECONDS,
+        Some(started.elapsed().as_millis()),
+        None,
+        Some(byte_length),
+        cache_result,
+        Some(status),
+        Some(browser_asset_id),
+    );
+    response
 }
 
 /// The response for one cached clip: the whole file, a byte range, or a refusal of a range that
@@ -1439,7 +1635,14 @@ fn context() -> OperationContext {
 }
 
 /// One paid call, with its time, model, price and outcome, through the shared span path.
-fn record_paid(key: &str, price: f64, elapsed: Duration, outcome: &str) {
+fn record_paid(
+    key: &str,
+    price: f64,
+    elapsed: Duration,
+    request_elapsed_ms: u128,
+    outcome: &str,
+    failure_category: Option<&'static str>,
+) {
     let mut span = df_observe::begin(&context(), "gameplay.home_video_render");
     span.event(
         "gameplay.home_video.paid",
@@ -1453,6 +1656,14 @@ fn record_paid(key: &str, price: f64, elapsed: Duration, outcome: &str) {
             (
                 "gameplay.home_video.seconds",
                 format!("{:.1}", elapsed.as_secs_f64()),
+            ),
+            (
+                "gameplay.home_video.request_elapsed_ms",
+                request_elapsed_ms.to_string(),
+            ),
+            (
+                "gameplay.home_video.failure_category",
+                failure_category.unwrap_or("none").to_owned(),
             ),
             (
                 "gameplay.home_video.estimated_usd",
@@ -1492,30 +1703,190 @@ fn record_scene_video(
     model: &str,
     duration_seconds: u32,
     reason: &str,
-    milliseconds: Option<u128>,
+    provider_ms: Option<u128>,
+    elapsed_ms: Option<u128>,
     bytes: Option<u64>,
 ) {
-    let message = match kind {
-        "request" => format!(
-            "VIDEO request plate={plate} model={model} seconds={duration_seconds} reason={reason}"
+    let resource_id = safe_video_resource_id(plate);
+    let (stage, status, failure_category, cache_result) = match kind {
+        "request" => ("requested", "requested", None, "unknown"),
+        "ready" if reason == "cached" => ("ready", "cached", None, "hit"),
+        "ready" => ("ready", "ready", None, "stored"),
+        _ => (
+            "failed",
+            "failed",
+            Some(video_failure_reason_category(reason)),
+            "miss",
         ),
-        "ready" => format!(
-            "VIDEO ready plate={plate} ms={} bytes={}",
-            milliseconds.unwrap_or_default(),
-            bytes.unwrap_or_default()
-        ),
-        _ => format!("VIDEO failed plate={plate} reason={reason}"),
     };
     let mut span = df_observe::begin(&context(), "gameplay.scene_video");
     span.event(
         "gameplay.scene_video.event",
         &[
-            ("gameplay.scene_video.message", message),
-            ("gameplay.scene_video.plate", plate.to_owned()),
+            ("gameplay.scene_video.resource_id", resource_id.clone()),
+            ("gameplay.scene_video.model", model.to_owned()),
             ("gameplay.scene_video.kind", kind.to_owned()),
+            ("gameplay.scene_video.status", status.to_owned()),
         ],
     );
     span.finish_unmeasured(kind);
+    record_video_resource(
+        match kind {
+            "request" => "gameplay.scene_video.requested",
+            "ready" => "gameplay.scene_video.ready",
+            _ => "gameplay.scene_video.failed",
+        },
+        &resource_id,
+        stage,
+        status,
+        failure_category,
+        "fal",
+        model,
+        duration_seconds,
+        elapsed_ms,
+        provider_ms,
+        bytes,
+        cache_result,
+        Some(video_reason_category(reason)),
+        None,
+    );
+}
+
+fn safe_video_resource_id(key: &str) -> String {
+    if key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        key.to_owned()
+    } else {
+        df_observe::presentation::local_identity(key).to_string()
+    }
+}
+
+fn video_failure_category(failure: &Failure) -> &'static str {
+    match failure {
+        Failure::Still(_) => "still_failure",
+        Failure::Price(_) => "price_unavailable",
+        Failure::BudgetSpent => "budget_exhausted",
+        Failure::Provider(_) => "provider_failure",
+        Failure::Timeout => "deadline",
+        Failure::Clip(_) => "clip_failure",
+    }
+}
+
+fn video_failure_reason_category(reason: &str) -> &'static str {
+    match reason {
+        "still: invalid" | "still: unavailable" => "still_failure",
+        "price: live price unavailable" => "price_unavailable",
+        "budget spent: no clip charged" => "budget_exhausted",
+        "timeout" => "deadline",
+        value if value.starts_with("provider:") => "provider_failure",
+        value if value.starts_with("clip:") => "clip_failure",
+        _ => "failed",
+    }
+}
+
+fn video_reason_category(reason: &str) -> &'static str {
+    match reason {
+        "cached" => "cached",
+        "ambient-scene-loop" => "ambient_loop",
+        "opening-scene" => "opening_scene",
+        _ => "unspecified",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_video_resource(
+    event: &'static str,
+    resource_id: &str,
+    stage: &'static str,
+    status: &'static str,
+    failure_category: Option<&'static str>,
+    provider: &'static str,
+    model: &str,
+    duration_seconds: u32,
+    elapsed_ms: Option<u128>,
+    provider_ms: Option<u128>,
+    byte_length: Option<u64>,
+    cache_result: &'static str,
+    status_category: Option<&'static str>,
+    browser_asset_id: Option<u64>,
+) {
+    let line = format!(
+        "VIDEO {stage} status={status} provider={provider} model={model} resource_id={resource_id} duration_seconds={duration_seconds} elapsed_ms={} provider_ms={} bytes={} cache_result={cache_result} failure_category={} status_category={}",
+        elapsed_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        provider_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        byte_length.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        failure_category.unwrap_or("none"),
+        status_category.unwrap_or("none"),
+    );
+    let fields = serde_json::Map::from_iter([
+        ("resource_type".to_owned(), serde_json::json!("video")),
+        ("resource_id".to_owned(), serde_json::json!(resource_id)),
+        ("provider".to_owned(), serde_json::json!(provider)),
+        ("model".to_owned(), serde_json::json!(model)),
+        ("stage".to_owned(), serde_json::json!(stage)),
+        ("status".to_owned(), serde_json::json!(status)),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        (
+            "duration_seconds".to_owned(),
+            serde_json::json!(duration_seconds),
+        ),
+        ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+        ("provider_ms".to_owned(), serde_json::json!(provider_ms)),
+        ("byte_length".to_owned(), serde_json::json!(byte_length)),
+        ("cache_result".to_owned(), serde_json::json!(cache_result)),
+        (
+            "status_category".to_owned(),
+            serde_json::json!(status_category),
+        ),
+        (
+            "browser_asset_id".to_owned(),
+            serde_json::json!(browser_asset_id),
+        ),
+    ]);
+    let attributes = [
+        ("gameplay.resource.type", "video".to_owned()),
+        ("gameplay.resource.id", resource_id.to_owned()),
+        ("gameplay.video.provider", provider.to_owned()),
+        ("gameplay.video.model", model.to_owned()),
+        ("gameplay.resource.stage", stage.to_owned()),
+        ("gameplay.resource.status", status.to_owned()),
+        (
+            "gameplay.resource.failure_category",
+            failure_category.unwrap_or("none").to_owned(),
+        ),
+        (
+            "gameplay.video.duration_seconds",
+            duration_seconds.to_string(),
+        ),
+        (
+            "gameplay.resource.elapsed_ms",
+            elapsed_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        (
+            "gameplay.video.provider_ms",
+            provider_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        (
+            "gameplay.resource.byte_length",
+            byte_length.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        ("gameplay.media.cache_result", cache_result.to_owned()),
+        (
+            "gameplay.media.status_category",
+            status_category.unwrap_or("none").to_owned(),
+        ),
+        (
+            "gameplay.media.browser_asset_id",
+            browser_asset_id.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+    ];
+    super::actor::record_audit_diagnostic(event, line, fields, &attributes);
 }
 
 /// Test helper: a flight's outcome for a still, without the display.

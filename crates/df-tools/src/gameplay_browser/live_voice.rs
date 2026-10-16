@@ -18,7 +18,10 @@ use crate::stage_conductor::{ClipSignal, LineId};
 use crate::voice_line::VoiceLine;
 use std::collections::{HashMap, VecDeque};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{Blob, BlobPropertyBag, Event, EventTarget, HtmlAudioElement, Node, Response, Url};
+use web_sys::{
+    Blob, BlobPropertyBag, Event, EventTarget, Headers, HtmlAudioElement, Node, Request,
+    RequestInit, Response, Url,
+};
 
 const VOICE_PATH: &str = "/gameplay/voice";
 const MAXIMUM_CLIP_BYTES: u32 = 4 * 1024 * 1024;
@@ -409,7 +412,7 @@ pub(super) fn request(id: LineId, line: &VoiceLine) {
     }
     let key = line.key();
     spawn_local(async move {
-        let fetched = fetch_clips(&key).await;
+        let fetched = fetch_clips(&key, id).await;
         let signal = {
             let mut state = shared.borrow_mut();
             let wanted = matches!(state.clips.get(&id), Some(Clip::Fetching));
@@ -712,11 +715,11 @@ fn on_error(shared: &Shared, _event: &Event) {
 
 /// Fetches one clip and returns an object URL for it. Anything but a non-empty, bounded
 /// 200 response is an error and the line stays silent.
-async fn fetch_clips(key: &str) -> Result<VecDeque<String>, JsValue> {
-    let (first, count) = fetch_clip(key, 0).await?;
+async fn fetch_clips(key: &str, presentation_id: LineId) -> Result<VecDeque<String>, JsValue> {
+    let (first, count) = fetch_clip(key, 0, presentation_id).await?;
     let mut clips = VecDeque::from([first]);
     for index in 1..count {
-        match fetch_clip(key, index).await {
+        match fetch_clip(key, index, presentation_id).await {
             Ok((clip, _)) => clips.push_back(clip),
             Err(error) => {
                 for clip in clips {
@@ -729,14 +732,25 @@ async fn fetch_clips(key: &str) -> Result<VecDeque<String>, JsValue> {
     Ok(clips)
 }
 
-async fn fetch_clip(key: &str, index: usize) -> Result<(String, usize), JsValue> {
+async fn fetch_clip(
+    key: &str,
+    index: usize,
+    presentation_id: LineId,
+) -> Result<(String, usize), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
     let path = if index == 0 {
         format!("{VOICE_PATH}/{key}")
     } else {
         format!("{VOICE_PATH}/{key}/{index}")
     };
-    let response: Response = JsFuture::from(window.fetch_with_str(&path))
+    let headers = Headers::new()?;
+    headers.set("x-gameplay-presentation-id", &presentation_id.to_string())?;
+    let options = RequestInit::new();
+    options.set_method("GET");
+    options.set_headers(&headers);
+    options.set_cache(web_sys::RequestCache::NoStore);
+    let request = Request::new_with_str_and_init(&path, &options)?;
+    let response: Response = JsFuture::from(window.fetch_with_request(&request))
         .await?
         .dyn_into()?;
     if response.status() != 200 {

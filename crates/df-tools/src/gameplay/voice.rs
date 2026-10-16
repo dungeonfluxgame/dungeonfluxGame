@@ -23,7 +23,7 @@ use std::{
 use axum::{
     Router,
     extract::{Path as RoutePath, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -456,34 +456,138 @@ impl Voice {
     }
 
     pub(super) async fn audio(&self, key: &str) -> Lookup {
-        self.audio_part(key, 0).await
+        self.audio_part(key, 0, None).await
     }
 
-    pub(super) async fn audio_part(&self, key: &str, index: usize) -> Lookup {
+    pub(super) async fn audio_part(
+        &self,
+        key: &str,
+        index: usize,
+        presentation_id: Option<u64>,
+    ) -> Lookup {
         let started = std::time::Instant::now();
+        let resource_id = safe_voice_resource_id(key);
         let Some(line) = locked(&self.inner.lines).by_key.get(key).cloned() else {
+            record_voice_resource(
+                "gameplay.voice.delivery_failed",
+                &resource_id,
+                presentation_id,
+                index,
+                0,
+                "failed",
+                "unregistered",
+                Some("unregistered"),
+                "not_applicable",
+                None,
+                None,
+                started.elapsed().as_millis(),
+                404,
+            );
             return Lookup::Unregistered;
         };
         let Mode::On { synthesis, .. } = &self.inner.mode else {
+            record_voice_resource(
+                "gameplay.voice.delivery_failed",
+                &resource_id,
+                presentation_id,
+                index,
+                0,
+                "failed",
+                "voice_off",
+                Some("voice_off"),
+                "not_applicable",
+                None,
+                None,
+                started.elapsed().as_millis(),
+                503,
+            );
             return Lookup::Unavailable;
         };
         let segments = voice_segments(&line.text);
         let Some(text) = segments.get(index) else {
+            record_voice_resource(
+                "gameplay.voice.delivery_failed",
+                &resource_id,
+                presentation_id,
+                index,
+                segments.len(),
+                "failed",
+                "part_unavailable",
+                Some("part_unavailable"),
+                "not_applicable",
+                Some(line.text.chars().count()),
+                None,
+                started.elapsed().as_millis(),
+                404,
+            );
             return Lookup::Unregistered;
         };
         let segment = VoiceLine {
             role: line.role,
             text: text.clone(),
         };
-        let outcome = synthesis.audio(segment).await;
-        super::actor::record_audit_line(
-            "gameplay.voice_clip",
-            format!(
-                "VOICE clip line={key} part={index} ms={} chars={} status={}",
-                started.elapsed().as_millis(),
-                text.chars().count(),
-                if outcome.is_ok() { "ready" } else { "failed" },
-            ),
+        record_voice_resource(
+            "gameplay.voice.requested",
+            &resource_id,
+            presentation_id,
+            index,
+            segments.len(),
+            "requested",
+            "requested",
+            None,
+            "unknown",
+            Some(text.chars().count()),
+            None,
+            0,
+            0,
+        );
+        record_voice_resource(
+            "gameplay.voice.queued",
+            &resource_id,
+            presentation_id,
+            index,
+            segments.len(),
+            "queued",
+            "queued",
+            None,
+            "pending",
+            Some(text.chars().count()),
+            None,
+            0,
+            0,
+        );
+        let (outcome, cache_result) = synthesis.audio(segment).await;
+        let (status, failure, bytes) = match &outcome {
+            Ok(bytes) => ("delivered", "none", Some(bytes.len())),
+            Err(failure) => ("failed", failure.label(), None),
+        };
+        let http_status = match (&outcome, index < segments.len()) {
+            (Ok(_), true) => 200,
+            (Err(_), true) => 503,
+            (_, false) => 404,
+        };
+        record_voice_resource(
+            if outcome.is_ok() {
+                "gameplay.voice.delivery"
+            } else {
+                "gameplay.voice.delivery_failed"
+            },
+            &resource_id,
+            presentation_id,
+            index,
+            segments.len(),
+            if outcome.is_ok() {
+                "delivered"
+            } else {
+                "failed"
+            },
+            status,
+            if outcome.is_ok() { None } else { Some(failure) },
+            cache_result,
+            Some(text.chars().count()),
+            bytes,
+            started.elapsed().as_millis(),
+            http_status,
         );
         match outcome {
             Ok(bytes) if segments.len() == 1 => Lookup::Audio(bytes),
@@ -497,29 +601,30 @@ impl Voice {
 }
 
 impl Synthesis {
-    async fn audio(self: &Arc<Self>, line: VoiceLine) -> Outcome {
+    async fn audio(self: &Arc<Self>, line: VoiceLine) -> (Outcome, &'static str) {
         let voice = self.casting.voice_for(&line).clone();
         let key = cache_file_name(&voice.voice_id, &line);
         if let Some(bytes) = self.read_cached(&key).await {
-            return Ok(bytes);
+            return (Ok(bytes), "hit");
         }
-        let mut receiver = {
+        let (mut receiver, cache_result) = {
             let mut flights = locked(&self.in_flight);
             match flights.get(&key) {
-                Some(receiver) => receiver.clone(),
+                Some(receiver) => (receiver.clone(), "in_flight"),
                 None => {
                     let (sender, receiver) = watch::channel(None);
                     flights.insert(key.clone(), receiver.clone());
                     tokio::spawn(Arc::clone(self).fly(key, voice, line, sender));
-                    receiver
+                    (receiver, "miss")
                 }
             }
         };
-        let finished = receiver
+        let outcome = receiver
             .wait_for(Option::is_some)
             .await
-            .map_err(|_| Failure::Interrupted)?;
-        finished.clone().unwrap_or(Err(Failure::Interrupted))
+            .map(|finished| finished.clone().unwrap_or(Err(Failure::Interrupted)))
+            .unwrap_or(Err(Failure::Interrupted));
+        (outcome, cache_result)
     }
 
     /// The one task of a cache key (voice, role and text). Callers that go away do not cancel
@@ -738,8 +843,12 @@ pub(super) fn router(voice: Voice) -> Router {
         .with_state(voice)
 }
 
-async fn serve_line(State(voice): State<Voice>, RoutePath(key): RoutePath<String>) -> Response {
-    match voice.audio(&key).await {
+async fn serve_line(
+    State(voice): State<Voice>,
+    RoutePath(key): RoutePath<String>,
+    headers: HeaderMap,
+) -> Response {
+    match voice.audio_part(&key, 0, presentation_id(&headers)).await {
         Lookup::Audio(bytes) => (
             [
                 (header::CONTENT_TYPE, "audio/mpeg"),
@@ -757,13 +866,107 @@ async fn serve_line(State(voice): State<Voice>, RoutePath(key): RoutePath<String
 async fn serve_part(
     State(voice): State<Voice>,
     RoutePath((key, part)): RoutePath<(String, usize)>,
+    headers: HeaderMap,
 ) -> Response {
-    match voice.audio_part(&key, part).await {
+    match voice
+        .audio_part(&key, part, presentation_id(&headers))
+        .await
+    {
         Lookup::Audio(bytes) => audio_parts_response(bytes, 1),
         Lookup::Part { bytes, count } => audio_parts_response(bytes, count),
         Lookup::Unregistered => StatusCode::NOT_FOUND.into_response(),
         Lookup::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+}
+
+fn presentation_id(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get("x-gameplay-presentation-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value <= i64::MAX as u64)
+}
+
+fn safe_voice_resource_id(key: &str) -> String {
+    if key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        key.to_ascii_lowercase()
+    } else {
+        df_observe::presentation::local_identity(key).to_string()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_voice_resource(
+    event: &'static str,
+    resource_id: &str,
+    presentation_id: Option<u64>,
+    part: usize,
+    part_count: usize,
+    stage: &'static str,
+    status: &'static str,
+    failure_category: Option<&'static str>,
+    cache_result: &'static str,
+    char_count: Option<usize>,
+    byte_length: Option<usize>,
+    elapsed_ms: u128,
+    http_status: u16,
+) {
+    let presentation = presentation_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "none".to_owned());
+    let line = format!(
+        "VOICE {stage} status={status} provider=elevenlabs resource_id={resource_id} presentation_id={presentation} part={part} part_count={part_count} chars={} bytes={} elapsed_ms={elapsed_ms} http_status={http_status} cache_result={cache_result}",
+        char_count.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        byte_length.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+    );
+    let fields = serde_json::Map::from_iter([
+        ("resource_type".to_owned(), serde_json::json!("voice")),
+        ("resource_id".to_owned(), serde_json::json!(resource_id)),
+        (
+            "presentation_id".to_owned(),
+            serde_json::json!(presentation_id),
+        ),
+        ("provider".to_owned(), serde_json::json!("elevenlabs")),
+        ("stage".to_owned(), serde_json::json!(stage)),
+        ("status".to_owned(), serde_json::json!(status)),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        ("part".to_owned(), serde_json::json!(part)),
+        ("part_count".to_owned(), serde_json::json!(part_count)),
+        ("char_count".to_owned(), serde_json::json!(char_count)),
+        ("byte_length".to_owned(), serde_json::json!(byte_length)),
+        ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+        ("http_status".to_owned(), serde_json::json!(http_status)),
+        ("cache_result".to_owned(), serde_json::json!(cache_result)),
+    ]);
+    let attributes = [
+        ("gameplay.resource.type", "voice".to_owned()),
+        ("gameplay.resource.id", resource_id.to_owned()),
+        ("gameplay.voice.presentation_id", presentation),
+        ("gameplay.voice.provider", "elevenlabs".to_owned()),
+        ("gameplay.resource.stage", stage.to_owned()),
+        ("gameplay.resource.status", status.to_owned()),
+        (
+            "gameplay.resource.failure_category",
+            failure_category.unwrap_or("none").to_owned(),
+        ),
+        ("gameplay.voice.part", part.to_string()),
+        ("gameplay.voice.part_count", part_count.to_string()),
+        (
+            "gameplay.voice.char_count",
+            char_count.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        (
+            "gameplay.resource.byte_length",
+            byte_length.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        ("gameplay.resource.elapsed_ms", elapsed_ms.to_string()),
+        ("gameplay.media.http_status", http_status.to_string()),
+        ("gameplay.media.cache_result", cache_result.to_owned()),
+    ];
+    super::actor::record_audit_diagnostic(event, line, fields, &attributes);
 }
 
 fn audio_parts_response(bytes: Bytes, count: usize) -> Response {
@@ -1005,7 +1208,7 @@ mod tests {
         let fake = FakeEleven::start(Duration::ZERO, true);
         let voice = voice_with(&fake, &cache, 1000);
 
-        let response = serve_line(State(voice), RoutePath("0".repeat(64))).await;
+        let response = serve_line(State(voice), RoutePath("0".repeat(64)), HeaderMap::new()).await;
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(fake.calls(), 0);
@@ -1018,8 +1221,18 @@ mod tests {
         let voice = voice_with(&fake, &cache, 1000);
         let key = register(&voice, &narrator("The lanterns sway."));
 
-        let first = serve_line(State(voice.clone()), RoutePath(key.clone())).await;
-        let second = serve_line(State(voice.clone()), RoutePath(key.clone())).await;
+        let first = serve_line(
+            State(voice.clone()),
+            RoutePath(key.clone()),
+            HeaderMap::new(),
+        )
+        .await;
+        let second = serve_line(
+            State(voice.clone()),
+            RoutePath(key.clone()),
+            HeaderMap::new(),
+        )
+        .await;
 
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(first.headers()[header::CONTENT_TYPE], "audio/mpeg");
@@ -1044,9 +1257,19 @@ mod tests {
         let line = narrator(&format!("{}. {}.", "a".repeat(350), "b".repeat(300)));
         let key = register(&voice, &line);
 
-        let first = serve_line(State(voice.clone()), RoutePath(key.clone())).await;
-        let second = serve_part(State(voice.clone()), RoutePath((key.clone(), 1))).await;
-        let replay = serve_part(State(voice), RoutePath((key, 1))).await;
+        let first = serve_line(
+            State(voice.clone()),
+            RoutePath(key.clone()),
+            HeaderMap::new(),
+        )
+        .await;
+        let second = serve_part(
+            State(voice.clone()),
+            RoutePath((key.clone(), 1)),
+            HeaderMap::new(),
+        )
+        .await;
+        let replay = serve_part(State(voice), RoutePath((key, 1)), HeaderMap::new()).await;
 
         assert_eq!(first.status(), StatusCode::OK);
         assert_eq!(first.headers()["x-voice-parts"], "2");
@@ -1130,7 +1353,7 @@ mod tests {
         assert_eq!(refused, Lookup::Unavailable);
         assert_eq!(fake.calls(), 1);
         assert_eq!(remaining(&voice), 0);
-        let response = serve_line(State(voice), RoutePath(second)).await;
+        let response = serve_line(State(voice), RoutePath(second), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(
             axum::body::to_bytes(response.into_body(), 16)
@@ -1166,7 +1389,7 @@ mod tests {
         let voice = voice_with(&fake, &cache, 1000);
         let key = register(&voice, &narrator("The seal cracks."));
 
-        let response = serve_line(State(voice), RoutePath(key.clone())).await;
+        let response = serve_line(State(voice), RoutePath(key.clone()), HeaderMap::new()).await;
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(fake.calls(), 1);
@@ -1414,8 +1637,13 @@ mod tests {
         voice.register_view(&display_message("The wharf is quiet."));
         let key = narrator("The wharf is quiet.").key();
 
-        let known = serve_line(State(voice.clone()), RoutePath(key)).await;
-        let unknown = serve_line(State(voice.clone()), RoutePath("1".repeat(64))).await;
+        let known = serve_line(State(voice.clone()), RoutePath(key), HeaderMap::new()).await;
+        let unknown = serve_line(
+            State(voice.clone()),
+            RoutePath("1".repeat(64)),
+            HeaderMap::new(),
+        )
+        .await;
 
         assert_eq!(known.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);

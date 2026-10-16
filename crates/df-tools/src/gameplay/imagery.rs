@@ -1187,41 +1187,188 @@ async fn serve_image(
     RoutePath(key): RoutePath<String>,
     headers: HeaderMap,
 ) -> Response {
-    match imagery.image(&key).await {
-        Lookup::Image { bytes, format } => {
-            let etag = format!("\"{key}\"");
-            let content_type = match format {
-                ImageFormat::Png => "image/png",
-                ImageFormat::Webp => "image/webp",
-                ImageFormat::Jpeg => "image/jpeg",
-            };
-            if headers
-                .get(header::IF_NONE_MATCH)
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value == etag)
-            {
-                return (
-                    StatusCode::NOT_MODIFIED,
-                    [
-                        (header::ETAG, etag),
-                        (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
-                    ],
-                )
-                    .into_response();
+    let started = std::time::Instant::now();
+    let resource_id = safe_image_resource_id(&key);
+    let browser_asset_id =
+        df_observe::presentation::local_identity(&format!("/gameplay/imagery/{key}"));
+    let (response, status_category, cache_result, byte_length, failure_category) =
+        match imagery.image(&key).await {
+            Lookup::Image { bytes, format } => {
+                let etag = format!("\"{key}\"");
+                let content_type = match format {
+                    ImageFormat::Png => "image/png",
+                    ImageFormat::Webp => "image/webp",
+                    ImageFormat::Jpeg => "image/jpeg",
+                };
+                if headers
+                    .get(header::IF_NONE_MATCH)
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value == etag)
+                {
+                    (
+                        (
+                            StatusCode::NOT_MODIFIED,
+                            [
+                                (header::ETAG, etag),
+                                (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
+                            ],
+                        )
+                            .into_response(),
+                        "not_modified",
+                        "client_revalidated",
+                        0,
+                        None,
+                    )
+                } else {
+                    let byte_length = bytes.len();
+                    (
+                        (
+                            [
+                                (header::CONTENT_TYPE, content_type.to_owned()),
+                                (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
+                                (header::ETAG, etag),
+                            ],
+                            bytes,
+                        )
+                            .into_response(),
+                        "ready",
+                        "server_hit",
+                        byte_length,
+                        None,
+                    )
+                }
             }
-            (
-                [
-                    (header::CONTENT_TYPE, content_type.to_owned()),
-                    (header::CACHE_CONTROL, CACHE_CONTROL.to_owned()),
-                    (header::ETAG, etag),
-                ],
-                bytes,
-            )
-                .into_response()
-        }
-        Lookup::Unregistered => StatusCode::NOT_FOUND.into_response(),
-        Lookup::NotReady => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            Lookup::Unregistered => (
+                StatusCode::NOT_FOUND.into_response(),
+                "unregistered",
+                "not_applicable",
+                0,
+                Some("unregistered"),
+            ),
+            Lookup::NotReady => (
+                StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                "not_ready",
+                "miss",
+                0,
+                Some("not_ready"),
+            ),
+        };
+    record_media_delivery(
+        "image",
+        &resource_id,
+        browser_asset_id,
+        status_category,
+        failure_category,
+        response.status().as_u16(),
+        byte_length,
+        cache_result,
+        started.elapsed().as_millis(),
+    );
+    response
+}
+
+fn safe_image_resource_id(key: &str) -> String {
+    if key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        key.to_owned()
+    } else {
+        df_observe::presentation::local_identity(key).to_string()
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_media_delivery(
+    resource_type: &'static str,
+    resource_id: &str,
+    browser_asset_id: u64,
+    status: &'static str,
+    failure_category: Option<&'static str>,
+    http_status: u16,
+    byte_length: usize,
+    cache_result: &'static str,
+    elapsed_ms: u128,
+) {
+    let line = format!(
+        "MEDIA_DELIVERY type={resource_type} resource_id={resource_id} browser_asset_id={browser_asset_id} status={status} http_status={http_status} bytes={byte_length} cache_result={cache_result} elapsed_ms={elapsed_ms} failure_category={}",
+        failure_category.unwrap_or("none"),
+    );
+    let fields = serde_json::Map::from_iter([
+        ("resource_type".to_owned(), serde_json::json!(resource_type)),
+        ("resource_id".to_owned(), serde_json::json!(resource_id)),
+        (
+            "browser_asset_id".to_owned(),
+            serde_json::json!(browser_asset_id),
+        ),
+        (
+            "stage".to_owned(),
+            serde_json::json!(if failure_category.is_some() {
+                "failed"
+            } else {
+                "delivered"
+            }),
+        ),
+        (
+            "status".to_owned(),
+            serde_json::json!(if failure_category.is_some() {
+                "failed"
+            } else {
+                "delivered"
+            }),
+        ),
+        ("status_category".to_owned(), serde_json::json!(status)),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        ("provider".to_owned(), serde_json::json!("image_cache")),
+        ("http_status".to_owned(), serde_json::json!(http_status)),
+        ("byte_length".to_owned(), serde_json::json!(byte_length)),
+        ("cache_result".to_owned(), serde_json::json!(cache_result)),
+        ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+    ]);
+    let attributes = [
+        ("gameplay.resource.type", resource_type.to_owned()),
+        ("gameplay.resource.id", resource_id.to_owned()),
+        (
+            "gameplay.media.browser_asset_id",
+            browser_asset_id.to_string(),
+        ),
+        (
+            "gameplay.resource.stage",
+            if failure_category.is_some() {
+                "failed".to_owned()
+            } else {
+                "delivered".to_owned()
+            },
+        ),
+        (
+            "gameplay.resource.status",
+            if failure_category.is_some() {
+                "failed".to_owned()
+            } else {
+                "delivered".to_owned()
+            },
+        ),
+        ("gameplay.media.status_category", status.to_owned()),
+        (
+            "gameplay.resource.failure_category",
+            failure_category.unwrap_or("none").to_owned(),
+        ),
+        ("gameplay.media.provider", "image_cache".to_owned()),
+        ("gameplay.media.http_status", http_status.to_string()),
+        ("gameplay.resource.byte_length", byte_length.to_string()),
+        ("gameplay.media.cache_result", cache_result.to_owned()),
+        ("gameplay.resource.elapsed_ms", elapsed_ms.to_string()),
+    ];
+    crate::gameplay::actor::record_audit_diagnostic(
+        "gameplay.media.delivery",
+        line,
+        fields,
+        &attributes,
+    );
 }
 
 #[cfg(test)]

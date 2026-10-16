@@ -19,6 +19,54 @@ use super::{Service, actor, credential};
 const MAX_PRODUCERS: usize = 128;
 const UPLOAD_DEADLINE: Duration = Duration::from_secs(10);
 
+fn scope_hash(kind: &str, bytes: &[u8]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"df-presentation-scope-v1\0");
+    hash.update(kind.as_bytes());
+    hash.update([0]);
+    hash.update(bytes);
+    format!(
+        "sha256:{}",
+        hash.finalize()
+            .iter()
+            .take(16)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScopeCorrelation {
+    room_id_hash: Option<String>,
+    run_id_hash: Option<String>,
+    build_id: String,
+}
+
+impl ScopeCorrelation {
+    fn log_suffix(&self) -> String {
+        format!(
+            "room_id_hash={} run_id_hash={} build={}",
+            self.room_id_hash.as_deref().unwrap_or("none"),
+            self.run_id_hash.as_deref().unwrap_or("none"),
+            self.build_id,
+        )
+    }
+}
+
+fn scope_correlation(session: Option<&[u8]>, run: Option<&[u8]>, build: &str) -> ScopeCorrelation {
+    let room_id_hash = session
+        .filter(|id| !id.is_empty())
+        .map(|id| scope_hash("room", id));
+    let run_id_hash = run
+        .filter(|id| !id.is_empty())
+        .map(|id| scope_hash("run", id));
+    ScopeCorrelation {
+        room_id_hash,
+        run_id_hash,
+        build_id: build.to_owned(),
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct PresentationIngress {
     service: Service,
@@ -44,79 +92,182 @@ struct TimingUpload<'a> {
     dropped: u64,
     bytes: &'a [u8],
     role: LocalDemoRole,
-    correlation: &'a str,
+    correlation: &'a ScopeCorrelation,
     receive_unix_ms: u64,
 }
 
-fn visual_source_fields(
+fn presentation_fields(
     event: &presentation::TimingEvent,
-) -> Option<(
+    correlation: &ScopeCorrelation,
+) -> (
     serde_json::Map<String, serde_json::Value>,
     Vec<(&'static str, String)>,
-)> {
-    let details = event.visual_source.as_ref()?;
-    let fields = serde_json::Map::from_iter([
-        ("kind".to_owned(), serde_json::json!(event.kind)),
+) {
+    let resource_type = match event.kind {
+        "voice-start" | "voice-end" | "voice-failed" => "voice",
+        "plate-requested" | "plate-loaded" | "plate-decoded" | "plate-shown" | "plate-kept" => {
+            "plate"
+        }
+        "clip-requested" | "clip-ready" | "clip-shown" | "clip-ended" | "clip-hidden"
+        | "clip-failed" => "video",
+        _ => "browser_media",
+    };
+    let stage = match event.kind {
+        "line-open" | "figure" | "figure-mounted" | "figure-shown" | "scene" | "plate-shown"
+        | "plate-kept" | "visual-source" | "check-shown" | "paint" | "paint-opportunity" => {
+            "projected"
+        }
+        "line" | "voice-start" | "voice-end" | "clip-shown" | "clip-ended" => "played",
+        "voice-failed" | "clip-failed" => "failed",
+        "plate-requested" | "clip-requested" => "requested",
+        "plate-loaded" | "plate-decoded" | "clip-ready" | "usable" => "ready",
+        "figure-hidden" | "clip-hidden" | "check-hidden" => "hidden",
+        _ => "observed",
+    };
+    let status = match (event.reason, stage) {
+        ("failed", _) => "failed",
+        (_, "requested") => "requested",
+        (_, "ready") => "ready",
+        (_, "played")
+            if event.reason == "read"
+                || event.reason == "voice-ended"
+                || event.reason == "ended" =>
+        {
+            "played"
+        }
+        (_, "played") => "partial",
+        (_, "projected") => "projected",
+        (_, "hidden") => "cancelled",
+        _ => "observed",
+    };
+    let mut fields = serde_json::Map::from_iter([
+        ("resource_type".to_owned(), serde_json::json!(resource_type)),
+        ("resource_id".to_owned(), serde_json::json!(event.id)),
         ("scene_id".to_owned(), serde_json::json!(event.scene)),
-        ("asset_id".to_owned(), serde_json::json!(event.id)),
+        ("kind".to_owned(), serde_json::json!(event.kind)),
+        ("stage".to_owned(), serde_json::json!(stage)),
+        ("status".to_owned(), serde_json::json!(status)),
+        ("reason".to_owned(), serde_json::json!(event.reason)),
         ("at_ms".to_owned(), serde_json::json!(event.at_ms)),
+        ("char_count".to_owned(), serde_json::json!(event.chars)),
+        ("read_ms".to_owned(), serde_json::json!(event.read_ms)),
+        ("opened_ms".to_owned(), serde_json::json!(event.opened_ms)),
         (
-            "requested_source".to_owned(),
-            serde_json::json!(details.requested.label()),
+            "voice_start_ms".to_owned(),
+            serde_json::json!(event.voice_start_ms),
         ),
         (
-            "effective_source".to_owned(),
-            serde_json::json!(details.effective.label()),
+            "voice_end_ms".to_owned(),
+            serde_json::json!(event.voice_end_ms),
         ),
-        ("shot".to_owned(), serde_json::json!(details.shot.label())),
+        ("closed_ms".to_owned(), serde_json::json!(event.closed_ms)),
         (
-            "plate_state".to_owned(),
-            serde_json::json!(details.plate_state.label()),
-        ),
-        (
-            "requested_asset_id".to_owned(),
-            serde_json::json!(details.requested_asset),
-        ),
-        (
-            "effective_asset_id".to_owned(),
-            serde_json::json!(details.effective_asset),
+            "crossfade_ms".to_owned(),
+            serde_json::json!(event.crossfade_ms),
         ),
     ]);
-    let attributes = vec![
-        ("gameplay.presentation.kind", event.kind.to_owned()),
+    fields.insert(
+        "room_id_hash".to_owned(),
+        serde_json::json!(correlation.room_id_hash.as_deref()),
+    );
+    fields.insert(
+        "run_id_hash".to_owned(),
+        serde_json::json!(correlation.run_id_hash.as_deref()),
+    );
+    fields.insert(
+        "build_id".to_owned(),
+        serde_json::json!(correlation.build_id.as_str()),
+    );
+    let mut attributes = vec![
+        (
+            "gameplay.presentation.resource_type",
+            resource_type.to_owned(),
+        ),
+        ("gameplay.presentation.resource_id", event.id.to_string()),
         ("gameplay.presentation.scene_id", event.scene.to_string()),
-        ("gameplay.presentation.asset_id", event.id.to_string()),
+        ("gameplay.presentation.kind", event.kind.to_owned()),
+        ("gameplay.presentation.stage", stage.to_owned()),
+        ("gameplay.presentation.status", status.to_owned()),
+        ("gameplay.presentation.reason", event.reason.to_owned()),
         ("gameplay.presentation.at_ms", event.at_ms.to_string()),
+        ("gameplay.presentation.char_count", event.chars.to_string()),
+        ("gameplay.presentation.read_ms", event.read_ms.to_string()),
         (
-            "gameplay.presentation.requested_source",
-            details.requested.label().to_owned(),
+            "gameplay.presentation.room_id_hash",
+            correlation
+                .room_id_hash
+                .as_deref()
+                .unwrap_or("none")
+                .to_owned(),
         ),
         (
-            "gameplay.presentation.effective_source",
-            details.effective.label().to_owned(),
+            "gameplay.presentation.run_id_hash",
+            correlation
+                .run_id_hash
+                .as_deref()
+                .unwrap_or("none")
+                .to_owned(),
         ),
         (
-            "gameplay.presentation.shot",
-            details.shot.label().to_owned(),
-        ),
-        (
-            "gameplay.presentation.plate_state",
-            details.plate_state.label().to_owned(),
-        ),
-        (
-            "gameplay.presentation.requested_asset_id",
-            details
-                .requested_asset
-                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
-        ),
-        (
-            "gameplay.presentation.effective_asset_id",
-            details
-                .effective_asset
-                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+            "gameplay.presentation.build_id",
+            correlation.build_id.clone(),
         ),
     ];
-    Some((fields, attributes))
+    if let Some(details) = &event.visual_source {
+        let requested_asset_id = details
+            .requested_asset
+            .map_or_else(|| "none".to_owned(), |id| id.to_string());
+        let effective_asset_id = details
+            .effective_asset
+            .map_or_else(|| "none".to_owned(), |id| id.to_string());
+        for (key, value) in [
+            ("requested_source", details.requested.label()),
+            ("effective_source", details.effective.label()),
+            ("shot", details.shot.label()),
+            ("plate_state", details.plate_state.label()),
+        ] {
+            attributes.push((
+                match key {
+                    "requested_source" => "gameplay.presentation.requested_source",
+                    "effective_source" => "gameplay.presentation.effective_source",
+                    "shot" => "gameplay.presentation.shot",
+                    _ => "gameplay.presentation.plate_state",
+                },
+                value.to_owned(),
+            ));
+        }
+        attributes.push((
+            "gameplay.presentation.requested_asset_id",
+            requested_asset_id.clone(),
+        ));
+        attributes.push((
+            "gameplay.presentation.effective_asset_id",
+            effective_asset_id.clone(),
+        ));
+        fields.insert(
+            "requested_source".to_owned(),
+            serde_json::json!(details.requested.label()),
+        );
+        fields.insert(
+            "effective_source".to_owned(),
+            serde_json::json!(details.effective.label()),
+        );
+        fields.insert("shot".to_owned(), serde_json::json!(details.shot.label()));
+        fields.insert(
+            "plate_state".to_owned(),
+            serde_json::json!(details.plate_state.label()),
+        );
+        fields.insert(
+            "requested_asset_id".to_owned(),
+            serde_json::json!(details.requested_asset),
+        );
+        fields.insert(
+            "effective_asset_id".to_owned(),
+            serde_json::json!(details.effective_asset),
+        );
+        return (fields, attributes);
+    }
+    (fields, attributes)
 }
 
 impl Ledger {
@@ -169,10 +320,8 @@ impl Ledger {
         } else if self.producers.len() == MAX_PRODUCERS {
             return Err(Status::resource_exhausted("timing producer capacity"));
         }
-        let producer = producer
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let producer = producer.as_slice();
+        let producer = scope_hash("display-producer", producer);
         let audience = if role == LocalDemoRole::Display {
             "DISPLAY"
         } else {
@@ -191,8 +340,9 @@ impl Ledger {
             emit(
                 "gameplay.presentation",
                 format!(
-                    "{} {correlation}",
-                    event.log_line(audience, receive_ms, &producer, sequence)
+                    "{} {}",
+                    event.log_line(audience, receive_ms, &producer, sequence),
+                    correlation.log_suffix(),
                 ),
                 Some(event.clone()),
             );
@@ -254,26 +404,9 @@ impl PresentationIngress {
         let scope = request
             .scope
             .ok_or_else(|| Status::invalid_argument("timing scope required"))?;
-        let hex = |bytes: &[u8]| {
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        };
-        let correlation = format!(
-            "session={} run={} build={}",
-            scope
-                .session_id
-                .as_ref()
-                .and_then(|id| id.value.as_deref())
-                .map(hex)
-                .unwrap_or_default(),
-            scope
-                .run_id
-                .as_ref()
-                .and_then(|id| id.value.as_deref())
-                .map(hex)
-                .unwrap_or_default(),
+        let correlation = scope_correlation(
+            scope.session_id.as_ref().and_then(|id| id.value.as_deref()),
+            scope.run_id.as_ref().and_then(|id| id.value.as_deref()),
             crate::BUILD_ID,
         );
         // Authenticate scope without projecting a view or refreshing seat presence. A telemetry
@@ -302,7 +435,8 @@ impl PresentationIngress {
                 receive_unix_ms,
             },
             |event, line, timing| {
-                if let Some((fields, attributes)) = timing.as_ref().and_then(visual_source_fields) {
+                if let Some(timing) = timing.as_ref() {
+                    let (fields, attributes) = presentation_fields(timing, &correlation);
                     actor::record_audit_diagnostic(event, line, fields, &attributes);
                 } else {
                     actor::record_audit_line(event, line);
@@ -348,6 +482,9 @@ mod tests {
         TimingEvent, VisualPlateState, VisualShot, VisualSource, VisualSourceDetails,
     };
     use std::cell::RefCell;
+    use std::sync::OnceLock;
+
+    static TEST_CORRELATION: OnceLock<ScopeCorrelation> = OnceLock::new();
 
     fn upload(bytes: &[u8]) -> TimingUpload<'_> {
         TimingUpload {
@@ -357,7 +494,11 @@ mod tests {
             dropped: 0,
             bytes,
             role: LocalDemoRole::Display,
-            correlation: "session=test run=test build=test",
+            correlation: TEST_CORRELATION.get_or_init(|| ScopeCorrelation {
+                room_id_hash: Some("sha256:test-room".to_owned()),
+                run_id_hash: Some("sha256:test-run".to_owned()),
+                build_id: "build-test".to_owned(),
+            }),
             receive_unix_ms: 123_456,
         }
     }
@@ -377,14 +518,54 @@ mod tests {
                 effective_asset: Some(37),
             },
         );
-        let (fields, attributes) = visual_source_fields(&event).unwrap();
+        let correlation =
+            scope_correlation(Some(b"private-room"), Some(b"private-run"), "test-build");
+        let (fields, attributes) = presentation_fields(&event, &correlation);
+        assert_eq!(fields["resource_type"], "browser_media");
+        assert_eq!(fields["stage"], "projected");
+        assert_eq!(fields["resource_id"], 17);
         assert_eq!(fields["requested_source"], "scene_plate");
         assert_eq!(fields["effective_source"], "establishing_photo");
         assert_eq!(fields["shot"], "establishing");
         assert_eq!(fields["plate_state"], "failed");
         assert_eq!(fields["requested_asset_id"], 31);
         assert_eq!(fields["effective_asset_id"], 37);
+        assert_eq!(
+            fields["room_id_hash"].as_str(),
+            correlation.room_id_hash.as_deref()
+        );
+        assert_eq!(
+            fields["run_id_hash"].as_str(),
+            correlation.run_id_hash.as_deref()
+        );
+        assert_eq!(fields["build_id"], "test-build");
+        assert!(!fields.to_string().contains("private-room"));
+        assert!(!fields.to_string().contains("private-run"));
         assert!(attributes.iter().all(|(_, value)| value != "private-url"));
+    }
+
+    #[test]
+    fn presentation_correlation_hashes_scope_and_producer_ids() {
+        let session = b"private-session-id";
+        let run = b"private-run-id";
+        let correlation = scope_correlation(Some(session), Some(run), "build-test");
+        let suffix = correlation.log_suffix();
+        assert!(suffix.contains("room_id_hash=sha256:"));
+        assert!(suffix.contains("run_id_hash=sha256:"));
+        assert!(suffix.contains("build=build-test"));
+        assert!(!suffix.contains("private-session-id"));
+        assert!(!suffix.contains("private-run-id"));
+        assert!(!suffix.contains("session="));
+        assert!(!suffix.contains("run="));
+        assert_eq!(
+            scope_correlation(Some(&[]), Some(&[]), "build-test").log_suffix(),
+            "room_id_hash=none run_id_hash=none build=build-test"
+        );
+        assert_eq!(
+            scope_hash("display-producer", b"producer"),
+            scope_hash("display-producer", b"producer")
+        );
+        assert_ne!(scope_hash("room", session), scope_hash("run", session));
     }
 
     #[test]

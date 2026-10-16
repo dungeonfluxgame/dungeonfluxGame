@@ -772,12 +772,233 @@ fn record_session_machine_refusal(checkpoint: &Checkpoint, request: &rpc::Submit
         super::journey::session_machine::SessionState::of(checkpoint),
     ) && let Some(event) = super::journey::session_machine::Event::for_kind(state, kind)
     {
-        record_audit_line(
+        record_session_state_diagnostic(
             "gameplay.session_machine_refused",
-            format!("STATE refused state={state:?} event={event:?} reason={step}"),
+            "failed",
+            "refused",
+            Some(step),
+            Some(state),
+            None,
+            event,
+            kind,
+            request,
+            Some(checkpoint.basis().revision),
+            None,
+            checkpoint,
         );
     }
     refusal_detail::note(step);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_session_state_diagnostic(
+    event_name: &'static str,
+    stage: &'static str,
+    status: &'static str,
+    failure_category: Option<&str>,
+    from_state: Option<super::journey::session_machine::SessionState>,
+    to_state: Option<super::journey::session_machine::SessionState>,
+    machine_event: super::journey::session_machine::Event,
+    kind: rpc::GameplayActionKind,
+    request: &rpc::SubmitActionRequest,
+    revision_before: Option<df_types::SessionRevision>,
+    revision_after: Option<df_types::SessionRevision>,
+    checkpoint_for_scene: &Checkpoint,
+) {
+    let session_bytes = request
+        .session_id
+        .as_ref()
+        .and_then(|value| value.value.as_deref())
+        .unwrap_or_default();
+    let run_bytes = request
+        .run_id
+        .as_ref()
+        .and_then(|value| value.value.as_deref())
+        .unwrap_or_default();
+    let operation_bytes = request
+        .operation_id
+        .as_ref()
+        .and_then(|value| value.value.as_deref())
+        .unwrap_or_default();
+    let room_hash = (!session_bytes.is_empty()).then(|| diagnostic_hash("room", session_bytes));
+    let run_hash = (!run_bytes.is_empty()).then(|| diagnostic_hash("run", run_bytes));
+    let operation_hash =
+        (!operation_bytes.is_empty()).then(|| diagnostic_hash("operation", operation_bytes));
+
+    let mut resource_hasher = Sha256::new();
+    resource_hasher.update(b"df-session-transition-resource-v1\0");
+    resource_hasher.update(session_bytes);
+    resource_hasher.update([0]);
+    resource_hasher.update(run_bytes);
+    resource_hasher.update([0]);
+    resource_hasher.update(operation_bytes);
+    resource_hasher.update([0]);
+    resource_hasher.update(format!("{}:{}", kind as i32, event_label(machine_event)));
+    if let Some(revision) = revision_before {
+        resource_hasher.update(revision.epoch().get().to_be_bytes());
+        resource_hasher.update(revision.sequence().to_be_bytes());
+    }
+    let resource_id = format!(
+        "sha256:{}",
+        resource_hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let scene_id = scene_key(checkpoint_for_scene);
+    let from = from_state.map(state_label);
+    let to = to_state.map(state_label);
+    let revision_before = revision_before.map(revision_label);
+    let revision_after = revision_after.map(revision_label);
+    let action_kind = audit_kind_name(kind);
+    let machine_event = event_label(machine_event);
+    let line = format!(
+        "STATE {stage} status={status} resource_id={resource_id} room_id_hash={} run_id_hash={} revision_before={} revision_after={} from_state={} to_state={} event={machine_event} action_kind={action_kind} scene_id={} failure_category={}",
+        room_hash.as_deref().unwrap_or("none"),
+        run_hash.as_deref().unwrap_or("none"),
+        revision_before.as_deref().unwrap_or("none"),
+        revision_after.as_deref().unwrap_or("none"),
+        from.unwrap_or("none"),
+        to.unwrap_or("none"),
+        scene_id.unwrap_or("none"),
+        failure_category.unwrap_or("none"),
+    );
+    let fields = serde_json::Map::from_iter([
+        ("resource_type".to_owned(), serde_json::json!("state")),
+        ("resource_id".to_owned(), serde_json::json!(resource_id)),
+        ("room_id_hash".to_owned(), serde_json::json!(room_hash)),
+        ("run_id_hash".to_owned(), serde_json::json!(run_hash)),
+        (
+            "operation_id_hash".to_owned(),
+            serde_json::json!(operation_hash),
+        ),
+        ("scene_id".to_owned(), serde_json::json!(scene_id)),
+        ("stage".to_owned(), serde_json::json!(stage)),
+        ("status".to_owned(), serde_json::json!(status)),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        ("from_state".to_owned(), serde_json::json!(from)),
+        ("to_state".to_owned(), serde_json::json!(to)),
+        ("machine_event".to_owned(), serde_json::json!(machine_event)),
+        ("action_kind".to_owned(), serde_json::json!(action_kind)),
+        (
+            "revision_before".to_owned(),
+            serde_json::json!(revision_before),
+        ),
+        (
+            "revision_after".to_owned(),
+            serde_json::json!(revision_after),
+        ),
+    ]);
+    let attributes = [
+        ("gameplay.resource.type", "state".to_owned()),
+        ("gameplay.resource.id", resource_id),
+        (
+            "gameplay.session.room_id_hash",
+            room_hash.unwrap_or_else(|| "none".to_owned()),
+        ),
+        (
+            "gameplay.session.run_id_hash",
+            run_hash.unwrap_or_else(|| "none".to_owned()),
+        ),
+        (
+            "gameplay.session.operation_id_hash",
+            operation_hash.unwrap_or_else(|| "none".to_owned()),
+        ),
+        (
+            "gameplay.session.scene_id",
+            scene_id.unwrap_or("none").to_owned(),
+        ),
+        ("gameplay.resource.stage", stage.to_owned()),
+        ("gameplay.resource.status", status.to_owned()),
+        (
+            "gameplay.resource.failure_category",
+            failure_category.unwrap_or("none").to_owned(),
+        ),
+        (
+            "gameplay.session.from_state",
+            from.unwrap_or("none").to_owned(),
+        ),
+        ("gameplay.session.to_state", to.unwrap_or("none").to_owned()),
+        ("gameplay.session.machine_event", machine_event.to_owned()),
+        ("gameplay.session.action_kind", action_kind),
+        (
+            "gameplay.session.revision_before",
+            revision_before.unwrap_or_else(|| "none".to_owned()),
+        ),
+        (
+            "gameplay.session.revision_after",
+            revision_after.unwrap_or_else(|| "none".to_owned()),
+        ),
+    ];
+    record_audit_diagnostic(event_name, line, fields, &attributes);
+}
+
+fn diagnostic_hash(kind: &str, bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"df-session-diagnostic-id-v1\0");
+    hasher.update(kind.as_bytes());
+    hasher.update([0]);
+    hasher.update(bytes);
+    format!(
+        "sha256:{}",
+        hasher
+            .finalize()
+            .iter()
+            .take(16)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn state_label(state: super::journey::session_machine::SessionState) -> &'static str {
+    use super::journey::session_machine::SessionState as State;
+    match state {
+        State::Lobby => "lobby",
+        State::Story => "story",
+        State::Conversation => "conversation",
+        State::Fight => "fight",
+        State::Aftermath => "aftermath",
+        State::Ended => "ended",
+        State::Preparing => "preparing",
+    }
+}
+
+fn event_label(event: super::journey::session_machine::Event) -> &'static str {
+    use super::journey::session_machine::Event;
+    match event {
+        Event::CreateHero => "create_hero",
+        Event::Begin => "begin",
+        Event::StoryChoice => "story_choice",
+        Event::ScriptStep => "script_step",
+        Event::StartFight => "start_fight",
+        Event::CombatAction => "combat_action",
+        Event::EndTurn => "end_turn",
+        Event::Rest => "rest",
+        Event::Resolve => "resolve",
+        Event::NewAdventure => "new_adventure",
+    }
+}
+
+fn revision_label(revision: df_types::SessionRevision) -> String {
+    format!("{}:{}", revision.epoch().get(), revision.sequence())
+}
+
+fn scene_key(checkpoint: &Checkpoint) -> Option<&'static str> {
+    let scene = super::beat_script_runtime::scene(checkpoint.state()).ok()?;
+    Some(match scene.key {
+        super::pack::SceneKey::Room => "room",
+        super::pack::SceneKey::Opening => "opening",
+        super::pack::SceneKey::DialogueSeal => "dialogue_seal",
+        super::pack::SceneKey::DialogueEscort => "dialogue_escort",
+        super::pack::SceneKey::Combat => "combat",
+        super::pack::SceneKey::Inn => "inn",
+        super::pack::SceneKey::Victory => "victory",
+        super::pack::SceneKey::Defeat => "defeat",
+    })
 }
 
 fn audit_kind_name(kind: rpc::GameplayActionKind) -> String {
@@ -2292,21 +2513,28 @@ impl Actor {
                 super::journey::session_machine::SessionState::of(before),
                 super::journey::session_machine::SessionState::of(after),
             ) {
-                super::journey::session_machine::Event::for_kind(state_before, kind).map(|event| {
-                    (
-                        event,
-                        format!(
-                            "STATE {state_before:?} -> {state_after:?} event={event:?} actor={actor:?}"
-                        ),
-                    )
-                })
+                super::journey::session_machine::Event::for_kind(state_before, kind)
+                    .map(|event| (event, state_before, state_after))
             } else {
                 None
             };
-            if let Some((event, line)) = &state_audit
+            if let Some((event, from_state, to_state)) = &state_audit
                 && *event != super::journey::session_machine::Event::StoryChoice
             {
-                record_audit_line("gameplay.session_machine_transition", line.clone());
+                record_session_state_diagnostic(
+                    "gameplay.session_machine_transition",
+                    "projected",
+                    "projected",
+                    None,
+                    Some(*from_state),
+                    Some(*to_state),
+                    *event,
+                    kind,
+                    request,
+                    Some(before.basis().revision),
+                    Some(after.basis().revision),
+                    after,
+                );
             }
             match kind {
                 rpc::GameplayActionKind::SecondWind => {
@@ -2397,8 +2625,26 @@ impl Actor {
                     }
                 }
             }
-            if let Some((super::journey::session_machine::Event::StoryChoice, line)) = state_audit {
-                record_audit_line("gameplay.session_machine_transition", line);
+            if let Some((
+                super::journey::session_machine::Event::StoryChoice,
+                from_state,
+                to_state,
+            )) = state_audit
+            {
+                record_session_state_diagnostic(
+                    "gameplay.session_machine_transition",
+                    "projected",
+                    "projected",
+                    None,
+                    Some(from_state),
+                    Some(to_state),
+                    super::journey::session_machine::Event::StoryChoice,
+                    kind,
+                    request,
+                    Some(before.basis().revision),
+                    Some(after.basis().revision),
+                    after,
+                );
             }
         }
 

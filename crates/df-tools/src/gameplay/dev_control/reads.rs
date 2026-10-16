@@ -380,7 +380,7 @@ pub(super) async fn view_as(
         return Ok((
             axum::http::StatusCode::OK,
             Json(
-                json!({"as": "tv", "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20)}),
+                json!({"as": "tv", "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, false)}),
             ),
         ));
     }
@@ -392,7 +392,7 @@ pub(super) async fn view_as(
     Ok((
         axum::http::StatusCode::OK,
         Json(
-            json!({"as": who, "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20)}),
+            json!({"as": who, "revision": revision_json(Some(&revision)), "view": view_json(&view), "timings":super::timeline::snapshot(20, None, false)}),
         ),
     ))
 }
@@ -608,9 +608,19 @@ pub(super) async fn timeline(
     if !(1..=1000).contains(&last) {
         return Err(bad_request("last must be 1 to 1000"));
     }
+    let resource_type = params.get("type").map(String::as_str);
+    if resource_type.is_some_and(|value| !super::timeline::RESOURCE_TYPES.contains(&value)) {
+        return Err(bad_request("type must be a known resource type"));
+    }
+    let summary_only = params
+        .get("summary")
+        .map(|value| value.parse::<bool>())
+        .transpose()
+        .map_err(|_| bad_request("summary must be true or false"))?
+        .unwrap_or(false);
     Ok((
         axum::http::StatusCode::OK,
-        Json(super::timeline::snapshot(last)),
+        Json(super::timeline::snapshot(last, resource_type, summary_only)),
     ))
 }
 
@@ -734,7 +744,7 @@ fn describe_json() -> Value {
             {"command":"preview", "method":"POST", "path":"/dev/preview", "args":{"seat":"seat or hero name","appearance_text":"up to 1000 characters","backstory_text":"up to 4000 characters","identity":"optional current identity JSON"}, "output":"{status:previewed, identity, source, warnings}; read-only, review then create --identity"},
             {"command":"scene", "method":"GET", "path":"/dev/scene?name=<hero>", "args":{"name":"hero or seat"},"output":"current scene contents, item card and media states"},
             {"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"},
-            {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>", "args":{"last":"1..1000, default 50"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],dropped,capacity,scope}; imagery request/ready/failure metrics, plate request/ready/failure/projection revisions and keys, browser visual-source requested/effective categories, shot, plate state and asset hashes, plus line/clip/check/combat audit events; no prompt, image bytes or asset URLs"},
+            {"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"},
             {"command":"play", "client":true, "args":"--to room|creation|opening|dialogue|combat|complete|ended --timeout 600 --max-steps 256", "output":"{status:reached|play-stopped|play-timeout,target,steps,state?}; joins, creates complete heroes from the live creation offer, and follows current offers; dialogue target chooses ask and stops before combat; ordinary presentation gates remain authoritative"},
             {"command": "join", "method": "POST", "path": "/dev/join",
              "args": {"seat": "1 or 2"},

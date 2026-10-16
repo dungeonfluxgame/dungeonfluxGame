@@ -589,6 +589,18 @@ impl Storyteller {
         let online = self.online.as_ref().ok_or(StorytellerError::Off)?;
         check_request(request)?;
         let key = cache_key(&online.model, request);
+        let started = Instant::now();
+        record_text_resource(
+            "gameplay.storyteller.requested",
+            online,
+            request,
+            &key,
+            "requested",
+            "requested",
+            None,
+            None,
+            None,
+        );
         let context = OperationContext {
             trace_parent: String::new(),
             build: crate::BUILD_ID.to_owned(),
@@ -599,6 +611,25 @@ impl Storyteller {
             &[("storyteller.purpose", request.purpose.to_owned())],
         );
         let outcome = self.express_online(online, request, &key, &mut span).await;
+        let (status, failure_category, slot_counts) = match &outcome {
+            Ok(values) => ("ready", None, Some((values.len(), 0))),
+            Err(error) => ("failed", Some(storyteller_failure(error)), None),
+        };
+        record_text_resource(
+            if outcome.is_ok() {
+                "gameplay.storyteller.ready"
+            } else {
+                "gameplay.storyteller.failed"
+            },
+            online,
+            request,
+            &key,
+            if outcome.is_ok() { "ready" } else { "failed" },
+            status,
+            failure_category,
+            Some(started.elapsed().as_millis()),
+            slot_counts,
+        );
         span.finish_unmeasured(match &outcome {
             Ok(_) => "expressed",
             Err(StorytellerError::Off) => "off",
@@ -621,6 +652,18 @@ impl Storyteller {
         let online = self.online.as_ref().ok_or(StorytellerError::Off)?;
         check_request(request)?;
         let key = cache_key(&online.model, request);
+        let started = Instant::now();
+        record_text_resource(
+            "gameplay.storyteller.requested",
+            online,
+            request,
+            &key,
+            "requested",
+            "requested",
+            None,
+            None,
+            None,
+        );
         let context = OperationContext {
             trace_parent: String::new(),
             build: crate::BUILD_ID.to_owned(),
@@ -633,6 +676,34 @@ impl Storyteller {
         let outcome = self
             .express_partial_online(online, request, &key, &mut span)
             .await;
+        let (stage, status, failure_category, accepted_slots, rejected_slots) = match &outcome {
+            Ok(partial) if partial.rejected.is_empty() => {
+                ("ready", "ready", None, partial.accepted.len(), 0)
+            }
+            Ok(partial) => (
+                "ready",
+                "partial",
+                None,
+                partial.accepted.len(),
+                partial.rejected.len(),
+            ),
+            Err(error) => ("failed", "failed", Some(storyteller_failure(error)), 0, 0),
+        };
+        record_text_resource(
+            if outcome.is_ok() {
+                "gameplay.storyteller.ready"
+            } else {
+                "gameplay.storyteller.failed"
+            },
+            online,
+            request,
+            &key,
+            stage,
+            status,
+            failure_category,
+            Some(started.elapsed().as_millis()),
+            Some((accepted_slots, rejected_slots)),
+        );
         span.finish_unmeasured(match &outcome {
             Ok(_) => "expressed",
             Err(StorytellerError::Off) => "off",
@@ -660,6 +731,17 @@ impl Storyteller {
                 let (accepted, rejected) = sort_slots(&rules, request.slots, &cached);
                 if !accepted.is_empty() {
                     span.event("storyteller.cache_hit", &[]);
+                    record_text_resource(
+                        "gameplay.storyteller.cache_hit",
+                        online,
+                        request,
+                        key,
+                        "ready",
+                        "cached",
+                        None,
+                        None,
+                        Some((accepted.len(), rejected.len())),
+                    );
                 }
                 (accepted, rejected)
             }
@@ -695,6 +777,7 @@ impl Storyteller {
                     ("storyteller.tokens_reserved", reserved.to_string()),
                 ],
             );
+            record_text_attempt(online, request, key, attempt, reserved);
             match online
                 .attempt(&narrowed, key, attempt, &prompt, reserved, started)
                 .await
@@ -743,7 +826,7 @@ impl Storyteller {
                 Err(error) => {
                     span.event(
                         "storyteller.failed",
-                        &[("storyteller.error", error.to_string())],
+                        &[("storyteller.error", storyteller_failure(&error).to_owned())],
                     );
                     if accepted.is_empty() {
                         return Err(error);
@@ -789,6 +872,17 @@ impl Storyteller {
             && validate(request, &values).is_ok()
         {
             span.event("storyteller.cache_hit", &[]);
+            record_text_resource(
+                "gameplay.storyteller.cache_hit",
+                online,
+                request,
+                key,
+                "ready",
+                "cached",
+                None,
+                None,
+                Some((request.slots.len(), 0)),
+            );
             return Ok(values);
         }
         let started = Instant::now();
@@ -807,6 +901,7 @@ impl Storyteller {
                     ("storyteller.tokens_reserved", reserved.to_string()),
                 ],
             );
+            record_text_attempt(online, request, key, attempt, reserved);
             let answer = online
                 .attempt(request, key, attempt, &prompt, reserved, started)
                 .await;
@@ -858,7 +953,7 @@ impl Storyteller {
                 Err(error) => {
                     span.event(
                         "storyteller.failed",
-                        &[("storyteller.error", error.to_string())],
+                        &[("storyteller.error", storyteller_failure(&error).to_owned())],
                     );
                     return Err(error);
                 }
@@ -1311,6 +1406,134 @@ fn cache_key(model: &str, request: &Expression<'_>) -> [u8; 32] {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn storyteller_failure(error: &StorytellerError) -> &'static str {
+    match error {
+        StorytellerError::Off => "off",
+        StorytellerError::BudgetExhausted => "budget_exhausted",
+        StorytellerError::InvalidRequest(_) => "invalid_request",
+        StorytellerError::DeadlineExceeded => "deadline",
+        StorytellerError::Provider(_) => "provider_failure",
+        StorytellerError::Rejected { failure, .. } => failure.label(),
+    }
+}
+
+fn record_text_resource(
+    event: &'static str,
+    online: &Online,
+    request: &Expression<'_>,
+    key: &[u8; 32],
+    stage: &'static str,
+    status: &'static str,
+    failure_category: Option<&'static str>,
+    elapsed_ms: Option<u128>,
+    slot_counts: Option<(usize, usize)>,
+) {
+    let resource_id = hex(key);
+    let elapsed = elapsed_ms.map_or_else(|| "none".to_owned(), |value| value.to_string());
+    let failure = failure_category.unwrap_or("none");
+    let (accepted, rejected) = slot_counts
+        .map_or(("none".to_owned(), "none".to_owned()), |(a, r)| {
+            (a.to_string(), r.to_string())
+        });
+    let line = format!(
+        "TEXT_MODEL {stage} status={status} provider=openai model={} resource_id={resource_id} purpose={} elapsed_ms={elapsed} failure_category={failure} accepted_slots={accepted} rejected_slots={rejected}",
+        online.model, request.purpose,
+    );
+    let fields = Map::from_iter([
+        (
+            "resource_type".to_owned(),
+            Value::String("text_model".to_owned()),
+        ),
+        ("resource_id".to_owned(), Value::String(resource_id.clone())),
+        ("provider".to_owned(), Value::String("openai".to_owned())),
+        ("model".to_owned(), Value::String(online.model.clone())),
+        (
+            "purpose".to_owned(),
+            Value::String(request.purpose.to_owned()),
+        ),
+        ("stage".to_owned(), Value::String(stage.to_owned())),
+        ("status".to_owned(), Value::String(status.to_owned())),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+        (
+            "accepted_slots".to_owned(),
+            serde_json::json!(slot_counts.map(|(a, _)| a)),
+        ),
+        (
+            "rejected_slots".to_owned(),
+            serde_json::json!(slot_counts.map(|(_, r)| r)),
+        ),
+    ]);
+    let attributes = [
+        ("gameplay.resource.type", "text_model".to_owned()),
+        ("gameplay.resource.id", resource_id),
+        ("gameplay.text_model.provider", "openai".to_owned()),
+        ("gameplay.text_model.model", online.model.clone()),
+        ("gameplay.text_model.purpose", request.purpose.to_owned()),
+        ("gameplay.resource.stage", stage.to_owned()),
+        ("gameplay.resource.status", status.to_owned()),
+        ("gameplay.resource.failure_category", failure.to_owned()),
+        ("gameplay.resource.elapsed_ms", elapsed),
+        ("gameplay.text_model.accepted_slots", accepted),
+        ("gameplay.text_model.rejected_slots", rejected),
+    ];
+    super::actor::record_audit_diagnostic(event, line, fields, &attributes);
+}
+
+fn record_text_attempt(
+    online: &Online,
+    request: &Expression<'_>,
+    key: &[u8; 32],
+    attempt: u64,
+    tokens_reserved: u64,
+) {
+    let resource_id = hex(key);
+    let line = format!(
+        "TEXT_MODEL queued provider=openai model={} resource_id={resource_id} purpose={} attempt={attempt} tokens_reserved={tokens_reserved}",
+        online.model, request.purpose,
+    );
+    let fields = Map::from_iter([
+        (
+            "resource_type".to_owned(),
+            Value::String("text_model".to_owned()),
+        ),
+        ("resource_id".to_owned(), Value::String(resource_id.clone())),
+        ("provider".to_owned(), Value::String("openai".to_owned())),
+        ("model".to_owned(), Value::String(online.model.clone())),
+        (
+            "purpose".to_owned(),
+            Value::String(request.purpose.to_owned()),
+        ),
+        ("stage".to_owned(), Value::String("queued".to_owned())),
+        ("status".to_owned(), Value::String("queued".to_owned())),
+        ("attempt".to_owned(), Value::from(attempt)),
+        ("tokens_reserved".to_owned(), Value::from(tokens_reserved)),
+    ]);
+    let attributes = [
+        ("gameplay.resource.type", "text_model".to_owned()),
+        ("gameplay.resource.id", resource_id),
+        ("gameplay.text_model.provider", "openai".to_owned()),
+        ("gameplay.text_model.model", online.model.clone()),
+        ("gameplay.text_model.purpose", request.purpose.to_owned()),
+        ("gameplay.resource.stage", "queued".to_owned()),
+        ("gameplay.resource.status", "queued".to_owned()),
+        ("gameplay.text_model.attempt", attempt.to_string()),
+        (
+            "gameplay.text_model.tokens_reserved",
+            tokens_reserved.to_string(),
+        ),
+    ];
+    super::actor::record_audit_diagnostic(
+        "gameplay.storyteller.attempt",
+        line,
+        fields,
+        &attributes,
+    );
 }
 
 pub(super) fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {

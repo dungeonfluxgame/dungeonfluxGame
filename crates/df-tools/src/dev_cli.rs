@@ -107,7 +107,7 @@ async fn run_inner(arguments: &[OsString]) -> CommandResult {
         let word = &words[index];
         if word == "--pretty" {
             client.pretty = true;
-        } else if matches!(word.as_str(), "--keep" | "--wait") {
+        } else if matches!(word.as_str(), "--keep" | "--wait" | "--summary") {
             options.push((word.clone(), "true".to_owned()));
         } else if word == "--help" || word == "-h" {
             print_help();
@@ -204,7 +204,7 @@ fn print_help() {
          note <hero> <text>           add a shared party note\n\
          scene <hero>                current contents and item card\n\
          feelings <npc>               current development-only NPC diagnostic\n\
-         timeline [--last <n>]         last N audit events with wall and elapsed times\n\
+         timeline [--last <n>] [--type <resource>] [--summary]  bounded correlated resource events and counts\n\
          play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
@@ -361,7 +361,20 @@ async fn dispatch(
             Some(since) => get(client, &format!("/dev/log?since={}", url_escape(&since))).await,
             None => get(client, "/dev/log").await,
         },
-        "timeline" => get(client, &format!("/dev/timeline?last={}", url_escape(&flag("--last").or_else(|| positional.get(1).cloned()).unwrap_or_else(|| "50".into())))).await,
+        "timeline" => {
+            let mut path = format!(
+                "/dev/timeline?last={}",
+                url_escape(&flag("--last").or_else(|| positional.get(1).cloned()).unwrap_or_else(|| "50".into()))
+            );
+            if let Some(resource_type) = flag("--type") {
+                path.push_str("&type=");
+                path.push_str(&url_escape(&resource_type));
+            }
+            if flag("--summary").as_deref() == Some("true") {
+                path.push_str("&summary=true");
+            }
+            get(client, &path).await
+        }
         "play" => play::run(client, options).await,
         "wait" => wait(client, options).await,
         "checkpoint" => match positional.get(1).map(String::as_str).unwrap_or("") {

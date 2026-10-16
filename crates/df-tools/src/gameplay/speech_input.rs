@@ -48,6 +48,7 @@ use df_types::{
     LocaleTag, MemberId, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId,
     SessionRevision, Usage, UsageUnit,
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 
 use super::{actor, model};
@@ -376,6 +377,8 @@ impl Admission {
         &mut self,
         body: &[u8],
         span: &mut OperationSpan,
+        provider_elapsed_ms: &mut Option<u128>,
+        audio_ms: &mut Option<u128>,
     ) -> Result<String, SpeechOutcome> {
         let Mode::On(active) = &*self.input.mode else {
             return Err(SpeechOutcome::Unavailable);
@@ -385,6 +388,7 @@ impl Admission {
             ContainerFault::WrongFormat => SpeechOutcome::UnsupportedType,
         })?;
         let duration = pcm_duration(pcm.len());
+        *audio_ms = Some(duration.as_millis());
         if duration < MINIMUM_CLIP {
             return Err(SpeechOutcome::TooShort);
         }
@@ -406,7 +410,10 @@ impl Admission {
             .cancellation
             .take()
             .ok_or(SpeechOutcome::ProviderFailed)?;
-        let text = transcribe(active, pcm, duration, cancellation).await?;
+        let provider_started = Instant::now();
+        let text = transcribe(active, pcm, duration, cancellation).await;
+        *provider_elapsed_ms = Some(provider_started.elapsed().as_millis());
+        let text = text?;
         span.event(
             "gameplay.speech.transcript",
             &[("gameplay.speech.transcript_bytes", text.len().to_string())],
@@ -700,19 +707,80 @@ fn is_clip_type(headers: &HeaderMap) -> bool {
 impl RouteState {
     /// Answers one upload and finishes its span, which carries sizes and the outcome only.
     async fn handle(&self, headers: &HeaderMap, body: Body, span: &mut OperationSpan) -> Response {
+        let request_started = Instant::now();
+        let resource_id = upload_id_from(headers).ok().map(speech_resource_id);
+        record_speech_resource(
+            "gameplay.speech_input.requested",
+            resource_id.as_deref(),
+            "requested",
+            "requested",
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            0,
+        );
         let mut received = 0;
         let mut cancelled = false;
+        let mut provider_elapsed_ms = None;
+        let mut audio_ms = None;
         let result = self
-            .process(headers, body, span, &mut received, &mut cancelled)
+            .process(
+                headers,
+                body,
+                span,
+                &mut received,
+                &mut cancelled,
+                resource_id.as_deref(),
+                &mut provider_elapsed_ms,
+                &mut audio_ms,
+            )
             .await;
         if cancelled {
             span.finish("cancelled", received);
+            record_speech_resource(
+                "gameplay.speech_input.failed",
+                resource_id.as_deref(),
+                "failed",
+                "cancelled",
+                Some("cancelled"),
+                received,
+                audio_ms,
+                None,
+                provider_elapsed_ms,
+                Some(request_started.elapsed().as_millis()),
+                SpeechOutcome::ProviderFailed.status(),
+            );
             return response(SpeechOutcome::ProviderFailed, String::new());
         }
         let outcome = result
             .as_ref()
             .map_or_else(|outcome| *outcome, |_| SpeechOutcome::Heard);
+        let transcript_char_count = result
+            .as_ref()
+            .ok()
+            .map(|transcript| transcript.chars().count());
         span.finish(outcome.label(), received);
+        let success = matches!(outcome, SpeechOutcome::Heard | SpeechOutcome::NothingHeard);
+        record_speech_resource(
+            if success {
+                "gameplay.speech_input.ready"
+            } else {
+                "gameplay.speech_input.failed"
+            },
+            resource_id.as_deref(),
+            if success { "ready" } else { "failed" },
+            outcome.label(),
+            (!success).then_some(outcome.label()),
+            received,
+            audio_ms,
+            transcript_char_count,
+            provider_elapsed_ms,
+            Some(request_started.elapsed().as_millis()),
+            outcome.status(),
+        );
         response(outcome, result.unwrap_or_default())
     }
 
@@ -723,6 +791,9 @@ impl RouteState {
         span: &mut OperationSpan,
         received: &mut usize,
         cancelled: &mut bool,
+        resource_id: Option<&str>,
+        provider_elapsed_ms: &mut Option<u128>,
+        audio_ms: &mut Option<u128>,
     ) -> Result<String, SpeechOutcome> {
         if !origin_known(headers, &self.allowed_origins) {
             return Err(SpeechOutcome::Refused);
@@ -744,11 +815,26 @@ impl RouteState {
         }
         let member = (self.identify)(credential).await?;
         let mut admission = self.input.admit(member, upload_id)?;
+        record_speech_resource(
+            "gameplay.speech_input.queued",
+            resource_id,
+            "queued",
+            "queued",
+            None,
+            0,
+            None,
+            None,
+            None,
+            Some(admission.started.elapsed().as_millis()),
+            0,
+        );
         let clip = axum::body::to_bytes(body, MAXIMUM_CLIP_BYTES)
             .await
             .map_err(|_| SpeechOutcome::TooLarge)?;
         *received = clip.len();
-        let result = admission.hear(&clip, span).await;
+        let result = admission
+            .hear(&clip, span, provider_elapsed_ms, audio_ms)
+            .await;
         if admission.cancelled.load(Ordering::Acquire) {
             *cancelled = true;
             span.event(
@@ -776,6 +862,110 @@ impl RouteState {
         let member = (self.identify)(credential).await?;
         Ok(self.input.cancel(member, upload_id))
     }
+}
+
+fn speech_resource_id(upload_id: [u8; 16]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"df-speech-input-resource-v1\0");
+    hasher.update(upload_id);
+    format!(
+        "sha256:{}",
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_speech_resource(
+    event: &'static str,
+    resource_id: Option<&str>,
+    stage: &'static str,
+    status: &'static str,
+    failure_category: Option<&str>,
+    byte_length: usize,
+    audio_ms: Option<u128>,
+    transcript_char_count: Option<usize>,
+    provider_ms: Option<u128>,
+    elapsed_ms: Option<u128>,
+    http_status: u16,
+) {
+    let resource_id_label = resource_id.unwrap_or("unidentified");
+    let line = format!(
+        "SPEECH_INPUT {stage} status={status} provider=elevenlabs model=scribe_v2 resource_id={resource_id_label} bytes={byte_length} audio_ms={} transcript_chars={} elapsed_ms={} provider_ms={} http_status={http_status} failure_category={} cache_result=not_cached",
+        audio_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        transcript_char_count.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        elapsed_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        provider_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        failure_category.unwrap_or("none"),
+    );
+    let fields = serde_json::Map::from_iter([
+        (
+            "resource_type".to_owned(),
+            serde_json::json!("speech_input"),
+        ),
+        ("resource_id".to_owned(), serde_json::json!(resource_id)),
+        ("provider".to_owned(), serde_json::json!("elevenlabs")),
+        ("model".to_owned(), serde_json::json!(REGISTERED_MODEL)),
+        ("stage".to_owned(), serde_json::json!(stage)),
+        ("status".to_owned(), serde_json::json!(status)),
+        (
+            "failure_category".to_owned(),
+            serde_json::json!(failure_category),
+        ),
+        ("byte_length".to_owned(), serde_json::json!(byte_length)),
+        ("audio_ms".to_owned(), serde_json::json!(audio_ms)),
+        (
+            "transcript_char_count".to_owned(),
+            serde_json::json!(transcript_char_count),
+        ),
+        ("provider_ms".to_owned(), serde_json::json!(provider_ms)),
+        ("elapsed_ms".to_owned(), serde_json::json!(elapsed_ms)),
+        ("http_status".to_owned(), serde_json::json!(http_status)),
+        ("cache_result".to_owned(), serde_json::json!("not_cached")),
+        (
+            "provider_attempted".to_owned(),
+            serde_json::json!(provider_ms.is_some()),
+        ),
+    ]);
+    let attributes = [
+        ("gameplay.resource.type", "speech_input".to_owned()),
+        ("gameplay.resource.id", resource_id_label.to_owned()),
+        ("gameplay.speech.provider", "elevenlabs".to_owned()),
+        ("gameplay.speech.model", REGISTERED_MODEL.to_owned()),
+        ("gameplay.resource.stage", stage.to_owned()),
+        ("gameplay.resource.status", status.to_owned()),
+        (
+            "gameplay.resource.failure_category",
+            failure_category.unwrap_or("none").to_owned(),
+        ),
+        ("gameplay.resource.byte_length", byte_length.to_string()),
+        (
+            "gameplay.speech.audio_ms",
+            audio_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        (
+            "gameplay.speech.transcript_char_count",
+            transcript_char_count.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        (
+            "gameplay.speech.provider_ms",
+            provider_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        (
+            "gameplay.resource.elapsed_ms",
+            elapsed_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        ("gameplay.media.http_status", http_status.to_string()),
+        ("gameplay.media.cache_result", "not_cached".to_owned()),
+        (
+            "gameplay.speech.provider_attempted",
+            provider_ms.is_some().to_string(),
+        ),
+    ];
+    actor::record_audit_diagnostic(event, line, fields, &attributes);
 }
 
 #[cfg(test)]
@@ -1015,6 +1205,20 @@ mod tests {
 
     fn binding_hex(byte: u8) -> String {
         format!("{byte:02x}").repeat(32)
+    }
+
+    #[test]
+    fn speech_resource_ids_hash_the_upload_token() {
+        let upload_id = [0x5a; 16];
+        let encoded = upload_id
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let first = speech_resource_id(upload_id);
+        assert_eq!(first, speech_resource_id(upload_id));
+        assert!(first.starts_with("sha256:"));
+        assert!(!first.contains(&encoded));
+        assert_ne!(first, speech_resource_id([0xa5; 16]));
     }
 
     struct Upload {

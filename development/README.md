@@ -158,15 +158,32 @@ dev view --as Neris                # exactly her phone view (offers, own sheet)
 dev log                            # the table log; dev checkpoint save <name> names a point
 ```
 
-`dev timeline` shows bounded structured events in `fields` as well as the readable `line`.
-Image events include the content key, prompt character count, reference count and byte lengths,
-status, failure category and elapsed time; plate events include scene id, graph revision, image
-key and request, ready, failed and projection timing. The diagnostics never include prompt text,
-image bytes, asset URLs or credentials. Browser `visual-source` events include requested and
-effective source categories, selected shot, plate state and page-local asset hashes. The command
-`dev view --as tv` includes `visual_assets`, which shows the requested plate source, the
-server-projected source, plate state and a hash of the effective asset identifier; it describes
-the server view sent to the browser without adding asset paths to the diagnostic summary.
+`dev timeline` is a bounded, structured resource timeline. Filter it by type or ask for counts
+only:
+
+```sh
+df-transport-fixture dev timeline --last 100 --type image
+df-transport-fixture dev timeline --last 100 --type video --summary
+```
+
+Types are `text_model`, `speech_input`, `voice`, `image`, `plate`, `video`, `browser_media` and
+`state`. The response keeps the event sequence and timestamps, shows counts by resource type,
+stage and status, and reports the number of distinct resource ids in the selected window. Request,
+queue, ready, failure, media delivery, browser played and projected events share content-free ids
+where the server exposes them; scene and graph revisions are included where available. This lets
+an agent compare a failed render with a later ready result and then check whether the browser
+loaded, decoded, displayed or played that resource. Browser events require a connected display.
+Diagnostics contain prompt and transcript character counts only, image/audio/video byte counts,
+closed status and failure categories, provider labels, and hashes or generated ids. They never
+contain prompt or transcript text, credentials, raw URLs or media bytes. `dev view --as tv`
+includes `visual_assets`, showing the requested plate source, server-projected source, plate state
+and a hash of the effective asset identifier without adding asset paths to the timeline.
+
+Known correlation gap: plate request/render events currently hash the authored scene asset label,
+while projection events can hash the asset label returned by the display. Their `scene_id` values
+may differ for the same transition. Until those producers use one canonical scene key, correlate
+plate phases with `plate_id`, `image_key_id` and graph revision; diagnostic records contain no raw
+scene titles or paths.
 
 For a fast two-hero NPC dialogue setup, start a fresh local game server with
 development control enabled, then copy its URL and token-file path from the
