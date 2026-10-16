@@ -12,7 +12,7 @@ use std::{
 use axum::http::{Method, Request, StatusCode, header};
 use df_providers::{
     ImageBackground, ImageEdit, ImageEditConfig, ImageEditModel, ImageFormat, ImageModeration,
-    ImageQuality, ReferenceImage,
+    ImageQuality, ReferenceImage as EditReferenceImage,
 };
 use tonic::codegen::Service;
 
@@ -143,7 +143,7 @@ fn merchant_seed_full_cast_plate_preserves_every_identity_in_final_assembly() {
     for id in ["merchant", "shop-adventurer", "shop-soldier"] {
         assert!(prompt.as_str().contains(id), "missing cast identity {id}");
     }
-    let references = [ReferenceImage {
+    let references = [EditReferenceImage {
         format: ImageFormat::Png,
         bytes: b"merchant-scene-fixture",
     }];
