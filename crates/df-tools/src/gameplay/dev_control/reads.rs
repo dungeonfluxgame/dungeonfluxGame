@@ -99,7 +99,7 @@ async fn seat_json(
             "action": action_name(offer.action_kind),
             "label": offer.label,
         })).collect::<Vec<_>>(),
-        "sheet": player.journey.as_ref().and_then(|journey| journey.own_character.as_ref()).map(super::sheet_json),
+        "sheet": player.journey.as_ref().and_then(|journey| journey.own_character.as_ref()).map(character_sheet_json),
         "standings": journey.map(|journey| journey.standing.iter().map(|standing| json!({
             "npc": standing.name,
             "attitude": attitude_name(standing.attitude),
@@ -285,6 +285,36 @@ fn music_plan_summary(scene: &rpc::GameplayScene, journey: &rpc::JourneyView) ->
     plan
 }
 
+fn item_card_json(item: &rpc::SceneItemCard) -> Value {
+    json!({
+        "id": item.thing_id,
+        "name": item.name,
+        "detail": item.detail,
+        "picture_description": item.picture_description,
+        "image_path": item.image_path,
+        "image_state": item.image_state,
+        "status": rpc::PlateState::try_from(item.image_state)
+            .map_or("unrecognized", |state| state.as_str_name()),
+        "state_revision": item.state_revision,
+        "observation_only": item.observation_only,
+        "holder": item.holder,
+        "owner_id": item.owner_id,
+        "holder_id": item.holder_id,
+    })
+}
+
+fn character_sheet_json(sheet: &rpc::CharacterSheet) -> Value {
+    let mut projection = super::sheet_json(sheet);
+    projection["owned_items"] = json!(
+        sheet
+            .owned_items
+            .iter()
+            .map(item_card_json)
+            .collect::<Vec<_>>()
+    );
+    projection
+}
+
 fn scene_json(scene: &rpc::GameplayScene) -> Value {
     let narrative_focus = serde_json::from_str::<Value>(&scene.scene_contents_json)
         .ok()
@@ -300,18 +330,8 @@ fn scene_json(scene: &rpc::GameplayScene) -> Value {
         "cast":scene.cast.iter().map(|actor| json!({"id":actor.id,"name":actor.name,"role":actor.role,"sprite":actor.sprite,"live_sprite":actor.live_sprite,"speaking":actor.speaking})).collect::<Vec<_>>(),
         "contents": scene.scene_contents_json,
         "narrative_focus": narrative_focus,
-        "item": scene.item.as_ref().map(|item| json!({
-            "id": item.thing_id, "name": item.name, "detail": item.detail,
-            "image_path": item.image_path, "image_state": item.image_state,
-            "observation_only": item.observation_only, "holder": item.holder,
-            "status": rpc::PlateState::try_from(item.image_state).map_or("unrecognized", |state| state.as_str_name()),
-            "state_revision": item.state_revision,
-        })),
-        "hand_items": scene.hand_items.iter().map(|item| json!({
-            "id": item.thing_id, "name": item.name, "detail": item.detail,
-            "observation_only": item.observation_only, "holder": item.holder,
-            "state_revision": item.state_revision,
-        })).collect::<Vec<_>>(),
+        "item": scene.item.as_ref().map(item_card_json),
+        "hand_items": scene.hand_items.iter().map(item_card_json).collect::<Vec<_>>(),
     })
 }
 
@@ -554,7 +574,7 @@ fn view_json(view: &rpc::ViewMessage) -> Value {
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "scene": player.scene.as_ref().map(scene_json).unwrap_or(json!(null)),
-            "journey": player.journey.as_ref().map(journey_json).unwrap_or(json!(null)),
+            "journey": player.journey.as_ref().map(|journey| journey_json(journey, true)).unwrap_or(json!(null)),
         }),
         Some(rpc::view_message::Audience::Display(display)) => json!({
             "audience": "display",
@@ -578,7 +598,7 @@ fn view_json(view: &rpc::ViewMessage) -> Value {
             })),
             "check": display.check.as_ref().map(|check|check_view_json(check, display.journey.as_ref())),
             "scene": display.scene.as_ref().map(scene_json).unwrap_or(json!(null)),
-            "journey": display.journey.as_ref().map(journey_json).unwrap_or(json!(null)),
+            "journey": display.journey.as_ref().map(|journey| journey_json(journey, false)).unwrap_or(json!(null)),
             "music_plan": display.scene.as_ref().zip(display.journey.as_ref()).map(|(scene, journey)| music_plan_summary(scene, journey)).unwrap_or(json!(null)),
         }),
         None => json!({"audience": "none"}),
@@ -626,12 +646,16 @@ fn check_json(check: &rpc::AbilityCheckResult) -> Value {
         "total":check.total, "succeeded":check.succeeded, "source_revision":check.source_revision})
 }
 
-fn journey_json(journey: &rpc::JourneyView) -> Value {
+fn journey_json(journey: &rpc::JourneyView, include_private_character: bool) -> Value {
     json!({
         "phase": super::phase_name(journey.phase),
         "room_code": journey.room_code,
         "party": journey.party.iter().map(party_json).collect::<Vec<_>>(),
-        "own_character": journey.own_character.as_ref().map(super::sheet_json).unwrap_or(json!(null)),
+        "own_character": if include_private_character {
+            journey.own_character.as_ref().map(character_sheet_json).unwrap_or(json!(null))
+        } else {
+            json!(null)
+        },
         "creation": journey.creation.as_ref().map(|creation| json!({
             "description": creation.description,
             "source_revision": creation.source_revision,
@@ -1109,6 +1133,30 @@ mod visual_asset_diagnostics_tests {
 mod complete_view_tests {
     use super::*;
 
+    fn item_card(
+        thing_id: &str,
+        detail: &str,
+        image_path: &str,
+        image_state: rpc::PlateState,
+        observation_only: bool,
+        owner_id: &str,
+        holder_id: &str,
+    ) -> rpc::SceneItemCard {
+        rpc::SceneItemCard {
+            thing_id: thing_id.into(),
+            name: "Traveler’s clothes".into(),
+            detail: detail.into(),
+            picture_description: "A photographic close-up of folded wool and linen clothes.".into(),
+            image_path: image_path.into(),
+            image_state: image_state as i32,
+            state_revision: 6,
+            observation_only,
+            holder: "Brakka".into(),
+            owner_id: owner_id.into(),
+            holder_id: holder_id.into(),
+        }
+    }
+
     #[test]
     fn creation_view_includes_choices_and_identity_menus() {
         let view = rpc::ViewMessage {
@@ -1144,6 +1192,99 @@ mod complete_view_tests {
                 .get("identity_groups")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn player_view_projects_owned_inventory_and_authoritative_custody_metadata() {
+        let owned_item = item_card(
+            "item-clothes-travelers",
+            "Marek sold the traveler’s clothes to Brakka.",
+            "/gameplay/imagery/clothes-photo",
+            rpc::PlateState::Ready,
+            false,
+            "entity:brakka-identity",
+            "entity:brakka-identity",
+        );
+        let held_item = item_card(
+            "folded-label",
+            "Marek lent the label to Brakka for inspection.",
+            "",
+            rpc::PlateState::Failed,
+            true,
+            "npc:merchant",
+            "entity:brakka-identity",
+        );
+        let view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    scene: Some(rpc::GameplayScene {
+                        hand_items: vec![held_item],
+                        ..Default::default()
+                    }),
+                    journey: Some(rpc::JourneyView {
+                        own_character: Some(rpc::CharacterSheet {
+                            owned_items: vec![owned_item],
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let shown = view_json(&view);
+        let owned = &shown["journey"]["own_character"]["owned_items"][0];
+        assert_eq!(owned["id"], "item-clothes-travelers");
+        assert_eq!(owned["owner_id"], "entity:brakka-identity");
+        assert_eq!(owned["holder_id"], "entity:brakka-identity");
+        assert_eq!(owned["observation_only"], false);
+        assert_eq!(owned["image_path"], "/gameplay/imagery/clothes-photo");
+        assert_eq!(owned["status"], "PLATE_STATE_READY");
+
+        let held = &shown["scene"]["hand_items"][0];
+        assert_eq!(held["id"], "folded-label");
+        assert_eq!(held["owner_id"], "npc:merchant");
+        assert_eq!(held["holder_id"], "entity:brakka-identity");
+        assert_eq!(held["holder"], "Brakka");
+        assert_eq!(held["observation_only"], true);
+        assert_eq!(held["status"], "PLATE_STATE_FAILED");
+    }
+
+    #[test]
+    fn display_view_redacts_a_player_owned_inventory_even_if_present_in_its_input() {
+        let private_item = item_card(
+            "private-owned-item-7c93",
+            "A player-only purchase that must never reach the shared display.",
+            "/gameplay/imagery/private-owned-item",
+            rpc::PlateState::Ready,
+            false,
+            "entity:private-hero",
+            "entity:private-hero",
+        );
+        let view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    journey: Some(rpc::JourneyView {
+                        own_character: Some(rpc::CharacterSheet {
+                            owned_items: vec![private_item],
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+
+        let shown = view_json(&view);
+        assert!(shown["journey"]["own_character"].is_null());
+        let serialized = shown.to_string();
+        assert!(!serialized.contains("private-owned-item-7c93"));
+        assert!(!serialized.contains("entity:private-hero"));
+        assert!(!serialized.contains("player-only purchase"));
     }
 }
 

@@ -181,6 +181,16 @@ fn fallback_art(
     }
 }
 
+fn authored_scene_alt(scene: &rpc::GameplayScene, fallback: ConceptScene) -> String {
+    match (scene.title.trim(), scene.place.trim()) {
+        ("", "") => fallback.description().to_owned(),
+        ("", place) => place.to_owned(),
+        (title, "") => title.to_owned(),
+        (title, place) if title.eq_ignore_ascii_case(place) => title.to_owned(),
+        (title, place) => format!("{title} — {place}"),
+    }
+}
+
 /// Public asset paths are presentation data; only local asset URLs enter CSS/image sources.
 pub(super) fn asset_url(path: &str) -> Option<String> {
     crate::presentation::asset_url(path)
@@ -593,6 +603,7 @@ fn exploration_model(
     Ok(ExplorationModel {
         plate_focus: plate.layout.map(|layout| layout.head_x),
         scene_asset: plate.url.or_else(|| asset_url(&input.scene.scene_asset)),
+        scene_alt: authored_scene_alt(input.scene, art_scene),
         portrait_asset: asset_url(&input.scene.speaker_portrait),
         has_whisper: show_clue,
         rules_note: input.scene.rules_note.clone(),
@@ -1294,9 +1305,9 @@ fn render_scene_contents(
 mod tests {
     use super::super::rpc;
     use super::{
-        SceneInput, VisualSource, art, art_source, choice_disabled_reason, end_card_contact_ready,
-        is_new_private_clue, lobby_art_source, phone_choice_label, should_show_dialogue_composer,
-        tv_model, validated_join_scene_asset,
+        SceneInput, VisualSource, art, art_source, authored_scene_alt, choice_disabled_reason,
+        end_card_contact_ready, is_new_private_clue, lobby_art_source, phone_choice_label,
+        should_show_dialogue_composer, tv_model, validated_join_scene_asset,
     };
 
     #[test]
@@ -1557,6 +1568,25 @@ mod tests {
         assert_eq!(
             art_source(rpc::JourneyPhase::Opening, &scene),
             VisualSource::LiveBackdrop
+        );
+    }
+
+    #[test]
+    fn authored_scene_alt_uses_public_scene_identity_instead_of_the_harbor_fallback() {
+        let scene = rpc::GameplayScene {
+            title: "A Quiet Bargain".into(),
+            place: "Marek’s cloth shop".into(),
+            scene_contents_json: r#"{"private_clue":"A secret bargain"}"#.into(),
+            ..Default::default()
+        };
+        let alt = authored_scene_alt(&scene, df_ui::ConceptScene::CourierRoad);
+        assert_eq!(alt, "A Quiet Bargain — Marek’s cloth shop");
+        assert!(!alt.contains("secret"));
+
+        let empty = rpc::GameplayScene::default();
+        assert_eq!(
+            authored_scene_alt(&empty, df_ui::ConceptScene::CourierRoad),
+            df_ui::ConceptScene::CourierRoad.description()
         );
     }
 

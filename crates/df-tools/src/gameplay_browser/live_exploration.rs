@@ -49,6 +49,7 @@ pub(super) struct ExplorationModel {
     /// picture is a plate; the phone's narrow crop is centred there.
     pub(super) plate_focus: Option<u32>,
     pub(super) scene_asset: Option<String>,
+    pub(super) scene_alt: String,
     pub(super) portrait_asset: Option<String>,
     pub(super) has_whisper: bool,
     /// The scene's rules wording, shown on its own line under the narration.
@@ -168,6 +169,9 @@ fn render_error(client: &Rc<RefCell<Client>>, error: &dyn std::fmt::Display) -> 
 fn decorate(screen: &ExplorationScreen, model: &ExplorationModel) -> Result<(), JsValue> {
     let root = screen.phase.root();
     screen.image_fallbacks.borrow_mut().clear();
+    if let Some(art) = root.query_selector(".scene-art")? {
+        art.set_attribute("alt", &model.scene_alt)?;
+    }
     server_image(
         screen,
         ".scene-art",
