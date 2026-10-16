@@ -190,8 +190,8 @@ pub(crate) enum SceneInventoryLocation {
     Held { holder_id: String },
 }
 
-/// Audience-safe inventory projection. It contains stable item identity and public
-/// placement/price state, while private clues and NPC knowledge remain on SceneThing.
+/// Canonical inventory row. Public projections filter private custody and redact IDs;
+/// private clues and NPC knowledge remain on SceneThing.
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SceneInventoryEntry {
@@ -392,7 +392,7 @@ impl SceneModel {
         })
     }
 
-    /// Returns the canonical, audience-safe inventory for this location. Offers are
+    /// Returns the canonical inventory for authoritative server/device use. Offers are
     /// represented as stock until purchased; a purchase replaces that stock entry with
     /// the one durable `SceneThing` carrying the same source ID. This is intentionally a
     /// projection of the scene model, so reconnects and image plate rebuilds cannot create
@@ -459,7 +459,14 @@ impl SceneModel {
             .map(|person| person.id.as_str())
             .collect::<BTreeSet<_>>();
         if let Some(things) = contents.get_mut("things").and_then(Value::as_array_mut) {
-            for (view, thing) in things.iter_mut().zip(&self.things) {
+            for view in things {
+                let Some(thing) = view
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| self.things.iter().find(|thing| thing.id == id))
+                else {
+                    continue;
+                };
                 view["short"] = Value::String(thing.short.clone());
                 view["actions"] = serde_json::json!(if thing.portable {
                     vec!["look", "take", "steal", "use"]
@@ -481,6 +488,9 @@ impl SceneModel {
                 .map(|offer| {
                     let mut value = serde_json::json!(offer);
                     value["item_id"] = serde_json::json!(offer.canonical_item_id());
+                    if !visible_people.contains(offer.seller_id.as_str()) {
+                        value["seller_id"] = Value::Null;
+                    }
                     value["actions"] = serde_json::json!(["look", "buy"]);
                     value
                 })
@@ -492,11 +502,37 @@ impl SceneModel {
         let public_inventory = self
             .inventory()
             .into_iter()
-            .filter(|entry| {
-                entry
-                    .holder_id
-                    .as_deref()
-                    .is_none_or(|holder| visible_people.contains(holder))
+            .filter_map(|mut entry| {
+                if let Some(thing) = self.things.iter().find(|thing| thing.id == entry.item_id) {
+                    if !thing.in_scene || !thing.publicly_visible {
+                        return None;
+                    }
+                    if entry
+                        .holder_id
+                        .as_deref()
+                        .is_some_and(|holder| !visible_people.contains(holder))
+                    {
+                        entry.holder_id = None;
+                    }
+                    if entry
+                        .owner_id
+                        .as_deref()
+                        .is_some_and(|owner| !visible_people.contains(owner))
+                    {
+                        entry.owner_id = None;
+                    }
+                } else if let Some(offer) = self
+                    .offers
+                    .iter()
+                    .find(|offer| offer.canonical_item_id() == entry.item_id)
+                {
+                    if !visible_people.contains(offer.seller_id.as_str()) {
+                        entry.owner_id = None;
+                    }
+                } else {
+                    return None;
+                }
+                Some(entry)
             })
             .collect::<Vec<_>>();
         contents["inventory"] =
@@ -519,21 +555,23 @@ impl SceneModel {
         let things = self
             .things
             .iter()
-            .filter(|thing| {
-                thing.in_scene
-                    && (thing.holder_id.is_none()
-                        || thing.publicly_visible
-                            && thing
-                                .holder_id
-                                .as_deref()
-                                .is_some_and(|holder| visible_people.contains(holder)))
-            })
+            .filter(|thing| thing.in_scene && (thing.holder_id.is_none() || thing.publicly_visible))
             .map(|thing| {
+                let position = thing.holder_id.as_deref().map_or_else(
+                    || thing.position.clone(),
+                    |holder_id| {
+                        self.people
+                            .iter()
+                            .find(|person| person.id == holder_id)
+                            .map(|person| format!("held by {}", person.name))
+                            .unwrap_or_else(|| "held in the scene".into())
+                    },
+                );
                 serde_json::json!({
                     "id": thing.id, "name": thing.name, "look": thing.picture_description,
-                    "position": thing.position, "in_scene": thing.in_scene,
+                    "position": position, "in_scene": thing.in_scene,
                     "publicly_visible": thing.publicly_visible,
-                    "holder": thing.holder_id, "open": thing.open, "lit": thing.lit,
+                    "open": thing.open, "lit": thing.lit,
                     "broken": thing.broken,
                 })
             })
@@ -605,9 +643,9 @@ impl SceneModel {
         {
             return Err(SceneModelError::InvalidBounds);
         }
-        let mut ids = BTreeSet::new();
+        let mut ids = BTreeSet::<String>::new();
         for person in &self.people {
-            if !ids.insert(person.id.as_str()) {
+            if !ids.insert(person.id.clone()) {
                 return Err(SceneModelError::DuplicateId);
             }
             if !valid_text(&person.id, 96)
@@ -631,7 +669,7 @@ impl SceneModel {
             }
         }
         for thing in &self.things {
-            if !ids.insert(thing.id.as_str()) {
+            if !ids.insert(thing.id.clone()) {
                 return Err(SceneModelError::DuplicateId);
             }
             if !valid_text(&thing.id, 96)
@@ -653,7 +691,7 @@ impl SceneModel {
             }
         }
         for way_out in &self.ways_out {
-            if !ids.insert(way_out.id.as_str()) {
+            if !ids.insert(way_out.id.clone()) {
                 return Err(SceneModelError::DuplicateId);
             }
             if !valid_text(&way_out.id, 96)
@@ -667,17 +705,29 @@ impl SceneModel {
                 return Err(SceneModelError::InvalidBounds);
             }
         }
+        let mut offer_item_ids = BTreeSet::new();
         for offer in &self.offers {
-            if !ids.insert(offer.id.as_str()) {
+            if !ids.insert(offer.id.clone()) {
                 return Err(SceneModelError::DuplicateId);
             }
-            // Offer handles and concrete item identities use separate namespaces in
-            // authoring, but both must be unique in the canonical scene graph. A purchase
-            // promotes this item ID into `things`; rejecting collisions here prevents a
-            // second stock entry or an authored object from shadowing that identity.
+            // A generated stock item retains this same identity when materialized as a
+            // scene thing. Accept only that exact provenance binding; any authored thing
+            // or another offer claiming the ID is a real collision.
             let item_id = offer.canonical_item_id();
-            if !ids.insert(item_id.as_str()) {
+            if !offer_item_ids.insert(item_id.clone()) {
                 return Err(SceneModelError::DuplicateId);
+            }
+            match self.things.iter().find(|thing| thing.id == item_id) {
+                Some(thing)
+                    if thing.provenance.kind == SceneItemProvenanceKind::GeneratedOffer
+                        && thing.provenance.source_id == offer.id
+                        && thing.provenance.seller_id.as_deref()
+                            == Some(offer.seller_id.as_str()) => {}
+                Some(_) => return Err(SceneModelError::DuplicateId),
+                None if !ids.insert(item_id.clone()) => {
+                    return Err(SceneModelError::DuplicateId);
+                }
+                None => {}
             }
             if item_id != format!("item-{}", offer.id) {
                 return Err(SceneModelError::InvalidShape);

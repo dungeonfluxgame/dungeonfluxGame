@@ -292,6 +292,126 @@ fn generated_offer_item_ids_are_canonical_and_legacy_stock_resolves() {
 }
 
 #[test]
+fn materialized_offer_keeps_its_stock_id_without_allowing_real_collisions() {
+    let original = merchant_shop();
+    let offer = original.offers[0].clone();
+    let snapshot = original
+        .as_it_is_now(
+            super::super::pack::SceneKey::Opening,
+            &[SceneChange {
+                entity_id: offer.canonical_item_id(),
+                description: "Marek lends the clothes for inspection.".into(),
+                kind: SceneChangeKind::Given {
+                    holder_id: "shop-adventurer".into(),
+                    owner_id: None,
+                },
+            }],
+        )
+        .expect("the canonical offer can materialize with stable provenance");
+    let snapshot: super::scene_model::SceneNow =
+        serde_json::from_str(&snapshot).expect("snapshot JSON");
+    snapshot
+        .model
+        .validate_structure()
+        .expect("the same canonical ID may be stock or its generated item");
+    assert_eq!(
+        snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.id == offer.canonical_item_id())
+            .unwrap()
+            .provenance
+            .source_id,
+        offer.id
+    );
+
+    let mut authored_collision = original.clone();
+    authored_collision.things[0].id = offer.canonical_item_id();
+    assert!(authored_collision.validate_structure().is_err());
+
+    let mut wrong_source = snapshot.model;
+    let materialized = wrong_source
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == offer.canonical_item_id())
+        .unwrap();
+    materialized.provenance.source_id = "another-offer".into();
+    assert!(wrong_source.validate_structure().is_err());
+}
+
+#[test]
+fn shared_scene_inventory_hides_private_custody_and_redacts_remote_owners() {
+    let mut model = merchant_shop();
+    let visible_id = model.things[0].id.clone();
+    model.things[0].owner_id = Some("unlisted-owner".into());
+    model.things[0].holder_id = Some("cloth-shop-bystander-1".into());
+    model.things[0].position = "held by cloth-shop-bystander-1".into();
+
+    let private_id = model.things[1].id.clone();
+    model.things[1].publicly_visible = false;
+    model.things[1].holder_id = Some("unlisted-holder".into());
+    model.things[1].owner_id = Some("unlisted-owner".into());
+
+    let public: serde_json::Value =
+        serde_json::from_str(&model.public_contents().expect("shared contents")).unwrap();
+    assert!(
+        public["things"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|thing| thing["id"] == visible_id)
+    );
+    assert!(
+        !public["things"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|thing| thing["id"] == private_id)
+    );
+    let visible_inventory = public["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item_id"] == visible_id)
+        .expect("the public held item remains projected");
+    assert!(visible_inventory["owner_id"].is_null());
+    assert_eq!(visible_inventory["holder_id"], "cloth-shop-bystander-1");
+    assert!(
+        !public["inventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["item_id"] == private_id)
+    );
+
+    assert!(
+        model
+            .inventory()
+            .iter()
+            .any(|entry| entry.item_id == private_id)
+    );
+}
+
+#[test]
+fn public_picture_includes_explicitly_visible_held_items_without_actor_id_leaks() {
+    let mut model = merchant_shop();
+    let item_id = model.things[0].id.clone();
+    model.things[0].holder_id = Some("hero:0123456789abcdef".into());
+    model.things[0].position = "held by hero:0123456789abcdef".into();
+    let picture: serde_json::Value =
+        serde_json::from_str(&model.picture_state().expect("picture state")).unwrap();
+    let item = picture["things"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|thing| thing["id"] == item_id)
+        .expect("explicitly visible item is included without an NPC roster lookup");
+    assert!(item.get("holder").is_none());
+    assert!(!item.to_string().contains("0123456789abcdef"));
+}
+
+#[test]
 fn npc_purchase_uses_actor_purse_and_promotes_same_stock_item() {
     let model = merchant_shop();
     let snapshot = model
