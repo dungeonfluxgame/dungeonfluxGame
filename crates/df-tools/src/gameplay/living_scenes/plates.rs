@@ -284,7 +284,7 @@ impl PlateScene {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LookupFailure {
+pub(super) enum LookupFailure {
     InvalidSceneKey,
     InvalidSceneVariant,
     MissingSceneVariant,
