@@ -36,6 +36,14 @@ pub(crate) type LineId = u64;
 const BEAT_CLIP_WAIT_MS: u64 = 1_500;
 const BEAT_SPEECH_CAP_MS: u64 = 10_000;
 
+/// Managed checks share the line queue, but their roll-to-result handoff has no speech linger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LineTiming {
+    Ordinary,
+    CheckRoll { reveal_ms: u32 },
+    CheckResult,
+}
+
 /// One line a view puts on the stage. The payload is opaque to the conductor.
 #[derive(Clone, Debug)]
 pub(crate) struct ScriptLine<D> {
@@ -50,6 +58,7 @@ pub(crate) struct ScriptLine<D> {
     /// Already on screen before the page was (reload, reconnect): it stands Lingering,
     /// silently, with no entrance.
     pub(crate) settled: bool,
+    pub(crate) timing: LineTiming,
 }
 
 /// What a hero is doing in the dialogue box.
@@ -109,6 +118,8 @@ pub(crate) enum Command<D> {
         state: LineState,
         detail: D,
         slot: Option<usize>,
+        /// The owner cancelled this line rather than completing its normal reading lifecycle.
+        interrupted: bool,
     },
     Clip {
         id: LineId,
@@ -176,6 +187,7 @@ struct LineRun<D> {
     /// When the table last affirmed the loader (a view carrying it).
     affirmed_ms: u64,
     timing: df_observe::presentation::TimingEvent,
+    interrupted: bool,
 }
 
 struct Pending<D> {
@@ -438,7 +450,8 @@ impl<D: Clone> Conductor<D> {
             .any(|(index, run)| match run.state {
                 LineState::Done => false,
                 LineState::Lingering => {
-                    self.pending.is_some()
+                    run.line.timing != LineTiming::Ordinary
+                        || self.pending.is_some()
                         || self
                             .lines
                             .iter()
@@ -457,16 +470,6 @@ impl<D: Clone> Conductor<D> {
                 .actors
                 .iter()
                 .any(|actor| matches!(actor.state, ActorState::Entering | ActorState::Exiting))
-    }
-
-    /// A settled silent check card is restored on screen without replaying its roll or voice.
-    /// Keep the existing clock alive until the ordinary final linger cap can retire that one
-    /// managed item; ordinary settled captions continue to use the event-driven idle path.
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn has_settled_silent_line(&self) -> bool {
-        self.lines.iter().any(|run| {
-            run.state == LineState::Lingering && run.line.settled && run.line.read_ms == 0
-        })
     }
 
     #[cfg(test)]
@@ -951,6 +954,7 @@ impl<D: Clone> Conductor<D> {
             intent: None,
             affirmed_ms: now_ms,
             timing,
+            interrupted: false,
         }
     }
 
@@ -992,6 +996,7 @@ impl<D: Clone> Conductor<D> {
                         read_ms: 0,
                         slot: Some(mark.slot),
                         settled: false,
+                        timing: LineTiming::Ordinary,
                     };
                     let mut run = self.make_run(line, now_ms);
                     run.state = LineState::Composing;
@@ -1115,6 +1120,7 @@ impl<D: Clone> Conductor<D> {
         for mut run in std::mem::take(&mut self.lines) {
             self.cancel_clip(&run, out);
             if run.state != LineState::Done {
+                run.interrupted = true;
                 run.timing.at_ms = now_ms;
                 run.timing.reason = if run.opened_ms.is_some() {
                     reason
@@ -1148,6 +1154,7 @@ impl<D: Clone> Conductor<D> {
             state: run.state,
             detail: run.line.detail.clone(),
             slot: run.line.slot,
+            interrupted: run.interrupted,
         });
     }
 
@@ -1226,6 +1233,9 @@ impl<D: Clone> Conductor<D> {
             return false;
         };
         let (before, slot) = (run.state, run.line.slot);
+        if event == LineEvent::Close {
+            run.interrupted = true;
+        }
         run.state = next;
         run.since_ms = now_ms;
         if next == LineState::Opening {
@@ -1442,7 +1452,13 @@ impl<D: Clone> Conductor<D> {
                 self.watch_speech(index, now_ms, out);
             }
             LineState::Lingering => {
-                let due = if has_next {
+                let due = if run.line.settled && run.line.timing == LineTiming::CheckResult {
+                    in_state >= u64::from(run.line.read_ms)
+                } else if let LineTiming::CheckRoll { reveal_ms } = run.line.timing {
+                    in_state >= u64::from(reveal_ms)
+                } else if run.line.timing == LineTiming::CheckResult {
+                    true
+                } else if has_next {
                     let linger = if catching_up {
                         0
                     } else {
@@ -1478,7 +1494,12 @@ impl<D: Clone> Conductor<D> {
             run.clip = next;
         }
         let read = run.opened_ms.is_some_and(|opened| {
-            now_ms.saturating_sub(opened.saturating_add(u64::from(LINE_OPEN_MS)))
+            let entrance_ms = if matches!(run.line.timing, LineTiming::CheckRoll { .. }) {
+                0
+            } else {
+                LINE_OPEN_MS
+            };
+            now_ms.saturating_sub(opened.saturating_add(u64::from(entrance_ms)))
                 >= u64::from(run.line.read_ms)
         });
         if read && (!run.voiced || run.clip.is_over()) {
@@ -1684,6 +1705,7 @@ mod tests {
             read_ms: 3_000,
             slot,
             settled: false,
+            timing: LineTiming::Ordinary,
         }
     }
 
@@ -1778,6 +1800,162 @@ mod tests {
         let timing = conductor.line_timing(id).unwrap();
         assert_eq!(timing.closed_ms, Some(200));
         assert_eq!(timing.reason, "replaced");
+    }
+
+    fn managed_check_script(read_ms: u32) -> Vec<ScriptLine<&'static str>> {
+        let mut roll = line("roll", false, None);
+        roll.read_ms = 5_200;
+        roll.timing = LineTiming::CheckRoll { reveal_ms: 200 };
+        let mut result = line("result", true, None);
+        result.read_ms = read_ms;
+        result.timing = LineTiming::CheckResult;
+        vec![roll, result]
+    }
+
+    #[test]
+    fn managed_roll_reveals_before_play_and_hands_off_without_the_speech_linger() {
+        let mut harness = Harness::new(
+            Voice::working(1_000),
+            true,
+            managed_check_script(5_000),
+            vec![],
+        );
+        harness.run_to(20_000);
+        let revealed = harness.line_at("roll", LineState::Lingering).unwrap();
+        assert_eq!(revealed, 5_200);
+        assert_eq!(harness.play_at("result"), Some(revealed + 200));
+        assert_eq!(harness.opened("result"), Some(revealed + 250));
+        let opened = harness.opened("result").unwrap();
+        let finished = harness.line_at("result", LineState::Lingering).unwrap();
+        assert_eq!(finished, opened + u64::from(LINE_OPEN_MS) + 5_000);
+        assert!(
+            harness
+                .log
+                .iter()
+                .filter_map(|(_, command)| match command {
+                    Command::Line {
+                        detail: "roll",
+                        interrupted,
+                        ..
+                    } => Some(!interrupted),
+                    _ => None,
+                })
+                .all(|normal| normal)
+        );
+        assert!(!harness.conductor.is_busy());
+    }
+
+    #[test]
+    fn managed_result_keeps_both_long_reading_and_actual_voice_completion_gates() {
+        for (read_ms, voice_ms) in [(20_000, 1_000), (5_000, 12_000)] {
+            let mut harness = Harness::new(
+                Voice::working(voice_ms),
+                true,
+                managed_check_script(read_ms),
+                vec![],
+            );
+            harness.run_to(40_000);
+            let opened = harness.opened("result").unwrap();
+            let finished = harness.line_at("result", LineState::Lingering).unwrap();
+            assert!(finished >= opened + u64::from(LINE_OPEN_MS) + u64::from(read_ms));
+            assert!(finished >= opened + voice_ms);
+        }
+    }
+
+    #[test]
+    fn missing_or_muted_check_voice_still_gets_the_full_result_reading_budget() {
+        let missing = Voice {
+            load_ms: None,
+            start_ms: None,
+            length_ms: None,
+            reported_length_ms: None,
+        };
+        for sound in [false, true] {
+            let mut harness = Harness::new(missing, sound, managed_check_script(5_000), vec![]);
+            harness.run_to(40_000);
+            let opened = harness.opened("result").unwrap();
+            assert_eq!(
+                harness.line_at("result", LineState::Lingering),
+                Some(opened + u64::from(LINE_OPEN_MS) + 5_000),
+            );
+            assert_eq!(harness.play_at("result"), None);
+            assert!(!harness.conductor.is_busy());
+        }
+    }
+
+    #[test]
+    fn restored_check_retires_silently_after_its_full_reading_budget() {
+        let mut result = line("restored result", true, None);
+        result.settled = true;
+        result.read_ms = 5_000;
+        result.timing = LineTiming::CheckResult;
+        let mut harness = Harness::new(Voice::working(1_000), true, vec![result], vec![]);
+        harness.run_to(4_950);
+        assert!(harness.conductor.is_busy());
+        assert_eq!(harness.closing("restored result"), None);
+        harness.run_to(5_400);
+        assert_eq!(harness.closing("restored result"), Some(5_000));
+        assert_eq!(harness.play_at("restored result"), None);
+        assert!(!harness.conductor.is_busy());
+    }
+
+    #[test]
+    fn failed_check_clip_preserves_the_result_reading_budget() {
+        let missing = Voice {
+            load_ms: None,
+            start_ms: None,
+            length_ms: None,
+            reported_length_ms: None,
+        };
+        let mut harness = Harness::new(missing, true, managed_check_script(5_000), vec![]);
+        harness.run_to(5_200);
+        let commands = harness.conductor.on_clip(5_200, 2, ClipSignal::Error);
+        harness.record(commands);
+        harness.run_to(11_000);
+        assert_eq!(harness.opened("result"), Some(5_400));
+        assert_eq!(
+            harness.line_at("result", LineState::Lingering),
+            Some(10_650)
+        );
+        assert_eq!(harness.play_at("result"), None);
+    }
+
+    #[test]
+    fn consecutive_managed_checks_wait_for_each_results_complete_reading_window() {
+        let mut script = managed_check_script(5_000);
+        let mut second = managed_check_script(5_000);
+        second[0].detail = "second roll";
+        second[1].detail = "second result";
+        script.extend(second);
+        let mut harness = Harness::new(Voice::working(1_000), true, script, vec![]);
+        harness.run_to(30_000);
+        assert!(
+            harness.opened("second roll").unwrap()
+                >= harness.line_at("result", LineState::Lingering).unwrap()
+        );
+        assert!(
+            harness
+                .line_at("second result", LineState::Lingering)
+                .unwrap()
+                >= harness.opened("second result").unwrap() + 5_000
+        );
+        assert!(!harness.conductor.is_busy());
+    }
+
+    #[test]
+    fn interrupted_roll_is_reported_for_card_cleanup_before_its_result_starts() {
+        let mut conductor = TestConductor::new();
+        let _ = conductor.restart(0, plain(managed_check_script(5_000), vec![]));
+        let commands = conductor.restart(100, plain(vec![], vec![]));
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            Command::Line {
+                detail: "roll",
+                state: LineState::Done,
+                interrupted: true,
+                ..
+            }
+        )));
     }
 
     /// A scripted voice: a requested clip loads after `load_ms`; a played clip starts after

@@ -166,9 +166,16 @@ pub(super) fn check_roll_read_ms() -> u32 {
     CHECK_ROLL_MS.saturating_add(CHECK_FINDING_REVEAL_MS)
 }
 
+pub(super) fn check_reveal_ms() -> u32 {
+    CHECK_FINDING_REVEAL_MS
+}
+
+pub(super) fn check_result_read_ms(finding: &str) -> u32 {
+    crate::stage_machines::reading_time_ms(finding).saturating_add(CHECK_FINDING_PADDING_MS)
+}
+
 fn check_result_phase_ms(finding: &str) -> (u32, u32, u32) {
-    let read_ms = crate::stage_machines::reading_time_ms(finding);
-    let finding_ms = read_ms.saturating_add(CHECK_FINDING_PADDING_MS);
+    let finding_ms = check_result_read_ms(finding);
     let total_ms = CHECK_ROLL_MS
         .saturating_add(CHECK_FINDING_REVEAL_MS)
         .saturating_add(finding_ms)

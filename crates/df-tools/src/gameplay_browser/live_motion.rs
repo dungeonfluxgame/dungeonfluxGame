@@ -20,8 +20,8 @@ use crate::{
         TableLine, TableRole, Transitions,
     },
     stage_conductor::{
-        ClipOp, ClipSignal, Command, Conductor, IntentKind, IntentMark, LineId, ScriptLine,
-        ViewPlan,
+        ClipOp, ClipSignal, Command, Conductor, IntentKind, IntentMark, LineId, LineTiming,
+        ScriptLine, ViewPlan,
     },
     stage_director::{StageState, ViewDiff},
     stage_machines::{ActorState, BattleState, ClipState, LineState, SceneState, reading_time_ms},
@@ -366,6 +366,7 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
         read_ms: reading_time_ms(text),
         slot: None,
         settled: false,
+        timing: LineTiming::Ordinary,
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
             role: TableRole::Narrator,
@@ -413,6 +414,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                 read_ms: reading_time_ms(&line.text),
                 slot,
                 settled: false,
+                timing: LineTiming::Ordinary,
                 detail: Detail::Line(LineDetail {
                     speaker,
                     role: TableRole::Npc,
@@ -511,6 +513,7 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
         read_ms: reading_time_ms(narration),
         slot: None,
         settled,
+        timing: LineTiming::Ordinary,
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
             role: TableRole::Narrator,
@@ -535,9 +538,11 @@ fn check_voice_script_line(
         voiceable: voice.is_some(),
         // The finding stays visible on the card while the short authoritative result is read;
         // retain it until the longer of those two existing reading budgets has elapsed.
-        read_ms: reading_time_ms(&check.voice.text).max(reading_time_ms(&check.finding)),
+        read_ms: reading_time_ms(&check.voice.text)
+            .max(super::live_stage::check_result_read_ms(&check.finding)),
         slot: None,
         settled,
+        timing: LineTiming::CheckResult,
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
             role: TableRole::Narrator,
@@ -561,12 +566,19 @@ fn check_roll_script_line(
         voiceable: false,
         // The card owns this phase duration; the line keeps the DM result behind its reveal.
         read_ms: if settled {
-            0
+            super::live_stage::check_result_read_ms(&check.finding)
         } else {
             super::live_stage::check_roll_read_ms()
         },
         slot: None,
         settled,
+        timing: if settled {
+            LineTiming::CheckResult
+        } else {
+            LineTiming::CheckRoll {
+                reveal_ms: super::live_stage::check_reveal_ms(),
+            }
+        },
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
             role: TableRole::Narrator,
@@ -646,6 +658,7 @@ fn script_line(
         read_ms: reading_time_ms(&line.text),
         slot,
         settled,
+        timing: LineTiming::Ordinary,
         detail: Detail::Line(detail),
     })
 }
@@ -1402,7 +1415,8 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
                 state,
                 detail,
                 slot,
-            } => line_command(client, id, state, &detail, slot),
+                interrupted,
+            } => line_command(client, id, state, &detail, slot, interrupted),
             Command::Clip { id, op, detail } => {
                 clip_command(id, op, &detail);
                 Ok(())
@@ -1888,6 +1902,7 @@ fn line_command(
     state: LineState,
     detail: &Detail,
     slot: Option<usize>,
+    interrupted: bool,
 ) -> Result<(), JsValue> {
     if let (Detail::Intent { kind, hero }, Some(position)) = (detail, slot) {
         return match client.borrow().live.tv.as_ref() {
@@ -1905,9 +1920,10 @@ fn line_command(
                 LineState::Opening if !line.check_settled => stage.begin_check(check, false)?,
                 LineState::Lingering if line.check_settled => stage.begin_check(check, true)?,
                 LineState::Lingering => stage.reveal_check(check.sequence)?,
-                LineState::Closing | LineState::Done | LineState::Cancelled => {
+                LineState::Closing | LineState::Done if interrupted || line.check_settled => {
                     stage.finish_check(check.sequence)?
                 }
+                LineState::Cancelled => stage.finish_check(check.sequence)?,
                 _ => {}
             }
         }
@@ -2214,7 +2230,7 @@ pub(super) fn clock_needs_work(
 }
 
 fn clock_busy(motion: &Motion) -> bool {
-    if motion.conductor.is_busy() || motion.conductor.has_settled_silent_line() {
+    if motion.conductor.is_busy() {
         return true;
     }
     motion
@@ -2546,6 +2562,396 @@ mod tests {
         )
     }
 
+    /// Uses the production command adapter and mounted TV, with explicit media signals and time.
+    struct CheckDom {
+        client: std::rc::Rc<std::cell::RefCell<super::Client>>,
+        parent: web_sys::Element,
+        conductor: Conductor<Detail>,
+        now: u64,
+        voice_ms: u32,
+        fail_voice: bool,
+        due: Vec<(u64, u64)>,
+        events: Vec<(u64, u64, LineState, bool)>,
+        plays: Vec<(u64, u64)>,
+    }
+
+    impl CheckDom {
+        fn new(
+            script: Vec<crate::stage_conductor::ScriptLine<Detail>>,
+            sound: bool,
+            voice_ms: u32,
+            fail_voice: bool,
+        ) -> Self {
+            use crate::presentation::{ActorSlot, SceneFamily, StageActor};
+            let document = web_sys::window().unwrap().document().unwrap();
+            let parent = document.create_element("section").unwrap();
+            parent
+                .set_attribute("style", "position:relative;width:100vw;height:100vh")
+                .unwrap();
+            document.body().unwrap().append_child(&parent).unwrap();
+            let client = super::super::new_client(&document, parent.clone(), "display").unwrap();
+            let stage = super::super::live_tv::TvStage::mount(&document, &parent).unwrap();
+            stage.root().set_attribute("data-tv-mode", "scene").unwrap();
+            stage.root().set_attribute("data-shot", "plate").unwrap();
+            stage
+                .root()
+                .set_attribute("data-plate-state", "ready")
+                .unwrap();
+            stage.root().set_attribute("data-plate-loaded", "").unwrap();
+            stage.root().remove_attribute("data-sound-gate").unwrap();
+            let cast: Vec<_> = ["Brakka", "Asha"]
+                .into_iter()
+                .enumerate()
+                .map(|(slot, name)| StageActor {
+                    actor_id: String::new(),
+                    slot: ActorSlot::Hero(slot),
+                    name: name.into(),
+                    role: "hero".into(),
+                    sprite: String::new(),
+                    portrait: String::new(),
+                    hit_points: None,
+                    speaking: false,
+                    down: false,
+                    live_sprite: None,
+                })
+                .collect();
+            stage
+                .figures()
+                .update(
+                    &cast,
+                    "check-scene",
+                    "",
+                    SceneFamily::Exterior,
+                    super::super::live_stage::StageMode::Scene,
+                )
+                .unwrap();
+            // This fixture starts on an established photograph, after its entrance animation.
+            stage
+                .root()
+                .query_selector(".tv-plate-bubbles")
+                .unwrap()
+                .unwrap()
+                .set_attribute("style", "animation:none")
+                .unwrap();
+            client.borrow_mut().live.tv = Some(stage);
+            let mut conductor = Conductor::new();
+            conductor.set_sound(sound);
+            let commands = conductor.restart(
+                0,
+                ViewPlan {
+                    diff: Default::default(),
+                    script,
+                    cast: vec![],
+                },
+            );
+            let mut fixture = Self {
+                client,
+                parent,
+                conductor,
+                now: 0,
+                voice_ms,
+                fail_voice,
+                due: vec![],
+                events: vec![],
+                plays: vec![],
+            };
+            fixture.apply(commands);
+            fixture
+        }
+
+        fn apply(&mut self, commands: Vec<Command<Detail>>) {
+            let mut commands = std::collections::VecDeque::from(commands);
+            while let Some(command) = commands.pop_front() {
+                match &command {
+                    Command::Clip {
+                        id,
+                        op,
+                        detail: Detail::Line(line),
+                    } => {
+                        let signal = match op {
+                            ClipOp::Request if self.fail_voice => ClipSignal::Error,
+                            ClipOp::Request => ClipSignal::Loaded,
+                            ClipOp::Play => {
+                                let sequence = line.check_sequence.unwrap();
+                                self.assert_result_visible(sequence);
+                                self.plays.push((self.now, sequence));
+                                self.due.push((self.now + u64::from(self.voice_ms), *id));
+                                ClipSignal::Started {
+                                    duration_ms: Some(self.voice_ms),
+                                }
+                            }
+                            ClipOp::Cancel => continue,
+                        };
+                        commands.extend(self.conductor.on_clip(self.now, *id, signal));
+                    }
+                    Command::Line {
+                        state,
+                        detail: Detail::Line(line),
+                        ..
+                    } => {
+                        if let Some(sequence) = line.check_sequence {
+                            self.events.push((
+                                self.now,
+                                sequence,
+                                *state,
+                                line.check_roll.is_some(),
+                            ));
+                        }
+                        // This is the same apply -> line_command -> TvStage path used by on_view.
+                        super::apply(&self.client, vec![command]).unwrap();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        fn run_to(&mut self, until: u64) {
+            while self.now < until {
+                self.now += 50;
+                let mut finished = vec![];
+                self.due.retain(|(at, id)| {
+                    if *at <= self.now {
+                        finished.push(*id);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                for id in finished {
+                    let commands = self.conductor.on_clip(self.now, id, ClipSignal::Finished);
+                    self.apply(commands);
+                }
+                let commands = self.conductor.on_tick(self.now);
+                self.apply(commands);
+            }
+        }
+
+        fn panel(&self, sequence: u64) -> Option<web_sys::Element> {
+            self.parent
+                .query_selector(&format!(
+                    ".tv-check-result[data-check-sequence=\"{sequence}\"]"
+                ))
+                .unwrap()
+        }
+
+        fn assert_result_visible(&self, sequence: u64) {
+            assert!(
+                self.client
+                    .borrow()
+                    .live
+                    .tv
+                    .as_ref()
+                    .unwrap()
+                    .root()
+                    .has_attribute("data-check-active")
+            );
+            let panel = self
+                .panel(sequence)
+                .expect("managed result must still be mounted");
+            assert!(panel.is_connected());
+            assert_eq!(
+                panel.get_attribute("data-check-phase").as_deref(),
+                Some("result")
+            );
+            assert!(panel.get_bounding_client_rect().width() > 0.0);
+            assert!(panel.get_bounding_client_rect().height() > 0.0);
+            let finding = panel.query_selector(".tv-check-finding").unwrap().unwrap();
+            let style = web_sys::window()
+                .unwrap()
+                .get_computed_style(&finding)
+                .unwrap()
+                .unwrap();
+            assert_eq!(style.get_property_value("visibility").unwrap(), "visible");
+            assert_eq!(style.get_property_value("opacity").unwrap(), "1");
+        }
+
+        fn at(&self, sequence: u64, state: LineState, roll: bool) -> u64 {
+            self.events
+                .iter()
+                .find(|(_, id, phase, is_roll)| {
+                    *id == sequence && *phase == state && *is_roll == roll
+                })
+                .unwrap()
+                .0
+        }
+    }
+
+    impl Drop for CheckDom {
+        fn drop(&mut self) {
+            if let Some(stage) = self.client.borrow_mut().live.tv.take() {
+                stage.dispose().unwrap();
+            }
+            self.parent.remove();
+        }
+    }
+
+    #[test]
+    fn managed_check_dom_reveals_before_play_and_keeps_the_result_past_old_roll_done() {
+        let (check, payload) = check_pair(40);
+        let script = vec![
+            check_roll_script_line(&check, payload, false),
+            check_voice_script_line(&check, std::slice::from_ref(&check.voice), false),
+        ];
+        let mut fixture = CheckDom::new(script, true, 1_000, false);
+        fixture.run_to(5_150);
+        assert_eq!(
+            fixture
+                .panel(40)
+                .unwrap()
+                .get_attribute("data-check-phase")
+                .as_deref(),
+            Some("roll")
+        );
+        fixture.run_to(5_200);
+        fixture.assert_result_visible(40);
+        assert!(fixture.plays.is_empty());
+        fixture.run_to(5_400);
+        assert_eq!(fixture.plays, [(5_400, 40)]);
+        fixture.run_to(6_500);
+        fixture.assert_result_visible(40);
+        let opened = fixture.at(40, LineState::Opening, false);
+        let budget = super::super::live_stage::check_result_read_ms(&check.finding)
+            .max(crate::stage_machines::reading_time_ms(&check.voice.text));
+        fixture.run_to(opened + u64::from(budget) + 200);
+        fixture.assert_result_visible(40);
+        fixture.run_to(opened + u64::from(budget) + 300);
+        assert!(fixture.panel(40).is_none());
+        assert!(
+            fixture.at(40, LineState::Lingering, false)
+                - fixture.at(40, LineState::Lingering, true)
+                >= u64::from(budget)
+        );
+    }
+
+    #[test]
+    fn managed_check_dom_holds_long_clues_and_voice_and_then_presents_the_second_hero() {
+        for long_voice in [false, true] {
+            let (mut first, mut first_payload) = check_pair(50);
+            if !long_voice {
+                first.finding =
+                    "The rain-soaked wharf reveals footprints beside the sealed gate. ".repeat(4);
+                first_payload.finding = first.finding.clone();
+            }
+            let (second, mut second_payload) = check_pair(52);
+            second_payload.hero_name = "Asha".into();
+            let voices = vec![first.voice.clone(), second.voice.clone()];
+            let budget = super::super::live_stage::check_result_read_ms(&first.finding)
+                .max(crate::stage_machines::reading_time_ms(&first.voice.text));
+            let script = vec![
+                check_roll_script_line(&first, first_payload, false),
+                check_voice_script_line(&first, &voices, false),
+                check_roll_script_line(&second, second_payload, false),
+                check_voice_script_line(&second, &voices, false),
+            ];
+            let voice_ms = if long_voice { 12_000 } else { 1_000 };
+            let mut fixture = CheckDom::new(script, true, voice_ms, false);
+            fixture.run_to(5_800);
+            fixture.assert_result_visible(50);
+            assert!(fixture.panel(52).is_none());
+            let finish = (5_400 + u64::from(budget) + 250).max(5_400 + u64::from(voice_ms));
+            fixture.run_to(finish - 50);
+            fixture.assert_result_visible(50);
+            assert!(fixture.panel(52).is_none());
+            fixture.run_to(finish + 100);
+            assert!(fixture.panel(50).is_none());
+            assert_eq!(
+                fixture
+                    .panel(52)
+                    .unwrap()
+                    .query_selector(".tv-check-hero")
+                    .unwrap()
+                    .unwrap()
+                    .text_content()
+                    .as_deref(),
+                Some("Asha")
+            );
+            fixture.run_to(finish + 40_000);
+            assert!(fixture.panel(52).is_none());
+            assert!(
+                fixture.at(52, LineState::Opening, true)
+                    >= fixture.at(50, LineState::Lingering, false)
+            );
+        }
+    }
+
+    #[test]
+    fn managed_check_dom_muted_missing_and_failed_clips_keep_the_full_result_budget() {
+        for (sound, missing, failed) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            let (check, payload) = check_pair(60);
+            let voices = if missing {
+                vec![]
+            } else {
+                vec![check.voice.clone()]
+            };
+            let script = vec![
+                check_roll_script_line(&check, payload, false),
+                check_voice_script_line(&check, &voices, false),
+            ];
+            let mut fixture = CheckDom::new(script, sound, 1_000, failed);
+            fixture.run_to(10_600);
+            fixture.assert_result_visible(60);
+            fixture.run_to(11_000);
+            assert!(fixture.panel(60).is_none());
+            assert!(fixture.plays.is_empty());
+            assert!(
+                fixture.at(60, LineState::Lingering, false)
+                    - fixture.at(60, LineState::Lingering, true)
+                    >= 5_000
+            );
+        }
+    }
+
+    #[test]
+    fn managed_check_dom_reconnect_and_interruption_retire_only_the_owned_sequence() {
+        let (check, payload) = check_pair(70);
+        let mut fixture = CheckDom::new(
+            vec![check_roll_script_line(&check, payload, true)],
+            true,
+            1_000,
+            false,
+        );
+        fixture.assert_result_visible(70);
+        fixture.run_to(4_950);
+        fixture.assert_result_visible(70);
+        fixture.run_to(5_000);
+        assert!(fixture.panel(70).is_none());
+        assert!(fixture.plays.is_empty());
+
+        let (first, first_payload) = check_pair(72);
+        let commands = fixture.conductor.restart(
+            5_000,
+            ViewPlan {
+                diff: Default::default(),
+                script: vec![check_roll_script_line(&first, first_payload, false)],
+                cast: vec![],
+            },
+        );
+        fixture.apply(commands);
+        assert!(fixture.panel(72).is_some());
+        let (second, second_payload) = check_pair(74);
+        let stale = fixture.conductor.restart(
+            5_050,
+            ViewPlan {
+                diff: Default::default(),
+                script: vec![check_roll_script_line(&second, second_payload, true)],
+                cast: vec![],
+            },
+        );
+        fixture.now = 5_050;
+        let old = stale.iter().filter(|command| matches!(command, Command::Line { detail: Detail::Line(line), .. } if line.check_sequence == Some(72))).cloned().collect();
+        fixture.apply(stale);
+        assert!(fixture.panel(72).is_none());
+        fixture.assert_result_visible(74);
+        fixture.apply(old);
+        fixture.assert_result_visible(74);
+        fixture.run_to(10_050);
+        assert!(fixture.panel(74).is_none());
+    }
+
     #[test]
     fn queued_checks_preserve_prior_line_roll_reveal_voice_and_each_sequence() {
         let (first, first_payload) = check_pair(8);
@@ -2635,7 +3041,10 @@ mod tests {
 
         assert!(script.settled);
         assert!(!script.voiceable);
-        assert_eq!(script.read_ms, 0);
+        assert_eq!(
+            script.read_ms,
+            super::super::live_stage::check_result_read_ms(&check.finding)
+        );
         let Detail::Line(line) = &script.detail else {
             panic!("settled check must remain a line queue item");
         };
@@ -2652,8 +3061,10 @@ mod tests {
                 cast: Vec::new(),
             },
         );
-        assert!(conductor.has_settled_silent_line());
-        let terminal = conductor.on_tick(45_000);
+        assert!(conductor.is_busy());
+        let terminal = conductor.on_tick(u64::from(
+            super::super::live_stage::check_result_read_ms(&check.finding),
+        ));
         assert!(terminal.iter().any(|command| {
             matches!(
                 command,
@@ -2727,7 +3138,7 @@ mod tests {
                     state: LineState::Lingering,
                     detail: Detail::Line(line),
                     ..
-                } if line.check_sequence == Some(30)
+                } if line.check_sequence == Some(30) && line.check_roll.is_none()
             )
         }));
         commands.extend(conductor.on_tick(20_000));
@@ -2739,7 +3150,7 @@ mod tests {
                     state: LineState::Lingering,
                     detail: Detail::Line(line),
                     ..
-                } if line.check_sequence == Some(30)
+                } if line.check_sequence == Some(30) && line.check_roll.is_none()
             )
         }));
     }
@@ -2855,7 +3266,10 @@ mod tests {
                     }
                 )
             }));
-            assert!(conductor.has_settled_silent_line());
+            assert_eq!(
+                conductor.focus_line().map(|(_, state)| state),
+                Some(LineState::Lingering)
+            );
         }
     }
 
