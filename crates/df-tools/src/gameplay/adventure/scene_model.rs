@@ -1136,7 +1136,7 @@ impl SceneModel {
                     thing.owner_id = Some(buyer_id.clone());
                     thing.holder_id = Some(buyer_id.clone());
                     thing.position = format!("held by {buyer_id}");
-                    thing.in_scene = person_ids.contains(buyer_id);
+                    thing.in_scene = person_ids.contains(buyer_id.as_str());
                 }
                 SceneChangeKind::Taken { holder_id } => {
                     if !thing.portable
@@ -1150,7 +1150,7 @@ impl SceneModel {
                         return Err(SceneModelError::Contradiction);
                     }
                     thing.holder_id = Some(holder_id.clone());
-                    thing.in_scene = person_ids.contains(holder_id);
+                    thing.in_scene = person_ids.contains(holder_id.as_str());
                     thing.position = format!("held by {holder_id}");
                 }
                 SceneChangeKind::Stolen {
@@ -1182,7 +1182,7 @@ impl SceneModel {
                     if let Some(owner_id) = owner_id {
                         thing.owner_id = Some(owner_id.clone());
                     }
-                    thing.in_scene = person_ids.contains(holder_id);
+                    thing.in_scene = person_ids.contains(holder_id.as_str());
                     thing.position = format!("held by {holder_id}");
                 }
                 SceneChangeKind::StealAttempt {
