@@ -11,36 +11,34 @@ use super::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) fn opening_dressing(model: &super::scene_model::SceneModel, place_name: &str) -> String {
+pub(crate) fn opening_dressing(model: &super::scene_model::SceneModel) -> String {
     let model = model.for_scene(SceneKey::Opening);
-    let mut sentences = vec![format!(
-        "You arrive at {place_name} in the {} with {}.",
-        model.time_of_day, model.weather
-    )];
-    sentences.extend(model.people.iter().map(|person| {
-        format!(
-            "{} is {} at {}.",
-            person.name,
-            person.description.trim_end_matches('.').replace(';', ","),
-            person.position
-        )
-    }));
-    sentences.extend(
-        model
-            .things
+    let activities = model
+        .people
+        .iter()
+        .filter_map(|person| {
+            let description = person.description.trim().trim_end_matches('.');
+            [
+                " examines ",
+                " keeps ",
+                " waits ",
+                " browses ",
+                " works ",
+                " pauses ",
+            ]
             .iter()
-            .filter(|thing| thing.in_scene)
-            .take(1)
-            .map(|thing| format!("You can see {} at {}.", thing.name, thing.position)),
-    );
-    sentences.extend(
-        model
-            .ways_out
-            .iter()
-            .take(1)
-            .map(|way| format!("The {} is at {}.", way.name, way.position)),
-    );
-    sentences.join(" ")
+            .find_map(|marker| {
+                description
+                    .find(marker)
+                    .map(|index| format!("{} {}", person.name, description[index + 1..].trim()))
+            })
+        })
+        .collect::<Vec<_>>();
+    if activities.is_empty() {
+        String::new()
+    } else {
+        format!("Meanwhile, {}.", activities.join(" while "))
+    }
 }
 
 trait Entry {
@@ -567,7 +565,7 @@ pub(crate) fn generate_with_prose(
         .meeting
         .model
         .as_ref()
-        .map(|model| opening_dressing(model, &settings.meeting.name))
+        .map(opening_dressing)
         .unwrap_or_else(|| settings.meeting.name.clone());
     context.insert("pos".into(), pronouns(&patron.gender)?[2].into());
     let entrance = render::render(&hook.entrance, &context)?;
@@ -1022,7 +1020,7 @@ pub(crate) fn generate_with_prose(
         };
         scene.title = expression(Some(scene.key), beat, "title", speaker, &title, 32)?;
         let narration_bound = if scene.key == SceneKey::Opening {
-            900
+            pack::TEXT_CHARACTERS_MAX
         } else {
             220
         };

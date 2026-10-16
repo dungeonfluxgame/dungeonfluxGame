@@ -282,7 +282,7 @@ fn combat_introduction_fact_sheet_includes_roster_and_source_weapons() {
 }
 
 #[test]
-fn longest_coherent_opening_fits_the_narration_bound() {
+fn coherent_opening_includes_the_public_arrival_and_stakes() {
     let tables = tables();
     let forced = ForcedEntries::from([
         ("location".into(), "pinewood-trail".into()),
@@ -324,13 +324,38 @@ fn longest_coherent_opening_fits_the_narration_bound() {
         .iter()
         .find(|s| s.key == super::super::pack::SceneKey::Opening)
         .unwrap();
-    assert!(opening.narration.chars().count() <= 900);
     assert!(
         opening
             .narration
             .contains(&generated.settings.meeting.short)
     );
     assert!(opening.narration.contains(&generated.settings.meeting.name));
+}
+
+#[test]
+fn merchant_opening_fallback_is_natural_and_keeps_public_stakes() {
+    let tables = tables();
+    let generated = generate(
+        &tables,
+        671_003,
+        GenerateOptions::default(),
+        &ForcedEntries::new(),
+    )
+    .unwrap();
+    let opening = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == super::super::pack::SceneKey::Opening)
+        .unwrap();
+    assert!(!opening.narration.contains(" at at "));
+    assert!(!opening.narration.contains("a person with"));
+    assert!(opening.narration.contains(&generated.facts["hook.job"]));
+    assert!(
+        opening
+            .narration
+            .contains(&generated.facts["stake.failure"])
+    );
 }
 
 #[test]
@@ -345,20 +370,10 @@ fn opening_dressing_uses_present_people_and_omits_empty_categories() {
     .unwrap();
     let model = generated.settings.meeting.model.as_ref().unwrap();
     let opening = model.for_scene(super::super::pack::SceneKey::Opening);
-    let dressing = super::opening_dressing(model, &generated.settings.meeting.name);
+    let dressing = super::opening_dressing(model);
 
     for person in &opening.people {
         assert!(dressing.contains(&person.name));
-        assert!(
-            dressing.contains(
-                person
-                    .description
-                    .trim_end_matches('.')
-                    .replace(';', ",")
-                    .as_str()
-            )
-        );
-        assert!(dressing.contains(&person.position));
     }
     for person in &model.people {
         if !opening.people.iter().any(|present| present.id == person.id) {
@@ -372,7 +387,7 @@ fn opening_dressing_uses_present_people_and_omits_empty_categories() {
         thing.in_scene = false;
     }
     empty_context.ways_out.clear();
-    let empty_dressing = super::opening_dressing(&empty_context, "the room");
+    let empty_dressing = super::opening_dressing(&empty_context);
     assert!(!empty_dressing.contains("You can see"));
     assert!(!empty_dressing.contains("Visible goods"));
     assert!(!empty_dressing.contains("Ways out"));

@@ -32,7 +32,7 @@ pub(super) const PACK_SCHEMA: &str = "df-gameplay-pack/1";
 /// Required value of `schema` in `tuning.json`.
 pub(super) const TUNING_SCHEMA: &str = "df-gameplay-tuning/1";
 
-const TEXT_CHARACTERS_MAX: usize = 1024;
+pub(super) const TEXT_CHARACTERS_MAX: usize = 1024;
 const LABEL_CHARACTERS_MAX: usize = 96;
 const ID_CHARACTERS_MAX: usize = 64;
 const DIE_SIDES: &[u8] = &[4, 6, 8, 10, 12];

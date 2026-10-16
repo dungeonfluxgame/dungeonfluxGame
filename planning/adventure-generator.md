@@ -51,7 +51,7 @@ The five-beat classic short-adventure arc stays exactly as the engine plays it t
 | 5 | `scenes[inn].speaker`, `.dialogue` | contact first name; `prose.inn_dialogue` + `secrets.confirm` + `rewards` |
 | 5 | `scenes[inn].asset` | `locations.art.interior` |
 
-Fixed, not generated: `creation`, `equipment`, `room_code`, the rules-facing labels (`create-character`, `greatsword-attack`, `second-wind`, `end-turn`, `short-rest`), and the mechanical sentences. Mechanical sentences (`combat_mech`, `victory_mech`, `victory_rested`, `defeat_mech`, `defeat_rested`) are fixed templates whose only slots are names; they state outcomes the rules produced and no table or model may alter them. The 220-character narration bound applies to the generated (story) part only; the opening has a bounded 900-character allowance for public room, time, weather, present people, and selected goods and exits so its narrator can establish the scene within a human reading hold.
+Fixed, not generated: `creation`, `equipment`, `room_code`, the rules-facing labels (`create-character`, `greatsword-attack`, `second-wind`, `end-turn`, `short-rest`), and the mechanical sentences. Mechanical sentences (`combat_mech`, `victory_mech`, `victory_rested`, `defeat_mech`, `defeat_rested`) are fixed templates whose only slots are names; they state outcomes the rules produced and no table or model may alter them. Opening narration uses the existing pack text envelope of 1024 characters; there is no additional development-only prose cap.
 
 ## 3. The roll procedure
 
@@ -105,7 +105,7 @@ Binding. A generated pack is just a pack whose bytes are produced at new-run tim
 
 Variants are written to be read aloud: no markup, no stage directions in speech, no unresolved braces. Verb forms are present tense in narration, past tense in `complication` recaps ("Afterward, the truth comes out"), and agree with he/she/it because only those pronoun sets exist.
 
-Length limits (checked on the rendered result; the table lint also checks every pattern against the longest value of each slot it uses): scene title <= 32, generated narration <= 220 except the opening's bounded 900-character public scene dressing, spoken line <= 160, offer label <= 40, speaker <= 28, private clue <= 280. The loader's own bounds (1024 / 96 / 512) are looser.
+Length limits (checked on the rendered result; the table lint also checks every pattern against the longest value of each slot it uses): scene title <= 32, generated narration <= 220 for ordinary scenes, spoken line <= 160, offer label <= 40, speaker <= 28, private clue <= 280. Opening prose remains subject to the existing loader/provider envelope rather than an added development-only cap. The loader's own bounds (1024 / 96 / 512) remain authoritative.
 
 Opening dressing projects the model to the opening phase before selecting facts.
 It includes every present person and their supplied appearance, activity and

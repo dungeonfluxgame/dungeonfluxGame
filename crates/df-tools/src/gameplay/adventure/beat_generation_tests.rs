@@ -91,14 +91,9 @@ fn two_hundred_seeds_cover_all_sixteen_data_defined_scripts_settings_slots_and_d
                 (&base.asset, &base.speaker_portrait, &base.cast)
             );
             assert!(scene.rules_note.is_empty() && scene.narration_rested.is_none());
-            assert!(
-                scene.narration.chars().count()
-                    <= if scene.key == pack::SceneKey::Opening {
-                        900
-                    } else {
-                        220
-                    }
-            );
+            if scene.key != pack::SceneKey::Opening {
+                assert!(scene.narration.chars().count() <= 220);
+            }
             assert!(!scene.narration.contains(&first.facts["secret.fact"]));
         }
         // SRD 5.2.1 pp. 187, 189: Search and Study are actions resolved by checks.
