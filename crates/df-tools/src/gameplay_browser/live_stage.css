@@ -221,11 +221,11 @@
 
 /* INV-07: the check replaces its hero's action bubble; dialogue from other figures remains
    readable while the result card is on screen. */
-.tv-check-result{display:grid;justify-items:center;gap:calc(var(--u)*.3);min-width:calc(var(--u)*24);max-width:calc(var(--u)*34);padding:calc(var(--u)*.8) calc(var(--u)*1.2);border:calc(var(--u)*.16) solid #e8cb94;border-radius:calc(var(--u)*.8);background:linear-gradient(180deg,#111a29f5,#060b13f5);box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.8) #000d;text-align:center;color:#f7efdc;animation:df-check-result-out var(--check-duration,12s) ease forwards}
+.tv-check-result{display:grid;justify-items:center;gap:calc(var(--u)*.3);min-width:calc(var(--u)*24);max-width:calc(var(--u)*34);padding:calc(var(--u)*.8) calc(var(--u)*1.2);border:calc(var(--u)*.16) solid #e8cb94;border-radius:calc(var(--u)*.8);background:linear-gradient(180deg,#111a29f5,#060b13f5);box-shadow:0 calc(var(--u)*.5) calc(var(--u)*1.8) #000d;text-align:center;color:#f7efdc;animation:df-check-result-out var(--check-duration,14s) ease forwards}
 .tv-check-hero{font:700 var(--fs-label)/1.1 var(--serif);letter-spacing:.12em;text-transform:uppercase;color:#f3d595}
 .tv-check-skill{font:italic var(--fs-label)/1.2 var(--serif);color:#ded5c2}
 .tv-check-mode{font:700 calc(var(--u)*.9)/1.2 system-ui,sans-serif;letter-spacing:.18em;color:#9ec7de}
-.tv-check-roll{display:grid;justify-items:center;gap:calc(var(--u)*.25);animation:df-check-roll-phase var(--check-duration,12s) ease forwards}
+.tv-check-roll{display:grid;justify-items:center;gap:calc(var(--u)*.25);animation:df-check-roll-phase var(--check-roll-duration,5s) ease forwards}
 .tv-check-dice{display:flex;align-items:center;gap:calc(var(--u)*.4)}
 .tv-check-die-label{font:700 var(--fs-label)/1 system-ui,sans-serif;color:#c8d4df}
 .tv-check-die{display:grid;place-items:center;width:calc(var(--u)*3.4);aspect-ratio:1;border:1px solid #f1d59b;border-radius:18%;background:#17283b;color:#f7efdc;font:700 calc(var(--u)*2)/1 system-ui,sans-serif;box-shadow:0 calc(var(--u)*.25) calc(var(--u)*.8) #000a}
@@ -235,10 +235,10 @@
 .tv-check-total{font-size:1.35em;color:#fff4d6}
 .tv-check-outcome{font:800 calc(var(--u)*1.8)/1 system-ui,sans-serif;letter-spacing:.16em;color:#a9d49c}
 .tv-check-result[data-succeeded=false] .tv-check-outcome{color:#e3a29a}
-.tv-check-finding{margin:calc(var(--u)*.25) 0 0;font:italic var(--fs-label)/1.25 var(--serif);color:#f1dfbc;animation:df-check-finding-phase var(--check-duration,12s) ease forwards}
-@keyframes df-check-roll-phase{0%,52%{opacity:1}62%,100%{opacity:0}}
-@keyframes df-check-finding-phase{0%,52%{opacity:0}62%,88%{opacity:1}100%{opacity:0}}
-@keyframes df-check-result-out{0%,86%{opacity:1}100%{opacity:0;visibility:hidden}}
+.tv-check-finding{margin:calc(var(--u)*.25) 0 0;font:italic var(--fs-label)/1.25 var(--serif);color:#f1dfbc;opacity:0;animation:df-check-finding-phase var(--check-finding-duration,5s) ease var(--check-finding-delay,5s) both}
+@keyframes df-check-roll-phase{0%,88%{opacity:1}100%{opacity:0}}
+@keyframes df-check-finding-phase{0%,8%{opacity:0}16%,92%{opacity:1}100%{opacity:0}}
+@keyframes df-check-result-out{0%,92%{opacity:1}100%{opacity:0;visibility:hidden}}
 
 /* ---------- the rules note under the narration of the phone and of the combat screens ---------- */
 .rules-note{display:block;margin:10px 0 0;max-width:580px;font:italic 13px/1.5 var(--serif,Georgia,serif);color:#a9b3bd}

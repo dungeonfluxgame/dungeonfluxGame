@@ -66,6 +66,9 @@ const BUBBLE_UI_OBSTACLES: [&str; 4] = [
     ".combat-roll-panel",
 ];
 const BUBBLE_FIXED_OBSTACLES: [&str; 2] = [".tv-headline", ".tv-rules"];
+const CHECK_ROLL_MS: u32 = 5_000;
+const CHECK_FINDING_PADDING_MS: u32 = 1_000;
+const CHECK_FADE_MS: u32 = 500;
 
 pub(super) struct CheckDisplay {
     pub(super) hero_name: String,
@@ -94,16 +97,15 @@ impl CheckDisplay {
     }
 }
 
-/// Keep the finding visible long enough to read after the roll phase has finished. The finding
-/// fades in around 62% of the card animation, so the duration scales with its actual reading
-/// budget instead of cutting every result off at a fixed eight seconds.
-fn check_result_duration_ms(finding: &str) -> u32 {
+/// Keep the roll and finding phases explicit. The finding gets its full reading budget after the
+/// roll, then a short fade; no part of its budget is spent inside the fade animation.
+fn check_result_phase_ms(finding: &str) -> (u32, u32, u32) {
     let read_ms = crate::stage_machines::reading_time_ms(finding);
-    read_ms
-        .saturating_mul(100)
-        .saturating_div(38)
-        .saturating_add(1_000)
-        .max(8_000)
+    let finding_ms = read_ms.saturating_add(CHECK_FINDING_PADDING_MS);
+    let total_ms = CHECK_ROLL_MS
+        .saturating_add(finding_ms)
+        .saturating_add(CHECK_FADE_MS);
+    (finding_ms, total_ms, CHECK_ROLL_MS)
 }
 
 /// Which part of the display the figures are standing in.
@@ -469,6 +471,7 @@ impl Figures {
                     name == BUBBLE_OUT_ANIMATION
                         || name == FLOAT_ANIMATION
                         || name == GHOST_ANIMATION
+                        || name == "df-check-result-out"
                 });
             if finished
                 && let Some(element) = event.target().and_then(|t| t.dyn_into::<Element>().ok())
@@ -872,7 +875,7 @@ impl Figures {
     pub(super) fn set_check(&self, check: Option<&CheckDisplay>) -> Result<(), JsValue> {
         let Some(check) = check else {
             for figure in &self.figures {
-                if let Some(panel) = figure.bubbles.query_selector(".tv-check-result")? {
+                while let Some(panel) = figure.bubbles.query_selector(".tv-check-result")? {
                     panel.remove();
                 }
             }
@@ -892,12 +895,16 @@ impl Figures {
             return Ok(());
         }
         // A rapid second-seat check must not erase the first card while its finding is still
-        // readable. Replacing a result on the same hero is safe; cards on other figures remain
-        // in their own bubble containers until their timed fade completes.
-        if let Some(panel) = figure.bubbles.query_selector(".tv-check-result")? {
-            panel.remove();
+        // readable. Remove only the checked hero's other live bubble; prior result cards remain
+        // queued in this container until their timed fade completes.
+        let mut child = figure.bubbles.first_element_child();
+        while let Some(element) = child {
+            child = element.next_element_sibling();
+            if !element.class_list().contains("tv-check-result") {
+                element.remove();
+            }
         }
-        figure.bubbles.set_text_content(None);
+        let (finding_ms, total_ms, roll_ms) = check_result_phase_ms(&check.finding);
         let panel = node(
             &self.document,
             &figure.bubbles,
@@ -909,8 +916,7 @@ impl Figures {
         panel.set_attribute(
             "style",
             &format!(
-                "--check-duration:{}ms",
-                check_result_duration_ms(&check.finding)
+                "--check-duration:{total_ms}ms;--check-roll-duration:{roll_ms}ms;--check-finding-duration:{finding_ms}ms;--check-finding-delay:{roll_ms}ms"
             ),
         )?;
         panel.set_attribute("data-roll-mode", &check.roll_mode.to_string())?;
@@ -1739,7 +1745,10 @@ fn healing_action_text(mode: StageMode, amount: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUBBLE_FIXED_OBSTACLES, art_candidates, typed_line_anchor};
+    use super::{
+        BUBBLE_FIXED_OBSTACLES, CHECK_FADE_MS, CHECK_ROLL_MS, art_candidates,
+        check_result_phase_ms, typed_line_anchor,
+    };
 
     #[test]
     fn photographic_sprite_candidates_do_not_reintroduce_painted_portraits() {
@@ -1756,6 +1765,15 @@ mod tests {
     fn speech_bubble_placement_keeps_off_the_title_and_rules_note() {
         assert!(BUBBLE_FIXED_OBSTACLES.contains(&".tv-headline"));
         assert!(BUBBLE_FIXED_OBSTACLES.contains(&".tv-rules"));
+    }
+
+    #[test]
+    fn check_finding_has_a_full_reading_phase_after_the_roll() {
+        let (finding_ms, total_ms, roll_ms) =
+            check_result_phase_ms("A clear crest catches the light.");
+        assert_eq!(roll_ms, CHECK_ROLL_MS);
+        assert!(finding_ms > 4_000);
+        assert_eq!(total_ms, roll_ms + finding_ms + CHECK_FADE_MS);
     }
 
     #[test]
