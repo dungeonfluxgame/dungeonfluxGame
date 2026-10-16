@@ -1151,6 +1151,15 @@ impl Figures {
                 right - span * 0.2,
                 top + tall * 0.36,
             ));
+            // A thinking marker or an earlier line is a live part of the stage too. Keep the
+            // next bubble out of that rectangle; otherwise a reply can paint over the courier's
+            // loader while the server is still resolving the reply.
+            if other.bubbles.has_child_nodes() {
+                let active = rectangle(&other.bubbles);
+                if active.2 > active.0 && active.3 > active.1 {
+                    avoid.push(active);
+                }
+            }
         }
         for selector in BUBBLE_FIXED_OBSTACLES {
             if let Ok(Some(panel)) = self.document.query_selector(selector) {
@@ -1336,6 +1345,21 @@ impl Figures {
                 if right > left && bottom > top {
                     fallback_avoid.push(Rect::new(left, top, right, bottom));
                 }
+            }
+        }
+        // The plate has its own bubble layer, so the regular figure-head obstacles do not cover
+        // another figure's live speech or thinking bubble. Include those active bubbles before
+        // asking the plate layout to select a side.
+        for figure in &self.figures {
+            if figure.root.is_same_node(Some(bubble_owner.root.as_ref()))
+                || !Self::present(figure)
+                || !figure.bubbles.has_child_nodes()
+            {
+                continue;
+            }
+            let active = rectangle(&figure.bubbles);
+            if active.2 > active.0 && active.3 > active.1 {
+                interface.push(Rect::new(active.0, active.1, active.2, active.3));
             }
         }
         avoid.extend(interface);

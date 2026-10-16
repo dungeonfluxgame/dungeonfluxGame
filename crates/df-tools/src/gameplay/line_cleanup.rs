@@ -29,8 +29,9 @@ use super::{
 pub(super) const CLEANUP_DEADLINE: Duration = Duration::from_millis(1_500);
 /// The model's small dedicated output budget for one line, reasoning included.
 pub(super) const CLEANUP_OUTPUT_TOKENS: u32 = 160;
-/// The longest display line; a longer one is cut with an ellipsis, not rewritten.
-pub(super) const DISPLAY_CHARACTERS: usize = 240;
+/// The longest display line. Keep this aligned with the table log's 420-character line budget so
+/// a long but valid player utterance is not silently shortened before the stage can pace it.
+pub(super) const DISPLAY_CHARACTERS: usize = 420;
 /// The most characters a cleaned line may gain over the raw one (a typo fix, a name).
 const MAXIMUM_GROWTH: usize = 12;
 
@@ -522,7 +523,7 @@ mod tests {
 
     #[test]
     fn a_long_line_is_cut_with_an_ellipsis_not_rewritten() {
-        let raw: String = (0..100).map(|n| format!("w{n} ")).collect();
+        let raw: String = (0..160).map(|n| format!("w{n} ")).collect();
         let cleaned = normalise(&raw, &[]);
         assert!(cleaned.chars().count() <= DISPLAY_CHARACTERS);
         assert!(cleaned.ends_with('\u{2026}'));
