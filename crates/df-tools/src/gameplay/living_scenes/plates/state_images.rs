@@ -130,13 +130,14 @@ pub(super) struct Item {
     pub(super) key: Option<ImageKey>,
     pub(super) failed: bool,
     pub(super) shared: bool,
+    pub(super) explicitly_shared: bool,
     pub(super) requested_at: Duration,
 }
 
 /// Media decorates the server's latest durable item selection; stale requests cannot replace
 /// a newer purchase/examination or fabricate ownership on reconnect.
 fn enrich_item_card(card: &mut rpc::SceneItemCard, item: &Item) {
-    if card.thing_id != item.thing.id || card.detail != item.thing.detail {
+    if !item_card_matches(card, item) {
         return;
     }
     if let Some(detail) = &item.detail {
@@ -150,6 +151,20 @@ fn enrich_item_card(card: &mut rpc::SceneItemCard, item: &Item) {
     } else {
         rpc::PlateState::Pending
     } as i32;
+}
+
+fn item_card_matches(card: &rpc::SceneItemCard, item: &Item) -> bool {
+    let holder = item.thing.holder_id.as_deref().unwrap_or_default();
+    let observation_only = item
+        .thing
+        .holder_id
+        .as_deref()
+        .is_some_and(|holder| item.thing.owner_id.as_deref() != Some(holder));
+    card.thing_id == item.thing.id
+        && card.name == item.thing.name
+        && card.detail == item.thing.detail
+        && card.holder == holder
+        && card.observation_only == observation_only
 }
 
 pub(super) enum Job {
@@ -481,6 +496,11 @@ impl Shared {
                     item.shared
                         && self.inner.now().saturating_sub(item.requested_at)
                             < Duration::from_secs(8)
+                        && (item.explicitly_shared
+                            || scene
+                                .hand_items
+                                .iter()
+                                .any(|card| item_card_matches(card, item)))
                 })
                 .max_by_key(|item| item.requested_at),
         };
@@ -493,12 +513,7 @@ impl Shared {
                     .state_images
                     .items
                     .values()
-                    .filter(|item| {
-                        item.thing.id == card.thing_id
-                            && item.thing.name == card.name
-                            && item.thing.detail == card.detail
-                            && item.thing.holder_id.as_deref() == Some(card.holder.as_str())
-                    })
+                    .filter(|item| item_card_matches(card, item))
                     .max_by_key(|item| item.requested_at)
                 {
                     enrich_item_card(card, item);
@@ -511,13 +526,7 @@ impl Shared {
                 .state_images
                 .items
                 .values()
-                .filter(|item| {
-                    item.shared
-                        && item.thing.id == card.thing_id
-                        && item.thing.name == card.name
-                        && item.thing.detail == card.detail
-                        && item.thing.holder_id.as_deref() == Some(card.holder.as_str())
-                })
+                .filter(|item| item.shared && item_card_matches(card, item))
                 .max_by_key(|item| item.requested_at)
             {
                 enrich_item_card(card, item);
@@ -1092,6 +1101,28 @@ impl Plates {
         detail: Option<String>,
         shared: bool,
     ) -> Result<(), &'static str> {
+        self.request_item_with_visibility(hero, thing_id, detail, shared, shared)
+    }
+
+    /// Makes an image available for a current hand projection without treating the projection
+    /// itself as an explicit share action.
+    pub(in crate::gameplay) fn request_hand_item(
+        &self,
+        hero: &str,
+        thing_id: &str,
+        shared: bool,
+    ) -> Result<(), &'static str> {
+        self.request_item_with_visibility(hero, thing_id, None, shared, false)
+    }
+
+    fn request_item_with_visibility(
+        &self,
+        hero: &str,
+        thing_id: &str,
+        detail: Option<String>,
+        shared: bool,
+        explicitly_shared: bool,
+    ) -> Result<(), &'static str> {
         let mut book = locked(&self.shared.book);
         let thing = book
             .current
@@ -1111,7 +1142,12 @@ impl Plates {
         let id = format!("{}:{state}", thing.id);
         let now = self.shared.inner.now();
         if let Some(item) = book.state_images.items.get_mut(&id) {
+            // Holder and owner do not change the close-up image identity. Refresh them from the
+            // authoritative snapshot so a reused image follows the current custody state.
+            item.thing = thing;
+            item.detail = detail;
             item.shared |= shared;
+            item.explicitly_shared |= explicitly_shared;
             if shared {
                 item.requested_at = now;
             }
@@ -1138,6 +1174,7 @@ impl Plates {
                 key: None,
                 failed: admission.is_err(),
                 shared,
+                explicitly_shared,
                 requested_at: now,
             },
         );

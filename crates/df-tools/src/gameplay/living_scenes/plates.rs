@@ -819,7 +819,7 @@ impl Plates {
                     return;
                 };
                 for item in scene.hand_items.clone() {
-                    let _ = self.request_item(&item.holder, &item.thing_id, None, true);
+                    let _ = self.request_hand_item(&item.holder, &item.thing_id, true);
                 }
                 let (scene_key, _) = scene_identity(&display.scene_asset, scene);
                 display.live_plate_graph_revision =
@@ -834,7 +834,7 @@ impl Plates {
                     return;
                 };
                 for item in scene.hand_items.clone() {
-                    let _ = self.request_item(&item.holder, &item.thing_id, None, false);
+                    let _ = self.request_hand_item(&item.holder, &item.thing_id, false);
                 }
                 let (scene_key, _) = scene_identity("", scene);
                 let _revision = self.shared.apply(&scene_key, scene);

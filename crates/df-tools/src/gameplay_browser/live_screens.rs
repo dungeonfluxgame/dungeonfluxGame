@@ -10,6 +10,7 @@ use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
 use df_observe::presentation::VisualSource;
 use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
+use std::collections::BTreeMap;
 
 const HARBOR_ESTABLISHING: &str = "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
 const HARBOR_WHARF: &str = "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
@@ -953,17 +954,14 @@ fn render_item_card(
     item: Option<&rpc::SceneItemCard>,
     display: bool,
 ) -> Result<(), JsValue> {
+    let item_state = item.map(|item| {
+        let mut state = item_card_state(item);
+        state.push_str(if display { "1:" } else { "0:" });
+        state
+    });
     if let Some(previous) = parent.query_selector(".live-scene-item")? {
-        let same = item.is_some_and(|item| {
-            previous.get_attribute("data-item-state")
-                == Some(format!(
-                    "{}:{}:{}:{}:{}",
-                    item.thing_id,
-                    item.state_revision,
-                    item.image_path,
-                    item.observation_only,
-                    item.holder
-                ))
+        let same = item_state.as_deref().is_some_and(|state| {
+            previous.get_attribute("data-item-state").as_deref() == Some(state)
         });
         if same {
             return Ok(());
@@ -974,8 +972,6 @@ fn render_item_card(
         return Ok(());
     };
     let card = node(document, parent, "article", "live-scene-item", "")?;
-    let id =
-        super::presentation_timing::identity(&format!("{}:{}", item.thing_id, item.state_revision));
     let scene = {
         let mut current = Some(parent.clone());
         let mut scene = String::new();
@@ -988,16 +984,14 @@ fn render_item_card(
         }
         scene
     };
+    let id = super::presentation_timing::identity(&format!(
+        "{scene}:{}",
+        item_state.as_deref().unwrap_or_default()
+    ));
     card.set_attribute("data-component-id", &id.to_string())?;
     card.set_attribute("data-component-scene", &scene)?;
     card.set_attribute("data-component-type", "item_card")?;
-    card.set_attribute(
-        "data-item-state",
-        &format!(
-            "{}:{}:{}:{}:{}",
-            item.thing_id, item.state_revision, item.image_path, item.observation_only, item.holder
-        ),
-    )?;
+    card.set_attribute("data-item-state", item_state.as_deref().unwrap_or_default())?;
     card.set_attribute("data-display", if display { "true" } else { "false" })?;
     node(document, &card, "h3", "live-scene-item-name", &item.name)?;
     if let Some(path) = crate::presentation::imagery_url(&item.image_path) {
@@ -1080,65 +1074,44 @@ fn render_hand_items(
     items: &[rpc::SceneItemCard],
     display: bool,
 ) -> Result<(), JsValue> {
-    if let Some(previous) = parent.query_selector(".live-scene-hand-inventory")? {
-        let state = items
-            .iter()
-            .map(|item| {
-                format!(
-                    "{}:{}:{}:{}:{}:{}:{}:{}",
-                    item.thing_id,
-                    item.name,
-                    item.detail,
-                    item.state_revision,
-                    item.holder,
-                    item.image_path,
-                    item.image_state,
-                    item.observation_only
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("|");
-        if previous.get_attribute("data-hand-state").as_deref() == Some(state.as_str()) {
-            return Ok(());
-        }
-        for card in previous.query_selector_all(".live-scene-item")? {
-            if let Some(card) = card.dyn_ref::<web_sys::Element>() {
-                close_item_card(card, "successor");
-            }
-        }
-        previous.remove();
-    }
+    let existing_section = parent.query_selector(".live-scene-hand-inventory")?;
     if items.is_empty() {
+        if let Some(section) = existing_section {
+            close_hand_item_cards(&section, "successor")?;
+            section.remove();
+        }
         return Ok(());
     }
-    let section = node(document, parent, "section", "live-scene-hand-inventory", "")?;
+    let section = if let Some(section) = existing_section {
+        section
+    } else {
+        node(document, parent, "section", "live-scene-hand-inventory", "")?
+    };
     let state = items
         .iter()
-        .map(|item| {
-            format!(
-                "{}:{}:{}:{}:{}:{}:{}:{}",
-                item.thing_id,
-                item.name,
-                item.detail,
-                item.state_revision,
-                item.holder,
-                item.image_path,
-                item.image_state,
-                item.observation_only
-            )
-        })
+        .map(item_card_state)
         .collect::<Vec<_>>()
         .join("|");
     section.set_attribute("data-hand-state", &state)?;
-    if display {
-        node(
+    let title = match section.query_selector(".live-scene-hand-inventory-title")? {
+        Some(title) => title,
+        None => node(
             document,
             &section,
             "h2",
             "live-scene-hand-inventory-title",
-            "Held observations",
-        )?;
-        let list = node(document, &section, "ul", "live-scene-hand-summary", "")?;
+            "",
+        )?,
+    };
+    if display {
+        close_hand_item_cards(&section, "successor")?;
+        remove_hand_item_wrappers(&section)?;
+        title.set_text_content(Some("Held observations"));
+        let list = match section.query_selector(".live-scene-hand-summary")? {
+            Some(list) => list,
+            None => node(document, &section, "ul", "live-scene-hand-summary", "")?,
+        };
+        list.set_text_content(None);
         for item in items {
             node(
                 document,
@@ -1150,16 +1123,87 @@ fn render_hand_items(
         }
         return Ok(());
     }
-    node(
-        document,
-        &section,
-        "h2",
-        "live-scene-hand-inventory-title",
-        "In hand · observation only",
-    )?;
+    title.set_text_content(Some("In hand · observation only"));
+    if let Some(summary) = section.query_selector(".live-scene-hand-summary")? {
+        summary.remove();
+    }
+    let mut existing = BTreeMap::new();
+    let wrappers = section.query_selector_all(".live-scene-hand-item")?;
+    for index in 0..wrappers.length() {
+        let Some(wrapper) = wrappers
+            .item(index)
+            .and_then(|node| node.dyn_into::<Element>().ok())
+        else {
+            continue;
+        };
+        let Some(thing_id) = wrapper.get_attribute("data-thing-id") else {
+            close_hand_item_cards(&wrapper, "successor")?;
+            wrapper.remove();
+            continue;
+        };
+        if existing.contains_key(&thing_id) {
+            close_hand_item_cards(&wrapper, "successor")?;
+            wrapper.remove();
+        } else {
+            existing.insert(thing_id, wrapper);
+        }
+    }
     for item in items {
-        let host = node(document, &section, "div", "live-scene-hand-item", "")?;
+        let host = match existing.remove(&item.thing_id) {
+            Some(host) => host,
+            None => node(document, &section, "div", "live-scene-hand-item", "")?,
+        };
+        host.set_attribute("data-thing-id", &item.thing_id)?;
         render_item_card(document, &host, Some(item), display)?;
+        section.append_child(&host)?;
+    }
+    for (_, wrapper) in existing {
+        close_hand_item_cards(&wrapper, "successor")?;
+        wrapper.remove();
+    }
+    Ok(())
+}
+
+fn item_card_state(item: &rpc::SceneItemCard) -> String {
+    let image_state = item.image_state.to_string();
+    let observation_only = item.observation_only.to_string();
+    [
+        item.thing_id.as_str(),
+        item.name.as_str(),
+        item.detail.as_str(),
+        item.image_path.as_str(),
+        image_state.as_str(),
+        observation_only.as_str(),
+        item.holder.as_str(),
+    ]
+    .into_iter()
+    .map(|part| format!("{}:{part}", part.len()))
+    .collect::<Vec<_>>()
+    .concat()
+}
+
+fn close_hand_item_cards(parent: &Element, reason: &'static str) -> Result<(), JsValue> {
+    let cards = parent.query_selector_all(".live-scene-item")?;
+    for index in 0..cards.length() {
+        if let Some(card) = cards
+            .item(index)
+            .and_then(|node| node.dyn_into::<Element>().ok())
+        {
+            close_item_card(&card, reason);
+        }
+    }
+    Ok(())
+}
+
+fn remove_hand_item_wrappers(parent: &Element) -> Result<(), JsValue> {
+    let wrappers = parent.query_selector_all(".live-scene-hand-item")?;
+    for index in 0..wrappers.length() {
+        if let Some(wrapper) = wrappers
+            .item(index)
+            .and_then(|node| node.dyn_into::<Element>().ok())
+        {
+            wrapper.remove();
+        }
     }
     Ok(())
 }

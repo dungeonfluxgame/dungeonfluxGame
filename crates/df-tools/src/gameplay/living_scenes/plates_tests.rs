@@ -1610,6 +1610,189 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
 }
 
 #[tokio::test]
+async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_projection() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(39);
+    let mut scene = scene(SceneKey::Opening, "The Cloth Shop", Some("Marek"));
+    let mut model = generated.settings.meeting.model.clone().unwrap();
+    let thing = model.things.iter_mut().find(|thing| !thing.in_use).unwrap();
+    let thing_id = thing.id.clone();
+    let thing_name = thing.name.clone();
+    let thing_detail = thing.detail.clone();
+    thing.owner_id = Some("merchant".to_owned());
+    thing.holder_id = Some("Marek".to_owned());
+    thing.publicly_visible = true;
+    scene.setting.as_mut().unwrap().model = Some(model);
+
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &scene, &[], &[1]);
+    drain(&mut queue);
+    let plates = Plates {
+        shared: shared.clone(),
+        _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
+    };
+    plates.request_hand_item("Marek", &thing_id, true).unwrap();
+    assert_eq!(drain(&mut queue).len(), 1);
+    let cache_id = {
+        let book = locked(&shared.book);
+        let cached = book.state_images.items.values().next().unwrap();
+        format!(
+            "{}:{}",
+            cached.thing.id,
+            state_images::item_revision(&cached.thing, cached.detail.as_deref())
+        )
+    };
+    locked(&shared.book)
+        .state_images
+        .items
+        .get_mut(&cache_id)
+        .unwrap()
+        .key = Some(key('a'));
+
+    {
+        let mut book = locked(&shared.book);
+        let current = book.current.as_mut().unwrap();
+        let thing = current
+            .scene
+            .as_mut()
+            .unwrap()
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .model
+            .things
+            .iter_mut()
+            .find(|thing| thing.id == thing_id)
+            .unwrap();
+        thing.holder_id = Some("Sigrun".to_owned());
+    }
+    plates.request_hand_item("Sigrun", &thing_id, true).unwrap();
+    assert!(
+        drain(&mut queue).is_empty(),
+        "custody reuses the object image"
+    );
+    {
+        let book = locked(&shared.book);
+        let cached = book.state_images.items.get(&cache_id).unwrap();
+        assert_eq!(cached.thing.owner_id.as_deref(), Some("merchant"));
+        assert_eq!(cached.thing.holder_id.as_deref(), Some("Sigrun"));
+        assert!(!cached.explicitly_shared);
+    }
+
+    let hand_card = |holder: &str, detail: &str| rpc::SceneItemCard {
+        thing_id: thing_id.clone(),
+        name: thing_name.clone(),
+        detail: detail.to_owned(),
+        image_state: rpc::PlateState::Pending as i32,
+        state_revision: 1,
+        observation_only: true,
+        holder: holder.to_owned(),
+        ..Default::default()
+    };
+    let mut phone = rpc::GameplayScene {
+        title: scene.title.clone(),
+        scene_asset: scene.asset.clone(),
+        hand_items: vec![hand_card("Sigrun", &thing_detail)],
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut phone, Some("Sigrun"));
+    assert_eq!(phone.hand_items[0].image_path, key('a').path());
+    assert!(phone.hand_items[0].observation_only);
+    assert_eq!(phone.hand_items[0].holder, "Sigrun");
+
+    let mut display = rpc::GameplayScene {
+        title: scene.title.clone(),
+        scene_asset: scene.asset.clone(),
+        hand_items: vec![hand_card("Sigrun", &thing_detail)],
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut display, None);
+    assert_eq!(display.item.as_ref().unwrap().holder, "Sigrun");
+    assert_eq!(display.item.as_ref().unwrap().image_path, key('a').path());
+
+    {
+        let mut book = locked(&shared.book);
+        let current = book.current.as_mut().unwrap();
+        let thing = current
+            .scene
+            .as_mut()
+            .unwrap()
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .model
+            .things
+            .iter_mut()
+            .find(|thing| thing.id == thing_id)
+            .unwrap();
+        thing.holder_id = Some("Vale".to_owned());
+        thing.publicly_visible = false;
+    }
+    plates.request_hand_item("Vale", &thing_id, false).unwrap();
+    plates.request_hand_item("Vale", &thing_id, false).unwrap();
+    assert!(
+        drain(&mut queue).is_empty(),
+        "reconnect reuses the item image"
+    );
+
+    let mut private_phone = rpc::GameplayScene {
+        title: scene.title.clone(),
+        scene_asset: scene.asset.clone(),
+        hand_items: vec![hand_card("Vale", &thing_detail)],
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut private_phone, Some("Vale"));
+    assert_eq!(private_phone.hand_items[0].image_path, key('a').path());
+
+    let mut private_display = rpc::GameplayScene {
+        title: scene.title.clone(),
+        scene_asset: scene.asset.clone(),
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut private_display, None);
+    assert!(
+        private_display.item.is_none(),
+        "a cached public hand image cannot reveal a later private hand"
+    );
+
+    {
+        let mut book = locked(&shared.book);
+        let current = book.current.as_mut().unwrap();
+        let thing = current
+            .scene
+            .as_mut()
+            .unwrap()
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .model
+            .things
+            .iter_mut()
+            .find(|thing| thing.id == thing_id)
+            .unwrap();
+        thing.detail.push_str(" The seam is newly described.");
+    }
+    plates.request_hand_item("Vale", &thing_id, false).unwrap();
+    assert_eq!(
+        drain(&mut queue).len(),
+        1,
+        "new details get their own image"
+    );
+    let detailed_detail = format!("{thing_detail} The seam is newly described.");
+    let detailed_card = hand_card("Vale", &detailed_detail);
+    let mut detailed_phone = rpc::GameplayScene {
+        title: scene.title.clone(),
+        scene_asset: scene.asset.clone(),
+        hand_items: vec![detailed_card],
+        ..Default::default()
+    };
+    shared.project_scene_contents(&mut detailed_phone, Some("Vale"));
+    assert!(
+        detailed_phone.hand_items[0].image_path.is_empty(),
+        "an image for an earlier detail cannot be attached to a changed card"
+    );
+}
+
+#[tokio::test]
 async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() {
     use crate::gameplay::imagery::tests::DirectionFixture;
     let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
