@@ -285,6 +285,11 @@ fn scene_json(scene: &rpc::GameplayScene) -> Value {
             "status": rpc::PlateState::try_from(item.image_state).map_or("unrecognized", |state| state.as_str_name()),
             "state_revision": item.state_revision,
         })),
+        "hand_items": scene.hand_items.iter().map(|item| json!({
+            "id": item.thing_id, "name": item.name, "detail": item.detail,
+            "observation_only": item.observation_only, "holder": item.holder,
+            "state_revision": item.state_revision,
+        })).collect::<Vec<_>>(),
     })
 }
 

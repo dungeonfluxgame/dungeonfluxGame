@@ -148,6 +148,9 @@
 .live-scene-item-image{display:block;width:100%;max-height:22rem;object-fit:contain;border-radius:.4rem}
 .live-scene-item-detail{white-space:pre-line;line-height:1.5}
 .live-scene-item-status{margin:.75rem 0 0;color:#e3c68f;font:700 .72rem/1.4 system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase}
+.live-scene-hand-inventory{display:grid;gap:.5rem;margin:1rem 0;padding:.75rem;background:#151310b8;border:1px solid #927650;border-radius:.6rem}
+.live-scene-hand-inventory-title{margin:0;color:#e3c68f;font:700 .75rem/1.3 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.live-scene-hand-item .live-scene-item{margin:.25rem 0}
 .live-scene-item[data-display=true]{position:absolute;z-index:35;right:3%;top:18%;width:26%;max-height:62%;overflow:hidden;animation:df-item-share 8s both;pointer-events:none}
 @keyframes df-item-share{0%{opacity:0;transform:translateY(.5rem)}8%,90%{opacity:1;transform:none}100%{opacity:0;visibility:hidden}}
 

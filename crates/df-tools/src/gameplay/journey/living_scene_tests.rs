@@ -627,6 +627,49 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
 }
 
 #[test]
+fn hand_inventory_lists_each_current_observation_and_clears_only_the_returned_item() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let targets = model
+            .things
+            .iter()
+            .filter(|thing| thing.portable && !thing.in_use && thing.holder_id.is_none())
+            .take(2)
+            .map(|thing| thing.id.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            targets.len() == 2,
+            "shop fixture needs two portable objects"
+        );
+        let first = interact(&current, member, 41, &targets[0], "take");
+        let second = interact(&first, member, 42, &targets[1], "take");
+
+        let held = living_scene::hand_items(second.state(), &scene, Some("Brynn")).unwrap();
+        assert_eq!(held.len(), 2);
+        assert_eq!(
+            held.iter()
+                .map(|item| item.thing_id.as_str())
+                .collect::<Vec<_>>(),
+            targets.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert!(held.iter().all(|item| item.observation_only));
+        assert!(
+            living_scene::hand_items(second.state(), &scene, Some("Vale"))
+                .unwrap()
+                .is_empty(),
+            "another hero cannot review Brynn's private hand collection"
+        );
+
+        let returned = interact(&second, member, 43, &targets[0], "return");
+        let remaining = living_scene::hand_items(returned.state(), &scene, Some("Brynn")).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].thing_id, targets[1]);
+    });
+}
+
+#[test]
 fn first_player_projection_contains_committed_room_state_without_a_display_observation() {
     taproom(|| {
         let (current, member) = opened();

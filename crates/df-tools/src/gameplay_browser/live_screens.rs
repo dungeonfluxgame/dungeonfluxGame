@@ -796,6 +796,7 @@ pub(super) fn render(
             action_button(client, &actions, offer.clone())?;
         }
         render_item_card(&document, &dock, input.scene.item.as_ref(), false)?;
+        render_hand_items(&document, &dock, &input.scene.hand_items, false)?;
         render_scene_contents(&document, &dock, &input.scene.scene_contents_json)?;
     }
     recovery(client, &dock)
@@ -881,6 +882,7 @@ fn render_display(
             input.scene.item.as_ref(),
             true,
         )?;
+        render_hand_items(&state.document, stage.root(), &input.scene.hand_items, true)?;
         stage.dock().clone()
     };
     for selector in [".tv-sound-start", ".tv-sound-skip"] {
@@ -1100,6 +1102,33 @@ fn render_item_card(
             read_ms,
             8_000,
         );
+    }
+    Ok(())
+}
+
+fn render_hand_items(
+    document: &Document,
+    parent: &Element,
+    items: &[rpc::SceneItemCard],
+    display: bool,
+) -> Result<(), JsValue> {
+    if let Some(previous) = parent.query_selector(".live-scene-hand-inventory")? {
+        previous.remove();
+    }
+    if items.is_empty() {
+        return Ok(());
+    }
+    let section = node(document, parent, "section", "live-scene-hand-inventory", "")?;
+    node(
+        document,
+        &section,
+        "h2",
+        "live-scene-hand-inventory-title",
+        "In hand · observation only",
+    )?;
+    for item in items {
+        let host = node(document, &section, "div", "live-scene-hand-item", "")?;
+        render_item_card(document, &host, Some(item), display)?;
     }
     Ok(())
 }

@@ -418,6 +418,40 @@ pub(in crate::gameplay) fn item_for(
     Ok(None)
 }
 
+/// Returns every currently held, non-owned scene thing for a phone or public display.
+/// The authoritative snapshot, rather than the last decision, prevents an old take
+/// receipt from resurrecting an item after it was returned, dropped, or given away.
+pub(in crate::gameplay) fn hand_items(
+    state: &GameState,
+    scene: &pack::Scene,
+    holder: Option<&str>,
+) -> Result<Vec<rpc::SceneItemCard>, RepositoryError> {
+    let Some(snapshot) = snapshot(state, scene)? else {
+        return Ok(Vec::new());
+    };
+    let revision = state.basis().revision.sequence();
+    Ok(snapshot
+        .model
+        .things
+        .iter()
+        .filter(|thing| {
+            thing.holder_id.is_some()
+                && thing.owner_id.as_deref() != thing.holder_id.as_deref()
+                && holder.is_none_or(|expected| thing.holder_id.as_deref() == Some(expected))
+        })
+        .map(|thing| rpc::SceneItemCard {
+            thing_id: thing.id.clone(),
+            name: thing.name.clone(),
+            detail: thing.detail.clone(),
+            image_path: String::new(),
+            image_state: rpc::PlateState::Failed as i32,
+            state_revision: revision,
+            observation_only: true,
+            holder: thing.holder_id.clone().unwrap_or_default(),
+        })
+        .collect())
+}
+
 pub(in crate::gameplay) fn gift_amount(words: &str) -> Option<u32> {
     let tokens = words.split_whitespace().collect::<Vec<_>>();
     let amounts = tokens

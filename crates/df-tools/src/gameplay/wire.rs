@@ -1381,6 +1381,7 @@ pub(super) fn project_journey(
             scene_video_path: String::new(),
             scene_contents_json: String::new(),
             item: None,
+            hand_items: Vec::new(),
         }
     };
     scene.cast = scene_cast(&authored);
@@ -1417,6 +1418,9 @@ pub(super) fn project_journey(
         && let Some(hero) = journey.own_character.as_ref()
     {
         scene.item = journey::living_scene::item_for(state, &authored, &hero.name)?;
+        scene.hand_items = journey::living_scene::hand_items(state, &authored, Some(&hero.name))?;
+    } else if role == LocalDemoRole::Display {
+        scene.hand_items = journey::living_scene::hand_items(state, &authored, None)?;
     }
 
     let latest_check = state
