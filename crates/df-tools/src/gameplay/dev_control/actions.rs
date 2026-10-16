@@ -1242,86 +1242,39 @@ pub(super) async fn say(
         .submit_line(credential, request)
         .await
         .map_err(|status| failed(status.message()))?;
-    let mut npc_outcome = None;
-    let mut npc_fallback = None;
-    let mut npc_event_proposal = None;
-    let mut npc_event_result = None;
-    let result = match answer {
-        super::super::dialogue::DialogueReply::Raw(response, npc) => {
-            let npc_reply = match npc {
-                Some(mut context) => {
-                    context.watch_publication(state.service.updates.clone());
-                    let shown = state.service.npc_voice.display_line(&context).await;
-                    context.publish_typed_line(&state.service.table_log, &shown);
-                    let _thinking = state.service.table_log.reply_pending(&context.speaker);
-                    match state
-                        .service
-                        .npc_voice
-                        .converse_report(context, &state.service.table_log)
-                        .await
-                    {
-                        Some(exchange) => {
-                            npc_outcome = Some(exchange.outcome);
-                            npc_fallback = exchange.fallback.map(|reason| reason.label());
-                            if let Some(proposal) = exchange.event_proposal {
-                                let proposal_view = json!({
-                                    "kind": proposal.kind.label(),
-                                    "actor_id": proposal.actor_id.clone(),
-                                    "npc_id": proposal.npc_id.clone(),
-                                    "item_id": proposal.item_id.clone(),
-                                    "recipient_id": proposal.recipient_id.clone(),
-                                    "source_line_id": proposal.source_line_id.clone(),
-                                    "revision": proposal.revision.clone(),
-                                    "status": "proposal",
-                                });
-                                npc_event_proposal = Some(proposal_view);
-                                match state.service.commit_npc_event(credential, proposal).await {
-                                    Ok(outcome) => {
-                                        npc_event_result = Some(json!({
-                                            "status": outcome.status,
-                                            "revision": outcome.revision,
-                                        }));
-                                    }
-                                    Err(status) => {
-                                        npc_event_result = Some(json!({
-                                            "status": "rejected",
-                                            "reason": status.message(),
-                                        }));
-                                    }
-                                }
-                            }
-                            exchange.text
-                        }
-                        None => String::new(),
-                    }
-                }
-                None => response.npc_reply.clone(),
-            };
-            Ok((
-                axum::http::StatusCode::OK,
-                Json(json!({
-                    "status": match npc_outcome {
-                        Some(super::super::npc_reply::ExchangeOutcome::Withheld) => "withheld",
-                        Some(super::super::npc_reply::ExchangeOutcome::Unavailable) => "unavailable",
-                        Some(super::super::npc_reply::ExchangeOutcome::Spoken) | None => "said",
-                    },
-                    "disposition": disposition_name(response.disposition),
-                    "npc_reply": npc_reply,
-                    "npc_outcome": npc_outcome.map(|outcome| outcome.label()).unwrap_or("no_reply"),
-                    "npc_fallback": npc_fallback,
-                    "npc_event_proposal": npc_event_proposal,
-                    "npc_event_result": npc_event_result,
-                    "npc_actor_id": response.npc_actor_id,
-                    "npc_speaker": response.npc_speaker,
-                    "confirmation_required": response.confirmation_required,
-                    "input_id":response.input_id.as_ref().and_then(|id|id.value.as_ref()).map(|bytes|crate::gameplay::journey::hex(bytes)),
-                    "confirmation_token":crate::gameplay::journey::hex(&response.confirmation_token),
-                    "revision": super::revision_json(response.revision.as_ref()),
-                })),
-            ))
-        }
-        _ => Err(failed("dialogue response binding invalid")),
+    let super::super::dialogue::DialogueReply::Raw(response, npc) = answer else {
+        return Err(failed("dialogue response binding invalid"));
     };
+    let completion = state
+        .service
+        .complete_dialogue_response(credential, response, npc)
+        .await
+        .map_err(|status| failed(status.message()))?;
+    let response = completion.response;
+    let npc_outcome = completion.npc_outcome;
+    let npc_reply = response.npc_reply.clone();
+    let result = Ok((
+        axum::http::StatusCode::OK,
+        Json(json!({
+            "status": match npc_outcome {
+                Some(super::super::npc_reply::ExchangeOutcome::Withheld) => "withheld",
+                Some(super::super::npc_reply::ExchangeOutcome::Unavailable) => "unavailable",
+                Some(super::super::npc_reply::ExchangeOutcome::Spoken) | None => "said",
+            },
+            "disposition": disposition_name(response.disposition),
+            "npc_reply": npc_reply,
+            "npc_outcome": npc_outcome.map(|outcome| outcome.label()).unwrap_or("no_reply"),
+            "npc_fallback": completion.npc_fallback,
+            "npc_event_proposal": completion.npc_event_proposal,
+            "npc_event_result": completion.npc_event_result,
+            "npc_actor_id": response.npc_actor_id,
+            "npc_speaker": response.npc_speaker,
+            "confirmation_required": response.confirmation_required,
+            "input_id":response.input_id.as_ref().and_then(|id|id.value.as_ref()).map(|bytes|crate::gameplay::journey::hex(bytes)),
+            "confirmation_token":crate::gameplay::journey::hex(&response.confirmation_token),
+            "revision": super::revision_json(response.revision.as_ref()),
+        })),
+    ));
     super::super::actor::record_audit_line(
         "gameplay.exchange_timing",
         format!(

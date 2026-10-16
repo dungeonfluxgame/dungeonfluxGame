@@ -355,9 +355,12 @@ fn resolve_direction(terms: &[&TradeTerms], words: &str) -> Option<TradeDirectio
     ]
     .iter()
     .any(|phrase| contains_phrase(words, phrase));
+    // Availability also depends on the merchant's purse. An explicit buyback request remains a
+    // sale even when that purse is empty; the canonical sell term still binds the direction, and
+    // the availability check rejects any quote that the merchant cannot fund.
     let hero_holds_item = terms
         .iter()
-        .any(|term| term.direction == TradeDirection::HeroSells && term.available);
+        .any(|term| term.direction == TradeDirection::HeroSells);
     match (sells, buys) {
         (true, true) if canonical_buyback && hero_holds_item => Some(TradeDirection::HeroSells),
         (true, false) => Some(TradeDirection::HeroSells),
@@ -1038,6 +1041,12 @@ fn is_refusal(reply: &str) -> bool {
         "cannot agree",
         "won't agree",
         "will not agree",
+        "can't take less",
+        "cannot take less",
+        "can't go lower",
+        "cannot go lower",
+        "can't come lower",
+        "cannot come lower",
     ];
     REFUSALS
         .iter()
@@ -1107,6 +1116,12 @@ fn is_quote_decline(words: &str) -> bool {
 
 fn is_present_commitment(reply: &str) -> bool {
     const COMMITMENTS: &[&str] = &[
+        "i ask",
+        "i have them marked at",
+        "i have it marked at",
+        "i've got them marked at",
+        "i've got it marked at",
+        "marked at",
         "i can do",
         "we can do",
         "i'll do",

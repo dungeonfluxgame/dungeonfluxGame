@@ -91,6 +91,61 @@ fn record_merchant_quote_candidate(
     );
 }
 
+fn record_merchant_reply_context(
+    actor_id: &str,
+    quote_followup: bool,
+    terms_count: usize,
+    hero_buy_terms: usize,
+    hero_sell_terms: usize,
+    named_sell_terms: usize,
+    selected_item: bool,
+    buyback_memory: &'static str,
+    context_ready: bool,
+) {
+    actor::record_audit_diagnostic(
+        "gameplay.merchant.reply_context",
+        format!(
+            "MERCHANT_REPLY_CONTEXT actor={actor_id} quote_followup={} terms={terms_count} buy_terms={hero_buy_terms} sell_terms={hero_sell_terms} named_sell_terms={named_sell_terms} selected_item={} buyback_memory={buyback_memory} context={}",
+            if quote_followup { "yes" } else { "no" },
+            if selected_item { "yes" } else { "no" },
+            if context_ready {
+                "ready"
+            } else {
+                "unavailable"
+            },
+        ),
+        serde_json::Map::from_iter([
+            ("actor_id".into(), serde_json::json!(actor_id)),
+            ("quote_followup".into(), serde_json::json!(quote_followup)),
+            ("terms_count".into(), serde_json::json!(terms_count)),
+            ("hero_buy_terms".into(), serde_json::json!(hero_buy_terms)),
+            ("hero_sell_terms".into(), serde_json::json!(hero_sell_terms)),
+            (
+                "named_sell_terms".into(),
+                serde_json::json!(named_sell_terms),
+            ),
+            ("selected_item".into(), serde_json::json!(selected_item)),
+            ("buyback_memory".into(), serde_json::json!(buyback_memory)),
+            ("context_ready".into(), serde_json::json!(context_ready)),
+        ]),
+        &[
+            (
+                "gameplay.merchant.reply_context.status",
+                if context_ready {
+                    "ready"
+                } else {
+                    "unavailable"
+                }
+                .to_owned(),
+            ),
+            (
+                "gameplay.merchant.reply_context.buyback_memory",
+                buyback_memory.to_owned(),
+            ),
+        ],
+    );
+}
+
 pub(super) enum DialogueRequest {
     SyncNotes,
     PendingMerchantQuote,
@@ -231,6 +286,14 @@ impl DialogueRequest {
             Self::Raw(bytes) | Self::Confirm(bytes) | Self::Cancel(bytes) => bytes.capacity(),
         }
     }
+}
+
+pub(super) struct DialogueCompletion {
+    pub response: rpc::DialogueResponse,
+    pub npc_outcome: Option<super::npc_reply::ExchangeOutcome>,
+    pub npc_fallback: Option<String>,
+    pub npc_event_proposal: Option<serde_json::Value>,
+    pub npc_event_result: Option<serde_json::Value>,
 }
 
 pub(super) enum DialogueReply {
@@ -1441,127 +1504,124 @@ impl Service {
     }
 }
 
-#[tonic::async_trait]
-impl rpc::dialogue_service_server::DialogueService for Service {
-    async fn submit(
+impl Service {
+    pub(super) async fn complete_dialogue_response(
         &self,
-        request: Request<rpc::RawDialogueRequest>,
-    ) -> Result<Response<rpc::DialogueResponse>, Status> {
-        let credential = credential(&request)?;
-        match self.submit_line(credential, request.into_inner()).await? {
-            DialogueReply::Raw(mut response, npc) => {
-                // The model call runs here, off the actor thread; on any failure the
-                // response is exactly the classification the actor produced.
-                if let Some(mut context) = npc {
-                    let bargain_source = (
-                        context.actor_id.clone(),
-                        context.npc_id.clone(),
-                        context.scene_identity.clone(),
-                        context.observed_revision.clone(),
-                        context.typed_words.clone(),
-                        context.hero_id.clone(),
-                        context.pending_quote.clone(),
-                    );
-                    context.watch_publication(self.updates.clone());
-                    // The table sees the hero's line cleaned up (within its deadline), then
-                    // the speaker thinking until the reply (or the lack of one) is in; the
-                    // mark clears when this scope ends.
-                    let shown = self.npc_voice.display_line(&context).await;
-                    let player_line = context.publish_typed_line(&self.table_log, &shown);
-                    let mut closed_prior_quote = false;
-                    if let (Some(quote), Some(line)) =
-                        (context.pending_quote.as_ref(), player_line.as_ref())
-                    {
-                        let decision = super::journey::merchant_bargaining::quote_decision(
-                            &line.text,
-                            quote.price_cp,
-                        );
-                        if matches!(
-                            decision,
-                            super::journey::merchant_bargaining::QuoteDecision::Decline
-                                | super::journey::merchant_bargaining::QuoteDecision::Counteroffer
-                        ) {
-                            match self
-                                .close_merchant_quote(
-                                    credential,
-                                    &quote.quote_id,
-                                    journey::living_scene::MerchantQuoteClosureReason::HeroDeclined,
-                                    line.sequence,
-                                    None,
-                                )
-                                .await
-                            {
-                                Ok(_) => {
-                                    closed_prior_quote = true;
-                                    response.revision = Some(wire::revision(
-                                        self.updates.borrow().basis().revision,
-                                    ));
-                                }
-                                Err(error) => actor::record_unavailable(
-                                    "merchant-quote-decline",
-                                    error.message(),
-                                ),
-                            }
-                        }
-                    }
-                    let _thinking = self.table_log.reply_pending(&context.speaker);
-                    if let Some(exchange) = self
-                        .npc_voice
-                        .converse_report(context, &self.table_log)
+        credential: [u8; 32],
+        mut response: rpc::DialogueResponse,
+        npc: Option<NpcReplyContext>,
+    ) -> Result<DialogueCompletion, Status> {
+        let mut npc_outcome = None;
+        let mut npc_fallback = None;
+        let mut npc_event_proposal = None;
+        let mut npc_event_result = None;
+        // The model call runs here, off the actor thread; on any failure the
+        // response is exactly the classification the actor produced.
+        if let Some(mut context) = npc {
+            let bargain_source = (
+                context.actor_id.clone(),
+                context.npc_id.clone(),
+                context.scene_identity.clone(),
+                context.observed_revision.clone(),
+                context.typed_words.clone(),
+                context.hero_id.clone(),
+                context.pending_quote.clone(),
+            );
+            context.watch_publication(self.updates.clone());
+            // The table sees the hero's line cleaned up (within its deadline), then
+            // the speaker thinking until the reply (or the lack of one) is in; the
+            // mark clears when this scope ends.
+            let shown = self.npc_voice.display_line(&context).await;
+            let player_line = context.publish_typed_line(&self.table_log, &shown);
+            let mut closed_prior_quote = false;
+            if let (Some(quote), Some(line)) =
+                (context.pending_quote.as_ref(), player_line.as_ref())
+            {
+                let decision =
+                    super::journey::merchant_bargaining::quote_decision(&line.text, quote.price_cp);
+                if matches!(
+                    decision,
+                    super::journey::merchant_bargaining::QuoteDecision::Decline
+                        | super::journey::merchant_bargaining::QuoteDecision::Counteroffer
+                ) {
+                    match self
+                        .close_merchant_quote(
+                            credential,
+                            &quote.quote_id,
+                            journey::living_scene::MerchantQuoteClosureReason::HeroDeclined,
+                            line.sequence,
+                            None,
+                        )
                         .await
                     {
-                        // The spoken reply is user facing and remains valid even when Jev is
-                        // unavailable or the owner rejects its event proposal.
-                        response.npc_reply = exchange.text.clone();
-                        let (
-                            actor_id,
-                            npc_id,
-                            scene_identity,
-                            mut source_revision,
-                            typed_words,
-                            hero_id,
-                            pending_quote,
-                        ) = bargain_source;
-                        if closed_prior_quote {
-                            let revision = self.updates.borrow().basis().revision;
-                            source_revision =
-                                format!("{}:{}", revision.epoch().get(), revision.sequence());
+                        Ok(_) => {
+                            closed_prior_quote = true;
+                            response.revision =
+                                Some(wire::revision(self.updates.borrow().basis().revision));
                         }
-                        let trade_request = pending_quote.is_some()
-                            || super::journey::merchant_bargaining::is_trade_dialogue_request(
-                                &typed_words,
-                            );
-                        let quote_proposal = if trade_request
-                            && exchange.outcome == super::npc_reply::ExchangeOutcome::Spoken
-                            && !exchange.private
-                        {
-                            let current = self.updates.borrow().clone();
-                            match journey::living_scene::merchant_trade_terms(&current, &hero_id) {
-                                Ok(mut terms) => {
-                                    let item_to_sell = pending_quote
-                                        .as_ref()
-                                        .filter(|quote| {
-                                            quote.direction
-                                                == journey::living_scene::SceneTradeDirection::HeroSells
-                                        })
-                                        .map(|quote| quote.item_id.clone())
-                                        .or_else(|| {
-                                            super::journey::merchant_bargaining::referenced_item_id(
-                                                &terms,
-                                                &hero_id,
-                                                &actor_id,
-                                                &typed_words,
-                                            )
-                                        });
-                                    let history_valid = if let (Some(item_id), Some(place_id)) = (
-                                        item_to_sell.as_deref(),
-                                        super::beat_script_runtime::scene(current.state())
-                                            .ok()
-                                            .and_then(|scene| {
-                                                scene.setting.map(|setting| setting.place_id)
-                                            }),
-                                    ) {
-                                        match super::journey::merchant_bargaining::apply_committed_buyback_context(
+                        Err(error) => {
+                            actor::record_unavailable("merchant-quote-decline", error.message())
+                        }
+                    }
+                }
+            }
+            let _thinking = self.table_log.reply_pending(&context.speaker);
+            if let Some(exchange) = self
+                .npc_voice
+                .converse_report(context, &self.table_log)
+                .await
+            {
+                npc_outcome = Some(exchange.outcome);
+                npc_fallback = exchange.fallback.map(|reason| reason.label().to_owned());
+                // The spoken reply is user facing and remains valid even when Jev is
+                // unavailable or the owner rejects its event proposal.
+                response.npc_reply = exchange.text.clone();
+                let (
+                    actor_id,
+                    npc_id,
+                    scene_identity,
+                    mut source_revision,
+                    typed_words,
+                    hero_id,
+                    pending_quote,
+                ) = bargain_source;
+                if closed_prior_quote {
+                    let revision = self.updates.borrow().basis().revision;
+                    source_revision = format!("{}:{}", revision.epoch().get(), revision.sequence());
+                }
+                let trade_request = pending_quote.is_some()
+                    || super::journey::merchant_bargaining::is_trade_dialogue_request(&typed_words);
+                let quote_proposal = if trade_request
+                    && exchange.outcome == super::npc_reply::ExchangeOutcome::Spoken
+                    && !exchange.private
+                {
+                    let current = self.updates.borrow().clone();
+                    match journey::living_scene::merchant_trade_terms(&current, &hero_id) {
+                        Ok(mut terms) => {
+                            let item_to_sell = pending_quote
+                                .as_ref()
+                                .filter(|quote| {
+                                    quote.direction
+                                        == journey::living_scene::SceneTradeDirection::HeroSells
+                                })
+                                .map(|quote| quote.item_id.clone())
+                                .or_else(|| {
+                                    super::journey::merchant_bargaining::referenced_item_id(
+                                        &terms,
+                                        &hero_id,
+                                        &actor_id,
+                                        &typed_words,
+                                    )
+                                });
+                            let history_valid = if let (Some(item_id), Some(place_id)) = (
+                                item_to_sell.as_deref(),
+                                super::beat_script_runtime::scene(current.state())
+                                    .ok()
+                                    .and_then(|scene| {
+                                        scene.setting.map(|setting| setting.place_id)
+                                    }),
+                            ) {
+                                match super::journey::merchant_bargaining::apply_committed_buyback_context(
                                             &current,
                                             &mut terms,
                                             &place_id,
@@ -1578,170 +1638,213 @@ impl rpc::dialogue_service_server::DialogueService for Service {
                                                 false
                                             }
                                         }
-                                    } else {
-                                        item_to_sell.is_none()
-                                    };
-                                    let candidate = if !history_valid {
-                                        Err(super::journey::merchant_bargaining::QuoteRejection::InvalidTerms)
-                                    } else if let Some(quote) = pending_quote.as_ref() {
-                                        super::journey::merchant_bargaining::quote_candidate_for_item(
-                                            &terms,
-                                            &hero_id,
-                                            &actor_id,
-                                            quote.direction,
-                                            &quote.item_id,
-                                            &typed_words,
-                                            &exchange.text,
-                                        )
-                                    } else {
-                                        super::journey::merchant_bargaining::quote_candidate_for_reply(
-                                            &terms,
-                                            &hero_id,
-                                            &actor_id,
-                                            &typed_words,
-                                            &exchange.text,
-                                        )
-                                    };
-                                    match candidate {
-                                        Ok(candidate) => {
-                                            if let Some(source_line_sequence) =
-                                                exchange.source_line_sequence
-                                                && !npc_id.is_empty()
-                                            {
-                                                let source_line_id =
-                                                    super::npc_event_classifier::Proposal::source_line_id(
-                                                        &actor_id,
-                                                        &npc_id,
-                                                        &scene_identity,
-                                                        &source_revision,
-                                                        &typed_words,
-                                                        &exchange.text,
-                                                    );
-                                                Some(super::npc_event_classifier::Proposal {
-                                                    kind: super::npc_event_classifier::EventKind::Offer,
-                                                    actor_id: actor_id.clone(),
-                                                    npc_id: npc_id.clone(),
-                                                    item_id: Some(candidate.item_id.clone()),
-                                                    recipient_id: None,
-                                                    reply_text: exchange.text.clone(),
-                                                    typed_words: typed_words.clone(),
-                                                    scene_identity: scene_identity.clone(),
-                                                    source_line_id,
-                                                    source_line_sequence: Some(source_line_sequence),
-                                                    revision: source_revision.clone(),
-                                                    trade_quote: Some(candidate.clone()),
-                                                })
-                                            } else {
-                                                record_merchant_quote_candidate(
-                                                    "rejected",
-                                                    "source_line_unavailable",
-                                                    &actor_id,
-                                                    Some(&candidate.item_id),
-                                                    Some(candidate.price_cp),
-                                                );
-                                                None
-                                            }
-                                        }
-                                        Err(reason) => {
-                                            record_merchant_quote_candidate(
-                                                "rejected",
-                                                reason.label(),
+                            } else {
+                                item_to_sell.is_none()
+                            };
+                            let candidate = if !history_valid {
+                                Err(super::journey::merchant_bargaining::QuoteRejection::InvalidTerms)
+                            } else if let Some(quote) = pending_quote.as_ref() {
+                                super::journey::merchant_bargaining::quote_candidate_for_item(
+                                    &terms,
+                                    &hero_id,
+                                    &actor_id,
+                                    quote.direction,
+                                    &quote.item_id,
+                                    &typed_words,
+                                    &exchange.text,
+                                )
+                            } else {
+                                super::journey::merchant_bargaining::quote_candidate_for_reply(
+                                    &terms,
+                                    &hero_id,
+                                    &actor_id,
+                                    &typed_words,
+                                    &exchange.text,
+                                )
+                            };
+                            match candidate {
+                                Ok(candidate) => {
+                                    if let Some(source_line_sequence) =
+                                        exchange.source_line_sequence
+                                        && !npc_id.is_empty()
+                                    {
+                                        let source_line_id =
+                                            super::npc_event_classifier::Proposal::source_line_id(
                                                 &actor_id,
-                                                None,
-                                                None,
+                                                &npc_id,
+                                                &scene_identity,
+                                                &source_revision,
+                                                &typed_words,
+                                                &exchange.text,
                                             );
-                                            None
-                                        }
+                                        Some(super::npc_event_classifier::Proposal {
+                                            kind: super::npc_event_classifier::EventKind::Offer,
+                                            actor_id: actor_id.clone(),
+                                            npc_id: npc_id.clone(),
+                                            item_id: Some(candidate.item_id.clone()),
+                                            recipient_id: None,
+                                            reply_text: exchange.text.clone(),
+                                            typed_words: typed_words.clone(),
+                                            scene_identity: scene_identity.clone(),
+                                            source_line_id,
+                                            source_line_sequence: Some(source_line_sequence),
+                                            revision: source_revision.clone(),
+                                            trade_quote: Some(candidate.clone()),
+                                        })
+                                    } else {
+                                        record_merchant_quote_candidate(
+                                            "rejected",
+                                            "source_line_unavailable",
+                                            &actor_id,
+                                            Some(&candidate.item_id),
+                                            Some(candidate.price_cp),
+                                        );
+                                        None
                                     }
                                 }
-                                Err(error) => {
-                                    actor::record_unavailable(
-                                        "merchant-dialogue-terms",
-                                        &format!("{error:?}"),
+                                Err(reason) => {
+                                    record_merchant_quote_candidate(
+                                        "rejected",
+                                        reason.label(),
+                                        &actor_id,
+                                        None,
+                                        None,
                                     );
                                     None
                                 }
                             }
-                        } else {
-                            None
-                        };
-                        if !closed_prior_quote
-                            && let Some(quote) = pending_quote.as_ref()
-                            && quote_proposal.is_none()
-                            && exchange.outcome == super::npc_reply::ExchangeOutcome::Spoken
-                            && !exchange.private
-                            && super::journey::merchant_bargaining::is_merchant_refusal(
-                                &exchange.text,
-                            )
-                            && let (Some(source_line_sequence), Some(player_line)) =
-                                (exchange.source_line_sequence, player_line.as_ref())
-                        {
-                            match self
-                                .close_merchant_quote(
-                                    credential,
-                                    &quote.quote_id,
-                                    journey::living_scene::MerchantQuoteClosureReason::MerchantWithdrew,
-                                    source_line_sequence,
-                                    Some(player_line.sequence),
-                                )
-                                .await
-                            {
-                                Ok(_) => {
-                                    response.revision = Some(wire::revision(
-                                        self.updates.borrow().basis().revision,
-                                    ));
-                                }
-                                Err(error) => actor::record_unavailable(
-                                    "merchant-quote-withdrawal",
-                                    error.message(),
-                                ),
-                            }
                         }
-                        let proposal = if let Some(quote_proposal) = quote_proposal {
-                            Some(quote_proposal)
-                        } else if !trade_request {
-                            exchange.event_proposal
-                        } else {
+                        Err(error) => {
+                            actor::record_unavailable(
+                                "merchant-dialogue-terms",
+                                &format!("{error:?}"),
+                            );
                             None
-                        };
-                        if let Some(proposal) = proposal {
-                            match self.commit_npc_event(credential, proposal).await {
-                                Ok(outcome) if outcome.status == "committed" => {
-                                    response.revision = Some(wire::revision(
-                                        self.updates.borrow().basis().revision,
-                                    ));
-                                    if outcome.holder_id.as_deref() == Some(hero_id.as_str())
-                                        && let Some(item_id) = outcome.item_id.as_deref()
-                                    {
-                                        let committed = self.updates.borrow().clone();
-                                        if let Err(reason) = self.request_committed_item(
-                                            &committed, &hero_id, item_id, None, false,
-                                        ) {
-                                            actor::record_audit_line(
-                                                "gameplay.scene_item_request",
-                                                format!(
-                                                    "IMAGERY kind=item target={item_id:?} status=text reason={reason:?}"
-                                                ),
-                                            );
-                                        }
-                                    }
-                                }
-                                Ok(_) => {}
-                                Err(error) => actor::record_unavailable(
-                                    "npc-event-commit",
-                                    &format!("{}: {}", error.code(), error.message()),
-                                ),
-                            }
                         }
                     }
-                    if let Err(error) = self
-                        .dialogue_call(credential, DialogueRequest::SyncNotes)
+                } else {
+                    None
+                };
+                if !closed_prior_quote
+                    && let Some(quote) = pending_quote.as_ref()
+                    && quote_proposal.is_none()
+                    && exchange.outcome == super::npc_reply::ExchangeOutcome::Spoken
+                    && !exchange.private
+                    && super::journey::merchant_bargaining::is_merchant_refusal(&exchange.text)
+                    && let (Some(source_line_sequence), Some(player_line)) =
+                        (exchange.source_line_sequence, player_line.as_ref())
+                {
+                    match self
+                        .close_merchant_quote(
+                            credential,
+                            &quote.quote_id,
+                            journey::living_scene::MerchantQuoteClosureReason::MerchantWithdrew,
+                            source_line_sequence,
+                            Some(player_line.sequence),
+                        )
                         .await
                     {
-                        actor::record_unavailable("notebook-grievance", error.message());
+                        Ok(_) => {
+                            response.revision =
+                                Some(wire::revision(self.updates.borrow().basis().revision));
+                        }
+                        Err(error) => {
+                            actor::record_unavailable("merchant-quote-withdrawal", error.message())
+                        }
                     }
                 }
-                Ok(Response::new(response))
+                let proposal = if let Some(quote_proposal) = quote_proposal {
+                    Some(quote_proposal)
+                } else if !trade_request {
+                    exchange.event_proposal
+                } else {
+                    None
+                };
+                if let Some(proposal) = proposal {
+                    npc_event_proposal = Some(serde_json::json!({
+                        "kind": proposal.kind.label(),
+                        "actor_id": proposal.actor_id.clone(),
+                        "npc_id": proposal.npc_id.clone(),
+                        "item_id": proposal.item_id.clone(),
+                        "recipient_id": proposal.recipient_id.clone(),
+                        "source_line_id": proposal.source_line_id.clone(),
+                        "revision": proposal.revision.clone(),
+                        "status": "proposal",
+                    }));
+                    match self.commit_npc_event(credential, proposal).await {
+                        Ok(outcome) if outcome.status == "committed" => {
+                            npc_event_result = Some(serde_json::json!({
+                                "status": outcome.status.clone(),
+                                "revision": outcome.revision.clone(),
+                            }));
+                            response.revision =
+                                Some(wire::revision(self.updates.borrow().basis().revision));
+                            if outcome.holder_id.as_deref() == Some(hero_id.as_str())
+                                && let Some(item_id) = outcome.item_id.as_deref()
+                            {
+                                let committed = self.updates.borrow().clone();
+                                if let Err(reason) = self.request_committed_item(
+                                    &committed, &hero_id, item_id, None, false,
+                                ) {
+                                    actor::record_audit_line(
+                                        "gameplay.scene_item_request",
+                                        format!(
+                                            "IMAGERY kind=item target={item_id:?} status=text reason={reason:?}"
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        Ok(outcome) => {
+                            npc_event_result = Some(serde_json::json!({
+                                "status": outcome.status,
+                                "revision": outcome.revision,
+                            }));
+                        }
+                        Err(error) => {
+                            npc_event_result = Some(serde_json::json!({
+                                "status": "rejected",
+                                "reason": error.message(),
+                            }));
+                            actor::record_unavailable(
+                                "npc-event-commit",
+                                &format!("{}: {}", error.code(), error.message()),
+                            );
+                        }
+                    }
+                }
+            }
+            if let Err(error) = self
+                .dialogue_call(credential, DialogueRequest::SyncNotes)
+                .await
+            {
+                actor::record_unavailable("notebook-grievance", error.message());
+            }
+        }
+
+        Ok(DialogueCompletion {
+            response,
+            npc_outcome,
+            npc_fallback,
+            npc_event_proposal,
+            npc_event_result,
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl rpc::dialogue_service_server::DialogueService for Service {
+    async fn submit(
+        &self,
+        request: Request<rpc::RawDialogueRequest>,
+    ) -> Result<Response<rpc::DialogueResponse>, Status> {
+        let credential = credential(&request)?;
+        match self.submit_line(credential, request.into_inner()).await? {
+            DialogueReply::Raw(response, npc) => {
+                let completed = self
+                    .complete_dialogue_response(credential, response, npc)
+                    .await?;
+                Ok(Response::new(completed.response))
             }
             _ => Err(Status::internal("dialogue response binding invalid")),
         }
@@ -2696,6 +2799,7 @@ impl actor::Actor {
                         None
                     };
                     let mut buyback_memory = None;
+                    let mut buyback_memory_status = "none";
                     if quote_followup.is_none()
                         && let Some(item_id) = tendered_item.as_deref()
                         && let Some(place_id) = scene
@@ -2711,11 +2815,18 @@ impl actor::Actor {
                             &hero_id,
                             &reply.actor_id,
                         ) {
-                            Ok(memory) => buyback_memory = memory,
-                            Err(error) => actor::record_unavailable(
-                                "merchant-buyback-history",
-                                &format!("{error:?}"),
-                            ),
+                            Ok(memory) => {
+                                buyback_memory_status =
+                                    if memory.is_some() { "found" } else { "none" };
+                                buyback_memory = memory;
+                            }
+                            Err(error) => {
+                                buyback_memory_status = "error";
+                                actor::record_unavailable(
+                                    "merchant-buyback-history",
+                                    &format!("{error:?}"),
+                                );
+                            }
                         }
                     }
                     let mut trade_facts = if let Some(quote) = quote_followup.as_ref() {
@@ -2737,6 +2848,29 @@ impl actor::Actor {
                             &reply.facts,
                         )
                     };
+                    let hero_buy_terms = terms
+                        .iter()
+                        .filter(|term| {
+                            term.direction == journey::living_scene::SceneTradeDirection::HeroBuys
+                        })
+                        .count();
+                    let hero_sell_terms = terms
+                        .iter()
+                        .filter(|term| {
+                            term.direction == journey::living_scene::SceneTradeDirection::HeroSells
+                        })
+                        .count();
+                    record_merchant_reply_context(
+                        &reply.actor_id,
+                        quote_followup.is_some(),
+                        terms.len(),
+                        hero_buy_terms,
+                        hero_sell_terms,
+                        usize::from(tendered_item.is_some()),
+                        tendered_item.is_some(),
+                        buyback_memory_status,
+                        trade_facts.is_some(),
+                    );
                     if let Some(trade_facts) = trade_facts.as_mut() {
                         reply.merchant_trade_scope = true;
                         if let Some(memory) = buyback_memory {

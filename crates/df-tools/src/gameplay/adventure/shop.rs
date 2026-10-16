@@ -189,6 +189,7 @@ mod tests {
     use df_model::checkpoint::Checkpoint;
     use df_persistence::local_demo_scope::LocalDemoRole;
     use df_protocol::common as rpc;
+    use serde_json::json;
 
     fn interaction(current: &Checkpoint, operation: u8, target: &str, option: &str) -> Checkpoint {
         interaction_with_choices(current, operation, target, option, &[])
@@ -901,6 +902,57 @@ mod tests {
                 })
                 .expect("the hero may offer the exact owned and held instance");
             assert_eq!(sell_terms.maximum_price_cp, 100);
+            let buyback_request =
+                "Marek, will you buy these travelers clothes back from me? What would you pay?";
+            let mut trade_terms =
+                journey::living_scene::merchant_trade_terms(&bought, "Brynn").unwrap();
+            assert_eq!(
+                journey::merchant_bargaining::referenced_item_id(
+                    &trade_terms,
+                    "Brynn",
+                    &merchant_id,
+                    buyback_request,
+                )
+                .as_deref(),
+                Some(item_id.as_str()),
+                "the real post-purchase terms resolve the spoken buyback to the held instance"
+            );
+            let place_id = bought_scene.setting.as_ref().unwrap().place_id.as_str();
+            let memory = journey::merchant_bargaining::apply_committed_buyback_context(
+                &bought,
+                &mut trade_terms,
+                place_id,
+                &item_id,
+                "Brynn",
+                &merchant_id,
+            )
+            .unwrap()
+            .expect("the exact accepted purchase is available to the merchant reply context");
+            assert_eq!(memory.last_purchase_price_cp, 140);
+            let mut trade_context = journey::merchant_bargaining::reply_context(
+                &trade_terms,
+                "Brynn",
+                &merchant_id,
+                buyback_request,
+                Some(&item_id),
+                &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+            )
+            .expect("the production reply context recognizes this as merchant buying");
+            journey::merchant_bargaining::attach_buyback_memory(&mut trade_context, &memory);
+            assert_eq!(
+                trade_context["available_trades"][0]["direction"],
+                "merchant_buys"
+            );
+            assert_eq!(trade_context["recent_committed_purchase"]["price_cp"], 140);
+            assert!(
+                trade_context["negotiation_rules"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|rule| rule
+                        .as_str()
+                        .is_some_and(|rule| rule.contains("trade, not a quest reward")))
+            );
             let sell_quote_checkpoint = journey::living_scene::commit_npc_trade_quote(
                 &bought,
                 journey::living_scene::NpcTradeQuoteProposal {

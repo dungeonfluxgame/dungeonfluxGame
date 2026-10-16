@@ -297,6 +297,20 @@ fn subject_for_trade_context(scope_is_canonical: bool, subject: AnswerSubject) -
     }
 }
 
+fn subject_for_trade_fallback(
+    scope_is_canonical: bool,
+    subject: AnswerSubject,
+    facts: &serde_json::Value,
+) -> Option<AnswerSubject> {
+    let merchant_buys = scope_is_canonical
+        && facts["available_trades"].as_array().is_some_and(|trades| {
+            trades
+                .iter()
+                .any(|trade| trade["direction"] == "merchant_buys")
+        });
+    (!merchant_buys).then_some(subject)
+}
+
 impl ExchangeOutcome {
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -1610,16 +1624,23 @@ impl NpcVoice {
             room_answer
                 .map(|answer| (answer, "room:answer".to_owned()))
                 .or_else(|| {
-                    npc_dossier::subject_fallback(
-                        &turn.dossier,
-                        reading.subject,
-                        &turn.withheld,
-                        &npc_dossier::Memory {
-                            conversation: &turn.conversation,
-                            said: &turn.said,
-                            offered: &turn.offered,
-                        },
+                    subject_for_trade_fallback(
+                        context.merchant_trade_scope,
+                        subject,
+                        &context.facts,
                     )
+                    .and_then(|subject| {
+                        npc_dossier::subject_fallback(
+                            &turn.dossier,
+                            subject,
+                            &turn.withheld,
+                            &npc_dossier::Memory {
+                                conversation: &turn.conversation,
+                                said: &turn.said,
+                                offered: &turn.offered,
+                            },
+                        )
+                    })
                 })
         };
         if let Some((answer, _)) = &subject_answer {
@@ -1709,6 +1730,11 @@ impl NpcVoice {
                     (answer, Some(key))
                 } else if let Some((answer, key)) = subject_answer.clone() {
                     (answer, Some(key))
+                } else if context.merchant_trade_scope {
+                    (
+                        "I need a moment before I can discuss a price for that.".to_owned(),
+                        None,
+                    )
                 } else {
                     npc_dossier::fallback(
                         &turn.dossier,
@@ -2108,6 +2134,24 @@ mod tests {
         assert_eq!(
             subject_for_trade_context(true, AnswerSubject::Errand),
             AnswerSubject::Errand
+        );
+        assert_eq!(
+            subject_for_trade_fallback(
+                true,
+                AnswerSubject::Other,
+                &json!({"available_trades": [{"direction": "merchant_buys"}]}),
+            ),
+            None,
+            "a buyback turn must not inherit the merchant's retail-price subject answer"
+        );
+        assert_eq!(
+            subject_for_trade_fallback(
+                true,
+                AnswerSubject::Other,
+                &json!({"available_trades": [{"direction": "merchant_sells"}]}),
+            ),
+            Some(AnswerSubject::Other),
+            "a merchant selling an item may still use the canonical current-price answer"
         );
     }
 

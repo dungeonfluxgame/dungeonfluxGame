@@ -223,6 +223,18 @@ fn exact_buyback_uses_owned_item_history_and_stays_below_the_prior_purchase() {
 }
 
 #[test]
+fn buyback_direction_survives_an_unfunded_merchant_term() {
+    let request = "Marek, will you buy these travelers clothes back from me? What would you pay?";
+    let mut sale = terms(TradeDirection::HeroSells);
+    sale.available = false;
+    sale.stock_units = 0;
+    assert_eq!(
+        referenced_item_id(&[sale], "sigrun", "marek", request).as_deref(),
+        Some("item-clothes-travelers")
+    );
+}
+
+#[test]
 fn buyer_bid_is_not_misread_as_the_hero_selling_the_merchant_item() {
     let mut buy_terms = terms(TradeDirection::HeroBuys);
     buy_terms.minimum_price_cp = 100;
@@ -300,6 +312,10 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             "I can't agree to one gold.",
             QuoteRejection::MerchantRefused,
         ),
+        (
+            "I can't take less for them.",
+            QuoteRejection::MerchantRefused,
+        ),
         ("I could do one gold.", QuoteRejection::NoMerchantCommitment),
     ] {
         assert_eq!(
@@ -363,6 +379,24 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
         .price_cp,
         200
     );
+    for reply in [
+        "I ask two gold pieces for the travelers clothes.",
+        "I have them marked at two gold pieces.",
+    ] {
+        assert_eq!(
+            quote_candidate(
+                &two_gp_terms,
+                "sigrun",
+                "marek",
+                "How much for the travelers clothes?",
+                reply,
+            )
+            .unwrap()
+            .price_cp,
+            200,
+            "{reply}"
+        );
+    }
     assert_eq!(
         quote_candidate(
             &terms(TradeDirection::HeroBuys),
