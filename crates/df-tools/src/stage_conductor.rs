@@ -1657,7 +1657,7 @@ mod tests {
     use super::*;
     use crate::stage_machines::{
         BATTLE_ENTER_CAP_MS, BATTLE_FINISH_CAP_MS, CLIP_READY_WAIT_MS, CLIP_START_WAIT_MS,
-        LINE_CLOSE_MS,
+        LINE_CLOSE_MS, READ_MAXIMUM_MS,
     };
 
     type TestConductor = Conductor<&'static str>;
@@ -2383,6 +2383,23 @@ mod tests {
             .line_at("a reply read from across the table", LineState::Lingering)
             .unwrap();
         assert!(lingered >= opened + 12_000);
+    }
+
+    #[test]
+    fn a_long_reply_keeps_the_next_line_queued_until_the_reading_budget_and_linger_finish() {
+        let mut first = line("a long reply", false, Some(0));
+        first.read_ms = READ_MAXIMUM_MS;
+        let second = line("the next reply", false, Some(1));
+        let mut harness = Harness::new(Voice::working(1_000), false, vec![first], vec![0, 1]);
+        harness.run_to(1_000);
+        harness.view(plain(vec![second], vec![0, 1]));
+        harness.run_to(50_000);
+        let first_open = harness.opened("a long reply").expect("long reply opens");
+        let second_open = harness.opened("the next reply").expect("next reply opens");
+        assert!(
+            second_open >= first_open + u64::from(READ_MAXIMUM_MS + LINE_LINGER_MS),
+            "successor opened before the human reading window elapsed: {first_open} -> {second_open}"
+        );
     }
 
     #[test]

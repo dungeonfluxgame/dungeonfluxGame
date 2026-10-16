@@ -39,11 +39,12 @@ pub(crate) const CLIP_START_WAIT_MS: u32 = 2_500;
 pub(crate) const CLIP_END_GRACE_MS: u32 = 3_000;
 /// Minimum reading time: `READ_BASE_MS + READ_PER_CHARACTER_MS` per character,
 /// kept between the two bounds. 65 ms a character is about 180 words a minute, a comfortable pace
-/// for text read off a TV; 35 ms with a 7 s cap cut a two-sentence reply off mid-read.
+/// for text read off a TV. The upper bound covers the 420-character NPC reply contract at that
+/// pace; a shorter cap cuts a two-to-four-sentence reply off while a person is still reading it.
 pub(crate) const READ_BASE_MS: u32 = 2_500;
 pub(crate) const READ_PER_CHARACTER_MS: u32 = 65;
 pub(crate) const READ_MINIMUM_MS: u32 = 4_000;
-pub(crate) const READ_MAXIMUM_MS: u32 = 14_000;
+pub(crate) const READ_MAXIMUM_MS: u32 = 30_000;
 /// Past this wait, queued lines of the old scene go to the log without flashing on screen.
 /// The line already being read or heard still finishes before the successor opens.
 pub(crate) const SCENE_WAIT_CAP_MS: u64 = 30_000;
@@ -775,6 +776,7 @@ mod tests {
     fn reading_time_is_bounded_and_grows_with_length() {
         assert_eq!(reading_time_ms(""), READ_MINIMUM_MS);
         assert!(reading_time_ms(&"word ".repeat(40)) > READ_MINIMUM_MS);
+        assert!(reading_time_ms(&"word ".repeat(84)) < READ_MAXIMUM_MS);
         assert_eq!(reading_time_ms(&"word ".repeat(400)), READ_MAXIMUM_MS);
     }
 }

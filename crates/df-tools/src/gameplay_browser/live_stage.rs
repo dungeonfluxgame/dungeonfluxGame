@@ -1162,6 +1162,10 @@ impl Figures {
                 avoid.push(rectangle(&panel));
             }
         }
+        // The first pass is the normal placement path. Keep the title and rules note in this
+        // same obstacle set as the cast heads; otherwise a bubble that fits beside a head can
+        // still be painted underneath a fixed header and visibly collide with its labels.
+        avoid.extend(fixed_avoid.iter().copied());
         let inward_first = speaker.root.get_attribute("data-slot").as_deref() == Some("hero-2");
         let sides = if inward_first {
             ["left", "right"]
