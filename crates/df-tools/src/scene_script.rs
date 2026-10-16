@@ -391,7 +391,7 @@ mod tests {
             "Marek",
             "Marek shows Brakka the remaining wool coats.",
         );
-        let answered_lines = [purchase, buy_reply, question, answer.clone()];
+        let answered_lines = [purchase, buy_reply.clone(), question, answer.clone()];
         let answered = SceneScript {
             narration: OPENING,
             lines: &answered_lines,
