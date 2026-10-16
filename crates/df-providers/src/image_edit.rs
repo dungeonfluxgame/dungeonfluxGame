@@ -342,7 +342,7 @@ fn validate(edit: &ImageEdit<'_>) -> Result<(), ImageEditError> {
         )
     );
     if edit.prompt.trim().is_empty()
-        || edit.prompt.chars().count() > crate::MAXIMUM_PROMPT_CHARACTERS
+        || edit.prompt.chars().count() > crate::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS
         || !references_ok
         || !sides_ok
         || !(MINIMUM_PIXELS..=MAXIMUM_PIXELS).contains(&pixels)

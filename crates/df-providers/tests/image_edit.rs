@@ -66,7 +66,7 @@ fn malformed_edits_are_refused_before_anything_is_sent() {
     for case in &cases {
         assert_eq!(case.validate(), Err(ImageEditError::InvalidRequest));
     }
-    let long = "x".repeat(df_providers::MAXIMUM_PROMPT_CHARACTERS + 1);
+    let long = "x".repeat(df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS + 1);
     assert_eq!(
         ImageEdit {
             prompt: &long,
@@ -101,7 +101,7 @@ fn the_documented_image_edit_prompt_budget_accepts_merchant_assembly_size() {
         .validate(),
         Ok(())
     );
-    let over_budget = "x".repeat(df_providers::MAXIMUM_PROMPT_CHARACTERS + 1);
+    let over_budget = "x".repeat(df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS + 1);
     assert_eq!(
         ImageEdit {
             prompt: &over_budget,

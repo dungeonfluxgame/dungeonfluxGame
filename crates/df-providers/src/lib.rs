@@ -5,7 +5,7 @@
 
 /// OpenAI Images Edit `prompt` maximum (`maxLength: 32000`), documented at:
 /// <https://developers.openai.com/api/reference/resources/images/methods/edit>.
-pub const MAXIMUM_PROMPT_CHARACTERS: usize = 32_000;
+pub const IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS: usize = 32_000;
 
 mod http_contract;
 mod output_fetch;

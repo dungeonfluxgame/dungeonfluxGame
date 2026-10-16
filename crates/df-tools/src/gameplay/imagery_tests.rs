@@ -10,7 +10,10 @@ use std::{
 };
 
 use axum::http::{Method, Request, StatusCode, header};
-use df_providers::{ImageEditConfig, ImageEditModel, ImageFormat, ImageQuality};
+use df_providers::{
+    ImageBackground, ImageEdit, ImageEditConfig, ImageEditModel, ImageFormat, ImageModeration,
+    ImageQuality, ReferenceImage,
+};
 use tonic::codegen::Service;
 
 use super::{
@@ -140,6 +143,22 @@ fn merchant_seed_full_cast_plate_preserves_every_identity_in_final_assembly() {
     for id in ["merchant", "shop-adventurer", "shop-soldier"] {
         assert!(prompt.as_str().contains(id), "missing cast identity {id}");
     }
+    let references = [ReferenceImage {
+        format: ImageFormat::Png,
+        bytes: b"merchant-scene-fixture",
+    }];
+    let edit = ImageEdit {
+        model: ImageEditModel::Gpt25Flare,
+        prompt: prompt.as_str(),
+        references: &references,
+        width: 1536,
+        height: 864,
+        quality: ImageQuality::Medium,
+        background: ImageBackground::Opaque,
+        output: ImageFormat::Jpeg,
+        moderation: ImageModeration::Low,
+    };
+    assert_eq!(edit.validate(), Ok(()));
 }
 
 #[test]
