@@ -955,8 +955,12 @@ fn render_item_card(
         let same = item.is_some_and(|item| {
             previous.get_attribute("data-item-state")
                 == Some(format!(
-                    "{}:{}:{}",
-                    item.thing_id, item.state_revision, item.image_path
+                    "{}:{}:{}:{}:{}",
+                    item.thing_id,
+                    item.state_revision,
+                    item.image_path,
+                    item.observation_only,
+                    item.holder
                 ))
         });
         if same {
@@ -1020,8 +1024,8 @@ fn render_item_card(
     card.set_attribute(
         "data-item-state",
         &format!(
-            "{}:{}:{}",
-            item.thing_id, item.state_revision, item.image_path
+            "{}:{}:{}:{}:{}",
+            item.thing_id, item.state_revision, item.image_path, item.observation_only, item.holder
         ),
     )?;
     card.set_attribute("data-display", if display { "true" } else { "false" })?;
@@ -1032,6 +1036,20 @@ fn render_item_card(
         image.set_attribute("alt", &item.name)?;
     }
     node(document, &card, "p", "live-scene-item-detail", &item.detail)?;
+    if item.observation_only {
+        let holder = if item.holder.is_empty() {
+            "your hand".to_owned()
+        } else {
+            format!("{}'s hand", item.holder)
+        };
+        node(
+            document,
+            &card,
+            "p",
+            "live-scene-item-status",
+            &format!("Observation only · held in {holder} · not permanent inventory"),
+        )?;
+    }
     let read_ms = crate::stage_machines::reading_time_ms(&format!("{} {}", item.name, item.detail));
     super::presentation_timing::component(
         None,

@@ -344,6 +344,7 @@ pub(in crate::gameplay) fn item_for(
         setting.model = Some(model.clone());
     }
     for decision in state.decisions.iter().rev() {
+        let mut was_take = false;
         let target = if let Some(entry) = read(decision)? {
             if entry.place != setting.place_id || entry.hero != hero {
                 continue;
@@ -351,6 +352,7 @@ pub(in crate::gameplay) fn item_for(
             if entry.paid_cp > 0 && matches!(entry.option.as_str(), "buy" | "use" | "trade") {
                 format!("purchased-{}", entry.target)
             } else if matches!(entry.option.as_str(), "examine" | "take" | "share") {
+                was_take = entry.option == "take";
                 entry.target
             } else {
                 continue;
@@ -395,6 +397,12 @@ pub(in crate::gameplay) fn item_for(
         let Some(thing) = model.things.iter().find(|thing| thing.id == target) else {
             continue;
         };
+        // A stale take receipt must not keep an object in the phone's hand after a
+        // return, drop, or give. A later examine can still deliberately select it
+        // for review from its new location.
+        if was_take && thing.holder_id.as_deref() != Some(hero) {
+            continue;
+        }
         return Ok(Some(rpc::SceneItemCard {
             thing_id: thing.id.clone(),
             name: thing.name.clone(),
@@ -402,6 +410,9 @@ pub(in crate::gameplay) fn item_for(
             image_path: String::new(),
             image_state: rpc::PlateState::Failed as i32,
             state_revision: decision.revision.sequence(),
+            observation_only: thing.holder_id.as_deref() == Some(hero)
+                && thing.owner_id.as_deref() != Some(hero),
+            holder: thing.holder_id.clone().unwrap_or_default(),
         }));
     }
     Ok(None)

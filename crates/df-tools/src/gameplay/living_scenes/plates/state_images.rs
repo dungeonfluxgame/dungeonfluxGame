@@ -475,6 +475,9 @@ impl Shared {
                 rpc::PlateState::Pending
             } as i32,
             state_revision: item_revision(&item.thing, item.detail.as_deref()),
+            observation_only: item.thing.holder_id.is_some()
+                && item.thing.owner_id.as_deref() != item.thing.holder_id.as_deref(),
+            holder: item.thing.holder_id.clone().unwrap_or_default(),
         });
     }
 

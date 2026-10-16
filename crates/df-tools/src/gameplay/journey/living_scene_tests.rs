@@ -142,6 +142,19 @@ fn a_taken_object_and_open_door_survive_checkpoint_encoding_without_advancing_th
                 .as_deref(),
             Some("Brynn")
         );
+        let hand_card = living_scene::item_for(opened.state(), &scene, "Brynn")
+            .unwrap()
+            .expect("a taken object remains reviewable on the player's phone");
+        assert_eq!(hand_card.thing_id, thing.id);
+        assert!(hand_card.observation_only);
+        assert_eq!(hand_card.holder, "Brynn");
+        let returned = interact(&opened, member, 12, &thing.id, "return");
+        assert!(
+            living_scene::item_for(returned.state(), &scene, "Brynn")
+                .unwrap()
+                .is_none(),
+            "returning an observation-only object clears the hand review card"
+        );
         assert!(
             now.model
                 .ways_out
@@ -202,6 +215,11 @@ fn a_purchase_spends_exact_copper_and_cannot_overdraw_the_heros_purse() {
                 .unwrap()
                 .contains(&format!("{} CP", offer.cost_cp))
         );
+        let bought_card = living_scene::item_for(bought.state(), &scene, "Brynn")
+            .unwrap()
+            .expect("the purchased item remains reviewable");
+        assert!(!bought_card.observation_only);
+        assert_eq!(bought_card.holder, "Brynn");
         let npc = &scene
             .setting
             .as_ref()

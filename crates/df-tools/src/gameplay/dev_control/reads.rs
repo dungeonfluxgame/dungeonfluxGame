@@ -281,6 +281,7 @@ fn scene_json(scene: &rpc::GameplayScene) -> Value {
         "item": scene.item.as_ref().map(|item| json!({
             "id": item.thing_id, "name": item.name, "detail": item.detail,
             "image_path": item.image_path, "image_state": item.image_state,
+            "observation_only": item.observation_only, "holder": item.holder,
             "status": rpc::PlateState::try_from(item.image_state).map_or("unrecognized", |state| state.as_str_name()),
             "state_revision": item.state_revision,
         })),
