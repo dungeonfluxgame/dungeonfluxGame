@@ -99,6 +99,28 @@ typed `fields`. Relevant event families include:
 - line, clip, scene, check, combat, and client presentation records that explain
   whether a visual change was delayed by the stage machine.
 
+The resource filter and summary are available directly from the CLI:
+
+```powershell
+& '.\artifacts\build\play\debug\df-transport-fixture.exe' dev --pretty timeline --last 1000 --type image
+& '.\artifacts\build\play\debug\df-transport-fixture.exe' dev --pretty timeline --last 1000 --type plate
+& '.\artifacts\build\play\debug\df-transport-fixture.exe' dev --pretty timeline --last 1000 --type browser_media
+& '.\artifacts\build\play\debug\df-transport-fixture.exe' dev --pretty timeline --last 1000 --type video --summary
+```
+
+The accepted resource types are `text_model`, `speech_input`, `voice`, `image`,
+`plate`, `video`, `browser_media`, and `state`. Events are normalized into the
+lifecycle stages `requested`, `queued`, `ready`, `failed`, `played`,
+`projected`, and `delivered`. The summary reports `matched`,
+`summary.window_events`, distinct `resource_count`, and counts by resource type,
+stage, and status. Status values can also identify `cached`, `fallback`,
+`partial`, or `cancelled` outcomes. `--summary` returns counts with an empty
+`events` array, which is useful for a quick pass over a long run.
+
+The corresponding HTTP request is
+`/dev/timeline?last=1000&type=plate&summary=true`; invalid types or a non-boolean
+summary value are rejected by the server.
+
 For a compact event table in PowerShell:
 
 ```powershell
@@ -129,6 +151,21 @@ the former identifies the pack scene path while the latter identifies the
 effective served asset path. Treat that as the known identity-alignment gap and
 compare scene id, graph revision, plate id, and image key together until the
 diagnostics follow-up makes the domains explicit and joins them in one record.
+
+There are three additional coverage gaps to account for during diagnosis:
+
+- Some server generation records do not carry room and scene context. Scope them
+  with the run/build, event sequence, `/dev/state`, `/dev/scene`, and nearby
+  revision-bearing events rather than assuming a resource id identifies a room.
+- Browser presentation records carry resource type/id, stage, status, source
+  details, and hashed room/run scope where available, but do not carry the
+  gameplay revision. Read the server revision from `dev view --as tv` and use
+  the browser event sequence for presentation ordering.
+- Home-video still preparation happens before the clip key is derived. Early
+  `prepare_still` failures can therefore have no video resource key; inspect the
+  failure category and the painting/scene context from adjacent state events.
+  Once preparation succeeds, the clip key is the SHA-256 of the prepared still,
+  model, prompt, duration, and recipe.
 
 ## Visual review loop
 
