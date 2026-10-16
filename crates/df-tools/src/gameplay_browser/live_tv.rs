@@ -3087,12 +3087,12 @@ impl TvStage {
             bubble.kind,
             super::live_stage::BubbleKind::Speech | super::live_stage::BubbleKind::Typed
         ) {
-            if state.is_active()
-                && let Some(stage) = self.root.parent_element()
-            {
-                // Action call-outs still use the figure layer and can leave this fallback marker
-                // set; clear that real predecessor when dialogue takes ownership of the lane.
-                stage.remove_attribute("data-unplaced-line")?;
+            if state.is_active() {
+                // Action call-outs still use the figure layer and can leave these fallback
+                // markers set; clear the actual stage when dialogue takes ownership of the lane.
+                self.root.remove_attribute("data-unplaced-line")?;
+                self.root.remove_attribute("data-typed-strip")?;
+                self.root.remove_attribute("data-typed-strip-closing")?;
             }
             let opened = self
                 .lower
@@ -3796,11 +3796,23 @@ mod tests {
             text: "You can call me the courier.",
             voiced: true,
         };
+        stage
+            .root
+            .set_attribute("data-unplaced-line", "41")
+            .unwrap();
+        stage.root.set_attribute("data-typed-strip", "41").unwrap();
+        stage
+            .root
+            .set_attribute("data-typed-strip-closing", "")
+            .unwrap();
         assert!(
             stage
                 .character_line(2, 42, LineState::Opening, &line)
                 .unwrap()
         );
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
+        assert!(!stage.root.has_attribute("data-typed-strip"));
+        assert!(!stage.root.has_attribute("data-typed-strip-closing"));
         assert_eq!(stage.lower.name.text_content().as_deref(), Some("Courier"));
         assert_eq!(stage.lower.text.text_content().as_deref(), Some(line.text));
         assert_eq!(
