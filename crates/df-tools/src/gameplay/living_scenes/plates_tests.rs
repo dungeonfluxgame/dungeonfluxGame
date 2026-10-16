@@ -1984,3 +1984,76 @@ async fn a_failed_measurement_is_remembered_in_process_without_repeating_the_loc
         "repeated views reuse even a missing-head result until a new owner/run"
     );
 }
+
+#[test]
+fn head_diagnostics_are_plate_filterable_correlated_and_bounded_without_prompt_text() {
+    let image = key('a');
+    let partial = HeadDiagnostic {
+        key: &image,
+        stage: "head_location",
+        source: "provider",
+        batch: Some(0),
+        targets: vec!["npc-0".into(), "npc-1".into()],
+        located: vec!["npc-0".into()],
+        actor_ids: vec![
+            ("npc-0".into(), "courier".into()),
+            ("npc-1".into(), "bandit".into()),
+        ],
+        elapsed_ms: 1234,
+        failure: None,
+    }
+    .fields();
+    assert_eq!(partial["resource_type"], "plate");
+    assert_eq!(partial["stage"], "head_location");
+    assert_eq!(partial["status"], "partial");
+    assert_eq!(partial["partial"], true);
+    assert_eq!(partial["image_key"], image.as_str());
+    assert_eq!(partial["actor_id_mapping"]["npc-1"], "bandit");
+    assert_eq!(partial["elapsed_ms"], 1234);
+    assert_eq!(partial["cache_source"], "provider");
+    let failed = HeadDiagnostic {
+        key: &image,
+        stage: "head_location",
+        source: "provider",
+        batch: Some(1),
+        targets: vec!["npc-1".into()],
+        located: vec![],
+        actor_ids: vec![],
+        elapsed_ms: 10,
+        failure: Some("provider_failed"),
+    }
+    .fields();
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["failure_category"], "provider_failed");
+    let cached = HeadDiagnostic {
+        key: &image,
+        stage: "actor_heads",
+        source: "durable_note",
+        batch: None,
+        targets: vec!["bandit".into()],
+        located: vec!["bandit".into()],
+        actor_ids: vec![],
+        elapsed_ms: 2,
+        failure: None,
+    }
+    .fields();
+    assert_eq!(cached["status"], "ready");
+    assert_eq!(cached["cache_source"], "durable_note");
+    assert_eq!(cached["target_ids"][0], "bandit");
+    let bounded = HeadDiagnostic {
+        key: &image,
+        stage: "actor_heads",
+        source: "in_process",
+        batch: None,
+        targets: vec!["x".repeat(1000); 100],
+        located: vec![],
+        actor_ids: vec![],
+        elapsed_ms: 0,
+        failure: None,
+    }
+    .fields();
+    assert_eq!(bounded["ids_truncated"], true);
+    assert_eq!(bounded["target_ids"].as_array().unwrap().len(), 16);
+    assert!(serde_json::to_vec(&bounded).unwrap().len() < 4096);
+    assert!(partial.get("prompt").is_none());
+}

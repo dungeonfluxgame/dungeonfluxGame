@@ -1348,10 +1348,6 @@ fn scene_plate_media_ready(
 
 const PLATE_LINGER_GATE_MS: f64 = 2500.0;
 
-fn plate_caption_active(stage: &Element) -> bool {
-    stage.query_selector(".tv-bubble:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]),.tv-dm:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering]),.tv-lower:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])").ok().flatten().is_some()
-}
-
 fn plate_line_is_reading(stage: &Element, now: f64) -> bool {
     if stage.query_selector(".tv-bubble:is([data-line-state=opening],[data-line-state=speaking]),.tv-dm:is([data-line-state=opening],[data-line-state=speaking]),.tv-lower:is([data-line-state=opening],[data-line-state=speaking])").ok().flatten().is_some() { return true; }
     stage
@@ -3327,7 +3323,6 @@ impl TvStage {
             let layout = plate.layout.clone();
             *layer.pending_layout.borrow_mut() = layout.clone();
             if self.root.has_attribute("data-plate-loaded")
-                && !plate_caption_active(&self.root)
                 && layer.root.get_attribute("data-active")
                     == layer.root.get_attribute("data-want-i")
             {
@@ -3339,7 +3334,8 @@ impl TvStage {
                 } else {
                     layer.root.remove_attribute("style")?;
                 }
-                self.figures.set_plate(layout, layer.picture_size.get())?;
+                self.figures
+                    .latch_plate_geometry(layout, layer.picture_size.get())?;
             }
             return Ok(());
         }
@@ -3660,6 +3656,138 @@ mod tests {
             stage.lower.text.text_content().as_deref(),
             Some(text.as_str())
         );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn late_same_bitmap_heads_latch_during_lingering_and_anchor_the_successor_line() {
+        use super::super::live_stage::{BubbleKind, LineBubble, StageMode};
+        use crate::{
+            plate_layout::Side,
+            presentation::{ActorSlot, PlateActor, PlateGeometry, SceneFamily},
+        };
+        let (parent, stage) = mounted_stage();
+        seed_active_plate(&stage);
+        let view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Display(
+                rpc::DisplayGameplayView {
+                    journey: Some(rpc::JourneyView::default()),
+                    scene: Some(rpc::GameplayScene {
+                        cast: vec![
+                            rpc::SceneActor {
+                                id: "courier".into(),
+                                name: "Courier".into(),
+                                speaking: true,
+                                ..Default::default()
+                            },
+                            rpc::SceneActor {
+                                id: "bandit".into(),
+                                name: "Bandit".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        stage
+            .figures
+            .update(
+                &crate::presentation::scene_cast(&view),
+                "old-scene",
+                "",
+                SceneFamily::Exterior,
+                StageMode::Scene,
+            )
+            .unwrap();
+        let mut geometry = PlateGeometry {
+            bubble_side: Side::Right,
+            head_x: 400,
+            head_y: 300,
+            head_width: 100,
+            head_height: 100,
+            heroes: vec![],
+            actors: vec![],
+        };
+        stage
+            .figures
+            .set_plate(Some(geometry.clone()), Some((1920.0, 1080.0)))
+            .unwrap();
+        stage.plate.picture_size.set(Some((1920.0, 1080.0)));
+        let slot = super::super::live_stage::slot_index(ActorSlot::Npc(1)).unwrap();
+        let old = LineBubble {
+            kind: BubbleKind::Speech,
+            speaker: "Bandit",
+            text: "Keep away.",
+            voiced: false,
+        };
+        stage
+            .character_line(slot, 1, LineState::Opening, &old)
+            .unwrap();
+        stage
+            .character_line(slot, 1, LineState::Lingering, &old)
+            .unwrap();
+        let host = stage
+            .root
+            .query_selector(".tv-fig-bubbles[data-actor-id=bandit]")
+            .unwrap()
+            .unwrap();
+        assert!(host.has_attribute("hidden"));
+        let before = host.get_attribute("style");
+        geometry.actors.push(PlateActor {
+            actor_id: "bandit".into(),
+            bubble_side: Side::Left,
+            head_x: 800,
+            head_y: 250,
+            head_width: 100,
+            head_height: 100,
+        });
+        stage
+            .set_plate(
+                &PlateView {
+                    state: PlateState::Ready,
+                    url: Some("/gameplay/imagery/old".into()),
+                    layout: Some(geometry),
+                },
+                "old-scene",
+                true,
+            )
+            .unwrap();
+        stage.plate_clock_at(10000.0).unwrap();
+        stage
+            .character_line(slot, 1, LineState::Lingering, &old)
+            .unwrap();
+        assert!(
+            host.has_attribute("hidden"),
+            "the retained named lane remains readable in its original place"
+        );
+        assert_eq!(host.get_attribute("style"), before);
+        assert_eq!(
+            stage.root.get_attribute("data-unplaced-line").as_deref(),
+            Some("1")
+        );
+        let next = LineBubble {
+            kind: BubbleKind::Speech,
+            speaker: "Bandit",
+            text: "Give me the packet.",
+            voiced: false,
+        };
+        host.set_attribute("style", "width:200px;height:80px")
+            .unwrap();
+        stage
+            .character_line(slot, 2, LineState::Opening, &next)
+            .unwrap();
+        assert!(
+            !host.has_attribute("hidden"),
+            "the successor uses the latched canonical Bandit head"
+        );
+        assert!(!host.has_attribute("data-anchor-fallback"));
+        assert!(!host.has_attribute("data-anchor-line"));
+        assert!(!stage.root.has_attribute("data-unplaced-line"));
+        assert!(host.get_attribute("style").unwrap().contains("left:"));
         finish_stage(parent, stage);
     }
 

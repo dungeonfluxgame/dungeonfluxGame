@@ -863,6 +863,155 @@ fn locator_targets(
     (focus_id, targets)
 }
 
+/// Bounded plate diagnostics share the audit mirror used by the development CLI.
+struct HeadDiagnostic<'a> {
+    key: &'a ImageKey,
+    stage: &'static str,
+    source: &'static str,
+    batch: Option<usize>,
+    targets: Vec<String>,
+    located: Vec<String>,
+    actor_ids: Vec<(String, String)>,
+    elapsed_ms: u128,
+    failure: Option<&'static str>,
+}
+
+impl HeadDiagnostic<'_> {
+    fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
+        let partial = self.located.len() < self.targets.len();
+        let status = if self.failure.is_some() && self.located.is_empty() {
+            "failed"
+        } else if partial {
+            "partial"
+        } else {
+            "ready"
+        };
+        let bounded = |ids: &[String]| {
+            ids.iter()
+                .take(16)
+                .map(|id| id.chars().take(96).collect::<String>())
+                .collect::<Vec<_>>()
+        };
+        serde_json::Map::from_iter([
+            ("resource_type".into(), serde_json::json!("plate")),
+            ("stage".into(), serde_json::json!(self.stage)),
+            ("status".into(), serde_json::json!(status)),
+            ("outcome".into(), serde_json::json!(status)),
+            ("image_key".into(), serde_json::json!(self.key.as_str())),
+            ("cache_source".into(), serde_json::json!(self.source)),
+            ("batch".into(), serde_json::json!(self.batch)),
+            (
+                "target_ids".into(),
+                serde_json::json!(bounded(&self.targets)),
+            ),
+            (
+                "located_ids".into(),
+                serde_json::json!(bounded(&self.located)),
+            ),
+            (
+                "actor_id_mapping".into(),
+                serde_json::json!(
+                    self.actor_ids
+                        .iter()
+                        .take(16)
+                        .map(|(target, actor)| (
+                            target.chars().take(96).collect::<String>(),
+                            actor.chars().take(96).collect::<String>()
+                        ))
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                ),
+            ),
+            ("target_count".into(), serde_json::json!(self.targets.len())),
+            (
+                "located_count".into(),
+                serde_json::json!(self.located.len()),
+            ),
+            (
+                "ids_truncated".into(),
+                serde_json::json!(
+                    self.targets.len() > 16
+                        || self.located.len() > 16
+                        || self
+                            .targets
+                            .iter()
+                            .chain(&self.located)
+                            .any(|id| id.chars().count() > 96)
+                ),
+            ),
+            ("partial".into(), serde_json::json!(partial)),
+            ("elapsed_ms".into(), serde_json::json!(self.elapsed_ms)),
+            ("failure_category".into(), serde_json::json!(self.failure)),
+            (
+                "missing_head_surface".into(),
+                serde_json::json!("named_lane"),
+            ),
+        ])
+    }
+
+    fn record(self) {
+        let fields = self.fields();
+        let status = fields["status"].as_str().unwrap_or("failed");
+        crate::gameplay::actor::record_audit_diagnostic(
+            if self.batch.is_some() {
+                "gameplay.living_scene.head_located"
+            } else {
+                "gameplay.living_scene.actor_heads"
+            },
+            format!(
+                "PLATE heads stage={} key={} source={} status={} targets={} located={} elapsed_ms={}",
+                self.stage,
+                self.key.as_str(),
+                self.source,
+                status,
+                self.targets.len(),
+                self.located.len(),
+                self.elapsed_ms
+            ),
+            fields.clone(),
+            &[
+                ("gameplay.resource.type", "plate".to_owned()),
+                ("plate.stage", self.stage.to_owned()),
+                ("plate.status", status.to_owned()),
+                ("plate.image_key", self.key.as_str().to_owned()),
+                ("plate.cache_source", self.source.to_owned()),
+                ("plate.target_ids", fields["target_ids"].to_string()),
+                ("plate.located_ids", fields["located_ids"].to_string()),
+                ("plate.elapsed_ms", self.elapsed_ms.to_string()),
+                (
+                    "plate.failure_category",
+                    self.failure.unwrap_or("none").to_owned(),
+                ),
+            ],
+        );
+    }
+}
+
+fn record_actor_heads(
+    key: &ImageKey,
+    actors: &[(String, String)],
+    placement: &PlatePlacement,
+    source: &'static str,
+    elapsed_ms: u128,
+    failure: Option<&'static str>,
+) {
+    HeadDiagnostic {
+        key,
+        stage: "actor_heads",
+        source,
+        batch: None,
+        targets: actors.iter().map(|(id, _)| id.clone()).collect(),
+        actor_ids: Vec::new(),
+        located: placement
+            .actors
+            .iter()
+            .map(|head| head.actor_id.clone())
+            .collect(),
+        elapsed_ms,
+        failure,
+    }
+    .record();
+}
+
 fn wire_side(side: shot::Side) -> i32 {
     (match side {
         shot::Side::Left => rpc::PlateSide::Left,
@@ -2193,6 +2342,7 @@ impl Shared {
         key: &ImageKey,
         actors: &[(String, String)],
     ) -> Option<PlatePlacement> {
+        let started = tokio::time::Instant::now();
         let note = self.inner.imagery.read_note(key).await?;
         let stored = serde_json::from_slice::<StoredPlacement>(&note).ok()?;
         if !actors.iter().all(|(id, _)| stored.actor_ids.contains(id)) {
@@ -2202,6 +2352,14 @@ impl Shared {
         placement
             .actors
             .retain(|head| actors.iter().any(|(id, _)| id == &head.actor_id));
+        record_actor_heads(
+            key,
+            actors,
+            &placement,
+            "durable_note",
+            started.elapsed().as_millis(),
+            None,
+        );
         Some(placement)
     }
 
@@ -2219,7 +2377,9 @@ impl Shared {
         actors: &[(String, String)],
         focus_actor_id: Option<&str>,
     ) -> PlatePlacement {
-        if let Some(known) = locked(&self.book).image_layouts.get(key.as_str()).cloned() {
+        let known = locked(&self.book).image_layouts.get(key.as_str()).cloned();
+        if let Some(known) = known {
+            record_actor_heads(key, actors, &known, "in_process", 0, None);
             return known;
         }
         if let Some(stored) = self.stored_placement(key, actors).await {
@@ -2229,42 +2389,41 @@ impl Shared {
         let started = tokio::time::Instant::now();
         let mut located = Vec::new();
         let mut measured_all_batches = targets.len() <= 16;
+        let mut failure = None;
         for (batch, targets) in targets.chunks(4).take(4).enumerate() {
             let borrowed: Vec<(&str, &str)> = targets
                 .iter()
                 .map(|(id, description)| (id.as_str(), description.as_str()))
                 .collect();
+            let batch_started = tokio::time::Instant::now();
             let found = self
                 .inner
                 .imagery
                 .locate_heads(key, if batch == 0 { face } else { None }, &borrowed)
                 .await;
-            record(
-                "gameplay.living_scene.head_located",
-                &[
-                    (
-                        "scene.outcome",
-                        found
-                            .as_ref()
-                            .map_or_else(|failure| failure.label(), |_| "located")
-                            .to_owned(),
-                    ),
-                    (
-                        "scene.elapsed_ms",
-                        started.elapsed().as_millis().to_string(),
-                    ),
-                    ("image_key", key.as_str().to_owned()),
-                    ("batch", batch.to_string()),
-                    (
-                        "target_ids",
-                        targets
-                            .iter()
-                            .map(|(id, _)| id.as_str())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    ),
-                ],
-            );
+            let batch_failure = found.as_ref().err().map(|failure| failure.label());
+            failure = failure.or(batch_failure);
+            HeadDiagnostic {
+                key,
+                stage: "head_location",
+                source: "provider",
+                batch: Some(batch),
+                actor_ids: targets
+                    .iter()
+                    .filter_map(|(id, _)| {
+                        let index = id.strip_prefix("npc-")?.parse::<usize>().ok()?;
+                        Some((id.clone(), actors.get(index)?.0.clone()))
+                    })
+                    .collect(),
+                targets: targets.iter().map(|(id, _)| id.clone()).collect(),
+                located: found
+                    .as_ref()
+                    .map(|heads| heads.iter().map(|head| head.id.clone()).collect())
+                    .unwrap_or_default(),
+                elapsed_ms: batch_started.elapsed().as_millis(),
+                failure: batch_failure,
+            }
+            .record();
             measured_all_batches &= found.is_ok();
             located.extend(found.unwrap_or_default());
         }
@@ -2326,29 +2485,13 @@ impl Shared {
             }),
             heroes,
         };
-        record(
-            "gameplay.living_scene.actor_heads",
-            &[
-                ("image_key", key.as_str().to_owned()),
-                (
-                    "requested_actor_ids",
-                    actors
-                        .iter()
-                        .map(|(id, _)| id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                ),
-                (
-                    "located_actor_ids",
-                    placement
-                        .actors
-                        .iter()
-                        .map(|head| head.actor_id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                ),
-                ("missing_head_surface", "named_lane".to_owned()),
-            ],
+        record_actor_heads(
+            key,
+            actors,
+            &placement,
+            "provider",
+            started.elapsed().as_millis(),
+            failure,
         );
         let mut stored = StoredPlacement::of(&placement);
         stored.actor_ids = actors.iter().map(|(id, _)| id.clone()).collect();

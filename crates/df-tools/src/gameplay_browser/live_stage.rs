@@ -984,6 +984,7 @@ impl Figures {
             self.report_removed_component(&element, position, reason);
         }
         figure.root.remove_attribute("data-thinking")?;
+        figure.bubbles.remove_attribute("data-anchor-line")?;
         Ok(())
     }
 
@@ -1384,6 +1385,10 @@ impl Figures {
     /// centre of the screen first), then narrower, until the bubble overlaps no other figure's
     /// head, the roll panel or the screen edge. When none fits, the narrowest stays.
     fn place_bubble(&self, speaker: &Figure) {
+        if let Some(id) = speaker.bubbles.get_attribute("data-anchor-line") {
+            if speaker.bubbles.query_selector(&format!("[data-line-id=\"{id}\"]:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])")).ok().flatten().is_some() { return; }
+            let _removed = speaker.bubbles.remove_attribute("data-anchor-line");
+        }
         let _shown = speaker.bubbles.remove_attribute("hidden");
         // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
         let geometry = self.plate.borrow().clone();
@@ -1491,6 +1496,24 @@ impl Figures {
         let _hidden = speaker.bubbles.set_attribute("hidden", "");
     }
 
+    /// Same-bitmap measurements become available to successors without moving readable text.
+    pub(super) fn latch_plate_geometry(
+        &self,
+        geometry: Option<PlateGeometry>,
+        picture_size: Option<(f64, f64)>,
+    ) -> Result<(), JsValue> {
+        if *self.plate.borrow() == geometry && self.plate_size.get() == picture_size {
+            return Ok(());
+        }
+        for figure in &self.figures {
+            if let Some(line) = figure.bubbles.query_selector(".tv-bubble[data-line-id]:is([data-line-state=opening],[data-line-state=speaking],[data-line-state=lingering])")?
+                && let Some(id) = line.get_attribute("data-line-id") {
+                figure.bubbles.set_attribute("data-anchor-line", &id)?;
+            }
+        }
+        self.set_plate(geometry, picture_size)
+    }
+
     /// PLAY-V09: tells the stage that a scene plate with this layout covers the cut-outs (or, with
     /// `None`, that none does). The bubbles then stand in the plate's own layer and are placed
     /// from the layout; without a plate they return to their figures.
@@ -1517,7 +1540,14 @@ impl Figures {
                     open.set_attribute("data-instant", "")?;
                     bubble = open.next_element_sibling();
                 }
+                let retained = figure
+                    .bubbles
+                    .has_attribute("data-anchor-line")
+                    .then(|| figure.bubbles.get_bounding_client_rect());
                 self.plate_bubbles.append_child(&figure.bubbles)?;
+                if let Some(bounds) = retained {
+                    figure.bubbles.set_attribute("style", &format!("position:fixed;left:{}px;top:{}px;width:{}px;right:auto;bottom:auto;transform:none", bounds.left(), bounds.top(), bounds.width()))?;
+                }
             } else if geometry.is_none() && host_is_plate {
                 figure
                     .root
