@@ -1124,14 +1124,33 @@ pub(crate) fn newest_scene_speech(journey: &rpc::JourneyView) -> Option<(u64, &s
     })
 }
 
+/// Which picture a stage actor shows, in the order the picture resolves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PictureSource {
+    /// The server's live image made for this character: a generated expression variant.
+    Live,
+    /// The character's portrait, a head crop.
+    Portrait,
+    /// The character's cut-out, the whole figure.
+    Cutout,
+}
+
 impl StageActor {
-    /// The picture this cast member shows in a caption or on the stage: the live image already
-    /// made for them, else the portrait, else the cut-out. Empty references are absent.
-    pub(crate) fn picture(&self) -> Option<String> {
+    /// The picture this cast member shows in a caption, a HUD crest or on the stage: the live image
+    /// already made for them, else the portrait, else the cut-out, each as a served URL. A reference
+    /// that names no servable picture is skipped, so `None` means nothing exists yet.
+    pub(crate) fn picture_source(&self) -> Option<(PictureSource, String)> {
         self.live_sprite
-            .clone()
-            .or_else(|| (!self.portrait.is_empty()).then(|| self.portrait.clone()))
-            .or_else(|| (!self.sprite.is_empty()).then(|| self.sprite.clone()))
+            .as_deref()
+            .and_then(imagery_url)
+            .map(|url| (PictureSource::Live, url))
+            .or_else(|| served_picture(&self.portrait).map(|url| (PictureSource::Portrait, url)))
+            .or_else(|| served_picture(&self.sprite).map(|url| (PictureSource::Cutout, url)))
+    }
+
+    /// The URL of [`Self::picture_source`].
+    pub(crate) fn picture(&self) -> Option<String> {
+        self.picture_source().map(|(_, url)| url)
     }
 }
 
@@ -1144,6 +1163,13 @@ pub(crate) fn served_picture(reference: &str) -> Option<String> {
             .reviewed
             .map(|photo| format!("{GENERATED}/{photo}"))
     })
+}
+
+/// A picture the browser can fetch for a scene-graph set reference: a live image, a served asset
+/// or a reviewed photograph. A role token such as `live-room-photo` has no file of its own, so it
+/// answers `None` and is never handed to the browser as a URL.
+pub(crate) fn set_picture(reference: &str) -> Option<String> {
+    imagery_url(reference).or_else(|| served_picture(reference))
 }
 
 /// Which character speaks a caption. Identity is the party position or the server's actor id,
@@ -3786,9 +3812,11 @@ mod caption_speakers {
         let npc = stage_actor("merchant", ActorSlot::Npc(0), "", Some(live_path()), false);
         let cast = [hero, npc];
 
+        // The hero's cut-out names the reviewed photograph it is served from; the bare stem is not
+        // a file the server serves.
         assert_eq!(
             caption_picture(&cast, CaptionSpeaker::Hero(1)),
-            Some("/assets/ui/generated/sprite-hero-2".to_owned())
+            Some("/assets/ui/generated/sprite-hero-2-documentary-photo".to_owned())
         );
         assert_eq!(caption_picture(&cast, CaptionSpeaker::Hero(0)), None);
     }
@@ -3941,5 +3969,129 @@ mod story_scene_picture {
         let reviewed = shop(candid, live('a'), String::new());
 
         assert_eq!(story_scene_picture(&reviewed), Some(format!("/{candid}")));
+    }
+}
+
+#[cfg(test)]
+mod battle_art {
+    use super::*;
+
+    const HARBOUR: &str = "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
+
+    fn live(digit: char) -> String {
+        format!(
+            "{}{}",
+            art_contract::LIVE_IMAGERY_PREFIX,
+            digit.to_string().repeat(64)
+        )
+    }
+
+    /// A fight in a place: the scene names its room token, and its live pictures are set as given.
+    fn fight(scene_asset: &str, live_backdrop: String, live_plate: String) -> rpc::GameplayScene {
+        rpc::GameplayScene {
+            title: "Marek's Cloth Shop".to_owned(),
+            scene_asset: scene_asset.to_owned(),
+            live_backdrop,
+            live_plate,
+            ..Default::default()
+        }
+    }
+
+    fn combatant(sprite: &str, portrait: &str, live_sprite: Option<String>) -> StageActor {
+        StageActor {
+            actor_id: "npc:marek".to_owned(),
+            slot: ActorSlot::Npc(0),
+            name: "Marek".to_owned(),
+            role: String::new(),
+            sprite: sprite.to_owned(),
+            portrait: portrait.to_owned(),
+            hit_points: None,
+            speaking: false,
+            down: false,
+            live_sprite,
+        }
+    }
+
+    #[test]
+    fn a_shop_fight_shows_the_shops_ready_plate_not_the_harbour() {
+        let mut scene = fight(art_contract::ROOM_PHOTO, live('a'), live('b'));
+        scene.plate_state = rpc::PlateState::Ready as i32;
+
+        let backdrop = story_scene_picture(&scene);
+
+        assert_eq!(backdrop, Some(live('b')));
+        assert_ne!(backdrop.as_deref(), Some(HARBOUR));
+    }
+
+    #[test]
+    fn a_shop_fight_with_no_picture_yet_shows_none_not_the_harbour() {
+        let scene = fight(art_contract::ROOM_PHOTO, String::new(), String::new());
+
+        assert_eq!(story_scene_picture(&scene), None);
+    }
+
+    #[test]
+    fn a_painted_scene_asset_in_a_shop_fight_names_no_harbour_photograph() {
+        let scene = fight(
+            "assets/ui/generated/scene-place-guardhouse",
+            String::new(),
+            String::new(),
+        );
+
+        assert_eq!(story_scene_picture(&scene), None);
+    }
+
+    #[test]
+    fn a_harbour_fight_keeps_the_harbour_photograph_from_its_own_scene_asset() {
+        let scene = fight(
+            "assets/ui/generated/scene-salt-quay-arrival-documentary-photo.png",
+            String::new(),
+            String::new(),
+        );
+
+        assert_eq!(story_scene_picture(&scene), Some(HARBOUR.to_owned()));
+    }
+
+    #[test]
+    fn a_combatant_with_a_live_image_shows_it_before_its_portrait_and_cutout() {
+        let actor = combatant(
+            "/assets/ui/generated/sprite-shop-adventurer-documentary-photo",
+            "/assets/ui/generated/portrait-shop-adventurer-documentary-photo",
+            Some(live('c')),
+        );
+
+        assert_eq!(actor.picture(), Some(live('c')));
+        assert_eq!(
+            actor.picture_source(),
+            Some((PictureSource::Live, live('c')))
+        );
+    }
+
+    #[test]
+    fn a_combatant_without_a_live_image_takes_its_portrait_then_its_cutout_then_nothing() {
+        let portrait = "/assets/ui/generated/portrait-shop-soldier-documentary-photo";
+        let cutout = "/assets/ui/generated/sprite-shop-soldier-documentary-photo";
+
+        let with_portrait = combatant(cutout, portrait, None);
+        assert_eq!(
+            with_portrait.picture_source(),
+            Some((PictureSource::Portrait, portrait.to_owned()))
+        );
+
+        let cutout_only = combatant(cutout, "", None);
+        assert_eq!(
+            cutout_only.picture_source(),
+            Some((PictureSource::Cutout, cutout.to_owned()))
+        );
+
+        let nothing = combatant("", "", None);
+        assert_eq!(nothing.picture_source(), None);
+    }
+
+    #[test]
+    fn a_role_token_is_never_handed_to_the_browser_as_a_set_url() {
+        assert_eq!(set_picture("/live-room-photo"), None);
+        assert_eq!(set_picture(art_contract::ROOM_PHOTO), None);
+        assert_eq!(set_picture(&live('d')), Some(live('d')));
     }
 }

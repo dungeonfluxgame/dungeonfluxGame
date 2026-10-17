@@ -18,12 +18,13 @@ pub(super) fn generated_asset_url(stem: &str) -> Option<String> {
     art_contract::fetch_target(stem).map(|target| format!("{GENERATED}/{target}"))
 }
 
-/// The reviewed harbor photograph behind both roles' combat, aftermath and rest screens.
-pub(super) const COMBAT_ART_URL: &str =
-    "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
+/// The picture behind a fight, set on the screen's host by `live_combat::present` as
+/// `--asset-battle-backdrop`. Until one is ready the variable is unset and every rule that reads it
+/// falls back to `none`: the readable CSS base stands, never a painting of another place.
+pub(super) const BATTLE_BACKDROP: &str = "var(--asset-battle-backdrop,none)";
 
 /// CSS custom property -> generated art stem, with the shape each slot expects.
-pub(super) const ART_SLOTS: [(&str, &str); 19] = [
+pub(super) const ART_SLOTS: [(&str, &str); 18] = [
     ("--asset-d20", "d20"),                       // about 11:12, blank top face
     ("--asset-ribbon-success", "ribbon-success"), // about 8:1
     ("--asset-ribbon-failure", "ribbon-failure"), // about 8:1
@@ -39,7 +40,6 @@ pub(super) const ART_SLOTS: [(&str, &str); 19] = [
     ("--asset-portrait-hero-1", "portrait-hero-1"), // 1:1
     ("--asset-portrait-hero-2", "portrait-hero-2"),
     ("--asset-portrait-bandit", "portrait-bandit"),
-    ("--asset-scene-harbor", art_contract::HARBOR_PHOTO), // 16:9
     ("--asset-portrait-hero-1-full", "portrait-hero-1-full"), // 2:3
     ("--asset-portrait-hero-2-full", "portrait-hero-2-full"),
     ("--asset-portrait-bandit-full", "portrait-bandit-full"),
@@ -81,7 +81,7 @@ pub(super) fn stylesheet() -> String {
     }
     format!(":root{{{variables}}}\n{COMMON}\n{PLAYER}\n{DISPLAY}\n{REST}\n{SHEET}\n{portraits}")
         .replace("@S", ".live-screen[data-role]")
-        .replace("@COMBAT_ART", COMBAT_ART_URL)
+        .replace("@BATTLE_BACKDROP", BATTLE_BACKDROP)
 }
 
 const COMMON: &str = r#"
@@ -314,8 +314,8 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 
 /// Aftermath and short-rest screens: the courier road painting over the combat painting.
 const REST: &str = r#"
-@S[data-screen=aftermath] .df-aftermath{background:linear-gradient(180deg,#05080a70 0,transparent 22%,transparent 40%,#05080ac4 66%,#05080af2),var(--asset-scene-harbor) center 38%/cover,url('@COMBAT_ART') center 38%/cover,#0b0f0c}
-@S[data-screen=rest] .df-campfire{--camp-art:var(--asset-scene-harbor),url('@COMBAT_ART') !important;min-height:0;border-radius:0;border:0}
+@S[data-screen=aftermath] .df-aftermath{background:linear-gradient(180deg,#05080a70 0,transparent 22%,transparent 40%,#05080ac4 66%,#05080af2),@BATTLE_BACKDROP center 38%/cover,#0b0f0c}
+@S[data-screen=rest] .df-campfire{--camp-art:@BATTLE_BACKDROP !important;min-height:0;border-radius:0;border:0}
 @S[data-role=player][data-screen=rest] .df-campfire{padding:20px 16px}
 @S[data-role=player][data-screen=rest] .df-campfire .camp-location{font-size:13px;letter-spacing:.3em}
 @S[data-role=player][data-screen=rest] .df-campfire{display:flex;flex-direction:column}

@@ -12,6 +12,7 @@ use super::*;
 use crate::{
     health_cues::{self, Blow, Pattern, Place, REFERENCE_STAGE_WIDTH_PX, Shake, TREMOR_PX},
     health_tier::{HealthTier, Vitals, tier_of},
+    presentation::PictureSource,
 };
 use df_render::battle::health as battlefield;
 use js_sys::{Array, Function, Object, Reflect};
@@ -255,30 +256,24 @@ pub(super) fn display_blow(stage: &Element, parts: &[&Element], blow: Blow) -> R
 
 /// The crest of a card: the generated health face (cropped to the head) when the server has
 /// published one for this character, otherwise the authored portrait.
-pub(super) fn crest(crest: &Element, portrait: &str, live: Option<&str>) -> Result<(), JsValue> {
-    match live {
-        Some(url) => {
+pub(super) fn crest(
+    crest: &Element,
+    picture: Option<(PictureSource, String)>,
+) -> Result<(), JsValue> {
+    match picture {
+        Some((source, url)) => {
             crest.set_attribute("style", &format!("background-image:url({url})"))?;
-            crest.set_attribute("data-crop", "face")
-        }
-        None => {
-            // Every picture the contract allows is a photograph of a person or creature: the
-            // crest crops to the head.
-            if matches!(
-                df_render::art_contract::classify(portrait),
-                df_render::art_contract::Reference::Reviewed(_)
-                    | df_render::art_contract::Reference::Live(_)
-            ) {
-                crest.set_attribute("data-crop", "face")?;
+            // A live image and a portrait are both head crops; only a cut-out shows the whole figure.
+            if source == PictureSource::Cutout {
+                crest.remove_attribute("data-crop")
             } else {
-                crest.remove_attribute("data-crop")?;
+                crest.set_attribute("data-crop", "face")
             }
-            let style = if portrait.is_empty() {
-                String::new()
-            } else {
-                format!("background-image:url({portrait})")
-            };
-            crest.set_attribute("style", &style)
+        }
+        // Nothing is ready for this character: the crest stays empty and its letter stands.
+        None => {
+            crest.remove_attribute("data-crop")?;
+            crest.remove_attribute("style")
         }
     }
 }

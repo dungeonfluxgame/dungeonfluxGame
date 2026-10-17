@@ -1426,22 +1426,31 @@ impl Inner {
     }
 
     /// The art contract for a cast member's picture, steps one and three: a live canonical
-    /// photograph already made for this person is the cut-out the display shows; one that a
-    /// reviewed photograph already answers is left to the library; otherwise it is requested now,
-    /// once (the request is idempotent per subject), and the display keeps its neutral fallback
-    /// until it is ready. This is the only place a view first needing a depiction asks for it.
+    /// photograph already made for this person is the cut-out the display shows, even when a
+    /// reviewed photograph also answers the cast member; a cast member that only a reviewed
+    /// photograph answers is left to the library; otherwise it is requested now, once (the request
+    /// is idempotent per subject), and the display keeps its neutral fallback until it is ready.
+    /// This is the only place a view first needing a depiction asks for it.
     fn live_photograph(state: &mut State, actor: &mut rpc::SceneActor) {
         let id = actor.id.strip_prefix("npc:").unwrap_or(&actor.id);
         let subject = art_contract::Subject::character(id);
         let reviewed = art_contract::plan(Role::CharacterToken, &actor.sprite).reviewed;
-        if reviewed.is_some() || !actor.live_sprite.is_empty() {
-            let source = if reviewed.is_some() { "reviewed" } else { "live" };
-            state.canonical.note_resolved(&subject, source);
-            return;
-        }
-        if let Some(key) = state.canonical.npc(id) {
+        // Step one of the art contract: a live image already made for this person leads, even when
+        // a reviewed photograph also answers the cast member.
+        if actor.live_sprite.is_empty()
+            && let Some(key) = state.canonical.npc(id)
+        {
             actor.live_sprite = key.path();
             state.canonical.note_resolved(&subject, "live");
+            return;
+        }
+        if reviewed.is_some() || !actor.live_sprite.is_empty() {
+            let source = if reviewed.is_some() {
+                "reviewed"
+            } else {
+                "live"
+            };
+            state.canonical.note_resolved(&subject, source);
             return;
         }
         state.canonical.note_resolved(&subject, "neutral");

@@ -871,7 +871,7 @@ impl Figures {
         let tier = live_health::display_tier(actor.hit_points, actor.down);
         live_health::set_tier(&card.root, tier)?;
         live_health::sync_tremor(&card.root, tier)?;
-        live_health::crest(&card.crest, &actor.portrait, actor.live_sprite.as_deref())?;
+        live_health::crest(&card.crest, actor.picture_source())?;
         match actor.hit_points {
             Some((current, maximum)) => {
                 let percent = u64::from(current.min(maximum)) * 100 / u64::from(maximum.max(1));

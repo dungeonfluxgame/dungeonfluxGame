@@ -181,6 +181,10 @@ impl StageLayer {
             self.root.set_attribute("data-inactive", "")?;
             tv_root.remove_attribute("data-stage-graph")?;
             tv_root.remove_attribute("data-stage-frame-revision")?;
+            // The last set belongs to the scene that just ended (a fight shows none); it must not
+            // stay behind the next picture.
+            self.set.remove_attribute("style")?;
+            self.set.remove_attribute("data-asset")?;
             if self.revision.replace(None).is_some() {
                 for layer in self.actors.borrow().iter() {
                     actor_timing(&layer.root, "figure-hidden", "scene-change");
@@ -229,13 +233,20 @@ impl StageLayer {
         self.set
             .set_attribute("data-place", &graph.set.place_name)?;
         self.set.set_attribute("data-asset", &graph.set.asset)?;
+        // Only pictures the browser can fetch are drawn: a role token (such as `live-room-photo`) is
+        // never handed over as a URL. A set with neither picture stands on the stage's base colour.
+        let layers: Vec<String> = [graph.set.asset.as_str(), graph.set.fallback_asset.as_str()]
+            .into_iter()
+            .filter_map(crate::presentation::set_picture)
+            .map(|url| format!("url(\"{}\")", css_url(&url)))
+            .collect();
         self.set.set_attribute(
             "style",
-            &format!(
-                "background-image:url(\"{}\"),url(\"{}\")",
-                css_url(&graph.set.asset),
-                css_url(&graph.set.fallback_asset)
-            ),
+            &if layers.is_empty() {
+                "background-image:none".to_owned()
+            } else {
+                format!("background-image:{}", layers.join(","))
+            },
         )?;
         let camera_target = camera_target(graph);
         self.camera.set_attribute(

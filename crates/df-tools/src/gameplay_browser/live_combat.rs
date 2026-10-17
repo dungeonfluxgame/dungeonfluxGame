@@ -18,7 +18,6 @@ use super::{
     live_tv, live_tv::TvStage, node, recovery_needs, recovery_prompt, replay,
 };
 use df_protocol::common as rpc;
-use df_render::art_contract;
 use df_types::{RecoveryEpoch, SessionRevision};
 use df_ui::{CampfireSurface, CombatPhaseSurface, EncounterAftermathSurface};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
@@ -459,7 +458,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     }
     let mut assets = String::new();
     if let Some(url) = combat_picture(view) {
-        assets.push_str(&format!("--asset-scene-harbor:url({url});"));
+        assets.push_str(&format!("--asset-battle-backdrop:url({url});"));
     }
     if let Some(url) = live_screens::asset_url(&view.scene.speaker_portrait)
         && screen == Screen::Combat
@@ -477,11 +476,9 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
         && let Some(url) = combat_picture(view)
         && let Some(image) = host.query_selector(".combat-art")?
     {
-        client.borrow_mut().combat.scene_image = Some(live_screens::ServerImage::install(
-            image,
-            &url,
-            Some(style::COMBAT_ART_URL.into()),
-        )?);
+        // No painting stands in when the picture fails to load: the image hides instead.
+        client.borrow_mut().combat.scene_image =
+            Some(live_screens::ServerImage::install(image, &url, None)?);
     }
     mount_chrome(client, &host, view, screen == Screen::Combat)?;
     mount_rules_badge(client, &host, custom_rules)?;
@@ -508,16 +505,11 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     Ok(true)
 }
 
-/// The picture behind a fight, by the art contract's backdrop order (the place's live room
-/// photograph, the scene plate, a reviewed photograph); `None` keeps the reviewed harbor photograph
-/// the stylesheet carries.
+/// The picture behind a fight: the same scene picture the phone and the subtitle show (the ready
+/// plate, the scene's own served or reviewed picture, then the live room photograph). `None` when
+/// nothing is ready; the stage then shows its plain base colour, never another place's painting.
 fn combat_picture(view: &LiveView<'_>) -> Option<String> {
-    crate::presentation::place_picture(
-        art_contract::Role::BattleBackdrop,
-        &view.scene.scene_asset,
-        &view.scene.live_backdrop,
-        &view.scene.live_plate,
-    )
+    crate::presentation::story_scene_picture(view.scene)
 }
 
 /// The display's composited stage behind the combat or aftermath screen: the painting and the
@@ -535,8 +527,8 @@ fn present_stage(
     // The shared display is read-only. Action affordances stay on player devices,
     // including when this combat/aftermath path updates the persistent TV stage.
     stage.set_choices(&[], true)?;
-    let art = combat_picture(view).unwrap_or_else(|| style::COMBAT_ART_URL.to_owned());
-    stage.set_art(&live_tv::image_layers(&art, style::COMBAT_ART_URL))?;
+    let art = combat_picture(view).unwrap_or_default();
+    stage.set_art(&live_tv::image_layers(&art, ""))?;
     stage.figures().update(
         &cast,
         &view.scene.title,
