@@ -53,6 +53,38 @@ pub(crate) enum MicrophoneFault {
     Other,
 }
 
+/// A media stream the browser handed over, able to end all of its tracks.
+pub(crate) trait LiveStream {
+    /// Stops every track of the stream, which releases the microphone.
+    fn end_tracks(&self);
+}
+
+/// The microphone stream the browser handed over. Letting go of the lease, on any end path,
+/// ends every track of that stream, so no path can leave the microphone open.
+///
+/// The recorder must read the stream through [`MicrophoneLease::stream`] and never through a copy:
+/// the browser's own `MediaStream.clone()` makes new tracks, and ending those leaves the
+/// microphone that was opened live.
+pub(crate) struct MicrophoneLease<S: LiveStream> {
+    stream: S,
+}
+
+impl<S: LiveStream> MicrophoneLease<S> {
+    pub(crate) fn new(stream: S) -> Self {
+        Self { stream }
+    }
+
+    pub(crate) fn stream(&self) -> &S {
+        &self.stream
+    }
+}
+
+impl<S: LiveStream> Drop for MicrophoneLease<S> {
+    fn drop(&mut self) {
+        self.stream.end_tracks();
+    }
+}
+
 /// Work for the driver. The control never touches the browser itself.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Command {
@@ -435,6 +467,69 @@ impl Capture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::Cell, rc::Rc};
+
+    /// A stand-in for a browser stream whose tracks record whether they are still live. Cloning
+    /// it shares the tracks, as cloning a JavaScript handle shares the object.
+    #[derive(Clone)]
+    struct FakeStream {
+        tracks: Rc<Vec<Cell<bool>>>,
+    }
+
+    impl FakeStream {
+        fn with_tracks(count: usize) -> Self {
+            Self {
+                tracks: Rc::new((0..count).map(|_| Cell::new(true)).collect()),
+            }
+        }
+
+        fn live_tracks(&self) -> usize {
+            self.tracks.iter().filter(|track| track.get()).count()
+        }
+    }
+
+    impl LiveStream for FakeStream {
+        fn end_tracks(&self) {
+            for track in self.tracks.iter() {
+                track.set(false);
+            }
+        }
+    }
+
+    #[test]
+    fn the_tracks_stay_live_while_the_microphone_lease_is_held() {
+        let returned = FakeStream::with_tracks(2);
+        let lease = MicrophoneLease::new(returned.clone());
+
+        assert_eq!(lease.stream().live_tracks(), 2);
+        assert_eq!(returned.live_tracks(), 2);
+    }
+
+    #[test]
+    fn dropping_the_lease_ends_every_track_of_the_stream_the_browser_returned() {
+        let returned = FakeStream::with_tracks(2);
+        let lease = MicrophoneLease::new(returned.clone());
+        assert!(Rc::ptr_eq(&lease.stream().tracks, &returned.tracks));
+
+        drop(lease);
+
+        assert_eq!(returned.live_tracks(), 0);
+    }
+
+    #[test]
+    fn the_recorder_reads_the_lease_and_never_a_copy_of_the_stream() {
+        // The browser module is not compiled for native tests, so its stream handling is checked
+        // in its source: `stream.clone()` on a MediaStream is the browser's copy with new tracks,
+        // and the recorder must read the lease's stream instead.
+        let source = include_str!("gameplay_browser/talk_control.rs");
+        assert_eq!(source.matches("stream.clone()").count(), 0);
+        assert_eq!(
+            source
+                .matches("MediaRecorder::new_with_media_stream(microphone.stream())")
+                .count(),
+            1
+        );
+    }
 
     const SECURE: Environment = Environment {
         secure_context: true,

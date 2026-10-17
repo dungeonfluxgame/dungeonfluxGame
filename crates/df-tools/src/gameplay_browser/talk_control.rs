@@ -13,7 +13,8 @@ use std::{cell::Cell, time::Duration};
 
 use super::*;
 use crate::speech_capture::{
-    Capture, Command, Environment, Interruption, MicrophoneFault, Notice, Phase,
+    Capture, Command, Environment, Interruption, LiveStream, MicrophoneFault, MicrophoneLease,
+    Notice, Phase,
 };
 use crate::speech_clip::{
     BINDING_HEADER, CANCEL_PATH, CLIP_CONTENT_TYPE, MAXIMUM_RECORDING, OUTCOME_HEADER, SAMPLE_RATE,
@@ -134,7 +135,8 @@ struct Listener {
 
 /// The microphone, the recorder and what it has captured. At most one exists.
 struct Recording {
-    stream: MediaStream,
+    /// The stream the browser handed over. Dropping the recording ends all of its tracks.
+    _microphone: MicrophoneLease<MediaStream>,
     recorder: MediaRecorder,
     chunks: Rc<RefCell<Vec<Blob>>>,
     /// False once the recording was discarded: the recorder's stop event then does nothing.
@@ -143,14 +145,22 @@ struct Recording {
     _on_error: Closure<dyn FnMut(web_sys::Event)>,
 }
 
-impl Recording {
-    fn stop_tracks(&self) {
-        stop_tracks(&self.stream);
-    }
-
-    fn detach_handlers(&self) {
+impl Drop for Recording {
+    fn drop(&mut self) {
+        // The handlers go first, so that no late event reaches the closures this drop releases.
+        self.keep.set(false);
         self.recorder.set_ondataavailable(None);
         self.recorder.set_onerror(None);
+        if self.recorder.state() != RecordingState::Inactive {
+            let _stopped = self.recorder.stop();
+        }
+        // Once this returns, the `_microphone` field drops and ends the tracks.
+    }
+}
+
+impl LiveStream for MediaStream {
+    fn end_tracks(&self) {
+        stop_tracks(self);
     }
 }
 
@@ -215,18 +225,11 @@ impl Talk {
         }
     }
 
-    /// Drops a recording unheard: the recorder stops, its data is dropped and the microphone is
-    /// released at once.
+    /// Drops a recording unheard: dropping it stops the recorder, its data is dropped and the
+    /// microphone is released at once.
     fn discard(&mut self) {
         self.ticker = None;
-        if let Some(recording) = self.recording.take() {
-            recording.keep.set(false);
-            recording.detach_handlers();
-            if recording.recorder.state() != RecordingState::Inactive {
-                let _stopped = recording.recorder.stop();
-            }
-            recording.stop_tracks();
-        }
+        self.recording = None;
     }
 
     /// Releases the microphone and every listener. Used when the page's client is dropped.
@@ -235,14 +238,7 @@ impl Talk {
         if let Some(upload) = self.upload.take() {
             upload.abort();
         }
-        if let Some(recording) = self.recording.take() {
-            recording.keep.set(false);
-            recording.detach_handlers();
-            if recording.recorder.state() != RecordingState::Inactive {
-                let _stopped = recording.recorder.stop();
-            }
-            recording.stop_tracks();
-        }
+        self.recording = None;
         for listener in self.listeners.drain(..) {
             let _removed = listener.target.remove_event_listener_with_callback(
                 listener.name,
@@ -728,6 +724,7 @@ fn stop_tracks(stream: &MediaStream) {
 }
 
 async fn open_microphone(weak: WeakClient) {
+    // Every path that lets go of `requested` ends the tracks of the stream it holds.
     let requested = async {
         let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
         let devices = window.navigator().media_devices()?;
@@ -736,11 +733,9 @@ async fn open_microphone(weak: WeakClient) {
         let stream = JsFuture::from(devices.get_user_media_with_constraints(&constraints)?).await?;
         stream.dyn_into::<MediaStream>()
     }
-    .await;
+    .await
+    .map(MicrophoneLease::new);
     let Some(client) = weak.upgrade() else {
-        if let Ok(stream) = &requested {
-            stop_tracks(stream);
-        }
         return;
     };
     if !ensure_current_scope(&client) {
@@ -751,14 +746,12 @@ async fn open_microphone(weak: WeakClient) {
             .capture
             .microphone_ready(now());
         execute(&client, command);
-        if let Ok(stream) = &requested {
-            stop_tracks(stream);
-        }
+        drop(requested);
         show(&client);
         return;
     }
-    let stream = match requested {
-        Ok(stream) => stream,
+    let microphone = match requested {
+        Ok(microphone) => microphone,
         Err(error) => {
             client
                 .borrow_mut()
@@ -779,12 +772,12 @@ async fn open_microphone(weak: WeakClient) {
         .microphone_ready(now());
     if command.is_some() {
         // The start was cancelled while the microphone opened, so the microphone is not kept.
-        stop_tracks(&stream);
+        drop(microphone);
         client.borrow_mut().dialogue.talk.held = None;
         show(&client);
         return;
     }
-    match start_recorder(&client, stream.clone()) {
+    match start_recorder(&client, microphone) {
         Ok(recording) => {
             let weak = Rc::downgrade(&client);
             let mut state = client.borrow_mut();
@@ -796,7 +789,7 @@ async fn open_microphone(weak: WeakClient) {
             }));
         }
         Err(_) => {
-            stop_tracks(&stream);
+            // The failed start dropped the microphone, which ended its tracks.
             let mut state = client.borrow_mut();
             state.dialogue.talk.capture.recorder_failed();
             state.dialogue.talk.held = None;
@@ -805,8 +798,12 @@ async fn open_microphone(weak: WeakClient) {
     show(&client);
 }
 
-fn start_recorder(client: &Rc<RefCell<Client>>, stream: MediaStream) -> Result<Recording, JsValue> {
-    let recorder = MediaRecorder::new_with_media_stream(&stream)?;
+fn start_recorder(
+    client: &Rc<RefCell<Client>>,
+    microphone: MicrophoneLease<MediaStream>,
+) -> Result<Recording, JsValue> {
+    // On error this returns early and drops `microphone`, which ends its tracks.
+    let recorder = MediaRecorder::new_with_media_stream(microphone.stream())?;
     let chunks = Rc::new(RefCell::new(Vec::new()));
     let keep = Rc::new(Cell::new(true));
     let collected = chunks.clone();
@@ -840,7 +837,7 @@ fn start_recorder(client: &Rc<RefCell<Client>>, stream: MediaStream) -> Result<R
     recorder.set_onstop(Some(on_stop.unchecked_ref()));
     recorder.start()?;
     Ok(Recording {
-        stream,
+        _microphone: microphone,
         recorder,
         chunks,
         keep,
@@ -859,32 +856,29 @@ fn finish_recording(client: &Rc<RefCell<Client>>) {
     };
     if recording.recorder.stop().is_err() {
         talk.capture.recorder_failed();
-        if let Some(recording) = talk.recording.take() {
-            recording.keep.set(false);
-            recording.detach_handlers();
-            recording.stop_tracks();
-        }
+        talk.recording = None;
     }
 }
 
 /// The recorder has stopped: release the microphone, then decode and upload the capture.
 fn recorded(client: &Rc<RefCell<Client>>) {
+    // Taken before the scope check, so the microphone is released even when the scope has moved on.
+    let recording = client.borrow_mut().dialogue.talk.recording.take();
     if !ensure_current_scope(client) {
         return;
     }
+    let Some(recording) = recording else {
+        return;
+    };
     let blob = {
-        let mut state = client.borrow_mut();
-        let Some(recording) = state.dialogue.talk.recording.take() else {
-            return;
-        };
-        recording.detach_handlers();
-        recording.stop_tracks();
         let parts = js_sys::Array::new();
         for chunk in recording.chunks.borrow().iter() {
             parts.push(chunk);
         }
         Blob::new_with_blob_sequence(&parts)
     };
+    // The microphone is released here, before the decode and the upload.
+    drop(recording);
     let Ok(blob) = blob else {
         client.borrow_mut().dialogue.talk.capture.unreadable();
         show(client);
