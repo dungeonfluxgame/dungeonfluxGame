@@ -91,6 +91,7 @@ const NUMERIC_FIELDS: &[&str] = &[
     "requested_asset",
     "effective_asset",
     "visible_held_ms",
+    "lag_ms",
 ];
 
 /// Closed catalog of display components whose lifecycle may be reported to the agent timeline.
@@ -101,6 +102,8 @@ pub enum PresentationComponent {
     ThinkingLoader,
     IntentLoader,
     CheckCard,
+    /// A server d20 roll's die and result card on the shared display.
+    Dice,
     ItemCard,
     TitleCard,
     SceneCard,
@@ -117,6 +120,7 @@ impl PresentationComponent {
             Self::ThinkingLoader => "thinking_loader",
             Self::IntentLoader => "intent_loader",
             Self::CheckCard => "check_card",
+            Self::Dice => "dice",
             Self::ItemCard => "item_card",
             Self::TitleCard => "title_card",
             Self::SceneCard => "scene_card",
@@ -133,6 +137,7 @@ impl PresentationComponent {
             Self::ThinkingLoader,
             Self::IntentLoader,
             Self::CheckCard,
+            Self::Dice,
             Self::ItemCard,
             Self::TitleCard,
             Self::SceneCard,
@@ -417,6 +422,9 @@ pub struct TimingEvent {
     pub component_phase: Option<ComponentPhase>,
     pub visibility: Option<EffectiveVisibility>,
     pub visible_held_ms: Option<u64>,
+    /// How long a combat beat waited between the display receiving its view and the beat
+    /// starting to play (the display's queue lag); set on a component record only.
+    pub lag_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -455,6 +463,7 @@ impl TimingEvent {
             component_phase: None,
             visibility: None,
             visible_held_ms: None,
+            lag_ms: None,
         }
     }
 
@@ -491,6 +500,8 @@ impl TimingEvent {
             || self.read_ms > 120_000
             || self.crossfade_ms > 30_000
             || self.visible_held_ms.is_some_and(|time| time > MAX_PAGE_MS)
+            || self.lag_ms.is_some_and(|time| time > MAX_PAGE_MS)
+            || (self.kind != "component" && self.lag_ms.is_some())
             || [
                 self.opened_ms,
                 self.voice_start_ms,
@@ -577,11 +588,12 @@ impl TimingEvent {
             (self.component, self.component_phase, self.visibility)
         {
             line.push_str(&format!(
-                " component={} component_phase={} visibility={} visible_held_ms={}",
+                " component={} component_phase={} visibility={} visible_held_ms={} lag_ms={}",
                 component.label(),
                 phase.label(),
                 visibility.label(),
                 optional(self.visible_held_ms),
+                optional(self.lag_ms),
             ));
         }
         line
@@ -660,6 +672,9 @@ pub fn encode(events: &[TimingEvent]) -> Result<Vec<u8>, TimingError> {
                 "visible_held_ms",
                 Value::IntValue(visible_held_ms as i64),
             ));
+        }
+        if let Some(lag_ms) = event.lag_ms {
+            attributes.push(attribute("lag_ms", Value::IntValue(lag_ms as i64)));
         }
         records.push(LogRecord {
             event_name: event.kind.into(),
@@ -867,6 +882,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
             component_phase,
             visibility,
             visible_held_ms: values.get("visible_held_ms").copied(),
+            lag_ms: values.get("lag_ms").copied(),
         };
         event.validate()?;
         // Comparing a rebuilt record also rejects severity, body, trace, flags, timestamps,
@@ -1040,6 +1056,7 @@ mod tests {
             component_phase: None,
             visibility: None,
             visible_held_ms: None,
+            lag_ms: None,
         }
     }
 
@@ -1184,6 +1201,10 @@ mod tests {
             Some(PresentationComponent::CheckCard)
         );
         assert_eq!(
+            PresentationComponent::from_label("dice"),
+            Some(PresentationComponent::Dice)
+        );
+        assert_eq!(
             PresentationComponent::from_label("party_hud"),
             Some(PresentationComponent::PartyHud)
         );
@@ -1209,7 +1230,7 @@ mod tests {
             EffectiveVisibility::Visible,
             "ready",
         );
-        assert!(encode(&[event.clone()]).is_ok());
+        assert!(encode(std::slice::from_ref(&event)).is_ok());
         assert_eq!(
             encode(&[TimingEvent {
                 component_phase: None,

@@ -660,13 +660,12 @@ impl CommerceRepository for UnknownCommitRepository {
         ) {
             return CommerceMutation::Pending;
         }
-        if let CommerceCommit::SpendSettlement(proposal) = candidate {
-            if proposal.operation != operation
+        if let CommerceCommit::SpendSettlement(proposal) = candidate
+            && (proposal.operation != operation
                 || self.settlement_revision != Some(proposal.before_revision)
-                || Some(proposal.next.revision) != proposal.before_revision.checked_add(1)
-            {
-                return CommerceMutation::Refused(PortRefusal::ConflictingOperation);
-            }
+                || Some(proposal.next.revision) != proposal.before_revision.checked_add(1))
+        {
+            return CommerceMutation::Refused(PortRefusal::ConflictingOperation);
         }
         if let Some(recorded) = self.operation {
             if recorded == operation && self.candidate == Some(candidate) {

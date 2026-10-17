@@ -27,10 +27,7 @@ use std::cell::Cell;
 #[allow(dead_code)]
 mod partial_progress;
 
-#[path = "support/candidate_fixture.rs"]
-#[allow(dead_code)]
-mod candidate_fixture;
-use candidate_fixture::*;
+use partial_progress::candidate_fixture::*;
 
 fn operation(value: u8) -> OperationId {
     OperationId::from_bytes(&[value; 16]).unwrap()
@@ -613,7 +610,7 @@ fn intent_boundary_preserves_classification_provenance_and_uncommitted_tail() {
     assert_eq!(staged.state().resources, roll_current.state().resources);
     assert_eq!(roll_current, roll_before);
     assert_eq!(
-        validate_steps(&[roll.clone()], &staged, plan_limits()).map(|_| ()),
+        validate_steps(std::slice::from_ref(&roll), &staged, plan_limits()).map(|_| ()),
         Err(PlanError::LookupRequired {
             operation: operation(31)
         })

@@ -6,7 +6,7 @@
 
 #[path = "../tests/support/candidate_fixture.rs"]
 #[allow(dead_code)]
-mod candidate_fixture;
+pub(crate) mod candidate_fixture;
 
 use candidate_fixture::{
     basis, checkpoint_at_basis, content, fact, label, member, pending, pins, rule, state,

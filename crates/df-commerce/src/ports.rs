@@ -199,6 +199,10 @@ pub trait PaymentGateway<PayerId> {
     /// Creates checkout using the same operation/fingerprint on retry and an explicit
     /// native deadline. Return URLs and customer-facing copy must already be selected
     /// by an allowlisted native owner; arrival at a return URL is not payment evidence.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the payment gateway contract keeps each validated checkout field explicit"
+    )]
     fn create_checkout(
         &mut self,
         payer: &PayerId,
