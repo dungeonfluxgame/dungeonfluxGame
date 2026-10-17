@@ -29,8 +29,8 @@ use super::{
         AnswerSubject, Attitude, Dossier, EmotionalProfile, FeelingKind, ForbiddenScope, Knowledge,
         Topic, mentions_term,
     },
-    npc_facts::Offered,
-    social::{Approach, Conversation, SocialLedger, Standing, topic_of},
+    npc_facts::{AskReading, Offered, OwnedClue, Source},
+    social::{Approach, Conversation, SocialLedger, Standing},
     speech_text::{SpokenRule, sentence_key, sentences},
     startup_configuration::{ContentRating, content_rating},
     storyteller::{
@@ -39,7 +39,7 @@ use super::{
     },
 };
 
-pub(super) use super::npc_facts::{Clue, Inputs};
+pub(super) use super::npc_facts::Inputs;
 
 pub(super) fn facts(inputs: &Inputs<'_>) -> (serde_json::Value, Vec<Offered>, Vec<String>) {
     super::npc_facts::facts(inputs)
@@ -54,6 +54,41 @@ pub(super) fn facts_with_scene(
     facts["now"] = super::npc_facts::current_scene_facts(narration, present);
     super::npc_facts::trim_background_facts(&mut facts);
     (facts, offered, said)
+}
+
+/// Whether the facts hold a line that answers the hero, so a reply may not open on a denial.
+pub(super) fn answer_offered(facts: &serde_json::Value) -> bool {
+    ["answer_from", "you_told_this_hero_in_private"]
+        .iter()
+        .any(|key| match &facts[*key] {
+            serde_json::Value::Array(lines) => !lines.is_empty(),
+            serde_json::Value::String(line) => !line.is_empty(),
+            _ => false,
+        })
+}
+
+/// What the hero's clue release is, and whether this reply may speak it. The keyword phrases
+/// and the exact secret terms set the starting state. Once Jev has read the line, the state
+/// follows `exact || jev private`: an exact secret term always releases the clue.
+#[derive(Clone, Debug)]
+pub(super) struct Release {
+    /// The whisper itself, given to the speaker's reply only while released.
+    pub(super) clue: String,
+    /// Terms the pack lists for the clue, minus the names the table already hears.
+    pub(super) clue_terms: Vec<String>,
+    /// Every secret term this reply withholds when the clue is not released.
+    pub(super) unheard: Vec<String>,
+    /// The typed words contain one of the clue's exact secret terms.
+    pub(super) exact: bool,
+    /// The state now in force.
+    pub(super) released: bool,
+}
+
+impl Release {
+    /// The state Jev's reading asks for: exact secret terms, or a private-matter question.
+    pub(super) fn wanted(&self, private: bool) -> bool {
+        self.exact || private
+    }
 }
 
 /// Longest in-depth spoken reply, in characters: three short sentences.
@@ -755,6 +790,76 @@ pub(super) struct Turn {
     /// Whether the facts held a line that answers the hero, so a reply may not open on a denial.
     pub(super) answer_offered: bool,
     pub(super) later_lines: Vec<String>,
+    /// The owned inputs the facts were selected from, kept so they can be selected again once
+    /// the hero's line has been read.
+    pub(super) source: Source,
+    /// The hero's private clue, when this NPC could tell it to this hero.
+    pub(super) release: Option<Release>,
+}
+
+impl Turn {
+    /// Selects the reply facts again with `reading`. Scene facts already on `previous` carry
+    /// over; the lines, the offered keys and whether an answer exists are rebuilt.
+    pub(super) fn reselect(
+        &mut self,
+        reading: &AskReading,
+        previous: &serde_json::Value,
+    ) -> serde_json::Value {
+        let (mut facts, offered, _) = {
+            let inputs = self.source.inputs(
+                &self.dossier,
+                &self.withheld,
+                &self.conversation,
+                &self.later_lines,
+            );
+            super::npc_facts::facts_for(&inputs, reading)
+        };
+        self.offered = offered;
+        if let Some(now) = previous.get("now") {
+            facts["now"] = now.clone();
+        }
+        if let (Some(old), Some(new)) = (previous["npc"].as_object(), facts["npc"].as_object_mut())
+        {
+            for (key, value) in old {
+                new.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+        if let Some(hero_visible) = previous.get("hero_visible") {
+            facts["hero_visible"] = hero_visible.clone();
+        }
+        super::npc_facts::trim_background_facts(&mut facts);
+        self.answer_offered = answer_offered(&facts);
+        facts
+    }
+
+    /// Moves the clue release to `on`. Returns whether the state changed, so the caller
+    /// reselects the facts that depend on it.
+    pub(super) fn set_release(&mut self, on: bool) -> bool {
+        let Some(release) = self.release.as_mut() else {
+            return false;
+        };
+        if release.released == on {
+            return false;
+        }
+        release.released = on;
+        let released = if on {
+            released_terms(&self.dossier, &release.clue_terms, &release.clue)
+        } else {
+            Vec::new()
+        };
+        self.withheld = Withheld::new(
+            &self.dossier,
+            release.unheard.clone(),
+            released,
+            content_rating(),
+        );
+        self.source.clue = if on {
+            OwnedClue::Told(release.clue.clone())
+        } else {
+            OwnedClue::Absent
+        };
+        true
+    }
 }
 
 /// The multi-word phrases of the speaker's tic, opener and closer. They shape the voice and are
@@ -867,7 +972,7 @@ pub(super) struct Memory<'a> {
 pub(super) fn fallback(
     dossier: &Dossier,
     standing: Standing,
-    typed: &str,
+    topic: Topic,
     approach: Approach,
     withheld: &Withheld,
     memory: &Memory<'_>,
@@ -877,7 +982,6 @@ pub(super) fn fallback(
         said,
         offered,
     } = *memory;
-    let topic = topic_of(typed, approach);
     let voiced = |key: &str| conversation.voiced.iter().any(|voiced| voiced == key);
     // No sentence the hero already heard, by the same bar the speaking checks hold the model
     // to: four or more words matching a sentence already said.

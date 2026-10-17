@@ -449,7 +449,12 @@ fn a_named_object_is_not_confused_with_its_owners() {
         "Ilsa, what is the carters' dice and cup?",
     );
     assert_eq!(
-        room::answer(&given).unwrap(),
+        room::answer(
+            &given,
+            &crate::gameplay::npc_facts::AskReading::keywords(&given.typed_words),
+            crate::gameplay::adventure::dossier::AnswerSubject::Other
+        )
+        .unwrap(),
         "bone dice and a carved wooden cup"
     );
 }
@@ -657,7 +662,12 @@ fn an_explicit_patron_name_wins_over_a_bystander_with_the_same_name() {
         &format!("I ask {patron_name} what the job is and what it pays."),
     );
     assert!(
-        room::answer(&addressed).is_none(),
+        room::answer(
+            &addressed,
+            &crate::gameplay::npc_facts::AskReading::keywords(&addressed.typed_words),
+            crate::gameplay::adventure::dossier::AnswerSubject::Other
+        )
+        .is_none(),
         "the question body is about the errand, not the equal-named bystander"
     );
     assert_eq!(addressed.turn.unwrap().dossier.npc_id, patron_id);

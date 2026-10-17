@@ -136,7 +136,7 @@ fn facts_for(
         words,
         withheld: &withheld_of(adventure, dossier),
         later_lines: &[],
-        clue: npc_dossier::Clue::Absent,
+        clue: crate::gameplay::npc_facts::Clue::Absent,
         // A friendly hero is at the third exchange, when confidences are first released.
         conversation: &Conversation {
             exchange: if standing.attitude == Attitude::Friendly {
@@ -1334,7 +1334,7 @@ fn fallback_of(
     fallback(
         dossier,
         standing,
-        typed,
+        crate::gameplay::social::topic_of(typed, approach),
         approach,
         withheld,
         &npc_dossier::Memory {
@@ -1366,7 +1366,7 @@ fn conversation_facts(
         withheld: &withheld_of(adventure, dossier),
         conversation,
         later_lines: &[],
-        clue: npc_dossier::Clue::Absent,
+        clue: crate::gameplay::npc_facts::Clue::Absent,
     });
     (facts, offered)
 }
@@ -1622,7 +1622,7 @@ fn a_fallback_line_never_starts_mid_thought() {
     let (answer, _) = fallback(
         &dossier,
         friendly(),
-        typed,
+        crate::gameplay::social::topic_of(typed, Approach::Question),
         Approach::Question,
         &withheld,
         &npc_dossier::Memory {
@@ -1637,7 +1637,7 @@ fn a_fallback_line_never_starts_mid_thought() {
     let (alone, _) = fallback(
         &dossier,
         friendly(),
-        typed,
+        crate::gameplay::social::topic_of(typed, Approach::Question),
         Approach::Question,
         &withheld,
         &npc_dossier::Memory {
@@ -1791,7 +1791,7 @@ fn with_the_text_model_off_the_chosen_lines_answer_and_none_repeats() {
         let (answer, key) = fallback(
             &dossier,
             friendly(),
-            line,
+            crate::gameplay::social::topic_of(line, classify_keywords(line)),
             classify_keywords(line),
             &withheld,
             &npc_dossier::Memory {
@@ -1838,7 +1838,7 @@ fn an_intimidated_npc_uses_attitude_specific_threat_replies_without_repeating_th
                 attitude: Attitude::Indifferent,
                 trust: 0,
             },
-            typed,
+            crate::gameplay::social::topic_of(typed, Approach::Intimidation),
             Approach::Intimidation,
             &withheld,
             &npc_dossier::Memory {
@@ -1872,7 +1872,7 @@ fn an_intimidated_npc_uses_attitude_specific_threat_replies_without_repeating_th
             attitude: Attitude::Hostile,
             trust: 0,
         },
-        typed,
+        crate::gameplay::social::topic_of(typed, Approach::Intimidation),
         Approach::Intimidation,
         &withheld,
         &npc_dossier::Memory {
@@ -1911,7 +1911,7 @@ fn with_the_text_model_off_a_pressed_topic_is_never_answered_twice() {
         let (answer, key) = fallback(
             &dossier,
             friendly(),
-            "What are you hiding from me?",
+            crate::gameplay::social::topic_of("What are you hiding from me?", Approach::Question),
             Approach::Question,
             &withheld,
             &npc_dossier::Memory {
@@ -2931,4 +2931,56 @@ fn old_dossiers_and_speakers_default_to_no_new_fact_or_disclosure_authority() {
             .unwrap();
     assert!(speaker.withheld_subjects.is_empty());
     assert!(speaker.identity_reply.is_none());
+}
+
+#[test]
+fn a_jev_reading_overrides_the_keyword_claim_flag_and_only_its_own_focus_sets_it() {
+    use crate::gameplay::{
+        adventure::dossier::Attitude,
+        npc_facts::{AskReading, Clue, Focus, Inputs, facts_for},
+        social::{Conversation, Standing},
+    };
+    let (adventure, _ledger) = confiding_patron(Attitude::Friendly);
+    let dossier = adventure.dossiers[0].clone();
+    let errand = dossier
+        .knowledge
+        .says_freely
+        .iter()
+        .find(|item| item.source == "errand_line")
+        .map(|item| item.text.clone())
+        .expect("the patron says something of the errand");
+    let word = super::speech_text::content_words(&errand)
+        .into_iter()
+        .next()
+        .expect("the errand line carries a content word");
+    let words = format!("We heard someone burned the {word} years ago. Explain that.");
+    let withheld = withheld_of(&adventure, &dossier);
+    let conversation = Conversation::default();
+    let inputs = Inputs {
+        dossier: &dossier,
+        name: &dossier.name,
+        hero: "Brakka",
+        standing: Standing {
+            attitude: Attitude::Friendly,
+            trust: 0,
+        },
+        recent: &[],
+        scene_title: "",
+        scripted_line: "",
+        words: &words,
+        withheld: &withheld,
+        conversation: &conversation,
+        later_lines: &[],
+        clue: Clue::Absent,
+    };
+    // The keyword reader flags the break word; Jev's reading of the same words decides instead.
+    let (keyword, _, _) = facts_for(&inputs, &AskReading::keywords(&words));
+    assert_eq!(keyword["hero_claims_against_errand"], json!(true));
+    let (other, _, _) = facts_for(&inputs, &AskReading::from_focus(vec![Focus::Other]));
+    assert!(other.get("hero_claims_against_errand").is_none());
+    let (claim, _, _) = facts_for(
+        &inputs,
+        &AskReading::from_focus(vec![Focus::ClaimAgainstErrand]),
+    );
+    assert_eq!(claim["hero_claims_against_errand"], json!(true));
 }

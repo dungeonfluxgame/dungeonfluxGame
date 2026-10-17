@@ -7,7 +7,7 @@
 use super::{NpcReplyContext, npc_dossier};
 use crate::gameplay::{
     adventure::dossier::{AnswerSubject, QuestionAuthority, QuestionSubject},
-    npc_facts,
+    npc_facts::{self, AskReading},
     social::{self, Approach},
     speech_text::shared_words,
 };
@@ -18,9 +18,9 @@ pub(super) struct Answer {
     pub(super) withheld: bool,
 }
 
-/// Recognition is deliberately bounded to these questions. It selects authority before a
-/// provider call; it never guesses whether an arbitrary generated claim is true.
-fn subject(part: &str) -> Option<QuestionSubject> {
+/// Keyword fallback for the question subject of one part. It decides only when Jev did not read
+/// the line; the recognised questions are bounded so it never guesses whether a claim is true.
+fn keyword_subject(part: &str) -> Option<QuestionSubject> {
     let part = part.to_lowercase().replace('’', "'");
     let has = |phrases: &[&str]| phrases.iter().any(|phrase| part.contains(phrase));
     let following_question = part.trim_start().starts_with("why he's following ")
@@ -184,7 +184,13 @@ pub(super) fn identity(context: &NpcReplyContext) -> Option<(String, String)> {
     })
 }
 
-fn ordinary_part(context: &NpcReplyContext, part: &str) -> Vec<(String, String)> {
+/// Answers a part that asks no question subject from the dossier's own subject answers. The
+/// subject is Jev's when Jev read the line, otherwise the keyword subject of this part.
+fn ordinary_part(
+    context: &NpcReplyContext,
+    part: &str,
+    subject: Option<AnswerSubject>,
+) -> Vec<(String, String)> {
     let Some(turn) = context.turn.as_ref() else {
         let part = part.to_lowercase();
         if (part.contains("what happened") || part.contains("what's happened"))
@@ -201,10 +207,12 @@ fn ordinary_part(context: &NpcReplyContext, part: &str) -> Vec<(String, String)>
         }
         return Vec::new();
     };
-    let reading = social::classify_keywords_reading_for_dossier(part, &turn.dossier);
+    let subject = subject.unwrap_or_else(|| {
+        social::classify_keywords_reading_for_dossier(part, &turn.dossier).subject
+    });
     if let Some(answer) = npc_dossier::subject_fallback(
         &turn.dossier,
-        reading.subject,
+        subject,
         &turn.withheld,
         &npc_dossier::Memory {
             conversation: &turn.conversation,
@@ -235,33 +243,49 @@ fn ordinary_part(context: &NpcReplyContext, part: &str) -> Vec<(String, String)>
     answers
 }
 
-pub(super) fn prepare(context: &NpcReplyContext, approach: Approach) -> Option<Answer> {
-    if approach != Approach::Question && !context.typed_words.contains('?') {
-        return None;
-    }
+/// The authored answer for the hero's question parts. Jev's per-part focus names each part's
+/// question subject when it read the line; the keyword subject decides only without Jev. The
+/// reply's `subject` is the answer subject for parts that ask no question subject.
+pub(super) fn prepare(
+    context: &NpcReplyContext,
+    approach: Approach,
+    reading: &AskReading,
+    subject: AnswerSubject,
+) -> Option<Answer> {
     let parts = npc_facts::question_parts(&context.typed_words);
-    if !parts.iter().any(|part| subject(part).is_some()) {
+    let questions: Vec<Option<QuestionSubject>> = match &reading.focus {
+        Some(foci) => (0..parts.len())
+            .map(|index| foci.get(index).and_then(|focus| focus.question_subject()))
+            .collect(),
+        None => {
+            if approach != Approach::Question && !context.typed_words.contains('?') {
+                return None;
+            }
+            parts.iter().map(|part| keyword_subject(part)).collect()
+        }
+    };
+    if questions.iter().all(Option::is_none) {
         return None;
     }
     let mut lines = Vec::new();
     let mut keys = Vec::new();
     let mut withheld = false;
-    for part in parts {
-        let answer = match subject(&part) {
-            Some(subject)
-                if context.withheld_subjects.contains(&subject)
+    for (part, question) in parts.iter().zip(questions) {
+        let answer = match question {
+            Some(question)
+                if context.withheld_subjects.contains(&question)
                     || context
                         .turn
                         .as_ref()
-                        .is_some_and(|turn| turn.dossier.withheld_subjects.contains(&subject)) =>
+                        .is_some_and(|turn| turn.dossier.withheld_subjects.contains(&question)) =>
             {
                 withheld = true;
                 continue;
             }
-            Some(subject) => (if subject == QuestionSubject::Identity {
+            Some(question) => (if question == QuestionSubject::Identity {
                 identity(context)
             } else {
-                authored(context, subject)
+                authored(context, question)
             })
             .map(|answer| vec![answer])
             .unwrap_or_else(|| {
@@ -270,7 +294,7 @@ pub(super) fn prepare(context: &NpcReplyContext, approach: Approach) -> Option<A
                     String::new(),
                 )]
             }),
-            None => ordinary_part(context, &part),
+            None => ordinary_part(context, part, reading.focus.is_some().then_some(subject)),
         };
         for (text, key) in answer {
             let length = lines
@@ -309,13 +333,13 @@ mod tests {
             "Why he’s following the courier?",
             "Why is he following the courier?",
         ] {
-            assert_eq!(subject(question), Some(QuestionSubject::Motive));
+            assert_eq!(keyword_subject(question), Some(QuestionSubject::Motive));
         }
         for statement in [
             "He's following the Courier.",
             "I know why he's following the Courier.",
         ] {
-            assert_eq!(subject(statement), None);
+            assert_eq!(keyword_subject(statement), None);
         }
     }
 }

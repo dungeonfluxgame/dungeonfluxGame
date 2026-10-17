@@ -24,9 +24,9 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use super::{
-    adventure::dossier::{Dossier, Knowledge, Length, ResolvedArchetype, Topic},
+    adventure::dossier::{Dossier, Knowledge, Length, QuestionSubject, ResolvedArchetype, Topic},
     npc_dossier::Withheld,
-    social::{Conversation, Standing, classify_keywords, topic_of},
+    social::{Approach, Conversation, Standing, classify_keywords, topic_of},
     speech_text::{normalised, sentences, shared_words, words},
 };
 
@@ -87,6 +87,59 @@ pub(super) fn current_scene_facts(narration: &str, present: &[(String, String)])
             json!({"name": name, "role": role})
         }).collect::<Vec<_>>(),
     })
+}
+
+/// The owned inputs of one reply, kept by its turn so the facts can be selected again from the
+/// reading Jev gives after the hero's line is known. Borrowed parts (dossier, withheld terms,
+/// conversation, later lines) live on the turn itself.
+pub(super) struct Source {
+    pub(super) name: String,
+    pub(super) hero: String,
+    pub(super) standing: Standing,
+    pub(super) recent: Vec<(bool, String)>,
+    pub(super) scene_title: String,
+    pub(super) scripted_line: String,
+    pub(super) words: String,
+    pub(super) clue: OwnedClue,
+}
+
+/// The owned form of [`Clue`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum OwnedClue {
+    Absent,
+    Told(String),
+    Kept,
+}
+
+impl Source {
+    /// The borrowed inputs for one selection, over the turn's dossier, withheld terms and
+    /// conversation.
+    pub(super) fn inputs<'a>(
+        &'a self,
+        dossier: &'a Dossier,
+        withheld: &'a Withheld,
+        conversation: &'a Conversation,
+        later_lines: &'a [String],
+    ) -> Inputs<'a> {
+        Inputs {
+            dossier,
+            name: &self.name,
+            hero: &self.hero,
+            standing: self.standing,
+            recent: &self.recent,
+            scene_title: &self.scene_title,
+            scripted_line: &self.scripted_line,
+            words: &self.words,
+            withheld,
+            conversation,
+            later_lines,
+            clue: match &self.clue {
+                OwnedClue::Absent => Clue::Absent,
+                OwnedClue::Told(text) => Clue::Told(text),
+                OwnedClue::Kept => Clue::Kept,
+            },
+        }
+    }
 }
 
 /// What a line is for.
@@ -211,21 +264,359 @@ fn candidate_lines(inputs: &Inputs<'_>) -> Vec<Line> {
     found
 }
 
-/// What the hero's words are about.
-struct Ask {
-    about_you: bool,
-    place: bool,
-    danger: bool,
-    private: bool,
-    topic: Topic,
-    /// An approach-driven topic (courtship, threat, bribe): lines on that topic answer.
-    directed: Option<Topic>,
-    /// An open question that asks what to do next ("anything else?", "what should I do
-    /// first?"): the errand answers it. Any other open question is small talk.
-    task: bool,
+/// Who answers the hero's words: Jev's closed reading of each question part, or the keyword
+/// reader when Jev did not answer in time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ReadingSource {
+    Jev,
+    Keywords,
 }
 
-fn read_ask(typed: &str) -> Ask {
+/// What the hero's words are about. Built from Jev's per-part [`Focus`] labels, or from the
+/// keyword reader as the fallback. Fact selection and the room answer read only this type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AskReading {
+    pub(super) source: ReadingSource,
+    pub(super) about_you: bool,
+    pub(super) place: bool,
+    pub(super) danger: bool,
+    pub(super) private: bool,
+    pub(super) topic: Topic,
+    /// An approach-driven topic (courtship, threat, bribe): lines on that topic answer.
+    pub(super) directed: Option<Topic>,
+    /// An open question that asks what to do next ("anything else?", "what should I do
+    /// first?"): the errand answers it. Any other open question is small talk.
+    pub(super) task: bool,
+    /// The hero's words break with the errand (a claim that something is gone or dead).
+    pub(super) claims: bool,
+    /// A genuine wh-question about the wider world.
+    pub(super) world: bool,
+    /// The room question kind, read by Jev or by keywords on the room's question body.
+    pub(super) room: RoomReading,
+    /// One Jev focus per question part, in part order. `None` when Jev did not read the line.
+    pub(super) focus: Option<Vec<Focus>>,
+}
+
+/// The room question kinds the room answer chooses between.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct RoomReading {
+    /// Asks the speaker's name or identity.
+    pub(super) identity: bool,
+    /// Asks about the speaker by name ("what is your name", "who are you").
+    pub(super) self_name: bool,
+    pub(super) owner: bool,
+    pub(super) who_here: bool,
+    pub(super) ways_out: bool,
+    /// A follow-up about the last named room subject ("does she ...", "what about ...").
+    pub(super) follow_up: bool,
+    /// Asks who an unnamed or absent person is.
+    pub(super) unknown_person: bool,
+}
+
+impl RoomReading {
+    /// The keyword reading of the room question body, the fallback when Jev did not read it.
+    pub(super) fn keywords(body: &str) -> Self {
+        let words = body.to_lowercase();
+        Self {
+            identity: words.contains("your name") || words.starts_with("who are you"),
+            self_name: words.contains("name") || words.contains("who are you"),
+            owner: words.starts_with("whose") || words.contains("who owns"),
+            who_here: words.contains("who is here")
+                || words.contains("who else")
+                || words.contains("others listening"),
+            ways_out: words.contains("ways out") || words.contains("how do we leave"),
+            follow_up: words.starts_with("does she ")
+                || words.starts_with("does he ")
+                || words.starts_with("whose ")
+                || words.starts_with("what about "),
+            unknown_person: words.starts_with("who ") || words.starts_with("whose "),
+        }
+    }
+}
+
+/// One closed label Jev chooses for a question part. Rust keeps the fixed mapping from each
+/// label to the reading's flags; Jev decides which label fits the words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Focus {
+    SmallTalk,
+    Identity,
+    SpeakerPast,
+    Motive,
+    Evidence,
+    Employer,
+    Payment,
+    DeliveryHistory,
+    Condition,
+    Place,
+    Danger,
+    PrivateMatter,
+    NextStep,
+    ClaimAgainstErrand,
+    WorldQuestion,
+    Owner,
+    WhoIsHere,
+    WaysOut,
+    UnknownPerson,
+    FollowUp,
+    Other,
+}
+
+/// Each focus with its Jev label and the criterion Jev reads. Labels are the closed choice set.
+const FOCI: [(Focus, &str, &str); 21] = [
+    (
+        Focus::SmallTalk,
+        "small_talk",
+        "Casual talk, a greeting, or an open question that asks nothing specific. It is answered from the speaker's own opinions.",
+    ),
+    (
+        Focus::Identity,
+        "identity",
+        "Asks who the speaker is, their name, what to call them, or whether they know someone.",
+    ),
+    (
+        Focus::SpeakerPast,
+        "speaker_past",
+        "Asks about the speaker's family, home, past, service, work or life.",
+    ),
+    (
+        Focus::Motive,
+        "motive",
+        "Asks why the speaker wants, is after, follows or does something, or what they gain from it.",
+    ),
+    (
+        Focus::Evidence,
+        "evidence",
+        "Asks how the speaker knows something, or whether they saw it or have proof.",
+    ),
+    (
+        Focus::Employer,
+        "employer",
+        "Asks who sent, hired or pays the speaker or the hero.",
+    ),
+    (
+        Focus::Payment,
+        "payment",
+        "Asks about payment, reward, price, or what was promised.",
+    ),
+    (
+        Focus::DeliveryHistory,
+        "delivery_history",
+        "Asks whether the speaker or the hero has made this delivery or done this kind of work before.",
+    ),
+    (
+        Focus::Condition,
+        "condition",
+        "Asks whether someone is hurt, injured, winded or all right.",
+    ),
+    (
+        Focus::Place,
+        "place",
+        "Asks about this place, the town, the road, the area, or what it is like here.",
+    ),
+    (
+        Focus::Danger,
+        "danger",
+        "Asks about threats, enemies, an ambush, who is hunting or after someone, risk, or what to watch for.",
+    ),
+    (
+        Focus::PrivateMatter,
+        "private_matter",
+        "Asks about a confidence or whisper the speaker gave this hero alone, or something hinted between them in private. Choose it only when private_confidence_exists is true.",
+    ),
+    (
+        Focus::NextStep,
+        "next_step",
+        "Asks what to do next, what else is needed, or what to expect from the errand.",
+    ),
+    (
+        Focus::ClaimAgainstErrand,
+        "claim_against_errand",
+        "States that something the errand needs is gone, broken, sold, stolen, dead, or otherwise contrary to the errand.",
+    ),
+    (
+        Focus::WorldQuestion,
+        "world_question",
+        "Asks a genuine question about the wider world, history, rumours, or things the speaker may not know.",
+    ),
+    (
+        Focus::Owner,
+        "owner",
+        "Asks whose a thing is or who owns it.",
+    ),
+    (
+        Focus::WhoIsHere,
+        "who_is_here",
+        "Asks who else is here, who is present, or who may be listening.",
+    ),
+    (
+        Focus::WaysOut,
+        "ways_out",
+        "Asks how to leave, which ways out there are, or where an exit leads.",
+    ),
+    (
+        Focus::UnknownPerson,
+        "unknown_person",
+        "Asks who an unnamed or absent person is.",
+    ),
+    (
+        Focus::FollowUp,
+        "follow_up",
+        "A follow-up that refers back to the last named person or thing, such as 'does she', 'what about him', or 'whose is that'.",
+    ),
+    (
+        Focus::Other,
+        "other",
+        "Anything else: a question about the errand, an object or a person that no other label covers.",
+    ),
+];
+
+/// The closed label choices Jev reads a question part with.
+pub(super) fn focus_choices() -> Vec<(&'static str, &'static str)> {
+    FOCI.iter()
+        .map(|(_, label, criterion)| (*label, *criterion))
+        .collect()
+}
+
+/// The focus a Jev label names, if it is one of the closed choices.
+pub(super) fn focus_of_label(label: &str) -> Option<Focus> {
+    FOCI.iter()
+        .find(|(_, candidate, _)| *candidate == label)
+        .map(|(focus, _, _)| *focus)
+}
+
+impl Focus {
+    /// The question subject an authored answer is filed under, for the questions that have one.
+    pub(super) fn question_subject(self) -> Option<QuestionSubject> {
+        match self {
+            Self::Identity => Some(QuestionSubject::Identity),
+            Self::Evidence => Some(QuestionSubject::Evidence),
+            Self::Employer => Some(QuestionSubject::Employer),
+            Self::Payment => Some(QuestionSubject::Payment),
+            Self::DeliveryHistory => Some(QuestionSubject::DeliveryHistory),
+            Self::Condition => Some(QuestionSubject::Condition),
+            Self::Motive => Some(QuestionSubject::Motive),
+            _ => None,
+        }
+    }
+
+    /// Sets the reading's flags for this focus. The topic is set separately, once per line.
+    fn apply(self, ask: &mut AskReading) {
+        match self {
+            Self::SmallTalk | Self::Other => {}
+            Self::Identity => {
+                ask.about_you = true;
+                ask.room.identity = true;
+                ask.room.self_name = true;
+            }
+            Self::SpeakerPast | Self::Condition | Self::Evidence | Self::Motive => {
+                ask.about_you = true;
+            }
+            Self::Employer | Self::Danger => ask.danger = true,
+            Self::Payment | Self::DeliveryHistory | Self::NextStep => ask.task = true,
+            Self::Place => ask.place = true,
+            Self::PrivateMatter => ask.private = true,
+            Self::ClaimAgainstErrand => ask.claims = true,
+            Self::WorldQuestion => ask.world = true,
+            Self::Owner => ask.room.owner = true,
+            Self::WhoIsHere => ask.room.who_here = true,
+            Self::WaysOut => ask.room.ways_out = true,
+            Self::UnknownPerson => ask.room.unknown_person = true,
+            Self::FollowUp => ask.room.follow_up = true,
+        }
+    }
+
+    /// The topic that prepared answers and personal lines are filed under, when the focus has one.
+    fn topic(self) -> Option<Topic> {
+        match self {
+            Self::Identity | Self::Evidence | Self::Condition => Some(Topic::WhoAreYou),
+            Self::SpeakerPast => Some(Topic::YourPast),
+            Self::Employer | Self::Danger => Some(Topic::TheAntagonist),
+            Self::Place => Some(Topic::ThePlace),
+            Self::Motive
+            | Self::Payment
+            | Self::DeliveryHistory
+            | Self::PrivateMatter
+            | Self::NextStep
+            | Self::ClaimAgainstErrand
+            | Self::WorldQuestion => Some(Topic::WhyThisMatters),
+            Self::SmallTalk
+            | Self::WhoIsHere
+            | Self::Owner
+            | Self::WaysOut
+            | Self::UnknownPerson
+            | Self::FollowUp
+            | Self::Other => None,
+        }
+    }
+}
+
+/// The topic an approach names outright (courtship, threat, bribe), if it names one.
+pub(super) fn directed_for(approach: Approach) -> Option<Topic> {
+    match approach {
+        Approach::Flattery | Approach::Flirting => Some(Topic::ComplimentOrFlirt),
+        Approach::Intimidation => Some(Topic::Threat),
+        Approach::Bribe | Approach::Bargain => Some(Topic::Bribe),
+        _ => None,
+    }
+}
+
+impl AskReading {
+    /// The reading Jev gives: the union of its focus flags over the parts, in part order.
+    /// The first focus that names a topic sets the line's topic.
+    pub(super) fn from_focus(foci: Vec<Focus>) -> Self {
+        let mut ask = Self {
+            source: ReadingSource::Jev,
+            about_you: false,
+            place: false,
+            danger: false,
+            private: false,
+            topic: Topic::WhyThisMatters,
+            directed: None,
+            task: false,
+            claims: false,
+            world: false,
+            room: RoomReading::default(),
+            focus: None,
+        };
+        let mut topic_set = false;
+        for focus in &foci {
+            focus.apply(&mut ask);
+            if let Some(topic) = focus.topic()
+                && !topic_set
+            {
+                ask.topic = topic;
+                topic_set = true;
+            }
+        }
+        ask.focus = Some(foci);
+        ask
+    }
+
+    /// The keyword reading of the hero's words: the fallback when Jev did not read them.
+    pub(super) fn keywords(typed: &str) -> Self {
+        read_ask(typed)
+    }
+
+    /// Keeps the approach's own topic for a Jev reading. The keyword reading keeps its keyword
+    /// approach, so it is left as read.
+    pub(super) fn with_approach(mut self, approach: Approach) -> Self {
+        if self.source == ReadingSource::Jev {
+            self.directed = directed_for(approach);
+        }
+        self
+    }
+
+    /// The topic a fallback answer is filed under. Keyword readings keep today's topic rule.
+    pub(super) fn fallback_topic(&self, typed: &str, approach: Approach) -> Topic {
+        match self.source {
+            ReadingSource::Keywords => topic_of(typed, approach),
+            ReadingSource::Jev => directed_for(approach).unwrap_or(self.topic),
+        }
+    }
+}
+
+/// The keyword reading of the hero's words: the fallback when Jev did not read them.
+fn read_ask(typed: &str) -> AskReading {
     let lowered = normalised(typed);
     let has = |phrases: &[&str]| phrases.iter().any(|phrase| lowered.contains(phrase));
     let mapped = topic_of(typed, classify_keywords(typed));
@@ -300,7 +691,8 @@ fn read_ask(typed: &str) -> Ask {
         None if personal => Topic::YourPast,
         None => mapped,
     };
-    Ask {
+    AskReading {
+        source: ReadingSource::Keywords,
         about_you: has(&[
             "who are you",
             "your name",
@@ -443,13 +835,19 @@ fn read_ask(typed: &str) -> Ask {
             "look out",
             "ahead",
         ]),
+        claims: words(typed)
+            .iter()
+            .any(|spoken| BREAK_WORDS.contains(&spoken.as_str())),
+        world: world_question(typed),
+        room: RoomReading::default(),
+        focus: None,
     }
 }
 
 /// Whether the hero's words are small talk: an open question (nothing topical asked) that is
 /// not asking what to do next. Small talk is answered briefly from the speaker's own life
 /// and opinions, never with an errand line.
-fn small_talk(ask: &Ask) -> bool {
+fn small_talk(ask: &AskReading) -> bool {
     !(ask.about_you || ask.place || ask.danger || ask.private || ask.directed.is_some())
         && !ask.task
 }
@@ -467,7 +865,7 @@ fn world_question(typed: &str) -> bool {
 }
 
 /// How well a line answers the hero's words; a line that cannot answer them scores zero or less.
-fn score(line: &Line, ask: &Ask, typed: &str, talk: bool) -> i32 {
+fn score(line: &Line, ask: &AskReading, typed: &str, talk: bool) -> i32 {
     // Small talk asks nothing topical, so shared words are incidental ("seen", "ever") and
     // must not let a biography line outrank an opinion.
     let shared = if talk {
@@ -603,15 +1001,11 @@ pub(super) fn question_parts(typed: &str) -> Vec<String> {
 /// Whether the hero's words break with the errand the speaker can tell: a claim word (burned,
 /// dead, nothing) sharing a content word with the errand or danger lines. Asking after the
 /// private whisper is not a break.
-fn claims_against_errand(inputs: &Inputs<'_>, ask: &Ask, lines: &[Line]) -> bool {
+fn claims_against_errand(inputs: &Inputs<'_>, ask: &AskReading, lines: &[Line]) -> bool {
     if ask.private {
         return false;
     }
-    let spoken = words(inputs.words);
-    let breaks = BREAK_WORDS
-        .iter()
-        .any(|word| spoken.iter().any(|spoken| spoken == word));
-    breaks
+    ask.claims
         && lines.iter().any(|line| {
             matches!(line.kind, Kind::Errand | Kind::Danger)
                 && shared_words(inputs.words, &line.text) > 0
@@ -625,7 +1019,7 @@ struct Selection<'a> {
     nearest: Option<&'a Line>,
 }
 
-fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a> {
+fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &AskReading) -> Selection<'a> {
     let fresh: Vec<&Line> = lines.iter().filter(|line| !line.said).collect();
     // Score with the same small-talk decision used for eligibility. Otherwise a question
     // grounded in an errand can score a matching biography word ("letter" / "letters").
@@ -637,7 +1031,7 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
                 !matches!(line.kind, Kind::Yourself) && shared_words(&part, &line.text) > 0
             })
         });
-    let talk = small_talk(ask) && !grounded && !world_question(inputs.words);
+    let talk = small_talk(ask) && !grounded && !ask.world;
     let mut ranked: Vec<(i32, usize, &Line)> = fresh
         .iter()
         .enumerate()
@@ -656,11 +1050,11 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &Ask) -> Selection<'a
         shared_words(inputs.words, &line.text) > 0
             || matches!(
                 (line.kind, ask),
-                (Kind::Danger, Ask { danger: true, .. })
-                    | (Kind::Place, Ask { place: true, .. })
+                (Kind::Danger, AskReading { danger: true, .. })
+                    | (Kind::Place, AskReading { place: true, .. })
                     | (
                         Kind::Yourself,
-                        Ask {
+                        AskReading {
                             about_you: true,
                             ..
                         }
@@ -811,16 +1205,25 @@ fn public_role_archetype(profile: &ResolvedArchetype, withheld: &Withheld) -> Op
 /// `withheld` also drops any line that mentions one of its secrets. The facts sent to the
 /// model carry only the most recent of the said lines; the full list is for the speaking
 /// checks, so nothing already spoken anywhere in the conversation is repeated.
+/// The reply facts read from the keyword reader. Used when Jev has not read the line.
 pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
+    facts_for(inputs, &read_ask(inputs.words))
+}
+
+/// The reply facts for one reading of the hero's words: which lines answer, which is
+/// volunteered, and the rest of the NPC's context.
+pub(super) fn facts_for(
+    inputs: &Inputs<'_>,
+    ask: &AskReading,
+) -> (Value, Vec<Offered>, Vec<String>) {
     let dossier = inputs.dossier;
     let withheld = inputs.withheld;
     let conversation = inputs.conversation;
     let kept = |text: &str| (!withheld.leaks_secret(text)).then(|| text.to_owned());
     let trusted = inputs.standing.trusted(dossier);
     let style = &dossier.speech_style;
-    let ask = read_ask(inputs.words);
     let lines = candidate_lines(inputs);
-    let selection = select(&lines, inputs, &ask);
+    let selection = select(&lines, inputs, ask);
 
     let mut emotional_profile = dossier.emotional_profile();
     emotional_profile.feelings.retain(|feeling| {
@@ -912,7 +1315,7 @@ pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
     if let Some(line) = courtship {
         facts["courtship"] = json!(line);
     }
-    if claims_against_errand(inputs, &ask, &lines) {
+    if claims_against_errand(inputs, ask, &lines) {
         facts["hero_claims_against_errand"] = json!(true);
     }
     if selection.answer.is_empty()
@@ -1111,5 +1514,91 @@ mod tests {
             question_parts("Who sent you? What did they promise? When will they come? Why?").len(),
             QUESTION_PARTS
         );
+    }
+}
+
+#[cfg(test)]
+mod reading_tests {
+    use super::*;
+
+    #[test]
+    fn every_focus_label_is_a_closed_choice_that_maps_back_to_its_focus() {
+        let choices = focus_choices();
+        assert_eq!(choices.len(), 21);
+        for (label, criterion) in choices {
+            assert!(!criterion.trim().is_empty(), "{label} needs a criterion");
+            assert!(
+                focus_of_label(label).is_some(),
+                "{label} must map to a focus"
+            );
+        }
+        assert_eq!(focus_of_label("who_knows"), None);
+    }
+
+    #[test]
+    fn a_jev_reading_sets_only_the_flags_of_its_focus_and_the_first_topic_wins() {
+        let ask = AskReading::from_focus(vec![Focus::Place, Focus::Danger]);
+        assert_eq!(ask.source, ReadingSource::Jev);
+        assert!(ask.place && ask.danger);
+        assert!(!ask.about_you && !ask.private && !ask.task && !ask.claims && !ask.world);
+        assert_eq!(ask.topic, Topic::ThePlace);
+        assert!(!small_talk(&ask));
+    }
+
+    #[test]
+    fn small_talk_and_other_are_open_readings_while_a_payment_question_is_errand_talk() {
+        assert!(small_talk(&AskReading::from_focus(vec![Focus::SmallTalk])));
+        assert!(small_talk(&AskReading::from_focus(vec![Focus::Other])));
+        assert!(!small_talk(&AskReading::from_focus(vec![Focus::Payment])));
+        assert!(AskReading::from_focus(vec![Focus::Payment]).task);
+    }
+
+    #[test]
+    fn a_claim_and_a_world_question_are_read_only_from_their_own_focus() {
+        let claim = AskReading::from_focus(vec![Focus::ClaimAgainstErrand]);
+        assert!(claim.claims && !claim.world);
+        let world = AskReading::from_focus(vec![Focus::WorldQuestion]);
+        assert!(world.world && !world.claims);
+    }
+
+    #[test]
+    fn keyword_reading_keeps_the_break_words_and_the_wh_question_rule_it_always_had() {
+        assert!(AskReading::keywords("My book burned.").claims);
+        assert!(!AskReading::keywords("Good morning.").claims);
+        let wards = AskReading::keywords("What are the old wards?");
+        assert!(wards.world);
+        assert!(wards.focus.is_none());
+        assert_eq!(wards.source, ReadingSource::Keywords);
+    }
+
+    #[test]
+    fn the_fallback_topic_follows_the_approach_then_the_jev_topic_or_the_keyword_rule() {
+        let typed = "Tell me about your childhood";
+        let jev = AskReading::from_focus(vec![Focus::SpeakerPast]);
+        assert_eq!(
+            jev.fallback_topic(typed, Approach::Question),
+            Topic::YourPast
+        );
+        assert_eq!(
+            jev.fallback_topic(typed, Approach::Intimidation),
+            Topic::Threat
+        );
+        let keywords = AskReading::keywords(typed);
+        assert_eq!(
+            keywords.fallback_topic(typed, Approach::Question),
+            topic_of(typed, Approach::Question)
+        );
+    }
+
+    #[test]
+    fn the_room_keyword_reading_matches_the_room_phrases_it_replaced() {
+        let owner = RoomReading::keywords("whose cup is this?");
+        assert!(owner.owner && owner.follow_up && owner.unknown_person && !owner.identity);
+        let name = RoomReading::keywords("what is your name?");
+        assert!(name.identity && name.self_name);
+        let follow = RoomReading::keywords("does she work here?");
+        assert!(follow.follow_up && !follow.owner);
+        assert!(RoomReading::keywords("who is here?").who_here);
+        assert!(RoomReading::keywords("what are the ways out?").ways_out);
     }
 }

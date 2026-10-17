@@ -4,9 +4,10 @@ use serde_json::{Value, json};
 
 use super::{NpcReplyContext, npc_dossier::Withheld};
 use crate::gameplay::adventure::{
-    dossier::Dossier,
+    dossier::{AnswerSubject, Dossier},
     scene_model::{SceneNow, ScenePerson, SceneTargetKind},
 };
+use crate::gameplay::npc_facts::{AskReading, RoomReading};
 
 pub(super) fn is_speaker(person: &ScenePerson, dossier: &Dossier) -> bool {
     dossier.npc_id == format!("bystander:{}", person.id)
@@ -101,13 +102,25 @@ pub(super) fn question_body(context: &NpcReplyContext) -> String {
     lowered
 }
 
-pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
+/// The room answer for a question about the room's people, things and exits. The question kind
+/// is Jev's when Jev read the line; the keyword kind on the question body decides otherwise.
+/// Exact names of people, things and exits stay a data match against the scene model.
+pub(super) fn answer(
+    context: &NpcReplyContext,
+    reading: &AskReading,
+    subject: AnswerSubject,
+) -> Option<String> {
     let room = context.room.as_ref()?;
     let model = &room.model;
     let turn = context.turn.as_ref()?;
     let body = question_body(context);
     let words = body.as_str();
-    if words.contains("your name") || words.starts_with("who are you") {
+    let question = if reading.focus.is_some() {
+        reading.room
+    } else {
+        RoomReading::keywords(words)
+    };
+    if question.identity {
         return super::answer::identity(context).map(|(text, _)| text);
     }
     // A named object takes precedence over a person alias embedded in its name.
@@ -120,11 +133,8 @@ pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
         .or_else(|| model.resolve_target(words))
         .or_else(|| {
             // A follow-up about "she" or "that" retains the last explicitly named room subject.
-            let follows = words.starts_with("does she ")
-                || words.starts_with("does he ")
-                || words.starts_with("whose ")
-                || words.starts_with("what about ");
-            follows
+            question
+                .follow_up
                 .then(|| {
                     context
                         .turn
@@ -152,7 +162,7 @@ pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
                         .as_ref()
                         .is_some_and(|turn| is_speaker(people[0], &turn.dossier))
                 {
-                    if words.contains("name") || words.contains("who are you") {
+                    if question.self_name {
                         return super::answer::identity(context).map(|(text, _)| text);
                     } else {
                         return None;
@@ -188,7 +198,7 @@ pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
                     .things
                     .iter()
                     .find(|thing| target.ids.contains(&thing.id))?;
-                if words.starts_with("whose") || words.contains("who owns") {
+                if question.owner {
                     if let Some(owner) = thing
                         .owner_id
                         .as_ref()
@@ -240,10 +250,7 @@ pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
                 )
             }
         }
-    } else if words.contains("who is here")
-        || words.contains("who else")
-        || words.contains("others listening")
-    {
+    } else if question.who_here {
         let names = model
             .people
             .iter()
@@ -254,17 +261,20 @@ pub(super) fn answer(context: &NpcReplyContext) -> Option<String> {
             "{} are here with us. They may hear us if we speak aloud.",
             names.join(" and ")
         )
-    } else if words.contains("ways out") || words.contains("how do we leave") {
+    } else if question.ways_out {
         model
             .ways_out
             .iter()
             .map(|way| format!("The {} leads to {}.", way.name, way.beyond))
             .collect::<Vec<_>>()
             .join(" ")
-    } else if words.starts_with("who ") || words.starts_with("whose ") {
-        let subject =
+    } else if question.unknown_person {
+        let subject = if reading.focus.is_some() {
+            subject
+        } else {
             super::super::social::classify_keywords_reading_for_dossier(words, &turn.dossier)
-                .subject;
+                .subject
+        };
         if subject != crate::gameplay::adventure::dossier::AnswerSubject::Other
             && turn.dossier.subject_answers.contains_key(&subject)
         {
