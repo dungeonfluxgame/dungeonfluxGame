@@ -3828,6 +3828,7 @@ impl Reducer<Call> for Actor {
                     super::dialogue::DialogueRequest::Confirm(_)
                     | super::dialogue::DialogueRequest::SyncNotes
                     | super::dialogue::DialogueRequest::PendingMerchantQuote
+                    | super::dialogue::DialogueRequest::PartyHeroes
                     | super::dialogue::DialogueRequest::CloseMerchantQuote { .. }
                     | super::dialogue::DialogueRequest::Cancel(_) => None,
                 };

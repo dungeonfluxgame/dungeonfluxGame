@@ -2271,3 +2271,252 @@ fn a_watched_question_subject_follows_jev_and_keywords_only_for_held_facts() {
         .collect::<Vec<_>>();
     assert_eq!(labels, ["reward", "enemy", "none"]);
 }
+
+fn courier_cast() -> Vec<df_protocol::common::SceneActor> {
+    vec![df_protocol::common::SceneActor {
+        id: "courier".to_owned(),
+        name: "Courier".to_owned(),
+        speaking: true,
+        ..Default::default()
+    }]
+}
+
+fn sigrun_party() -> Vec<super::npc_target::PartyHero> {
+    super::dialogue::party_without_speaker("Brakka", &["Brakka".to_owned(), "Sigrun".to_owned()])
+}
+
+fn addressed(
+    target: super::npc_target::Target,
+    hero: Option<(&str, bool)>,
+) -> super::npc_target::Decision {
+    super::npc_target::Decision {
+        target,
+        hero: hero.map(|(id, private_aside)| super::npc_target::HeroAddressee {
+            id: id.to_owned(),
+            private_aside,
+        }),
+        source: "jev",
+        reason: "test",
+        elapsed_ms: 0,
+    }
+}
+
+#[test]
+fn a_hero_addressee_routes_to_hero_speech_and_never_to_the_npc() {
+    use super::dialogue::{AddresseeRoute, addressee_route};
+    use super::npc_target::Target;
+    // "I hand the traveler's clothes to Sigrun." names a party hero, so no NPC is addressed.
+    let decision = addressed(Target::Absent, Some(("Sigrun", false)));
+    let route = addressee_route(&decision, &courier_cast(), &sigrun_party());
+    assert_eq!(
+        route,
+        AddresseeRoute::Hero {
+            id: "Sigrun".to_owned(),
+            private_aside: false,
+        }
+    );
+    assert_eq!(route.validation(), "hero_selected");
+}
+
+#[test]
+fn a_whispered_hero_addressee_is_flagged_as_a_private_aside() {
+    use super::dialogue::{AddresseeRoute, addressee_route};
+    use super::npc_target::Target;
+    // "I lean over and whisper to Sigrun so Marek can't hear" is labelled private by Jev.
+    let decision = addressed(Target::Absent, Some(("Sigrun", true)));
+    let route = addressee_route(&decision, &courier_cast(), &sigrun_party());
+    assert_eq!(
+        route,
+        AddresseeRoute::Hero {
+            id: "Sigrun".to_owned(),
+            private_aside: true,
+        }
+    );
+    assert_eq!(route.validation(), "hero_private_aside");
+}
+
+#[test]
+fn a_hero_outside_the_party_is_unmatched_and_gets_a_narrated_reply() {
+    use super::dialogue::{AddresseeRoute, NAME_NOT_HERE_NARRATION, addressee_route};
+    use super::npc_target::Target;
+    // The speaker is excluded from the party, so a line naming them matches nobody.
+    let decision = addressed(Target::Absent, Some(("Brakka", false)));
+    let route = addressee_route(&decision, &courier_cast(), &sigrun_party());
+    assert_eq!(
+        route,
+        AddresseeRoute::Unmatched {
+            validation: "absent",
+            narration: NAME_NOT_HERE_NARRATION,
+        }
+    );
+}
+
+#[test]
+fn an_addressee_who_matches_nobody_gets_a_narrated_reply_not_a_failure() {
+    use super::dialogue::{
+        AddresseeRoute, DESCRIPTION_NOT_HERE_NARRATION, NAME_NOT_HERE_NARRATION, addressee_route,
+    };
+    use super::npc_target::Target;
+    assert_eq!(NAME_NOT_HERE_NARRATION, "Nobody here goes by that name.");
+    let by_name = addressee_route(
+        &addressed(Target::Absent, None),
+        &courier_cast(),
+        &sigrun_party(),
+    );
+    assert_eq!(
+        by_name,
+        AddresseeRoute::Unmatched {
+            validation: "absent",
+            narration: NAME_NOT_HERE_NARRATION,
+        }
+    );
+    let by_description = addressed(Target::Description, None);
+    assert_eq!(
+        addressee_route(&by_description, &courier_cast(), &sigrun_party()),
+        AddresseeRoute::Unmatched {
+            validation: "unresolved_explicit_target",
+            narration: DESCRIPTION_NOT_HERE_NARRATION,
+        }
+    );
+}
+
+#[test]
+fn a_present_actor_or_an_unaddressed_line_keeps_the_npc_route() {
+    use super::dialogue::{AddresseeRoute, addressee_route};
+    use super::npc_target::Target;
+    let present = addressee_route(
+        &addressed(Target::Actor("courier".to_owned()), None),
+        &courier_cast(),
+        &sigrun_party(),
+    );
+    assert_eq!(present, AddresseeRoute::Npc(Some("courier".to_owned())));
+    assert_eq!(present.validation(), "selected");
+    let unaddressed = addressee_route(
+        &addressed(Target::Unspecified, None),
+        &courier_cast(),
+        &sigrun_party(),
+    );
+    assert_eq!(unaddressed, AddresseeRoute::Npc(None));
+    assert_eq!(unaddressed.validation(), "no_npc");
+    let stale = addressee_route(
+        &addressed(Target::Actor("ghost".to_owned()), None),
+        &courier_cast(),
+        &sigrun_party(),
+    );
+    assert_eq!(stale.validation(), "invalid_actor_id");
+}
+
+#[test]
+fn an_ambiguous_addressee_is_refused_for_one_name_not_routed() {
+    use super::dialogue::{AddresseeRoute, addressee_route};
+    use super::npc_target::Target;
+    let route = addressee_route(
+        &addressed(Target::Ambiguous, None),
+        &courier_cast(),
+        &sigrun_party(),
+    );
+    assert_eq!(route, AddresseeRoute::Ambiguous);
+    assert_eq!(route.validation(), "ambiguous");
+}
+
+#[test]
+fn the_party_for_addressing_excludes_the_speaker() {
+    use super::npc_target::PartyHero;
+    assert_eq!(
+        sigrun_party(),
+        vec![PartyHero {
+            id: "Sigrun".to_owned(),
+            name: "Sigrun".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn a_final_meta_note_command_is_a_notebook_submission_only_when_declared_meta() {
+    use super::dialogue::is_notebook_submission;
+    use df_model::intent::{DiscourseContext, InputFinality};
+    let note = "note: Tomas is a mapmaker.";
+    assert!(is_notebook_submission(
+        DiscourseContext::Meta,
+        InputFinality::Final,
+        note
+    ));
+    assert!(is_notebook_submission(
+        DiscourseContext::Meta,
+        InputFinality::Final,
+        "share clue 42"
+    ));
+    assert!(!is_notebook_submission(
+        DiscourseContext::Social,
+        InputFinality::Final,
+        note
+    ));
+    assert!(!is_notebook_submission(
+        DiscourseContext::Meta,
+        InputFinality::Partial,
+        note
+    ));
+    assert!(!is_notebook_submission(
+        DiscourseContext::Meta,
+        InputFinality::Final,
+        "we should write down the clues"
+    ));
+}
+
+#[test]
+fn a_meta_note_is_written_to_the_party_notes_every_member_reads() {
+    use super::dialogue::{NotebookCommand, notebook_command};
+    use super::notebook::NotebookLedger;
+    use df_model::intent::DiscourseContext;
+    use df_types::MemberId;
+    let writer = MemberId::from_bytes(&[1; 16]).unwrap();
+    let other = MemberId::from_bytes(&[2; 16]).unwrap();
+    let Some(NotebookCommand::Note(note)) =
+        notebook_command(DiscourseContext::Meta, "note: Tomas is a mapmaker.")
+    else {
+        panic!("a Meta note command is expected");
+    };
+    let ledger = NotebookLedger::none();
+    ledger
+        .add_note(writer, "Brakka", note, "The Sealed Warning")
+        .unwrap();
+    assert!(
+        ledger
+            .visible_to(other)
+            .iter()
+            .any(|entry| entry.text == "Tomas is a mapmaker.")
+    );
+}
+
+#[test]
+fn a_party_note_intent_becomes_a_notebook_write() {
+    use super::dialogue::{NotebookCommand, notebook_command, party_note_text};
+    use df_model::intent::DiscourseContext;
+    let typed = "I write in our party notes: the bell is cracked.";
+    let text = party_note_text(typed);
+    assert_eq!(
+        text,
+        "note: I write in our party notes: the bell is cracked."
+    );
+    assert!(matches!(
+        notebook_command(DiscourseContext::Meta, &text),
+        Some(NotebookCommand::Note(note)) if note == typed
+    ));
+    // A line already written in the notebook grammar is kept as typed.
+    assert_eq!(
+        party_note_text("note: Tomas is a mapmaker."),
+        "note: Tomas is a mapmaker."
+    );
+    assert_eq!(
+        party_note_text("write down the bell is cracked."),
+        "write down the bell is cracked."
+    );
+}
+
+#[test]
+fn an_unavailable_authority_is_a_retryable_status_for_the_phone() {
+    use df_session::submission::RepositoryError;
+    // The phone keeps its draft on Unavailable; it is never reported as a rejected line.
+    let status = super::actor::unavailable(RepositoryError::UnresolvedCommit);
+    assert_eq!(status.code(), tonic::Code::Unavailable);
+}

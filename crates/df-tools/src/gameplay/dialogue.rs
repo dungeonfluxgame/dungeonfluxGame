@@ -373,6 +373,8 @@ pub(super) struct QuoteClosureEvidence {
 pub(super) enum DialogueRequest {
     SyncNotes,
     PendingMerchantQuote,
+    /// The other party heroes at the table, for addressing them by name.
+    PartyHeroes,
     CloseMerchantQuote {
         quote_id: String,
         reason: journey::living_scene::MerchantQuoteClosureReason,
@@ -501,7 +503,7 @@ impl DialogueRequest {
     pub(super) fn retained_heap_bytes(&self) -> usize {
         match self {
             Self::SyncNotes => 0,
-            Self::PendingMerchantQuote => 0,
+            Self::PendingMerchantQuote | Self::PartyHeroes => 0,
             Self::CloseMerchantQuote { quote_id, .. } => quote_id.capacity(),
             Self::RawTarget { bytes, actor_id } => bytes
                 .retained_heap_bytes()
@@ -526,6 +528,7 @@ pub(super) enum DialogueReply {
         hero_id: String,
         quote: Option<journey::living_scene::SceneTradeQuote>,
     },
+    PartyHeroes(Vec<super::npc_target::PartyHero>),
     MerchantQuoteClosed {
         revision: String,
     },
@@ -658,6 +661,133 @@ fn addresses_party_hero(words: &str, party: &[String]) -> bool {
     })
 }
 
+/// The narrator's answer when the addressed name matches nobody present. It is shown to the
+/// speaker only and is never written to the table.
+pub(super) const NAME_NOT_HERE_NARRATION: &str = "Nobody here goes by that name.";
+pub(super) const DESCRIPTION_NOT_HERE_NARRATION: &str = "Nobody here matches that description.";
+pub(super) const NAME_ONE_PERSON_NARRATION: &str = "Name just one person here to address.";
+pub(super) const NOTE_ACCEPTED_NARRATION: &str = "Noted in the party notes.";
+pub(super) const CLUE_SHARED_NARRATION: &str = "Shared with the party.";
+pub(super) const CLUE_NOT_SHAREABLE_NARRATION: &str = "That clue cannot be shared.";
+
+/// The other party heroes, excluding the speaker. A hero's party id is its name, which is also
+/// the id its person carries in the scene snapshot.
+pub(super) fn party_without_speaker(
+    speaker: &str,
+    heroes: &[String],
+) -> Vec<super::npc_target::PartyHero> {
+    heroes
+        .iter()
+        .filter(|name| name.as_str() != speaker)
+        .map(|name| super::npc_target::PartyHero {
+            id: name.clone(),
+            name: name.clone(),
+        })
+        .collect()
+}
+
+/// Where an addressee decision sends the line. Pure: the caller performs the NPC, hero or
+/// narrated route.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum AddresseeRoute {
+    /// The present speaker (`None`) or the named present actor.
+    Npc(Option<String>),
+    /// Hero speech to a party hero. `private_aside` marks a line Jev labelled as whispered.
+    Hero { id: String, private_aside: bool },
+    /// Nobody present answers to the addressee; the speaker gets `narration`.
+    Unmatched {
+        validation: &'static str,
+        narration: &'static str,
+    },
+    /// More than one person is addressed; the speaker gets `NAME_ONE_PERSON_NARRATION`.
+    Ambiguous,
+}
+
+pub(super) fn addressee_route(
+    decision: &super::npc_target::Decision,
+    cast: &[rpc::SceneActor],
+    party: &[super::npc_target::PartyHero],
+) -> AddresseeRoute {
+    if let Some(addressee) = &decision.hero {
+        return if party.iter().any(|hero| hero.id == addressee.id) {
+            AddresseeRoute::Hero {
+                id: addressee.id.clone(),
+                private_aside: addressee.private_aside,
+            }
+        } else {
+            AddresseeRoute::Unmatched {
+                validation: "absent",
+                narration: NAME_NOT_HERE_NARRATION,
+            }
+        };
+    }
+    match &decision.target {
+        super::npc_target::Target::Actor(id) if super::npc_target::current(cast, id).is_some() => {
+            AddresseeRoute::Npc(Some(id.clone()))
+        }
+        super::npc_target::Target::Actor(_) => AddresseeRoute::Unmatched {
+            validation: "invalid_actor_id",
+            narration: NAME_NOT_HERE_NARRATION,
+        },
+        super::npc_target::Target::Ambiguous => AddresseeRoute::Ambiguous,
+        super::npc_target::Target::Absent => AddresseeRoute::Unmatched {
+            validation: "absent",
+            narration: NAME_NOT_HERE_NARRATION,
+        },
+        super::npc_target::Target::PossibleAddress => AddresseeRoute::Unmatched {
+            validation: "unresolved_explicit_target",
+            narration: NAME_NOT_HERE_NARRATION,
+        },
+        super::npc_target::Target::Description => AddresseeRoute::Unmatched {
+            validation: "unresolved_explicit_target",
+            narration: DESCRIPTION_NOT_HERE_NARRATION,
+        },
+        super::npc_target::Target::Unspecified => AddresseeRoute::Npc(None),
+    }
+}
+
+impl AddresseeRoute {
+    /// The validation label recorded on the NPC target line for this route.
+    pub(super) fn validation(&self) -> &'static str {
+        match self {
+            Self::Npc(Some(_)) => "selected",
+            Self::Npc(None) => "no_npc",
+            Self::Hero {
+                private_aside: false,
+                ..
+            } => "hero_selected",
+            Self::Hero {
+                private_aside: true,
+                ..
+            } => "hero_private_aside",
+            Self::Unmatched { validation, .. } => validation,
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
+/// Whether a line is a notebook command that is written straight to the notebook: a final Meta
+/// submission the notebook grammar accepts. Such a line keeps its Meta context and skips every
+/// scene and intent route.
+pub(super) fn is_notebook_submission(
+    declared: DiscourseContext,
+    finality: InputFinality,
+    text: &str,
+) -> bool {
+    finality == InputFinality::Final && notebook_command(declared, text).is_some()
+}
+
+/// A line Jev reads as a party note, in the notebook's own grammar. A line already written as
+/// "note:" or "write down" is kept as typed.
+pub(super) fn party_note_text(text: &str) -> String {
+    let trimmed = text.trim_start().to_lowercase();
+    if trimmed.starts_with("note:") || trimmed.starts_with("write down ") {
+        text.to_owned()
+    } else {
+        format!("note: {text}")
+    }
+}
+
 fn is_observation_submission(
     request: &rpc::RawDialogueRequest,
     reading: &super::approach_model::LineReading,
@@ -738,6 +868,72 @@ impl Service {
             DialogueReply::PendingMerchantQuote { hero_id, quote } => Ok((hero_id, quote)),
             _ => Err(Status::internal("merchant quote lookup binding invalid")),
         }
+    }
+
+    /// The other party heroes at the table, read through the actor so the speaker is excluded
+    /// from the authenticated member's own hero.
+    async fn party_heroes(
+        &self,
+        credential: [u8; 32],
+    ) -> Result<Vec<super::npc_target::PartyHero>, Status> {
+        match self
+            .dialogue_call(credential, DialogueRequest::PartyHeroes)
+            .await?
+        {
+            DialogueReply::PartyHeroes(heroes) => Ok(heroes),
+            _ => Err(Status::internal("party lookup binding invalid")),
+        }
+    }
+
+    /// The narrator's reply to the speaker alone for a line the table cannot route. Nothing is
+    /// written to the table, and the reply carries the input's identity for the phone.
+    fn narrated_addressee_reply(
+        &self,
+        request: &rpc::RawDialogueRequest,
+        narration: &str,
+    ) -> DialogueReply {
+        let current = self.updates.borrow().clone();
+        let basis = current.basis();
+        DialogueReply::Raw(
+            rpc::DialogueResponse {
+                input_id: request.input_id.clone(),
+                disposition: rpc::DialogueDisposition::Meta as i32,
+                revision: Some(wire::revision(basis.revision)),
+                npc_reply: narration.to_owned(),
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    /// The scene-snapshot id of the party hero named after "to" in a give line. The rules stage
+    /// validates the recipient against the snapshot, where each party hero is a person with the
+    /// hero role.
+    async fn party_hero_recipient(
+        &self,
+        credential: [u8; 32],
+        scene: &super::pack::Scene,
+        words: &str,
+    ) -> Result<Option<String>, Status> {
+        let party = self.party_heroes(credential).await?;
+        let super::npc_target::ExactAddressee::Hero(hero_id) =
+            super::npc_target::exact_with_party(words, &[], &party)
+        else {
+            return Ok(None);
+        };
+        let Some(hero) = party.iter().find(|hero| hero.id == hero_id) else {
+            return Ok(None);
+        };
+        let current = self.updates.borrow().clone();
+        let snapshot =
+            journey::living_scene::snapshot(current.state(), scene).map_err(actor::unavailable)?;
+        Ok(snapshot.and_then(|now| {
+            now.model
+                .people
+                .iter()
+                .find(|person| person.role == "hero" && person.name == hero.name)
+                .map(|person| person.id.clone())
+        }))
     }
 
     async fn close_merchant_quote(
@@ -973,16 +1169,16 @@ impl Service {
             .unwrap_or_else(|| "invalid".to_owned());
         let chars = request.text.chars().count();
         let answer = self.submit_line_inner(credential, request).await;
+        // The code tells a retryable refusal (Unavailable, the draft is kept) from a rejected line.
+        let status = match &answer {
+            Ok(_) => "completed".to_owned(),
+            Err(error) => format!("failed code={:?}", error.code()),
+        };
         actor::record_audit_line(
             "gameplay.input_timing",
             format!(
-                "STORY input id={id} chars={chars} elapsed_ms={} status={}",
+                "STORY input id={id} chars={chars} elapsed_ms={} status={status}",
                 started.elapsed().as_millis(),
-                if answer.is_ok() {
-                    "completed"
-                } else {
-                    "failed"
-                },
             ),
         );
         answer
@@ -999,6 +1195,19 @@ impl Service {
             return Err(Status::resource_exhausted(
                 "bounded dialogue fields required",
             ));
+        }
+        // A notebook command the player declared as Meta is written as declared: no intent
+        // reading or scene route may rewrite its context and drop the note.
+        if is_notebook_submission(declared, finality(request.finality)?, &request.text) {
+            return self
+                .dialogue_call(
+                    credential,
+                    DialogueRequest::Raw(RawDialogueBytes::new(
+                        encode(&request)?,
+                        HeroTradeIntent::not_requested(),
+                    )),
+                )
+                .await;
         }
         let current = self.updates.borrow().clone();
         let scene =
@@ -1150,12 +1359,14 @@ impl Service {
         } else {
             reading.intent
         };
+        // A line Jev reads as a party note is a notebook write, never a scene interaction.
         let scene_turn = finality(request.finality)? == InputFinality::Final
             && matches!(
                 context(request.context)?,
                 DiscourseContext::Unspecified | DiscourseContext::Social
             )
-            && !merchant_trade_request;
+            && !merchant_trade_request
+            && reading.intent != super::approach_model::LineIntent::PartyNote;
         // Jev reads the line as a scene interaction once; a physical line and a plain interaction
         // both use that reading, so the keyword rules run only if Jev gave no label.
         let scene_interaction = if scene_turn {
@@ -1243,19 +1454,8 @@ impl Service {
             }
             _ => request.context,
         };
-        if reading.intent == super::approach_model::LineIntent::PartyNote
-            && !request
-                .text
-                .trim_start()
-                .to_lowercase()
-                .starts_with("note:")
-            && !request
-                .text
-                .trim_start()
-                .to_lowercase()
-                .starts_with("write down ")
-        {
-            request.text = format!("note: {}", request.text);
+        if reading.intent == super::approach_model::LineIntent::PartyNote {
+            request.text = party_note_text(&request.text);
         }
         let mut target = quote_followup.as_ref().map(|quote| match quote.direction {
             journey::living_scene::SceneTradeDirection::HeroBuys => quote.seller_id.clone(),
@@ -1271,44 +1471,38 @@ impl Service {
             )
         {
             let cast = wire::scene_cast(&scene);
-            let decision = self
-                .npc_voice
-                .resolve_addressee(&request.text, &cast, &scene.speaker)
+            let party = self.party_heroes(credential).await?;
+            let (_, approach_model) = self.npc_voice.hero_identity_models();
+            let decision = approach_model
+                .resolve_addressee_with_party(&request.text, &cast, &party, &scene.speaker)
                 .await;
-            let (selected, validation) = match &decision.target {
-                super::npc_target::Target::Actor(id)
-                    if super::npc_target::current(&cast, id).is_some() =>
-                {
-                    (Some(id.clone()), "selected")
-                }
-                super::npc_target::Target::Actor(_) => (None, "invalid_actor_id"),
-                super::npc_target::Target::Ambiguous => (None, "ambiguous"),
-                super::npc_target::Target::Absent => (None, "absent"),
-                super::npc_target::Target::Description
-                | super::npc_target::Target::PossibleAddress => {
-                    (None, "unresolved_explicit_target")
-                }
-                super::npc_target::Target::Unspecified => (None, "no_npc"),
+            let route = addressee_route(&decision, &cast, &party);
+            let selected = match &route {
+                AddresseeRoute::Npc(selected) => selected.as_deref(),
+                _ => None,
             };
             record_target_route(
                 &request,
-                selected.as_deref(),
+                selected,
                 decision.source,
                 decision.reason,
                 decision.elapsed_ms,
-                validation,
+                route.validation(),
             );
-            if !matches!(validation, "selected" | "no_npc") {
-                return Err(Status::failed_precondition(match validation {
-                    "ambiguous" => "Name one present character to address.",
-                    "absent" => "The explicitly addressed character is not present.",
-                    "unresolved_explicit_target" => {
-                        "The addressed character could not be resolved; use their name."
-                    }
-                    _ => "The addressed character is not available.",
-                }));
+            match route {
+                AddresseeRoute::Npc(selected) => target = selected,
+                // Hero speech is the same table line a vocative addresses to a hero: it has no
+                // NPC reply.
+                AddresseeRoute::Hero { .. } => {
+                    request.context = rpc::DialogueContext::PlanOnly as i32;
+                }
+                AddresseeRoute::Unmatched { narration, .. } => {
+                    return Ok(self.narrated_addressee_reply(&request, narration));
+                }
+                AddresseeRoute::Ambiguous => {
+                    return Ok(self.narrated_addressee_reply(&request, NAME_ONE_PERSON_NARRATION));
+                }
             }
-            target = selected;
         }
         let bytes = RawDialogueBytes::new(encode(&request)?, hero_trade);
         let request = match target {
@@ -1528,9 +1722,16 @@ impl Service {
             let current = self.updates.borrow().clone();
             let scene =
                 super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
-            if let Some(recipient) =
-                journey::living_scene::recipient_for_line(&scene, &request.text)
-            {
+            // A give to a party hero is named after "to"; the authored scene lists only its people.
+            let recipient = match journey::living_scene::recipient_for_line(&scene, &request.text) {
+                Some(recipient) => Some(recipient),
+                None if option == "give" => {
+                    self.party_hero_recipient(credential, &scene, &request.text)
+                        .await?
+                }
+                None => None,
+            };
+            if let Some(recipient) = recipient {
                 if option == "give" || request.text.to_lowercase().contains(" to ") {
                     submit.action_choices.push(rpc::JourneyChoice {
                         group_id: "scene-recipient".into(),
@@ -2595,12 +2796,15 @@ fn disposition(value: IntentDisposition) -> rpc::DialogueDisposition {
     }
 }
 
-enum NotebookCommand<'a> {
+pub(super) enum NotebookCommand<'a> {
     Note(&'a str),
     Share(u64),
 }
 
-fn notebook_command(context: DiscourseContext, text: &str) -> Option<NotebookCommand<'_>> {
+pub(super) fn notebook_command(
+    context: DiscourseContext,
+    text: &str,
+) -> Option<NotebookCommand<'_>> {
     if context != DiscourseContext::Meta {
         return None;
     }
@@ -2967,6 +3171,25 @@ impl actor::Actor {
                     quote,
                 })
             }
+            DialogueRequest::PartyHeroes => {
+                let member = self.dialogue_member(&credential)?;
+                let current = self.owner.checkpoint();
+                let speaker = journey::name(
+                    current.state(),
+                    journey::player_entity(member, current).map_err(actor::unavailable)?,
+                )
+                .map_err(actor::unavailable)?;
+                let heroes = current
+                    .state()
+                    .characters
+                    .iter()
+                    .map(|character| journey::name(current.state(), character.entity))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(actor::unavailable)?;
+                Ok(DialogueReply::PartyHeroes(party_without_speaker(
+                    &speaker, &heroes,
+                )))
+            }
             DialogueRequest::CloseMerchantQuote {
                 quote_id,
                 reason,
@@ -3089,6 +3312,8 @@ impl actor::Actor {
         .map_err(|_| Status::invalid_argument("dialogue input rejected"))?;
         let mut token = Vec::new();
         self.dialogue.pending.remove(&member);
+        // What the player is told about a notebook command: only an accepted write is confirmed.
+        let mut acknowledgement = "";
         if finality == InputFinality::Final
             && let Some(command) = notebook_command(declared, &request.text)
         {
@@ -3098,27 +3323,30 @@ impl actor::Actor {
                         return Err(Status::invalid_argument("party note text required"));
                     }
                     self.record_notebook_note(member, text)?;
+                    acknowledgement = NOTE_ACCEPTED_NARRATION;
                 }
                 NotebookCommand::Share(order) => {
                     let shared = self.notebook.share(member, order).map_err(|error| {
                         actor::record_unavailable("notebook-save", &error.to_string());
                         Status::unavailable("notebook state unavailable")
                     })?;
-                    let Some(entry) = shared else {
-                        return Err(Status::failed_precondition("private clue is not shareable"));
-                    };
-                    self.table_log.push(
-                        "table",
-                        rpc::TableRole::Narrator,
-                        0,
-                        rpc::TableKind::Action,
-                        &format!(
-                            "NOTE shared kind={} title={:?} scene={}",
-                            entry.kind.label(),
-                            entry.title,
-                            entry.scene
-                        ),
-                    );
+                    if let Some(entry) = shared {
+                        self.table_log.push(
+                            "table",
+                            rpc::TableRole::Narrator,
+                            0,
+                            rpc::TableKind::Action,
+                            &format!(
+                                "NOTE shared kind={} title={:?} scene={}",
+                                entry.kind.label(),
+                                entry.title,
+                                entry.scene
+                            ),
+                        );
+                        acknowledgement = CLUE_SHARED_NARRATION;
+                    } else {
+                        acknowledgement = CLUE_NOT_SHAREABLE_NARRATION;
+                    }
                 }
             }
         }
@@ -3199,7 +3427,7 @@ impl actor::Actor {
                 confirmation_required: !token.is_empty(),
                 confirmation_token: token,
                 revision: Some(wire::revision(basis.revision)),
-                npc_reply: String::new(),
+                npc_reply: acknowledgement.to_owned(),
                 npc_actor_id: npc
                     .as_ref()
                     .map(|context| context.actor_id.clone())
