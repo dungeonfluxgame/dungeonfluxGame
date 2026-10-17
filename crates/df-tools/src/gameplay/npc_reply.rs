@@ -14,7 +14,13 @@
 
 use std::sync::Arc;
 
+use df_model::checkpoint::{EntityId, GameState};
 use df_protocol::common as rpc;
+use df_rules::influence::{
+    Attitude as RulesAttitude, InfluenceInput, InfluenceOutcome, InfluenceResult, InfluenceSkill,
+    Willingness, WordQuality, WordTilt,
+};
+use df_session::submission::RepositoryError;
 use df_types::MemberId;
 use serde_json::{Value, json};
 
@@ -262,6 +268,189 @@ fn revision_key(view: &rpc::ViewMessage) -> String {
     )
 }
 
+/// Stand-in Intelligence for an NPC without a stat block. The 2024 Influence DC is the higher of 15
+/// and the creature's Intelligence, so an average score of 10 leaves the default DC 15.
+const UNAUTHORED_NPC_INTELLIGENCE: u8 = 10;
+
+/// The server's inputs to a hesitant Influence check, read when the reply is routed: the hero's
+/// modifiers for the Influence skills from the sheet on the authoritative checkpoint, and the d20
+/// faces drawn for this reply (one counts; two when Advantage or Disadvantage applies).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InfluenceCheckInput {
+    pub(super) persuasion: (i8, u8),
+    pub(super) deception: (i8, u8),
+    pub(super) intimidation: (i8, u8),
+    pub(super) performance: (i8, u8),
+    pub(super) faces: [u8; 2],
+}
+
+impl InfluenceCheckInput {
+    /// Reads the hero's sheet and draws the two faces. An error means no rules path is available
+    /// for this reply, so the caller falls back to a reluctant reply and logs why.
+    pub(super) fn read(state: &GameState, hero: EntityId) -> Result<Self, RepositoryError> {
+        let modifiers =
+            |skill| super::beat_script_runtime::skill_check_modifiers(state, hero, skill);
+        Ok(Self {
+            persuasion: modifiers("persuasion")?,
+            deception: modifiers("deception")?,
+            intimidation: modifiers("intimidation")?,
+            performance: modifiers("performance")?,
+            faces: [draw_d20()?, draw_d20()?],
+        })
+    }
+
+    /// The hero's (ability modifier, proficiency bonus) for the skill, when the sheet has it.
+    fn modifiers(self, skill: InfluenceSkill) -> Option<(i8, u8)> {
+        match skill {
+            InfluenceSkill::Persuasion => Some(self.persuasion),
+            InfluenceSkill::Deception => Some(self.deception),
+            InfluenceSkill::Intimidation => Some(self.intimidation),
+            InfluenceSkill::Performance => Some(self.performance),
+            InfluenceSkill::AnimalHandling => None,
+        }
+    }
+}
+
+/// One d20 face from the operating system's random source, rejection-sampled so every face has
+/// the same chance (the same mapping as the model's draw).
+fn draw_d20() -> Result<u8, RepositoryError> {
+    for _ in 0..16 {
+        let [byte] = super::model::random::<1>()?;
+        if byte < 240 {
+            return Ok(byte % 20 + 1);
+        }
+    }
+    Err(RepositoryError::Unavailable)
+}
+
+/// What the server found for one hesitant Influence request, before the reply is written.
+enum HesitantRoll {
+    Rolled(InfluenceResult),
+    Unavailable(&'static str),
+}
+
+impl HesitantRoll {
+    fn succeeded(&self) -> bool {
+        matches!(self, Self::Rolled(result) if result.outcome == InfluenceOutcome::Success)
+    }
+
+    /// The facts the reply is written from. The meaning says what the outcome permits, so a
+    /// model reply can never grant a price the merchant's own terms do not allow.
+    fn facts(&self) -> Value {
+        match self {
+            Self::Rolled(result) => {
+                let meaning = if self.succeeded() {
+                    "The check succeeded: you are willing to hear the hero out and negotiate on the terms you already have. You name no new price and promise nothing the server does not allow."
+                } else {
+                    "The check failed: you will not move on this request. Decline in character and offer no new price or concession."
+                };
+                json!({
+                    "skill": result.skill.name(),
+                    "difficulty_class": result.difficulty_class,
+                    "roll_mode": result.mode.word(),
+                    "faces": result.faces,
+                    "counted": result.counted,
+                    "total": result.total,
+                    "outcome": if self.succeeded() { "success" } else { "failure" },
+                    "check": result.explanation(),
+                    "meaning": meaning,
+                })
+            }
+            Self::Unavailable(reason) => json!({
+                "outcome": "not_rolled",
+                "reason": reason,
+                "meaning": "No check could be made here, so you have not agreed yet: answer reluctantly and grant nothing.",
+            }),
+        }
+    }
+
+    /// The one audit line for this request: the check as the rules explain it, and its result.
+    fn audit_text(&self, npc_id: &str, hero: &str) -> String {
+        match self {
+            Self::Rolled(result) => format!(
+                "INFLUENCE npc={npc_id} hero={hero} cause=hesitant result={} check={}",
+                if self.succeeded() {
+                    "success"
+                } else {
+                    "failure"
+                },
+                result.explanation(),
+            ),
+            Self::Unavailable(reason) => format!(
+                "INFLUENCE npc={npc_id} hero={hero} cause=hesitant result=not_rolled reason={reason}"
+            ),
+        }
+    }
+}
+
+/// The skill a hesitant request uses, by the approach's label mapping: Deception and Intimidation
+/// for those approaches, Performance for flattery, otherwise Persuasion (a bargain, a plea).
+fn influence_skill(approach: Approach) -> InfluenceSkill {
+    match approach {
+        Approach::Deception => InfluenceSkill::Deception,
+        Approach::Intimidation => InfluenceSkill::Intimidation,
+        Approach::Flattery | Approach::Flirting => InfluenceSkill::Performance,
+        _ => InfluenceSkill::Persuasion,
+    }
+}
+
+fn rules_attitude(attitude: Attitude) -> RulesAttitude {
+    match attitude {
+        Attitude::Friendly => RulesAttitude::Friendly,
+        Attitude::Indifferent => RulesAttitude::Indifferent,
+        Attitude::Hostile => RulesAttitude::Hostile,
+    }
+}
+
+/// Rolls the 2024 Influence check for a Hesitant request on the server's dice: the skill the
+/// approach names, DC 15 (or higher Intelligence), Advantage when Friendly and Disadvantage when
+/// Hostile. The check decides only whether the NPC engages; it never sets a price.
+fn roll_hesitant_influence(
+    context: &NpcReplyContext,
+    approach: Approach,
+    attitude: Attitude,
+) -> HesitantRoll {
+    let Some(input) = context.influence_check else {
+        return HesitantRoll::Unavailable("no-hero-sheet");
+    };
+    let skill = influence_skill(approach);
+    let Some((ability_modifier, proficiency_bonus)) = input.modifiers(skill) else {
+        return HesitantRoll::Unavailable("no-skill-sheet");
+    };
+    let attitude = rules_attitude(attitude);
+    // Attitude is the only roll-mode source here: Indifferent rolls one die, the others two.
+    let faces = match attitude {
+        RulesAttitude::Indifferent => &input.faces[..1],
+        RulesAttitude::Friendly | RulesAttitude::Hostile => &input.faces[..],
+    };
+    match df_rules::influence::resolve(InfluenceInput {
+        ability_modifier,
+        proficiency_bonus,
+        skill,
+        attitude,
+        monster_intelligence: UNAUTHORED_NPC_INTELLIGENCE,
+        willingness: Willingness::Hesitant,
+        words: WordQuality {
+            tilt: WordTilt::Neutral,
+            reason: "the hero's words",
+        },
+        extra_sources: &[],
+        faces,
+    }) {
+        Ok(result) => HesitantRoll::Rolled(result),
+        Err(_) => HesitantRoll::Unavailable("check-rejected"),
+    }
+}
+
+/// The line spoken only when the model cannot write the reply: it states the check's outcome.
+fn hesitant_fallback_line(hesitant: Option<&HesitantRoll>) -> &'static str {
+    match hesitant {
+        Some(roll) if roll.succeeded() => "All right, you've made your case. Let's talk terms.",
+        Some(HesitantRoll::Rolled(_)) => "No. I won't move on that, and I won't haggle over it.",
+        _ => "I'm not sure yet. Tell me plainly what you want from me.",
+    }
+}
+
 /// Everything one reply needs, captured by the actor and owned so the model call can run
 /// elsewhere.
 pub(super) struct NpcReplyContext {
@@ -301,6 +490,9 @@ pub(super) struct NpcReplyContext {
     /// The hero's private clue for a reply without a backstory (the legacy route). A turn with a
     /// backstory keeps its release on the turn instead.
     private_release: Option<Release>,
+    /// The server's inputs for a hesitant Influence check: the hero's sheet and this reply's dice.
+    /// `None` when the sheet could not be read, and the reply then treats the NPC as reluctant.
+    pub(super) influence_check: Option<InfluenceCheckInput>,
 }
 
 impl NpcReplyContext {
@@ -916,6 +1108,7 @@ impl NpcReplyContext {
                 release,
             })),
             private_release: None,
+            influence_check: None,
         })
     }
 
@@ -1104,6 +1297,7 @@ impl NpcReplyContext {
             room: None,
             observed_revision: revision_key(view),
             private_release,
+            influence_check: None,
         })
     }
 
@@ -1174,7 +1368,22 @@ fn visible_hero(hero: &rpc::CharacterSheet) -> Value {
     })
 }
 
-/// The names a scene shows: its heroes, cast, speaker and the capitalised words of its title.
+/// The scene's place name as one name, with a leading "the " stripped the way `spoken_names`
+/// strips it. Splitting it into words would make "Cloth" or "Shop" a name wherever a hero says
+/// those words.
+fn place_name(title: &str) -> String {
+    let title = title.trim();
+    let article = title
+        .get(..4)
+        .is_some_and(|start| start.eq_ignore_ascii_case("the "));
+    if article {
+        title[4..].trim().to_owned()
+    } else {
+        title.to_owned()
+    }
+}
+
+/// The names a scene shows: its heroes, cast, speaker and its place name.
 fn scene_names(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -> Vec<String> {
     let mut names: Vec<String> = journey
         .party
@@ -1184,18 +1393,7 @@ fn scene_names(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -
         .collect();
     if let Some(scene) = scene {
         names.extend(scene.cast.iter().map(|actor| actor.name.clone()));
-        names.extend(
-            scene
-                .title
-                .split_whitespace()
-                .filter(|word| word.chars().next().is_some_and(char::is_uppercase))
-                // "The Broken Seal" names a place; "The" alone must not capitalise every "the".
-                .filter(|word| {
-                    !["the", "a", "an", "of", "and", "at", "in", "on", "to", "for"]
-                        .contains(&word.to_lowercase().as_str())
-                })
-                .map(str::to_owned),
-        );
+        names.push(place_name(&scene.title));
     }
     names.retain(|name| !name.trim().is_empty());
     names.sort();
@@ -1598,6 +1796,8 @@ impl NpcVoice {
         let mut appraised_reaction = None;
         let mut reaction_note = None;
         let mut influence_willingness = None;
+        // A hesitant urging that already failed in this scene is refused without another roll.
+        let mut repeated_urging = false;
         let publication_guard = context.publication_guard.clone();
         if let Some(turn) = context.turn.as_mut() {
             let similar_asks = if approach == Approach::Question {
@@ -1683,6 +1883,14 @@ impl NpcVoice {
                 if current.never_forgives.is_some() {
                     influence_willingness = Some(InfluenceWillingness::Unwilling);
                 }
+                if influence_willingness == Some(InfluenceWillingness::Hesitant)
+                    && turn
+                        .ledger
+                        .influence_failed_for(context.member, &turn.dossier, &turn.scene)
+                {
+                    influence_willingness = Some(InfluenceWillingness::Unwilling);
+                    repeated_urging = true;
+                }
                 let summary = current.summary();
                 let patience = summary
                     .split_whitespace()
@@ -1704,7 +1912,7 @@ impl NpcVoice {
                 );
                 if current.noticeable_change_from(&previous) {
                     reaction_note =
-                        Some(current.perceived_line(&context.speaker, &context.hero_name));
+                        Some(current.turn_line(&previous, &context.speaker, &context.hero_name));
                 }
             }
         }
@@ -1791,15 +1999,31 @@ impl NpcVoice {
                 ),
             );
             if current.noticeable_change_from(&previous) {
-                reaction_note = Some(current.perceived_line(&context.speaker, &context.hero_name));
+                reaction_note =
+                    Some(current.turn_line(&previous, &context.speaker, &context.hero_name));
             }
         }
+        let already_unforgiving = context.turn.as_ref().is_some_and(|turn| {
+            turn.ledger
+                .emotional_state(context.member, &turn.dossier, &turn.scene)
+                .never_forgives
+                .is_some()
+        });
+        let done_now = appraised_reaction == Some(EmotionReaction::Done);
+        let never_forgive_now = appraised_reaction == Some(EmotionReaction::NeverForgive);
+        let unwilling_now = influence_request
+            && (influence_willingness == Some(InfluenceWillingness::Unwilling)
+                || already_unforgiving);
+        let hesitant_now =
+            influence_request && influence_willingness == Some(InfluenceWillingness::Hesitant);
         let bounded_answer = answer::prepare(&context, approach, &ask, subject);
         let room_answer = (approach == Approach::Question && bounded_answer.is_none())
             .then(|| room::answer(&context, &ask, subject))
             .flatten();
         let subject_answer = if bounded_answer.is_some()
             || approach == Approach::Intimidation
+            || done_now
+            || never_forgive_now
             || private_clue_withheld
             || (influence_request
                 && matches!(
@@ -1848,33 +2072,65 @@ impl NpcVoice {
                     .collect::<Vec<_>>()
             );
         }
-        let already_unforgiving = context.turn.as_ref().is_some_and(|turn| {
-            turn.ledger
-                .emotional_state(context.member, &turn.dossier, &turn.scene)
-                .never_forgives
-                .is_some()
-        });
-        let done_now = appraised_reaction == Some(EmotionReaction::Done);
-        let never_forgive_now = appraised_reaction == Some(EmotionReaction::NeverForgive);
-        let unwilling_now = influence_request
-            && (influence_willingness == Some(InfluenceWillingness::Unwilling)
-                || already_unforgiving);
-        let hesitant_now =
-            influence_request && influence_willingness == Some(InfluenceWillingness::Hesitant);
-        if hesitant_now {
+        // A refusal is still voiced in character: the mechanics above decided it, and the model
+        // writes the reply from these facts. The canned lines below are the fallback only.
+        let refused = done_now || never_forgive_now || unwilling_now;
+        let refusal = if done_now {
+            Some(json!({
+                "kind": "patience_spent",
+                "meaning": "You have had enough of this hero's questions for this scene. Say so briefly in character and do not answer.",
+            }))
+        } else if never_forgive_now {
+            let grudge = context.turn.as_ref().and_then(|turn| {
+                turn.ledger
+                    .emotional_state(context.member, &turn.dossier, &turn.scene)
+                    .never_forgives
+            });
+            Some(json!({
+                "kind": "grudge",
+                "grudge": grudge,
+                "meaning": "This hero did something you will never forgive. Refuse coldly and do not forgive them in this scene.",
+            }))
+        } else if unwilling_now {
+            Some(json!({
+                "kind": if repeated_urging { "repeated_urging" } else { "unwilling" },
+                "reaction": appraised_reaction.map(EmotionReaction::label),
+                "meaning": if repeated_urging {
+                    "This hero already pressed this request and you refused it; you will not be moved by it again in this scene. Refuse in character."
+                } else {
+                    "You will not do what this hero asks. Refuse in character, and let your feeling about how they asked show."
+                },
+            }))
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            context.facts["refusal"] = refusal;
+        }
+        let hesitant = if hesitant_now {
+            let turn = context.turn.as_ref()?;
+            let rolled = roll_hesitant_influence(&context, approach, turn.standing.attitude);
             super::actor::record_audit_line(
-                "gameplay.social.influence_pending",
-                format!(
-                    "INFLUENCE npc={} hero={} cause=hesitant result=pending",
-                    context.turn.as_ref()?.dossier.npc_id,
-                    context.hero_name,
-                ),
+                "gameplay.social.influence_check",
+                rolled.audit_text(&turn.dossier.npc_id, &context.hero_name),
             );
+            if matches!(&rolled, HesitantRoll::Rolled(result) if result.outcome == InfluenceOutcome::Failure)
+            {
+                turn.ledger
+                    .record_influence_failure(context.member, &turn.dossier, &turn.scene);
+            }
+            Some(rolled)
+        } else {
+            None
+        };
+        if let Some(rolled) = &hesitant {
+            context.facts["influence_check"] = rolled.facts();
         }
         super::npc_facts::trim_background_facts(&mut context.facts);
-        let modeled = if done_now || never_forgive_now || unwilling_now || hesitant_now {
-            Err(FallbackReason::ReplyRejected)
-        } else if let Some(answer) = &bounded_answer {
+        let modeled = if let Some(answer) = bounded_answer
+            .as_ref()
+            .filter(|_| !refused && hesitant.is_none())
+        {
             Ok((answer.text.clone(), None))
         } else {
             self.model_dialogue(&context).await
@@ -1909,10 +2165,7 @@ impl NpcVoice {
                 } else if unwilling_now {
                     ("I will not help you with that.".to_owned(), None)
                 } else if hesitant_now {
-                    (
-                        "I need a moment before I can give you an answer.".to_owned(),
-                        None,
-                    )
+                    (hesitant_fallback_line(hesitant.as_ref()).to_owned(), None)
                 } else if private_clue_withheld {
                     let (answer, key) = private_clue_refusal(turn);
                     (answer, Some(key))
@@ -2308,6 +2561,30 @@ mod tests {
     use super::super::adventure::dossier::Attitude;
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_place_name_is_one_scene_name_so_its_words_are_not_names() {
+        let journey = rpc::JourneyView {
+            speaker: "Marek".to_owned(),
+            ..Default::default()
+        };
+        let scene = rpc::GameplayScene {
+            title: "Marek's Cloth Shop".to_owned(),
+            ..Default::default()
+        };
+
+        let names = scene_names(&journey, Some(&scene));
+
+        assert!(
+            names.contains(&"Marek's Cloth Shop".to_owned()),
+            "{names:?}"
+        );
+        assert!(names.contains(&"Marek".to_owned()), "{names:?}");
+        assert!(
+            !names.iter().any(|name| name == "Cloth" || name == "Shop"),
+            "{names:?}"
+        );
+    }
 
     #[test]
     fn canonical_merchant_trade_scope_overrides_reward_subject_only_for_that_turn() {

@@ -7,6 +7,7 @@ use df_protocol::common as rpc;
 use df_types::MemberId;
 use serde_json::{Value, json};
 
+use super::approach_model::tests::{answer, model};
 use super::{
     adventure::{
         ForcedEntries, GenerateOptions, GeneratedAdventure, Tables,
@@ -21,7 +22,7 @@ use super::{
         generate_emotional_profile, validate_emotional_profile,
     },
     npc_facts,
-    npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
+    npc_reply::{InfluenceCheckInput, NpcReplyContext, NpcVoice, StoryFacts},
     pack::SceneKey,
     social::{Approach, Conversation, SocialLedger, Standing, classify_keywords},
     startup_configuration::{ContentRating, TestRating, content_rating},
@@ -2983,4 +2984,215 @@ fn a_jev_reading_overrides_the_keyword_claim_flag_and_only_its_own_focus_sets_it
         &AskReading::from_focus(vec![Focus::ClaimAgainstErrand]),
     );
     assert_eq!(claim["hero_claims_against_errand"], json!(true));
+}
+
+/// Jev's answers to one request in call order: the approach, the subject, the question focus
+/// (no question here, so it takes any valid label), then the appraisal. Option numbers follow
+/// Jev's tables: o9 is Bargain, o7 Intimidation, o5 Warmed and Much and Hesitant, o4 Warmed and
+/// Much and Willing, o30 Uneasy and Much and Unwilling.
+fn jev_answers(approach: &str, appraisal: &str) -> Vec<Reply> {
+    vec![
+        answer(approach),
+        answer("o1"),
+        answer("o1"),
+        answer(appraisal),
+    ]
+}
+
+/// The hero's sheet for these tests: Charisma +2 and Proficiency +2 in Persuasion and
+/// Intimidation, no bonus in the others, and the faces drawn for this reply.
+fn hero_sheet(faces: [u8; 2]) -> InfluenceCheckInput {
+    InfluenceCheckInput {
+        persuasion: (2, 2),
+        deception: (0, 0),
+        intimidation: (2, 0),
+        performance: (0, 0),
+        faces,
+    }
+}
+
+fn request_facts(replies: &FakeEndpoint, call: usize) -> String {
+    replies.bodies()[call]["input"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_hesitant_bargain_is_rolled_as_persuasion_and_a_success_reaches_the_reply() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let dossier = adventure.dossiers[0].clone();
+    let decision = FakeEndpoint::start(jev_answers("o9", "o5"));
+    let replies = FakeEndpoint::start(vec![reply("Fair enough, let us talk terms.", "bargain")]);
+    let (voice, cache) = voice(&replies, "influence-success");
+    let voice = voice.with_approach_model(model(&decision));
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "I'll give you 150 copper for them.",
+    );
+    // Friendly gives Advantage: the higher face counts, 18 + 2 + 2 = 22 against DC 15.
+    ask.influence_check = Some(hero_sheet([4, 18]));
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert_eq!(exchange.approach, Approach::Bargain);
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    assert_eq!(decision.connections(), 4);
+    let facts = request_facts(&replies, 0);
+    assert!(facts.contains("\"skill\":\"Persuasion\""), "{facts}");
+    assert!(facts.contains("\"roll_mode\":\"Advantage\""), "{facts}");
+    assert!(facts.contains("\"outcome\":\"success\""), "{facts}");
+    assert!(facts.contains("\"total\":22"), "{facts}");
+    assert!(facts.contains("\"difficulty_class\":15"), "{facts}");
+    assert!(!ledger.influence_failed_for(member(1), &dossier, "Opening"));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_failed_hesitant_bargain_is_refused_again_without_a_roll_for_the_rest_of_the_scene() {
+    let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
+    let dossier = adventure.dossiers[0].clone();
+    let mut script = jev_answers("o9", "o5");
+    script.extend(jev_answers("o9", "o5"));
+    let decision = FakeEndpoint::start(script);
+    let replies = FakeEndpoint::start(vec![
+        reply("No. That is my price.", "bargain"),
+        reply("I have already given you my answer.", "bargain"),
+    ]);
+    let (voice, cache) = voice(&replies, "influence-failure");
+    let voice = voice.with_approach_model(model(&decision));
+    let log = TableLog::new();
+    let line = "I'll give you 150 copper for them.";
+
+    // Indifferent rolls one die: 3 + 2 + 2 = 7 against DC 15 fails.
+    let mut first = context(&adventure, &ledger, SceneKey::Opening, line);
+    first.influence_check = Some(hero_sheet([3, 9]));
+    voice.converse_in_character(first, &log).await.unwrap();
+    assert!(ledger.influence_failed_for(member(1), &dossier, "Opening"));
+
+    // A roll that would succeed is never made: the same urging is refused.
+    let mut second = context(&adventure, &ledger, SceneKey::Opening, line);
+    second.influence_check = Some(hero_sheet([20, 20]));
+    let exchange = voice.converse_in_character(second, &log).await.unwrap();
+
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    let facts = request_facts(&replies, 1);
+    assert!(facts.contains("\"kind\":\"repeated_urging\""), "{facts}");
+    assert!(!facts.contains("influence_check"), "{facts}");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_unwilling_intimidation_is_refused_in_character_with_the_reaction_in_facts() {
+    let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
+    let decision = FakeEndpoint::start(jev_answers("o7", "o30"));
+    let replies = FakeEndpoint::start(vec![reply(
+        "Put that blade away before someone gets hurt.",
+        "intimidation",
+    )]);
+    let (voice, cache) = voice(&replies, "influence-unwilling");
+    let voice = voice.with_approach_model(model(&decision));
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Give me the coin or I will break your arm.",
+    );
+    ask.influence_check = Some(hero_sheet([12, 6]));
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert_eq!(exchange.approach, Approach::Intimidation);
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    assert_eq!(replies.connections(), 1);
+    let facts = request_facts(&replies, 0);
+    assert!(facts.contains("\"kind\":\"unwilling\""), "{facts}");
+    assert!(facts.contains("\"reaction\":\"uneasy\""), "{facts}");
+    assert!(!facts.contains("influence_check"), "{facts}");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_refusal_falls_back_to_the_canned_line_only_when_the_model_fails() {
+    let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
+    let decision = FakeEndpoint::start(jev_answers("o7", "o30"));
+    let replies = FakeEndpoint::start(vec![Reply::Status(500, json!({"error": "unavailable"}))]);
+    let (voice, cache) = voice(&replies, "influence-refusal-fallback");
+    let voice = voice.with_approach_model(model(&decision));
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "Give me the coin or I will break your arm.",
+    );
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert!(!exchange.from_model);
+    assert!(exchange.fallback.is_some());
+    assert_eq!(exchange.text, "I will not help you with that.");
+    // The reply cache is written only by a reply that succeeds, so a failed call leaves none.
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_hesitant_request_without_a_hero_sheet_is_reluctant_and_never_stalls() {
+    let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
+    let decision = FakeEndpoint::start(jev_answers("o9", "o5"));
+    let replies = FakeEndpoint::start(vec![reply("I am not sure yet.", "bargain")]);
+    let (voice, cache) = voice(&replies, "influence-no-sheet");
+    let voice = voice.with_approach_model(model(&decision));
+    let ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "I'll give you 150 copper for them.",
+    );
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    let facts = request_facts(&replies, 0);
+    assert!(facts.contains("\"outcome\":\"not_rolled\""), "{facts}");
+    assert!(facts.contains("\"reason\":\"no-hero-sheet\""), "{facts}");
+    assert!(!ledger.influence_failed_for(member(1), &adventure.dossiers[0], "Opening"));
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_willing_bargain_is_answered_without_a_check_or_a_refusal() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let decision = FakeEndpoint::start(jev_answers("o9", "o4"));
+    let replies = FakeEndpoint::start(vec![reply("Gladly, what do you offer?", "bargain")]);
+    let (voice, cache) = voice(&replies, "influence-willing");
+    let voice = voice.with_approach_model(model(&decision));
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "I'll give you 150 copper for them.",
+    );
+    ask.influence_check = Some(hero_sheet([12, 6]));
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    let facts = request_facts(&replies, 0);
+    assert!(!facts.contains("influence_check"), "{facts}");
+    assert!(!facts.contains("\"refusal\""), "{facts}");
+    std::fs::remove_dir_all(cache).unwrap();
 }

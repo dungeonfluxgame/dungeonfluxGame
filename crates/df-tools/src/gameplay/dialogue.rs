@@ -3295,6 +3295,17 @@ impl actor::Actor {
                 }
         });
         reply.pending_quote = quote_followup.clone();
+        // The hero's sheet and this reply's dice, for a hesitant Influence check. A failure leaves
+        // the check unavailable and is logged; the reply then treats the NPC as reluctant.
+        reply.influence_check = match super::journey::player_entity(member, current)
+            .and_then(|hero| super::npc_reply::InfluenceCheckInput::read(current.state(), hero))
+        {
+            Ok(input) => Some(input),
+            Err(error) => {
+                actor::record_unavailable("influence-check", &format!("{error:?}"));
+                None
+            }
+        };
         if hero_trade.is_trade() || quote_followup.is_some() {
             let line = HeroLine {
                 intent: hero_trade,

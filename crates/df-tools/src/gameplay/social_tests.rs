@@ -1370,6 +1370,78 @@ fn patience_done_is_said_once_and_a_never_forgive_grudge_survives_reload() {
 }
 
 #[test]
+fn a_failed_influence_check_holds_the_same_urging_for_the_scene_and_survives_reload() {
+    let directory = directory("influence-failure");
+    let dossier = patron(Attitude::Friendly);
+    let ledger = SocialLedger::open(
+        vec![dossier.clone()],
+        "influence-failure",
+        Some(directory.clone()),
+    )
+    .unwrap();
+    let hero = member(17);
+
+    assert!(!ledger.influence_failed_for(hero, &dossier, "opening"));
+    ledger.record_influence_failure(hero, &dossier, "opening");
+    assert!(ledger.influence_failed_for(hero, &dossier, "opening"));
+    assert!(!ledger.influence_failed_for(hero, &dossier, "next-scene"));
+    ledger.record_influence_failure(hero, &dossier, "next-scene");
+    ledger.save().unwrap();
+
+    let reloaded = SocialLedger::open(
+        vec![dossier.clone()],
+        "influence-failure",
+        Some(directory.clone()),
+    )
+    .unwrap();
+    assert!(reloaded.influence_failed_for(hero, &dossier, "next-scene"));
+    assert!(!reloaded.influence_failed_for(hero, &dossier, "opening"));
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn the_turn_caption_names_the_feeling_this_exchange_moved_not_an_older_one() {
+    let before = EmotionalState {
+        fond: EmotionLevel::ALittle,
+        ..EmotionalState::default()
+    };
+    // Intimidation: wary jumps to much while the older fond feeling stays mild.
+    let threatened = EmotionalState {
+        wary: EmotionLevel::Much,
+        last_reaction: Some(EmotionReaction::Uneasy),
+        ..before.clone()
+    };
+    assert_eq!(
+        threatened.turn_line(&before, "Marek", "Brakka"),
+        "Marek seems wary of Brakka."
+    );
+
+    // A tie at the same strength goes to the feeling this turn's reaction names.
+    let charmed = EmotionalState {
+        fond: EmotionLevel::Much,
+        drawn_to: EmotionLevel::Much,
+        last_reaction: Some(EmotionReaction::Charmed),
+        ..EmotionalState::default()
+    };
+    assert_eq!(
+        charmed.turn_line(&EmotionalState::default(), "Marek", "Brakka"),
+        "Marek seems drawn to Brakka."
+    );
+
+    // The unchanged fond feeling is not named: only what moved this turn is.
+    let mild_only = EmotionalState {
+        fond: EmotionLevel::ALittle,
+        wary: EmotionLevel::ALittle,
+        last_reaction: Some(EmotionReaction::Uneasy),
+        ..before.clone()
+    };
+    assert_eq!(
+        mild_only.turn_line(&before, "Marek", "Brakka"),
+        "Marek seems wary of Brakka."
+    );
+}
+
+#[test]
 fn a_ledger_without_dossiers_is_inactive_and_saves_nothing() {
     let ledger = SocialLedger::none();
 

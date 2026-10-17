@@ -199,6 +199,50 @@ impl EmotionLevel {
             Self::Much => "much",
         }
     }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::ALittle => 1,
+            Self::Much => 2,
+        }
+    }
+}
+
+/// The feelings a reaction can name in a public caption.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Feeling {
+    Fond,
+    Afraid,
+    DrawnTo,
+    Resentful,
+    Wary,
+}
+
+impl Feeling {
+    fn phrase(self) -> &'static str {
+        match self {
+            Self::Fond => "fond of",
+            Self::Afraid => "afraid of",
+            Self::DrawnTo => "drawn to",
+            Self::Resentful => "resentful of",
+            Self::Wary => "wary of",
+        }
+    }
+}
+
+impl EmotionReaction {
+    /// The feeling this reaction moves, if any; amusement, patience and boredom name none.
+    fn feeling(self) -> Option<Feeling> {
+        match self {
+            Self::Warmed => Some(Feeling::Fond),
+            Self::Charmed => Some(Feeling::DrawnTo),
+            Self::Uneasy => Some(Feeling::Wary),
+            Self::Frightened => Some(Feeling::Afraid),
+            Self::Offended | Self::Disgusted | Self::NeverForgive => Some(Feeling::Resentful),
+            Self::Amused | Self::Unmoved | Self::LosingPatience | Self::Done => None,
+        }
+    }
 }
 
 impl PatienceState {
@@ -318,6 +362,37 @@ impl EmotionalState {
             .any(|(now, before)| {
                 (now == EmotionLevel::Much || before == EmotionLevel::Much) && now != before
             })
+    }
+
+    /// The public caption for the change this exchange made. It names the strongest feeling that
+    /// moved this turn, preferring the feeling this turn's reaction names at equal strength, so an
+    /// older mild feeling never stands in for it. The standing line is the fallback.
+    pub(super) fn turn_line(&self, previous: &Self, npc: &str, hero: &str) -> String {
+        if self.patience != previous.patience && self.patience == PatienceState::Done {
+            return format!("{npc} will not answer {hero} again for now.");
+        }
+        if self.patience != previous.patience && self.patience == PatienceState::Short {
+            return format!("{npc} is losing patience with {hero}.");
+        }
+        if self.never_forgives.is_some() && previous.never_forgives.is_none() {
+            return format!("{npc} seems resentful of {hero}.");
+        }
+        let primary = self.last_reaction.and_then(EmotionReaction::feeling);
+        let moved = [
+            (Feeling::Resentful, self.resentful, previous.resentful),
+            (Feeling::Afraid, self.afraid, previous.afraid),
+            (Feeling::DrawnTo, self.drawn_to, previous.drawn_to),
+            (Feeling::Fond, self.fond, previous.fond),
+            (Feeling::Wary, self.wary, previous.wary),
+        ]
+        .into_iter()
+        .filter(|(_, now, before)| now != before && *now != EmotionLevel::None)
+        .max_by_key(|(feeling, now, _)| (now.rank(), Some(*feeling) == primary))
+        .map(|(feeling, _, _)| feeling);
+        match moved {
+            Some(feeling) => format!("{npc} seems {} {hero}.", feeling.phrase()),
+            None => self.perceived_line(npc, hero),
+        }
     }
 
     pub(super) fn perceived_line(&self, npc: &str, hero: &str) -> String {
@@ -1038,6 +1113,11 @@ struct Relationship {
     same_subject_count: u32,
     #[serde(default)]
     patience_spent: u16,
+    /// Whether a hesitant Influence check against this hero failed in the current scene. The 2024
+    /// rule holds a failed urging back for 24 hours; the scene is the nearest recorded span, so the
+    /// same request is not rolled again until the scene changes.
+    #[serde(default)]
+    influence_failed: bool,
     /// Set when a threat has already moved the attitude for the exchange now being answered, so
     /// recording that exchange does not move it again. Never stored.
     #[serde(skip)]
@@ -1065,6 +1145,7 @@ impl Relationship {
             last_subject: String::new(),
             same_subject_count: 0,
             patience_spent: 0,
+            influence_failed: false,
             threat_applied: false,
             appraised: false,
             pending_shift: None,
@@ -1086,6 +1167,7 @@ impl Relationship {
         self.last_subject.clear();
         self.same_subject_count = 0;
         self.patience_spent = 0;
+        self.influence_failed = false;
     }
 
     /// Applies one exchange's effect inside the bounds in the module documentation.
@@ -1606,6 +1688,38 @@ impl SocialLedger {
             .or_insert_with(|| Relationship::new(dossier));
         relationship.begin_scene(scene);
         relationship.emotional.patience == PatienceState::Done && relationship.emotional.done_said
+    }
+
+    /// Whether a hesitant Influence check this hero made against this NPC already failed in this
+    /// scene, so the same urging is refused without another roll.
+    pub(super) fn influence_failed_for(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+    ) -> bool {
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        relationship.influence_failed
+    }
+
+    /// Records that a hesitant Influence check failed, held until the scene changes. The reply's
+    /// save persists it with the rest of the standing.
+    pub(super) fn record_influence_failure(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+    ) {
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        relationship.influence_failed = true;
     }
 
     /// Commits Jev's selected reaction before the reply is formed.
