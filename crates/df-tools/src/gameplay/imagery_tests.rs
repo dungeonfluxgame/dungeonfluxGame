@@ -48,8 +48,11 @@ fn scene_prompts_follow_the_narration_snapshot_and_item_card_detail() {
     let generated = adventure(39);
     let model = generated.settings.meeting.model.as_ref().unwrap();
     let mut current = model.clone();
-    current.things[0].holder_id = Some("Brakka".into());
-    current.things[0].position = "held by Brakka".into();
+    let holder = current.people.first().expect("an adventure cast member");
+    let holder_id = holder.id.clone();
+    let holder_name = holder.name.clone();
+    current.things[0].holder_id = Some(holder_id);
+    current.things[0].position = format!("held by {holder_name}");
     current.ways_out[0].open = true;
     let narration = current.as_it_is_now(pack::SceneKey::Opening, &[]).unwrap();
     let narrative: serde_json::Value = serde_json::from_str(&narration).unwrap();
@@ -57,14 +60,16 @@ fn scene_prompts_follow_the_narration_snapshot_and_item_card_detail() {
     let edit = state_edit(
         ContentRating::Mature,
         &image_model,
-        "Brakka takes the tankard, opens the door and shows the seal to the patron",
+        &format!(
+            "{holder_name} takes the tankard, opens the door and shows the seal to the patron"
+        ),
     )
     .unwrap();
     let picture = image_model.picture_state().unwrap();
     assert!(edit.as_str().contains(&picture));
     assert_eq!(
         narrative["model"]["things"][0]["position"],
-        "held by Brakka"
+        format!("held by {holder_name}")
     );
     for person in &image_model.people {
         assert!(edit.as_str().contains(&person.name));
@@ -127,7 +132,12 @@ fn merchant_seed_full_cast_plate_preserves_every_identity_in_final_assembly() {
         .find(|scene| scene.key == super::super::pack::SceneKey::Opening)
         .expect("the opening scene");
     let setting = opening.setting.as_ref().expect("the shop setting");
-    let model = setting.model.as_ref().expect("the merchant scene model");
+    let model = generated
+        .settings
+        .meeting
+        .model
+        .as_ref()
+        .expect("the merchant scene model");
     let prompt = model_plate(
         ContentRating::Mature,
         model,
@@ -1864,7 +1874,9 @@ fn both_ratings_keep_every_person_an_adult_and_name_no_real_person() {
                 text.contains("Every person shown is an adult."),
                 "{rating:?}"
             );
-            assert!(text.contains("No real people, celebrities or likenesses of real persons."));
+            assert!(
+                text.contains("Fictional identities; no recognizable real person or celebrity.")
+            );
             assert!(text.contains("No text, letters, numbers, logos or watermarks."));
             if life_stage == LifeStage::YoungAdult {
                 assert!(text.contains("young adult, clearly over eighteen"));
@@ -1947,7 +1959,7 @@ fn a_backdrop_prompt_never_invites_the_model_to_paint_people() {
                     // stand on it" was live-checked to paint nobody) are the known exceptions.
                     if phrase == super::prompt::NO_PEOPLE
                         || phrase.contains("Every person")
-                        || phrase.starts_with("No real people")
+                        || phrase.starts_with("Fictional identities;")
                         || phrase.starts_with("Keep a wide, clear, open floor")
                     {
                         continue;
@@ -2011,13 +2023,13 @@ mod settings {
     }
 
     #[test]
-    fn the_defaults_are_forty_images_a_thirty_second_interval_and_a_forty_five_second_deadline() {
+    fn the_defaults_use_a_twenty_second_interval_and_one_hundred_seventy_second_deadline() {
         let ImagerySettings::On(configuration) = settings(inputs()).unwrap() else {
             panic!("a credential turns imagery on");
         };
         assert_eq!(configuration.model.model_id(), "gpt-image-2.5-flare");
-        assert_eq!(configuration.interval, Duration::from_secs(30));
-        assert_eq!(configuration.deadline, Duration::from_secs(45));
+        assert_eq!(configuration.interval, Duration::from_secs(20));
+        assert_eq!(configuration.deadline, Duration::from_secs(170));
         assert_eq!(configuration.quality, ImageQuality::Medium);
         assert_eq!(
             configuration.cache_dir,

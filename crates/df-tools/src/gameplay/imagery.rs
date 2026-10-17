@@ -84,9 +84,11 @@ pub(super) use cast_sheet::{CastIdentity, cast_sheet};
 use party_sheet::SheetError;
 pub(super) use party_sheet::{party_sheet, vision_picture};
 pub(super) use photo_edit::harbor_photo_edit;
+#[cfg(test)]
+pub(super) use plate_prompt::FLUX_MAXIMUM_PROMPT_CHARACTERS;
 pub(super) use plate_prompt::{
-    FLUX_MAXIMUM_PROMPT_CHARACTERS, FluxCast, FluxPerson, PlateReferences, flux_scene_plate,
-    hero_locator_phrase, plate_moment, scene_plate,
+    FluxCast, FluxPerson, PlateReferences, flux_scene_plate, hero_locator_phrase, plate_moment,
+    scene_plate,
 };
 #[allow(
     unused_imports,

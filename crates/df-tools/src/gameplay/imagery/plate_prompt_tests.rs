@@ -305,6 +305,7 @@ fn the_heroes_are_named_by_their_place_on_the_sheet_and_the_speaker_by_the_speak
         "no wider than a quarter of the frame",
         "All heads below the top 30%",
         "Directly",
+        "Image 2 shows this person",
     ] {
         assert!(text.contains(needle), "{needle}");
     }

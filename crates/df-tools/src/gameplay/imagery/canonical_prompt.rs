@@ -309,7 +309,7 @@ mod tests {
         assert!(
             prompt
                 .as_str()
-                .contains("approved documentary identity photograph")
+                .contains("approved documentary face portrait")
         );
         assert!(prompt.as_str().contains("do not de-age, slim, beautify"));
         assert!(prompt.as_str().contains("same recognizable face"));

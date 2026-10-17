@@ -140,6 +140,7 @@ const HEROES_IDENTITY: &str = "Image 1 is the party sheet (the heroes on plain g
     hair, build, costume and weapon, in new poses and viewpoint.";
 const HEROES_WITHOUT_REFERENCE: &str = "No photographic hero reference is available: show the heroes only as small, \
     anonymous figures from behind or in profile, following the staged slots and activities.";
+const HERO_SCALE: &str = "Keep each hero no wider than a quarter of the frame.";
 const HERO_NUMBER: [&str; 3] = ["Hero 1", "Hero 2", "Hero 3"];
 const SHEET_POSITION: [&str; 3] = [
     "(first figure on the sheet)",
@@ -428,6 +429,7 @@ fn scene_plate_with(
         } else {
             HEROES_WITHOUT_REFERENCE
         }));
+        parts.push(Part::Fixed(HERO_SCALE));
         for (ordinal, hero) in spec.heroes.iter().enumerate() {
             let sheet = sheet_position(&spec.heroes, hero.art).min(2);
             parts.extend([
@@ -756,10 +758,12 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
         camera_phrase(Camera::DutchOverShoulderLeft),
         camera_phrase(Camera::DutchOverShoulderRight),
         PLACE_IS,
+        FOCAL_CONTEXT,
         INTERIOR,
         EXTERIOR,
         HEROES_IDENTITY,
         HEROES_WITHOUT_REFERENCE,
+        HERO_SCALE,
         HERO_IS,
         HERO_FROM_SHEET,
         HERO_FROM_STAGE,
