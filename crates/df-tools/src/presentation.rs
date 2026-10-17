@@ -559,6 +559,23 @@ pub(crate) fn place_picture(
         .or_else(|| plan.reviewed.map(|photo| format!("{GENERATED}/{photo}")))
 }
 
+/// Whether the scene art a view names is a reference the art contract knows: nothing, a role
+/// token, a live image path, a reviewed photograph, an identity key, chrome, or a served local
+/// asset (the reviewed harbour plate and the concept art among them). It answers whether the
+/// reference can be drawn, never whether the view may be shown: a view with art the display
+/// cannot draw is still shown, on the neutral stage, and the display never refuses a whole view
+/// because its base scene art is a token or is not ready yet. Only a deleted painting (a
+/// depiction stem that is neither reviewed nor a key) answers `false`, so the caller can log it.
+pub(crate) fn scene_art_admitted(path: &str) -> bool {
+    if asset_url(path).is_some() {
+        return true;
+    }
+    !matches!(
+        art_contract::classify(path),
+        art_contract::Reference::Painted(_)
+    )
+}
+
 // PLAY-L01: a server-generated image path: `/gameplay/imagery/` and a 64-digit lowercase
 // hexadecimal key, nothing else. Only these reach CSS or `src` besides local assets.
 pub(crate) fn imagery_url(path: &str) -> Option<String> {
@@ -3452,5 +3469,59 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(scene_family(&quay), SceneFamily::Exterior);
+    }
+}
+
+#[cfg(test)]
+mod scene_art_admission {
+    use super::*;
+
+    /// A view is shown whatever its base scene art is. Every reference the art contract lets the
+    /// server send is admitted: each role token, a reviewed photograph by stem and by path, a
+    /// live image path, the reviewed harbour plate, and no art at all.
+    #[test]
+    fn every_art_contract_reference_a_view_can_carry_is_admitted() {
+        let live = format!("{}{}", art_contract::LIVE_IMAGERY_PREFIX, "a".repeat(64));
+        let mut references = vec![
+            "",
+            art_contract::ROOM_PHOTO,
+            art_contract::CANONICAL_PHOTO,
+            art_contract::NEUTRAL,
+            art_contract::HARBOR_PHOTO,
+            "assets/ui/scenes/mara-harbor-v4.png",
+            "assets/concept-art/scene-tavern-barkeep-talk-rain.webp",
+            live.as_str(),
+        ];
+        let reviewed_paths: Vec<String> = art_contract::REVIEWED_PHOTOS
+            .iter()
+            .map(|stem| format!("assets/ui/generated/{stem}.png"))
+            .collect();
+        references.extend(reviewed_paths.iter().map(String::as_str));
+        references.extend(art_contract::REVIEWED_PHOTOS);
+        for reference in references {
+            assert!(
+                scene_art_admitted(reference),
+                "the art contract's own reference {reference:?} must be admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_deleted_painting_is_not_admitted() {
+        assert!(!scene_art_admitted(
+            "assets/ui/generated/scene-harbor-painted-concept.png"
+        ));
+    }
+
+    #[test]
+    fn role_tokens_draw_nothing_themselves_so_the_neutral_stage_stands() {
+        for token in [
+            art_contract::ROOM_PHOTO,
+            art_contract::CANONICAL_PHOTO,
+            art_contract::NEUTRAL,
+        ] {
+            assert_eq!(asset_url(token), None);
+            assert_eq!(place_picture(art_contract::Role::LobbyArt, token, "", ""), None);
+        }
     }
 }

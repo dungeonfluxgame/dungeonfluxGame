@@ -1039,8 +1039,11 @@ fn connect(client: Rc<RefCell<Client>>) {
                 if owned.borrow().generation != generation {
                     return Ok(());
                 }
-                receive_view(&owned, &view_generation, scope, view)
-                    .map_err(|_| "Server view could not be displayed")?;
+                // A view that cannot be drawn is reported (redraw_current logs why) and the stream
+                // stays open: dropping it would reconnect, receive the same view and fail again.
+                if receive_view(&owned, &view_generation, scope, view).is_err() {
+                    status(&owned.borrow(), "Server view could not be displayed");
+                }
             }
             Ok(())
         };
@@ -2460,10 +2463,13 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
     {
         // Generated adventures name their own art from the served pool; the screens fall back
         // to a built-in scene when a file is absent, so any well-formed local path is accepted.
+        // A role token or art not yet ready draws the neutral stage; only a deleted painting is
+        // reported, and the view is still shown.
         if public_scene_assets::resolve(&shown.scene_asset).is_err()
             && live_screens::asset_url(&shown.scene_asset).is_none()
+            && !crate::presentation::scene_art_admitted(&shown.scene_asset)
         {
-            return Err(JsValue::from_str("unknown required public scene asset"));
+            status(&client.borrow(), "The scene art is unavailable; showing the stage.");
         }
         surface.set_attribute("data-destination", &shown.destination.to_string())?;
         live_combat::release(client)?;
@@ -2500,8 +2506,11 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
     }
     live_screens::release(client, &surface)?;
     live_combat::release(client)?;
-    public_scene_assets::resolve(&scene.scene_asset)
-        .map_err(|_| JsValue::from_str("unknown required public scene asset"))?;
+    // The base scene art never refuses the view: a role token, live path or reviewed photo the
+    // delivery cannot fetch leaves its fallback stage, and only a deleted painting is reported.
+    if !crate::presentation::scene_art_admitted(&scene.scene_asset) {
+        status(&client.borrow(), "The scene art is unavailable; showing the stage.");
+    }
     let (delivery, scope, revision) = {
         let mut state = client.borrow_mut();
         let views = state
