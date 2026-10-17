@@ -775,6 +775,9 @@ fn join_room(client: Rc<RefCell<Client>>) {
                         feedback(&client.borrow(), seat_recovery::REFUSED);
                         return;
                     }
+                    // A refusal is the join's final answer, not an uncertain one, so it must not
+                    // block taking an away hero back; another join starts a new operation.
+                    client.borrow_mut().join_request = None;
                     feedback(
                         &client.borrow(),
                         match rpc::RejectionCode::try_from(refusal.code) {
