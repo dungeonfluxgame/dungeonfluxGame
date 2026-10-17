@@ -8,17 +8,24 @@
 //! ranges. A cached loop is served with no provider call. Nothing waits on the video: until it is
 //! ready the display shows the still, and every failure leaves the still in place.
 //!
-//! Spend is charged to a per-run budget (`DF_GAMEPLAY_VIDEO_BUDGET`) before each submit and is
-//! never refunded. The live price is read before the first submit of a run and logged.
+//! Both kinds of clip, the home loop and the scene loop, are one resource kind of the generation
+//! hub (`ResourceKind::VideoClip`) with two specs ([`clip_spec::HomeLoopSpec`] and
+//! [`clip_spec::SceneLoopSpec`]). The spec's key is the hash of the still, the prompt, the model,
+//! the duration, the size and the recipe version, and it is also the clip's file name, so a change
+//! to any of them is a new clip and an old loop is never served for it. The hub owns the state,
+//! the failure memory and the attempt limit; this module keeps only the index from a painting or a
+//! plate to its clip, the disk store and the provider call.
+//!
+//! Spend is one clip per provider call, recorded on the hub's ledger when the call is about to be
+//! sent and kept whatever the outcome, for a home loop and a scene loop alike. There is no cap:
+//! the ledger counts and the audit lines say what was spent, and nothing is refused. The live
+//! price is read before the first submit of a run and logged.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io,
     net::{SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicU32, Ordering},
-    },
+    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 use tokio::sync::watch;
@@ -40,7 +47,7 @@ use df_provider_api::{
 use df_providers::{
     EncodedMediaFacts, FalCdnPin, FalMediaConfig, FalMediaError, FalMediaFamily,
     FalQueueObservation, FalReferenceFrame, FalVideoBasis, FalVideoProfile, FalVideoRequest,
-    NativeFalMediaProvider, NativeHttpLimits, registered_fal_media_provider,
+    NativeFalMediaProvider, NativeHttpLimits, ProviderLimits, registered_fal_media_provider,
 };
 use df_types::{
     OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage, UsageUnit,
@@ -48,25 +55,35 @@ use df_types::{
 use sha2::{Digest, Sha256};
 
 use super::home_theme;
-use super::imagery::FILM_LOOK;
 use super::living_scenes::LivingScenes;
+use super::resource_adapters::{Flights, Kit, KitSlot, Produced, write_atomic};
+use super::resources::{
+    Generated, Limits, ResourceFailure, ResourceKey, ResourceKind, ResourceSpec, ResourceStatus,
+    Unit,
+};
 use super::rpc;
 use crate::BUILD_ID;
 
 /// The endpoint the server requests. Only endpoints the adapter has a body and checks for are
 /// accepted as the setting.
 pub(crate) const MODEL: &str = df_providers::KLING_O1_IMAGE_TO_VIDEO;
-/// Ambient motion only; the shared film look comes from the image prompt vocabulary.
-const HOME_MOTION: &str = "Locked camera with a slow, almost imperceptible optical push-in. Ambient motion only: lantern and window light flicker, drifting mist over the water, slow clouds across the moon, water glints, leaves or banners stirring. No new people, creatures, objects, text or logos. Nothing enters or leaves the frame. The composition stays exactly as in the reference image.";
+/// The look of a landing ambience loop: a documentary photograph of a place, with no cast. The
+/// shared `FILM_LOOK` is written for people (costumes, skin pores) and invites them into an empty
+/// room, so a loop of a place does not use it.
+const AMBIENCE_LOOK: &str = "Documentary photograph of a place, shot on a real camera with a prime lens in natural practical light, believable textures of weathered wood, stone, water and cloth, natural depth of field, fine film grain. No people and no creatures anywhere in the frame; no painting, illustration, concept art, cgi or game art.";
+/// The gentle-ambience wording of the home loop, in one place: a locked-off camera and only small
+/// ambient motion. The still is both the first and the last frame, which is what makes it loop.
+const HOME_MOTION: &str = "Locked-off camera: the frame does not move, zoom or drift. Only small ambient motion: lamplight and candle flicker, drifting smoke or dust, cloth and banners stirring, water shimmer. Nothing enters or leaves the frame, and no new objects, text or logos appear. The last frame matches the first so the motion loops seamlessly, the composition exactly as in the reference image.";
 const DURATION_SECONDS: u32 = 5;
 /// Changing how a clip is requested or cached changes this, so old loops are not reused for it.
 const RECIPE: &str = "df-home-video/2";
 const SCENE_RECIPE: &str = "df-scene-video/2";
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
-const STILL_QUALITY: u8 = 95;
-const DEFAULT_BUDGET: u32 = MAXIMUM_BUDGET;
-const MAXIMUM_BUDGET: u32 = 1_000;
+/// The still is sent inline as the first and the last frame, so its size is the request's size twice;
+/// 85 keeps a 1080p frame near a quarter of a megabyte. Uploading it once to fal storage and sending
+/// the URL twice is the follow-up, and needs a pinned storage host (see the report).
+const STILL_QUALITY: u8 = 85;
 const DEFAULT_CACHE: &str = "artifacts/tmp/play/home-video-cache";
 /// The fal media hosts the download is pinned to. The adapter refuses any other host.
 const CDN_HOSTS: [&str; 2] = ["v3.fal.media", "v3b.fal.media"];
@@ -78,13 +95,22 @@ const DEFAULT_DEADLINE: Duration = Duration::from_secs(15 * 60);
 const REQUEST_DEADLINE: Duration = Duration::from_secs(170);
 const PRICE_DEADLINE: Duration = Duration::from_secs(20);
 const ROUTE: &str = "/gameplay/home-video";
+/// A paid clip is made once per key. A failure stays failed until the dev tools invalidate the
+/// key: a clip that failed in an unknown way may already have been billed, so nothing retries it.
+const CLIP_ATTEMPTS: u8 = 1;
+/// What the hub's timeout allows beyond the engine's own deadline: the price read, the still and
+/// the cache write, so the engine's labelled `Timeout` fires first.
+const HUB_SLACK: Duration = Duration::from_secs(60);
 
 #[path = "scene_video_prompt.rs"]
 mod scene_video_prompt;
 pub(super) use scene_video_prompt::model_staging;
+#[path = "video_clip_spec.rs"]
+pub(super) mod clip_spec;
+use clip_spec::{ClipInput, ClipRecipe, HomeLoopSpec, SceneLoopSpec};
 
 fn home_video_prompt() -> String {
-    format!("{FILM_LOOK} {HOME_MOTION}")
+    format!("{AMBIENCE_LOOK} {HOME_MOTION}")
 }
 
 /// The raw `DF_GAMEPLAY_HOME_VIDEO*`, `DF_GAMEPLAY_SCENE_VIDEO` and `FAL_KEY` inputs.
@@ -92,7 +118,6 @@ pub(crate) struct HomeVideoInputs {
     pub(crate) mode: Result<String, std::env::VarError>,
     pub(crate) scene_mode: Result<String, std::env::VarError>,
     pub(crate) model: Result<String, std::env::VarError>,
-    pub(crate) budget: Result<String, std::env::VarError>,
     pub(crate) cache: Result<String, std::env::VarError>,
     pub(crate) credential: Result<String, std::env::VarError>,
 }
@@ -103,7 +128,6 @@ impl HomeVideoInputs {
             mode: std::env::var("DF_GAMEPLAY_HOME_VIDEO"),
             scene_mode: std::env::var("DF_GAMEPLAY_SCENE_VIDEO"),
             model: std::env::var("DF_GAMEPLAY_HOME_VIDEO_MODEL"),
-            budget: std::env::var("DF_GAMEPLAY_VIDEO_BUDGET"),
             cache: std::env::var("DF_GAMEPLAY_HOME_VIDEO_CACHE"),
             credential: std::env::var("FAL_KEY"),
         }
@@ -142,8 +166,6 @@ impl HomeVideoOff {
 #[derive(Debug)]
 pub(crate) struct HomeVideoConfiguration {
     pub(crate) model: &'static str,
-    /// Clips the run may request, charged before each submit.
-    pub(crate) budget: u32,
 }
 
 #[derive(Debug)]
@@ -238,16 +260,7 @@ pub(crate) fn home_video_settings(
             Err(std::env::VarError::NotPresent) => MODEL,
             Err(_) => return Err(refused("DF_GAMEPLAY_HOME_VIDEO_MODEL")),
         };
-        let budget = match inputs.budget {
-            Ok(value) if !value.is_empty() => value
-                .parse::<u32>()
-                .ok()
-                .filter(|budget| *budget <= MAXIMUM_BUDGET)
-                .ok_or_else(|| refused("DF_GAMEPLAY_VIDEO_BUDGET"))?,
-            Ok(_) | Err(std::env::VarError::NotPresent) => DEFAULT_BUDGET,
-            Err(_) => return Err(refused("DF_GAMEPLAY_VIDEO_BUDGET")),
-        };
-        Ok(HomeVideoConfiguration { model, budget })
+        Ok(HomeVideoConfiguration { model })
     };
     let cache_dir = if home_enabled || scene_enabled {
         match inputs.cache {
@@ -273,8 +286,8 @@ pub(crate) fn home_video_settings(
 pub(crate) fn startup_line(settings: &HomeVideoSettings) -> String {
     let home = match &settings.home {
         Ok(configuration) => format!(
-            "HOME VIDEO on model={} budget={} duration={}s",
-            configuration.model, configuration.budget, DURATION_SECONDS
+            "HOME VIDEO on model={} duration={}s",
+            configuration.model, DURATION_SECONDS
         ),
         Err(reason) => format!("HOME VIDEO off ({})", reason.reason()),
     };
@@ -356,7 +369,6 @@ impl SceneClipView {
 pub(crate) enum Failure {
     Still(&'static str),
     Price(&'static str),
-    BudgetSpent,
     Provider(String),
     Timeout,
     Clip(&'static str),
@@ -367,7 +379,6 @@ impl Failure {
         match self {
             Self::Still(reason) => format!("still: {reason}"),
             Self::Price(reason) => format!("price: {reason}"),
-            Self::BudgetSpent => "budget spent: no clip charged".to_owned(),
             Self::Provider(reason) => format!("provider: {reason}"),
             Self::Timeout => "timeout".to_owned(),
             Self::Clip(reason) => format!("clip: {reason}"),
@@ -375,11 +386,49 @@ impl Failure {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Stage {
-    Pending,
-    Ready(String),
-    Failed(Failure),
+/// Which loop a clip is, and so which spec, recipe and log lines it uses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Variant {
+    Home,
+    Scene,
+}
+
+/// The clip a painting or a plate currently points at: the hub's key for it and its file name in
+/// the store (the whole digest of the same spec, so the two are one identity).
+#[derive(Clone, Debug)]
+struct Lane {
+    key: ResourceKey,
+    file: String,
+}
+
+/// A painting's slot: its still is being prepared (the clip's key is not known yet), or its clip
+/// is known to the hub.
+#[derive(Clone, Debug)]
+enum HomeSlot {
+    Preparing,
+    Keyed(Lane),
+}
+
+/// The still a clip is made from, before the provider sees it.
+enum StillBytes {
+    /// Decoded and re-encoded to the provider's frame.
+    Prepared(Vec<u8>),
+    /// A scene plate as the imagery service made it; prepared only if the clip must be made.
+    Plate(Vec<u8>),
+}
+
+/// Everything the one generation of a clip needs, owned so the task can outlive its caller.
+struct ClipJob {
+    variant: Variant,
+    /// The hub's subject for the clip (`video:home:...`), for the `RESOURCE` lines.
+    resource_subject: String,
+    file: String,
+    input: ClipInput,
+    /// Why the clip cannot be made, when `input` is [`ClipInput::Unavailable`].
+    unavailable: Option<Failure>,
+    still: StillBytes,
+    /// Why the clip was asked for, for the log lines.
+    reason: String,
 }
 
 /// Where the clip requests go: the live fal endpoints, or a loopback fixture in tests.
@@ -407,13 +456,25 @@ pub(crate) struct Engine {
     credential: Option<String>,
     endpoints: Endpoints,
     deadline: Duration,
-    budget: AtomicU32,
     home_enabled: bool,
     scene_enabled: bool,
-    stages: Mutex<BTreeMap<String, Stage>>,
-    scene_stages: Mutex<BTreeMap<String, Stage>>,
+    kit: KitSlot,
+    /// Identical concurrent asks for one clip share one run.
+    flights: Flights<Result<Produced<()>, ResourceFailure>>,
+    /// The home painting to its clip. The hub holds the clip's state; this is only the index.
+    home: Mutex<BTreeMap<String, HomeSlot>>,
+    /// The scene plate key to the clip of its latest request.
+    scenes: Mutex<BTreeMap<String, Lane>>,
+    /// Clips whose run has been started and has not ended. This is not a failure memory: it only
+    /// tells a view that a run is on the way before the hub has heard of it.
+    launching: Mutex<BTreeSet<ResourceKey>>,
     price: tokio::sync::Mutex<Option<f64>>,
     living: Option<LivingScenes>,
+}
+
+/// The guarded data are plain collections that stay consistent when a holder panics.
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl std::fmt::Debug for Engine {
@@ -489,29 +550,35 @@ pub(crate) fn install(
     if !home_enabled && !scene_enabled {
         return Ok(effective_line);
     }
-    let engine = Engine {
+    let engine = Engine::new(EngineSetup {
         root: asset_root.to_path_buf(),
         cache_dir: settings.cache_dir,
         credential,
         endpoints: Endpoints::Live { pins },
         deadline: DEFAULT_DEADLINE,
-        budget: AtomicU32::new(
-            home_configuration
-                .as_ref()
-                .map(|configuration| configuration.budget)
-                .unwrap_or_default(),
-        ),
         home_enabled,
         scene_enabled,
-        stages: Mutex::new(BTreeMap::new()),
-        scene_stages: Mutex::new(BTreeMap::new()),
-        price: tokio::sync::Mutex::new(None),
         living: Some(living),
-    };
+    });
     *ENGINE
         .lock()
         .map_err(|_| io::Error::other("home video lock poisoned"))? = Some(Arc::new(engine));
     Ok(effective_line)
+}
+
+/// Puts the installed engine on the server's generation hub, so its clips, failures and spend are
+/// listed and invalidated with every other resource. A server with no clip engine has nothing to
+/// attach.
+pub(crate) fn attach_kit(kit: &Kit) -> Result<(), io::Error> {
+    let engine = ENGINE
+        .lock()
+        .map_err(|_| io::Error::other("home video lock poisoned"))?
+        .clone();
+    if let Some(engine) = engine {
+        engine.kit.attach(kit);
+        engine.configure();
+    }
+    Ok(())
 }
 
 /// Resolves each pinned fal media host once, at startup. Only public addresses are kept.
@@ -598,33 +665,184 @@ pub(crate) fn router() -> Router {
     Router::new().route("/gameplay/home-video/{key}", get(serve_clip))
 }
 
+/// What an engine is made of, apart from its runtime state.
+struct EngineSetup {
+    root: PathBuf,
+    cache_dir: PathBuf,
+    credential: Option<String>,
+    endpoints: Endpoints,
+    deadline: Duration,
+    home_enabled: bool,
+    scene_enabled: bool,
+    living: Option<LivingScenes>,
+}
+
+/// What a view is told about a clip, read from the hub.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaneState {
+    Ready,
+    Pending,
+    Failed,
+    /// Nothing is running and the hub holds no usable clip: never asked, invalidated, or its
+    /// stored file is gone. The next ask starts a run.
+    Forgotten,
+}
+
+/// What a finished run produced.
+struct ClipDone {
+    cached: bool,
+    bytes: u64,
+}
+
+/// A provider call that was made: its price and how long it took.
+struct PaidCall {
+    price: f64,
+    elapsed: Duration,
+}
+
+/// The way clips of one variant are requested and cached, for the spec's key.
+fn clip_recipe(variant: Variant) -> ClipRecipe {
+    ClipRecipe {
+        model: MODEL.to_owned(),
+        duration_seconds: DURATION_SECONDS,
+        width: WIDTH,
+        height: HEIGHT,
+        recipe: match variant {
+            Variant::Home => RECIPE,
+            Variant::Scene => SCENE_RECIPE,
+        }
+        .to_owned(),
+        finish: LoopFinish::CURRENT.label(),
+    }
+}
+
+/// What is done to the provider's clip between download and store: the seam for a post-processing
+/// step. Today the clip is stored as delivered, since the still is both its first and last frame.
+/// If the provider's loop turns out not to close cleanly, a tail crossfade (blend the last frames
+/// into the first) or a ping-pong (play it forward then reversed) is added as a variant here and
+/// made `CURRENT`; its label is in the spec's key, so every clip made without it is superseded and
+/// none is served as if it had it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoopFinish {
+    AsDelivered,
+}
+
+impl LoopFinish {
+    const CURRENT: Self = Self::AsDelivered;
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::AsDelivered => "as_delivered",
+        }
+    }
+
+    /// The bytes to store for the provider's `clip`. A step that cannot finish a clip fails it
+    /// rather than storing a half-finished loop.
+    fn apply(self, clip: Vec<u8>) -> Result<Vec<u8>, Failure> {
+        match self {
+            Self::AsDelivered => Ok(clip),
+        }
+    }
+}
+
 impl Engine {
+    fn new(setup: EngineSetup) -> Self {
+        let engine = Self {
+            root: setup.root,
+            cache_dir: setup.cache_dir,
+            credential: setup.credential,
+            endpoints: setup.endpoints,
+            deadline: setup.deadline,
+            home_enabled: setup.home_enabled,
+            scene_enabled: setup.scene_enabled,
+            kit: KitSlot::private(),
+            flights: Flights::default(),
+            home: Mutex::new(BTreeMap::new()),
+            scenes: Mutex::new(BTreeMap::new()),
+            launching: Mutex::new(BTreeSet::new()),
+            price: tokio::sync::Mutex::new(None),
+            living: setup.living,
+        };
+        engine.configure();
+        engine
+    }
+
+    /// Tunes the clip kind on the engine's current kit: how long a run may take, how a ready
+    /// entry's file is checked and how it is erased.
+    fn configure(&self) {
+        let kit = self.kit.get();
+        let checked = self.cache_dir.clone();
+        let erased = self.cache_dir.clone();
+        kit.tune(
+            ResourceKind::VideoClip,
+            Limits {
+                timeout: self.deadline + PRICE_DEADLINE + HUB_SLACK,
+                attempts: CLIP_ATTEMPTS,
+            },
+            Arc::new(move |generated: &Generated| {
+                cached_clip(&checked, &generated.handle).is_some()
+            }),
+            Arc::new(move |generated: &Generated| {
+                // Best effort: a clip that is already gone is what was asked for.
+                let _removed = std::fs::remove_file(clip_path(&erased, &generated.handle));
+            }),
+        );
+    }
+
+    /// What the hub says about a clip, with a run that has been started but not yet reached the
+    /// hub counted as pending.
+    fn lane_state(&self, lane: &Lane) -> LaneState {
+        if locked(&self.launching).contains(&lane.key) {
+            return LaneState::Pending;
+        }
+        match self.kit.get().hub().status(&lane.key) {
+            ResourceStatus::Ready(_) => LaneState::Ready,
+            ResourceStatus::Failed(..) => LaneState::Failed,
+            ResourceStatus::Pending(_) | ResourceStatus::Fallback(_) => LaneState::Forgotten,
+        }
+    }
+
+    /// Marks a run of `key` as started; `false` when one already is.
+    fn claim_launch(&self, key: &ResourceKey) -> bool {
+        locked(&self.launching).insert(key.clone())
+    }
+
     fn observe(self: &Arc<Self>, painting: &str) -> LoopView {
         if !self.home_enabled {
             return LoopView::None;
         }
-        let Ok(mut stages) = self.stages.lock() else {
-            return LoopView::None;
-        };
-        let stage = match stages.get(painting) {
-            Some(stage) => stage.clone(),
-            None => {
-                stages.insert(painting.to_owned(), Stage::Pending);
-                drop(stages);
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    let engine = Arc::clone(self);
-                    let painting = painting.to_owned();
-                    handle.spawn(async move { engine.fly(painting).await });
+        let lane = {
+            let mut home = locked(&self.home);
+            match home.get(painting) {
+                None => {
+                    home.insert(painting.to_owned(), HomeSlot::Preparing);
+                    drop(home);
+                    self.start_home(painting);
+                    return LoopView::Pending;
                 }
-                return LoopView::Pending;
+                Some(HomeSlot::Preparing) => return LoopView::Pending,
+                Some(HomeSlot::Keyed(lane)) => lane.clone(),
             }
         };
-        match stage {
-            Stage::Pending => LoopView::Pending,
-            Stage::Ready(key) => LoopView::Ready {
-                path: format!("{ROUTE}/{key}"),
+        match self.lane_state(&lane) {
+            LaneState::Ready => LoopView::Ready {
+                path: format!("{ROUTE}/{}", lane.file),
             },
-            Stage::Failed(_) => LoopView::Failed,
+            LaneState::Pending => LoopView::Pending,
+            LaneState::Failed => LoopView::Failed,
+            LaneState::Forgotten => {
+                locked(&self.home).insert(painting.to_owned(), HomeSlot::Preparing);
+                self.start_home(painting);
+                LoopView::Pending
+            }
+        }
+    }
+
+    fn start_home(self: &Arc<Self>, painting: &str) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let engine = Arc::clone(self);
+            let painting = painting.to_owned();
+            handle.spawn(async move { engine.fly_home(painting).await });
         }
     }
 
@@ -638,357 +856,210 @@ impl Engine {
         if !self.scene_enabled || !valid_plate_key(plate_key) {
             return;
         }
-        let Ok(mut stages) = self.scene_stages.lock() else {
-            return;
-        };
-        if stages.contains_key(plate_key) {
-            return;
-        }
-        if let Some(path) = cached_clip(&self.cache_dir, plate_key) {
-            let Ok(bytes) = std::fs::metadata(path).map(|metadata| metadata.len()) else {
-                stages.insert(
-                    plate_key.to_owned(),
-                    Stage::Failed(Failure::Clip("cached clip unavailable")),
-                );
-                drop(stages);
-                record_scene_video(
-                    "failed",
-                    plate_key,
-                    MODEL,
-                    DURATION_SECONDS,
-                    "cached clip unavailable",
-                    None,
-                    None,
-                    None,
-                );
-                if let Some(living) = &self.living {
-                    living.signal_art();
-                }
-                return;
-            };
-            stages.insert(plate_key.to_owned(), Stage::Ready(plate_key.to_owned()));
-            drop(stages);
-            record_scene_video(
-                "ready",
-                plate_key,
-                MODEL,
-                DURATION_SECONDS,
-                "cached",
-                Some(0),
-                Some(0),
-                Some(bytes),
-            );
-            if let Some(living) = &self.living {
-                living.signal_art();
+        let (input, unavailable) = match scene_video_prompt::ambient(description) {
+            Ok(prompt) => (ClipInput::ready(&still, &prompt), None),
+            Err(refusal) => {
+                let label = match refusal {
+                    scene_video_prompt::Refusal::EmptyDescription => "scene description missing",
+                    scene_video_prompt::Refusal::InvalidDescription => "scene description invalid",
+                    scene_video_prompt::Refusal::PromptTooLong => "prompt too long",
+                };
+                (
+                    ClipInput::refused(Some(&still), label),
+                    Some(Failure::Clip(label)),
+                )
             }
+        };
+        let spec = SceneLoopSpec::new(plate_key, input.clone(), clip_recipe(Variant::Scene));
+        let lane = Lane {
+            key: ResourceKey::of(&spec),
+            file: clip_spec::file_key(&spec),
+        };
+        locked(&self.scenes).insert(plate_key.to_owned(), lane.clone());
+        // A clip that is running, ready or remembered as failed is not asked for again.
+        if self.lane_state(&lane) != LaneState::Forgotten || !self.claim_launch(&lane.key) {
             return;
         }
-        stages.insert(plate_key.to_owned(), Stage::Pending);
-        drop(stages);
-        record_scene_video(
-            "request",
-            plate_key,
-            MODEL,
-            DURATION_SECONDS,
-            reason,
-            None,
-            None,
-            None,
-        );
-
+        let job = ClipJob {
+            variant: Variant::Scene,
+            resource_subject: spec.subject(),
+            file: lane.file.clone(),
+            input,
+            unavailable,
+            still: StillBytes::Plate(still),
+            reason: reason.to_owned(),
+        };
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            let failure = Failure::Clip("runtime unavailable");
-            record_scene_video(
-                "failed",
-                plate_key,
-                MODEL,
-                DURATION_SECONDS,
-                "runtime unavailable",
+            locked(&self.launching).remove(&lane.key);
+            log_failed(
+                &job,
+                &Failure::Clip("runtime unavailable"),
                 None,
-                None,
-                None,
+                Duration::ZERO,
             );
-            self.finish_scene_clip(plate_key.to_owned(), Err(failure));
             return;
         };
         let engine = Arc::clone(self);
-        let plate_key = plate_key.to_owned();
-        let description = description.to_owned();
-        handle.spawn(async move {
-            engine.fly_scene_clip(plate_key, still, description).await;
-        });
+        handle.spawn(async move { engine.fly_clip(spec, lane.key, job).await });
     }
 
     fn scene_clip_view(&self, plate_key: &str) -> SceneClipView {
         if !valid_plate_key(plate_key) {
             return SceneClipView::None;
         }
-        let Ok(stages) = self.scene_stages.lock() else {
+        let Some(lane) = locked(&self.scenes).get(plate_key).cloned() else {
             return SceneClipView::None;
         };
-        match stages.get(plate_key) {
-            Some(Stage::Pending) => SceneClipView::Pending,
-            Some(Stage::Ready(key)) => SceneClipView::Ready {
-                path: format!("{ROUTE}/{key}"),
+        match self.lane_state(&lane) {
+            LaneState::Ready => SceneClipView::Ready {
+                path: format!("{ROUTE}/{}", lane.file),
             },
-            Some(Stage::Failed(_)) => SceneClipView::Failed,
-            None => SceneClipView::None,
+            LaneState::Pending => SceneClipView::Pending,
+            LaneState::Failed => SceneClipView::Failed,
+            LaneState::Forgotten => SceneClipView::None,
         }
     }
 
-    async fn fly_scene_clip(
-        self: Arc<Self>,
-        plate_key: String,
-        still: Vec<u8>,
-        description: String,
-    ) {
-        let started = Instant::now();
-        let outcome = self
-            .produce_scene_clip(&plate_key, &still, &description)
-            .await;
-        match &outcome {
-            Ok((_, milliseconds, bytes)) => record_scene_video(
-                "ready",
-                &plate_key,
-                MODEL,
-                DURATION_SECONDS,
-                "ambient-scene-loop",
-                Some(*milliseconds),
-                Some(started.elapsed().as_millis()),
-                Some(*bytes),
+    /// The task of a painting: prepare its still, key the clip by it, run the clip, then wake the
+    /// displays.
+    async fn fly_home(self: Arc<Self>, painting: String) {
+        let (input, unavailable, still) = match prepare_still(&self.root, &painting).await {
+            Ok(still) => (ClipInput::ready(&still, &home_video_prompt()), None, still),
+            Err(Failure::Still(reason)) => (
+                ClipInput::refused(None, reason),
+                Some(Failure::Still(reason)),
+                Vec::new(),
             ),
-            Err(failure) => record_scene_video(
-                "failed",
-                &plate_key,
-                MODEL,
-                DURATION_SECONDS,
-                &failure.label(),
-                None,
-                Some(started.elapsed().as_millis()),
-                None,
+            Err(other) => (
+                ClipInput::refused(None, "still unavailable"),
+                Some(other),
+                Vec::new(),
             ),
-        }
-        self.finish_scene_clip(plate_key, outcome.map(|(key, _, _)| key));
-    }
-
-    fn finish_scene_clip(&self, plate_key: String, outcome: Result<String, Failure>) {
-        let stage = match outcome {
-            Ok(key) => Stage::Ready(key),
-            Err(failure) => Stage::Failed(failure),
         };
-        if let Ok(mut stages) = self.scene_stages.lock() {
-            stages.insert(plate_key, stage);
-        }
-        if let Some(living) = &self.living {
-            living.signal_art();
-        }
-    }
-
-    async fn produce_scene_clip(
-        &self,
-        plate_key: &str,
-        still: &[u8],
-        description: &str,
-    ) -> Result<(String, u128, u64), Failure> {
-        let prompt = scene_video_prompt::ambient(description).map_err(|reason| match reason {
-            scene_video_prompt::Refusal::EmptyDescription => {
-                Failure::Clip("scene description missing")
-            }
-            scene_video_prompt::Refusal::InvalidDescription => {
-                Failure::Clip("scene description invalid")
-            }
-            scene_video_prompt::Refusal::PromptTooLong => Failure::Clip("prompt too long"),
-        })?;
-        let still = prepare_scene_still(still.to_vec()).await?;
-        if let Some(path) = cached_clip(&self.cache_dir, plate_key) {
-            let bytes = std::fs::metadata(path)
-                .map_err(|_| Failure::Clip("cached clip unavailable"))?
-                .len();
-            return Ok((plate_key.to_owned(), 0, bytes));
-        }
-        let provider = self.provider()?;
-        let started = Instant::now();
-        let bytes = self
-            .make_scene_clip(&provider, &still, plate_key, &prompt)
-            .await?;
-        Ok((plate_key.to_owned(), started.elapsed().as_millis(), bytes))
-    }
-
-    /// The one task of a painting: prepare the still, serve a cached loop or make one, then
-    /// record the outcome and wake the displays.
-    async fn fly(self: Arc<Self>, painting: String) {
-        let outcome = self.produce(&painting).await;
-        let stage = match outcome {
-            Ok(key) => Stage::Ready(key),
-            Err(failure) => Stage::Failed(failure),
+        let spec = HomeLoopSpec::new(&painting, input.clone(), clip_recipe(Variant::Home));
+        let lane = Lane {
+            key: ResourceKey::of(&spec),
+            file: clip_spec::file_key(&spec),
         };
-        if let Ok(mut stages) = self.stages.lock() {
-            stages.insert(painting, stage);
+        // A run of this clip may already be going (another painting with the same still).
+        let started = self.claim_launch(&lane.key);
+        locked(&self.home).insert(painting.clone(), HomeSlot::Keyed(lane.clone()));
+        if started {
+            let job = ClipJob {
+                variant: Variant::Home,
+                resource_subject: spec.subject(),
+                file: lane.file.clone(),
+                input,
+                unavailable,
+                still: StillBytes::Prepared(still),
+                reason: "home-loop".to_owned(),
+            };
+            self.fly_clip(spec, lane.key, job).await;
         }
         // The display streams watch the home wake, and the living scenes' wake when it has one.
         WAKE.get_or_init(|| watch::channel(0).0)
             .send_modify(|count| *count += 1);
+    }
+
+    /// The one run of a clip, through the generation hub: identical asks share it, the hub
+    /// remembers its failure and lists it, and the outcome is read back from the hub by the view
+    /// (and written to the log by [`Self::generate`]).
+    async fn fly_clip<S>(self: Arc<Self>, spec: S, key: ResourceKey, job: ClipJob)
+    where
+        S: ResourceSpec + Send + Sync + 'static,
+    {
+        let kit = self.kit.get();
+        let engine = Arc::clone(&self);
+        let work = async move { engine.generate(job).await };
+        // The outcome is in the hub and the log; the views read it from the hub.
+        let (_outcome, _role) = kit.produce(&self.flights, spec, work).await;
+        locked(&self.launching).remove(&key);
         if let Some(living) = &self.living {
             living.signal_art();
         }
     }
 
-    async fn produce(&self, painting: &str) -> Result<String, Failure> {
-        let still = prepare_still(&self.root, painting).await?;
-        let key = clip_key(&still);
-        let request_started = Instant::now();
-        record_video_resource(
-            "gameplay.home_video.requested",
-            &key,
-            "requested",
-            "requested",
-            None,
-            "fal",
-            MODEL,
-            DURATION_SECONDS,
-            None,
-            None,
-            None,
-            "unknown",
-            None,
-            None,
-        );
-        if cached_clip(&self.cache_dir, &key).is_some() {
-            record_event("cached", &key, None);
-            record_video_resource(
-                "gameplay.home_video.ready",
-                &key,
-                "ready",
-                "cached",
-                None,
-                "cache",
-                MODEL,
-                DURATION_SECONDS,
-                Some(0),
-                None,
-                None,
-                "hit",
-                None,
-                None,
-            );
-            return Ok(key);
-        }
-        let provider = match self.provider() {
-            Ok(provider) => provider,
-            Err(failure) => {
-                record_video_resource(
-                    "gameplay.home_video.failed",
-                    &key,
-                    "failed",
-                    "failed",
-                    Some(video_failure_category(&failure)),
-                    "fal",
-                    MODEL,
-                    DURATION_SECONDS,
-                    Some(request_started.elapsed().as_millis()),
-                    None,
-                    None,
-                    "miss",
-                    None,
-                    None,
-                );
-                return Err(failure);
-            }
-        };
-        let price = match self.price(&provider).await {
-            Ok(price) => price,
-            Err(failure) => {
-                record_video_resource(
-                    "gameplay.home_video.failed",
-                    &key,
-                    "failed",
-                    "failed",
-                    Some(video_failure_category(&failure)),
-                    "fal",
-                    MODEL,
-                    DURATION_SECONDS,
-                    Some(request_started.elapsed().as_millis()),
-                    None,
-                    None,
-                    "miss",
-                    None,
-                    None,
-                );
-                return Err(failure);
-            }
-        };
-        if let Err(failure) = self.charge() {
-            record_video_resource(
-                "gameplay.home_video.failed",
-                &key,
-                "failed",
-                "failed",
-                Some(video_failure_category(&failure)),
-                "fal",
-                MODEL,
-                DURATION_SECONDS,
-                Some(request_started.elapsed().as_millis()),
-                None,
-                None,
-                "miss",
-                None,
-                None,
-            );
-            return Err(failure);
-        }
+    /// Makes the clip, or finds it in the store, and writes the log lines of the attempt.
+    async fn generate(self: Arc<Self>, job: ClipJob) -> Result<Produced<()>, ResourceFailure> {
         let started = Instant::now();
-        let outcome = self.make(&provider, &still, &key).await;
+        log_requested(&job);
+        let mut paid = None;
+        let outcome = self.produce_clip(&job, &mut paid).await;
         let elapsed = started.elapsed();
-        let request_elapsed_ms = request_started.elapsed().as_millis();
-        match &outcome {
-            Ok(()) => {
-                record_paid(&key, price, elapsed, request_elapsed_ms, "ready", None);
-                record_video_resource(
-                    "gameplay.home_video.ready",
-                    &key,
-                    "ready",
-                    "ready",
-                    None,
-                    "fal",
-                    MODEL,
-                    DURATION_SECONDS,
-                    Some(request_elapsed_ms),
-                    Some(elapsed.as_millis()),
-                    None,
-                    "stored",
-                    None,
-                    None,
-                );
+        match outcome {
+            Ok(done) => {
+                log_ready(&job, &done, paid.as_ref(), elapsed);
+                Ok(Produced {
+                    generated: Generated {
+                        handle: job.file.clone(),
+                        note: format!("{} bytes", done.bytes),
+                    },
+                    payload: Some(()),
+                    from_store: done.cached,
+                })
             }
             Err(failure) => {
-                let category = video_failure_category(failure);
-                record_paid(
-                    &key,
-                    price,
-                    elapsed,
-                    request_elapsed_ms,
-                    "failed",
-                    Some(category),
-                );
-                record_video_resource(
-                    "gameplay.home_video.failed",
-                    &key,
-                    "failed",
-                    "failed",
-                    Some(category),
-                    "fal",
-                    MODEL,
-                    DURATION_SECONDS,
-                    Some(request_elapsed_ms),
-                    Some(elapsed.as_millis()),
-                    None,
-                    "miss",
-                    None,
-                    None,
-                );
+                log_failed(&job, &failure, paid.as_ref(), elapsed);
+                Err(classify(&failure))
             }
         }
-        outcome.map(|()| key)
+    }
+
+    async fn produce_clip(
+        &self,
+        job: &ClipJob,
+        paid: &mut Option<PaidCall>,
+    ) -> Result<ClipDone, Failure> {
+        if let Some(failure) = &job.unavailable {
+            return Err(failure.clone());
+        }
+        let prompt = job
+            .input
+            .prompt()
+            .ok_or(Failure::Clip("clip prompt missing"))?;
+        if let Some(path) = cached_clip(&self.cache_dir, &job.file) {
+            let bytes = std::fs::metadata(path)
+                .map_err(|_| Failure::Clip("cached clip unavailable"))?
+                .len();
+            return Ok(ClipDone {
+                cached: true,
+                bytes,
+            });
+        }
+        let still = match &job.still {
+            StillBytes::Prepared(bytes) => bytes.clone(),
+            StillBytes::Plate(plate) => prepare_scene_still(plate.clone()).await?,
+        };
+        let provider = self.provider()?;
+        let price = self.price(&provider).await?;
+        // The request is checked before anything is charged, so a request refused locally costs
+        // nothing.
+        let (request, reference) = clip_request(job.variant, &still, &job.file, prompt)?;
+        // The call is about to be sent: the clip is paid for whatever its outcome, and a call of
+        // unknown outcome may have been billed, so it is never given back.
+        self.kit.get().charge(Unit::VideoClip, 1);
+        let started = Instant::now();
+        let fetched = self.fetch(&provider, &request, &reference).await;
+        let stored = match fetched {
+            Ok(bytes) => match LoopFinish::CURRENT.apply(bytes) {
+                Ok(finished) => {
+                    let length = finished.len() as u64;
+                    write_clip(&self.cache_dir, &job.file, &finished)
+                        .await
+                        .map(|()| length)
+                }
+                Err(failure) => Err(failure),
+            },
+            Err(failure) => Err(failure),
+        };
+        *paid = Some(PaidCall {
+            price,
+            elapsed: started.elapsed(),
+        });
+        stored.map(|bytes| ClipDone {
+            cached: false,
+            bytes,
+        })
     }
 
     fn provider(&self) -> Result<NativeFalMediaProvider, Failure> {
@@ -1030,45 +1101,16 @@ impl Engine {
         Ok(price)
     }
 
-    /// Charges one clip before the submit. Spend is never refunded, even when the clip fails.
-    fn charge(&self) -> Result<(), Failure> {
-        self.budget
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .map(|_| ())
-            .map_err(|_| Failure::BudgetSpent)
-    }
-
-    async fn make(
+    /// Submits the request, waits for the clip and checks it, within the engine's deadline.
+    async fn fetch(
         &self,
         provider: &NativeFalMediaProvider,
-        still: &[u8],
-        key: &str,
-    ) -> Result<(), Failure> {
-        let (request, reference) = video_request(still, key)?;
-        let bytes =
-            tokio::time::timeout(self.deadline, self.run_job(provider, &request, &reference))
-                .await
-                .map_err(|_| Failure::Timeout)??;
-        write_clip(&self.cache_dir, key, &bytes).await
-    }
-
-    async fn make_scene_clip(
-        &self,
-        provider: &NativeFalMediaProvider,
-        still: &[u8],
-        key: &str,
-        prompt: &str,
-    ) -> Result<u64, Failure> {
-        let (request, reference) = scene_video_request(still, key, prompt)?;
-        let bytes =
-            tokio::time::timeout(self.deadline, self.run_job(provider, &request, &reference))
-                .await
-                .map_err(|_| Failure::Timeout)??;
-        let byte_length = bytes.len() as u64;
-        write_clip(&self.cache_dir, key, &bytes).await?;
-        Ok(byte_length)
+        request: &FalVideoRequest,
+        reference: &RequestBinding<FalVideoBasis>,
+    ) -> Result<Vec<u8>, Failure> {
+        tokio::time::timeout(self.deadline, self.run_job(provider, request, reference))
+            .await
+            .map_err(|_| Failure::Timeout)?
     }
 
     async fn run_job(
@@ -1127,7 +1169,7 @@ impl Engine {
                 let milliseconds = timebase
                     .milliseconds_ceil()
                     .map_err(|_| Failure::Clip("clock unreadable"))?;
-                if (width, height) != (WIDTH, HEIGHT)
+                if !acceptable_frame(width, height)
                     || !(MINIMUM_CLIP_MILLISECONDS..=MAXIMUM_CLIP_MILLISECONDS)
                         .contains(&milliseconds)
                 {
@@ -1143,13 +1185,36 @@ impl Engine {
     }
 }
 
+/// Whether a clip's frame is the shape the display wants: 16:9 within two percent, at least 640
+/// pixels wide. Another provider may return 720p for a 1080p request, and a real clip of the
+/// right shape is not discarded for its size.
+fn acceptable_frame(width: u32, height: u32) -> bool {
+    let (width, height) = (u64::from(width), u64::from(height));
+    if width < 640 {
+        return false;
+    }
+    let (left, right) = (width * 9, height * 16);
+    left.abs_diff(right) * 50 <= right
+}
+
 /// The adapter's reason, with the queue request it concerned: the diagnostic that names a job
 /// the provider may still be running.
+///
+/// When the supplier answered over HTTP, its status and a bounded, redacted excerpt of its body
+/// follow (the adapter has already removed the credential and any opaque token), so a refusal
+/// reads as the supplier worded it.
 fn provider_failure(error: FalMediaError) -> Failure {
-    match error.request_id {
-        Some(id) => Failure::Provider(format!("{:?} request={}", error.reason, id.as_str())),
-        None => Failure::Provider(format!("{:?}", error.reason)),
+    let mut detail = format!("{:?}", error.reason);
+    if let Some(id) = &error.request_id {
+        detail.push_str(&format!(" request={}", id.as_str()));
     }
+    if let Some(http) = &error.http {
+        detail.push_str(&format!(
+            " http_status={} body={:?}",
+            http.status, http.body
+        ));
+    }
+    Failure::Provider(detail)
 }
 
 fn valid_plate_key(key: &str) -> bool {
@@ -1160,16 +1225,12 @@ fn valid_plate_key(key: &str) -> bool {
 }
 
 fn limits() -> NativeHttpLimits {
-    NativeHttpLimits {
-        connect_timeout: Duration::from_secs(10),
-        read_timeout: Duration::from_secs(60),
-        total_timeout: REQUEST_DEADLINE,
-        maximum_request_bytes: 8 * 1024 * 1024,
-        // The adapter's ceiling for a response; the clip bound below is the same size.
-        maximum_response_bytes: 16 * 1024 * 1024,
-        maximum_header_bytes: 16 * 1024,
-        maximum_chunks: 65_536,
-    }
+    // The response bound is the adapter's ceiling; the clip bound below is the same size.
+    ProviderLimits::new(REQUEST_DEADLINE, 8 * 1024 * 1024, 16 * 1024 * 1024)
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(60))
+        .chunks(65_536)
+        .build()
 }
 
 fn owner(binding: &RequestBinding<FalVideoBasis>) -> RequestOwnerState<'_, FalVideoBasis> {
@@ -1184,13 +1245,8 @@ fn request_refused<E>(_: E) -> Failure {
     Failure::Provider("request refused before submit".to_owned())
 }
 
-/// The request for one still: the still as both frames, five seconds, the adapter's own profile
-/// for the endpoint.
-fn video_basis(still: &[u8], key: &str) -> Result<RequestBinding<FalVideoBasis>, Failure> {
-    let prompt = home_video_prompt();
-    video_basis_with(still, key, &prompt, "home-still", "home-video", RECIPE)
-}
-
+/// The request basis for one still: the still as both frames, five seconds, the adapter's own
+/// profile for the endpoint.
 fn video_basis_with(
     still: &[u8],
     key: &str,
@@ -1257,36 +1313,20 @@ fn video_basis_with(
     Ok(binding)
 }
 
-/// The request for one still, and the binding it was checked against (the owner's view of it).
-fn video_request(
-    still: &[u8],
-    key: &str,
-) -> Result<(FalVideoRequest, RequestBinding<FalVideoBasis>), Failure> {
-    let reference = video_basis(still, key)?;
-    make_video_request(video_basis(still, key)?, reference)
-}
-
-fn scene_video_request(
+/// The request for one still of either loop, and the binding it was checked against (the owner's
+/// view of it).
+fn clip_request(
+    variant: Variant,
     still: &[u8],
     key: &str,
     prompt: &str,
 ) -> Result<(FalVideoRequest, RequestBinding<FalVideoBasis>), Failure> {
-    let reference = video_basis_with(
-        still,
-        key,
-        prompt,
-        "scene-plate",
-        "scene-video",
-        SCENE_RECIPE,
-    )?;
-    let request_basis = video_basis_with(
-        still,
-        key,
-        prompt,
-        "scene-plate",
-        "scene-video",
-        SCENE_RECIPE,
-    )?;
+    let (asset_key, rights_revision, recipe) = match variant {
+        Variant::Home => ("home-still", "home-video", RECIPE),
+        Variant::Scene => ("scene-plate", "scene-video", SCENE_RECIPE),
+    };
+    let reference = video_basis_with(still, key, prompt, asset_key, rights_revision, recipe)?;
+    let request_basis = video_basis_with(still, key, prompt, asset_key, rights_revision, recipe)?;
     make_video_request(request_basis, reference)
 }
 
@@ -1392,35 +1432,36 @@ pub(crate) async fn prepare_still_for_test(
     prepare_still(root, painting).await
 }
 
-/// The cache key: SHA-256 over the still, the model, the prompt, the duration and the recipe.
+/// The home loop's file key for a prepared still: the whole digest of its spec.
+#[cfg(test)]
 pub(crate) fn clip_key(still: &[u8]) -> String {
-    clip_key_with(still, MODEL, &home_video_prompt(), DURATION_SECONDS, RECIPE)
+    let input = ClipInput::ready(still, &home_video_prompt());
+    clip_spec::file_key(&HomeLoopSpec::new("", input, clip_recipe(Variant::Home)))
 }
 
-pub(crate) fn clip_key_with(
-    still: &[u8],
-    model: &str,
+/// The scene loop's spec for a plate, with `edit` applied to the recipe, for the key checks.
+#[cfg(test)]
+pub(crate) fn scene_spec_for_test(
+    plate_key: &str,
+    plate: &[u8],
     prompt: &str,
-    duration_seconds: u32,
-    recipe: &str,
-) -> String {
-    let mut hasher = Sha256::new();
-    let duration = duration_seconds.to_string();
-    for part in [
-        still,
-        model.as_bytes(),
-        prompt.as_bytes(),
-        duration.as_bytes(),
-        recipe.as_bytes(),
-    ] {
-        hasher.update((part.len() as u64).to_be_bytes());
-        hasher.update(part);
-    }
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    edit: impl FnOnce(&mut ClipRecipe),
+) -> SceneLoopSpec {
+    let mut recipe = clip_recipe(Variant::Scene);
+    edit(&mut recipe);
+    SceneLoopSpec::new(plate_key, ClipInput::ready(plate, prompt), recipe)
+}
+
+/// The scene loop's file key for a plate and a description, as `request_scene_clip` computes it.
+#[cfg(test)]
+pub(crate) fn scene_clip_key(plate: &[u8], description: &str) -> Option<String> {
+    let prompt = scene_video_prompt::ambient(description).ok()?;
+    Some(clip_spec::file_key(&scene_spec_for_test(
+        "",
+        plate,
+        &prompt,
+        |_| {},
+    )))
 }
 
 fn clip_path(cache_dir: &Path, key: &str) -> PathBuf {
@@ -1443,19 +1484,14 @@ pub(super) fn is_within_cache(root: &Path, resolved: &Path) -> bool {
     resolved.starts_with(root)
 }
 
-/// Writes a validated clip beside its key, through a temporary name so a reader never sees half a
-/// file. The write is blocking I/O, so it runs off the async workers.
+/// Writes a validated clip beside its key through the shared atomic write, so a reader never sees
+/// half a file. The write is blocking I/O, so it runs off the async workers.
 async fn write_clip(cache_dir: &Path, key: &str, bytes: &[u8]) -> Result<(), Failure> {
     let directory = cache_dir.to_path_buf();
-    let key = key.to_owned();
+    let name = format!("{key}.mp4");
     let bytes = bytes.to_vec();
     tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&directory)
-            .map_err(|_| Failure::Clip("cache directory unavailable"))?;
-        let path = clip_path(&directory, &key);
-        let temporary = directory.join(format!(".{key}.{}.tmp", std::process::id()));
-        std::fs::write(&temporary, &bytes).map_err(|_| Failure::Clip("cache write failed"))?;
-        std::fs::rename(&temporary, &path).map_err(|_| Failure::Clip("cache rename failed"))
+        write_atomic(&directory, &name, &bytes).map_err(|_| Failure::Clip("cache write failed"))
     })
     .await
     .map_err(|_| Failure::Clip("cache task interrupted"))?
@@ -1678,6 +1714,237 @@ fn record_paid(
     });
 }
 
+/// How the hub remembers a failure: what would fail again is permanent, what may pass is
+/// transient, and a deadline has its own class. The label is stable and holds no
+/// detail of the request.
+fn classify(failure: &Failure) -> ResourceFailure {
+    match failure {
+        Failure::Still("still task interrupted") => {
+            ResourceFailure::Transient("still task interrupted")
+        }
+        Failure::Still(reason) | Failure::Clip(reason) => ResourceFailure::Permanent(*reason),
+        Failure::Price(reason) => ResourceFailure::Transient(*reason),
+        Failure::Timeout => ResourceFailure::TimedOut,
+        Failure::Provider(detail) => provider_class(detail),
+    }
+}
+
+/// The provider failures the engine itself words, and the adapter's own reason for the rest.
+fn provider_class(detail: &str) -> ResourceFailure {
+    match detail {
+        "no FAL_KEY" => ResourceFailure::Permanent("provider: no FAL_KEY"),
+        "fal media hosts do not resolve" => {
+            ResourceFailure::Permanent("provider: fal media hosts do not resolve")
+        }
+        "request refused before submit" => {
+            ResourceFailure::Permanent("provider: request refused before submit")
+        }
+        "fixture address refused" | "model refused" => {
+            ResourceFailure::Permanent("provider: configuration refused")
+        }
+        "status unknown" => ResourceFailure::Transient("provider: status unknown"),
+        "no completed output" => ResourceFailure::Transient("provider: no completed output"),
+        other if other.starts_with("refused or failed") => {
+            ResourceFailure::Transient("provider: refused or failed")
+        }
+        _ => ResourceFailure::Transient("provider: call failed"),
+    }
+}
+
+fn log_requested(job: &ClipJob) {
+    match job.variant {
+        Variant::Home => record_video_resource(
+            "gameplay.home_video.requested",
+            &job.file,
+            "requested",
+            "requested",
+            None,
+            "fal",
+            MODEL,
+            DURATION_SECONDS,
+            None,
+            None,
+            None,
+            "unknown",
+            None,
+            None,
+        ),
+        Variant::Scene => record_scene_video(
+            "request",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            &job.reason,
+            None,
+            None,
+            None,
+        ),
+    }
+}
+
+fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: Duration) {
+    let request_ms = elapsed.as_millis();
+    if !done.cached
+        && let Some(paid) = paid
+    {
+        record_paid(
+            &job.file,
+            paid.price,
+            paid.elapsed,
+            request_ms,
+            "ready",
+            None,
+        );
+    }
+    match (job.variant, done.cached) {
+        (Variant::Home, true) => {
+            record_event("cached", &job.file, None);
+            record_video_resource(
+                "gameplay.home_video.ready",
+                &job.file,
+                "ready",
+                "cached",
+                None,
+                "cache",
+                MODEL,
+                DURATION_SECONDS,
+                Some(0),
+                None,
+                None,
+                "hit",
+                None,
+                None,
+            );
+        }
+        (Variant::Home, false) => record_video_resource(
+            "gameplay.home_video.ready",
+            &job.file,
+            "ready",
+            "ready",
+            None,
+            "fal",
+            MODEL,
+            DURATION_SECONDS,
+            Some(request_ms),
+            paid.map(|paid| paid.elapsed.as_millis()),
+            Some(done.bytes),
+            "stored",
+            None,
+            None,
+        ),
+        (Variant::Scene, true) => record_scene_video(
+            "ready",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            "cached",
+            Some(0),
+            Some(0),
+            Some(done.bytes),
+        ),
+        (Variant::Scene, false) => record_scene_video(
+            "ready",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            "ambient-scene-loop",
+            paid.map(|paid| paid.elapsed.as_millis()),
+            Some(request_ms),
+            Some(done.bytes),
+        ),
+    }
+}
+
+fn log_failed(job: &ClipJob, failure: &Failure, paid: Option<&PaidCall>, elapsed: Duration) {
+    let request_ms = elapsed.as_millis();
+    let category = video_failure_category(failure);
+    record_failure_detail(job, failure);
+    if let Some(paid) = paid {
+        record_paid(
+            &job.file,
+            paid.price,
+            paid.elapsed,
+            request_ms,
+            "failed",
+            Some(category),
+        );
+    }
+    match job.variant {
+        Variant::Home => record_video_resource(
+            "gameplay.home_video.failed",
+            &job.file,
+            "failed",
+            "failed",
+            Some(category),
+            "fal",
+            MODEL,
+            DURATION_SECONDS,
+            Some(request_ms),
+            paid.map(|paid| paid.elapsed.as_millis()),
+            None,
+            "miss",
+            None,
+            None,
+        ),
+        Variant::Scene => record_scene_video(
+            "failed",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            &failure.label(),
+            None,
+            Some(request_ms),
+            None,
+        ),
+    }
+}
+
+/// The full wording of a failure, which the hub's stable label leaves out: the adapter's reason,
+/// the queue request it concerned (the diagnostic that names a job the provider may still be
+/// running) and, when the supplier answered over HTTP, its status and a bounded, redacted excerpt
+/// of its body. It holds no credential. It is written in the hub's `RESOURCE` line format beside
+/// the hub's own `failed` line for the same key, as `failed_detail`.
+fn record_failure_detail(job: &ClipJob, failure: &Failure) {
+    let detail: String = failure
+        .label()
+        .chars()
+        .map(|character| match character {
+            '"' => '\'',
+            character if character.is_control() => ' ',
+            character => character,
+        })
+        .collect();
+    super::actor::record_audit_line(
+        "gameplay.resource",
+        format!(
+            "RESOURCE failed_detail kind={} key={} subject={} ms=0 handle= error=\"{detail}\"",
+            ResourceKind::VideoClip.label(),
+            job.file.chars().take(32).collect::<String>(),
+            job.resource_subject,
+        ),
+    );
+    let mut span = df_observe::begin(&context(), "gameplay.home_video_event");
+    span.event(
+        "gameplay.home_video.failure",
+        &[
+            (
+                "gameplay.home_video.key",
+                job.file.chars().take(16).collect(),
+            ),
+            (
+                "gameplay.home_video.variant",
+                match job.variant {
+                    Variant::Home => "home",
+                    Variant::Scene => "scene",
+                }
+                .to_owned(),
+            ),
+            ("gameplay.home_video.detail", failure.label()),
+        ],
+    );
+    span.finish_unmeasured("failed");
+}
+
 fn record_event(kind: &str, subject: &str, price: Option<f64>) {
     let mut span = df_observe::begin(&context(), "gameplay.home_video_event");
     let mut fields = vec![
@@ -1768,7 +2035,6 @@ fn video_failure_category(failure: &Failure) -> &'static str {
     match failure {
         Failure::Still(_) => "still_failure",
         Failure::Price(_) => "price_unavailable",
-        Failure::BudgetSpent => "budget_exhausted",
         Failure::Provider(_) => "provider_failure",
         Failure::Timeout => "deadline",
         Failure::Clip(_) => "clip_failure",
@@ -1779,7 +2045,6 @@ fn video_failure_reason_category(reason: &str) -> &'static str {
     match reason {
         "still: invalid" | "still: unavailable" => "still_failure",
         "price: live price unavailable" => "price_unavailable",
-        "budget spent: no clip charged" => "budget_exhausted",
         "timeout" => "deadline",
         value if value.starts_with("provider:") => "provider_failure",
         value if value.starts_with("clip:") => "clip_failure",
@@ -1889,29 +2154,24 @@ fn record_video_resource(
     super::actor::record_audit_diagnostic(event, line, fields, &attributes);
 }
 
-/// Test helper: a flight's outcome for a still, without the display.
+/// Test helper: an engine for the home loop, over a fixture or live endpoints.
 #[cfg(test)]
 pub(crate) fn test_engine(
     root: PathBuf,
     cache_dir: PathBuf,
-    budget: u32,
     endpoints: Endpoints,
     deadline: Duration,
 ) -> Arc<Engine> {
-    Arc::new(Engine {
+    Arc::new(Engine::new(EngineSetup {
         root,
         cache_dir,
         credential: Some("fixture-private-key".to_owned()),
         endpoints,
         deadline,
-        budget: AtomicU32::new(budget),
         home_enabled: true,
         scene_enabled: false,
-        stages: Mutex::new(BTreeMap::new()),
-        scene_stages: Mutex::new(BTreeMap::new()),
-        price: tokio::sync::Mutex::new(None),
         living: None,
-    })
+    }))
 }
 
 /// Test helper: installs the engine the view and the route use. Only one test installs one.
@@ -1931,27 +2191,23 @@ pub(crate) fn install_for_test(engine: Arc<Engine>) -> Result<(), Arc<Engine>> {
 pub(crate) fn live_test_engine(
     root: PathBuf,
     cache_dir: PathBuf,
-    budget: u32,
     credential: String,
     pins: Vec<FalCdnPin>,
     deadline: Duration,
 ) -> Arc<Engine> {
-    Arc::new(Engine {
+    Arc::new(Engine::new(EngineSetup {
         root,
         cache_dir,
         credential: Some(credential),
         endpoints: Endpoints::Live { pins },
         deadline,
-        budget: AtomicU32::new(budget),
         home_enabled: true,
         scene_enabled: false,
-        stages: Mutex::new(BTreeMap::new()),
-        scene_stages: Mutex::new(BTreeMap::new()),
-        price: tokio::sync::Mutex::new(None),
         living: None,
-    })
+    }))
 }
 
+/// Test helper: an engine for scene loops.
 #[cfg(test)]
 pub(crate) fn scene_test_engine(
     cache_dir: PathBuf,
@@ -1959,31 +2215,36 @@ pub(crate) fn scene_test_engine(
     deadline: Duration,
     credential: Option<String>,
 ) -> Arc<Engine> {
-    Arc::new(Engine {
+    Arc::new(Engine::new(EngineSetup {
         root: PathBuf::new(),
         cache_dir,
         credential,
         endpoints,
         deadline,
-        budget: AtomicU32::new(0),
         home_enabled: false,
         scene_enabled: true,
-        stages: Mutex::new(BTreeMap::new()),
-        scene_stages: Mutex::new(BTreeMap::new()),
-        price: tokio::sync::Mutex::new(None),
         living: None,
-    })
+    }))
 }
 
 #[cfg(test)]
 impl Engine {
+    fn stage_text(&self, lane: &Lane) -> String {
+        if locked(&self.launching).contains(&lane.key) {
+            return "pending".to_owned();
+        }
+        match self.kit.get().hub().status(&lane.key) {
+            ResourceStatus::Ready(generated) => format!("ready:{}", generated.handle),
+            ResourceStatus::Failed(failure, _) => format!("failed:{}", failure.label()),
+            ResourceStatus::Pending(_) | ResourceStatus::Fallback(_) => "pending".to_owned(),
+        }
+    }
+
     pub(crate) fn stage_of(&self, painting: &str) -> Option<String> {
-        self.stages.lock().ok().and_then(|stages| {
-            stages.get(painting).map(|stage| match stage {
-                Stage::Pending => "pending".to_owned(),
-                Stage::Ready(key) => format!("ready:{key}"),
-                Stage::Failed(failure) => format!("failed:{}", failure.label()),
-            })
+        let slot = locked(&self.home).get(painting).cloned()?;
+        Some(match slot {
+            HomeSlot::Preparing => "pending".to_owned(),
+            HomeSlot::Keyed(lane) => self.stage_text(&lane),
         })
     }
 
@@ -1991,8 +2252,19 @@ impl Engine {
         self.observe(painting)
     }
 
-    pub(crate) fn budget_left(&self) -> u32 {
-        self.budget.load(Ordering::SeqCst)
+    /// Clips charged on the hub's ledger so far.
+    pub(crate) fn clips_charged(&self) -> u64 {
+        self.kit
+            .get()
+            .hub()
+            .ledger()
+            .snapshot(Unit::VideoClip)
+            .committed
+    }
+
+    /// The kit the engine runs on, for the hub's listing.
+    pub(crate) fn kit_for_test(&self) -> Kit {
+        self.kit.get()
     }
 
     pub(crate) fn request_scene_for_test(
@@ -2010,13 +2282,8 @@ impl Engine {
     }
 
     pub(crate) fn scene_stage_of(&self, plate_key: &str) -> Option<String> {
-        self.scene_stages.lock().ok().and_then(|stages| {
-            stages.get(plate_key).map(|stage| match stage {
-                Stage::Pending => "pending".to_owned(),
-                Stage::Ready(key) => format!("ready:{key}"),
-                Stage::Failed(failure) => format!("failed:{}", failure.label()),
-            })
-        })
+        let lane = locked(&self.scenes).get(plate_key).cloned()?;
+        Some(self.stage_text(&lane))
     }
 
     pub(crate) fn scene_view_for_test(&self, plate_key: &str) -> SceneClipView {
@@ -2034,20 +2301,66 @@ mod prompt_tests {
     use super::home_video_prompt;
 
     #[test]
-    fn home_video_prompt_uses_the_shared_film_look() {
+    fn home_video_prompt_is_a_photographic_look_of_a_place_with_no_cast() {
         let prompt = home_video_prompt().to_ascii_lowercase();
         for marker in [
+            "documentary photograph of a place",
             "real camera",
             "prime lens",
-            "practical light",
-            "named film grade",
-            "skin pores",
-            "woven fabric",
+            "natural practical light",
             "natural depth of field",
             "fine film grain",
+            "no people and no creatures",
             "no painting, illustration, concept art, cgi or game art",
         ] {
             assert!(prompt.contains(marker), "missing {marker:?} in {prompt}");
         }
+        for cast_word in ["performers", "costume", "skin pores", "anyone in the frame"] {
+            assert!(
+                !prompt.contains(cast_word),
+                "a loop of a place must not invite {cast_word:?}: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_home_loop_prompt_asks_for_a_gentle_ambience_loop_and_nothing_abrupt() {
+        let prompt = home_video_prompt().to_ascii_lowercase();
+        for marker in [
+            "locked-off camera",
+            "lamplight and candle flicker",
+            "drifting smoke or dust",
+            "cloth and banners stirring",
+            "water shimmer",
+            "nothing enters or leaves the frame",
+            "loops seamlessly",
+            "documentary photograph",
+        ] {
+            assert!(prompt.contains(marker), "missing {marker:?} in {prompt}");
+        }
+        assert!(!prompt.contains("push-in"), "the camera does not move");
+    }
+
+    #[test]
+    fn the_home_loop_spec_names_its_still_frames_prompt_variant_model_duration_and_recipe() {
+        use crate::gameplay::resources::ResourceSpec;
+
+        let spec = super::HomeLoopSpec::new(
+            "assets/ui/generated/scene-farm",
+            super::ClipInput::ready(b"a still", &home_video_prompt()),
+            super::clip_recipe(super::Variant::Home),
+        );
+
+        let canonical: serde_json::Value = serde_json::from_str(&spec.canonical()).unwrap();
+
+        assert_eq!(canonical["variant"], "home_loop");
+        assert_eq!(canonical["prompt_variant"], "ambient");
+        assert_eq!(canonical["frames"], "first_and_last_frame_same_still");
+        assert_eq!(canonical["model"], super::MODEL);
+        assert_eq!(canonical["duration_seconds"], super::DURATION_SECONDS);
+        assert_eq!(canonical["recipe"], super::RECIPE);
+        assert_eq!(canonical["finish"], "as_delivered");
+        assert_eq!(canonical["still"].as_str().map(str::len), Some(64));
+        assert_eq!(spec.subject(), "video:home:scene-farm");
     }
 }

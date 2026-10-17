@@ -196,16 +196,17 @@ pub(in crate::gameplay) fn cache_directory(name: &str) -> PathBuf {
     directory
 }
 
+/// A storyteller over a loopback endpoint. `_budget` is ignored: there is no token cap, and the
+/// parameter stays so the many tests that pass one need no change.
 pub(in crate::gameplay) fn teller(
     address: SocketAddr,
-    budget: u64,
+    _budget: u64,
     deadline: Duration,
     cache: &Path,
 ) -> Storyteller {
     Storyteller::new(StorytellerSettings {
         credential: CREDENTIAL.to_owned(),
         model: "gpt-test-model".to_owned(),
-        token_budget: budget,
         cache_directory: cache.to_owned(),
         deadline,
     })
@@ -271,7 +272,7 @@ async fn a_valid_answer_is_returned_cached_and_charged_at_the_reported_usage() {
             .to_ascii_lowercase()
             .contains(&format!("authorization: bearer {CREDENTIAL}"))
     );
-    assert_eq!(storyteller.remaining_tokens(), Some(20_000 - 140));
+    assert_eq!(storyteller.tokens_charged(), Some(140));
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -468,7 +469,7 @@ async fn a_rejected_first_answer_is_retried_once_with_the_complaint_and_can_succ
         !retry.contains(LONG_TEXT),
         "the complaint never repeats the text"
     );
-    assert_eq!(storyteller.remaining_tokens(), Some(20_000 - 280));
+    assert_eq!(storyteller.tokens_charged(), Some(280));
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -489,23 +490,6 @@ async fn two_rejected_answers_give_a_typed_error_after_exactly_two_calls() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn an_exhausted_budget_makes_no_call() {
-    let endpoint = FakeEndpoint::start(vec![reply("never asked")]);
-    let cache = cache_directory("budget");
-    let storyteller = teller(endpoint.address, 50, Duration::from_secs(5), &cache);
-    let (facts, slots) = (facts(), slots());
-
-    let error = storyteller
-        .express(&expression(&facts, &slots))
-        .await
-        .unwrap_err();
-
-    assert_eq!(error, StorytellerError::BudgetExhausted);
-    assert_eq!(endpoint.connections(), 0);
-    assert_eq!(storyteller.remaining_tokens(), Some(50));
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn a_repeated_identical_request_is_served_from_the_cache_without_a_call() {
     let endpoint = FakeEndpoint::start(vec![reply("Once only, friend.")]);
     let cache = cache_directory("cache");
@@ -515,7 +499,7 @@ async fn a_repeated_identical_request_is_served_from_the_cache_without_a_call() 
         .express(&expression(&facts, &slots))
         .await
         .unwrap();
-    let after_first = storyteller.remaining_tokens();
+    let after_first = storyteller.tokens_charged();
 
     let second = storyteller
         .express(&expression(&facts, &slots))
@@ -528,8 +512,8 @@ async fn a_repeated_identical_request_is_served_from_the_cache_without_a_call() 
     assert_eq!(first, second);
     assert_eq!(first, third);
     assert_eq!(endpoint.connections(), 1);
-    assert_eq!(storyteller.remaining_tokens(), after_first);
-    assert_eq!(resumed.remaining_tokens(), Some(20_000));
+    assert_eq!(storyteller.tokens_charged(), after_first);
+    assert_eq!(resumed.tokens_charged(), Some(0));
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -572,7 +556,7 @@ async fn a_silent_endpoint_hits_the_deadline_and_the_sent_call_stays_charged() {
     assert_eq!(error, StorytellerError::DeadlineExceeded);
     assert_eq!(endpoint.connections(), 1);
     assert!(
-        storyteller.remaining_tokens().unwrap() < 20_000,
+        storyteller.tokens_charged().unwrap() > 0,
         "unknown outcome is not refunded"
     );
 }
@@ -596,7 +580,7 @@ async fn a_supplier_refusal_is_typed_and_refunded() {
         error,
         StorytellerError::Provider(ProviderFailureClass::Denied)
     );
-    assert_eq!(storyteller.remaining_tokens(), Some(20_000));
+    assert_eq!(storyteller.tokens_charged(), Some(0));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -612,7 +596,7 @@ async fn an_unknown_supplier_failure_is_typed_and_not_refunded() {
         .unwrap_err();
 
     assert!(matches!(error, StorytellerError::Provider(_)));
-    assert!(storyteller.remaining_tokens().unwrap() < 20_000);
+    assert!(storyteller.tokens_charged().unwrap() > 0);
 }
 
 fn batch_slots() -> Vec<Slot> {
@@ -1059,4 +1043,197 @@ fn the_cache_tells_a_restrained_prompt_from_a_mature_one() {
         )
     };
     assert_ne!(key(ContentRating::Mature), key(ContentRating::Restrained));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn two_identical_concurrent_text_requests_make_one_provider_call() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::ComputeResponse(Arc::new(|body| {
+            thread::sleep(Duration::from_millis(150));
+            (
+                200,
+                completed(body, json!({"reply": "One answer for both."}).to_string()),
+            )
+        })),
+        reply("Never asked for."),
+    ]);
+    let cache = cache_directory("concurrent");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), slots());
+
+    let (one, two) = (expression(&facts, &slots), expression(&facts, &slots));
+
+    let (first, second) = tokio::join!(storyteller.express(&one), storyteller.express(&two));
+
+    assert_eq!(first.unwrap()["reply"], "One answer for both.");
+    assert_eq!(second.unwrap()["reply"], "One answer for both.");
+    assert_eq!(endpoint.connections(), 1, "one call serves both requests");
+    assert_eq!(
+        storyteller.tokens_charged(),
+        Some(140),
+        "and is charged once"
+    );
+    let key = hex(&cache_key("gpt-test-model", &expression(&facts, &slots)));
+    let lines = crate::gameplay::actor::audit_lines_containing(&key[..32]);
+    for state in ["request", "ready"] {
+        assert!(
+            lines.iter().any(
+                |line| line.starts_with(&format!("RESOURCE {state} kind=text key="))
+                    && line.contains("subject=text:npc_reply")
+            ),
+            "no {state} line in {lines:?}"
+        );
+    }
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn two_identical_concurrent_batched_requests_make_one_provider_call() {
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::ComputeResponse(Arc::new(|body| {
+            thread::sleep(Duration::from_millis(150));
+            (
+                200,
+                completed(body, json!({"reply": "Shared batch."}).to_string()),
+            )
+        })),
+        reply("Never asked for."),
+    ]);
+    let cache = cache_directory("concurrent-partial");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let (facts, slots) = (facts(), slots());
+
+    let (one, two) = (expression(&facts, &slots), expression(&facts, &slots));
+
+    let (first, second) = tokio::join!(
+        storyteller.express_partial(&one),
+        storyteller.express_partial(&two)
+    );
+
+    assert_eq!(first.unwrap().accepted["reply"], "Shared batch.");
+    assert_eq!(second.unwrap().accepted["reply"], "Shared batch.");
+    assert_eq!(endpoint.connections(), 1);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[test]
+fn the_text_key_changes_with_everything_that_shapes_the_answer() {
+    let facts = json!({"npc": "Courier"});
+    let key = |slots: &[Slot], purpose: &'static str, profile: CallProfile| {
+        cache_key(
+            "m",
+            &Expression {
+                purpose,
+                facts: &facts,
+                slots,
+                style: "A line.",
+                profile,
+            },
+        )
+    };
+    let plain = [Slot::new("reply", 80)];
+    let base = key(&plain, "npc_reply", CallProfile::default());
+    assert_eq!(base, key(&plain, "npc_reply", CallProfile::default()));
+
+    let withheld = [Slot::new("reply", 80).withholding(vec!["Harbor Inn".to_owned()])];
+    let other_withheld = [Slot::new("reply", 80).withholding(vec!["Salt Quay".to_owned()])];
+    let speaking = [Slot::new("reply", 80).speaking(vec![SpokenRule::NoColons])];
+    let other_speaking = [Slot::new("reply", 80).speaking(vec![SpokenRule::NoSemicolons])];
+    let must_mention = [Slot::new("reply", 80).mentioning(vec!["Courier".to_owned()])];
+    let longer = [Slot::new("reply", 90)];
+    for (what, changed) in [
+        (
+            "withheld",
+            key(&withheld, "npc_reply", CallProfile::default()),
+        ),
+        (
+            "another withheld term",
+            key(&other_withheld, "npc_reply", CallProfile::default()),
+        ),
+        (
+            "speaking rules",
+            key(&speaking, "npc_reply", CallProfile::default()),
+        ),
+        (
+            "other speaking rules",
+            key(&other_speaking, "npc_reply", CallProfile::default()),
+        ),
+        (
+            "must mention",
+            key(&must_mention, "npc_reply", CallProfile::default()),
+        ),
+        ("length", key(&longer, "npc_reply", CallProfile::default())),
+        (
+            "purpose",
+            key(&plain, "line_cleanup", CallProfile::default()),
+        ),
+        (
+            "guidance",
+            key(
+                &plain,
+                "npc_reply",
+                CallProfile {
+                    guidance: "Be brief.",
+                    ..CallProfile::default()
+                },
+            ),
+        ),
+    ] {
+        assert_ne!(
+            base, changed,
+            "a changed {what} must be a new text resource"
+        );
+    }
+    let slower = CallProfile {
+        deadline: Some(Duration::from_secs(99)),
+        ..CallProfile::default()
+    };
+    assert_eq!(
+        base,
+        key(&plain, "npc_reply", slower),
+        "a deadline bounds the call and does not shape the text"
+    );
+}
+
+#[test]
+fn the_text_key_carries_the_instruction_and_the_prompt_version() {
+    let spec = TextSpec::of(
+        "m",
+        &expression(&json!({"a": 1}), &[Slot::new("reply", 80)]),
+    );
+
+    let canonical: Value = serde_json::from_str(&spec.canonical).unwrap();
+
+    assert_eq!(canonical["prompt_version"], PROMPT_VERSION);
+    assert_eq!(
+        canonical["instruction"],
+        hex(&Sha256::digest(INSTRUCTION.as_bytes())),
+        "editing the fixed instruction changes every key without a manual bump"
+    );
+    assert_eq!(spec.subject(), "text:npc_reply");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_cached_text_with_a_withheld_term_is_not_served() {
+    let endpoint = FakeEndpoint::start(vec![reply("Fresh and safe.")]);
+    let cache = cache_directory("withheld-cache");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let facts = facts();
+    let slots = vec![Slot::new("reply", 80).withholding(vec!["Salt Quay".to_owned()])];
+    let key = cache_key("gpt-test-model", &expression(&facts, &slots));
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(
+        cache.join(format!("{}.json", hex(&key))),
+        br#"{"reply":"Meet me at the Salt Quay."}"#,
+    )
+    .unwrap();
+
+    let values = storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap();
+
+    assert_eq!(values["reply"], "Fresh and safe.");
+    assert_eq!(endpoint.connections(), 1);
+    std::fs::remove_dir_all(cache).unwrap();
 }

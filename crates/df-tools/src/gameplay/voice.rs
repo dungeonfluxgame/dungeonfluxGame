@@ -3,23 +3,35 @@
 //! The server only voices text it put into an outgoing display view: each such line is
 //! registered under the SHA-256 key of its role and text, and `GET /gameplay/voice/<key>`
 //! serves the audio of a registered line. Audio comes from the on-disk cache when present,
-//! otherwise from one single-flight ElevenLabs call whose characters are charged to a
-//! per-run budget before the call and never refunded. Every refusal is an empty 503 or 404;
+//! otherwise from one single-flight ElevenLabs call whose characters are recorded on the hub's
+//! ledger when the call is sent and never given back. There is no cap. Every refusal is an empty
+//! 503 or 404;
 //! the browser then simply stays silent.
 //!
 //! The public key never includes a voice: the browser does not know voices. Each named
-//! speaker is cast to a roster voice at startup, and the on-disk cache name additionally
-//! includes the voice id, so a speaker recast to another voice never replays old audio.
+//! speaker is cast to a roster voice at startup. The audio itself is a `VoiceLine` resource of
+//! the generation hub: its key (and its file name in the cache) is the hash of the voice id, the
+//! role, the clip text, the model, the output format, the language, the clip split and the
+//! contract version ([`VoiceLineSpec`]), so a speaker recast to another voice, or a provider
+//! change of model, format or language, never replays old audio. The hub owns the state, the
+//! failure memory and the attempt limit, and the characters spoken are its ledger's
+//! `VoiceCharacter` account.
 mod casting;
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
+    collections::VecDeque,
     io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
+use super::{
+    resource_adapters::{Flights, Kit, KitSlot, Outcome as HubOutcome, Produced, Role},
+    resource_adapters::{hex, slug, spec_digest, write_atomic},
+    resources::{Chrome, Generated, Limits, ResourceFailure, ResourceKind, ResourceSpec, Unit},
+};
 use axum::{
     Router,
     extract::{Path as RoutePath, State},
@@ -37,15 +49,15 @@ use df_provider_api::{
     RequestUsage, TtsEventKind, TtsSemantics,
 };
 use df_providers::{
-    CandidateRouteId, ElevenSpeechBasis, ElevenSpeechRequest, NativeHttpLimits,
-    NativeSpeechProvider, SpeechOutputFormat, registered_speech_provider,
+    CandidateRouteId, ELEVEN_TTS_LANGUAGE, ELEVEN_TTS_MODEL, ElevenSpeechBasis,
+    ElevenSpeechRequest, NativeSpeechProvider, ProviderLimits, SpeechOutputFormat,
+    registered_speech_provider,
 };
+use df_render::art_contract::Neutral;
 use df_types::{
     LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
     UsageUnit,
 };
-use sha2::{Digest, Sha256};
-use tokio::sync::watch;
 
 use super::startup_configuration::{VoiceConfiguration, VoiceOff, VoiceSettings};
 use crate::voice_line::{MAXIMUM_VOICE_CLIP_CHARACTERS, VoiceLine, voice_segments};
@@ -141,19 +153,39 @@ pub(super) struct SpeakerCasting {
 /// difference: every variant is an empty 503.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Failure {
-    BudgetExhausted,
     Request,
     Provider,
+    TimedOut,
     Interrupted,
 }
 
 impl Failure {
     fn label(self) -> &'static str {
         match self {
-            Self::BudgetExhausted => "budget_exhausted",
             Self::Request => "request_refused",
             Self::Provider => "provider_failed",
+            Self::TimedOut => "timed_out",
             Self::Interrupted => "interrupted",
+        }
+    }
+
+    /// How the hub remembers it: a refused request would fail again, a provider failure may
+    /// pass.
+    fn to_hub(self) -> ResourceFailure {
+        match self {
+            Self::Request => ResourceFailure::Permanent("request_refused"),
+            Self::Provider => ResourceFailure::Transient("provider_failed"),
+            Self::TimedOut => ResourceFailure::TimedOut,
+            Self::Interrupted => ResourceFailure::Interrupted,
+        }
+    }
+
+    fn from_hub(failure: &ResourceFailure) -> Self {
+        match failure {
+            ResourceFailure::Permanent(_) => Self::Request,
+            ResourceFailure::Transient(_) => Self::Provider,
+            ResourceFailure::TimedOut => Self::TimedOut,
+            ResourceFailure::Interrupted => Self::Interrupted,
         }
     }
 }
@@ -192,11 +224,6 @@ impl Lines {
         self.order.push_back(key.clone());
         self.by_key.insert(key, line);
     }
-}
-
-struct Budget {
-    remaining: u32,
-    exhausted: bool,
 }
 
 /// The voice one line is spoken with.
@@ -250,27 +277,82 @@ impl Casting {
     }
 }
 
-/// On-disk cache file name: the voice id is part of the audio's identity, so recasting a
-/// speaker never replays audio made with another voice. Voice ids contain no newline.
-fn cache_file_name(voice_id: &str, line: &VoiceLine) -> String {
-    let mut hasher = Sha256::new();
-    for part in [voice_id, &line.role, &line.text] {
-        hasher.update(part.as_bytes());
-        hasher.update(b"\n");
-    }
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+/// One clip of speech as a `VoiceLine` resource: everything that decides what the audio sounds
+/// like. The hub key is the hash of these with the contract version, and the cache file is named
+/// by the whole digest of the same text, so changing any of them is a different clip. Voice ids
+/// contain no newline.
+#[derive(Clone, Debug)]
+pub(super) struct VoiceLineSpec {
+    voice_id: String,
+    role: String,
+    /// The clip's text: one segment of a long line (see `voice_segments`).
+    text: String,
+    model: String,
+    format: String,
+    language: String,
+    /// The most characters a clip holds, which decides where a long line is split.
+    clip_limit: usize,
 }
+
+impl VoiceLineSpec {
+    /// The clip `line` is spoken as by `voice_id`, with the provider's own model, format and
+    /// language.
+    pub(super) fn new(voice_id: &str, line: &VoiceLine) -> Self {
+        Self {
+            voice_id: voice_id.to_owned(),
+            role: line.role.clone(),
+            text: line.text.clone(),
+            model: ELEVEN_TTS_MODEL.to_owned(),
+            format: SpeechOutputFormat::Mp3At22050Hz32Kbps
+                .query_value()
+                .to_owned(),
+            language: ELEVEN_TTS_LANGUAGE.to_owned(),
+            clip_limit: MAXIMUM_VOICE_CLIP_CHARACTERS,
+        }
+    }
+
+    /// The cache file name and the key the clip is stored under.
+    pub(super) fn file_name(&self) -> String {
+        hex(&spec_digest(self))
+    }
+}
+
+impl ResourceSpec for VoiceLineSpec {
+    const KIND: ResourceKind = ResourceKind::VoiceLine;
+    const CONTRACT_VERSION: u32 = 1;
+
+    fn canonical(&self) -> String {
+        serde_json::json!({
+            "voice": self.voice_id,
+            "role": self.role,
+            "text": self.text,
+            "model": self.model,
+            "format": self.format,
+            "language": self.language,
+            "clip_limit": self.clip_limit,
+        })
+        .to_string()
+    }
+
+    fn subject(&self) -> String {
+        format!("voice:{}", slug(&self.role, 48))
+    }
+
+    fn chrome(&self) -> Chrome {
+        Neutral::Nothing
+    }
+}
+
+/// What a hub run of a clip hands the waiters: the audio, shared by every caller of one key.
+type Clip = HubOutcome<Bytes>;
 
 struct Synthesis {
     provider: NativeSpeechProvider,
     casting: Casting,
     cache_dir: PathBuf,
-    budget: Mutex<Budget>,
-    in_flight: Mutex<HashMap<String, watch::Receiver<Option<Outcome>>>>,
+    kit: KitSlot,
+    /// Identical concurrent asks for one clip share one provider call.
+    flights: Flights<Clip>,
 }
 
 enum Mode {
@@ -323,19 +405,11 @@ impl Voice {
         };
         let roster = Roster::load(&configuration.casting_path)
             .map_err(|error| io::Error::other(error.to_string()))?;
-        let limits = NativeHttpLimits {
-            connect_timeout: Duration::from_secs(5),
-            read_timeout: SYNTHESIS_DEADLINE,
-            total_timeout: SYNTHESIS_DEADLINE,
-            maximum_request_bytes: 16 * 1024,
-            maximum_response_bytes: MAXIMUM_AUDIO_BYTES,
-            maximum_header_bytes: 16 * 1024,
-            maximum_chunks: 4096,
-        };
+        let limits = ProviderLimits::new(SYNTHESIS_DEADLINE, 16 * 1024, MAXIMUM_AUDIO_BYTES);
         let provider = registered_speech_provider(
             CandidateRouteId::ElevenFlashV25Tts,
             configuration.credential.expose(),
-            limits,
+            limits.build(),
         )
         .map_err(|_| io::Error::other("voice provider configuration refused"))?;
         Self::new(configuration, provider, &roster, speakers, run_identifier)
@@ -364,7 +438,7 @@ impl Voice {
                 fallback: false,
             });
         let mut summary = format!(
-            "VOICE on narrator={} npc={} budget={} cache={}",
+            "VOICE on narrator={} npc={} cache={}",
             configuration.narrator_voice,
             match &forced {
                 Some(forced) => format!("forced:{}", forced.voice_id),
@@ -374,7 +448,6 @@ impl Voice {
                     roster.fallback.name
                 ),
             },
-            configuration.character_budget,
             configuration.cache_dir.display()
         );
         let mut by_speaker = HashMap::new();
@@ -427,12 +500,10 @@ impl Voice {
             provider,
             casting,
             cache_dir: configuration.cache_dir,
-            budget: Mutex::new(Budget {
-                remaining: configuration.character_budget,
-                exhausted: false,
-            }),
-            in_flight: Mutex::new(HashMap::new()),
+            kit: KitSlot::private(),
+            flights: Flights::default(),
         };
+        synthesis.configure();
         Ok(Self {
             inner: Arc::new(Inner {
                 lines: Mutex::new(Lines::default()),
@@ -442,6 +513,15 @@ impl Voice {
                 },
             }),
         })
+    }
+
+    /// Puts the voice on the server's generation hub, so its clips, failures and spend are listed
+    /// and invalidated with every other resource. A disabled voice has nothing to attach.
+    pub(super) fn attach_kit(&self, kit: &Kit) {
+        if let Mode::On { synthesis, .. } = &self.inner.mode {
+            synthesis.kit.attach(kit);
+            synthesis.configure();
+        }
     }
 
     /// The startup lines (the summary, then one per cast speaker); they never contain the
@@ -465,6 +545,7 @@ impl Voice {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn audio(&self, key: &str) -> Lookup {
         self.audio_part(key, 0, None).await
     }
@@ -611,52 +692,67 @@ impl Voice {
 }
 
 impl Synthesis {
+    /// Tunes the clip kind on the current kit: the kind's bounds, how a ready entry's file is
+    /// checked and how it is erased.
+    fn configure(&self) {
+        let kit = self.kit.get();
+        let checked = self.cache_dir.clone();
+        let erased = self.cache_dir.clone();
+        kit.tune(
+            ResourceKind::VoiceLine,
+            Limits::for_kind(ResourceKind::VoiceLine),
+            Arc::new(move |generated: &Generated| is_stored(&checked.join(&generated.handle))),
+            Arc::new(move |generated: &Generated| {
+                // Best effort: a clip that is already gone is what was asked for.
+                let _removed = std::fs::remove_file(erased.join(&generated.handle));
+            }),
+        );
+    }
+
+    /// The audio of one clip, and where it came from (`hit`, `in_flight` or `miss`).
     async fn audio(self: &Arc<Self>, line: VoiceLine) -> (Outcome, &'static str) {
         let voice = self.casting.voice_for(&line).clone();
-        let key = cache_file_name(&voice.voice_id, &line);
-        if let Some(bytes) = self.read_cached(&key).await {
-            return (Ok(bytes), "hit");
-        }
-        let (mut receiver, cache_result) = {
-            let mut flights = locked(&self.in_flight);
-            match flights.get(&key) {
-                Some(receiver) => (receiver.clone(), "in_flight"),
-                None => {
-                    let (sender, receiver) = watch::channel(None);
-                    flights.insert(key.clone(), receiver.clone());
-                    tokio::spawn(Arc::clone(self).fly(key, voice, line, sender));
-                    (receiver, "miss")
-                }
+        let kit = self.kit.get();
+        // A ready entry whose file vanished between the hub's check and the read is asked for
+        // again once.
+        let mut result = (Err(Failure::Interrupted), "miss");
+        for _ in 0..2 {
+            let spec = VoiceLineSpec::new(&voice.voice_id, &line);
+            let name = spec.file_name();
+            let work = Arc::clone(self).generate(name, voice.clone(), line.clone());
+            let (outcome, role) = kit.produce(&self.flights, spec, work).await;
+            let produced = match outcome {
+                Ok(produced) => produced,
+                Err(failure) => return (Err(Failure::from_hub(&failure)), "miss"),
+            };
+            let source = match (role, produced.from_store) {
+                (Role::Joined, _) => "in_flight",
+                (Role::Leader, true) => "hit",
+                (Role::Leader, false) => "miss",
+            };
+            let bytes = match produced.payload {
+                Some(bytes) => Some(bytes),
+                None => self.read_cached(&produced.generated.handle).await,
+            };
+            match bytes {
+                Some(bytes) => return (Ok(bytes), source),
+                None => result = (Err(Failure::Provider), source),
             }
-        };
-        let outcome = receiver
-            .wait_for(Option::is_some)
-            .await
-            .map(|finished| finished.clone().unwrap_or(Err(Failure::Interrupted)))
-            .unwrap_or(Err(Failure::Interrupted));
-        (outcome, cache_result)
+        }
+        result
     }
 
-    /// The one task of a cache key (voice, role and text). Callers that go away do not cancel
-    /// it: its charge is already spent, so its audio is finished and cached for the next
-    /// request.
-    async fn fly(
-        self: Arc<Self>,
-        key: String,
-        voice: ChosenVoice,
-        line: VoiceLine,
-        sender: watch::Sender<Option<Outcome>>,
-    ) {
-        let outcome = self.produce(&key, &voice, &line).await;
-        locked(&self.in_flight).remove(&key);
-        // No receiver left means every requester disconnected; the cache holds the result.
-        sender.send_replace(Some(outcome));
-    }
-
-    async fn produce(&self, key: &str, voice: &ChosenVoice, line: &VoiceLine) -> Outcome {
-        // A flight that finished between the caller's cache check and this one wrote it.
-        if let Some(bytes) = self.read_cached(key).await {
-            return Ok(bytes);
+    /// The one run of a clip: the stored audio when the store has it, otherwise one paid
+    /// synthesis. Callers that go away do not cancel it: its charge is already spent, so its
+    /// audio is finished and stored for the next request.
+    async fn generate(self: Arc<Self>, name: String, voice: ChosenVoice, line: VoiceLine) -> Clip {
+        // A run that finished before this one started stored it.
+        if let Some(bytes) = self.read_cached(&name).await {
+            return Ok(Produced {
+                generated: Generated::new(name),
+                payload: Some(bytes),
+                from_store: true,
+            });
         }
         let context = OperationContext {
             trace_parent: String::new(),
@@ -670,26 +766,44 @@ impl Synthesis {
                 ("gameplay.voice.fallback", voice.fallback.to_string()),
             ],
         );
-        let outcome = self.synthesize(key, voice, line).await;
+        let outcome = self.synthesize(&name, &voice, &line).await;
         span.finish_unmeasured(match &outcome {
             Ok((_, true)) => "synthesized",
             Ok((_, false)) => "synthesized_uncached",
             Err(failure) => failure.label(),
         });
-        outcome.map(|(bytes, _)| bytes)
+        match outcome {
+            Ok((bytes, stored)) => Ok(Produced {
+                generated: Generated {
+                    handle: name,
+                    note: if stored {
+                        String::new()
+                    } else {
+                        "uncached".to_owned()
+                    },
+                },
+                payload: Some(bytes),
+                from_store: false,
+            }),
+            Err(failure) => Err(failure.to_hub()),
+        }
     }
 
-    /// Charges first, calls the provider once and caches the audio; the boolean tells
-    /// whether the cache write succeeded.
+    /// Builds the request, charges its characters, calls the provider once and stores the audio;
+    /// the boolean tells whether the store write succeeded.
     async fn synthesize(
         &self,
         key: &str,
         voice: &ChosenVoice,
         line: &VoiceLine,
     ) -> Result<(Bytes, bool), Failure> {
-        let characters = u32::try_from(line.text.chars().count()).map_err(|_| Failure::Request)?;
-        self.charge(characters)?;
-        let audio = self.request_audio(&voice.voice_id, line).await?;
+        let characters = u64::try_from(line.text.chars().count()).map_err(|_| Failure::Request)?;
+        // A request the contract refuses is found before anything is charged.
+        let (request, current) = speech_request(&voice.voice_id, line)?;
+        // The call is about to be sent: spend is kept whatever the outcome, since a call whose
+        // result is unknown may still have been billed.
+        self.kit.get().charge(Unit::VoiceCharacter, characters);
+        let audio = self.send(&request, &current).await?;
         if audio.is_empty() || audio.len() > MAXIMUM_AUDIO_BYTES {
             return Err(Failure::Provider);
         }
@@ -698,49 +812,18 @@ impl Synthesis {
         Ok((audio, stored))
     }
 
-    /// Spend is committed before the call and kept whatever the outcome: a call whose
-    /// result is unknown may still have been billed.
-    fn charge(&self, characters: u32) -> Result<(), Failure> {
-        let mut budget = locked(&self.budget);
-        if budget.exhausted || characters > budget.remaining {
-            if !budget.exhausted {
-                budget.exhausted = true;
-                println!("VOICE budget exhausted; no further lines will be synthesized");
-            }
-            return Err(Failure::BudgetExhausted);
-        }
-        budget.remaining -= characters;
-        Ok(())
-    }
-
-    async fn request_audio(&self, voice: &str, line: &VoiceLine) -> Result<Vec<u8>, Failure> {
-        let characters = line.text.chars().count();
-        let current = speech_binding(voice, line)?;
-        let request = ElevenSpeechRequest::new(
-            speech_binding(voice, line)?,
-            line.text.as_bytes(),
-            RequestUsage::new(
-                0,
-                Duration::ZERO,
-                Usage::new(characters as u128, UsageUnit::Character),
-            ),
-            RequestLimits::new(
-                4096,
-                0,
-                Duration::ZERO,
-                Usage::new(MAXIMUM_LINE_CHARACTERS as u128, UsageUnit::Character),
-            )
-            .map_err(|_| Failure::Request)?,
-            owner(&current),
-        )
-        .map_err(|_| Failure::Request)?;
+    async fn send(
+        &self,
+        request: &ElevenSpeechRequest,
+        current: &RequestBinding<ElevenSpeechBasis>,
+    ) -> Result<Vec<u8>, Failure> {
         let prepared = self
             .provider
-            .speak(&request, owner(&current), std::future::pending())
+            .speak(request, owner(current), std::future::pending())
             .await
             .map_err(|_| Failure::Provider)?;
         let events = prepared
-            .complete(owner(&current))
+            .complete(owner(current))
             .map_err(|_| Failure::Provider)?;
         events
             .into_iter()
@@ -760,38 +843,66 @@ impl Synthesis {
             .flatten()
     }
 
-    /// Writes a temporary file beside the target and renames it into place so a reader
-    /// never sees a partial file.
+    /// Writes the audio through the shared atomic write so a reader never sees a partial file.
     async fn store(&self, key: &str, audio: Bytes) -> io::Result<()> {
-        let target = self.cache_dir.join(key);
-        let staging = self
-            .cache_dir
-            .join(format!(".{key}.{}.tmp", std::process::id()));
-        tokio::task::spawn_blocking(move || write_cache_file(&staging, &target, &audio))
+        let directory = self.cache_dir.clone();
+        let name = key.to_owned();
+        tokio::task::spawn_blocking(move || write_cache_file(&directory, &name, &audio))
             .await
             .map_err(|_| io::Error::other("voice cache write task failed"))?
     }
 }
 
-fn read_cache_file(path: &Path) -> Option<Bytes> {
+/// The provider request for one clip, checked against the contract, and the binding it was
+/// checked against.
+fn speech_request(
+    voice: &str,
+    line: &VoiceLine,
+) -> Result<(ElevenSpeechRequest, RequestBinding<ElevenSpeechBasis>), Failure> {
+    let characters = line.text.chars().count();
+    let current = speech_binding(voice, line)?;
+    let request = ElevenSpeechRequest::new(
+        speech_binding(voice, line)?,
+        line.text.as_bytes(),
+        RequestUsage::new(
+            0,
+            Duration::ZERO,
+            Usage::new(characters as u128, UsageUnit::Character),
+        ),
+        RequestLimits::new(
+            4096,
+            0,
+            Duration::ZERO,
+            Usage::new(MAXIMUM_LINE_CHARACTERS as u128, UsageUnit::Character),
+        )
+        .map_err(|_| Failure::Request)?,
+        owner(&current),
+    )
+    .map_err(|_| Failure::Request)?;
+    Ok((request, current))
+}
+
+/// Whether a stored clip is a bounded, non-empty regular file.
+fn is_stored(path: &Path) -> bool {
+    stored_length(path).is_some()
+}
+
+fn stored_length(path: &Path) -> Option<usize> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     let length = usize::try_from(metadata.len()).ok()?;
-    if !metadata.is_file() || length == 0 || length > MAXIMUM_AUDIO_BYTES {
-        return None;
-    }
+    (metadata.is_file() && length != 0 && length <= MAXIMUM_AUDIO_BYTES).then_some(length)
+}
+
+fn read_cache_file(path: &Path) -> Option<Bytes> {
+    stored_length(path)?;
     std::fs::read(path).ok().map(Bytes::from)
 }
 
-fn write_cache_file(staging: &Path, target: &Path, audio: &[u8]) -> io::Result<()> {
+fn write_cache_file(directory: &Path, name: &str, audio: &[u8]) -> io::Result<()> {
     if audio.is_empty() {
         return Err(io::Error::other("empty voice audio is never cached"));
     }
-    let written = std::fs::write(staging, audio).and_then(|()| std::fs::rename(staging, target));
-    if written.is_err() {
-        // Best effort: a leftover staging file is the only residue of a failed write.
-        let _removed = std::fs::remove_file(staging);
-    }
-    written
+    write_atomic(directory, name, audio)
 }
 
 fn owner(current: &RequestBinding<ElevenSpeechBasis>) -> RequestOwnerState<'_, ElevenSpeechBasis> {
@@ -830,7 +941,7 @@ fn speech_binding(
             modality: RequestModality::Tts,
             source: ContentDigest(digest),
             rights_revision: label("local-demo-voice")?,
-            output_format_revision: label("mp3_22050_32")?,
+            output_format_revision: label(SpeechOutputFormat::Mp3At22050Hz32Kbps.query_value())?,
             semantic: TtsSemantics {
                 locale: LocaleTag::parse("en-US").map_err(refused)?,
                 text: line.text.clone(),
@@ -1015,6 +1126,7 @@ mod tests {
     };
     use super::casting::fixtures::test_roster;
     use super::*;
+    use crate::gameplay::resources::{Invalidate, ResourceKey};
 
     const AUDIO: &[u8] = b"ID3 fake mpeg audio";
 
@@ -1133,10 +1245,9 @@ mod tests {
         NEXT.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn configuration(cache: &Path, budget: u32) -> VoiceConfiguration {
+    fn configuration(cache: &Path) -> VoiceConfiguration {
         VoiceConfiguration {
             credential: VoiceCredential::for_test("test-credential"),
-            character_budget: budget,
             cache_dir: cache.to_path_buf(),
             narrator_voice: "narratorvoice".to_owned(),
             npc_voice_override: None,
@@ -1144,8 +1255,8 @@ mod tests {
         }
     }
 
-    fn voice_with(fake: &FakeEleven, cache: &Path, budget: u32) -> Voice {
-        voice_cast(fake, configuration(cache, budget), &[], "0x1")
+    fn voice_with(fake: &FakeEleven, cache: &Path) -> Voice {
+        voice_cast(fake, configuration(cache), &[], "0x1")
     }
 
     fn voice_cast(
@@ -1154,15 +1265,10 @@ mod tests {
         speakers: &[SpeakerCasting],
         run_identifier: &str,
     ) -> Voice {
-        let limits = NativeHttpLimits {
-            connect_timeout: Duration::from_secs(1),
-            read_timeout: Duration::from_secs(5),
-            total_timeout: Duration::from_secs(5),
-            maximum_request_bytes: 16_384,
-            maximum_response_bytes: 65_536,
-            maximum_header_bytes: 4096,
-            maximum_chunks: 4096,
-        };
+        let limits = ProviderLimits::new(Duration::from_secs(5), 16_384, 65_536)
+            .connect_timeout(Duration::from_secs(1))
+            .header_bytes(4096)
+            .build();
         let provider = registered_speech_provider(
             CandidateRouteId::ElevenFlashV25Tts,
             "test-credential",
@@ -1193,11 +1299,24 @@ mod tests {
         line.key()
     }
 
-    fn remaining(voice: &Voice) -> u32 {
+    /// The characters charged on the hub's ledger so far.
+    fn charged(voice: &Voice) -> u64 {
         match &voice.inner.mode {
-            Mode::On { synthesis, .. } => locked(&synthesis.budget).remaining,
+            Mode::On { synthesis, .. } => {
+                synthesis
+                    .kit
+                    .get()
+                    .hub()
+                    .ledger()
+                    .snapshot(Unit::VoiceCharacter)
+                    .committed
+            }
             Mode::Off(_) => 0,
         }
+    }
+
+    fn file_name(voice_id: &str, line: &VoiceLine) -> String {
+        VoiceLineSpec::new(voice_id, line).file_name()
     }
 
     fn display_message(narration: &str) -> rpc::ViewMessage {
@@ -1216,7 +1335,7 @@ mod tests {
     async fn unregistered_key_is_not_found() {
         let cache = scratch("unregistered");
         let fake = FakeEleven::start(Duration::ZERO, true);
-        let voice = voice_with(&fake, &cache, 1000);
+        let voice = voice_with(&fake, &cache);
 
         let response = serve_line(State(voice), RoutePath("0".repeat(64)), HeaderMap::new()).await;
 
@@ -1228,7 +1347,7 @@ mod tests {
     async fn registered_line_is_synthesized_once_then_served_from_cache() {
         let cache = scratch("once");
         let fake = FakeEleven::start(Duration::ZERO, true);
-        let voice = voice_with(&fake, &cache, 1000);
+        let voice = voice_with(&fake, &cache);
         let key = register(&voice, &narrator("The lanterns sway."));
 
         let first = serve_line(
@@ -1253,7 +1372,7 @@ mod tests {
         assert_eq!(body.as_ref(), AUDIO);
         assert_eq!(second.status(), StatusCode::OK);
         assert_eq!(fake.calls(), 1);
-        let name = cache_file_name("narratorvoice", &narrator("The lanterns sway."));
+        let name = file_name("narratorvoice", &narrator("The lanterns sway."));
         assert_eq!(std::fs::read(cache.join(name)).unwrap(), AUDIO);
         let first_target = fake.targets.lock().unwrap()[0].clone();
         assert!(first_target.contains("/v1/text-to-speech/narratorvoice/stream"));
@@ -1263,7 +1382,7 @@ mod tests {
     async fn long_line_parts_are_individually_addressable_and_cached() {
         let cache = scratch("long-line-parts");
         let fake = FakeEleven::start(Duration::ZERO, true);
-        let voice = voice_with(&fake, &cache, 1000);
+        let voice = voice_with(&fake, &cache);
         let line = narrator(&format!("{}. {}.", "a".repeat(350), "b".repeat(300)));
         let key = register(&voice, &line);
 
@@ -1294,27 +1413,27 @@ mod tests {
         let cache = scratch("restart");
         let fake = FakeEleven::start(Duration::ZERO, true);
         let line = narrator("Rain on the slates.");
-        let first_run = voice_with(&fake, &cache, 1000);
+        let first_run = voice_with(&fake, &cache);
         let key = register(&first_run, &line);
         assert_eq!(
             first_run.audio(&key).await,
             Lookup::Audio(Bytes::from_static(AUDIO))
         );
 
-        let second_run = voice_with(&fake, &cache, 1000);
+        let second_run = voice_with(&fake, &cache);
         register(&second_run, &line);
         let replay = second_run.audio(&key).await;
 
         assert_eq!(replay, Lookup::Audio(Bytes::from_static(AUDIO)));
         assert_eq!(fake.calls(), 1);
-        assert_eq!(remaining(&second_run), 1000);
+        assert_eq!(charged(&second_run), 0, "a stored line costs nothing");
     }
 
     #[tokio::test]
     async fn concurrent_requests_share_one_provider_call() {
         let cache = scratch("flight");
         let fake = FakeEleven::start(Duration::from_millis(250), true);
-        let voice = voice_with(&fake, &cache, 1000);
+        let voice = voice_with(&fake, &cache);
         let text = "A bell tolls twice.";
         let key = register(&voice, &narrator(text));
 
@@ -1329,14 +1448,14 @@ mod tests {
             assert_eq!(lookup, Lookup::Audio(Bytes::from_static(AUDIO)));
         }
         assert_eq!(fake.calls(), 1);
-        assert_eq!(remaining(&voice), 1000 - text.chars().count() as u32);
+        assert_eq!(charged(&voice), text.chars().count() as u64);
     }
 
     #[tokio::test]
-    async fn budget_is_charged_before_the_call_and_kept_when_the_provider_fails() {
+    async fn characters_are_charged_when_the_call_is_sent_and_kept_when_the_provider_fails() {
         let cache = scratch("charge");
         let fake = FakeEleven::start(Duration::ZERO, false);
-        let voice = voice_with(&fake, &cache, 40);
+        let voice = voice_with(&fake, &cache);
         let text = "Thirty characters of narration";
         assert_eq!(text.chars().count(), 30);
         let key = register(&voice, &narrator(text));
@@ -1345,58 +1464,35 @@ mod tests {
 
         assert_eq!(failed, Lookup::Unavailable);
         assert_eq!(fake.calls(), 1);
-        assert_eq!(remaining(&voice), 10);
+        assert_eq!(charged(&voice), 30);
     }
 
     #[tokio::test]
-    async fn exhausted_budget_is_unavailable_without_a_provider_call() {
-        let cache = scratch("exhausted");
+    async fn no_line_is_refused_for_cost_however_much_has_been_spoken() {
+        let cache = scratch("no-cap");
         let fake = FakeEleven::start(Duration::ZERO, true);
-        let voice = voice_with(&fake, &cache, 20);
+        let voice = voice_with(&fake, &cache);
         let first = register(&voice, &narrator("Exactly twenty chars"));
         let second = register(&voice, &narrator("Another line"));
 
-        let spent = voice.audio(&first).await;
-        let refused = voice.audio(&second).await;
+        let spoken = voice.audio(&first).await;
+        let also_spoken = voice.audio(&second).await;
 
-        assert_eq!(spent, Lookup::Audio(Bytes::from_static(AUDIO)));
-        assert_eq!(refused, Lookup::Unavailable);
-        assert_eq!(fake.calls(), 1);
-        assert_eq!(remaining(&voice), 0);
-        let response = serve_line(State(voice), RoutePath(second), HeaderMap::new()).await;
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert!(
-            axum::body::to_bytes(response.into_body(), 16)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn cached_line_is_served_after_the_budget_is_exhausted() {
-        let cache = scratch("cached-after-exhausted");
-        let fake = FakeEleven::start(Duration::ZERO, true);
-        let voice = voice_with(&fake, &cache, 20);
-        let key = register(&voice, &narrator("Exactly twenty chars"));
-        let other = register(&voice, &narrator("Different"));
-        assert_eq!(
-            voice.audio(&key).await,
-            Lookup::Audio(Bytes::from_static(AUDIO))
-        );
-        assert_eq!(voice.audio(&other).await, Lookup::Unavailable);
-
-        let replay = voice.audio(&key).await;
-
+        assert_eq!(spoken, Lookup::Audio(Bytes::from_static(AUDIO)));
+        assert_eq!(also_spoken, Lookup::Audio(Bytes::from_static(AUDIO)));
+        assert_eq!(fake.calls(), 2);
+        assert_eq!(charged(&voice), 20 + 12);
+        let replay = voice.audio(&first).await;
         assert_eq!(replay, Lookup::Audio(Bytes::from_static(AUDIO)));
-        assert_eq!(fake.calls(), 1);
+        assert_eq!(fake.calls(), 2, "a stored line is replayed for nothing");
+        assert_eq!(charged(&voice), 32);
     }
 
     #[tokio::test]
     async fn provider_failure_writes_no_cache_file() {
         let cache = scratch("failure");
         let fake = FakeEleven::start(Duration::ZERO, false);
-        let voice = voice_with(&fake, &cache, 1000);
+        let voice = voice_with(&fake, &cache);
         let key = register(&voice, &narrator("The seal cracks."));
 
         let response = serve_line(State(voice), RoutePath(key.clone()), HeaderMap::new()).await;
@@ -1445,7 +1541,7 @@ mod tests {
         let fake = FakeEleven::start(Duration::ZERO, true);
         let mut courier = speaker("Courier", Gender::She, Some(Age::Adult), "warm");
         courier.actor_ids = vec!["courier".into()];
-        let voice = voice_cast(&fake, configuration(&cache, 1000), &[courier], "0x7");
+        let voice = voice_cast(&fake, configuration(&cache), &[courier], "0x7");
         let mut display = rpc::DisplayGameplayView {
             journey: Some(rpc::JourneyView {
                 speaker: "courier".into(),
@@ -1531,7 +1627,7 @@ mod tests {
             speaker("Wren", Gender::She, Some(Age::Elder), "warm older woman"),
             speaker("Garrick", Gender::He, Some(Age::Adult), "gruff man"),
         ];
-        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+        let voice = voice_cast(&fake, configuration(&cache), &speakers, "0x7");
 
         let wren = voice_id_requested(&voice, &fake, &npc("Wren", "Welcome in.")).await;
         let garrick = voice_id_requested(&voice, &fake, &npc("Garrick", "Move along.")).await;
@@ -1548,7 +1644,7 @@ mod tests {
             speaker("Marl", Gender::They, None, "calm"),
             speaker("Skrit", Gender::It, None, "raspy"),
         ];
-        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+        let voice = voice_cast(&fake, configuration(&cache), &speakers, "0x7");
 
         let marl = voice_id_requested(&voice, &fake, &npc("Marl", "Hello.")).await;
         let skrit = voice_id_requested(&voice, &fake, &npc("Skrit", "Hiss.")).await;
@@ -1565,7 +1661,7 @@ mod tests {
             speaker("Wren", Gender::She, Some(Age::Young), "warm"),
             speaker("Brisa", Gender::She, Some(Age::Young), "warm"),
         ];
-        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+        let voice = voice_cast(&fake, configuration(&cache), &speakers, "0x7");
 
         let wren = voice_id_requested(&voice, &fake, &npc("Wren", "Welcome in.")).await;
         let brisa = voice_id_requested(&voice, &fake, &npc("Brisa", "Welcome in.")).await;
@@ -1578,7 +1674,7 @@ mod tests {
         let cache = scratch("fallback");
         let fake = FakeEleven::start(Duration::ZERO, true);
         let speakers = [speaker("Wren", Gender::She, None, "")];
-        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+        let voice = voice_cast(&fake, configuration(&cache), &speakers, "0x7");
 
         let stranger = voice_id_requested(&voice, &fake, &npc("Stranger", "Who goes?")).await;
 
@@ -1600,7 +1696,7 @@ mod tests {
         let cache = scratch("case");
         let fake = FakeEleven::start(Duration::ZERO, true);
         let speakers = [speaker("Wren", Gender::She, None, "")];
-        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+        let voice = voice_cast(&fake, configuration(&cache), &speakers, "0x7");
 
         let loud = voice_id_requested(&voice, &fake, &npc(" WREN ", "Hello.")).await;
         let narration = voice_id_requested(&voice, &fake, &narrator("Rain falls.")).await;
@@ -1613,7 +1709,7 @@ mod tests {
     async fn the_forced_npc_voice_speaks_every_named_speaker() {
         let cache = scratch("forced");
         let fake = FakeEleven::start(Duration::ZERO, true);
-        let mut forced = configuration(&cache, 1000);
+        let mut forced = configuration(&cache);
         forced.npc_voice_override = Some("npcvoice".to_owned());
         let speakers = [speaker("Wren", Gender::She, None, "")];
         let voice = voice_cast(&fake, forced, &speakers, "0x7");
@@ -1635,7 +1731,7 @@ mod tests {
             speaker("Wren", Gender::She, Some(Age::Elder), "warm"),
             speaker("Odo", Gender::He, None, ""),
         ];
-        let voice = voice_cast(&fake, configuration(&cache, 1000), &speakers, "0x7");
+        let voice = voice_cast(&fake, configuration(&cache), &speakers, "0x7");
 
         let text = voice.startup_line();
 
@@ -1654,7 +1750,7 @@ mod tests {
         let line = npc("Wren", "Welcome in.");
         let first = voice_cast(
             &fake,
-            configuration(&cache, 1000),
+            configuration(&cache),
             &[speaker("Wren", Gender::She, Some(Age::Young), "")],
             "0x7",
         );
@@ -1663,7 +1759,7 @@ mod tests {
 
         let recast = voice_cast(
             &fake,
-            configuration(&cache, 1000),
+            configuration(&cache),
             &[speaker("Wren", Gender::She, Some(Age::Elder), "")],
             "0x7",
         );
@@ -1676,26 +1772,169 @@ mod tests {
             2,
             "the old voice's cached audio must not be replayed"
         );
-        assert!(cache.join(cache_file_name(&first_voice, &line)).is_file());
-        assert!(cache.join(cache_file_name(&second_voice, &line)).is_file());
+        assert!(cache.join(file_name(&first_voice, &line)).is_file());
+        assert!(cache.join(file_name(&second_voice, &line)).is_file());
         assert!(!cache.join(&public_key).exists());
     }
 
     #[test]
-    fn cache_names_are_the_sha256_of_voice_role_and_text() {
+    fn the_voice_key_changes_with_the_voice_role_text_model_format_language_or_clip_split() {
         let line = npc("Wren", "Welcome in.");
+        let base = VoiceLineSpec::new("abc", &line);
+        let key = |spec: &VoiceLineSpec| (spec.file_name(), ResourceKey::of(spec));
+        let (base_name, base_key) = key(&base);
+        assert_eq!(base_name.len(), 64);
+        assert!(base_name.starts_with(base_key.as_str()));
+        assert_ne!(
+            base_name,
+            line.key(),
+            "the cache name is not the public key"
+        );
+        assert_eq!(key(&VoiceLineSpec::new("abc", &line)).0, base_name);
 
-        let name = cache_file_name("abc", &line);
+        let changed = [
+            ("voice", VoiceLineSpec::new("abd", &line)),
+            (
+                "role",
+                VoiceLineSpec::new("abc", &npc("Garrick", "Welcome in.")),
+            ),
+            (
+                "text",
+                VoiceLineSpec::new("abc", &npc("Wren", "Welcome back.")),
+            ),
+            (
+                "model",
+                VoiceLineSpec {
+                    model: "eleven_multilingual_v2".to_owned(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "format",
+                VoiceLineSpec {
+                    format: "mp3_44100_128".to_owned(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "language",
+                VoiceLineSpec {
+                    language: "fr".to_owned(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "clip split",
+                VoiceLineSpec {
+                    clip_limit: base.clip_limit + 100,
+                    ..base.clone()
+                },
+            ),
+        ];
+        for (what, spec) in changed {
+            let (name, hub_key) = key(&spec);
+            assert_ne!(name, base_name, "a changed {what} must be another file");
+            assert_ne!(
+                hub_key, base_key,
+                "a changed {what} must be another hub entry"
+            );
+        }
+        // The spec reads the provider's own model, language and format, so a change there changes
+        // the key without anyone remembering to bump a version.
+        assert_eq!(base.model, ELEVEN_TTS_MODEL);
+        assert_eq!(base.language, ELEVEN_TTS_LANGUAGE);
+        assert_eq!(base.format, "mp3_22050_32");
+    }
 
-        let mut expected = Sha256::new();
-        expected.update(b"abc\nnpc:Wren\nWelcome in.\n");
-        let expected: String = expected
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        assert_eq!(name, expected);
-        assert_ne!(name, line.key());
+    #[tokio::test]
+    async fn a_failed_line_is_not_retried_beyond_its_attempts_and_is_listed_by_the_hub() {
+        let cache = scratch("attempts");
+        let fake = FakeEleven::start(Duration::ZERO, false);
+        let voice = voice_with(&fake, &cache);
+        let key = register(&voice, &narrator("The seal cracks twice."));
+
+        let mut lookups = Vec::new();
+        for _ in 0..4 {
+            lookups.push(voice.audio(&key).await);
+        }
+
+        assert!(lookups.iter().all(|lookup| *lookup == Lookup::Unavailable));
+        assert_eq!(fake.calls(), 2, "two attempts, then the failure stands");
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice should be on");
+        };
+        let rows = synthesis
+            .kit
+            .get()
+            .hub()
+            .list(Some(ResourceKind::VoiceLine));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, "failed");
+        assert_eq!(rows[0].last_error, "provider_failed");
+        assert_eq!(rows[0].subject, "voice:narrator");
+        assert_eq!(
+            charged(&voice),
+            2 * "The seal cracks twice.".chars().count() as u64,
+            "each paid attempt is charged and none is refunded"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clip_is_a_voice_line_resource_with_resource_audit_lines_and_a_ledger_charge() {
+        let cache = scratch("resource-lines");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let voice = voice_with(&fake, &cache);
+        let line = narrator("A bell rings once over the quay.");
+        let key = register(&voice, &line);
+
+        assert_eq!(
+            voice.audio(&key).await,
+            Lookup::Audio(Bytes::from_static(AUDIO))
+        );
+
+        let hub_key = ResourceKey::of(&VoiceLineSpec::new("narratorvoice", &line));
+        let lines = crate::gameplay::actor::audit_lines_containing(hub_key.as_str());
+        assert!(
+            lines
+                .iter()
+                .any(|text| text.starts_with("RESOURCE request kind=voice_line")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|text| text.starts_with("RESOURCE ready kind=voice_line")
+                    && text.contains(&VoiceLineSpec::new("narratorvoice", &line).file_name())),
+            "{lines:?}"
+        );
+        assert_eq!(charged(&voice), line.text.chars().count() as u64);
+    }
+
+    #[tokio::test]
+    async fn invalidating_a_clip_erases_its_file_so_the_next_ask_speaks_it_again() {
+        let cache = scratch("invalidate");
+        let fake = FakeEleven::start(Duration::ZERO, true);
+        let voice = voice_with(&fake, &cache);
+        let line = narrator("The tide turns.");
+        let key = register(&voice, &line);
+        voice.audio(&key).await;
+        let Mode::On { synthesis, .. } = &voice.inner.mode else {
+            panic!("voice should be on");
+        };
+        let kit = synthesis.kit.get();
+        let name = VoiceLineSpec::new("narratorvoice", &line).file_name();
+        assert!(cache.join(&name).is_file());
+
+        let dropped = kit.invalidate(Invalidate::Subject("voice:narrator"));
+        let again = voice.audio(&key).await;
+
+        assert_eq!(dropped, 1);
+        assert_eq!(again, Lookup::Audio(Bytes::from_static(AUDIO)));
+        assert_eq!(
+            fake.calls(),
+            2,
+            "an invalidated clip is made again, not replayed"
+        );
     }
 
     #[test]
@@ -1704,9 +1943,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("voice-casting.json");
         std::fs::write(&path, br#"{"schema":"df-voice-casting/1"}"#).unwrap();
-        let mut malformed = configuration(&dir, 1000);
+        let mut malformed = configuration(&dir);
         malformed.casting_path = path;
-        let mut missing = configuration(&dir, 1000);
+        let mut missing = configuration(&dir);
         missing.casting_path = dir.join("absent.json");
 
         let malformed = Voice::start(VoiceSettings::On(malformed), &[], "0x1")
@@ -1808,7 +2047,6 @@ mod tests {
         VoiceInputs {
             credential: pick("ELEVENLABS_API_KEY"),
             mode: pick("DF_GAMEPLAY_VOICE"),
-            character_budget: pick("DF_GAMEPLAY_VOICE_CHAR_BUDGET"),
             cache_dir: pick("DF_GAMEPLAY_VOICE_CACHE"),
             narrator_voice: pick("DF_GAMEPLAY_VOICE_NARRATOR"),
             npc_voice: pick("DF_GAMEPLAY_VOICE_NPC"),
@@ -1833,7 +2071,6 @@ mod tests {
         let VoiceSettings::On(configuration) = settings else {
             panic!("voice should be on");
         };
-        assert_eq!(configuration.character_budget, 12_000);
         assert_eq!(
             configuration.cache_dir,
             PathBuf::from("artifacts/tmp/play/voice-cache")
@@ -1851,7 +2088,6 @@ mod tests {
     fn settings_read_every_override_and_off_wins_over_the_credential() {
         let overrides = [
             ("ELEVENLABS_API_KEY", "k"),
-            ("DF_GAMEPLAY_VOICE_CHAR_BUDGET", "300"),
             ("DF_GAMEPLAY_VOICE_CACHE", "/tmp/somewhere"),
             ("DF_GAMEPLAY_VOICE_NARRATOR", "narr_1"),
             ("DF_GAMEPLAY_VOICE_NPC", "npc-2"),
@@ -1860,7 +2096,6 @@ mod tests {
         let VoiceSettings::On(configuration) = voice_settings(inputs(&overrides)).unwrap() else {
             panic!("voice should be on");
         };
-        assert_eq!(configuration.character_budget, 300);
         assert_eq!(configuration.cache_dir, PathBuf::from("/tmp/somewhere"));
         assert_eq!(configuration.narrator_voice, "narr_1");
         assert_eq!(configuration.npc_voice_override.as_deref(), Some("npc-2"));
@@ -1881,8 +2116,6 @@ mod tests {
     fn settings_refuse_invalid_values_without_echoing_them() {
         for bad in [
             ("DF_GAMEPLAY_VOICE", "maybe"),
-            ("DF_GAMEPLAY_VOICE_CHAR_BUDGET", "lots"),
-            ("DF_GAMEPLAY_VOICE_CHAR_BUDGET", "1000001"),
             ("DF_GAMEPLAY_VOICE_NARRATOR", "../etc"),
             ("DF_GAMEPLAY_VOICE_NPC", "a b"),
         ] {

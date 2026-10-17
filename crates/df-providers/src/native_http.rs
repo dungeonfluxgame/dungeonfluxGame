@@ -17,6 +17,87 @@ pub struct NativeHttpLimits {
     pub maximum_chunks: usize,
 }
 
+/// The one way a caller states how a provider call is bounded: how long it may take, the largest
+/// request it sends and the largest response it keeps. The connect bound, the header bound and
+/// the chunk bound take the defaults every adapter used unless a call names its own, so no module
+/// restates the seven numbers of [`NativeHttpLimits`]. [`NativeHttpLimits`] stays the validated
+/// form the transport checks; this only builds it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderLimits {
+    total: Duration,
+    request_bytes: usize,
+    response_bytes: usize,
+    connect: Option<Duration>,
+    read: Option<Duration>,
+    header_bytes: usize,
+    chunks: usize,
+}
+
+impl ProviderLimits {
+    /// The connect bound defaults to five seconds, or the whole call when that is shorter.
+    const DEFAULT_CONNECT: Duration = Duration::from_secs(5);
+    const DEFAULT_HEADER_BYTES: usize = 16 * 1024;
+    const DEFAULT_CHUNKS: usize = 4096;
+
+    /// A call that may take `total` end to end, send `request_bytes` and keep `response_bytes`.
+    pub const fn new(total: Duration, request_bytes: usize, response_bytes: usize) -> Self {
+        Self {
+            total,
+            request_bytes,
+            response_bytes,
+            connect: None,
+            read: None,
+            header_bytes: Self::DEFAULT_HEADER_BYTES,
+            chunks: Self::DEFAULT_CHUNKS,
+        }
+    }
+
+    /// Replaces the default connect bound.
+    pub const fn connect_timeout(mut self, connect: Duration) -> Self {
+        self.connect = Some(connect);
+        self
+    }
+
+    /// Replaces the read bound, which otherwise equals the total.
+    pub const fn read_timeout(mut self, read: Duration) -> Self {
+        self.read = Some(read);
+        self
+    }
+
+    /// Replaces the largest response header block kept.
+    pub const fn header_bytes(mut self, bytes: usize) -> Self {
+        self.header_bytes = bytes;
+        self
+    }
+
+    /// Replaces the most body chunks read.
+    pub const fn chunks(mut self, chunks: usize) -> Self {
+        self.chunks = chunks;
+        self
+    }
+
+    /// The transport form. `NativeHttp` still validates every bound when it is constructed.
+    pub fn build(self) -> NativeHttpLimits {
+        NativeHttpLimits {
+            connect_timeout: self
+                .connect
+                .unwrap_or_else(|| Self::DEFAULT_CONNECT.min(self.total)),
+            read_timeout: self.read.unwrap_or(self.total),
+            total_timeout: self.total,
+            maximum_request_bytes: self.request_bytes,
+            maximum_response_bytes: self.response_bytes,
+            maximum_header_bytes: self.header_bytes,
+            maximum_chunks: self.chunks,
+        }
+    }
+}
+
+impl From<ProviderLimits> for NativeHttpLimits {
+    fn from(limits: ProviderLimits) -> Self {
+        limits.build()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeHttpRefusal {
     InvalidLimits,

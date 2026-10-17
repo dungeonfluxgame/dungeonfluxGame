@@ -1,11 +1,12 @@
 //! Native checks of the home video: the cache key, the byte ranges the route serves, and the flight
 //! against a loopback fal fake. The fake counts what the adapter sends, so "one submit per
-//! painting", "the budget is charged before the submit" and "a cached loop costs nothing" are
+//! painting", "a clip is charged when it is sent" and "a cached loop costs nothing" are
 //! checked against the traffic itself, not against the engine's own bookkeeping.
 use super::home_video::{
-    self, Endpoints, LoopView, Span, clip_key, clip_key_with, respond, scene_test_engine, span_for,
-    test_engine,
+    self, Endpoints, LoopView, Span, clip_key, respond, scene_clip_key, scene_spec_for_test,
+    scene_test_engine, span_for, test_engine,
 };
+use super::resources::{ResourceKey, ResourceKind, ResourceSpec};
 use super::rpc;
 use axum::{
     body::to_bytes,
@@ -20,8 +21,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PAINTING: &str = "assets/ui/generated/scene-thistledown-farm-arrival";
-const OTHER: &str = "assets/ui/generated/scene-reedmoor-boardwalk-arrival";
+const PAINTING: &str = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
+const OTHER: &str = "assets/ui/generated/scene-salt-quay-candid-documentary-photo";
 
 fn asset_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui")
@@ -44,6 +45,8 @@ enum Scenario {
     Refused,
     /// The queue never finishes.
     NeverFinishes,
+    /// The submit is refused over HTTP with a validation body, as fal answers a bad field.
+    Rejected,
 }
 
 struct Fake {
@@ -127,7 +130,14 @@ fn answer(
         lines.push(request_line.clone());
     }
     let path = request_line.split_whitespace().nth(1).unwrap_or_default();
-    let (content_type, payload): (&str, Vec<u8>) = if path.starts_with("/v1/models/pricing") {
+    let rejected = scenario == Scenario::Rejected && request_line.starts_with("POST ");
+    let (content_type, payload): (&str, Vec<u8>) = if rejected {
+        (
+            "application/json",
+            br#"{"detail":[{"msg":"end_image_url is not accepted for this model","loc":["body","end_image_url"],"input":"fixture-private-key"}]}"#
+                .to_vec(),
+        )
+    } else if path.starts_with("/v1/models/pricing") {
         (
             "application/json",
             br#"{"prices":[{"endpoint_id":"fal-ai/kling-video/o1/image-to-video","unit_price":0.112,"unit":"seconds","currency":"USD"}],"next_cursor":null,"has_more":false}"#
@@ -149,7 +159,7 @@ fn answer(
                 r#"{"status":"COMPLETED","error_type":"RunnerError","error":"content refused"}"#
             }
             Scenario::NeverFinishes => r#"{"status":"IN_QUEUE","queue_position":0}"#,
-            Scenario::MalformedClip => r#"{"status":"COMPLETED"}"#,
+            Scenario::MalformedClip | Scenario::Rejected => r#"{"status":"COMPLETED"}"#,
         };
         ("application/json", status.as_bytes().to_vec())
     } else if path.ends_with("/req-home-video-1") {
@@ -162,8 +172,13 @@ fn answer(
     } else {
         ("application/json", b"{}".to_vec())
     };
+    let status = if rejected {
+        "422 Unprocessable Entity"
+    } else {
+        "200 OK"
+    };
     let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
     );
     stream.write_all(head.as_bytes())?;
@@ -219,35 +234,65 @@ fn scene_still() -> Vec<u8> {
 }
 
 #[test]
-fn the_clip_key_changes_with_the_still_the_model_the_prompt_the_duration_and_the_recipe() {
-    let still = b"a still";
-    let base = clip_key_with(still, "model-a", "prompt", 5, "recipe-1");
+fn a_clip_key_changes_with_the_still_the_prompt_the_model_the_duration_the_size_and_the_recipe() {
+    let plate = b"a plate";
+    let key = |plate: &[u8], prompt: &str, edit: fn(&mut home_video::clip_spec::ClipRecipe)| {
+        let spec = scene_spec_for_test("plate", plate, prompt, edit);
+        (
+            home_video::clip_spec::file_key(&spec),
+            ResourceKey::of(&spec),
+        )
+    };
+    let (base, base_key) = key(plate, "prompt", |_| {});
     assert_eq!(base.len(), 64, "a SHA-256 in lowercase hex");
+    assert!(
+        base.starts_with(base_key.as_str()),
+        "the file name and the hub key are one identity"
+    );
+    assert_eq!(base, key(plate, "prompt", |_| {}).0);
+    for (name, changed) in [
+        ("still", key(b"another plate", "prompt", |_| {})),
+        ("prompt", key(plate, "prompt!", |_| {})),
+        (
+            "model",
+            key(plate, "prompt", |recipe| {
+                recipe.model = "model-b".to_owned()
+            }),
+        ),
+        (
+            "duration",
+            key(plate, "prompt", |recipe| recipe.duration_seconds += 1),
+        ),
+        ("width", key(plate, "prompt", |recipe| recipe.width += 2)),
+        ("height", key(plate, "prompt", |recipe| recipe.height += 2)),
+        (
+            "recipe",
+            key(plate, "prompt", |recipe| {
+                recipe.recipe = "df-scene-video/3".to_owned()
+            }),
+        ),
+        (
+            "finish",
+            key(plate, "prompt", |recipe| recipe.finish = "tail_crossfade"),
+        ),
+    ] {
+        assert_ne!(base, changed.0, "a changed {name} must be a new file");
+        assert_ne!(
+            base_key, changed.1,
+            "a changed {name} must be a new hub entry"
+        );
+    }
+    let spec = scene_spec_for_test("plate", plate, "prompt", |_| {});
     assert_eq!(
-        base,
-        clip_key_with(still, "model-a", "prompt", 5, "recipe-1")
+        <home_video::clip_spec::SceneLoopSpec as ResourceSpec>::KIND,
+        ResourceKind::VideoClip
     );
-    assert_ne!(
-        base,
-        clip_key_with(b"another still", "model-a", "prompt", 5, "recipe-1")
+    assert!(
+        spec.canonical()
+            .contains("\"prompt_variant\":\"scene_ambient\"")
     );
-    assert_ne!(
-        base,
-        clip_key_with(still, "model-b", "prompt", 5, "recipe-1")
-    );
-    assert_ne!(
-        base,
-        clip_key_with(still, "model-a", "prompt!", 5, "recipe-1")
-    );
-    assert_ne!(
-        base,
-        clip_key_with(still, "model-a", "prompt", 6, "recipe-1")
-    );
-    assert_ne!(
-        base,
-        clip_key_with(still, "model-a", "prompt", 5, "recipe-2")
-    );
-    assert_eq!(clip_key(still).len(), 64);
+    assert!(spec.canonical().contains("first_and_last_frame_same_still"));
+    assert_eq!(clip_key(b"a still").len(), 64);
 }
 
 #[test]
@@ -392,7 +437,6 @@ async fn a_cached_loop_is_served_at_once_with_no_provider_call() {
     let engine = test_engine(
         root.clone(),
         directory.clone(),
-        4,
         endpoints(&fake),
         Duration::from_secs(30),
     );
@@ -416,7 +460,7 @@ async fn a_cached_loop_is_served_at_once_with_no_provider_call() {
     );
     assert_eq!(fake.count("POST"), 0, "a cached loop makes no submit");
     assert_eq!(fake.count("pricing"), 0, "nor a price check");
-    assert_eq!(engine.budget_left(), 4, "nor any charge");
+    assert_eq!(engine.clips_charged(), 0, "nor any charge");
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -427,7 +471,6 @@ async fn one_submit_serves_every_display_that_asks_for_the_same_painting() {
     let engine = test_engine(
         asset_root(),
         directory.clone(),
-        4,
         endpoints(&fake),
         Duration::from_secs(30),
     );
@@ -443,35 +486,31 @@ async fn one_submit_serves_every_display_that_asks_for_the_same_painting() {
         assert_eq!(engine.observe_for_test(PAINTING), LoopView::Failed);
     }
     assert_eq!(fake.count("POST"), 1, "three displays, one submit");
-    assert_eq!(engine.budget_left(), 3, "one clip charged");
+    assert_eq!(engine.clips_charged(), 1, "one clip charged");
     let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[tokio::test]
-async fn the_budget_is_charged_before_each_submit_and_refused_once_spent() {
+async fn every_clip_that_is_sent_is_charged_and_nothing_is_ever_refused_for_cost() {
     let fake = fake(Scenario::MalformedClip);
-    let directory = scratch("budget");
+    let directory = scratch("no-cap");
     let engine = test_engine(
         asset_root(),
         directory.clone(),
-        1,
         endpoints(&fake),
         Duration::from_secs(30),
     );
     engine.observe_for_test(PAINTING);
     settle(&engine, PAINTING).await;
-    assert_eq!(engine.budget_left(), 0);
+    assert_eq!(engine.clips_charged(), 1);
     engine.observe_for_test(OTHER);
-    let refused = settle(&engine, OTHER).await;
+    let second = settle(&engine, OTHER).await;
     assert!(
-        refused.contains("budget spent"),
-        "refused by name: {refused}"
+        !second.contains("capped") && !second.contains("budget"),
+        "no spend limit exists to refuse it: {second}"
     );
-    assert_eq!(
-        fake.count("POST"),
-        1,
-        "the refused painting never reached the provider"
-    );
+    assert_eq!(fake.count("POST"), 2, "both paintings reached the provider");
+    assert_eq!(engine.clips_charged(), 2);
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -482,7 +521,6 @@ async fn a_refusal_or_failure_from_the_provider_leaves_the_still_with_a_diagnost
     let engine = test_engine(
         asset_root(),
         directory.clone(),
-        4,
         endpoints(&fake),
         Duration::from_secs(30),
     );
@@ -516,7 +554,6 @@ async fn a_malformed_clip_fails_closed_and_is_not_cached() {
     let engine = test_engine(
         asset_root(),
         directory.clone(),
-        4,
         endpoints(&fake),
         Duration::from_secs(30),
     );
@@ -535,19 +572,18 @@ async fn a_timeout_leaves_the_still_and_the_spend_is_kept() {
     let engine = test_engine(
         asset_root(),
         directory.clone(),
-        4,
         endpoints(&fake),
         Duration::from_millis(900),
     );
     engine.observe_for_test(PAINTING);
     let stage = settle(&engine, PAINTING).await;
     assert_eq!(
-        stage, "failed:timeout",
+        stage, "failed:timed_out",
         "a clip that never finishes times out"
     );
     assert_eq!(
-        engine.budget_left(),
-        3,
+        engine.clips_charged(),
+        1,
         "a timed-out clip stays charged, never refunded"
     );
     let _ = std::fs::remove_dir_all(&directory);
@@ -567,7 +603,6 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
     let engine = test_engine(
         root,
         directory.clone(),
-        4,
         endpoints(&fake),
         Duration::from_secs(30),
     );
@@ -584,6 +619,7 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
                 encounter_xp: None,
                 layout_json: String::new(),
                 layout_revision: 0,
+                place_music: None,
                 journey: Some(rpc::JourneyView {
                     phase: rpc::JourneyPhase::Room as i32,
                     ..Default::default()
@@ -639,7 +675,6 @@ async fn live_generation_of_one_painting() {
     let engine = home_video::live_test_engine(
         asset_root(),
         directory,
-        1,
         credential,
         pins,
         Duration::from_secs(20 * 60),
@@ -729,17 +764,15 @@ async fn print_the_cache_key_of_a_painting_for_seeding() {
 fn inputs(
     mode: Option<&str>,
     key: Option<&str>,
-    budget: Option<&str>,
     model: Option<&str>,
 ) -> home_video::HomeVideoInputs {
-    inputs_with_scene(mode, None, key, budget, model)
+    inputs_with_scene(mode, None, key, model)
 }
 
 fn inputs_with_scene(
     mode: Option<&str>,
     scene_mode: Option<&str>,
     key: Option<&str>,
-    budget: Option<&str>,
     model: Option<&str>,
 ) -> home_video::HomeVideoInputs {
     let value = |name: Option<&str>| match name {
@@ -750,7 +783,6 @@ fn inputs_with_scene(
         mode: value(mode),
         scene_mode: value(scene_mode),
         model: value(model),
-        budget: value(budget),
         cache: Err(std::env::VarError::NotPresent),
         credential: value(key),
     }
@@ -760,7 +792,7 @@ fn inputs_with_scene(
 fn the_scene_video_switch_defaults_from_the_provider_and_can_be_explicitly_disabled_or_enabled() {
     let current = Path::new("/work");
     let off = home_video::home_video_settings(
-        inputs_with_scene(None, Some("off"), Some("fixture-key"), None, None),
+        inputs_with_scene(None, Some("off"), Some("fixture-key"), None),
         current,
         false,
     )
@@ -770,7 +802,7 @@ fn the_scene_video_switch_defaults_from_the_provider_and_can_be_explicitly_disab
     );
 
     let keyless = home_video::home_video_settings(
-        inputs_with_scene(None, Some("on"), None, None, None),
+        inputs_with_scene(None, Some("on"), None, None),
         current,
         false,
     )
@@ -781,7 +813,7 @@ fn the_scene_video_switch_defaults_from_the_provider_and_can_be_explicitly_disab
     );
 
     let invalid = home_video::home_video_settings(
-        inputs_with_scene(None, Some("maybe"), Some("fixture-key"), None, None),
+        inputs_with_scene(None, Some("maybe"), Some("fixture-key"), None),
         current,
         false,
     )
@@ -820,6 +852,11 @@ async fn a_scene_plate_submits_once_with_its_first_frame_prompt_and_failure_keep
     assert!(stage.starts_with("failed:"), "{stage}");
     assert!(engine.scene_view_for_test(&plate_key).path().is_empty());
     assert_eq!(fake.count("POST "), 1, "a plate is submitted only once");
+    assert_eq!(
+        engine.clips_charged(),
+        1,
+        "a scene clip is a paid call and is charged like a home loop"
+    );
 
     let body = {
         let bodies = fake.bodies.lock().expect("captured request bodies");
@@ -845,10 +882,11 @@ async fn a_scene_plate_submits_once_with_its_first_frame_prompt_and_failure_keep
 }
 
 #[tokio::test]
-async fn a_cached_scene_plate_is_ready_immediately_and_a_new_plate_edit_gets_its_own_request() {
+async fn a_cached_scene_clip_is_ready_with_no_provider_call_and_an_edited_plate_gets_its_own() {
     let fake = fake(Scenario::Refused);
     let directory = scratch("scene-cache");
-    let cached_key = "b".repeat(64);
+    let description = "a dice game beside the fire";
+    let cached_key = scene_clip_key(&scene_still(), description).expect("a key");
     std::fs::write(directory.join(format!("{cached_key}.mp4")), vec![0u8; 64])
         .expect("cached scene clip");
     let engine = scene_test_engine(
@@ -857,15 +895,20 @@ async fn a_cached_scene_plate_is_ready_immediately_and_a_new_plate_edit_gets_its
         Duration::from_secs(30),
         Some("fixture-private-key".to_owned()),
     );
+    let plate_key = "b".repeat(64);
     engine.request_scene_for_test(
-        &cached_key,
+        &plate_key,
         scene_still(),
-        "a dice game beside the fire",
+        description,
         "current-story-plate",
         false,
     );
     assert_eq!(
-        engine.scene_view_for_test(&cached_key),
+        settle_scene(&engine, &plate_key).await,
+        format!("ready:{cached_key}")
+    );
+    assert_eq!(
+        engine.scene_view_for_test(&plate_key),
         home_video::SceneClipView::Ready {
             path: format!("/gameplay/home-video/{cached_key}")
         }
@@ -873,8 +916,9 @@ async fn a_cached_scene_plate_is_ready_immediately_and_a_new_plate_edit_gets_its
     assert_eq!(
         fake.count("POST "),
         0,
-        "a cached plate makes no provider call"
+        "a cached clip makes no provider call"
     );
+    assert_eq!(engine.clips_charged(), 0, "and costs nothing");
 
     let edited_key = "c".repeat(64);
     engine.request_scene_for_test(
@@ -890,6 +934,140 @@ async fn a_cached_scene_plate_is_ready_immediately_and_a_new_plate_edit_gets_its
         fake.count("POST "),
         1,
         "the edited plate has its own request"
+    );
+}
+
+#[tokio::test]
+async fn a_changed_description_for_the_same_plate_is_a_new_clip_not_the_old_loop() {
+    let fake = fake(Scenario::Refused);
+    let directory = scratch("scene-changed-prompt");
+    let engine = scene_test_engine(
+        directory.clone(),
+        endpoints(&fake),
+        Duration::from_secs(30),
+        Some("fixture-private-key".to_owned()),
+    );
+    let plate_key = "9".repeat(64);
+    let old_key = scene_clip_key(&scene_still(), "the innkeeper rolls dice").expect("a key");
+    std::fs::write(directory.join(format!("{old_key}.mp4")), vec![0u8; 64]).expect("an old loop");
+
+    engine.request_scene_for_test(
+        &plate_key,
+        scene_still(),
+        "the innkeeper rolls dice",
+        "current-story-plate",
+        false,
+    );
+    assert_eq!(
+        settle_scene(&engine, &plate_key).await,
+        format!("ready:{old_key}")
+    );
+    engine.request_scene_for_test(
+        &plate_key,
+        scene_still(),
+        "the innkeeper pours ale",
+        "current-story-plate",
+        false,
+    );
+    let stage = settle_scene(&engine, &plate_key).await;
+
+    assert!(
+        stage.starts_with("failed:"),
+        "the new description is asked for, not served the old loop: {stage}"
+    );
+    assert_eq!(fake.count("POST "), 1);
+    assert_eq!(engine.clips_charged(), 1, "and the new clip is charged");
+}
+
+#[tokio::test]
+async fn each_scene_clip_is_charged_on_the_ledger_with_a_spend_line() {
+    let fake = fake(Scenario::Refused);
+    let engine = scene_test_engine(
+        scratch("scene-charge"),
+        endpoints(&fake),
+        Duration::from_secs(30),
+        Some("fixture-private-key".to_owned()),
+    );
+    let first = "7".repeat(64);
+    let second = "8".repeat(64);
+    engine.request_scene_for_test(&first, scene_still(), "a quiet hearth", "plate", false);
+    settle_scene(&engine, &first).await;
+    assert_eq!(engine.clips_charged(), 1);
+
+    engine.request_scene_for_test(&second, scene_still(), "a busy bar", "plate", false);
+    settle_scene(&engine, &second).await;
+
+    assert_eq!(engine.clips_charged(), 2);
+    assert_eq!(fake.count("POST "), 2);
+    assert!(
+        !crate::gameplay::actor::audit_lines_containing("SPEND commit unit=video_clip").is_empty(),
+        "the ledger writes a line for every charge"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_clip_is_not_asked_for_again_and_the_hub_lists_it_until_it_is_invalidated() {
+    let fake = fake(Scenario::Refused);
+    let engine = scene_test_engine(
+        scratch("scene-failed-memory"),
+        endpoints(&fake),
+        Duration::from_secs(30),
+        Some("fixture-private-key".to_owned()),
+    );
+    let plate_key = "6".repeat(64);
+    for _ in 0..3 {
+        engine.request_scene_for_test(&plate_key, scene_still(), "a still room", "plate", false);
+        settle_scene(&engine, &plate_key).await;
+    }
+    assert_eq!(
+        fake.count("POST "),
+        1,
+        "a failure is not retried beyond its attempts"
+    );
+
+    let clip = scene_clip_key(&scene_still(), "a still room").expect("a key");
+    let lines = crate::gameplay::actor::audit_lines_containing(&clip[..32]);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("RESOURCE request kind=video_clip key=")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(
+            |line| line.starts_with("RESOURCE failed kind=video_clip key=")
+                && line.contains("error=provider: refused or failed")
+        ),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(
+            |line| line.starts_with("RESOURCE failed_detail kind=video_clip key=")
+                && line.contains("RunnerError")
+        ),
+        "the supplier's wording is in the log: {lines:?}"
+    );
+
+    let kit = engine.kit_for_test();
+    let rows = kit.hub().list(Some(ResourceKind::VideoClip));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state, "failed");
+    assert!(
+        rows[0].subject.starts_with("video:scene:"),
+        "{}",
+        rows[0].subject
+    );
+    assert_eq!(
+        kit.invalidate(super::resources::Invalidate::Key(&rows[0].key)),
+        1
+    );
+
+    engine.request_scene_for_test(&plate_key, scene_still(), "a still room", "plate", false);
+    settle_scene(&engine, &plate_key).await;
+    assert_eq!(
+        fake.count("POST "),
+        2,
+        "invalidating the key lets it be asked for again"
     );
 }
 
@@ -938,30 +1116,27 @@ async fn keyless_scene_clips_fail_without_provider_traffic() {
 }
 
 #[test]
-fn the_setting_is_on_with_a_key_and_the_default_budget_and_model_and_off_without_one() {
+fn the_setting_is_on_with_a_key_and_the_default_model_and_off_without_one() {
     let current = Path::new("/work");
-    let on = home_video::home_video_settings(
-        inputs(None, Some("fixture-key"), None, None),
-        current,
-        false,
-    )
-    .expect("valid settings");
+    let on =
+        home_video::home_video_settings(inputs(None, Some("fixture-key"), None), current, false)
+            .expect("valid settings");
     assert!(
         home_video::startup_line(&on).contains("SCENE VIDEO on"),
         "scene clips are enabled by default when the media provider is configured"
     );
     assert_eq!(
         home_video::startup_line(&on),
-        "HOME VIDEO on model=fal-ai/kling-video/o1/image-to-video budget=1000 duration=5s; SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
+        "HOME VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s; SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
     );
-    let without = home_video::home_video_settings(inputs(None, None, None, None), current, false)
+    let without = home_video::home_video_settings(inputs(None, None, None), current, false)
         .expect("a missing key is a state");
     assert_eq!(
         home_video::startup_line(&without),
         "HOME VIDEO off (no FAL_KEY); SCENE VIDEO off (no FAL_KEY)"
     );
     let disabled = home_video::home_video_settings(
-        inputs(Some("off"), Some("fixture-key"), None, None),
+        inputs(Some("off"), Some("fixture-key"), None),
         current,
         false,
     )
@@ -970,12 +1145,9 @@ fn the_setting_is_on_with_a_key_and_the_default_budget_and_model_and_off_without
         home_video::startup_line(&disabled),
         "HOME VIDEO off (DF_GAMEPLAY_HOME_VIDEO=off); SCENE VIDEO on model=fal-ai/kling-video/o1/image-to-video duration=5s"
     );
-    let qualification = home_video::home_video_settings(
-        inputs(None, Some("fixture-key"), None, None),
-        current,
-        true,
-    )
-    .expect("a qualification run is a state");
+    let qualification =
+        home_video::home_video_settings(inputs(None, Some("fixture-key"), None), current, true)
+            .expect("a qualification run is a state");
     assert_eq!(
         home_video::startup_line(&qualification),
         "HOME VIDEO off (qualification run); SCENE VIDEO off (qualification run)"
@@ -985,22 +1157,8 @@ fn the_setting_is_on_with_a_key_and_the_default_budget_and_model_and_off_without
 #[test]
 fn an_invalid_setting_is_refused_by_name_and_its_value_is_never_echoed() {
     let current = Path::new("/work");
-    let budget = home_video::home_video_settings(
-        inputs(None, Some("fixture-key"), Some("lots"), None),
-        current,
-        false,
-    )
-    .expect_err("a non-number budget is refused");
-    assert!(
-        budget.to_string().contains("DF_GAMEPLAY_VIDEO_BUDGET"),
-        "{budget}"
-    );
-    assert!(
-        !budget.to_string().contains("lots"),
-        "the value is not echoed"
-    );
     let model = home_video::home_video_settings(
-        inputs(None, Some("fixture-key"), None, Some("some/other-model")),
+        inputs(None, Some("fixture-key"), Some("some/other-model")),
         current,
         false,
     )
@@ -1009,18 +1167,8 @@ fn an_invalid_setting_is_refused_by_name_and_its_value_is_never_echoed() {
         model.to_string().contains("DF_GAMEPLAY_HOME_VIDEO_MODEL"),
         "{model}"
     );
-    let over = home_video::home_video_settings(
-        inputs(None, Some("fixture-key"), Some("1001"), None),
-        current,
-        false,
-    )
-    .expect_err("a budget over the maximum is refused");
-    assert!(
-        over.to_string().contains("DF_GAMEPLAY_VIDEO_BUDGET"),
-        "{over}"
-    );
     let mode = home_video::home_video_settings(
-        inputs(Some("maybe"), Some("fixture-key"), None, None),
+        inputs(Some("maybe"), Some("fixture-key"), None),
         current,
         false,
     )
@@ -1046,5 +1194,36 @@ fn the_view_carries_the_loop_state_and_its_served_path_only_when_ready() {
         LoopView::Pending.path(),
         "",
         "no path is sent before the loop is ready"
+    );
+}
+
+#[tokio::test]
+async fn a_submit_the_provider_rejects_logs_its_http_status_and_redacted_body() {
+    let fake = fake(Scenario::Rejected);
+    let engine = scene_test_engine(
+        scratch("scene-rejected"),
+        endpoints(&fake),
+        Duration::from_secs(30),
+        Some("fixture-private-key".to_owned()),
+    );
+    let plate_key = "5".repeat(64);
+    engine.request_scene_for_test(&plate_key, scene_still(), "a rejected room", "plate", false);
+
+    let stage = settle_scene(&engine, &plate_key).await;
+
+    assert_eq!(stage, "failed:provider: call failed");
+    let clip = scene_clip_key(&scene_still(), "a rejected room").expect("a key");
+    let lines = crate::gameplay::actor::audit_lines_containing(&clip[..32]);
+    let detail = lines
+        .iter()
+        .find(|line| line.starts_with("RESOURCE failed_detail kind=video_clip key="))
+        .unwrap_or_else(|| panic!("no failed_detail line in {lines:?}"));
+    assert!(detail.contains("http_status=422"), "{detail}");
+    assert!(detail.contains("end_image_url is not accepted"), "{detail}");
+    assert!(!detail.contains("fixture-private-key"), "{detail}");
+    assert_eq!(
+        engine.clips_charged(),
+        1,
+        "a submit that was sent is charged"
     );
 }

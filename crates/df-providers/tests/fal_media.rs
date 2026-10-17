@@ -1374,3 +1374,63 @@ async fn native_registry_hook_redacts_private_fields_and_keeps_dated_routes() {
     assert!(df_providers::candidate_for(df_providers::Capability::Video).is_err());
     assert!(fixture.finish().is_empty());
 }
+
+#[tokio::test]
+async fn a_refused_submit_keeps_the_http_status_and_a_redacted_bounded_body() {
+    let opaque = "A".repeat(200);
+    let mut refused = Reply::json(json!({"detail": [{
+        "msg": "image rejected, credential fixture-private-key",
+        "input": opaque,
+        "loc": ["body", "start_image_url"],
+    }]}));
+    refused.status = 422;
+    let fixture = Fixture::new(vec![refused]);
+    let provider = provider(FalMediaFamily::Video, &fixture);
+    let current = video_basis();
+    let request = video_request(&current);
+
+    let error = provider
+        .submit_video(&request, owner(&current), future::pending())
+        .await
+        .err()
+        .expect("a 422 answer is a refusal");
+
+    assert_eq!(
+        error.reason,
+        FalMediaReason::Status,
+        "a refused submit is a status failure, not a queue reply that lost its identity"
+    );
+    let http = error.http.expect("the supplier's answer is kept");
+    assert_eq!(http.status, 422);
+    assert!(http.body.contains("start_image_url"), "{}", http.body);
+    assert!(http.body.contains("image rejected"), "{}", http.body);
+    assert!(!http.body.contains("fixture-private-key"), "{}", http.body);
+    assert!(http.body.contains("[credential]"), "{}", http.body);
+    assert!(http.body.contains("[opaque]"), "{}", http.body);
+    assert!(!http.body.contains("AAAAAAAA"), "{}", http.body);
+    assert!(http.body.chars().count() <= 400);
+}
+
+#[test]
+fn provider_limits_build_the_transport_limits_with_the_shared_defaults() {
+    let limits = df_providers::ProviderLimits::new(Duration::from_secs(30), 1024, 4096).build();
+
+    assert_eq!(limits.total_timeout, Duration::from_secs(30));
+    assert_eq!(limits.read_timeout, Duration::from_secs(30));
+    assert_eq!(limits.connect_timeout, Duration::from_secs(5));
+    assert_eq!(limits.maximum_request_bytes, 1024);
+    assert_eq!(limits.maximum_response_bytes, 4096);
+    assert_eq!(limits.maximum_header_bytes, 16 * 1024);
+    assert_eq!(limits.maximum_chunks, 4096);
+    let short = df_providers::ProviderLimits::new(Duration::from_secs(2), 1, 1)
+        .read_timeout(Duration::from_secs(1))
+        .chunks(8)
+        .build();
+    assert_eq!(
+        short.connect_timeout,
+        Duration::from_secs(2),
+        "never longer than the call"
+    );
+    assert_eq!(short.read_timeout, Duration::from_secs(1));
+    assert_eq!(short.maximum_chunks, 8);
+}

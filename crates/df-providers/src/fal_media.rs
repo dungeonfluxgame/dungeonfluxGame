@@ -212,6 +212,63 @@ pub struct FalMediaError {
     pub reason: FalMediaReason,
     pub request_id: Option<ProviderRequestId>,
     pub observed_usage: Option<Usage>,
+    /// What the supplier answered, when the failure came with an HTTP response.
+    pub http: Option<FalHttpFacts>,
+}
+
+/// The supplier's HTTP answer to a failed call: the status and a bounded excerpt of the body with
+/// the credential, long opaque tokens (an echoed image) and control characters removed. It is safe
+/// to log.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FalHttpFacts {
+    pub status: u16,
+    pub body: String,
+}
+
+/// The longest body excerpt kept, in characters.
+const MAX_FAILURE_BODY_CHARACTERS: usize = 400;
+/// A run of this many token characters is opaque data (a key, a data URI) and is not kept.
+const OPAQUE_RUN_CHARACTERS: usize = 32;
+
+fn http_facts(response: &NativeHttpResponse, credential: &str) -> FalHttpFacts {
+    let mut text = String::from_utf8_lossy(&response.body).into_owned();
+    if !credential.is_empty() {
+        text = text.replace(credential, "[credential]");
+    }
+    let mut kept = String::new();
+    let mut run = String::new();
+    fn flush(run: &mut String, kept: &mut String) {
+        if run.chars().count() >= OPAQUE_RUN_CHARACTERS {
+            kept.push_str("[opaque]");
+        } else {
+            kept.push_str(run);
+        }
+        run.clear();
+    }
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '+' | '/' | '=' | '_' | '-') {
+            run.push(character);
+        } else {
+            flush(&mut run, &mut kept);
+            kept.push(if character.is_control() {
+                ' '
+            } else {
+                character
+            });
+        }
+    }
+    flush(&mut run, &mut kept);
+    FalHttpFacts {
+        status: response.status,
+        body: kept.chars().take(MAX_FAILURE_BODY_CHARACTERS).collect(),
+    }
+}
+
+impl FalMediaError {
+    fn with_http(mut self, facts: &FalHttpFacts) -> Self {
+        self.http = Some(facts.clone());
+        self
+    }
 }
 
 impl FalMediaError {
@@ -444,21 +501,28 @@ impl NativeFalMediaProvider {
                 None,
             )
             .await?;
-        let value = parse_json(&response, None)?;
-        let id = value
-            .get("request_id")
-            .and_then(Value::as_str)
-            .filter(|id| valid_id(id))
-            .and_then(|id| ProviderRequestId::new(id).ok());
-        let id = id.ok_or_else(|| {
+        let http = http_facts(&response, &self.credential);
+        // A refused submit (a bad key, a rejected field, a server fault) is a status failure
+        // whatever its body, so it is reported as one with the supplier's own words, not as a
+        // queue reply that lost its identity.
+        if !matches!(response.status, 200 | 202) {
+            let named = parse_json(&response, None)
+                .ok()
+                .and_then(|value| request_id_of(&value));
+            return Err(error(
+                FalMediaReason::Status,
+                named.as_ref().or(response.transport_request_id.as_ref()),
+            )
+            .with_http(&http));
+        }
+        let value = parse_json(&response, None).map_err(|failure| failure.with_http(&http))?;
+        let id = request_id_of(&value).ok_or_else(|| {
             error(
                 FalMediaReason::QueueIdentity,
                 response.transport_request_id.as_ref(),
             )
+            .with_http(&http)
         })?;
-        if !matches!(response.status, 200 | 202) {
-            return Err(error(FalMediaReason::Status, Some(&id)));
-        }
         // fal names a request under its endpoint's path, or under the owner and app that hold it
         // (`fal-ai/kling-video/requests/{id}` for `fal-ai/kling-video/o1/image-to-video`). Either is
         // this request on the queue host, so either is accepted; anything else is refused.
@@ -614,7 +678,9 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
                 Some(&self.id),
             )
             .await?;
-        let value = parse_json(&response, Some(&self.id))?;
+        let http = http_facts(&response, &self.provider.credential);
+        let value =
+            parse_json(&response, Some(&self.id)).map_err(|failure| failure.with_http(&http))?;
         if value
             .get("response_url")
             .is_some_and(|v| v.as_str() != Some(self.result.as_str()))
@@ -648,7 +714,7 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
             value.get("error").and_then(Value::as_str),
             metric.and_then(Value::as_f64),
         )
-        .map_err(|_| error(FalMediaReason::Status, Some(&self.id)))?;
+        .map_err(|_| error(FalMediaReason::Status, Some(&self.id)).with_http(&http))?;
         self.completed = matches!(observation, FalQueueObservation::Completed { .. });
         Ok(observation)
     }
@@ -712,17 +778,19 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
                 Some(&self.id),
             )
             .await?;
+        let http = http_facts(&response, &self.provider.credential);
         if response.status != 200 {
-            return Err(error(FalMediaReason::Status, Some(&self.id)));
+            return Err(error(FalMediaReason::Status, Some(&self.id)).with_http(&http));
         }
-        let value = parse_json(&response, Some(&self.id))?;
+        let value =
+            parse_json(&response, Some(&self.id)).map_err(|failure| failure.with_http(&http))?;
         if value
             .get("request_id")
             .is_some_and(|v| v.as_str() != Some(self.id.as_str()))
             || value.get("error").is_some()
             || value.get("error_type").is_some()
         {
-            return Err(error(FalMediaReason::QueueIdentity, Some(&self.id)));
+            return Err(error(FalMediaReason::QueueIdentity, Some(&self.id)).with_http(&http));
         }
         let files = output_files(&value, &self.expected, &self.id)?;
         let maximum = self.provider.http.limits().maximum_response_bytes;
@@ -792,6 +860,7 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
                 reason: FalMediaReason::UsageOverrun,
                 request_id: Some(self.id),
                 observed_usage: Some(usage),
+                http: None,
             });
         }
         Ok(PreparedFalMediaResponse {
@@ -859,6 +928,7 @@ impl<Semantic: Eq> PreparedFalMediaResponse<'_, Semantic> {
                 reason: FalMediaReason::Owner(reason),
                 request_id: Some(self.id.clone()),
                 observed_usage: Some(self.usage),
+                http: None,
             })?;
         Ok(FalMediaCompletion {
             identity: self.request.binding().identity,
@@ -940,6 +1010,20 @@ fn output_files(
     Ok(files)
 }
 
+/// Whether two frame sizes have the same aspect ratio, within two percent, and the first is
+/// at least 320 pixels on its short side.
+fn same_frame_shape(actual: (u32, u32), requested: (u32, u32)) -> bool {
+    let (width, height) = (u64::from(actual.0), u64::from(actual.1));
+    let (requested_width, requested_height) = (u64::from(requested.0), u64::from(requested.1));
+    if width.min(height) < 320 || requested_width == 0 || requested_height == 0 {
+        return false;
+    }
+    // width / height against requested_width / requested_height, cross-multiplied.
+    let left = width * requested_height;
+    let right = height * requested_width;
+    left.abs_diff(right) * 50 <= right
+}
+
 fn validate_output(
     expected: &ExpectedMedia,
     metadata: &Value,
@@ -966,7 +1050,9 @@ fn validate_output(
                 timebase,
             },
         ) => {
-            if (width, height) != (p.width, p.height)
+            // The supplier may return a smaller or larger frame than the profile asks for (720p
+            // for a 1080p request): the shape must match, not the exact size.
+            if !same_frame_shape((width, height), (p.width, p.height))
                 || !duration_in(timebase, p.accepted_duration_min, p.accepted_duration_max)
                 || optional_u64_mismatch(metadata, "width", u64::from(width))
                 || optional_u64_mismatch(metadata, "height", u64::from(height))
@@ -1090,8 +1176,18 @@ fn error(reason: FalMediaReason, id: Option<&ProviderRequestId>) -> FalMediaErro
         reason,
         request_id: id.cloned(),
         observed_usage: None,
+        http: None,
     }
 }
+/// The queue request id a reply names, when it is a valid one.
+fn request_id_of(value: &Value) -> Option<ProviderRequestId> {
+    value
+        .get("request_id")
+        .and_then(Value::as_str)
+        .filter(|id| valid_id(id))
+        .and_then(|id| ProviderRequestId::new(id).ok())
+}
+
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 256
@@ -1221,5 +1317,36 @@ impl FalMediaCompletion {
                 output: self.outputs,
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod frame_shape_tests {
+    use super::same_frame_shape;
+
+    #[test]
+    fn a_smaller_frame_of_the_requested_shape_is_accepted_and_another_shape_is_not() {
+        assert!(same_frame_shape((1920, 1080), (1920, 1080)));
+        assert!(
+            same_frame_shape((1280, 720), (1920, 1080)),
+            "720p for a 1080p request"
+        );
+        assert!(
+            same_frame_shape((1920, 1088), (1920, 1080)),
+            "a codec's padded height"
+        );
+        assert!(
+            !same_frame_shape((640, 480), (1920, 1080)),
+            "4:3 is another shape"
+        );
+        assert!(
+            !same_frame_shape((320, 180), (1920, 1080)),
+            "too small to show"
+        );
+        assert!(
+            !same_frame_shape((1080, 1920), (1920, 1080)),
+            "portrait is another shape"
+        );
+        assert!(!same_frame_shape((1280, 720), (0, 0)));
     }
 }

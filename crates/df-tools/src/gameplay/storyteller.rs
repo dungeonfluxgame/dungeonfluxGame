@@ -24,18 +24,33 @@
 //! facts and slots. A result is complete (every slot present, non-empty, within its length,
 //! with its must-mention terms) or the call returns a [`StorytellerError`] so the caller can
 //! fall back to authored text. Identical requests are answered from an on-disk cache and cost
-//! nothing; every model call is charged to a per-run token budget before it is sent.
+//! nothing; every model call is recorded on the generation hub's token ledger when it is sent. There is
+//! no token cap: the ledger counts and the audit lines say what was spent, and nothing is refused.
+//!
+//! # The text resource
+//!
+//! Generated text is the `text` resource kind: one [`TextSpec`] per request, whose variant is the
+//! request's purpose (`npc_reply`, `line_cleanup`, `adventure`, `freeform_act`, `investigation`,
+//! `npc_emotional_profile`, ...). Its key (and the cache file name) is the hash of everything that
+//! shapes the output: the model, the purpose, the facts, each slot's length, must-mention,
+//! forbidden and withheld terms and speaking rules, the style, the call profile, the hash of the
+//! fixed instruction and the prompt version. Changing any of them is a new key, so nothing relies
+//! on a manual version bump to stop an old answer being served. Identical concurrent requests
+//! share one model call. A cached answer is checked again against the rules of the request that
+//! reads it (including the withheld terms) before it is served.
 
 use std::{
     collections::BTreeMap,
     fmt, io,
     path::{Path, PathBuf},
-    sync::{Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
 #[cfg(test)]
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{Mutex, PoisonError},
+};
 
 use df_model::checkpoint::{Basis, ContentDigest, ExecutionMode, JobId};
 use df_observe::OperationContext;
@@ -44,9 +59,9 @@ use df_provider_api::{
     RequestOwnerState, RequestUsage, TextEventKind, TextRequest, TextSemantics,
 };
 use df_providers::{
-    CandidateRouteId, NativeHttpLimits, NativeHttpRefusal, NativeTextProvider,
-    ProviderFailureClass, ReasoningEffort, TextOutputSchema, TextProviderConfig,
-    TextResponseContract, TextResponseError, TextSchemaLimits, registered_text_provider,
+    CandidateRouteId, NativeHttpRefusal, NativeTextProvider, ProviderFailureClass, ProviderLimits,
+    ReasoningEffort, TextOutputSchema, TextProviderConfig, TextResponseContract, TextResponseError,
+    TextSchemaLimits, registered_text_provider,
 };
 use df_types::{
     LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
@@ -56,6 +71,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
+    resource_adapters::{Flights, Kit, KitSlot, TEXT, hex, write_atomic},
+    resources::Unit,
     speech_text::SpokenRule,
     startup_configuration::{ContentRating, StorytellerMode, StorytellerSettings},
 };
@@ -376,7 +393,11 @@ impl ValidationFailure {
 pub(super) enum StorytellerError {
     /// No credential, or switched off: no call was made.
     Off,
-    /// The per-run token budget cannot cover the call: no call was made.
+    /// Never produced: there is no token cap. It stays so callers that match it still compile.
+    #[allow(
+        dead_code,
+        reason = "no token cap exists; the callers that still match it are another task's"
+    )]
     BudgetExhausted,
     /// The expression itself is malformed: no call was made.
     InvalidRequest(&'static str),
@@ -411,8 +432,11 @@ struct Online {
     model: String,
     cache_directory: PathBuf,
     deadline: Duration,
-    /// Tokens not yet spent or reserved by calls in flight.
-    remaining_tokens: Mutex<u64>,
+    kit: KitSlot,
+    /// Identical concurrent expressions share one run (and so one model call).
+    flights: Flights<Result<BTreeMap<String, String>, StorytellerError>>,
+    /// The same for batched expressions, whose answer carries per-slot outcomes.
+    partial_flights: Flights<Result<PartialExpression, StorytellerError>>,
     /// Supplier-reported counters of every answered attempt, for live transcript costing.
     #[cfg(test)]
     usage_log: Mutex<Vec<df_providers::TextTokenUsage>>,
@@ -462,12 +486,22 @@ impl Storyteller {
                 model: settings.model,
                 cache_directory: settings.cache_directory,
                 deadline: settings.deadline,
-                remaining_tokens: Mutex::new(settings.token_budget),
+                kit: KitSlot::private(),
+                flights: Flights::default(),
+                partial_flights: Flights::default(),
                 #[cfg(test)]
                 usage_log: Mutex::new(Vec::new()),
                 #[cfg(test)]
                 loopback: None,
             }),
+        }
+    }
+
+    /// Puts the storyteller on the server's generation hub, so its token spend is counted on the
+    /// hub's `TextToken` account. A storyteller that is off has nothing to attach.
+    pub(super) fn attach_kit(&self, kit: &Kit) {
+        if let Some(online) = &self.online {
+            online.kit.attach(kit);
         }
     }
 
@@ -489,13 +523,23 @@ impl Storyteller {
     }
 
     #[cfg(test)]
-    pub(super) fn remaining_tokens(&self) -> Option<u64> {
+    pub(super) fn tokens_charged(&self) -> Option<u64> {
         self.online.as_ref().map(|online| {
-            *online
-                .remaining_tokens
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+            online
+                .kit
+                .get()
+                .hub()
+                .ledger()
+                .snapshot(Unit::TextToken)
+                .committed
         })
+    }
+
+    /// The headroom under the largest count. There is no cap, so this is not a budget; it keeps
+    /// the live checks' `start - remaining_tokens()` meaning the tokens used between two points.
+    #[cfg(test)]
+    pub(super) fn remaining_tokens(&self) -> Option<u64> {
+        self.tokens_charged().map(|charged| u64::MAX - charged)
     }
 
     /// The supplier-reported token counters of every answered attempt so far.
@@ -569,7 +613,7 @@ impl Storyteller {
         check_request(request)?;
         let key = cache_key(&online.model, request);
         let prompt = build_prompt(request, None);
-        let reserved = online.reserve(&prompt, request)?;
+        let reserved = online.estimate(&prompt, request);
         match online
             .attempt(request, &key, 1, &prompt, reserved, Instant::now())
             .await?
@@ -608,7 +652,17 @@ impl Storyteller {
             "storyteller.requested",
             &[("storyteller.purpose", request.purpose.to_owned())],
         );
-        let outcome = self.express_online(online, request, &key, &mut span).await;
+        let subject = TextSpec::of(&online.model, request).subject();
+        let key_text = hex(&key);
+        TEXT.line("request", &key_text, &subject, Duration::ZERO, "", "");
+        let (outcome, _role) = online
+            .flights
+            .run_inline(
+                &key_text,
+                self.express_online(online, request, &key, &mut span),
+            )
+            .await;
+        record_text_outcome(&key_text, &subject, started.elapsed(), &outcome);
         let (status, failure_category, slot_counts) = match &outcome {
             Ok(values) => ("ready", None, Some((values.len(), 0))),
             Err(error) => ("failed", Some(storyteller_failure(error)), None),
@@ -671,9 +725,17 @@ impl Storyteller {
             "storyteller.requested",
             &[("storyteller.purpose", request.purpose.to_owned())],
         );
-        let outcome = self
-            .express_partial_online(online, request, &key, &mut span)
+        let subject = TextSpec::of(&online.model, request).subject();
+        let key_text = hex(&key);
+        TEXT.line("request", &key_text, &subject, Duration::ZERO, "", "");
+        let (outcome, _role) = online
+            .partial_flights
+            .run_inline(
+                &key_text,
+                self.express_partial_online(online, request, &key, &mut span),
+            )
             .await;
+        record_text_outcome(&key_text, &subject, started.elapsed(), &outcome);
         let (stage, status, failure_category, accepted_slots, rejected_slots) = match &outcome {
             Ok(partial) if partial.rejected.is_empty() => {
                 ("ready", "ready", None, partial.accepted.len(), 0)
@@ -767,7 +829,7 @@ impl Storyteller {
                 ..*request
             };
             let prompt = build_prompt(&narrowed, complaint.as_deref());
-            let reserved = online.reserve(&prompt, &narrowed)?;
+            let reserved = online.estimate(&prompt, &narrowed);
             span.event(
                 "storyteller.attempt",
                 &[
@@ -891,7 +953,7 @@ impl Storyteller {
         };
         for attempt in 1_u64..=2 {
             let prompt = build_prompt(request, complaint.as_deref());
-            let reserved = online.reserve(&prompt, request)?;
+            let reserved = online.estimate(&prompt, request);
             span.event(
                 "storyteller.attempt",
                 &[
@@ -962,41 +1024,27 @@ impl Storyteller {
 }
 
 impl Online {
-    /// Charges a conservative estimate before the call; refuses if the budget cannot cover it.
-    fn reserve(&self, prompt: &str, request: &Expression<'_>) -> Result<u64, StorytellerError> {
-        let estimate = estimate_tokens(prompt, request);
-        let mut remaining = self
-            .remaining_tokens
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if *remaining < estimate {
-            return Err(StorytellerError::BudgetExhausted);
-        }
-        *remaining -= estimate;
-        Ok(estimate)
-    }
-
-    /// Returns a reservation for a call that was never sent or was refused outright.
-    fn refund(&self, reserved: u64) {
-        let mut remaining = self
-            .remaining_tokens
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        *remaining = remaining.saturating_add(reserved);
+    /// A conservative estimate of what the call will use, charged when it is sent and corrected
+    /// when the supplier reports the real usage.
+    fn estimate(&self, prompt: &str, request: &Expression<'_>) -> u64 {
+        estimate_tokens(prompt, request)
     }
 
     /// Replaces the estimate with the supplier-reported total for a known result.
     fn reconcile(&self, reserved: u64, actual: u128) {
-        let actual = u64::try_from(actual).unwrap_or(u64::MAX);
-        let mut remaining = self
-            .remaining_tokens
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        *remaining = if actual <= reserved {
-            remaining.saturating_add(reserved - actual)
-        } else {
-            remaining.saturating_sub(actual - reserved)
-        };
+        let actual = i64::try_from(actual).unwrap_or(i64::MAX);
+        let reserved = i64::try_from(reserved).unwrap_or(i64::MAX);
+        self.kit
+            .get()
+            .adjust(Unit::TextToken, actual.saturating_sub(reserved));
+    }
+
+    /// Gives back the estimate of a call the supplier refused outright or that never left.
+    fn release(&self, reserved: u64) {
+        let reserved = i64::try_from(reserved).unwrap_or(i64::MAX);
+        self.kit
+            .get()
+            .adjust(Unit::TextToken, reserved.saturating_neg());
     }
 
     async fn attempt(
@@ -1014,16 +1062,13 @@ impl Online {
             .unwrap_or(self.deadline)
             .saturating_sub(started.elapsed());
         if remaining_time.is_zero() {
-            self.refund(reserved);
             return Err(StorytellerError::DeadlineExceeded);
         }
-        let call = match self.build_call(request, key, attempt, prompt, reserved, remaining_time) {
-            Ok(call) => call,
-            Err(error) => {
-                self.refund(reserved);
-                return Err(error);
-            }
-        };
+        let call = self.build_call(request, key, attempt, prompt, reserved, remaining_time)?;
+        // The call is about to be sent: the estimate is charged from here. It stays charged if
+        // the call outlives its deadline or its outcome is unknown, and is corrected below when
+        // the supplier reports what the call used (or refuses it outright).
+        self.kit.get().charge(Unit::TextToken, reserved);
         let owner = || RequestOwnerState {
             current: Some(&call.current),
             elapsed: Duration::ZERO,
@@ -1062,16 +1107,14 @@ impl Online {
         })
     }
 
-    /// Maps an adapter failure to the caller's error and the budget outcome. Only a refusal
-    /// the supplier reported before doing work, or a failure before sending, is refunded.
+    /// Maps an adapter failure to the caller's error and the budget outcome. A supplier-reported
+    /// usage replaces the estimate; otherwise only a refusal the supplier reported before doing
+    /// work, or a failure before sending, is given back.
     fn settle_failure(
         &self,
         error: TextResponseError,
         reserved: u64,
     ) -> Result<Attempt, StorytellerError> {
-        if let Some(usage) = error.supplier_usage() {
-            self.reconcile(reserved, usage.total_tokens);
-        }
         let reason = error.reason();
         let never_sent = matches!(
             error,
@@ -1089,8 +1132,10 @@ impl Online {
                 ProviderFailureClass::InvalidRequest | ProviderFailureClass::Denied
             )
         );
-        if never_sent || refused_by_supplier {
-            self.refund(reserved);
+        if let Some(usage) = error.supplier_usage() {
+            self.reconcile(reserved, usage.total_tokens);
+        } else if never_sent || refused_by_supplier {
+            self.release(reserved);
         }
         match reason {
             TextResponseError::Contract {
@@ -1125,15 +1170,8 @@ impl Online {
         if let Some(effort) = request.profile.reasoning {
             config = config.with_reasoning_effort(effort);
         }
-        let limits = NativeHttpLimits {
-            connect_timeout: remaining_time.min(Duration::from_secs(5)),
-            read_timeout: remaining_time,
-            total_timeout: remaining_time,
-            maximum_request_bytes: MAXIMUM_PROMPT_BYTES + 2048,
-            maximum_response_bytes: 256 * 1024,
-            maximum_header_bytes: 16 * 1024,
-            maximum_chunks: 4096,
-        };
+        let limits =
+            ProviderLimits::new(remaining_time, MAXIMUM_PROMPT_BYTES + 2048, 256 * 1024).build();
         #[allow(
             unused_mut,
             reason = "only the loopback test fixture rebinds the provider"
@@ -1378,27 +1416,79 @@ fn canonical(value: &Value) -> String {
     }
 }
 
-fn cache_key(model: &str, request: &Expression<'_>) -> [u8; 32] {
-    let slots: Vec<Value> = request
-        .slots
-        .iter()
-        .map(|slot| {
-            json!({"name": slot.name, "max_chars": slot.max_chars, "must_mention": slot.must_mention, "forbidden": slot.forbidden})
-        })
-        .collect();
-    let description = format!(
-        "{PROMPT_VERSION}\n{model}\n{}\n{}\n{}\n{}\n{:?}",
-        request.purpose,
-        canonical(request.facts),
-        Value::Array(slots),
-        request.style,
-        request.profile,
-    );
-    Sha256::digest(description.as_bytes()).into()
+/// One request for prose as a `text` resource. Its variant is the request's purpose; its
+/// canonical description is everything that shapes the answer, so equal descriptions are equal
+/// requests and nothing else is.
+pub(super) struct TextSpec {
+    purpose: String,
+    canonical: String,
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+impl TextSpec {
+    pub(super) fn of(model: &str, request: &Expression<'_>) -> Self {
+        let slots: Vec<Value> = request
+            .slots
+            .iter()
+            .map(|slot| {
+                json!({
+                    "name": slot.name,
+                    "max_chars": slot.max_chars,
+                    "must_mention": slot.must_mention,
+                    "forbidden": slot.forbidden,
+                    "withheld": slot.withheld,
+                    "spoken": slot.spoken.iter().map(|rule| format!("{rule:?}")).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        // The profile's deadline bounds the call; it does not shape the text, so it is not here.
+        let profile = json!({
+            "reasoning": request.profile.reasoning.map(|effort| format!("{effort:?}")),
+            "output_tokens": request.profile.output_tokens,
+            "guidance": request.profile.guidance,
+        });
+        let canonical = json!({
+            "prompt_version": PROMPT_VERSION,
+            "instruction": hex(&Sha256::digest(INSTRUCTION.as_bytes())),
+            "model": model,
+            "purpose": request.purpose,
+            "facts": canonical(request.facts),
+            "slots": slots,
+            "style": request.style,
+            "profile": profile,
+        })
+        .to_string();
+        Self {
+            purpose: request.purpose.to_owned(),
+            canonical,
+        }
+    }
+
+    /// The hash of the spec under the text kind's contract version.
+    pub(super) fn digest(&self) -> [u8; 32] {
+        TEXT.digest(&self.canonical)
+    }
+
+    /// What the text is about, for the audit lines: `text:<purpose>`.
+    pub(super) fn subject(&self) -> String {
+        format!("text:{}", self.purpose)
+    }
+}
+
+fn cache_key(model: &str, request: &Expression<'_>) -> [u8; 32] {
+    TextSpec::of(model, request).digest()
+}
+
+/// The `RESOURCE ready` or `RESOURCE failed` line of one expression, in the hub's format.
+fn record_text_outcome<T>(
+    key: &str,
+    subject: &str,
+    took: Duration,
+    outcome: &Result<T, StorytellerError>,
+) {
+    match outcome {
+        Ok(_) => TEXT.line("ready", key, subject, took, &format!("{key}.json"), ""),
+        Err(error) => TEXT.line("failed", key, subject, took, "", storyteller_failure(error)),
+    }
 }
 
 fn storyteller_failure(error: &StorytellerError) -> &'static str {
@@ -1844,10 +1934,11 @@ async fn write_cache(file: PathBuf, values: &BTreeMap<String, String>) -> io::Re
         let directory = file
             .parent()
             .ok_or_else(|| io::Error::other("cache path has no directory"))?;
-        std::fs::create_dir_all(directory)?;
-        let staging = file.with_extension("tmp");
-        std::fs::write(&staging, bytes)?;
-        std::fs::rename(&staging, &file)
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| io::Error::other("cache path has no file name"))?;
+        write_atomic(directory, name, &bytes)
     })
     .await
     .map_err(io::Error::other)?

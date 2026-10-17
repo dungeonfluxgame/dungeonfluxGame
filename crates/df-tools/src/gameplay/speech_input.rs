@@ -9,8 +9,10 @@
 //! only safe actor IDs, sizes, durations and outcome labels. Only the words are used; nothing
 //! is derived from the voice itself.
 //!
-//! The spend is bounded by a per-run budget of audio seconds that is charged before the
-//! provider call and never refunded, and a player has at most one clip in flight.
+//! The spend is recorded on the generation hub's `SttSecond` ledger account when the provider
+//! call is sent and kept whatever the outcome. There is no cap: nothing is refused for cost.
+//! A player has at most one clip in flight. A transcription is a call with no store:
+//! it keeps no cache entry, only the hub's `RESOURCE` audit lines and its spend.
 use std::{
     collections::BTreeMap,
     env::VarError,
@@ -39,9 +41,9 @@ use df_provider_api::{
     RequestUsage, SttEventKind, SttSemantics,
 };
 use df_providers::{
-    CandidateRouteId, ElevenSttBasis, ElevenSttRequest, NativeHttpLimits, NativeHttpRefusal,
-    NativeSpeechProvider, SpeechAdapterReason, SpeechInputFormat, SpeechTranscriptProfile,
-    registered_speech_provider,
+    CandidateRouteId, ELEVEN_STT_MODEL, ElevenSttBasis, ElevenSttRequest, NativeHttpLimits,
+    NativeHttpRefusal, NativeSpeechProvider, ProviderLimits, SpeechAdapterReason,
+    SpeechInputFormat, SpeechTranscriptProfile, registered_speech_provider,
 };
 use df_session::inbox::InboxHandle;
 use df_types::{
@@ -51,18 +53,21 @@ use df_types::{
 use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 
-use super::{actor, model};
+use super::model;
+use super::{
+    actor,
+    resource_adapters::{Kit, KitSlot, TRANSCRIPTION, hex},
+    resources::Unit,
+};
 use crate::speech_clip::{
     BINDING_HEADER, CANCEL_PATH, CLIP_CONTENT_TYPE, ContainerFault, MAXIMUM_ACCEPTED_CLIP,
     MAXIMUM_CLIP_BYTES, MINIMUM_CLIP, OUTCOME_HEADER, SPEECH_PATH, STATUS_PATH, SpeechOutcome,
     UPLOAD_ID_HEADER, pcm_duration, wav_pcm,
 };
 
-const DEFAULT_BUDGET_SECONDS: u32 = MAXIMUM_BUDGET_SECONDS;
-const MAXIMUM_BUDGET_SECONDS: u32 = 86_400;
 /// The only model the registered provider route sends. The setting names it so a different
 /// model cannot be selected without a matching provider route.
-const REGISTERED_MODEL: &str = "scribe_v2";
+const REGISTERED_MODEL: &str = ELEVEN_STT_MODEL;
 /// The most the provider may take, end to end; it is also the request deadline.
 const PROVIDER_DEADLINE: Duration = Duration::from_secs(12);
 const IDENTITY_DEADLINE: Duration = Duration::from_secs(5);
@@ -76,7 +81,6 @@ const MAXIMUM_REQUEST_BYTES: usize = MAXIMUM_CLIP_BYTES / 2 + 4096;
 pub(super) struct SpeechInputs {
     pub(super) credential: Result<String, VarError>,
     pub(super) mode: Result<String, VarError>,
-    pub(super) seconds_budget: Result<String, VarError>,
     pub(super) model: Result<String, VarError>,
 }
 
@@ -85,7 +89,6 @@ impl SpeechInputs {
         Self {
             credential: std::env::var("ELEVENLABS_API_KEY"),
             mode: std::env::var("DF_GAMEPLAY_STT"),
-            seconds_budget: std::env::var("DF_GAMEPLAY_STT_SECONDS_BUDGET"),
             model: std::env::var("DF_GAMEPLAY_STT_MODEL"),
         }
     }
@@ -120,7 +123,6 @@ impl std::fmt::Debug for SpeechCredential {
 #[derive(Debug)]
 pub(super) struct SpeechConfiguration {
     credential: SpeechCredential,
-    budget_seconds: u32,
     model: &'static str,
 }
 
@@ -151,14 +153,6 @@ pub(super) fn speech_settings(inputs: SpeechInputs) -> Result<SpeechSettings, io
         Some("off") => true,
         Some(_) => return Err(refused("DF_GAMEPLAY_STT")),
     };
-    let budget_seconds = match optional(inputs.seconds_budget)? {
-        Some(value) => value
-            .parse::<u32>()
-            .ok()
-            .filter(|seconds| (1..=MAXIMUM_BUDGET_SECONDS).contains(seconds))
-            .ok_or_else(|| refused("DF_GAMEPLAY_STT_SECONDS_BUDGET"))?,
-        None => DEFAULT_BUDGET_SECONDS,
-    };
     let model = match optional(inputs.model)?.as_deref() {
         None | Some(REGISTERED_MODEL) => REGISTERED_MODEL,
         Some(_) => return Err(refused("DF_GAMEPLAY_STT_MODEL")),
@@ -171,7 +165,6 @@ pub(super) fn speech_settings(inputs: SpeechInputs) -> Result<SpeechSettings, io
     };
     Ok(SpeechSettings::On(SpeechConfiguration {
         credential: SpeechCredential(credential),
-        budget_seconds,
         model,
     }))
 }
@@ -180,7 +173,7 @@ struct Active {
     provider: NativeSpeechProvider,
     deadline: Duration,
     model: &'static str,
-    budget: Mutex<u32>,
+    kit: KitSlot,
     in_flight: Mutex<BTreeMap<MemberId, Flight>>,
 }
 
@@ -253,37 +246,41 @@ impl SpeechInput {
         Ok(Self::with_provider(
             provider,
             configuration.model,
-            configuration.budget_seconds,
             PROVIDER_DEADLINE,
         ))
     }
 
     fn limits() -> NativeHttpLimits {
-        NativeHttpLimits {
-            connect_timeout: Duration::from_secs(5),
-            read_timeout: PROVIDER_DEADLINE,
-            total_timeout: PROVIDER_DEADLINE,
-            maximum_request_bytes: MAXIMUM_REQUEST_BYTES,
-            maximum_response_bytes: MAXIMUM_PROVIDER_RESPONSE_BYTES,
-            maximum_header_bytes: 16 * 1024,
-            maximum_chunks: 4096,
-        }
+        ProviderLimits::new(
+            PROVIDER_DEADLINE,
+            MAXIMUM_REQUEST_BYTES,
+            MAXIMUM_PROVIDER_RESPONSE_BYTES,
+        )
+        .build()
     }
 
     fn with_provider(
         provider: NativeSpeechProvider,
         model: &'static str,
-        budget_seconds: u32,
         deadline: Duration,
     ) -> Self {
+        let active = Active {
+            provider,
+            deadline,
+            model,
+            kit: KitSlot::private(),
+            in_flight: Mutex::new(BTreeMap::new()),
+        };
         Self {
-            mode: Arc::new(Mode::On(Box::new(Active {
-                provider,
-                deadline,
-                model,
-                budget: Mutex::new(budget_seconds),
-                in_flight: Mutex::new(BTreeMap::new()),
-            }))),
+            mode: Arc::new(Mode::On(Box::new(active))),
+        }
+    }
+
+    /// Puts speech input on the server's generation hub, so its spend is counted on the hub's
+    /// `SttSecond` account. A speech input that is off has nothing to attach.
+    pub(super) fn attach_kit(&self, kit: &Kit) {
+        if let Mode::On(active) = &*self.mode {
+            active.kit.attach(kit);
         }
     }
 
@@ -291,11 +288,7 @@ impl SpeechInput {
     pub(super) fn startup_line(&self) -> String {
         match &*self.mode {
             Mode::Off(reason) => format!("STT off ({})", reason.reason()),
-            Mode::On(active) => format!(
-                "STT on model={} budget={}s",
-                active.model,
-                *locked(&active.budget)
-            ),
+            Mode::On(active) => format!("STT on model={}", active.model),
         }
     }
 
@@ -303,7 +296,6 @@ impl SpeechInput {
     fn status(&self) -> SpeechOutcome {
         match &*self.mode {
             Mode::Off(_) => SpeechOutcome::Unavailable,
-            Mode::On(active) if *locked(&active.budget) == 0 => SpeechOutcome::BudgetSpent,
             Mode::On(_) => SpeechOutcome::Available,
         }
     }
@@ -358,16 +350,13 @@ impl SpeechInput {
         }
         true
     }
+}
 
-    /// Spend is committed before the call and kept whatever the outcome: a call whose result
-    /// is unknown may still have been billed.
-    fn charge(active: &Active, seconds: u32) -> Result<(), SpeechOutcome> {
-        let mut remaining = locked(&active.budget);
-        if seconds > *remaining {
-            return Err(SpeechOutcome::BudgetSpent);
-        }
-        *remaining -= seconds;
-        Ok(())
+impl Active {
+    /// Records `seconds` of audio as spent, when the call is about to be sent. Kept whatever the
+    /// outcome: a call whose result is unknown may still have been billed.
+    fn charge(&self, seconds: u64) {
+        self.kit.get().charge(Unit::SttSecond, seconds);
     }
 }
 
@@ -397,7 +386,6 @@ impl Admission {
         }
         let seconds = u32::try_from(duration.as_secs() + u64::from(duration.subsec_nanos() > 0))
             .map_err(|_| SpeechOutcome::TooLong)?;
-        SpeechInput::charge(active, seconds)?;
         span.event(
             "gameplay.speech.clip",
             &[
@@ -411,7 +399,7 @@ impl Admission {
             .take()
             .ok_or(SpeechOutcome::ProviderFailed)?;
         let provider_started = Instant::now();
-        let text = transcribe(active, pcm, duration, cancellation).await;
+        let text = transcribe(active, pcm, duration, cancellation, u64::from(seconds)).await;
         *provider_elapsed_ms = Some(provider_started.elapsed().as_millis());
         let text = text?;
         span.event(
@@ -492,6 +480,7 @@ async fn transcribe(
     pcm: &[u8],
     duration: Duration,
     cancellation: oneshot::Receiver<()>,
+    seconds: u64,
 ) -> Result<String, SpeechOutcome> {
     let ids = RequestIds::new()?;
     let binding = ids.binding(active.deadline)?;
@@ -517,6 +506,9 @@ async fn transcribe(
         owner(&binding),
     )
     .map_err(failed)?;
+    // The request is formed and checked, so the call is about to be sent: the seconds are spent
+    // from here, whatever the outcome. A request that never got this far costs nothing.
+    active.charge(seconds);
     let call = active
         .provider
         .transcribe(&request, owner(&binding), async move {
@@ -709,6 +701,7 @@ impl RouteState {
     async fn handle(&self, headers: &HeaderMap, body: Body, span: &mut OperationSpan) -> Response {
         let request_started = Instant::now();
         let resource_id = upload_id_from(headers).ok().map(speech_resource_id);
+        transcription_line("request", resource_id.as_deref(), Duration::ZERO, "");
         record_speech_resource(
             "gameplay.speech_input.requested",
             resource_id.as_deref(),
@@ -739,6 +732,12 @@ impl RouteState {
             )
             .await;
         if cancelled {
+            transcription_line(
+                "failed",
+                resource_id.as_deref(),
+                request_started.elapsed(),
+                "cancelled",
+            );
             span.finish("cancelled", received);
             record_speech_resource(
                 "gameplay.speech_input.failed",
@@ -764,6 +763,12 @@ impl RouteState {
             .map(|transcript| transcript.chars().count());
         span.finish(outcome.label(), received);
         let success = matches!(outcome, SpeechOutcome::Heard | SpeechOutcome::NothingHeard);
+        transcription_line(
+            if success { "ready" } else { "failed" },
+            resource_id.as_deref(),
+            request_started.elapsed(),
+            if success { "" } else { outcome.label() },
+        );
         record_speech_resource(
             if success {
                 "gameplay.speech_input.ready"
@@ -862,6 +867,15 @@ impl RouteState {
         let member = (self.identify)(credential).await?;
         Ok(self.input.cancel(member, upload_id))
     }
+}
+
+/// One `RESOURCE` line of a transcription, in the hub's format. A transcription has no store, so
+/// it has no handle; its key is the hash of the clip's opaque resource id, never of the audio or
+/// the words.
+fn transcription_line(state: &str, resource_id: Option<&str>, took: Duration, error: &str) {
+    let id = resource_id.unwrap_or("unidentified");
+    let key = hex(&TRANSCRIPTION.digest(id));
+    TRANSCRIPTION.line(state, &key, "transcription:clip", took, "", error);
 }
 
 fn speech_resource_id(upload_id: [u8; 16]) -> String {
@@ -1174,7 +1188,7 @@ mod tests {
         })
     }
 
-    fn input_with(fake: &FakeScribe, budget: u32, deadline: Duration) -> SpeechInput {
+    fn input_with(fake: &FakeScribe, deadline: Duration) -> SpeechInput {
         let provider = registered_speech_provider(
             CandidateRouteId::ElevenScribeV2Stt,
             "test-credential",
@@ -1183,7 +1197,7 @@ mod tests {
         .unwrap()
         .for_loopback_fixture(fake.address)
         .unwrap();
-        SpeechInput::with_provider(provider, REGISTERED_MODEL, budget, deadline)
+        SpeechInput::with_provider(provider, REGISTERED_MODEL, deadline)
     }
 
     fn app(input: &SpeechInput) -> Router {
@@ -1277,17 +1291,72 @@ mod tests {
         (outcome, String::from_utf8(text.to_vec()).unwrap())
     }
 
-    fn remaining(input: &SpeechInput) -> u32 {
+    /// The audio seconds charged on the hub's ledger so far.
+    fn charged(input: &SpeechInput) -> u64 {
+        ledger_spend(input).committed
+    }
+
+    /// What the hub's ledger holds for speech input: the seconds reserved and kept.
+    fn ledger_spend(input: &SpeechInput) -> crate::gameplay::resources::Spend {
         match &*input.mode {
-            Mode::On(active) => *locked(&active.budget),
-            Mode::Off(_) => 0,
+            Mode::On(active) => active.kit.get().hub().ledger().snapshot(Unit::SttSecond),
+            Mode::Off(_) => panic!("speech input should be on"),
         }
+    }
+
+    #[tokio::test]
+    async fn transcription_spend_goes_through_the_ledger_and_writes_resource_lines() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let id = 0xA11CE_u128;
+        let upload = Upload::from(1, clip(2_100)).with_upload_id(&format!("{id:032x}"));
+        let resource = speech_resource_id(id.to_be_bytes());
+
+        let (outcome, _) = send(&mut app, upload).await;
+
+        assert_eq!(outcome, SpeechOutcome::Heard);
+        let spend = ledger_spend(&input);
+        assert_eq!(spend.committed, 3, "2.1 s is charged as 3 whole seconds");
+        assert_eq!(charged(&input), 3);
+        let key = hex(&TRANSCRIPTION.digest(&resource));
+        let lines = crate::gameplay::actor::audit_lines_containing(&key[..32]);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("RESOURCE request kind=transcription")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("RESOURCE ready kind=transcription")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("zebra")),
+            "no words reach the audit line"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clip_that_is_refused_before_it_is_sent_gives_its_seconds_back() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+
+        let (outcome, _) = send(&mut app, Upload::from(1, b"RIFF not a clip".to_vec())).await;
+
+        assert_eq!(outcome, SpeechOutcome::Malformed);
+        assert_eq!(charged(&input), 0);
+        assert_eq!(ledger_spend(&input).committed, 0);
+        assert_eq!(fake.calls(), 0);
     }
 
     #[tokio::test]
     async fn a_players_clip_is_transcribed_and_only_the_trimmed_words_come_back() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
 
         let (outcome, text) = send(&mut app, Upload::from(1, clip(1_500))).await;
@@ -1303,7 +1372,7 @@ mod tests {
         const UPLOAD_ID: &str = "00112233445566778899aabbccddeeff";
 
         let fake = FakeScribe::start(Duration::from_secs(10), Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
         let mut upload_app = app.clone();
         let upload = Upload::from(1, clip(1_500))
@@ -1357,20 +1426,20 @@ mod tests {
     #[tokio::test]
     async fn a_clip_with_no_words_is_nothing_heard_and_still_charged() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::NoWords);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
 
         let (outcome, text) = send(&mut app, Upload::from(1, clip(1_500))).await;
 
         assert_eq!(outcome, SpeechOutcome::NothingHeard);
         assert_eq!(text, "");
-        assert_eq!(remaining(&input), 598);
+        assert_eq!(charged(&input), 2);
     }
 
     #[tokio::test]
     async fn a_clip_over_one_mebibyte_is_refused_before_any_provider_call() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
 
         let (declared, _) = send(&mut app, Upload::from(1, vec![0; MAXIMUM_CLIP_BYTES + 1])).await;
@@ -1382,13 +1451,13 @@ mod tests {
         assert_eq!(declared, SpeechOutcome::TooLarge);
         assert_eq!(reply.headers()[OUTCOME_HEADER], "too_large");
         assert_eq!(fake.calls(), 0);
-        assert_eq!(remaining(&input), 600);
+        assert_eq!(charged(&input), 0);
     }
 
     #[tokio::test]
     async fn clips_that_are_the_wrong_type_length_or_container_are_refused_unspent() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
         let mut ogg = Upload::from(1, clip(1_000));
         ogg.content_type = "audio/ogg";
@@ -1416,13 +1485,13 @@ mod tests {
             ]
         );
         assert_eq!(fake.calls(), 0);
-        assert_eq!(remaining(&input), 600);
+        assert_eq!(charged(&input), 0);
     }
 
     #[tokio::test]
     async fn a_request_that_is_not_an_authenticated_player_of_this_page_is_refused() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
         let mut anonymous = Upload::from(1, clip(1_000));
         anonymous.binding = None;
@@ -1454,13 +1523,13 @@ mod tests {
             ]
         );
         assert_eq!(fake.calls(), 0);
-        assert_eq!(remaining(&input), 600);
+        assert_eq!(charged(&input), 0);
     }
 
     #[tokio::test]
     async fn a_second_clip_from_the_same_player_waits_while_the_first_is_in_flight() {
         let fake = FakeScribe::start(Duration::from_millis(400), Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let first = tokio::spawn({
             let mut app = app(&input);
             async move { send(&mut app, Upload::from(1, clip(1_000))).await }
@@ -1485,7 +1554,7 @@ mod tests {
     #[tokio::test]
     async fn a_provider_that_is_too_slow_times_out_and_the_player_may_try_again() {
         let fake = FakeScribe::start(Duration::from_millis(1_500), Answer::Words);
-        let input = input_with(&fake, 600, Duration::from_millis(300));
+        let input = input_with(&fake, Duration::from_millis(300));
         let mut app = app(&input);
 
         let (outcome, text) = send(&mut app, Upload::from(1, clip(1_000))).await;
@@ -1499,37 +1568,35 @@ mod tests {
     #[tokio::test]
     async fn a_provider_error_is_a_provider_failure_and_the_spend_stays_committed() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Failure);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
 
         let (outcome, text) = send(&mut app, Upload::from(1, clip(2_100))).await;
 
         assert_eq!(outcome, SpeechOutcome::ProviderFailed);
         assert_eq!(text, "");
-        assert_eq!(remaining(&input), 597);
+        assert_eq!(charged(&input), 3);
     }
 
     #[tokio::test]
-    async fn the_budget_is_charged_in_whole_seconds_before_the_call_until_it_is_spent() {
+    async fn clips_are_charged_in_whole_seconds_and_never_refused_for_cost() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
-        let input = input_with(&fake, 4, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
         assert_eq!(input.status(), SpeechOutcome::Available);
 
-        let charged_first = send(&mut app, Upload::from(1, clip(1_001))).await.0;
-        let remaining_after_first = remaining(&input);
-        let too_big_for_what_is_left = send(&mut app, Upload::from(1, clip(2_500))).await.0;
-        let exact = send(&mut app, Upload::from(1, clip(2_000))).await.0;
-        let spent = send(&mut app, Upload::from(1, clip(1_000))).await.0;
+        let first = send(&mut app, Upload::from(1, clip(1_001))).await.0;
+        let after_first = charged(&input);
+        let second = send(&mut app, Upload::from(1, clip(2_500))).await.0;
+        let third = send(&mut app, Upload::from(1, clip(2_000))).await.0;
 
-        assert_eq!(charged_first, SpeechOutcome::Heard);
-        assert_eq!(remaining_after_first, 2);
-        assert_eq!(too_big_for_what_is_left, SpeechOutcome::BudgetSpent);
-        assert_eq!(exact, SpeechOutcome::Heard);
-        assert_eq!(spent, SpeechOutcome::BudgetSpent);
-        assert_eq!(remaining(&input), 0);
-        assert_eq!(input.status(), SpeechOutcome::BudgetSpent);
-        assert_eq!(fake.calls(), 2);
+        assert_eq!(first, SpeechOutcome::Heard);
+        assert_eq!(after_first, 2);
+        assert_eq!(second, SpeechOutcome::Heard);
+        assert_eq!(third, SpeechOutcome::Heard);
+        assert_eq!(charged(&input), 2 + 3 + 2);
+        assert_eq!(input.status(), SpeechOutcome::Available);
+        assert_eq!(fake.calls(), 3);
     }
 
     #[tokio::test]
@@ -1558,7 +1625,7 @@ mod tests {
     async fn the_status_route_reports_availability_to_anyone_and_the_startup_line_names_the_model()
     {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let mut app = app(&input);
 
         let status = Service::call(
@@ -1573,13 +1640,13 @@ mod tests {
 
         assert_eq!(status.status(), StatusCode::OK);
         assert_eq!(status.headers()[OUTCOME_HEADER], "available");
-        assert_eq!(input.startup_line(), "STT on model=scribe_v2 budget=600s");
+        assert_eq!(input.startup_line(), "STT on model=scribe_v2");
     }
 
     #[tokio::test]
     async fn no_audio_or_transcript_text_reaches_an_emitted_span() {
         let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
-        let input = input_with(&fake, 600, PROVIDER_DEADLINE);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
         let state = RouteState {
             input,
             identify: identity(),
@@ -1636,42 +1703,34 @@ mod tests {
         assert!(line.chars().all(|letter| letter == 'é'));
     }
 
-    fn inputs(values: [Option<&str>; 4]) -> SpeechInputs {
+    fn inputs(values: [Option<&str>; 3]) -> SpeechInputs {
         let read = |value: Option<&str>| value.map(str::to_owned).ok_or(VarError::NotPresent);
         SpeechInputs {
             credential: read(values[0]),
             mode: read(values[1]),
-            seconds_budget: read(values[2]),
-            model: read(values[3]),
+            model: read(values[2]),
         }
     }
 
     #[test]
-    fn settings_default_to_the_largest_budget_and_the_registered_model() {
-        let SpeechSettings::On(on) =
-            speech_settings(inputs([Some("key"), None, None, None])).unwrap()
+    fn settings_default_to_the_registered_model() {
+        let SpeechSettings::On(on) = speech_settings(inputs([Some("key"), None, None])).unwrap()
         else {
             panic!("speech input should be on");
         };
 
-        assert_eq!(on.budget_seconds, MAXIMUM_BUDGET_SECONDS);
         assert_eq!(on.model, "scribe_v2");
-        let explicit = speech_settings(inputs([
-            Some("key"),
-            Some("on"),
-            Some("90"),
-            Some("scribe_v2"),
-        ]))
-        .unwrap();
-        assert!(matches!(explicit, SpeechSettings::On(on) if on.budget_seconds == 90));
+        let explicit =
+            speech_settings(inputs([Some("key"), Some("on"), Some("scribe_v2")])).unwrap();
+        assert!(matches!(explicit, SpeechSettings::On(on) if on.model == "scribe_v2"));
     }
 
     #[test]
     fn speech_input_is_off_without_a_credential_or_when_switched_off() {
         for (values, reason) in [
-            ([None, None, None, None], SpeechOff::NoCredential),
-            ([Some(""), None, None, None], SpeechOff::NoCredential),
-            ([Some("key"), Some("off"), None, None], SpeechOff::Disabled),
+            ([None, None, None], SpeechOff::NoCredential),
+            ([Some(""), None, None], SpeechOff::NoCredential),
+            ([Some("key"), Some("off"), None], SpeechOff::Disabled),
         ] {
             assert!(matches!(
                 speech_settings(inputs(values)).unwrap(),
@@ -1683,28 +1742,13 @@ mod tests {
     #[test]
     fn invalid_settings_are_refused_without_echoing_them() {
         for (values, name) in [
+            ([Some("key"), Some("maybe-secret"), None], "DF_GAMEPLAY_STT"),
             (
-                [Some("key"), Some("maybe-secret"), None, None],
-                "DF_GAMEPLAY_STT",
-            ),
-            (
-                [Some("key"), None, Some("0"), None],
-                "DF_GAMEPLAY_STT_SECONDS_BUDGET",
-            ),
-            (
-                [Some("key"), None, Some("999999999"), None],
-                "DF_GAMEPLAY_STT_SECONDS_BUDGET",
-            ),
-            (
-                [Some("key"), None, Some("ten"), None],
-                "DF_GAMEPLAY_STT_SECONDS_BUDGET",
-            ),
-            (
-                [Some("key"), None, None, Some("scribe_v1 secret-model")],
+                [Some("key"), None, Some("scribe_v1 secret-model")],
                 "DF_GAMEPLAY_STT_MODEL",
             ),
             (
-                [Some("key"), None, None, Some("some_other_model")],
+                [Some("key"), None, Some("some_other_model")],
                 "DF_GAMEPLAY_STT_MODEL",
             ),
         ] {

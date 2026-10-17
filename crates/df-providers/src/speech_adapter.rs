@@ -30,6 +30,15 @@ use crate::{
 };
 
 const ELEVEN_BASE: &str = "https://api.elevenlabs.io";
+/// The text-to-speech model every request is sent with. Callers that key a stored clip read it
+/// from here, so a changed model is a changed key.
+pub const ELEVEN_TTS_MODEL: &str = "eleven_flash_v2_5";
+/// The language every text-to-speech request is sent with (`language_code`).
+pub const ELEVEN_TTS_LANGUAGE: &str = "en";
+/// The speech-to-text model every transcription request is sent with.
+pub const ELEVEN_STT_MODEL: &str = "scribe_v2";
+/// The language every transcription request is sent with (`language_code`).
+pub const ELEVEN_STT_LANGUAGE: &str = "en";
 const MAX_PCM_BYTES: usize = 1_920_000;
 const MAX_TRANSCRIPT_BYTES: usize = 65_536;
 const MAX_WORDS: usize = 4096;
@@ -57,6 +66,17 @@ pub enum SpeechTranscriptProfile {
 pub enum SpeechOutputFormat {
     Mp3At22050Hz32Kbps,
     PcmAt16000Hz,
+}
+
+impl SpeechOutputFormat {
+    /// The `output_format` query value the format is requested with. The request URL and the key
+    /// of a stored clip both take it from here.
+    pub const fn query_value(self) -> &'static str {
+        match self {
+            Self::Mp3At22050Hz32Kbps => "mp3_22050_32",
+            Self::PcmAt16000Hz => "pcm_16000",
+        }
+    }
 }
 
 pub type ElevenSttRequest = SttRequest<SpeechInputFormat, SpeechTranscriptProfile>;
@@ -645,7 +665,11 @@ impl NativeSpeechProvider {
         };
         serde_json::to_writer(
             &mut body,
-            &serde_json::json!({"text":text,"model_id":"eleven_flash_v2_5","language_code":"en"}),
+            &serde_json::json!({
+                "text": text,
+                "model_id": ELEVEN_TTS_MODEL,
+                "language_code": ELEVEN_TTS_LANGUAGE,
+            }),
         )
         .map_err(|_| {
             error(SpeechAdapterReason::Transport(
@@ -653,9 +677,10 @@ impl NativeSpeechProvider {
             ))
         })?;
         let endpoint = format!(
-            "{}/v1/text-to-speech/{}/stream?output_format=mp3_22050_32",
+            "{}/v1/text-to-speech/{}/stream?output_format={}",
             self.base,
-            encode_path_segment(&semantic.voice)
+            encode_path_segment(&semantic.voice),
+            semantic.output_format.query_value()
         );
         let mapped = HttpRequest::elevenlabs_native(
             &endpoint,
@@ -775,8 +800,8 @@ fn multipart(
         ))
     };
     for (name, value) in [
-        ("model_id", "scribe_v2"),
-        ("language_code", "en"),
+        ("model_id", ELEVEN_STT_MODEL),
+        ("language_code", ELEVEN_STT_LANGUAGE),
         ("file_format", "pcm_s16le_16"),
         ("timestamps_granularity", "word"),
         ("diarize", "false"),
