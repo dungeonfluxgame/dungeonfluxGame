@@ -2180,60 +2180,84 @@ async fn uncertain_confirmation(
     Ok(())
 }
 
-// Jev-judged routing: the phrase gates in approach_model.rs and the trailing-question rule are
-// fallbacks, so these tests pin what the Rust side does with a typed Jev reading.
+// Jev-judged routing: these tests pin what the Rust side does with a typed Jev reading. Without
+// Jev's label nothing is decided from the words.
 
 #[test]
-fn a_jev_physical_line_resolves_its_exact_target_past_the_keyword_gate() {
+fn a_jev_physical_line_resolves_its_listed_target_and_verb() {
+    use super::approach_model::{LineIntent, LineReading, PhysicalAction, PhysicalActionKind};
     use super::dialogue::named_physical_action;
-    let things = vec!["lantern".to_owned()];
-    let words = "I take the lantern when the bell rings.";
-    // Jev decided the line is an action, so the ungated parse names the lantern.
+    let reading = |thing: &str| LineReading {
+        intent: LineIntent::PhysicalAction,
+        skill: None,
+        thing: thing.to_owned(),
+        physical_kind: Some(PhysicalActionKind::Take),
+        source: "jev",
+        elapsed_ms: 0,
+    };
+    // Jev chose the listed lantern, so the act names it with the verb from Jev's label.
     assert_eq!(
-        named_physical_action(words, &things, false).map(|action| action.target),
-        Some("lantern".to_owned())
+        named_physical_action(&reading("lantern")),
+        Some(PhysicalAction {
+            kind: PhysicalActionKind::Take,
+            target: "lantern".to_owned(),
+        })
     );
-    // The rules reading keeps the keyword gate, so the same words remain dialogue.
-    assert!(named_physical_action(words, &things, true).is_none());
+    // Without a physical verb (a speech intent) there is no named action, whatever thing is set.
+    let speech = LineReading {
+        intent: LineIntent::CharacterSpeech,
+        physical_kind: None,
+        ..reading("lantern")
+    };
+    assert_eq!(named_physical_action(&speech), None);
 }
 
 #[test]
 fn a_jev_physical_line_with_no_named_target_resolves_to_no_action() {
+    use super::approach_model::{LineIntent, LineReading, PhysicalActionKind};
     use super::dialogue::named_physical_action;
-    // The caller answers a None through the narrator; it is never an error status.
-    assert!(named_physical_action("I attack.", &[], false).is_none());
+    // Jev chose none of the listed things, so there is no target. The caller answers a None
+    // through the narrator; it is never an error status.
+    let reading = LineReading {
+        intent: LineIntent::PhysicalAction,
+        skill: None,
+        thing: String::new(),
+        physical_kind: Some(PhysicalActionKind::Attack),
+        source: "jev",
+        elapsed_ms: 0,
+    };
+    assert_eq!(named_physical_action(&reading), None);
 }
 
 #[test]
-fn a_hero_line_is_a_question_by_jev_label_and_by_punctuation_only_without_one() {
+fn a_hero_line_form_is_jevs_label_and_a_statement_without_one() {
     use super::dialogue::HeroLineForm::{self, Question, Statement};
     use crate::gameplay::approach_model::JevUnavailable;
     use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
-    let judged = TradeJudgement::Jev;
     assert_eq!(
-        HeroLineForm::from_judgement(Ok("statement"), "Will you help me?"),
-        (Statement, judged),
-        "Jev's statement label overrides a trailing question mark"
+        HeroLineForm::from_judgement(Ok("statement")),
+        (Statement, TradeJudgement::Jev),
+        "Jev's statement label stands even for a line that ends in a question mark"
     );
     assert_eq!(
-        HeroLineForm::from_judgement(Ok("question"), "Help me."),
-        (Question, judged)
+        HeroLineForm::from_judgement(Ok("question")),
+        (Question, TradeJudgement::Jev)
     );
     assert_eq!(
-        HeroLineForm::from_judgement(Err(JevUnavailable::Timeout), "Will you help me?"),
-        (Question, TradeJudgement::Rules(JevUnavailable::Timeout))
+        HeroLineForm::from_judgement(Err(JevUnavailable::Timeout)),
+        (Statement, TradeJudgement::Rules(JevUnavailable::Timeout))
     );
     assert_eq!(
-        HeroLineForm::from_judgement(Err(JevUnavailable::ProviderUnavailable), "Help me."),
+        HeroLineForm::from_judgement(Err(JevUnavailable::ProviderUnavailable)),
         (
             Statement,
             TradeJudgement::Rules(JevUnavailable::ProviderUnavailable)
         )
     );
     assert_eq!(
-        HeroLineForm::from_judgement(Ok("unsure"), "Will you help me?"),
+        HeroLineForm::from_judgement(Ok("unsure")),
         (
-            Question,
+            Statement,
             TradeJudgement::Rules(JevUnavailable::UnknownChoice)
         )
     );
@@ -2242,32 +2266,31 @@ fn a_hero_line_is_a_question_by_jev_label_and_by_punctuation_only_without_one() 
 }
 
 #[test]
-fn a_watched_question_subject_follows_jev_and_keywords_only_for_held_facts() {
+fn a_watched_question_subject_is_only_jevs_held_fact_label() {
     use super::dialogue::{watched_subject_choices, watched_subject_from_judgement};
     use crate::gameplay::adventure::dossier::AnswerSubject;
     use crate::gameplay::approach_model::JevUnavailable;
     use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
     let held = [AnswerSubject::Reward, AnswerSubject::Enemy];
-    let price = "What is the price?";
     assert_eq!(
-        watched_subject_from_judgement(&held, price, Ok("enemy")),
+        watched_subject_from_judgement(&held, Ok("enemy")),
         (Some(AnswerSubject::Enemy), TradeJudgement::Jev)
     );
     assert_eq!(
-        watched_subject_from_judgement(&held, price, Ok("none")),
+        watched_subject_from_judgement(&held, Ok("none")),
         (None, TradeJudgement::Jev)
     );
     assert_eq!(
-        watched_subject_from_judgement(&held, price, Err(JevUnavailable::ProviderUnavailable)),
+        watched_subject_from_judgement(&held, Err(JevUnavailable::ProviderUnavailable)),
         (
-            Some(AnswerSubject::Reward),
+            None,
             TradeJudgement::Rules(JevUnavailable::ProviderUnavailable)
         )
     );
-    // A keyword subject with no held fact is not a subject, as before.
+    // A label Jev names that the dossier holds no answer for is not a subject.
     assert_eq!(
-        watched_subject_from_judgement(&held, "Where is it?", Err(JevUnavailable::Timeout)),
-        (None, TradeJudgement::Rules(JevUnavailable::Timeout))
+        watched_subject_from_judgement(&held, Ok("deadline")),
+        (None, TradeJudgement::Rules(JevUnavailable::UnknownChoice))
     );
     let labels = watched_subject_choices(&held)
         .into_iter()
@@ -2465,6 +2488,11 @@ fn a_final_meta_note_command_is_a_notebook_submission_only_when_declared_meta() 
         InputFinality::Final,
         "we should write down the clues"
     ));
+    assert!(!is_notebook_submission(
+        DiscourseContext::Meta,
+        InputFinality::Final,
+        "write down the clues"
+    ));
 }
 
 #[test]
@@ -2511,9 +2539,10 @@ fn a_party_note_intent_becomes_a_notebook_write() {
         party_note_text("note: Tomas is a mapmaker."),
         "note: Tomas is a mapmaker."
     );
+    // "write down" is wording, not the notebook grammar: it gets the "note: " prefix like any line.
     assert_eq!(
         party_note_text("write down the bell is cracked."),
-        "write down the bell is cracked."
+        "note: write down the bell is cracked."
     );
 }
 

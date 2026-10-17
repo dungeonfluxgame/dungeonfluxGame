@@ -144,8 +144,10 @@ fn room() -> Vec<Target> {
     .collect()
 }
 
-#[test]
-fn played_investigation_and_item_lines_keep_their_target_and_book_skill() {
+#[tokio::test(flavor = "current_thread")]
+async fn played_investigation_and_item_lines_resolve_to_the_target_jev_chooses() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let cases = [
         ("I look around.", "room", "perception"),
         ("What do I see in here?", "room", "perception"),
@@ -290,34 +292,34 @@ fn played_investigation_and_item_lines_keep_their_target_and_book_skill() {
         ),
         ("I pour myself an ale from the jug.", "jug", "perception"),
     ];
+    let options = room();
+    let replies = cases
+        .iter()
+        .map(|(_, target_id, _)| {
+            let position = options
+                .iter()
+                .position(|entry| entry.id == *target_id)
+                .unwrap();
+            answer(&format!("o{}", position + 1))
+        })
+        .collect();
+    let endpoint = FakeEndpoint::start(replies);
+    let model = model(&endpoint);
     for (words, target_id, skill) in cases {
-        let target = local_target(words, &room());
+        let target = model.resolve_investigation_target(words, &options).await;
         assert_eq!(target.id, target_id, "{words}");
-        assert_eq!(local_skill(words), skill, "{words}");
-        if skill != "speech" {
-            let reading = local_reading(words, &room())
-                .unwrap_or_else(|| panic!("unrouted attempt: {words}"));
-            assert!(reading.intent.is_attempt(), "{words}");
-            assert_eq!(reading.skill, Some(skill), "{words}");
-            let observation = Observation {
-                target,
-                skill: skill.into(),
-                succeeded: false,
-                repeated: false,
-                finding: None,
-                private_finding: false,
-            };
-            let answer = observation.fallback();
-            assert!(!answer.is_empty(), "{words}");
-            assert!(!answer.contains("nothing unusual"), "{words}: {answer}");
-        }
+        let observation = Observation {
+            target,
+            skill: skill.into(),
+            succeeded: false,
+            repeated: false,
+            finding: None,
+            private_finding: false,
+        };
+        let text = observation.fallback();
+        assert!(!text.is_empty(), "{words}");
+        assert!(!text.contains("nothing unusual"), "{words}: {text}");
     }
-}
-
-#[test]
-fn conversational_looking_forward_and_listen_address_do_not_become_checks() {
-    assert!(local_reading("I look forward to it.", &room()).is_none());
-    assert!(local_reading("Listen, old man.", &room()).is_none());
 }
 
 #[test]
@@ -410,25 +412,21 @@ async fn jev_target_choice_uses_scene_names_and_resolves_a_description() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn target_choice_timeout_preserves_the_named_target() {
+async fn target_choice_timeout_is_absent_and_named_by_the_players_words() {
     use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
     let endpoint = FakeEndpoint::start(vec![Reply::DelayedStatus(
         Duration::from_millis(900),
         200,
         json!({"answers": {}}),
     )]);
-    let provider = SystemOneChoiceProvider::new(
-        "jev-fixture-sentinel".into(),
-        &format!("http://{}", endpoint.address),
-    )
-    .unwrap();
-    let selected = resolve_target(
-        Some(&provider),
-        "I search Brakka's pack while he isn't looking.",
-        &room(),
-    )
-    .await;
-    assert_eq!(selected.name, "Brakka's pack");
+    let selected = crate::gameplay::approach_model::tests::model(&endpoint)
+        .resolve_investigation_target("I search Brakka's pack while he isn't looking.", &room())
+        .await;
+    assert!(!selected.present);
+    assert_eq!(
+        selected.name,
+        "I search Brakka's pack while he isn't looking"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -572,22 +570,49 @@ fn registered_search_accepts_repeated_and_different_targets_without_unrelated_fi
     )
     .unwrap();
     pack::with_test_pack(loaded, || {
+        use crate::gameplay::storyteller::tests::FakeEndpoint;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         let (mut current, member) = opening();
-        for (index, words) in [
-            "I look around.",
-            "I look around again, more carefully this time.",
-            "I look at the moon.",
-            "I read the notice pinned to the door.",
-            "I listen at the back door for footsteps.",
-            "I study her face.",
+        // Jev answers the room, the courier, and the absent option for the moon, notice and back
+        // door, in the order of the script below.
+        let initial = targets(
+            &crate::gameplay::beat_script_runtime::scene(current.state()).unwrap(),
+            &party_targets(current.state()).unwrap(),
+        );
+        let absent = format!("o{}", initial.len() + 1);
+        let courier = initial
+            .iter()
+            .position(|entry| entry.id == "person-courier")
+            .unwrap();
+        let endpoint = FakeEndpoint::start(vec![
+            crate::gameplay::approach_model::tests::answer("o1"),
+            crate::gameplay::approach_model::tests::answer("o1"),
+            crate::gameplay::approach_model::tests::answer(&absent),
+            crate::gameplay::approach_model::tests::answer(&absent),
+            crate::gameplay::approach_model::tests::answer(&absent),
+            crate::gameplay::approach_model::tests::answer(&format!("o{}", courier + 1)),
+        ]);
+        let model = crate::gameplay::approach_model::tests::model(&endpoint);
+        for (index, (words, skill)) in [
+            ("I look around.", "perception"),
+            (
+                "I look around again, more carefully this time.",
+                "perception",
+            ),
+            ("I look at the moon.", "perception"),
+            ("I read the notice pinned to the door.", "investigation"),
+            ("I listen at the back door for footsteps.", "perception"),
+            ("I study her face.", "insight"),
         ]
         .into_iter()
         .enumerate()
         {
             let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
             let catalog = targets(&scene, &party_targets(current.state()).unwrap());
-            let target = local_target(words, &catalog);
-            let skill = local_skill(words);
+            let target = runtime.block_on(model.resolve_investigation_target(words, &catalog));
             let choices = vec![
                 (
                     crate::gameplay::model::label("attempt-skill").unwrap(),
@@ -637,10 +662,27 @@ fn registered_search_accepts_repeated_and_different_targets_without_unrelated_fi
 
 #[test]
 fn unseen_search_of_companion_pack_uses_companions_passive_perception() {
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let (current, member) = opening();
     let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
     let catalog = targets(&scene, &party_targets(current.state()).unwrap());
-    let target = local_target("I search Vale's pack while he isn't looking.", &catalog);
+    let vale = catalog
+        .iter()
+        .position(|entry| entry.name == "Vale's pack")
+        .unwrap();
+    let endpoint = FakeEndpoint::start(vec![crate::gameplay::approach_model::tests::answer(
+        &format!("o{}", vale + 1),
+    )]);
+    let target = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(
+            crate::gameplay::approach_model::tests::model(&endpoint).resolve_investigation_target(
+                "I search Vale's pack while he isn't looking.",
+                &catalog,
+            ),
+        );
     assert_eq!(target.name, "Vale's pack");
     let choices = vec![
         (
@@ -678,17 +720,29 @@ fn unseen_search_of_companion_pack_uses_companions_passive_perception() {
 
 #[test]
 fn absent_target_key_preserves_apostrophes_and_unicode_without_an_input_panic() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let scene = pack::scene(pack::SceneKey::Opening);
-    let target = local_target("I examine the traveller's café token.", &[]);
+    // With no scene options, Jev's only option is the absent one.
+    let endpoint = FakeEndpoint::start(vec![answer("o1"), answer("o1")]);
+    let jev = model(&endpoint);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let target = runtime
+        .block_on(jev.resolve_investigation_target("I examine the traveller's café token.", &[]));
     let check = rpc::AbilityCheckResult {
         source_revision: format!("srd521-p6:opening:investigation:target-{}", target.id),
         ..Default::default()
     };
     assert_eq!(
         check_target(&scene, &check).unwrap().name,
-        "the traveller's café token"
+        "I examine the traveller's café token"
     );
-    let long = local_target(&format!("I examine the {}.", "é".repeat(100)), &[]);
+    let long = runtime.block_on(
+        jev.resolve_investigation_target(&format!("I examine the {}.", "é".repeat(100)), &[]),
+    );
     let check = rpc::AbilityCheckResult {
         source_revision: format!("srd521-p6:opening:investigation:target-{}", long.id),
         ..Default::default()
@@ -699,12 +753,22 @@ fn absent_target_key_preserves_apostrophes_and_unicode_without_an_input_panic() 
 
 #[test]
 fn an_absent_notice_is_not_resolved_to_the_door_it_would_be_pinned_to() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let mut options = room();
     options.retain(|entry| entry.id != "notice");
-    let target = local_target("I read the notice pinned to the door.", &options);
+    let endpoint = FakeEndpoint::start(vec![answer(&format!("o{}", options.len() + 1))]);
+    let target = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(
+            model(&endpoint)
+                .resolve_investigation_target("I read the notice pinned to the door.", &options),
+        );
     assert!(!target.present);
-    assert_eq!(target.name, "the notice");
-    assert!(target.description.contains("no notice"));
+    assert!(target.id.starts_with("absent-"));
+    assert_eq!(target.name, "I read the notice pinned to the door");
 }
 
 #[test]
@@ -718,8 +782,19 @@ fn looking_around_the_taproom_does_not_select_the_lodging_offer_named_room() {
         .unwrap()
         .clone();
     scene.setting = Some(generated.settings.meeting);
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let options = targets(&scene, &[]);
-    assert_eq!(local_target("I look around the room", &options).id, "room");
+    // The room is always the first option listed, so Jev's first answer is the room.
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    let target = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(
+            model(&endpoint).resolve_investigation_target("I look around the room", &options),
+        );
+    assert_eq!(target.id, "room");
 }
 
 #[test]
@@ -734,17 +809,26 @@ fn narration_sentence_is_not_promoted_to_an_investigation_target() {
         .clone();
     scene.narration = "The courier presses the packet against his chest.".into();
     scene.setting = Some(generated.settings.meeting);
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let options = targets(&scene, &[]);
-    let target = local_target(
-        "I inspect the courier presses the packet against his.",
-        &options,
-    );
+    let endpoint = FakeEndpoint::start(vec![answer(&format!("o{}", options.len() + 1))]);
+    let target = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(model(&endpoint).resolve_investigation_target(
+            "I inspect the courier presses the packet against his.",
+            &options,
+        ));
     assert!(!target.present);
     assert!(target.id.starts_with("absent-"));
 }
 
 #[test]
 fn searching_an_absent_satchel_does_not_search_its_owners_face() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let mut options = room();
     options.push(Target {
         id: "person-innkeeper".into(),
@@ -755,18 +839,17 @@ fn searching_an_absent_satchel_does_not_search_its_owners_face() {
         present: true,
         finding_ids: Vec::new(),
     });
-    let target = local_target("I search her satchel", &options);
+    // The innkeeper is the last option, so Jev's absent answer follows her entry.
+    let endpoint = FakeEndpoint::start(vec![answer(&format!("o{}", options.len() + 1))]);
+    let target = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(model(&endpoint).resolve_investigation_target("I search her satchel", &options));
     assert!(!target.present);
     assert!(!target.person);
-    assert_eq!(target.name, "her satchel");
+    assert_eq!(target.name, "I search her satchel");
 }
-#[test]
-fn looking_behind_the_counter_is_an_investigation_in_the_keyless_route() {
-    let reading = local_reading("I look behind the counter", &[]).unwrap();
-    assert!(reading.intent.is_attempt());
-    assert_eq!(reading.skill, Some("perception"));
-}
-
 #[test]
 fn the_phrase_gives_common_nouns_their_article_and_leaves_names_and_articles_alone() {
     assert_eq!(the_phrase("folded paper label"), "the folded paper label");
@@ -833,6 +916,8 @@ fn every_looked_at_target_reads_as_a_grammatical_sentence() {
 
 #[test]
 fn scene_names_accept_ordinary_synonyms_without_matching_nearby_objects() {
+    use crate::gameplay::approach_model::tests::answer;
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let mut scene = pack::scene(pack::SceneKey::Opening);
     let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
     scene.setting = Some(generated.settings.meeting);
@@ -847,35 +932,32 @@ fn scene_names_accept_ordinary_synonyms_without_matching_nearby_objects() {
     mug.aliases = vec!["tankard".into()];
     let mug_id = format!("thing-{}", mug.id);
     let options = targets(&scene, &[]);
+    let bar_at = options
+        .iter()
+        .position(|entry| entry.id == expected)
+        .unwrap();
+    let mug_at = options.iter().position(|entry| entry.id == mug_id).unwrap();
+    let endpoint = FakeEndpoint::start(vec![
+        answer(&format!("o{}", bar_at + 1)),
+        answer(&format!("o{}", mug_at + 1)),
+    ]);
+    let jev = crate::gameplay::approach_model::tests::model(&endpoint);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     assert_eq!(
-        local_target("I look behind the counter.", &options).id,
+        runtime
+            .block_on(jev.resolve_investigation_target("I look behind the counter.", &options))
+            .id,
         expected
     );
-    assert_eq!(local_target("I examine the mug.", &options).id, mug_id);
-}
-
-#[test]
-fn jev_skill_choice_wins_over_listen_and_sleight_of_hand_keywords() {
-    // Arrange: the keyword reader would pick perception, then sleight-of-hand, for these words.
-    // Act and assert: Jev's chosen skill is the reading, so the keywords do not override it.
     assert_eq!(
-        skill(
-            "I listen at the door for the rustle of coins.",
-            Some("insight")
-        ),
-        "insight"
+        runtime
+            .block_on(jev.resolve_investigation_target("I examine the mug.", &options))
+            .id,
+        mug_id
     );
-    assert_eq!(
-        skill("I palm the coin while I listen.", Some("perception")),
-        "perception"
-    );
-}
-
-#[test]
-fn keyword_skill_applies_only_when_jev_gave_no_skill() {
-    // Jev unavailable: the keyword reader's skill is today's result for these words.
-    assert_eq!(skill("I listen at the door.", None), "perception");
-    assert_eq!(skill("I palm the coin.", None), "sleight-of-hand");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -901,9 +983,27 @@ async fn jev_absent_answer_is_not_replaced_by_an_alias_match() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn without_jev_the_keyword_reader_resolves_the_named_target() {
+async fn jev_absent_answer_gives_the_absent_target_named_by_the_words() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     let options = room();
-    let selected = resolve_target(None, "I examine the tankards.", &options).await;
-    assert_eq!(selected, local_target("I examine the tankards.", &options));
-    assert_eq!(selected.id, "tankards");
+    let words = "I examine the tankards.";
+    let endpoint = FakeEndpoint::start(vec![answer(&format!("o{}", options.len() + 1))]);
+    let selected = model(&endpoint)
+        .resolve_investigation_target(words, &options)
+        .await;
+    assert_eq!(selected, absent_target(words));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn without_jev_the_target_is_absent_even_when_the_words_name_a_present_thing() {
+    use crate::gameplay::approach_model::ApproachModel;
+    // No key means no provider, so nothing is requested and no scene thing is named on a guess.
+    let options = room();
+    let selected = ApproachModel::configured(None)
+        .resolve_investigation_target("I examine the tankards.", &options)
+        .await;
+    assert!(!selected.present);
+    assert!(selected.id.starts_with("absent-"));
+    assert_eq!(selected.name, "I examine the tankards");
 }

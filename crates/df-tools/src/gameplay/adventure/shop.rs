@@ -383,10 +383,12 @@ mod tests {
             );
             let scene = runtime::scene(taken.state()).unwrap();
             assert_eq!(
-                journey::living_scene::interaction_for_line(
+                journey::living_scene::interaction_from_judgement(
                     &scene,
-                    "I put the folded paper label back on the counter."
-                ),
+                    "I put the folded paper label back on the counter.",
+                    Ok("return"),
+                )
+                .0,
                 Some(("folded-label".into(), "return"))
             );
             let returned = interaction(&taken, 8, "folded-label", "return");
@@ -580,12 +582,13 @@ mod tests {
                 initial - 200
             );
             let scene = runtime::scene(traded.state()).unwrap();
-            assert_eq!(
-                journey::living_scene::recipient_for_line(
-                    &scene,
-                    "I give the travelers clothes to Corin."
-                ),
-                Some("shop-adventurer".into())
+            assert!(
+                journey::living_scene::recipient_choices(&scene)
+                    .expect("the scene lists people a hand-over can name")
+                    .person_ids
+                    .iter()
+                    .any(|id| id == "shop-adventurer"),
+                "the listed people include the hand-over recipient Jev chooses from"
             );
             let given = interaction_with_choices(
                 &traded,
@@ -949,13 +952,12 @@ mod tests {
             assert_eq!(sell_terms.maximum_price_cp, 100);
             let buyback_request =
                 "Marek, will you buy these travelers clothes back from me? What would you pay?";
-            // Jev is not called in this test; the phrase fallback reads the same buyback line.
+            // The typed Jev label stands in for the judgement; no Jev call runs in this test.
             let buyback_line = journey::merchant_bargaining::HeroLine {
-                intent: journey::merchant_bargaining::rules_hero_intent(
-                    buyback_request,
-                    None,
-                    crate::gameplay::approach_model::JevUnavailable::ProviderUnavailable,
-                ),
+                intent: journey::merchant_bargaining::HeroTradeIntent::from_label(
+                    "sell_to_merchant",
+                )
+                .expect("sell_to_merchant is a Jev label"),
                 words: buyback_request,
             };
             let mut trade_terms =
@@ -966,6 +968,7 @@ mod tests {
                     "Brynn",
                     &merchant_id,
                     buyback_line,
+                    Some(item_id.as_str()),
                 )
                 .as_deref(),
                 Some(item_id.as_str()),
@@ -988,7 +991,10 @@ mod tests {
                 "Brynn",
                 &merchant_id,
                 buyback_line,
-                Some(&item_id),
+                journey::merchant_bargaining::TradeFocus {
+                    tendered_item_id: Some(item_id.as_str()),
+                    picked_item_id: Some(item_id.as_str()),
+                },
                 &json!({"npc": {"name": "Marek", "role": "merchant"}}),
             )
             .expect("the production reply context recognizes this as merchant buying");

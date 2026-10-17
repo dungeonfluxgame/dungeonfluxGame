@@ -462,103 +462,16 @@ fn word_position(text: &str, alias: &str) -> Option<usize> {
     })
 }
 
-/// Keyword alias reader; runs only when Jev gives no usable target (unavailable, failed, timed out).
-pub(super) fn local_target(words: &str, options: &[Target]) -> Target {
-    let lowered = normalized(words);
-    if ["look around", "what do i see", "what can i see"]
-        .iter()
-        .any(|phrase| lowered.contains(phrase))
-        && let Some(room) = options.iter().find(|entry| entry.id == "room")
-    {
-        return room.clone();
-    }
-    let requested = normalized(&requested_name(words));
-    let primary = requested
-        .split(" on ")
-        .next()
-        .unwrap_or(&requested)
-        .split(" for ")
-        .next()
-        .unwrap_or(&requested)
-        .split(" while ")
-        .next()
-        .unwrap_or(&requested)
-        .split(" pinned to ")
-        .next()
-        .unwrap_or(&requested);
-    // An examination following a manipulation addresses the thing examined.
-    let focus = lowered.split_once(" and look ").map(|(_, tail)| tail);
-    let find = |text: &str| {
-        options
-            .iter()
-            .filter(|entry| entry.id != "room")
-            .flat_map(|entry| {
-                entry.aliases.iter().filter_map(move |alias| {
-                    let alias = normalized(alias);
-                    if matches!(alias.as_str(), "her" | "his")
-                        && (text.contains("search her ") || text.contains("search his "))
-                    {
-                        return None;
-                    }
-                    word_position(text, &alias)
-                        .map(|position| (position, usize::MAX - alias.len(), entry))
-                })
-            })
-            .min_by_key(|(position, length, _)| (*position, *length))
-            .map(|(_, _, entry)| entry.clone())
-    };
-    let named_action = ["read ", "examine ", "look at ", "look under ", "search "]
-        .iter()
-        .any(|prefix| lowered.contains(prefix));
-    let selected = focus.and_then(find).or_else(|| {
-        if named_action && primary != requested {
-            find(primary)
-        } else {
-            find(&lowered)
-        }
-    });
-    if let Some(entry) = selected {
-        return entry;
-    }
-    if ["around", "room", "in here", "place", "detect magic"]
-        .iter()
-        .any(|term| lowered.contains(term))
-    {
-        if let Some(room) = options.iter().find(|entry| entry.id == "room") {
-            return room.clone();
-        }
-    }
-    absent_target(words)
-}
-
 /// The absent target for a named thing outside the scene; Jev's "absent" answer produces it too.
 fn absent_target(words: &str) -> Target {
     // Keep the requested name, including apostrophes, when it is outside the closed scene catalog.
-    let requested = requested_name(words);
-    let noun = requested
-        .split(" on ")
-        .next()
-        .unwrap_or(&requested)
-        .split(" for ")
-        .next()
-        .unwrap_or(&requested)
-        .split(" while ")
-        .next()
-        .unwrap_or(&requested)
-        .split(" pinned to ")
-        .next()
-        .unwrap_or(&requested)
-        .to_owned();
+    let noun = requested_name(words);
     let end = noun
         .char_indices()
         .find(|(index, character)| index + character.len_utf8() > 60)
         .map_or(noun.len(), |(index, _)| index);
     let noun = &noun[..end];
-    let mut absent = target(
-        noun,
-        &format!("You see no {} here.", noun.trim_start_matches("the ")),
-        false,
-    );
+    let mut absent = target(noun, "You see nothing of that here.", false);
     absent.present = false;
     absent.id = format!(
         "absent-{}",
@@ -655,11 +568,7 @@ pub(super) fn check_target(scene: &pack::Scene, check: &rpc::AbilityCheckResult)
         return Some(entry);
     }
     let name = decoded_name(id.strip_prefix("absent-")?)?;
-    let mut absent = target(
-        &name,
-        &format!("You see no {} here.", name.trim_start_matches("the ")),
-        false,
-    );
+    let mut absent = target(&name, "You see nothing of that here.", false);
     absent.id = id.to_owned();
     absent.present = false;
     Some(absent)
@@ -929,31 +838,14 @@ pub(super) fn difficulty_class(
     )
 }
 
-/// Extracts the named thing; used by the keyword reader and to label a Jev-absent target.
+/// The wording of the line up to its first sentence or clause break, at most eight words. It labels
+/// a target Jev found absent; no verb or phrase is matched, so the label is the player's own words.
 fn requested_name(words: &str) -> String {
-    let lowered = words.to_ascii_lowercase();
-    let start = [
-        "look at ",
-        "look under ",
-        "examine ",
-        "search ",
-        "watch ",
-        "read ",
-        "listen at ",
-        "check ",
-        "study ",
-        "behind ",
-    ]
-    .iter()
-    .filter_map(|prefix| lowered.find(prefix).map(|index| index + prefix.len()))
-    .min()
-    .or_else(|| lowered.find("the "))
-    .unwrap_or(0);
-    let tail = words.get(start..).unwrap_or(words).trim();
-    let name = tail
+    let name = words
+        .trim()
         .split(['.', '?', '!', ','])
         .next()
-        .unwrap_or(tail)
+        .unwrap_or_default()
         .split_whitespace()
         .take(8)
         .collect::<Vec<_>>()
@@ -965,15 +857,16 @@ fn requested_name(words: &str) -> String {
     }
 }
 
-/// Jev's closed choice among the scene's names plus an explicit "absent" option is final.
-/// The keyword reader (`local_target`) runs only when Jev gives no usable answer.
+/// Jev's closed choice among the scene's names plus an explicit "absent" option is final. Without
+/// Jev's usable answer no target is read from the words: the request is treated as absent, so
+/// nothing is narrated as present on a guess.
 pub(super) async fn resolve_target(
     provider: Option<&SystemOneChoiceProvider>,
     words: &str,
     options: &[Target],
 ) -> Target {
     let Some(provider) = provider else {
-        return local_target(words, options);
+        return unavailable_target(words, "provider_unavailable");
     };
     let available = options.iter().take(64).collect::<Vec<_>>();
     let mut criteria = available
@@ -995,143 +888,28 @@ pub(super) async fn resolve_target(
                 format!("TARGET source=jev target={:?} reason=absent", target.id));
             target
         }
-        outcome => {
-            let fallback = local_target(words, options);
-            actor::record_audit_line("gameplay.investigation_target",
-                format!("TARGET source=rules target={:?} reason={}", fallback.id,
-                    match outcome { Ok(Ok(_)) => "invalid-index", Ok(Err(_)) => "provider", Err(_) => "deadline" }));
-            fallback
-        }
+        outcome => unavailable_target(
+            words,
+            match outcome {
+                Ok(Ok(_)) => "invalid-index",
+                Ok(Err(_)) => "provider",
+                Err(_) => "deadline",
+            },
+        ),
     }
 }
 
-pub(super) fn local_skill(words: &str) -> &'static str {
-    let words = normalized(words);
-    if words.contains("ask the innkeeper") {
-        "speech"
-    } else if words.contains("listen") {
-        "perception"
-    } else if words.contains("palm")
-        || ((words.contains("pack") || words.contains("rummag"))
-            && (words.contains("isn't looking")
-                || words.contains("unseen")
-                || words.contains("without being seen")))
-    {
-        "sleight-of-hand"
-    } else if words.contains("breathing")
-        || words.contains("colour")
-        || words.contains("ill herself")
-    {
-        "medicine"
-    } else if words.contains("truth")
-        || words.contains("face")
-        || words.contains("watch the people")
-    {
-        "insight"
-    } else if words.contains("tracks") {
-        "survival"
-    } else if words.contains("history") {
-        "history"
-    } else if words.contains("magic") {
-        "arcana"
-    } else if words.contains("herb") {
-        "nature"
-    } else if words.contains("shrine") || words.contains("holy") {
-        "religion"
-    } else if words.contains("examine") || words.contains("read the") || words.contains("letter") {
-        "investigation"
-    } else {
-        "perception"
-    }
-}
-
-/// The keyless migration path for plain phone speech; context never suppresses an observation.
-/// Runs only when Jev gives no usable reading (classify_input source "rules"), never over Jev's.
-pub(super) fn local_reading(
-    words: &str,
-    options: &[Target],
-) -> Option<crate::gameplay::approach_model::LineReading> {
-    use crate::gameplay::approach_model::{LineIntent, LineReading};
-    let lowered = normalized(words);
-    if local_skill(words) == "speech" {
-        return None;
-    }
-    let existing = crate::gameplay::approach_model::local_attempt(words);
-    let explicit = [
-        "i look around",
-        "i look at ",
-        "i look under ",
-        "i look behind ",
-        "i look out ",
-        "i look closely ",
-        "i look for ",
-        "i scan ",
-        "i search ",
-        "i examine ",
-        "i inspect ",
-        "i watch ",
-        "i listen ",
-        "i check ",
-        "i read ",
-        "i study ",
-        "i keep watch",
-        "i keep an eye",
-        "i give the place",
-        "i palm ",
-        "i rummage ",
-        "what do i see",
-        "anything out of place",
-        "what do i know about",
-        "i pour ",
-    ]
-    .iter()
-    .any(|prefix| lowered.starts_with(prefix));
-    let compound = [
-        "look under",
-        "look at",
-        "look closely",
-        "study her face",
-        "check her",
-        "magical about",
-        "what are the dried herbs",
-        "shrine or holy",
-        "may i see the letter",
-        "cast detect magic",
-        "lick the wall",
-        "what is behind the counter",
-    ]
-    .iter()
-    .any(|phrase| lowered.contains(phrase));
-    if !explicit && !compound && existing.is_none() {
-        return None;
-    }
-    let skill = if existing
-        .as_ref()
-        .is_some_and(|attempt| attempt.skill == "stealth")
-    {
-        "stealth"
-    } else {
-        local_skill(words)
-    };
-    let intent = match skill {
-        "insight" => LineIntent::WatchPerson,
-        "survival" => LineIntent::Track,
-        "stealth" => LineIntent::KeepWatch,
-        "investigation" | "arcana" | "history" | "nature" | "religion" => LineIntent::StudyRecall,
-        _ => LineIntent::Examine,
-    };
-    Some(LineReading {
-        intent,
-        skill: Some(skill),
-        thing: local_target(words, options).name,
-        source: "rules",
-        elapsed_ms: 0,
-    })
-}
-
-/// Jev's chosen skill is the reading; the keyword reader supplies a skill only when Jev gave none.
-pub(super) fn skill(words: &str, chosen: Option<&str>) -> String {
-    chosen.map_or_else(|| local_skill(words).to_owned(), str::to_owned)
+/// The neutral target when Jev gives no usable answer: the absent target, audited as unavailable.
+fn unavailable_target(words: &str, reason: &str) -> Target {
+    let target = absent_target(words);
+    actor::record_audit_line(
+        "gameplay.investigation_target",
+        format!(
+            "TARGET source=unavailable target={:?} reason={reason}",
+            target.id
+        ),
+    );
+    target
 }
 
 pub(super) fn finding_skill(skill: pack::FindingSkill) -> &'static str {

@@ -106,6 +106,7 @@ fn plan(act: ActKind, target: Option<Target>, difficulty: Difficulty) -> Freefor
         recipient: None,
         difficulty,
         means: StrikeMeans::Unarmed,
+        spell: None,
     }
 }
 
@@ -121,8 +122,8 @@ fn fair(modifier: i32) -> impl Fn(&str, u8, u8) -> Option<SkillRoll> {
     }
 }
 
-fn run(situation: &Situation, plan: &FreeformPlan, words: &str, die: u8) -> Resolution {
-    adjudicate(situation, plan, words, die, fair(3))
+fn run(situation: &Situation, plan: &FreeformPlan, _words: &str, die: u8) -> Resolution {
+    adjudicate(situation, plan, die, fair(3))
 }
 
 fn performance(resolution: &Resolution) -> &Performance {
@@ -194,7 +195,10 @@ fn a_fighter_cannot_cast_light() {
     let situation = shop();
     let resolution = run(
         &situation,
-        &plan(ActKind::Cast, None, Difficulty::None),
+        &FreeformPlan {
+            spell: Some("Light".to_owned()),
+            ..plan(ActKind::Cast, None, Difficulty::None)
+        },
         "I cast Light at the candle.",
         12,
     );
@@ -216,7 +220,10 @@ fn a_known_spell_is_cast_only_when_the_sheet_names_it() {
     situation.hero.known_spells = vec!["Prestidigitation".to_owned()];
     let resolution = run(
         &situation,
-        &plan(ActKind::Cast, None, Difficulty::None),
+        &FreeformPlan {
+            spell: Some("Prestidigitation".to_owned()),
+            ..plan(ActKind::Cast, None, Difficulty::None)
+        },
         "I cast Prestidigitation to clean the counter.",
         12,
     );
@@ -592,19 +599,6 @@ fn a_hero_line_is_published_before_the_roll_and_the_narration() {
     assert!(lines[0].sequence < lines[1].sequence && lines[1].sequence < lines[2].sequence);
 }
 
-#[test]
-fn a_spell_name_is_cut_at_the_object_of_the_cast() {
-    assert_eq!(
-        spell_named("I cast Light at the candle."),
-        Some("Light".to_owned())
-    );
-    assert_eq!(
-        spell_named("I cast Magic Missile on Corin."),
-        Some("Magic Missile".to_owned())
-    );
-    assert_eq!(spell_named("I cast."), None);
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn jev_plan_asks_closed_questions_in_order_and_takes_each_answer_as_a_position() {
     // Act sense (o1), sense smell (o3), target the room (o11 of 13), difficulty none (o1).
@@ -638,6 +632,61 @@ async fn jev_plan_asks_closed_questions_in_order_and_takes_each_answer_as_a_posi
             .len(),
         13
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jev_names_the_known_spell_last_and_none_names_no_spell() {
+    // Cast is the eleventh act. Plan asks the act, then the target, the difficulty and the spell.
+    let cast = ACT_KINDS
+        .iter()
+        .position(|(kind, _, _)| *kind == ActKind::Cast)
+        .unwrap()
+        + 1;
+    let mut situation = shop();
+    situation.hero.known_spells = vec!["Mage Hand".to_owned()];
+    let named = FakeEndpoint::start(vec![
+        answer(&format!("o{cast}")),
+        answer("o1"),
+        answer("o1"),
+        answer("o1"),
+    ]);
+    let model = ApproachModel::configured(Some(ApproachSettings {
+        credential: "jev-fixture-sentinel".to_owned(),
+        base_url: format!("http://{}", named.address),
+    }));
+    let plan = super::plan(&model, "I cast Mage Hand on the candle.", &situation)
+        .await
+        .expect("jev plan");
+    assert_eq!(plan.act, ActKind::Cast);
+    assert_eq!(plan.spell.as_deref(), Some("Mage Hand"));
+    assert_eq!(named.connections(), 4);
+    assert_eq!(
+        named.bodies()[3]["questions"]["q1"]["criteria"]
+            .as_object()
+            .unwrap()
+            .len(),
+        2
+    );
+    let resolution = run(&situation, &plan, "I cast Mage Hand on the candle.", 12);
+    assert_eq!(performance(&resolution).succeeded, true);
+    assert_eq!(resolution.spell.as_deref(), Some("Mage Hand"));
+
+    let none = FakeEndpoint::start(vec![
+        answer(&format!("o{cast}")),
+        answer("o1"),
+        answer("o1"),
+        answer("o2"),
+    ]);
+    let model = ApproachModel::configured(Some(ApproachSettings {
+        credential: "jev-fixture-sentinel".to_owned(),
+        base_url: format!("http://{}", none.address),
+    }));
+    let plan = super::plan(&model, "I cast something on the candle.", &situation)
+        .await
+        .expect("jev plan");
+    assert_eq!(plan.spell, None);
+    let resolution = run(&situation, &plan, "I cast something on the candle.", 12);
+    assert_eq!(resolution.verdict, Verdict::Refused(Refusal::NoSpell));
 }
 
 fn answer(option: &str) -> Reply {
@@ -977,7 +1026,10 @@ fn a_refused_spell_reaches_the_storyteller_as_the_in_world_sentence() {
     let situation = market_street();
     let resolution = run(
         &situation,
-        &plan(ActKind::Cast, None, Difficulty::None),
+        &FreeformPlan {
+            spell: Some("Light".to_owned()),
+            ..plan(ActKind::Cast, None, Difficulty::None)
+        },
         "I cast Light at the candle.",
         12,
     );

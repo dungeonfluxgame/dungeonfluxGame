@@ -302,8 +302,9 @@ fn explicit_steal_text_routes_to_server_inventory_interaction() {
                     && thing.owner_id.is_some()
             })
             .unwrap();
+        let steal = format!("I steal the {}.", thing.name);
         assert_eq!(
-            living_scene::interaction_for_line(&scene, &format!("I steal the {}.", thing.name),),
+            living_scene::interaction_from_judgement(&scene, &steal, Ok("steal")).0,
             Some((thing.id.clone(), "steal"))
         );
         let attempted = interact(&current, _member, 20, &thing.id, "steal");
@@ -548,6 +549,8 @@ fn soldier_dwarf_fighter_sheet_exposes_its_source_traits_and_both_class_skills()
 
 #[test]
 fn hypothetical_negative_and_questioned_interactions_do_not_execute() {
+    use crate::gameplay::approach_model::JevUnavailable;
+    use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
     let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
     let mut scene = generated
         .pack
@@ -557,6 +560,7 @@ fn hypothetical_negative_and_questioned_interactions_do_not_execute() {
         .unwrap()
         .clone();
     scene.setting = Some(generated.settings.meeting);
+    // Jev's none label executes nothing for these lines, and a missing label is neutral too.
     for words in [
         "What if I open the door?",
         "I do not pick up the tankard",
@@ -564,22 +568,60 @@ fn hypothetical_negative_and_questioned_interactions_do_not_execute() {
         "I open the door?",
         "I do not want a pint of beer",
     ] {
-        assert!(
-            living_scene::interaction_for_line(&scene, words).is_none(),
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, words, Ok("none")).0,
+            None,
+            "{words}"
+        );
+        assert_eq!(
+            living_scene::interaction_from_judgement(
+                &scene,
+                words,
+                Err(JevUnavailable::ProviderUnavailable)
+            )
+            .0,
+            None,
             "{words}"
         );
     }
-    assert_eq!(
-        living_scene::interaction_for_line(&scene, "I open the door")
-            .unwrap()
-            .1,
-        "open"
-    );
+    // A plain open line still runs when Jev labels it open.
+    let (door, judgement) =
+        living_scene::interaction_from_judgement(&scene, "I open the door", Ok("open"));
+    assert_eq!(door.map(|(_, option)| option), Some("open"));
+    assert_eq!(judgement, TradeJudgement::Jev);
+}
+
+#[test]
+fn a_give_line_without_a_jev_label_is_neutral_and_interacts_with_nothing() {
+    use crate::gameplay::approach_model::JevUnavailable;
+    use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
+    taproom(|| {
+        let (current, _member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        // The keyword gift and give rules are gone: a provider outage names no interaction.
+        assert_eq!(
+            living_scene::interaction_from_judgement(
+                &scene,
+                "I give the travelers clothes to Corin.",
+                Err(JevUnavailable::ProviderUnavailable),
+            ),
+            (
+                None,
+                TradeJudgement::Rules(JevUnavailable::ProviderUnavailable)
+            )
+        );
+    });
+}
+
+#[test]
+fn a_coin_amount_is_one_unit_phrase_in_copper_and_several_or_none_is_no_amount() {
     assert_eq!(living_scene::coin_amount_cp("I give Ilsa 5 GP."), Some(500));
+    assert_eq!(living_scene::coin_amount_cp("12 gold"), Some(1200));
     assert_eq!(
         living_scene::coin_amount_cp("I give Ilsa 5 GP or 10 GP"),
         None
     );
+    assert_eq!(living_scene::coin_amount_cp("no coins"), None);
 }
 
 #[test]
@@ -653,11 +695,21 @@ fn a_named_npc_gift_spends_owned_gold_and_an_unaffordable_gift_transfers_nothing
 
 #[test]
 fn an_absent_scene_target_is_described_without_drawing_a_die() {
+    use crate::gameplay::approach_model::tests::{answer, model as jev_model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     taproom(|| {
         let (current, member) = opened();
         let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
-        let target =
-            crate::gameplay::investigation::local_target("I examine the golden telescope.", &[]);
+        // With no scene options, Jev's only option is the absent one.
+        let named = FakeEndpoint::start(vec![answer("o1")]);
+        let target = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(
+                jev_model(&named)
+                    .resolve_investigation_target("I examine the golden telescope.", &[]),
+            );
         let after = interact(&current, member, 30, &target.id, "examine");
         let receipt = accepted(after.state().decisions.last().unwrap()).unwrap();
         assert!(receipt.check.is_none());
@@ -665,7 +717,7 @@ fn an_absent_scene_target_is_described_without_drawing_a_die() {
             living_scene::last_line(after.state())
                 .unwrap()
                 .unwrap()
-                .contains("no golden telescope")
+                .contains("You see nothing of that here.")
         );
         assert_eq!(phase(&after).unwrap(), phase(&current).unwrap());
         assert_eq!(
@@ -677,12 +729,26 @@ fn an_absent_scene_target_is_described_without_drawing_a_die() {
 
 #[test]
 fn an_ordinary_counter_without_a_finding_is_described_without_drawing_a_die() {
+    use crate::gameplay::approach_model::tests::{answer, model as jev_model};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
     taproom(|| {
         let (current, member) = opened();
         let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
         let catalog = crate::gameplay::investigation::targets(&scene, &[]);
-        let target =
-            crate::gameplay::investigation::local_target("I look behind the counter.", &catalog);
+        // Jev picks the first listed surface for the counter.
+        let surface = catalog
+            .iter()
+            .position(|entry| entry.id.starts_with("surface-"))
+            .unwrap();
+        let named = FakeEndpoint::start(vec![answer(&format!("o{}", surface + 1))]);
+        let target = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(
+                jev_model(&named)
+                    .resolve_investigation_target("I look behind the counter.", &catalog),
+            );
         assert!(target.present && target.id.starts_with("surface-"));
         assert!(
             crate::gameplay::investigation::finding_on(&scene, &target, "perception").is_none()
@@ -950,7 +1016,7 @@ fn first_player_projection_contains_committed_room_state_without_a_display_obser
 
 #[test]
 fn interaction_labels_are_a_closed_set_that_names_existing_kinds() {
-    assert_eq!(living_scene::InteractionMeaning::CHOICES.len(), 14);
+    assert_eq!(living_scene::InteractionMeaning::CHOICES.len(), 15);
     for (label, _) in living_scene::InteractionMeaning::CHOICES {
         assert!(
             living_scene::InteractionMeaning::from_label(label).is_some(),
@@ -965,24 +1031,46 @@ fn interaction_labels_are_a_closed_set_that_names_existing_kinds() {
 }
 
 #[test]
-fn a_give_with_a_gold_amount_is_a_gift_and_none_has_no_option() {
+fn the_give_and_gift_options_are_the_labels_own_and_none_has_no_option() {
     use living_scene::InteractionMeaning;
-    assert_eq!(
-        InteractionMeaning::Give.option("I give Ilsa 5 GP."),
-        Some("gift")
-    );
-    assert_eq!(
-        InteractionMeaning::Give.option("I give Ilsa the key."),
-        Some("give")
-    );
-    assert_eq!(
-        InteractionMeaning::NotInteraction.option("I give Ilsa 5 GP."),
-        None
-    );
+    assert_eq!(InteractionMeaning::Give.option(), Some("give"));
+    assert_eq!(InteractionMeaning::Gift.option(), Some("gift"));
+    assert_eq!(InteractionMeaning::NotInteraction.option(), None);
 }
 
 #[test]
-fn jev_meaning_decides_the_scene_interaction_and_keywords_answer_only_without_a_label() {
+fn jev_gift_and_give_labels_pick_their_own_option_even_when_the_line_names_coin() {
+    use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
+    taproom(|| {
+        let (current, _member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let people = scene
+            .setting
+            .as_ref()
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .for_scene(scene.key);
+        let npc = people
+            .people
+            .iter()
+            .find(|person| person.role != "hero" && !person.is_background)
+            .unwrap();
+        let line = format!("I give {} 5 GP.", npc.name);
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &line, Ok("gift")),
+            (Some((npc.id.clone(), "gift")), TradeJudgement::Jev)
+        );
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &line, Ok("give")),
+            (Some((npc.id.clone(), "give")), TradeJudgement::Jev)
+        );
+    });
+}
+
+#[test]
+fn jev_meaning_decides_the_scene_interaction_and_no_label_is_neutral() {
     use crate::gameplay::approach_model::JevUnavailable;
     use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
     taproom(|| {
@@ -1010,7 +1098,7 @@ fn jev_meaning_decides_the_scene_interaction_and_keywords_answer_only_without_a_
             ),
             Some((thing.id.clone(), "take"))
         );
-        // Jev's none label is not an interaction even though the keyword rules would match.
+        // Jev's none label is not an interaction, even for a line that names a steal.
         assert_eq!(
             living_scene::interaction_from_judgement(&scene, &steal, Ok("none")),
             (None, TradeJudgement::Jev)
@@ -1019,15 +1107,23 @@ fn jev_meaning_decides_the_scene_interaction_and_keywords_answer_only_without_a_
             living_scene::interaction_from_judgement(&scene, &steal, Ok("steal")),
             (Some((thing.id.clone(), "steal")), TradeJudgement::Jev)
         );
-        // Without a Jev label the keyword rules answer exactly as they did before Jev.
+        // Without a Jev label the line is neutral: no interaction, and the reason is audited.
         let unavailable = Err(JevUnavailable::ProviderUnavailable);
         assert_eq!(
-            living_scene::interaction_from_judgement(&scene, &steal, unavailable).0,
-            Some((thing.id.clone(), "steal"))
+            living_scene::interaction_from_judgement(&scene, &steal, unavailable),
+            (
+                None,
+                TradeJudgement::Rules(JevUnavailable::ProviderUnavailable)
+            )
         );
         assert_eq!(
             living_scene::interaction_from_judgement(&scene, &question, unavailable).0,
             None
+        );
+        // A label outside the closed set is neutral and audited as an unknown choice.
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &steal, Ok("use")),
+            (None, TradeJudgement::Rules(JevUnavailable::UnknownChoice))
         );
     });
 }
@@ -1100,13 +1196,7 @@ fn a_hand_over_names_a_party_hero_after_to_and_moves_the_held_item() {
             .iter()
             .find(|person| person.name == "Vale" && person.role == "hero")
             .unwrap();
-        assert_eq!(
-            living_scene::recipient_for_line(
-                &scene,
-                &format!("I hand the {} to {}.", ale.name, companion.name),
-            ),
-            Some(companion.id.clone())
-        );
+        // This test hands the item over by its recipient id; Jev's recipient choice is tested below.
         let bought = interact(&current, member, 40, &ale.id, "buy");
         let owned = living_scene::snapshot(bought.state(), &scene)
             .unwrap()
@@ -1138,6 +1228,60 @@ fn a_hand_over_names_a_party_hero_after_to_and_moves_the_held_item() {
                 .unwrap()
                 .contains(&format!("gives the {} to {}", ale.name, companion.name))
         );
+    });
+}
+
+#[test]
+fn jev_names_the_listed_person_a_hand_over_goes_to_and_none_names_no_one() {
+    use crate::gameplay::approach_model::tests::{answer, model as jev_model};
+    use crate::gameplay::approach_model::{ApproachModel, JevUnavailable};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
+    taproom(|| {
+        let (current, _member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        // Party heroes reach the recipient list through the snapshot that dialogue projects.
+        let snapshot = living_scene::snapshot(current.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let vale = snapshot
+            .model
+            .people
+            .iter()
+            .find(|person| person.name == "Vale" && person.role == "hero")
+            .unwrap()
+            .id
+            .clone();
+        let mut projected = scene.clone();
+        projected.setting.as_mut().unwrap().model = Some(snapshot.model);
+        let choices = living_scene::recipient_choices(&projected).unwrap();
+        let vale_position = choices
+            .person_ids
+            .iter()
+            .position(|id| *id == vale)
+            .unwrap();
+        let words = "I hand the travelers clothes to Vale.";
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let named = FakeEndpoint::start(vec![answer(&format!("o{}", vale_position + 1))]);
+            assert_eq!(
+                living_scene::judge_recipient(&jev_model(&named), words, &choices).await,
+                Ok(Some(vale.clone()))
+            );
+            assert_eq!(named.bodies()[0]["state"]["hero_line"], words);
+
+            let none = FakeEndpoint::start(vec![answer(&format!("o{}", choices.criteria.len()))]);
+            assert_eq!(
+                living_scene::judge_recipient(&jev_model(&none), words, &choices).await,
+                Ok(None)
+            );
+
+            let unavailable =
+                living_scene::judge_recipient(&ApproachModel::default(), words, &choices).await;
+            assert_eq!(unavailable, Err(JevUnavailable::ProviderUnavailable));
+        });
     });
 }
 
@@ -1321,18 +1465,20 @@ fn reading_a_scene_item_while_picking_it_up_is_an_examine_and_never_a_take() {
             living_scene::interaction_from_judgement(&scene, &reads, Ok("examine")),
             (Some((item.clone(), "examine")), TradeJudgement::Jev)
         );
-        // Without Jev, the fallback reads the same line as an examine too.
+        // Without a Jev label the line is neutral: no examine, and no take either.
         let unavailable = Err(JevUnavailable::ProviderUnavailable);
         assert_eq!(
             living_scene::interaction_from_judgement(&scene, &reads, unavailable).0,
-            Some((item.clone(), "examine"))
+            None
         );
-        // A clear wish to keep the item, or a bare pick-up, is still a take.
+        // A clear wish to keep the item, or a bare pick-up, is a take when Jev labels it so.
         let keeps = format!("I pick up the {name} and keep it.");
         let bare = format!("I pick up the {name}.");
         for line in [keeps, bare] {
             assert_eq!(
-                living_scene::interaction_for_line(&scene, &line).map(|(_, option)| option),
+                living_scene::interaction_from_judgement(&scene, &line, Ok("take"))
+                    .0
+                    .map(|(_, option)| option),
                 Some("take"),
                 "{line}"
             );

@@ -33,7 +33,7 @@ use journey::merchant_bargaining::{
 
 const MAXIMUM_MESSAGE_BYTES: usize = 8192;
 const MAXIMUM_TEXT_BYTES: usize = 4096;
-const NOTE_COMMAND_OVERHEAD_BYTES: usize = "write down ".len();
+const NOTE_COMMAND_OVERHEAD_BYTES: usize = "note: ".len();
 const MAXIMUM_PENDING_MEMBERS: usize = 32;
 const MAXIMUM_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
@@ -213,8 +213,8 @@ fn record_merchant_reply_context(
     );
 }
 
-/// Records which judgement decided a scene, form or subject reading, so a Jev-unavailable keyword
-/// fallback is visible in the audit log.
+/// Records which judgement decided a scene, form or subject reading, so a Jev-unavailable neutral
+/// outcome is visible in the audit log.
 fn record_line_judgement(stage: &str, meaning: &str, judgement: TradeJudgement) {
     let source = judgement.source_label();
     let reason = judgement.reason_label();
@@ -276,44 +276,34 @@ impl HeroLineForm {
         })
     }
 
-    /// Jev's form for the line, or the trailing-question-mark rule when Jev gave no label.
+    /// Jev's form for the line. Without Jev's label the line is a statement: the neutral form that
+    /// asks nothing. The outcome is reported as unavailable; no punctuation decides the form.
     pub(super) fn from_judgement(
         judgement: Result<&'static str, super::approach_model::JevUnavailable>,
-        words: &str,
     ) -> (Self, TradeJudgement) {
         match judgement {
             Ok(label) => match Self::from_label(label) {
                 Some(form) => (form, TradeJudgement::Jev),
                 None => (
-                    Self::from_punctuation(words),
+                    Self::Statement,
                     TradeJudgement::Rules(super::approach_model::JevUnavailable::UnknownChoice),
                 ),
             },
-            Err(reason) => (Self::from_punctuation(words), TradeJudgement::Rules(reason)),
-        }
-    }
-
-    fn from_punctuation(words: &str) -> Self {
-        if words.trim_end().ends_with('?') {
-            Self::Question
-        } else {
-            Self::Statement
+            Err(reason) => (Self::Statement, TradeJudgement::Rules(reason)),
         }
     }
 }
 
-/// The exact action a physical reading names. A rules reading already passed the keyword gate in
-/// `classify_input`; a Jev reading is an action by Jev's decision, so only the exact parse runs.
+/// The physical act a reading names: the verb from Jev's intent label and the target Jev chose from
+/// the listed things. None when Jev named no listed thing.
 pub(super) fn named_physical_action(
-    words: &str,
-    available_things: &[String],
-    judged_by_rules: bool,
+    reading: &super::approach_model::LineReading,
 ) -> Option<super::approach_model::PhysicalAction> {
-    if judged_by_rules {
-        super::approach_model::physical_action(words, available_things)
-    } else {
-        super::approach_model::parse_physical_action(words, available_things)
-    }
+    let kind = reading.physical_kind?;
+    (!reading.thing.is_empty()).then(|| super::approach_model::PhysicalAction {
+        kind,
+        target: reading.thing.clone(),
+    })
 }
 
 fn subject_description(subject: AnswerSubject) -> &'static str {
@@ -345,27 +335,22 @@ pub(super) fn watched_subject_choices(
         .collect()
 }
 
-/// Jev's subject for the hero's last question, or the keyword subject when Jev gives no label.
-/// Only a subject the dossier holds an answer for is returned.
+/// Jev's subject for the hero's last question. Without Jev's label no subject is named, so no
+/// dossier answer is offered; only a subject the dossier holds an answer for is returned.
 pub(super) fn watched_subject_from_judgement(
     subjects: &[AnswerSubject],
-    question: &str,
     judgement: Result<&'static str, super::approach_model::JevUnavailable>,
 ) -> (Option<AnswerSubject>, TradeJudgement) {
-    let keyword_subject = || {
-        let subject = super::social::subject_keywords(question);
-        subjects.contains(&subject).then_some(subject)
-    };
     match judgement {
         Ok("none") => (None, TradeJudgement::Jev),
         Ok(label) => match subjects.iter().find(|subject| subject.label() == label) {
             Some(subject) => (Some(*subject), TradeJudgement::Jev),
             None => (
-                keyword_subject(),
+                None,
                 TradeJudgement::Rules(super::approach_model::JevUnavailable::UnknownChoice),
             ),
         },
-        Err(reason) => (keyword_subject(), TradeJudgement::Rules(reason)),
+        Err(reason) => (None, TradeJudgement::Rules(reason)),
     }
 }
 
@@ -392,11 +377,30 @@ fn scene_with_party(
 pub(super) struct RawDialogueBytes {
     bytes: Vec<u8>,
     hero_trade: HeroTradeIntent,
+    /// The listed trade item Jev picked for this line, judged before the actor call.
+    trade_pick: Option<String>,
+    /// The listed item ids the storyteller's bulk pick named together, judged before the actor call.
+    bulk_picks: Vec<String>,
 }
 
 impl RawDialogueBytes {
     pub(super) fn new(bytes: Vec<u8>, hero_trade: HeroTradeIntent) -> Self {
-        Self { bytes, hero_trade }
+        Self {
+            bytes,
+            hero_trade,
+            trade_pick: None,
+            bulk_picks: Vec::new(),
+        }
+    }
+
+    pub(super) fn with_picks(
+        mut self,
+        trade_pick: Option<String>,
+        bulk_picks: Vec<String>,
+    ) -> Self {
+        self.trade_pick = trade_pick;
+        self.bulk_picks = bulk_picks;
+        self
     }
 
     pub(super) fn as_slice(&self) -> &[u8] {
@@ -450,13 +454,14 @@ mod notebook_command_tests {
             notebook_command(DiscourseContext::Meta, "note: Tomas is a mapmaker."),
             Some(NotebookCommand::Note("Tomas is a mapmaker."))
         ));
-        assert!(matches!(
+        assert!(
             notebook_command(
                 DiscourseContext::Meta,
                 " Write Down Kelbin wants the letter. "
-            ),
-            Some(NotebookCommand::Note("Kelbin wants the letter."))
-        ));
+            )
+            .is_none(),
+            "wording alone is not a notebook command; Jev's party-note intent decides"
+        );
         assert!(notebook_command(DiscourseContext::Question, "note: no").is_none());
         assert!(
             notebook_command(DiscourseContext::Meta, "we should write down the clues").is_none()
@@ -780,14 +785,6 @@ fn note_scene_title(scene: &super::pack::Scene) -> &str {
     &scene.title
 }
 
-fn addresses_party_hero(words: &str, party: &[String]) -> bool {
-    words.split_once(',').is_some_and(|(name, _)| {
-        party
-            .iter()
-            .any(|hero| hero.eq_ignore_ascii_case(name.trim()))
-    })
-}
-
 /// The narrator's answer when the addressed name matches nobody present. It is shown to the
 /// speaker only and is never written to the table.
 pub(super) const NAME_NOT_HERE_NARRATION: &str = "Nobody here goes by that name.";
@@ -907,11 +904,12 @@ pub(super) fn is_notebook_submission(
     finality == InputFinality::Final && notebook_command(declared, text).is_some()
 }
 
-/// A line Jev reads as a party note, in the notebook's own grammar. A line already written as
-/// "note:" or "write down" is kept as typed.
+/// A line Jev reads as a party note, in the notebook's own grammar. A line already carrying the
+/// client's "note:" command prefix (the notebook's own syntax, as `notebook_command` reads it) is
+/// kept as typed. No other wording is read for meaning.
 pub(super) fn party_note_text(text: &str) -> String {
     let trimmed = text.trim_start().to_lowercase();
-    if trimmed.starts_with("note:") || trimmed.starts_with("write down ") {
+    if trimmed.starts_with("note:") {
         text.to_owned()
     } else {
         format!("note: {text}")
@@ -945,24 +943,14 @@ mod classified_line_tests {
     use super::*;
 
     #[test]
-    fn an_npc_name_before_a_comma_is_not_a_party_hero_address() {
-        let party = vec!["Brakka".to_owned(), "Sigrun".to_owned()];
-        assert!(!addresses_party_hero("Ilsa, who is Elin?", &party));
-        assert!(addresses_party_hero("Sigrun, come here", &party));
-        assert!(!addresses_party_hero(
-            "who is that lady with the tray?",
-            &party
-        ));
-    }
-
-    #[test]
     fn plan_context_does_not_suppress_a_final_search_attempt_srd_521_page_187() {
         // SRD 5.2.1 p. 187: the Search action resolves with a Wisdom check.
         let reading = super::super::approach_model::LineReading {
             intent: super::super::approach_model::LineIntent::Examine,
             skill: Some("perception"),
             thing: "bell chamber".to_owned(),
-            source: "rules",
+            physical_kind: None,
+            source: "jev",
             elapsed_ms: 0,
         };
         for context in [
@@ -1049,36 +1037,6 @@ impl Service {
             },
             None,
         )
-    }
-
-    /// The scene-snapshot id of the party hero named after "to" in a give line. The rules stage
-    /// validates the recipient against the snapshot, where each party hero is a person with the
-    /// hero role.
-    async fn party_hero_recipient(
-        &self,
-        credential: [u8; 32],
-        scene: &super::pack::Scene,
-        words: &str,
-    ) -> Result<Option<String>, Status> {
-        let party = self.party_heroes(credential).await?;
-        let super::npc_target::ExactAddressee::Hero(hero_id) =
-            super::npc_target::exact_with_party(words, &[], &party)
-        else {
-            return Ok(None);
-        };
-        let Some(hero) = party.iter().find(|hero| hero.id == hero_id) else {
-            return Ok(None);
-        };
-        let current = self.updates.borrow().clone();
-        let snapshot =
-            journey::living_scene::snapshot(current.state(), scene).map_err(actor::unavailable)?;
-        Ok(snapshot.and_then(|now| {
-            now.model
-                .people
-                .iter()
-                .find(|person| person.role == "hero" && person.name == hero.name)
-                .map(|person| person.id.clone())
-        }))
     }
 
     async fn close_merchant_quote(
@@ -1237,12 +1195,7 @@ impl Service {
                 &HeroTradeMeaning::CHOICES,
             )
             .await;
-        let quoted_price_cp = pending_quote.map(|quote| quote.price_cp);
-        let intent = journey::merchant_bargaining::hero_intent_from_judgement(
-            choice,
-            words,
-            quoted_price_cp,
-        );
+        let intent = journey::merchant_bargaining::hero_intent_from_judgement(choice);
         record_trade_judgement("hero", intent.meaning.label(), intent.judgement);
         intent
     }
@@ -1270,50 +1223,90 @@ impl Service {
                 &MerchantMeaning::CHOICES,
             )
             .await;
-        let commitment = journey::merchant_bargaining::merchant_commitment_from_judgement(
-            choice,
-            merchant_reply,
-        );
+        let commitment = journey::merchant_bargaining::merchant_commitment_from_judgement(choice);
         record_trade_judgement("merchant", commitment.meaning.label(), commitment.judgement);
         commitment
     }
 
-    /// Jev's pick of the listed in-stock offer a merchant's firm price line concerns. Jev chooses one
-    /// position among the offers and a final "none"; an unavailable Jev is recorded and returned.
-    async fn judge_offer_pick(
+    /// Jev's pick of the listed trade item a line concerns: one position among the hero's and the
+    /// merchant's in-stock offers, plus a final "none". No listed offer means no call and no item.
+    /// An unavailable Jev is recorded and yields no item.
+    async fn judged_trade_item(
         &self,
-        choices: &journey::merchant_bargaining::OfferChoices,
+        terms: &[journey::living_scene::MerchantTradeTerms],
+        hero_id: &str,
+        merchant_id: &str,
         words: &str,
         merchant_reply: &str,
-    ) -> Result<Option<String>, super::approach_model::JevUnavailable> {
+    ) -> Option<String> {
+        let choices =
+            journey::merchant_bargaining::TradeItemChoices::new(terms, hero_id, merchant_id)?;
         let (_, approach_model) = self.npc_voice.hero_identity_models();
-        let state = journey::merchant_bargaining::offer_pick_state(words, merchant_reply);
-        let picked = approach_model
-            .choose_option(
-                &state,
-                journey::merchant_bargaining::OFFER_PICK_INSTRUCTIONS,
-                choices.criteria(),
-            )
-            .await;
-        match picked {
-            Ok(choice) => {
-                let item_id = choices.item_for(choice).map(str::to_owned);
+        match journey::merchant_bargaining::judge_trade_item(
+            approach_model,
+            &choices,
+            words,
+            merchant_reply,
+        )
+        .await
+        {
+            Ok(item) => {
                 record_trade_judgement(
-                    "offer",
-                    if item_id.is_some() { "item" } else { "none" },
+                    "trade_item",
+                    if item.is_some() { "item" } else { "none" },
                     TradeJudgement::Jev,
                 );
-                Ok(item_id)
+                item
             }
             Err(reason) => {
-                record_trade_judgement("offer", "unavailable", TradeJudgement::Rules(reason));
-                Err(reason)
+                record_trade_judgement("trade_item", "unavailable", TradeJudgement::Rules(reason));
+                None
             }
         }
     }
 
-    /// Jev's reading of a line as a scene interaction. Keyword rules run only when Jev gives no
-    /// label, and the typed interaction is returned to the caller that owns the routing.
+    /// The storyteller's bulk pick for a price or purchase line. Without a storyteller answer, or
+    /// with fewer than two listed items, no bulk ask is made; the outcome is audited either way.
+    async fn judged_bulk_picks(
+        &self,
+        terms: &[journey::living_scene::MerchantTradeTerms],
+        hero_id: &str,
+        merchant_id: &str,
+        hero_trade: HeroTradeIntent,
+        words: &str,
+    ) -> Vec<String> {
+        if !matches!(
+            hero_trade.meaning,
+            HeroTradeMeaning::AskPrice | HeroTradeMeaning::OfferPrice | HeroTradeMeaning::BuyNow
+        ) {
+            return Vec::new();
+        }
+        let Some(choices) =
+            journey::merchant_bargaining::TradeItemChoices::new(terms, hero_id, merchant_id)
+        else {
+            return Vec::new();
+        };
+        let (storyteller, _) = self.npc_voice.hero_identity_models();
+        match journey::merchant_bargaining::judged_bulk_picks(storyteller, &choices, words).await {
+            Ok(picks) => {
+                actor::record_audit_line(
+                    "gameplay.merchant.bulk_ask",
+                    format!("BULK_ASK source=storyteller picks={}", picks.len()),
+                );
+                picks
+            }
+            Err(error) => {
+                actor::record_audit_line(
+                    "gameplay.merchant.bulk_ask",
+                    format!("BULK_ASK source=unavailable reason={error:?}"),
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// Jev's reading of a line as a scene interaction. Without Jev's label no interaction is taken,
+    /// and the typed interaction is returned to the caller that owns the routing.
     async fn judge_scene_interaction(
         &self,
         words: &str,
@@ -1357,7 +1350,7 @@ impl Service {
         let choice = approach_model
             .choose_label(&state, HeroLineForm::INSTRUCTIONS, &HeroLineForm::CHOICES)
             .await;
-        let (form, judgement) = HeroLineForm::from_judgement(choice, words);
+        let (form, judgement) = HeroLineForm::from_judgement(choice);
         record_line_judgement("hero_form", form.label(), judgement);
         form
     }
@@ -1414,7 +1407,7 @@ impl Service {
                 &watched_subject_choices(&subjects),
             )
             .await;
-        let (subject, judgement) = watched_subject_from_judgement(&subjects, &question, choice);
+        let (subject, judgement) = watched_subject_from_judgement(&subjects, choice);
         record_line_judgement(
             "watched_question",
             subject.map_or("none", AnswerSubject::label),
@@ -1584,6 +1577,17 @@ impl Service {
             let latest = self.updates.borrow().clone();
             match journey::living_scene::merchant_trade_terms(&latest, hero_id) {
                 Ok(terms) => {
+                    // The merchant on a hero-buys term is the seller the purchase names.
+                    let merchant_id = terms
+                        .iter()
+                        .find(|term| {
+                            term.direction == journey::living_scene::SceneTradeDirection::HeroBuys
+                        })
+                        .map(|term| term.seller_id.clone())
+                        .unwrap_or_default();
+                    let picked = self
+                        .judged_trade_item(&terms, hero_id, &merchant_id, &request.text, "")
+                        .await;
                     if let Some((item_id, price_cp)) =
                         journey::merchant_bargaining::fixed_price_purchase(
                             &terms,
@@ -1592,6 +1596,7 @@ impl Service {
                                 intent: hero_trade,
                                 words: &request.text,
                             },
+                            picked.as_deref(),
                         )
                     {
                         return self
@@ -1621,16 +1626,10 @@ impl Service {
             .map(|target| target.name.clone())
             .collect::<Vec<_>>();
         let public_scene = format!("{} {}", scene.title, scene.narration);
-        let mut reading = self
+        let reading = self
             .npc_voice
             .classify_input(&request.text, &public_scene, &available_things)
             .await;
-        if reading.source == "rules"
-            && reading.intent != super::approach_model::LineIntent::PhysicalAction
-            && let Some(local) = super::investigation::local_reading(&request.text, &catalog)
-        {
-            reading = local;
-        }
         // A line that may be spoken to an NPC starts its tidy-up now, so the model's wait overlaps
         // the routing below. Any other route drops it, which cancels the call.
         let mut speech_cleanup = None;
@@ -1681,7 +1680,7 @@ impl Service {
             && !merchant_trade_request
             && reading.intent != super::approach_model::LineIntent::PartyNote;
         // Jev reads the line as a scene interaction once; a physical line and a plain interaction
-        // both use that reading, so the keyword rules run only if Jev gave no label.
+        // both use that reading; without Jev's label the line is neutral speech, never a keyword read.
         // Jev's freeform-act reading is the adjudicator's, except for a scene door or lid that the
         // scene model opens or closes: that keeps the scene interaction, as it always did.
         let freeform =
@@ -1701,13 +1700,7 @@ impl Service {
         }
         if scene_turn && reading.intent == super::approach_model::LineIntent::PhysicalAction {
             return self
-                .physical_action_call(
-                    credential,
-                    &request,
-                    &reading,
-                    &available_things,
-                    scene_interaction,
-                )
+                .physical_action_call(credential, &request, &reading, scene_interaction)
                 .await;
         }
         if let Some((target, option)) = scene_interaction {
@@ -1767,14 +1760,16 @@ impl Service {
         request.context = match context_intent {
             super::approach_model::LineIntent::PartyNote => rpc::DialogueContext::Meta as i32,
             super::approach_model::LineIntent::HeroSpeech => {
-                let party = current
-                    .state()
-                    .characters
-                    .iter()
-                    .map(|character| journey::name(current.state(), character.entity))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(actor::unavailable)?;
-                if addresses_party_hero(&request.text, &party) {
+                // Jev decides whether the hero line addresses a party hero; no name is matched here.
+                let cast = wire::scene_cast(&scene);
+                let party = self.party_heroes(credential).await?;
+                let (_, approach_model) = self.npc_voice.hero_identity_models();
+                let addressed = approach_model
+                    .resolve_addressee_with_party(&request.text, &cast, &party, &scene.speaker)
+                    .await
+                    .hero
+                    .is_some();
+                if addressed {
                     rpc::DialogueContext::PlanOnly as i32
                 } else if self.hero_line_form(&request.text, &public_scene).await
                     == HeroLineForm::Question
@@ -1854,7 +1849,37 @@ impl Service {
                 }
             }
         }
-        let bytes = RawDialogueBytes::new(encode(&request)?, hero_trade);
+        // Jev picks the listed trade item a hero line concerns, against the addressed merchant's
+        // in-stock offers. The actor cannot await a model, so the pick is judged here.
+        let (trade_pick, bulk_picks) = match (target.as_deref(), authenticated_hero_id.as_deref()) {
+            (Some(merchant_id), Some(hero_id)) if hero_trade.is_trade() => {
+                let latest = self.updates.borrow().clone();
+                match journey::living_scene::merchant_trade_terms(&latest, hero_id) {
+                    Ok(terms) => {
+                        let trade_pick = self
+                            .judged_trade_item(&terms, hero_id, merchant_id, &request.text, "")
+                            .await;
+                        let bulk_picks = self
+                            .judged_bulk_picks(
+                                &terms,
+                                hero_id,
+                                merchant_id,
+                                hero_trade,
+                                &request.text,
+                            )
+                            .await;
+                        (trade_pick, bulk_picks)
+                    }
+                    Err(error) => {
+                        actor::record_unavailable("merchant-trade-pick", &format!("{error:?}"));
+                        (None, Vec::new())
+                    }
+                }
+            }
+            _ => (None, Vec::new()),
+        };
+        let bytes =
+            RawDialogueBytes::new(encode(&request)?, hero_trade).with_picks(trade_pick, bulk_picks);
         let request = match target {
             Some(actor_id) => DialogueRequest::RawTarget { bytes, actor_id },
             None => DialogueRequest::Raw(bytes),
@@ -1910,7 +1935,12 @@ impl Service {
             .npc_voice
             .resolve_investigation_target(&request.text, &catalog)
             .await;
-        let skill = super::investigation::skill(&request.text, reading.skill);
+        // Jev names a skill for every attempt reading (approach_model::read_line), so a missing
+        // skill is an internal invariant failure, not a line to guess from.
+        let skill = reading
+            .skill
+            .ok_or_else(|| Status::internal("observation skill missing from Jev reading"))?
+            .to_owned();
         if !target.present
             || target.id.starts_with("surface-")
                 && super::investigation::finding_on(scene, &target, &skill).is_none()
@@ -2080,18 +2110,31 @@ impl Service {
             let scene =
                 super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
             let scene = scene_with_party(&current, &scene).map_err(actor::unavailable)?;
-            // A recipient is a named party hero, or a named person in the scene. A give to a party
-            // hero is named after "to", and a purchase for someone is named after "for".
-            let recipient = match option {
-                "plant" => journey::living_scene::person_for_line(&scene, &request.text),
-                _ => match journey::living_scene::recipient_for_line(&scene, &request.text) {
-                    Some(recipient) => Some(recipient),
-                    None if option == "give" => {
-                        self.party_hero_recipient(credential, &scene, &request.text)
-                            .await?
+            // Jev chooses the recipient from the listed people, party heroes included. Choosing none
+            // is a valid answer. When Jev cannot answer, the line is neutral: no interaction is
+            // submitted, and the speaker gets the narrated reply instead.
+            let (_, approach_model) = self.npc_voice.hero_identity_models();
+            let recipient = match journey::living_scene::recipient_choices(&scene) {
+                Some(choices) => match journey::living_scene::judge_recipient(
+                    approach_model,
+                    &request.text,
+                    &choices,
+                )
+                .await
+                {
+                    Ok(recipient) => recipient,
+                    Err(reason) => {
+                        actor::record_audit_line(
+                            "gameplay.recipient_classified",
+                            format!(
+                                "RECIPIENT source=unavailable option={option} reason={}",
+                                reason.label()
+                            ),
+                        );
+                        return self.narrated_no_op(credential, request).await;
                     }
-                    None => None,
                 },
+                None => None,
             };
             if let Some(recipient) = recipient {
                 submit.action_choices.push(rpc::JourneyChoice {
@@ -2366,7 +2409,6 @@ impl Service {
         credential: [u8; 32],
         request: &rpc::RawDialogueRequest,
         reading: &super::approach_model::LineReading,
-        available_things: &[String],
         scene_interaction: Option<(String, &'static str)>,
     ) -> Result<DialogueReply, Status> {
         let current = self.updates.borrow().clone();
@@ -2377,9 +2419,7 @@ impl Service {
                 .interaction_call(credential, request, &target, option, None, None)
                 .await;
         }
-        let Some(action) =
-            named_physical_action(&request.text, available_things, reading.source == "rules")
-        else {
+        let Some(action) = named_physical_action(reading) else {
             return self.narrated_no_op(credential, request).await;
         };
         let verb = match action.kind {
@@ -2387,7 +2427,6 @@ impl Service {
             super::approach_model::PhysicalActionKind::Take => "take",
             super::approach_model::PhysicalActionKind::Give => "give",
             super::approach_model::PhysicalActionKind::Trade => "trade",
-            super::approach_model::PhysicalActionKind::Use => "use",
         };
         // An attack on a scene person who has a stat block starts a real fight.
         if action.kind == super::approach_model::PhysicalActionKind::Attack
@@ -2522,7 +2561,7 @@ impl Service {
                 current.state(),
                 hero,
                 &action.target,
-                action.weapon.as_deref(),
+                None,
             )
             .map_err(actor::unavailable)?
             else {
@@ -2596,48 +2635,6 @@ impl Service {
                 None,
             ));
         }
-        let typed_interaction = (action.kind == super::approach_model::PhysicalActionKind::Use)
-            .then(|| {
-                scene
-                    .setting
-                    .as_ref()?
-                    .model
-                    .as_ref()?
-                    .for_scene(scene.key)
-                    .things
-                    .iter()
-                    .find(|thing| {
-                        thing.id.eq_ignore_ascii_case(&action.target)
-                            || thing.name.eq_ignore_ascii_case(&action.target)
-                    })
-                    .map(|thing| (thing.id.clone(), "use"))
-            })
-            .flatten();
-        if let Some((target, option)) = typed_interaction {
-            let result = self
-                .interaction_call(credential, request, &target, option, None, None)
-                .await;
-            if result.is_ok() {
-                record_physical_action_event(
-                    "gameplay.physical_action_resolved",
-                    verb,
-                    &action.target,
-                    "action",
-                    &format!("scene-interaction option={option:?}"),
-                    None,
-                );
-            } else {
-                record_physical_action_event(
-                    "gameplay.physical_action_unavailable",
-                    verb,
-                    &action.target,
-                    "unavailable",
-                    "scene-interaction",
-                    Some("native interaction refused or failed"),
-                );
-            }
-            return result;
-        }
         let reason = match action.kind {
             super::approach_model::PhysicalActionKind::Attack => {
                 "no offered canonical combat attack for this target"
@@ -2650,9 +2647,6 @@ impl Service {
             }
             super::approach_model::PhysicalActionKind::Trade => {
                 "target is not a registered trade offer"
-            }
-            super::approach_model::PhysicalActionKind::Use => {
-                "target is not a registered usable scene object"
             }
         };
         record_physical_action_event(
@@ -2962,15 +2956,27 @@ impl Service {
             let sold_out = if context.pending_quote.is_none() {
                 let current = self.updates.borrow().clone();
                 match journey::living_scene::merchant_trade_terms(&current, &context.hero_id) {
-                    Ok(terms) => journey::merchant_bargaining::sold_out_refusal(
-                        &terms,
-                        &context.hero_id,
-                        &context.actor_id,
-                        HeroLine {
-                            intent: hero_trade,
-                            words: &context.typed_words,
-                        },
-                    ),
+                    Ok(terms) => {
+                        let picked = self
+                            .judged_trade_item(
+                                &terms,
+                                &context.hero_id,
+                                &context.actor_id,
+                                &context.typed_words,
+                                "",
+                            )
+                            .await;
+                        journey::merchant_bargaining::sold_out_refusal(
+                            &terms,
+                            &context.hero_id,
+                            &context.actor_id,
+                            HeroLine {
+                                intent: hero_trade,
+                                words: &context.typed_words,
+                            },
+                            picked.as_deref(),
+                        )
+                    }
                     Err(error) => {
                         actor::record_unavailable("merchant-sold-out", &format!("{error:?}"));
                         None
@@ -3060,18 +3066,34 @@ impl Service {
                                 merchant,
                                 merchant_reply: &exchange.text,
                             };
-                            let item_to_sell = pending_quote
+                            let quoted_item = pending_quote
                                 .as_ref()
                                 .filter(|quote| {
                                     quote.direction
                                         == journey::living_scene::SceneTradeDirection::HeroSells
                                 })
-                                .map(|quote| quote.item_id.clone())
-                                .or_else(|| {
+                                .map(|quote| quote.item_id.clone());
+                            let item_to_sell = match quoted_item {
+                                Some(item_id) => Some(item_id),
+                                None => {
+                                    let picked = self
+                                        .judged_trade_item(
+                                            &terms,
+                                            &hero_id,
+                                            &actor_id,
+                                            turn.hero.words,
+                                            turn.merchant_reply,
+                                        )
+                                        .await;
                                     journey::merchant_bargaining::referenced_item_id(
-                                        &terms, &hero_id, &actor_id, turn.hero,
+                                        &terms,
+                                        &hero_id,
+                                        &actor_id,
+                                        turn.hero,
+                                        picked.as_deref(),
                                     )
-                                });
+                                }
+                            };
                             let history_valid = if let (Some(item_id), Some(place_id)) = (
                                 item_to_sell.as_deref(),
                                 super::beat_script_runtime::scene(current.state())
@@ -3111,37 +3133,22 @@ impl Service {
                                     &quote.item_id,
                                     &turn,
                                 )
-                            } else if let Some(choices) =
-                                journey::merchant_bargaining::OfferChoices::new(
-                                    &terms, &hero_id, &actor_id,
-                                )
-                            {
-                                // Jev picks the listed offer a price line concerns. A "none" pick is
-                                // no quote; Jev unavailable leaves the reading to the phrase rules.
-                                match self
-                                    .judge_offer_pick(&choices, &typed_words, &exchange.text)
-                                    .await
-                                {
-                                    Ok(Some(item_id)) => {
-                                        journey::merchant_bargaining::quote_candidate_for_item(
-                                            &terms,
-                                            &hero_id,
-                                            &actor_id,
-                                            journey::living_scene::SceneTradeDirection::HeroBuys,
-                                            &item_id,
-                                            &turn,
-                                        )
-                                    }
-                                    Ok(None) => Err(QuoteRejection::ItemUnclear),
-                                    Err(_) => {
-                                        journey::merchant_bargaining::quote_candidate_for_reply(
-                                            &terms, &hero_id, &actor_id, &turn,
-                                        )
-                                    }
-                                }
                             } else {
+                                let picked = self
+                                    .judged_trade_item(
+                                        &terms,
+                                        &hero_id,
+                                        &actor_id,
+                                        &typed_words,
+                                        &exchange.text,
+                                    )
+                                    .await;
                                 journey::merchant_bargaining::quote_candidate_for_reply(
-                                    &terms, &hero_id, &actor_id, &turn,
+                                    &terms,
+                                    &hero_id,
+                                    &actor_id,
+                                    &turn,
+                                    picked.as_deref(),
                                 )
                             };
                             match candidate {
@@ -3601,11 +3608,10 @@ pub(super) fn notebook_command(
         text.get(..value.len())
             .is_some_and(|found| found.eq_ignore_ascii_case(value))
     };
+    // Exact command syntax the client itself sends (live_notebook.rs): "note: <text>" and
+    // "share clue <order>". Wording in a spoken line is never matched here; Jev's intent decides.
     if prefix("note:") {
         return Some(NotebookCommand::Note(text.get(5..)?.trim()));
-    }
-    if prefix("write down") && text.as_bytes().get(10).is_none_or(u8::is_ascii_whitespace) {
-        return Some(NotebookCommand::Note(text.get(10..)?.trim()));
     }
     if prefix("share clue ") {
         return text
@@ -3988,14 +3994,28 @@ impl actor::Actor {
             DialogueRequest::Raw(bytes) => {
                 let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
                     .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
-                self.raw_dialogue(credential, request, None, bytes.hero_trade)
-                    .map(|(response, npc)| DialogueReply::Raw(response, npc))
+                self.raw_dialogue(
+                    credential,
+                    request,
+                    None,
+                    bytes.hero_trade,
+                    bytes.trade_pick,
+                    bytes.bulk_picks,
+                )
+                .map(|(response, npc)| DialogueReply::Raw(response, npc))
             }
             DialogueRequest::RawTarget { bytes, actor_id } => {
                 let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
                     .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
-                self.raw_dialogue(credential, request, Some(&actor_id), bytes.hero_trade)
-                    .map(|(response, npc)| DialogueReply::Raw(response, npc))
+                self.raw_dialogue(
+                    credential,
+                    request,
+                    Some(&actor_id),
+                    bytes.hero_trade,
+                    bytes.trade_pick,
+                    bytes.bulk_picks,
+                )
+                .map(|(response, npc)| DialogueReply::Raw(response, npc))
             }
             DialogueRequest::Confirm(bytes) => {
                 let request = rpc::ConfirmDialogueRequest::decode(bytes.as_slice())
@@ -4018,6 +4038,8 @@ impl actor::Actor {
         request: rpc::RawDialogueRequest,
         target: Option<&str>,
         hero_trade: HeroTradeIntent,
+        trade_pick: Option<String>,
+        bulk_picks: Vec<String>,
     ) -> Result<(rpc::DialogueResponse, Option<SpokenTurn>), Status> {
         let member = self.dialogue_member(&credential)?;
         if self.fenced || self.owner.has_uncertain_operation() {
@@ -4182,7 +4204,16 @@ impl actor::Actor {
                     | IntentDisposition::Joke
                     | IntentDisposition::Clarify
             ))
-        .then(|| self.npc_reply_context(member, &request.text, target, hero_trade))
+        .then(|| {
+            self.npc_reply_context(
+                member,
+                &request.text,
+                target,
+                hero_trade,
+                trade_pick,
+                bulk_picks,
+            )
+        })
         .flatten();
         if finality == InputFinality::Final
             && declared != DiscourseContext::Meta
@@ -4237,6 +4268,8 @@ impl actor::Actor {
         typed: &str,
         target: Option<&str>,
         hero_trade: HeroTradeIntent,
+        trade_pick: Option<String>,
+        bulk_picks: Vec<String>,
     ) -> Option<NpcReplyContext> {
         let current = self.owner.checkpoint();
         let scene = match super::beat_script_runtime::scene(current.state()) {
@@ -4351,12 +4384,16 @@ impl actor::Actor {
             };
             match journey::living_scene::merchant_trade_terms(current, &hero_id) {
                 Ok(mut terms) => {
+                    // The listed item Jev picked for this line, judged by the Service before the
+                    // actor call; it is used for every reading below.
+                    let picked = trade_pick.filter(|_| quote_followup.is_none());
                     let tendered_item = if quote_followup.is_none() {
                         journey::merchant_bargaining::referenced_item_id(
                             &terms,
                             &hero_id,
                             &reply.actor_id,
                             line,
+                            picked.as_deref(),
                         )
                     } else {
                         None
@@ -4400,6 +4437,7 @@ impl actor::Actor {
                             &hero_id,
                             &reply.actor_id,
                             line,
+                            picked.as_deref(),
                         )
                     } else {
                         None
@@ -4409,6 +4447,7 @@ impl actor::Actor {
                         &hero_id,
                         &reply.actor_id,
                         line,
+                        picked.as_deref(),
                     );
                     let mut trade_facts = if let Some(quote) = quote_followup.as_ref() {
                         journey::merchant_bargaining::reply_context_for_quote(
@@ -4425,7 +4464,10 @@ impl actor::Actor {
                             &hero_id,
                             &reply.actor_id,
                             line,
-                            tendered_item.as_deref(),
+                            journey::merchant_bargaining::TradeFocus {
+                                tendered_item_id: tendered_item.as_deref(),
+                                picked_item_id: picked.as_deref(),
+                            },
                             &reply.facts,
                         )
                     };
@@ -4452,6 +4494,17 @@ impl actor::Actor {
                         buyback_memory_status,
                         trade_facts.is_some(),
                     );
+                    if let Some(trade_facts) = trade_facts.as_mut()
+                        && quote_followup.is_none()
+                        && let Some(ask) = journey::merchant_bargaining::bulk_ask_from_picks(
+                            &terms,
+                            &hero_id,
+                            &reply.actor_id,
+                            &bulk_picks,
+                        )
+                    {
+                        journey::merchant_bargaining::attach_bulk_ask(trade_facts, &ask);
+                    }
                     if let Some(trade_facts) = trade_facts.as_mut() {
                         reply.merchant_trade_scope = true;
                         if let Some(memory) = buyback_memory {
@@ -4710,7 +4763,7 @@ mod speech_cleanup_tests {
             FakeEndpoint::start(vec![Reply::Status(500, serde_json::json!({"error": {}}))]);
         let cleanup = SpeechCleanup::start(
             voice(&endpoint, &cache),
-            speech_words("um whats this"),
+            speech_words("um whats this?"),
             Vec::new(),
         );
         let line = cleanup
@@ -4731,7 +4784,7 @@ mod speech_cleanup_tests {
         let endpoint = FakeEndpoint::start(vec![Reply::Hang]);
         let cleanup = SpeechCleanup::start(
             voice(&endpoint, &cache),
-            speech_words("um whats that"),
+            speech_words("um whats that?"),
             Vec::new(),
         );
         let started = Instant::now();

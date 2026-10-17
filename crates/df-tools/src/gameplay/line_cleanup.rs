@@ -40,11 +40,6 @@ const MAXIMUM_GROWTH: usize = 12;
 const FILLERS: [&str; 12] = [
     "um", "umm", "uh", "uhh", "uhm", "er", "erm", "ah", "ahh", "hmm", "hm", "eh",
 ];
-const QUESTION_STARTERS: [&str; 20] = [
-    "who", "what", "whats", "where", "when", "why", "how", "which", "is", "are", "do", "does",
-    "did", "can", "could", "will", "would", "should", "whose", "whom",
-];
-const CONNECTIVES: [&str; 7] = ["and", "but", "so", "then", "also", "well", "ok"];
 const CONTRACTIONS: [(&str, &str); 18] = [
     ("whats", "what's"),
     ("thats", "that's"),
@@ -241,24 +236,6 @@ pub(super) fn normalise(raw: &str, names: &[String]) -> String {
     if let Some(last) = kept.last_mut() {
         last.push_str(&pending);
     }
-    // A question starts with a question word, or has one right after the name it addresses
-    // ("Garick what is...").
-    let wh = |word: &str| {
-        let key = core(word);
-        QUESTION_STARTERS[..8].contains(&key.as_str()) || key == "whose" || key == "whom"
-    };
-    let addressed = kept
-        .first()
-        .is_some_and(|word| known_name(word, names).is_some());
-    // A leading "and", "so" or "okay" does not make a question a statement.
-    let lead = kept
-        .iter()
-        .position(|word| !CONNECTIVES.contains(&core(word).as_str()))
-        .unwrap_or(0);
-    let question = kept
-        .get(lead)
-        .is_some_and(|word| QUESTION_STARTERS.contains(&core(word).as_str()))
-        || (addressed && kept.get(1).is_some_and(|word| wh(word)));
     let mut text = kept.join(" ");
     // The first letter is capital.
     if let Some(first) = text.chars().find(|character| character.is_alphabetic())
@@ -275,8 +252,10 @@ pub(super) fn normalise(raw: &str, names: &[String]) -> String {
         .trim_end()
         .trim_end_matches([',', ';', ':', '-'])
         .to_owned();
+    // A line without its own terminal mark ends in a full stop. The stop is a constant, never chosen
+    // from the words, so a question keeps its "?" only when the player typed one.
     if body.chars().any(char::is_alphanumeric) && !body.ends_with(['.', '!', '?', '\u{2026}']) {
-        body.push(if question { '?' } else { '.' });
+        body.push('.');
     }
     cut(&format!("{body}{closers}"))
 }
@@ -588,17 +567,21 @@ mod tests {
     }
 
     #[test]
-    fn the_messy_example_becomes_a_clean_question_with_the_name_and_slips_fixed() {
+    fn the_messy_example_is_cleaned_with_its_name_and_slips_fixed_and_a_full_stop() {
         assert_eq!(
             normalise("uhh  garick whats  so special abt the wistle", &names()),
-            "Garick what's so special about the wistle?"
+            "Garick what's so special about the wistle."
         );
     }
 
     #[test]
-    fn a_leading_connective_does_not_hide_a_question() {
+    fn a_question_mark_is_kept_only_when_the_player_typed_it() {
         assert_eq!(
             normalise("and who is it that follows you", &[]),
+            "And who is it that follows you."
+        );
+        assert_eq!(
+            normalise("and who is it that follows you?", &[]),
             "And who is it that follows you?"
         );
     }
@@ -610,7 +593,7 @@ mod tests {
             "The door is locked."
         );
         assert_eq!(
-            normalise("wh- what is that sound", &[]),
+            normalise("wh- what is that sound?", &[]),
             "What is that sound?"
         );
         assert_eq!(
@@ -644,7 +627,7 @@ mod tests {
 
     #[test]
     fn language_is_left_alone_when_mature_and_masked_when_restrained() {
-        let line = "what the fuck is that thing";
+        let line = "what the fuck is that thing?";
         assert_eq!(normalise(line, &[]), "What the fuck is that thing?");
         assert_eq!(
             mask_profanity("What the fuck is that thing?"),
@@ -818,11 +801,12 @@ mod tests {
         ]);
         let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(30), &cache);
         let started = std::time::Instant::now();
-        let slow = display_line(&storyteller, "um whats that", &[], ContentRating::Mature).await;
+        let slow = display_line(&storyteller, "um whats that?", &[], ContentRating::Mature).await;
         assert!(started.elapsed() < CLEANUP_DEADLINE + Duration::from_millis(600));
         assert_eq!(slow.source, Source::Fallback);
         assert_eq!(slow.text, "What's that?");
-        let refused = display_line(&storyteller, "um whats this", &[], ContentRating::Mature).await;
+        let refused =
+            display_line(&storyteller, "um whats this?", &[], ContentRating::Mature).await;
         assert_eq!(refused.source, Source::Fallback);
         assert_eq!(refused.text, "What's this?");
         if cache.exists() {
@@ -839,14 +823,14 @@ mod tests {
         let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
         let masked = display_line(
             &storyteller,
-            "what the fuck is that",
+            "what the fuck is that?",
             &[],
             ContentRating::Restrained,
         )
         .await;
         assert_eq!(masked.text, "What the f*** is that?");
         let off = Storyteller::disabled();
-        let plain = display_line(&off, "what the fuck is that", &[], ContentRating::Mature).await;
+        let plain = display_line(&off, "what the fuck is that?", &[], ContentRating::Mature).await;
         assert_eq!(plain.source, Source::Fallback);
         assert_eq!(plain.text, "What the fuck is that?");
         if cache.exists() {
@@ -874,7 +858,7 @@ I'll tell the whole market your cloth is moth-eaten rot.\"";
             ),
             "I say \"you know the way.\" Marek, \"the door\" please."
         );
-        assert_eq!(normalise("\"wh- where is it\"", &[]), "\"Where is it?\"");
+        assert_eq!(normalise("\"wh- where is it?\"", &[]), "\"Where is it?\"");
     }
 
     #[test]
