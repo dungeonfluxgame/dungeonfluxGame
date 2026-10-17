@@ -138,9 +138,9 @@ mod tests {
             .expect("a bounded scene description");
         assert!(prompt.contains("the patron stands mid-left, rolling dice beside the hearth"));
         assert!(prompt.contains("camera completely still"));
-        assert!(prompt.contains("named film grade"));
+        assert!(prompt.contains("Documentary color photograph"));
         assert!(prompt.contains("fine film grain"));
-        assert!(prompt.contains("no painting, illustration, concept art, CGI or game art"));
+        assert!(prompt.contains("CGI, 3D render, painting or illustration"));
         assert!(prompt.contains("face, hair, clothing"));
         assert!(prompt.contains("No one enters or leaves"));
         assert!(prompt.contains("breathe, blink, and shift their weight"));
