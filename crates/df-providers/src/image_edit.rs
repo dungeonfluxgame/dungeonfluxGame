@@ -304,7 +304,11 @@ impl NativeImageEditProvider {
     ) -> Result<GeneratedImage, ImageEditError> {
         validate(edit)?;
         let (endpoint, content_type, body) = if edit.references.is_empty() {
-            (&self.generations_endpoint, "application/json".to_owned(), generation_body(edit))
+            (
+                &self.generations_endpoint,
+                "application/json".to_owned(),
+                generation_body(edit),
+            )
         } else {
             let (content_type, body) = multipart(edit);
             (&self.endpoint, content_type, body)
