@@ -297,3 +297,15 @@ not a result of this document.
 - `AGENTS.md` and ADR 0001–0005: scoped worktree/document ownership, meaningful
   devlog, source/build-bound evidence, independent review, and honest unperformed
   checks.
+
+## Amendment 2026-10-17: owner decision, vector index now
+
+The owner decided to build the DM's story memory on text embeddings with a pgvector index in the
+game's PostgreSQL now. This overrides only the "Alternatives considered" deferral of an always-on
+vector index ("deferred until representative workload evidence"). Everything else in this policy
+stands and is followed by the implementation: PostgreSQL only, audience filtering before ranking
+and again on the returned rows, hard item and byte bounds, deterministic ordering, derived data
+that never rewrites a fact, and replay with zero provider calls. Where the implementation departs
+from a rule (the query embedding on the retrieval path; rows that no canonical source can
+rewrite) the departure and its reason are recorded in `planning/story-memory.md`. The policy
+text above is otherwise unchanged.

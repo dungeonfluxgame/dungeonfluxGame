@@ -7,12 +7,24 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 
 use df_protocol::common as rpc;
 use tokio::sync::watch;
+
+/// The speaker of the server's own notes in the log (not story, so the story memory skips them).
+pub(super) const SYSTEM_SPEAKER: &str = "table";
+/// The speaker of a check's line, written by [`TableLog::push_check`].
+pub(super) const CHECK_SPEAKER: &str = "Roll";
+
+/// Receives a copy of every public line as it is appended, and the floor of a rewind. The story
+/// memory's tap: it must not block, because it runs on whichever thread appended the line.
+pub(super) trait LineSink: Send + Sync {
+    fn line(&self, line: &rpc::TableLine);
+    fn rewound(&self, floor: u64);
+}
 
 /// How many of the latest lines a view carries.
 pub(super) const RING_LINES: usize = 24;
@@ -171,6 +183,8 @@ pub(super) struct TableLog {
     /// runtime of its own: without the captured handle the expiry/pacing timers could never
     /// be armed from there and a wait would never end on its own.
     runtime: Mutex<Option<tokio::runtime::Handle>>,
+    /// The tap that copies each appended line to the story memory, once installed.
+    sink: OnceLock<Arc<dyn LineSink>>,
 }
 
 /// A sequence reserved for an accepted action line. Dropping it leaves an empty sequence gap.
@@ -211,6 +225,7 @@ impl TableLog {
             // now so the first timer can arm even if it is requested (on the session
             // owner thread) before any watcher subscribes.
             runtime: Mutex::new(tokio::runtime::Handle::try_current().ok()),
+            sink: OnceLock::new(),
         }
     }
 
@@ -317,6 +332,11 @@ impl TableLog {
         true
     }
 
+    /// Installs the tap that copies every appended public line (once; a second call is ignored).
+    pub(super) fn set_sink(&self, sink: Arc<dyn LineSink>) {
+        let _already = self.sink.set(sink);
+    }
+
     /// The first table sequence not yet assigned: the floor a development rewind
     /// (DEVCTL-001) truncates back to.
     pub(super) fn position(&self) -> u64 {
@@ -347,6 +367,9 @@ impl TableLog {
             ring.version + ring.presence_version
         };
         self.wake.send_replace(version);
+        if let Some(sink) = self.sink.get() {
+            sink.rewound(floor);
+        }
     }
 
     /// Reserves the next sequence before a durable action can publish its checkpoint. If the
@@ -442,7 +465,7 @@ impl TableLog {
     ) {
         self.push_reserved(
             reservation,
-            "Roll",
+            CHECK_SPEAKER,
             rpc::TableRole::Narrator,
             roller_index,
             rpc::TableKind::Action,
@@ -492,7 +515,7 @@ impl TableLog {
             "gameplay.table_line",
             format!("LINE queued speaker={speaker:?} role={role:?} kind={kind:?} text={text:?}"),
         );
-        let (version, sequence) = {
+        let (version, sequence, tapped) = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
             let sequence = reserved_sequence.unwrap_or_else(|| {
                 let sequence = ring.next_sequence;
@@ -500,18 +523,17 @@ impl TableLog {
                 sequence
             });
             let position = ring.lines.partition_point(|line| line.sequence < sequence);
-            ring.lines.insert(
-                position,
-                rpc::TableLine {
-                    sequence,
-                    actor_id: actor_id.to_owned(),
-                    speaker: speaker.chars().take(48).collect(),
-                    role: role as i32,
-                    hero_index,
-                    kind: kind as i32,
-                    text,
-                },
-            );
+            let entry = rpc::TableLine {
+                sequence,
+                actor_id: actor_id.to_owned(),
+                speaker: speaker.chars().take(48).collect(),
+                role: role as i32,
+                hero_index,
+                kind: kind as i32,
+                text,
+            };
+            let tapped = self.sink.get().map(|_| entry.clone());
+            ring.lines.insert(position, entry);
             while ring.lines.len() > RING_LINES {
                 ring.lines.pop_front();
             }
@@ -520,9 +542,12 @@ impl TableLog {
                 ring.composing.retain(|mark| mark.hero_index != hero_index);
             }
             ring.version += 1;
-            (ring.version, sequence)
+            (ring.version, sequence, tapped)
         };
         self.wake.send_replace(version);
+        if let (Some(sink), Some(line)) = (self.sink.get(), tapped) {
+            sink.line(&line);
+        }
         Some(sequence)
     }
 

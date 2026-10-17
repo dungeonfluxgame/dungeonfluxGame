@@ -20,6 +20,8 @@ mod native_scope;
 mod revision_codec;
 #[cfg(not(target_arch = "wasm32"))]
 mod sql;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod story_memory;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use checkpoint_codec::CodecLimits as NativeCodecLimits;
@@ -63,3 +65,6 @@ mod replay_input_hash_contract;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod protected_recovery_overlay_contract;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod story_memory_pg_fixture;
