@@ -292,8 +292,9 @@ fn plate_loading_timing(stage: &Element, visible: bool, scene: &str) {
 }
 
 fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str) {
+    let plate_ready = stage.get_attribute("data-plate-state").as_deref() == Some("ready");
     if let Some(pending) = server_pending {
-        if pending {
+        if pending && !plate_ready {
             let _ = stage.set_attribute("data-plate-server-pending", "");
         } else {
             let _ = stage.remove_attribute("data-plate-server-pending");
@@ -304,7 +305,11 @@ fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str
         .ok()
         .flatten()
         .is_some_and(|plate| plate.has_attribute("data-loading"));
-    let visible = stage.has_attribute("data-plate-server-pending") || client_pending;
+    let visible = plate_loading_visible(
+        plate_ready,
+        stage.has_attribute("data-plate-server-pending"),
+        client_pending,
+    );
     let was_visible = stage.has_attribute("data-plate-loading");
     if visible {
         let _ = stage.set_attribute("data-plate-loading", "");
@@ -326,6 +331,14 @@ fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str
         let _ = indicator.set_attribute("data-loading-component-scene", scene);
         plate_loading_timing(stage, true, scene);
     }
+}
+
+fn plate_loading_visible(plate_ready: bool, server_pending: bool, client_pending: bool) -> bool {
+    !plate_ready && (server_pending || client_pending)
+}
+
+fn can_retain_plate_for_scene(scene_matches: bool, has_active_plate: bool, plate_loaded: bool) -> bool {
+    scene_matches && has_active_plate && plate_loaded
 }
 
 fn initial(name: &str) -> String {
@@ -3426,11 +3439,11 @@ impl TvStage {
             (state, _) => state,
         };
         let Some(url) = usable else {
-            if (matches!(state, PlateState::Pending | PlateState::Failed)
-                || layer.scene.borrow().as_str() == scene_key)
-                && layer.root.has_attribute("data-active")
-                && self.root.has_attribute("data-plate-loaded")
-            {
+            if can_retain_plate_for_scene(
+                layer.scene.borrow().as_str() == scene_key,
+                layer.root.has_attribute("data-active"),
+                self.root.has_attribute("data-plate-loaded"),
+            ) {
                 if state == PlateState::Pending
                     && self.root.get_attribute("data-scene-key").as_deref() == Some(scene_key)
                 {
@@ -3511,6 +3524,7 @@ impl TvStage {
             self.root.remove_attribute("data-plate-layout-key")?;
             self.root.remove_attribute("data-plate-loaded")?;
             layer.root.remove_attribute("data-loading")?;
+            layer.root.remove_attribute("data-active")?;
             sync_plate_loading(&self.root, None, scene_key);
             layer.root.remove_attribute("data-want")?;
             layer.root.remove_attribute("data-push")?;
@@ -3701,8 +3715,8 @@ mod tests {
     use super::super::rpc;
     use super::{
         PlateState, PlateView, TvStage, check_display, first_art_asset, is_loopback_join_host,
-        plate_asset_key, roll_intention, scene_clip_needs_frame_swap, scene_plate_media_ready,
-        scene_video_url,
+        can_retain_plate_for_scene, plate_asset_key, plate_loading_visible, roll_intention,
+        scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
     };
     use crate::stage_machines::LineState;
     use wasm_bindgen::JsCast;
@@ -3742,6 +3756,22 @@ mod tests {
     fn finish_stage(parent: web_sys::Element, stage: TvStage) {
         stage.dispose().unwrap();
         parent.remove();
+    }
+
+    #[test]
+    fn ready_plate_suppresses_stale_loading_state() {
+        assert!(!plate_loading_visible(true, true, false));
+        assert!(!plate_loading_visible(true, false, true));
+        assert!(plate_loading_visible(false, true, false));
+        assert!(plate_loading_visible(false, false, true));
+    }
+
+    #[test]
+    fn previous_plate_is_not_retained_across_a_place_change() {
+        assert!(!can_retain_plate_for_scene(false, true, true));
+        assert!(!can_retain_plate_for_scene(true, false, true));
+        assert!(!can_retain_plate_for_scene(true, true, false));
+        assert!(can_retain_plate_for_scene(true, true, true));
     }
 
     #[test]

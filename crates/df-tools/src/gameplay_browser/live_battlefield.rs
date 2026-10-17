@@ -1301,7 +1301,7 @@ pub(super) fn start_preview(document: &Document) -> Result<(), JsValue> {
 
 use super::live_combat::LiveView;
 use crate::presentation::GridCell;
-use df_render::art_contract::{self, Role};
+use df_render::art_contract::Role;
 use df_render::battle::{CombatFeed, CombatSnapshot, FeedMode, Member, Outcome, RollCard};
 use std::collections::VecDeque;
 
@@ -1341,8 +1341,6 @@ enum Phase {
     Idle,
     Mounting,
     Active,
-    /// The fight ended: the stage finishes what it is showing, fades out, then is dropped.
-    Closing,
     Unavailable,
 }
 
@@ -2517,7 +2515,7 @@ pub(super) fn entrance() -> crate::stage_conductor::Battlefield {
         let mut live = live.borrow_mut();
         match live.phase {
             Phase::Idle | Phase::Mounting => Battlefield::Pending,
-            Phase::Unavailable | Phase::Closing => Battlefield::Fallback,
+            Phase::Unavailable => Battlefield::Fallback,
             Phase::Active => {
                 // The initiative roll and roll-call are on the battlefield's own HUD: the
                 // entrance is over only once they have shown and finished.
@@ -2894,6 +2892,8 @@ fn reset_fight(live: &mut Live) {
     live.pending_caption = None;
     live.held_moves.clear();
     live.pending_cues = 0;
+    live.reachable.clear();
+    live.targets.clear();
     live.initiative_pending = false;
     live.initiative_seen = false;
     live.phase = Phase::Idle;
@@ -2903,6 +2903,10 @@ fn reset_fight(live: &mut Live) {
     live.latest_seq = 0;
     live.beat_hp.clear();
     live.beat_down.clear();
+    live.active_strike = None;
+    live.battlefield_beat_log.clear();
+    live.card_values.clear();
+    live.card_log.clear();
     live.feed = CombatFeed::new(FeedMode::HoldForCues);
 }
 
@@ -2911,59 +2915,10 @@ fn reset_fight(live: &mut Live) {
 pub(super) fn release() {
     // A view that is not combat means the next fight begins in front of the display.
     SEEN_NON_COMBAT.with(|seen| seen.set(true));
-    let closing = LIVE.with(|live| {
+    LIVE.with(|live| {
         let mut live = live.borrow_mut();
-        match live.phase {
-            Phase::Idle | Phase::Closing => false,
-            Phase::Mounting | Phase::Unavailable => {
-                live.stage = None;
-                reset_fight(&mut live);
-                false
-            }
-            Phase::Active => {
-                live.phase = Phase::Closing;
-                live.latest = None;
-                true
-            }
-        }
-    });
-    if closing {
-        wasm_bindgen_futures::spawn_local(close_when_idle());
-    }
-}
-
-const CLOSE_POLL_MS: u32 = 200;
-const CLOSE_PATIENCE_POLLS: u32 = 40;
-const FADE_OUT_MS: u32 = 700;
-
-async fn close_when_idle() {
-    for _ in 0..CLOSE_PATIENCE_POLLS {
-        let busy = LIVE.with(|live| {
-            live.borrow()
-                .stage
-                .as_ref()
-                .and_then(|stage| stage.with_stage(|stage| stage.is_busy()))
-                .unwrap_or(false)
-        });
-        if !busy {
-            break;
-        }
-        TimeoutFuture::new(CLOSE_POLL_MS).await;
-    }
-    let host = LIVE.with(|live| live.borrow().host.clone());
-    if let Some(container) =
-        host.and_then(|host| host.query_selector(".battlefield").ok().flatten())
-    {
-        // The fade is cosmetic; the stage is dropped either way.
-        let _ = container.set_attribute("data-closing", "");
-    }
-    TimeoutFuture::new(FADE_OUT_MS).await;
-    let dropped = LIVE.with(|live| {
-        let mut live = live.borrow_mut();
-        let stage = live.stage.take();
+        live.stage = None;
         reset_fight(&mut live);
-        stage
     });
-    drop(dropped);
     live_sfx::set_battlefield_owns_combat(false);
 }
