@@ -456,6 +456,39 @@ impl TableLog {
         )
     }
 
+    /// A scene interaction's rows, in table order: its roll row when it rolled one, then the
+    /// narrator's outcome. The reservation is the one the action took when it was submitted.
+    pub(super) fn push_scene_outcome(
+        &self,
+        reservation: TableLogReservation,
+        roller_index: u32,
+        check: Option<&str>,
+        outcome: &str,
+    ) {
+        match check {
+            Some(check) => {
+                self.push_check(reservation, roller_index, check);
+                self.push(
+                    "Narrator",
+                    rpc::TableRole::Narrator,
+                    0,
+                    rpc::TableKind::Action,
+                    outcome,
+                );
+            }
+            None => {
+                self.push_reserved(
+                    reservation,
+                    "Narrator",
+                    rpc::TableRole::Narrator,
+                    0,
+                    rpc::TableKind::Action,
+                    outcome,
+                );
+            }
+        }
+    }
+
     /// A check is rules narration; the hero's name and outcome belong in its text.
     pub(super) fn push_check(
         &self,

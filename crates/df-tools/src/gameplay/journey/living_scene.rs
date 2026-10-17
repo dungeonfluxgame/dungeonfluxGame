@@ -1904,6 +1904,62 @@ pub(in crate::gameplay) fn last_line(state: &GameState) -> Result<Option<String>
         .map(|entry| entry.flatten().map(|entry| entry.line))
 }
 
+/// The Sleight of Hand roll row of the latest scene interaction, when that interaction rolled one:
+/// a steal, a failed steal, or a pickpocket. Nothing else rolls a row here.
+pub(in crate::gameplay) fn last_check_line(
+    state: &GameState,
+) -> Result<Option<String>, RepositoryError> {
+    let Some(entry) = state.decisions.last().map(read).transpose()?.flatten() else {
+        return Ok(None);
+    };
+    let Some(adjudication) = entry
+        .change
+        .as_ref()
+        .and_then(|change| steal_adjudication_of(&change.kind))
+    else {
+        return Ok(None);
+    };
+    Ok(steal_check_record(&entry.hero, adjudication).map(|record| record.line()))
+}
+
+fn steal_adjudication_of(kind: &SceneChangeKind) -> Option<&SceneStealAdjudication> {
+    match kind {
+        SceneChangeKind::Stolen { adjudication, .. }
+        | SceneChangeKind::StealAttempt { adjudication, .. } => adjudication.as_ref(),
+        SceneChangeKind::CoinLifted { adjudication, .. } => Some(adjudication),
+        _ => None,
+    }
+}
+
+/// The roll row for a stored Sleight of Hand receipt, in the shape the other roll rows use.
+fn steal_check_record(
+    hero: &str,
+    check: &SceneStealAdjudication,
+) -> Option<crate::gameplay::freeform_action::CheckRecord> {
+    let result = df_rules::ability_check::resolve(df_rules::ability_check::AbilityCheckInput {
+        die: check.die,
+        ability_modifier: check.ability_modifier,
+        proficiency_bonus: check.proficiency_bonus,
+        difficulty_class: check.difficulty_class,
+    })
+    .ok()?;
+    Some(crate::gameplay::freeform_action::CheckRecord {
+        subject: hero.to_owned(),
+        label: "Dexterity (Sleight of Hand)".to_owned(),
+        die: check.die,
+        modifier: i32::from(check.ability_modifier) + i32::from(check.proficiency_bonus),
+        total: i32::from(result.total),
+        against: "DC",
+        number: i32::from(check.difficulty_class),
+        result: if result.succeeded {
+            "success"
+        } else {
+            "failure"
+        },
+        success: result.succeeded,
+    })
+}
+
 pub(in crate::gameplay) fn line(
     state: &GameState,
     operation: OperationId,
@@ -2866,6 +2922,16 @@ fn coercion_outcome(
     }
 }
 
+/// The table line for examining or talking to a scene person: the hero's act, then the person's own
+/// description sentence. The relation to the speaker is never printed as a bare token.
+pub(super) fn person_look_line(hero: &str, person: &ScenePerson, option: &str) -> String {
+    let act = match option {
+        "talk" => "speaks with",
+        _ => "studies",
+    };
+    format!("{hero} {act} {}. {}", person.name, person.description)
+}
+
 /// Describes a failed steal. A person who noticed it is named in the record.
 fn attempt_line(model: &SceneModel, hero: &str, item: &str, noticer: Option<&str>) -> String {
     let item = the_phrase(item);
@@ -3667,10 +3733,7 @@ fn stage_inner(
         .find(|person| person.id == target)
     {
         match option {
-            "examine" | "talk" => format!(
-                "{}: {} {}",
-                person.name, person.description, person.relation_to_speaker
-            ),
+            "examine" | "talk" => person_look_line(&hero, person, option),
             "gift" => {
                 let cost = gift_cost_cp(payment, get("scene-amount")).ok_or_else(invalid)?;
                 if balance_cp(current.state(), *who)? < u64::from(cost) {

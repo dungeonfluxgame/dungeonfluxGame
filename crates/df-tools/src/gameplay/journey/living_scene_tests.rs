@@ -1367,6 +1367,45 @@ fn a_successful_steal_records_no_witness_and_a_noticed_failure_names_the_noticer
 }
 
 #[test]
+fn a_theft_attempt_orders_the_hero_row_then_the_roll_row_then_the_outcome() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let item = owned_portable_thing(model);
+        let attempted = interact_with_roll(&current, member, 24, &item, "steal", Some(1));
+        let operation = OperationId::from_bytes(&[24; 16]).unwrap();
+        let hero = living_scene::hero(attempted.state(), operation).unwrap();
+        let outcome = living_scene::last_line(attempted.state()).unwrap().unwrap();
+        let check = living_scene::last_check_line(attempted.state())
+            .unwrap()
+            .unwrap();
+        assert!(check.starts_with(&format!("{hero}: ")), "{check}");
+        assert!(check.contains("Dexterity (Sleight of Hand) 1 "), "{check}");
+        assert!(check.ends_with("— failure."), "{check}");
+        assert!(outcome.contains("fails to steal"), "{outcome}");
+
+        let log = crate::gameplay::table_log::TableLog::new();
+        let words = "I slip the gloves into my satchel.";
+        crate::gameplay::freeform_action::publish_hero_line(&log, &hero, 0, words);
+        log.push_scene_outcome(log.reserve(), 0, Some(&check), &outcome);
+        let lines = log.lines();
+        let [hero_row, roll_row, outcome_row] = lines.as_slice() else {
+            panic!("a theft is three table rows: {lines:?}");
+        };
+        assert_eq!(hero_row.speaker, hero);
+        assert_eq!(hero_row.role, rpc::TableRole::Hero as i32);
+        assert_eq!(hero_row.kind, rpc::TableKind::Action as i32);
+        assert_eq!(hero_row.text, words);
+        assert_eq!(roll_row.speaker, "Roll");
+        assert_eq!(roll_row.role, rpc::TableRole::Narrator as i32);
+        assert_eq!(roll_row.text, check);
+        assert_eq!(outcome_row.speaker, "Narrator");
+        assert_eq!(outcome_row.text, outcome);
+    });
+}
+
+#[test]
 fn taking_an_owned_item_openly_requires_the_check() {
     taproom(|| {
         let (current, member) = opened();
@@ -1949,4 +1988,36 @@ fn buying_for_another_hero_sets_owner_and_holder_and_the_buyer_pays() {
             seller_before + u64::from(offer.cost_cp)
         );
     });
+}
+
+#[test]
+fn examining_or_talking_to_a_person_reads_the_act_and_the_description_never_the_relation() {
+    use crate::gameplay::adventure::scene_model::{ScenePerson, StartingAttitude};
+    let person = ScenePerson {
+        id: "corin".into(),
+        name: "Corin".into(),
+        role: "customer".into(),
+        description: "Corin examines a jacket seam, a worn leather pack at his feet.".into(),
+        relation_to_speaker: "fellow customer".into(),
+        position: "table".into(),
+        aliases: vec!["Corin".into()],
+        is_background: false,
+        present_in: vec!["inn".into()],
+        attitude: StartingAttitude::Indifferent,
+        attitudes: Default::default(),
+        knowledge: Vec::new(),
+        wants: "Stay out of trouble.".into(),
+        coin_cp: 0,
+        passive_perception: 10,
+    };
+    let examined = living_scene::person_look_line("Brakka", &person, "examine");
+    assert_eq!(
+        examined,
+        "Brakka studies Corin. Corin examines a jacket seam, a worn leather pack at his feet."
+    );
+    assert!(examined.contains(&person.description));
+    assert!(!examined.contains(&person.relation_to_speaker));
+    let talked = living_scene::person_look_line("Brakka", &person, "talk");
+    assert!(talked.contains(&person.description));
+    assert!(!talked.contains(&person.relation_to_speaker));
 }

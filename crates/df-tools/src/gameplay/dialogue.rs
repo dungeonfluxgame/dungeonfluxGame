@@ -569,6 +569,51 @@ impl DialogueRequest {
     }
 }
 
+/// The request for the NPC's spoken reply to a committed coin gift. A recipient who is a present
+/// NPC answers, since the server already resolved it as the gift's target; any other recipient
+/// keeps the default addressee.
+fn gift_reply_request(
+    bytes: RawDialogueBytes,
+    recipient: &str,
+    cast: &[rpc::SceneActor],
+) -> DialogueRequest {
+    match super::npc_target::current(cast, recipient) {
+        Some(actor) => DialogueRequest::RawTarget {
+            bytes,
+            actor_id: actor.id.clone(),
+        },
+        None => DialogueRequest::Raw(bytes),
+    }
+}
+
+#[cfg(test)]
+mod gift_reply_tests {
+    use super::*;
+
+    fn scene_actor(id: &str) -> rpc::SceneActor {
+        rpc::SceneActor {
+            id: id.into(),
+            name: id.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_gift_to_a_present_npc_is_answered_by_that_npc_not_the_default_addressee() {
+        // Marek is listed first and is the default addressee; Corin received the coin.
+        let cast = [scene_actor("merchant"), scene_actor("shop-adventurer")];
+        let bytes = || RawDialogueBytes::new(Vec::new(), HeroTradeIntent::coin_gift(10));
+        assert!(matches!(
+            gift_reply_request(bytes(), "shop-adventurer", &cast),
+            DialogueRequest::RawTarget { actor_id, .. } if actor_id == "shop-adventurer"
+        ));
+        assert!(matches!(
+            gift_reply_request(bytes(), "not-on-stage", &cast),
+            DialogueRequest::Raw(_)
+        ));
+    }
+}
+
 pub(super) struct DialogueCompletion {
     pub response: rpc::DialogueResponse,
     pub npc_outcome: Option<super::npc_reply::ExchangeOutcome>,
@@ -1926,7 +1971,6 @@ impl Service {
             .ok_or_else(|| Status::failed_precondition("this scene has no observation offer"))?;
         let hero_entity = journey::player_entity(member, &current).map_err(actor::unavailable)?;
         let (hero, hero_index) = table_speaker(current.state(), hero_entity)?;
-        freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
         let catalog = super::investigation::targets(
             scene,
             &super::investigation::party_targets(current.state()).map_err(actor::unavailable)?,
@@ -1953,6 +1997,7 @@ impl Service {
                 _ => Err(Status::internal("observation response binding invalid")),
             };
         }
+        freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
         actor::record_audit_line(
             "gameplay.investigation_attempt",
             format!(
@@ -2057,6 +2102,31 @@ impl Service {
             npc_actor_id: String::new(),
             npc_speaker: String::new(),
         })
+    }
+
+    /// Puts the hero's typed line on the table as an action row before the interaction resolves,
+    /// so the row precedes the interaction's own roll and outcome rows.
+    async fn publish_hero_action_line(
+        &self,
+        credential: [u8; 32],
+        text: &str,
+    ) -> Result<(), Status> {
+        let (member_reply, member_wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::SpeechMember {
+                credential,
+                reply: member_reply,
+            })
+            .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
+        let member = tokio::time::timeout(super::timing::active().reply, member_wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("dialogue owner did not resolve the player"))?
+            .map_err(|_| Status::unavailable("dialogue actor stopped"))??;
+        let current = self.updates.borrow().clone();
+        let hero_entity = journey::player_entity(member, &current).map_err(actor::unavailable)?;
+        let (hero, hero_index) = table_speaker(current.state(), hero_entity)?;
+        freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, text);
+        Ok(())
     }
 
     async fn interaction_call(
@@ -2170,6 +2240,11 @@ impl Service {
                 });
             }
         }
+        // A gift the NPC answers is spoken through dialogue_call, which publishes the hero's line.
+        if option != "gift" {
+            self.publish_hero_action_line(credential, &request.text)
+                .await?;
+        }
         let (reply, receive) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Submit {
@@ -2262,13 +2337,17 @@ impl Service {
             if let DialogueReply::Raw(mut response, npc) = self
                 .dialogue_call(
                     credential,
-                    DialogueRequest::Raw(RawDialogueBytes::new(
-                        encode(&spoken)?,
-                        HeroTradeIntent::coin_gift(
-                            journey::living_scene::coin_amount_cp(&request.text)
-                                .unwrap_or_default(),
+                    gift_reply_request(
+                        RawDialogueBytes::new(
+                            encode(&spoken)?,
+                            HeroTradeIntent::coin_gift(
+                                journey::living_scene::coin_amount_cp(&request.text)
+                                    .unwrap_or_default(),
+                            ),
                         ),
-                    )),
+                        target,
+                        &wire::scene_cast(&scene),
+                    ),
                 )
                 .await?
             {

@@ -2989,14 +2989,17 @@ impl Actor {
         };
         match super::journey::living_scene::last_line(self.owner.checkpoint().state()) {
             Ok(Some(line)) => {
-                self.table_log.push_reserved(
-                    reservation,
-                    "Narrator",
-                    rpc::TableRole::Narrator,
-                    0,
-                    rpc::TableKind::Action,
-                    &line,
-                );
+                let check = match super::journey::living_scene::last_check_line(
+                    self.owner.checkpoint().state(),
+                ) {
+                    Ok(check) => check,
+                    Err(error) => {
+                        record_unavailable("scene-interaction-check", &format!("{error:?}"));
+                        None
+                    }
+                };
+                self.table_log
+                    .push_scene_outcome(reservation, index, check.as_deref(), &line);
                 record_audit_line(
                     "gameplay.scene_interaction",
                     format!("SCENE actor={hero:?} result={line:?}"),
