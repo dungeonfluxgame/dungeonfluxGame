@@ -292,6 +292,10 @@ pub(crate) struct MerchantTradeTerms {
     pub(crate) stock_units: u8,
     pub(crate) stock_revision: u64,
     pub(crate) purse_revision: u64,
+    /// The merchant on the other side of this term, named for Jev's hero-line reading.
+    pub(crate) counterparty_name: String,
+    /// Every party hero in the scene, so a hand-over to a companion reads as no trade.
+    pub(crate) party_hero_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -597,6 +601,7 @@ pub(crate) fn merchant_trade_terms(
         .ok_or_else(invalid)?
         .place_id
         .as_str();
+    let party_heroes = party_hero_names(model);
     let mut terms = Vec::new();
     for offer in &model.offers {
         let item_id = offer.canonical_item_id();
@@ -615,6 +620,8 @@ pub(crate) fn merchant_trade_terms(
             stock_units: u8::from(available),
             stock_revision: item_stock_revision(current.state(), place_id, &item_id)?,
             purse_revision: purse_revision(current.state(), place_id, &offer.seller_id)?,
+            counterparty_name: person_name(model, &offer.seller_id)?,
+            party_hero_names: party_heroes.clone(),
         });
     }
     let merchants = model
@@ -654,6 +661,8 @@ pub(crate) fn merchant_trade_terms(
                 stock_units: u8::from(available),
                 stock_revision: item_stock_revision(current.state(), place_id, &thing.id)?,
                 purse_revision: purse_revision(current.state(), place_id, merchant_id)?,
+                counterparty_name: merchant.name.clone(),
+                party_hero_names: party_heroes.clone(),
             });
         }
     }
@@ -1157,6 +1166,25 @@ fn revision_is_after(candidate: &str, prior: &str) -> bool {
     }
 
     matches!((parts(candidate), parts(prior)), (Some(candidate), Some(prior)) if candidate > prior)
+}
+
+/// Names of the party heroes in this scene, from the people list that authorizes hero actions.
+fn party_hero_names(model: &SceneModel) -> Vec<String> {
+    model
+        .people
+        .iter()
+        .filter(|person| person.role == "hero" && !person.is_background)
+        .map(|person| person.name.clone())
+        .collect()
+}
+
+fn person_name(model: &SceneModel, person_id: &str) -> Result<String, RepositoryError> {
+    model
+        .people
+        .iter()
+        .find(|person| person.id == person_id)
+        .map(|person| person.name.clone())
+        .ok_or_else(invalid)
 }
 
 fn is_authenticated_hero(
@@ -2858,10 +2886,7 @@ fn stage_inner(
                     let serving = if ale { "pours" } else { "hands over" };
                     format!(
                         "{} {serving} {} for {hero}, who pays {} {} CP.",
-                        server.name,
-                        offer.description.trim_end_matches('.'),
-                        seller.name,
-                        cost_cp
+                        server.name, offer.name, seller.name, cost_cp
                     )
                 }
             }

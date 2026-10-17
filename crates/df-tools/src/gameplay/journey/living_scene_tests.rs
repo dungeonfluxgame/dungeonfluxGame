@@ -92,6 +92,41 @@ fn interact(
     interact_with_roll(current, member, op, target, option, roll)
 }
 
+fn interact_with_recipient(
+    current: &Checkpoint,
+    member: MemberId,
+    op: u8,
+    target: &str,
+    option: &str,
+    recipient: &str,
+) -> Checkpoint {
+    let choices = vec![
+        (
+            model::label("scene-target").unwrap(),
+            model::label(target).unwrap(),
+        ),
+        (
+            model::label("scene-option").unwrap(),
+            model::label(option).unwrap(),
+        ),
+        (
+            model::label("scene-recipient").unwrap(),
+            model::label(recipient).unwrap(),
+        ),
+    ];
+    stage_with_supplier(
+        current,
+        &input(current, member, op, "script-choice", choices),
+        &mut |_| panic!("an ordinary hand-over must not roll"),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "{option} {target} to {recipient}: {error:?}; step={:?}",
+            refusal_detail::take()
+        )
+    })
+}
+
 fn interact_with_roll(
     current: &Checkpoint,
     member: MemberId,
@@ -984,6 +1019,115 @@ fn jev_meaning_decides_the_scene_interaction_and_keywords_answer_only_without_a_
         assert_eq!(
             living_scene::interaction_from_judgement(&scene, &question, unavailable).0,
             None
+        );
+    });
+}
+
+#[test]
+fn merchant_trade_terms_name_the_merchant_and_every_party_hero() {
+    taproom(|| {
+        let (current, _member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let ale = model
+            .offers
+            .iter()
+            .find(|offer| offer.name.contains("ale"))
+            .unwrap();
+        let seller = model
+            .people
+            .iter()
+            .find(|person| person.id == ale.seller_id)
+            .unwrap();
+        let terms = living_scene::merchant_trade_terms(&current, "Brynn").unwrap();
+        let term = terms
+            .iter()
+            .find(|term| term.item_id == ale.canonical_item_id())
+            .unwrap();
+        assert_eq!(term.counterparty_name, seller.name);
+        assert!(term.party_hero_names.contains(&"Brynn".to_owned()));
+        assert!(term.party_hero_names.contains(&"Vale".to_owned()));
+    });
+}
+
+#[test]
+fn a_purchase_line_names_the_item_and_not_its_description() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let offer = model
+            .offers
+            .iter()
+            .find(|offer| offer.name.contains("ale"))
+            .unwrap();
+        let after = interact(&current, member, 42, &offer.id, "buy");
+        let line = living_scene::last_line(after.state()).unwrap().unwrap();
+        assert!(
+            line.contains(&format!("{} for Brynn", offer.name)),
+            "{line}"
+        );
+        assert!(
+            !line.contains(offer.description.trim_end_matches('.')),
+            "the narrator line must name the item, not its description: {line}"
+        );
+    });
+}
+
+#[test]
+fn a_hand_over_names_a_party_hero_after_to_and_moves_the_held_item() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let ale = model
+            .offers
+            .iter()
+            .find(|offer| offer.name.contains("ale"))
+            .unwrap();
+        let item_id = ale.canonical_item_id();
+        let companion = model
+            .people
+            .iter()
+            .find(|person| person.name == "Vale" && person.role == "hero")
+            .unwrap();
+        assert_eq!(
+            living_scene::recipient_for_line(
+                &scene,
+                &format!("I hand the {} to {}.", ale.name, companion.name),
+            ),
+            Some(companion.id.clone())
+        );
+        let bought = interact(&current, member, 40, &ale.id, "buy");
+        let owned = living_scene::snapshot(bought.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let before = owned
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.id == item_id)
+            .unwrap();
+        assert_eq!(before.holder_id.as_deref(), Some("Brynn"));
+        assert_eq!(before.owner_id.as_deref(), Some("Brynn"));
+        let handed = interact_with_recipient(&bought, member, 41, &item_id, "give", &companion.id);
+        let now = living_scene::snapshot(handed.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let thing = now
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.id == item_id)
+            .unwrap();
+        assert_eq!(thing.holder_id.as_deref(), Some(companion.id.as_str()));
+        // The existing custody rule: when the giver owns the item, the recipient becomes its owner.
+        assert_eq!(thing.owner_id.as_deref(), Some(companion.id.as_str()));
+        assert!(
+            living_scene::last_line(handed.state())
+                .unwrap()
+                .unwrap()
+                .contains(&format!("gives {} to {}", ale.name, companion.name))
         );
     });
 }

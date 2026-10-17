@@ -1,14 +1,14 @@
 use serde_json::json;
 
 use super::merchant_bargaining::{
-    HeroLine, HeroTradeIntent, HeroTradeMeaning, MerchantBuybackMemory, MerchantMeaning,
-    MerchantReplyCommitment, QuoteDecision, QuoteRejection, TradeDirection, TradeExchange,
-    TradeJudgement, TradeTerms, attach_buyback_memory, constrain_buyback_ceiling,
-    explicit_price_cp, fixed_price_purchase, hero_intent_from_judgement, hero_stated_price_cp,
-    is_trade_dialogue_request, merchant_commitment_from_judgement, quote_candidate,
-    quote_candidate_for_item, quote_candidate_for_reply, quote_decision, referenced_item_id,
-    reply_context, reply_context_for_quote, revalidate_quote, rules_hero_intent,
-    rules_merchant_commitment, rules_quote_decision,
+    HERO_TRADE_INSTRUCTIONS, HeroLine, HeroTradeIntent, HeroTradeMeaning, MerchantBuybackMemory,
+    MerchantMeaning, MerchantReplyCommitment, QuoteDecision, QuoteRejection, TradeDirection,
+    TradeExchange, TradeJudgement, TradeTerms, attach_buyback_memory, constrain_buyback_ceiling,
+    explicit_price_cp, fixed_price_purchase, hero_intent_from_judgement, hero_judgement_state,
+    hero_stated_price_cp, is_trade_dialogue_request, merchant_commitment_from_judgement,
+    quote_candidate, quote_candidate_for_item, quote_candidate_for_reply, quote_decision,
+    referenced_item_id, reply_context, reply_context_for_quote, revalidate_quote,
+    rules_hero_intent, rules_merchant_commitment, rules_quote_decision,
 };
 use crate::gameplay::approach_model::JevUnavailable;
 
@@ -43,6 +43,8 @@ fn terms(direction: TradeDirection) -> TradeTerms {
         stock_units: 1,
         stock_revision: 1,
         purse_revision: 1,
+        counterparty_name: "Marek".into(),
+        party_hero_names: vec!["Brakka".into(), "Sigrun".into()],
     }
 }
 
@@ -1043,6 +1045,26 @@ fn live_counteroffer_context_preserves_the_exact_item_and_direction() {
     assert_eq!(context["available_trades"][0]["direction"], "merchant_buys");
     assert_eq!(context["live_quote"]["price_cp"], 1_000);
     assert_eq!(context["merchant_facts"]["attitude_toward_hero"], "wary");
+}
+
+#[test]
+fn hero_judgement_state_names_the_party_and_the_merchant_and_the_rule_excludes_hand_overs() {
+    let sale = terms(TradeDirection::HeroBuys);
+    let words = "I hand the traveler's clothes to Sigrun.";
+    let state = hero_judgement_state(words, None, &[sale]);
+    assert_eq!(state["hero_line"], json!(words));
+    assert_eq!(state["merchant_names"], json!(["Marek"]));
+    assert_eq!(state["party_heroes"], json!(["Brakka", "Sigrun"]));
+    assert_eq!(state["trade_items"][0]["item"], json!("fine clothes"));
+    assert!(HERO_TRADE_INSTRUCTIONS.contains("party_heroes"));
+    assert!(HERO_TRADE_INSTRUCTIONS.contains("merchant_names"));
+    assert!(
+        HERO_TRADE_INSTRUCTIONS.contains("is not_trade, even when the item is in trade_items"),
+        "hand-overs to a companion must be classified as not_trade"
+    );
+    assert!(
+        HERO_TRADE_INSTRUCTIONS.contains("only an exchange with the merchant for coin is trade")
+    );
 }
 
 #[test]
