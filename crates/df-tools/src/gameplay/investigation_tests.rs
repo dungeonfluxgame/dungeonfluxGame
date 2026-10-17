@@ -361,6 +361,26 @@ fn repeats_and_absence_are_answered_without_a_refusal_or_secret() {
 }
 
 #[test]
+fn player_fallback_names_the_hero_and_never_uses_second_person() {
+    let target = room()
+        .into_iter()
+        .find(|target| target.id == "hearth")
+        .unwrap();
+    let observation = Observation {
+        target,
+        skill: "investigation".into(),
+        succeeded: true,
+        repeated: false,
+        finding: None,
+        private_finding: false,
+    };
+
+    let text = observation.fallback_for("Sigrun", None);
+    assert!(text.contains("Sigrun"));
+    assert!(!text.to_lowercase().contains("you"), "{text}");
+}
+
+#[test]
 fn roll_text_preserves_apostrophes_and_shows_outcome_without_difficulty_class() {
     let target = room()
         .into_iter()
@@ -463,6 +483,32 @@ async fn storyteller_receives_only_target_facts_and_no_failed_finding() {
     assert!(request.contains("never address the player as you"));
     assert!(!request.contains("PRIVATE-FINDING-MUST-NOT-ENTER-PROMPT"));
     assert_eq!(observation.facts()["finding"], Value::Null);
+}
+
+#[test]
+fn storyteller_facts_include_the_acting_hero_and_available_pronouns() {
+    let observation = Observation {
+        target: room()
+            .into_iter()
+            .find(|entry| entry.id == "hearth")
+            .unwrap(),
+        skill: "investigation".into(),
+        succeeded: true,
+        repeated: false,
+        finding: None,
+        private_finding: false,
+    };
+    let pronouns = Pronouns {
+        subject: "she",
+        object: "her",
+        possessive: "her",
+        reflexive: "herself",
+    };
+
+    let facts = observation.facts_for("Sigrun", Some(pronouns));
+    assert_eq!(facts["hero"]["name"], "Sigrun");
+    assert_eq!(facts["hero"]["pronouns"]["subject"], "she");
+    assert!(!facts.to_string().to_lowercase().contains("you"));
 }
 
 #[test]

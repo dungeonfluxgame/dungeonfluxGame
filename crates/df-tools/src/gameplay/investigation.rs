@@ -8,7 +8,9 @@ use df_types::{MemberId, OperationId, RevisionLabel};
 use serde_json::{Value, json};
 
 use crate::gameplay::{
-    actor, pack, shot,
+    actor,
+    freeform_action::Pronouns,
+    pack, shot,
     storyteller::{CallProfile, Expression, Slot, Storyteller},
 };
 
@@ -950,6 +952,31 @@ pub(super) struct Observation {
     pub(super) private_finding: bool,
 }
 
+pub(super) fn hero_pronouns(hero: &rpc::CharacterSheet) -> Option<Pronouns> {
+    let appearance = hero.identity.as_ref()?.appearance.as_ref()?;
+    match appearance.pronouns.as_str() {
+        "she-her" => Some(Pronouns {
+            subject: "she",
+            object: "her",
+            possessive: "her",
+            reflexive: "herself",
+        }),
+        "he-him" => Some(Pronouns {
+            subject: "he",
+            object: "him",
+            possessive: "his",
+            reflexive: "himself",
+        }),
+        "they-them" => Some(Pronouns {
+            subject: "they",
+            object: "them",
+            possessive: "their",
+            reflexive: "themselves",
+        }),
+        _ => None,
+    }
+}
+
 impl Observation {
     /// Public prose never receives a member-private finding, even in its provider prompt.
     pub(super) fn public_view(&self) -> Self {
@@ -994,11 +1021,66 @@ impl Observation {
         }
     }
 
+    pub(super) fn fallback_for(&self, hero_name: &str, pronouns: Option<Pronouns>) -> String {
+        if self.repeated {
+            return match pronouns {
+                Some(pronouns) => format!(
+                    "{hero_name} has already examined {}; {} finds nothing new.",
+                    self.target.name, pronouns.subject
+                ),
+                None => format!(
+                    "{hero_name} has already examined {}; nothing new turns up.",
+                    self.target.name
+                ),
+            };
+        }
+        if !self.target.present {
+            return format!("{hero_name} observes: {}", self.target.description);
+        }
+        if self.succeeded {
+            if let Some(finding) = &self.finding {
+                return format!("{hero_name} examines {}: {finding}", self.target.name);
+            }
+            return format!(
+                "{hero_name} examines {}: {}",
+                self.target.name, self.target.description
+            );
+        }
+        if self.skill == "insight" {
+            return format!(
+                "{hero_name} can't tell what {} is thinking.",
+                self.target.name
+            );
+        }
+        format!(
+            "{} {hero_name} notices nothing further about {}.",
+            self.target.description,
+            the_phrase(&self.target.name)
+        )
+    }
+
     pub(super) fn facts(&self) -> Value {
         json!({"target": {"name": self.target.name, "description": self.target.description,
             "present": self.target.present}, "skill": self.skill, "succeeded": self.succeeded,
             "repeated": self.repeated, "finding": if self.succeeded && !self.repeated && self.target.present {
                 self.finding.as_deref() } else { None }})
+    }
+
+    fn facts_for(&self, hero_name: &str, pronouns: Option<Pronouns>) -> Value {
+        let mut facts = self.facts();
+        facts["hero"] = match pronouns {
+            Some(pronouns) => json!({
+                "name": hero_name,
+                "pronouns": {
+                    "subject": pronouns.subject,
+                    "object": pronouns.object,
+                    "possessive": pronouns.possessive,
+                    "reflexive": pronouns.reflexive,
+                }
+            }),
+            None => json!({"name": hero_name, "pronouns": null}),
+        };
+        facts
     }
 
     pub(super) fn roll_line(&self, hero: &str, check: &rpc::AbilityCheckResult) -> String {
@@ -1036,7 +1118,18 @@ impl Observation {
 }
 
 pub(super) async fn describe(storyteller: &Storyteller, observation: &Observation) -> String {
-    let facts = observation.facts();
+    describe_for(storyteller, observation, None).await
+}
+
+pub(super) async fn describe_for(
+    storyteller: &Storyteller,
+    observation: &Observation,
+    hero: Option<(&str, Option<Pronouns>)>,
+) -> String {
+    let facts = hero.map_or_else(
+        || observation.facts(),
+        |(name, pronouns)| observation.facts_for(name, pronouns),
+    );
     let slots = [Slot::new("observation", 320).mentioning(vec![observation.target.name.clone()])];
     let result = storyteller.express(&Expression { purpose: "investigation", facts: &facts, slots: &slots,
         style: "One plain sentence about the target, in a warm narrator's voice. Narrate in third person and name the acting hero when their identity is provided; never address the player as you.",
@@ -1051,7 +1144,10 @@ pub(super) async fn describe(storyteller: &Storyteller, observation: &Observatio
                     "gameplay.investigation_expression",
                     "OBSERVATION source=rules reason=missing-slot".into(),
                 );
-                observation.fallback()
+                hero.map_or_else(
+                    || observation.fallback(),
+                    |(name, pronouns)| observation.fallback_for(name, pronouns),
+                )
             }
         },
         Err(error) => {
@@ -1059,7 +1155,10 @@ pub(super) async fn describe(storyteller: &Storyteller, observation: &Observatio
                 "gameplay.investigation_expression",
                 format!("OBSERVATION source=rules reason={error}"),
             );
-            observation.fallback()
+            hero.map_or_else(
+                || observation.fallback(),
+                |(name, pronouns)| observation.fallback_for(name, pronouns),
+            )
         }
     }
 }

@@ -1552,9 +1552,11 @@ pub(super) fn project_journey(
     // Keep its scene narration stable when a later interaction clears the current check.
     if role == LocalDemoRole::Player
         && let Some(check) = &latest_check
+        && let Some(hero) = journey.own_character.as_ref()
         && let Some(observation) = super::investigation::observation(&authored, check)
     {
-        narration = observation.public_view().fallback();
+        let pronouns = super::investigation::hero_pronouns(hero);
+        narration = observation.public_view().fallback_for(&hero.name, pronouns);
     }
     let audience = match role {
         LocalDemoRole::Display => rpc::view_message::Audience::Display(rpc::DisplayGameplayView {
