@@ -182,12 +182,12 @@
 
 .tv-fig-bubbles[data-anchor-fallback=named-check-panel] .tv-check-result{width:100%}
 
-/* Photographic cinema (owner, 2026-10-17): the TV shows the camera's own frame. No grade,
-   grain, dust, firelight, vignette or rotating drift is laid over a scene photograph or its
-   loop; any of them made a real photograph read as a painting. This file is joined after the
-   stage, motion and home sheets, so these rules win over their treatments. */
-.tv-stage[data-shot=plate] .tv-plate-img,.tv-stage[data-shot=plate] .tv-plate-video .tv-loop-clip{filter:none;animation:none;transform:none}
-.tv-plate-dust,.tv-plate-vignette{display:none}
-.tv-scene-set{filter:none!important}
-.tv-scene-set::before,.tv-scene-set::after{display:none}
+/* Photographic cinema (owner, 2026-10-17): the TV keeps the camera's frame sharp and steady.
+   The owner keeps the gentle colour grade and the screen-space dust; the breathing vignette, the
+   firelight glows, the SVG grain and the rotating 1.07-1.1x drift are gone, since together they
+   made a real photograph read as a painting. This file is joined after the stage, motion and
+   home sheets, so these rules win over their treatments. */
+.tv-stage[data-shot=plate] .tv-plate-img,.tv-stage[data-shot=plate] .tv-plate-video .tv-loop-clip{animation:none;transform:none}
+.tv-plate-vignette{display:none}
+.tv-scene-set::after{display:none}
 .tv-stage[data-tv-mode=lobby] .tv-atmosphere::after{display:none}
