@@ -985,9 +985,10 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
             let message = match outcome {
                 Ok(Ok((Some(reply), None))) => match &call {
                     Call::Raw(input)
+                        // A look, a smell or a refused act changes no state, so its answer keeps the
+                        // observed revision; it is still the resolved answer to this input.
                         if reply.input_id == input.input_id
                             && reply.revision.is_some()
-                            && reply.revision != input.observed_revision
                             && reply.disposition == rpc::DialogueDisposition::Action as i32
                             && !reply.confirmation_required
                             && reply.confirmation_token.is_empty()
