@@ -356,10 +356,13 @@ fn finale_defeat_names_the_same_captured_patron_outcome_as_its_epilogue() {
 #[test]
 fn ending_removes_a_stock_sentence_repeated_from_an_earlier_scene() {
     let t = tables();
-    let frame = generate_frame(&t, 51, GenerateOptions::default()).unwrap();
-    let record = CampaignRecord::new(frame.clone()).unwrap();
-    let mut plan = next_chapter(&t, &frame, &record).unwrap();
-    let mut generated = generate_chapter(&t, &frame, &mut plan).unwrap();
+    let mut generated = super::generate::generate(
+        &t.chapter,
+        51,
+        GenerateOptions::default(),
+        &super::ForcedEntries::new(),
+    )
+    .unwrap();
     let repeated = "The innkeeper now looks to Brakka for support on the way.";
     let (earlier_variant, ending_variant) = {
         let script = generated.pack.beat_script.as_mut().unwrap();
@@ -373,23 +376,51 @@ fn ending_removes_a_stock_sentence_repeated_from_an_earlier_scene() {
             })
             .unwrap();
         let ending_scene_key = script.scenes[&ending_variant].key;
-        let ending_place = generated.settings.scene(ending_scene_key).place_id.clone();
-        let earlier_variant = script
+        match ending_scene_key {
+            super::super::pack::SceneKey::Opening
+            | super::super::pack::SceneKey::DialogueSeal
+            | super::super::pack::SceneKey::DialogueEscort => {
+                generated.settings.confrontation.place_id = "test-other-place".into();
+                generated.settings.destination.place_id = "test-other-place".into();
+            }
+            super::super::pack::SceneKey::Room
+            | super::super::pack::SceneKey::Combat
+            | super::super::pack::SceneKey::Defeat => {
+                generated.settings.meeting.place_id = "test-other-place".into();
+                generated.settings.destination.place_id = "test-other-place".into();
+            }
+            super::super::pack::SceneKey::Victory | super::super::pack::SceneKey::Inn => {
+                generated.settings.meeting.place_id = "test-other-place".into();
+                generated.settings.confrontation.place_id = "test-other-place".into();
+            }
+        }
+        let earlier_variant = "earlier-repetition".to_owned();
+        let different_place_key = match ending_scene_key {
+            super::super::pack::SceneKey::Opening
+            | super::super::pack::SceneKey::DialogueSeal
+            | super::super::pack::SceneKey::DialogueEscort => super::super::pack::SceneKey::Combat,
+            super::super::pack::SceneKey::Room
+            | super::super::pack::SceneKey::Combat
+            | super::super::pack::SceneKey::Defeat
+            | super::super::pack::SceneKey::Victory
+            | super::super::pack::SceneKey::Inn => super::super::pack::SceneKey::Opening,
+        };
+        let mut earlier_scene = script.scenes[&ending_variant].clone();
+        earlier_scene.key = different_place_key;
+        earlier_scene.setting = None;
+        earlier_scene.narration = repeated.to_owned();
+        script.scenes.insert(earlier_variant.clone(), earlier_scene);
+        script
             .beats
-            .iter()
-            .filter(|beat| beat.kind != super::super::beat_script::BeatKind::Ending)
-            .filter_map(|beat| beat.scene_variant.as_ref())
-            .find(|variant| {
-                let scene = &script.scenes[*variant];
-                generated.settings.scene(scene.key).place_id != ending_place
-            })
+            .iter_mut()
+            .find(|beat| beat.kind != super::super::beat_script::BeatKind::Ending)
             .unwrap()
-            .clone();
+            .scene_variant = Some(earlier_variant.clone());
         script.scenes.get_mut(&earlier_variant).unwrap().setting = None;
         script.scenes.get_mut(&ending_variant).unwrap().setting = None;
         script.scenes.get_mut(&earlier_variant).unwrap().narration = repeated.to_owned();
         script.scenes.get_mut(&ending_variant).unwrap().narration =
-            format!("{repeated} The road lies ahead.");
+            format!("{repeated} The road lies ahead. The river runs west.");
         (earlier_variant, ending_variant)
     };
 
@@ -399,7 +430,7 @@ fn ending_removes_a_stock_sentence_repeated_from_an_earlier_scene() {
     assert_eq!(script.scenes[&earlier_variant].narration, repeated);
     assert_eq!(
         script.scenes[&ending_variant].narration,
-        "The road lies ahead."
+        "The road lies ahead. The river runs west."
     );
 }
 

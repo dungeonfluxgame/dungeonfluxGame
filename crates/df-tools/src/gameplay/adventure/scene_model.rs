@@ -881,7 +881,7 @@ impl SceneModel {
             .map(|person| {
                 serde_json::json!({
                     "id": person.id, "name": person.name, "look_and_doing": person.description,
-                    "position": person.position,
+                    "role": person.role, "position": person.position,
                 })
             })
             .collect::<Vec<_>>();

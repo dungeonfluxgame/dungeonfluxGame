@@ -358,7 +358,14 @@ mod tests {
                     .contains("Road wear")
             );
             assert_eq!(corin.facts["player"]["exact_words"], road_clothes_question);
-            assert!(corin.facts["answer_from"].as_array().unwrap().is_empty());
+            // Question-matched dossier answers supply grounded lines (PLAY-N06).
+            let answer_from = corin.facts["answer_from"].as_array().unwrap();
+            assert!(!answer_from.is_empty());
+            assert!(
+                answer_from
+                    .iter()
+                    .all(|answer| { answer.as_str().is_some_and(|text| !text.trim().is_empty()) })
+            );
             assert!(!corin.facts.to_string().contains("private watch passphrase"));
             let checked = native::act(&opening, native::first(), 6, "look-around");
             assert_eq!(checked.state().draws.len(), 1);

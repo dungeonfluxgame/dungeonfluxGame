@@ -812,66 +812,101 @@ pub(super) fn remove_repeated_ending_sentences(
     let Some(script) = &mut generated.pack.beat_script else {
         return;
     };
-    let mut earlier: Vec<(SceneKey, String, String)> = Vec::new();
+    let earlier: Vec<(SceneKey, String, String)> = script
+        .beats
+        .iter()
+        .filter(|beat| beat.kind != super::super::beat_script::BeatKind::Ending)
+        .filter_map(|beat| beat.scene_variant.as_ref())
+        .filter_map(|variant| script.scenes.get(variant))
+        .map(|scene| (scene.key, scene.narration.clone(), scene.dialogue.clone()))
+        .collect();
     for beat in &script.beats {
-        if beat.kind == super::super::beat_script::BeatKind::Ending {
-            if let Some(variant) = &beat.scene_variant
-                && let Some(ending) = script.scenes.get_mut(variant)
-            {
-                let ending_place = settings.scene(ending.key).place_id.clone();
-                let prior_text: Vec<&str> = earlier
-                    .iter()
-                    .filter(|(scene, _, _)| settings.scene(*scene).place_id != ending_place)
-                    .flat_map(|(_, narration, dialogue)| [narration.as_str(), dialogue.as_str()])
-                    .collect();
-                let narration =
-                    super::expression::remove_repeated_sentences(&ending.narration, &prior_text);
-                if narration.is_empty() {
-                    ending.narration = table_text
-                        .and_then(|table| {
-                            table
-                                .pack
-                                .beat_script
-                                .as_ref()?
-                                .scenes
-                                .get(variant)
-                                .map(|scene| scene.narration.clone())
-                        })
-                        .unwrap_or_default();
-                } else {
-                    ending.narration = narration;
-                }
-                let dialogue =
-                    super::expression::remove_repeated_sentences(&ending.dialogue, &prior_text);
-                if dialogue.is_empty() {
-                    ending.dialogue = table_text
-                        .and_then(|table| {
-                            table
-                                .pack
-                                .beat_script
-                                .as_ref()?
-                                .scenes
-                                .get(variant)
-                                .map(|scene| scene.dialogue.clone())
-                        })
-                        .unwrap_or_default();
-                } else {
-                    ending.dialogue = dialogue;
-                }
-            }
+        if beat.kind != super::super::beat_script::BeatKind::Ending {
             continue;
         }
         if let Some(variant) = &beat.scene_variant
-            && let Some(scene) = script.scenes.get(variant)
+            && let Some(ending) = script.scenes.get_mut(variant)
         {
-            earlier.push((scene.key, scene.narration.clone(), scene.dialogue.clone()));
+            let ending_place = settings.scene(ending.key).place_id.clone();
+            let prior_text: Vec<&str> = earlier
+                .iter()
+                .filter(|(scene, _, _)| settings.scene(*scene).place_id != ending_place)
+                .flat_map(|(_, narration, dialogue)| [narration.as_str(), dialogue.as_str()])
+                .collect();
+            ending.narration = remove_repeated_ending_prose(
+                &ending.narration,
+                &prior_text,
+                table_text.and_then(|table| {
+                    table
+                        .pack
+                        .beat_script
+                        .as_ref()?
+                        .scenes
+                        .get(variant)
+                        .map(|scene| scene.narration.as_str())
+                }),
+            );
+            ending.dialogue =
+                super::expression::remove_repeated_sentences(&ending.dialogue, &prior_text);
+            if ending.dialogue.is_empty() {
+                ending.dialogue = table_text
+                    .and_then(|table| {
+                        table
+                            .pack
+                            .beat_script
+                            .as_ref()?
+                            .scenes
+                            .get(variant)
+                            .map(|scene| scene.dialogue.clone())
+                    })
+                    .unwrap_or_default();
+            }
         }
     }
 }
 
+fn remove_repeated_ending_prose(text: &str, earlier: &[&str], fallback: Option<&str>) -> String {
+    let paragraphs = text
+        .split("\n\n")
+        .flat_map(|paragraph| {
+            let filtered = super::expression::remove_repeated_sentences(paragraph, earlier);
+            filtered
+                .split_inclusive(['.', '!', '?'])
+                .map(str::trim)
+                .filter(|sentence| !sentence.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    if paragraphs.is_empty() {
+        let fallback_text = fallback
+            .map(|fallback| remove_repeated_ending_prose(fallback, earlier, None))
+            .filter(|fallback| !fallback.is_empty());
+        return fallback_text.unwrap_or_else(|| "The chapter closes here.".to_owned());
+    }
+    // Pack text may hold no control characters, so the kept sentences stay on one line.
+    paragraphs.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{epilogue_speech, whispered_clue};
+    use super::{epilogue_speech, remove_repeated_ending_prose, whispered_clue};
+
+    #[test]
+    fn repeated_ending_sentences_are_removed_and_leave_a_valid_fallback() {
+        assert_eq!(
+            remove_repeated_ending_prose(
+                "Old news. New beginning. New road. New promise.",
+                &["Old news."],
+                None,
+            ),
+            "New beginning. New road. New promise."
+        );
+        assert_eq!(
+            remove_repeated_ending_prose("Old news.", &["Old news."], None),
+            "The chapter closes here."
+        );
+    }
 
     #[test]
     fn private_clue_quotes_the_whispered_speech() {

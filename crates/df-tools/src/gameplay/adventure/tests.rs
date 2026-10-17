@@ -570,7 +570,15 @@ fn every_compiled_creature_has_table_parity_and_loader_disclosure() {
         // Tactical source profiles implement the complete T01 stat blocks; legacy
         // one-weapon fidelity flags no longer describe their mechanical authority.
         assert!(loaded.tuning.tactical.is_some());
-        assert_eq!(loaded.departures, ["tactical.cover-centre-line"]);
+        assert_eq!(
+            loaded.departures,
+            [
+                "tactical.cover-centre-line",
+                "tactical.cover-representative-height",
+                "tactical.initiative-ties-input-order",
+                "tactical.dead-space-passable",
+            ]
+        );
         let mut tampered = generated.tuning.clone();
         tampered.hero.armor_class += 1;
         assert!(
@@ -619,7 +627,23 @@ fn stored_adventure_resumes_identical_bytes_without_tables_or_new_seed() {
     .unwrap();
     assert!(!resumed.fresh);
     assert_eq!(resumed.record.seed, "0x3c6ef378dd81de97");
-    assert_eq!(resumed.loaded.pack, generated.pack);
+    let mut loaded_pack = resumed.loaded.pack.clone();
+    // Reload hydrates settings models into scene projections; the stored document bytes below
+    // remain the exact persistence contract.
+    for scene in &mut loaded_pack.scenes {
+        if let Some(setting) = &mut scene.setting {
+            setting.model = None;
+        }
+    }
+    if let Some(script) = &mut loaded_pack.beat_script {
+        for scene in script.scenes.values_mut() {
+            scene.source_variant_id = None;
+            if let Some(setting) = &mut scene.setting {
+                setting.model = None;
+            }
+        }
+    }
+    assert_eq!(loaded_pack, generated.pack);
     assert_eq!(resumed.loaded.tuning, generated.tuning);
     assert!(resumed.documents == documents);
     assert!(super::record::create_cache(&directory, &documents).is_err());
@@ -1346,12 +1370,25 @@ fn dossiers_are_stored_with_the_adventure_and_an_adventure_saved_without_them_st
     let mut documents = generated.documents(true).unwrap();
     let (_, stored) = record::reload(&documents).unwrap();
     assert_eq!(stored.dossiers, generated.dossiers);
-    assert!(generated.dossiers.iter().all(|dossier| {
-        dossier.subject_answers.len() == 8
-            && dossier.subject_answers.values().all(|answer| {
-                !answer.text.trim().is_empty() && !answer.restatement.trim().is_empty()
-            })
-    }));
+    for dossier in generated
+        .dossiers
+        .iter()
+        .filter(|dossier| !dossier.npc_id.starts_with("bystander:"))
+    {
+        assert!(
+            dossier.subject_answers.len() == 8
+                && dossier.subject_answers.values().all(|answer| {
+                    !answer.text.trim().is_empty() && !answer.restatement.trim().is_empty()
+                })
+        );
+    }
+    assert!(
+        generated
+            .dossiers
+            .iter()
+            .filter(|dossier| dossier.npc_id.starts_with("bystander:"))
+            .all(|dossier| dossier.subject_answers.is_empty())
+    );
 
     // SRD 5.2.1, p. 184 (Influence): this checks stored dialogue facts, not an Influence check.
     let mut old_dossier_record = documents.clone();
@@ -1434,25 +1471,25 @@ const RESTRAINED_GOLDEN: [(u64, [&str; 3]); 3] = [
     (
         0x3c6ef378dd81de97,
         [
-            "35597663b0b53680085997ace1beb84031f028ac6d76a1cbcc2a63ff3fc1d482",
+            "0fe96bc6ea5f52789daa1172f2ec2623ba2315e5c43bbddeff480250f30cb385",
             "737a6b07cd72aea7cfa2ffa40d1668389bd5edb862b24a567bcfa8ea9e4548b4",
-            "e6f3105f28d9b5e9ed66a6a1b1a378b3b7a0864d657bf98ad8cbfb31f3088860",
+            "81a6ddd8f90397350cb59d2e5fb96460eaae65ecfadafbdc588917c22aafd254",
         ],
     ),
     (
         0xdaa66d325ccc5aac,
         [
-            "05c6db51e18680a4580e0c5d04afcf4bd77aec344c85198fdd90e8a5cb45a16d",
+            "ef4518c684f3c99d1fedc5f4c0fba470143c31a4e80dc303b6edc6800558693a",
             "4d05fcc39c31cb1013cc3db19184ca9f393ce34fdd179c336982b49daf3dca84",
-            "3c1d3296987ee7584d12c6891f6630fae6eeca6b8492ac38c432cb4a96fac1a5",
+            "a39f6274fcb182bfc560f9b602304177425ca88792a438e85d2e8828ab3998d8",
         ],
     ),
     (
         0x11a25cdccc7d808f,
         [
-            "84fec187fd66b235e3e8d6ec74b85ea67175ada87d02a1b359172c11584a099e",
+            "287e292464202cf17a61fc87a5593c3c7c62f5c9524445d6fb674438baece36c",
             "e193cdaa460abcc354e13b7761e1c287b3ede5fa9b90d6be0517b236b1e7627e",
-            "7de96e697b10f839f824b539f66462b51acf32c116a86586720896d2e1d1d372",
+            "118bed9c69148269d6a1ff2496eb8ace0d6b1b60f7cd6084425223141e564a55",
         ],
     ),
 ];
@@ -1535,7 +1572,22 @@ fn mature_generation_is_deterministic_differs_from_restrained_and_reloads() {
         assert_eq!(first.facts["ant.id"], restrained.facts["ant.id"]);
         assert_eq!(first.tuning, restrained.tuning, "mechanics are never rated");
         let (loaded, record) = record::reload(&a).unwrap();
-        assert_eq!(loaded.pack, first.pack);
+        let mut loaded_pack = loaded.pack.clone();
+        // Compare persisted pack fields after removing runtime-only projections added on reload.
+        for scene in &mut loaded_pack.scenes {
+            if let Some(setting) = &mut scene.setting {
+                setting.model = None;
+            }
+        }
+        if let Some(script) = &mut loaded_pack.beat_script {
+            for scene in script.scenes.values_mut() {
+                scene.source_variant_id = None;
+                if let Some(setting) = &mut scene.setting {
+                    setting.model = None;
+                }
+            }
+        }
+        assert_eq!(loaded_pack, first.pack);
         assert_eq!(record.tables_revision(), first.tables_revision);
     }
 }

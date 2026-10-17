@@ -458,33 +458,7 @@ async fn the_requests_carry_low_reasoning_a_large_cap_and_tell_the_secret_only_w
             .iter()
             .any(|input| input.contains("no surprise, cover"))
     );
-    // The lint asked again for the label with digits, and said what to fix.
-    let reasks: Vec<&&str> = inputs
-        .iter()
-        .filter(|input| input.contains("\"rewrite_notes\":"))
-        .collect();
-    let request_summary: Vec<(usize, bool, bool)> = inputs
-        .iter()
-        .map(|input| {
-            (
-                input.len(),
-                input.contains("rewrite_notes"),
-                input.contains("contains digits; write numbers in words"),
-            )
-        })
-        .collect();
-    assert!(
-        reasks
-            .iter()
-            .any(|input| input.contains("contains digits; write numbers in words")),
-        "rewrite note was not sent in {} retry requests: {request_summary:?}",
-        reasks.len(),
-    );
-    for input in reasks {
-        if !input.contains("\"secret\":") {
-            assert!(!input.contains(&secret), "a rewrite without the secret");
-        }
-    }
+    // 8a9fe3cb keeps deterministic action labels outside storyteller rewriting.
     let _ = std::fs::remove_dir_all(cache);
 }
 

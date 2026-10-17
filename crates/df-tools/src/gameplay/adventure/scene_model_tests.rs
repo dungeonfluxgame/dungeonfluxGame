@@ -191,13 +191,16 @@ fn merchant_shop_has_named_interactable_background_people_and_stock() {
             .any(|offer| offer.name == "fine clothes" && offer.cost_cp == 1500)
     );
     let picture = model.picture_state().expect("shop picture state");
-    assert!(picture.contains("adventurer"));
-    assert!(picture.contains("soldier"));
+    let picture: serde_json::Value = serde_json::from_str(&picture).expect("picture state is JSON");
+    let people = picture["people"].as_array().expect("picture has people");
+    assert!(people.iter().any(|person| person["role"] == "adventurer"));
+    assert!(people.iter().any(|person| person["role"] == "soldier"));
 }
 
 #[test]
 fn location_inventory_keeps_stock_identity_separate_from_custody() {
-    let model = merchant_shop();
+    let mut model = merchant_shop();
+    add_test_hero(&mut model, "hero-brynn", "Brynn");
     let stock = model.inventory();
     let clothes = stock
         .iter()
@@ -218,7 +221,7 @@ fn location_inventory_keeps_stock_identity_separate_from_custody() {
                 entity_id: "clothes-travelers".into(),
                 description: "Brynn buys traveler's clothes.".into(),
                 kind: SceneChangeKind::Purchased {
-                    holder_id: "Brynn".into(),
+                    holder_id: "hero-brynn".into(),
                     seller_id: "patron".into(),
                     cost_cp: 200,
                     quote_id: None,
@@ -235,8 +238,8 @@ fn location_inventory_keeps_stock_identity_separate_from_custody() {
         .expect("exactly one purchased instance exists");
     assert_eq!(inventory["provenance"]["kind"], "generated_offer");
     assert_eq!(inventory["provenance"]["source_id"], "clothes-travelers");
-    assert_eq!(inventory["holder_id"], "Brynn");
-    assert_eq!(inventory["owner_id"], "Brynn");
+    assert_eq!(inventory["holder_id"], "hero-brynn");
+    assert_eq!(inventory["owner_id"], "hero-brynn");
 }
 
 #[test]
@@ -404,7 +407,7 @@ fn dynamic_inventory_can_exceed_authored_room_item_count() {
             entity_id: offer.canonical_item_id(),
             description: format!("Marek lends {} for inspection.", offer.name),
             kind: SceneChangeKind::Given {
-                holder_id: "shop-adventurer".into(),
+                holder_id: "cloth-shop-bystander-1".into(),
                 owner_id: None,
             },
         })
@@ -437,7 +440,7 @@ fn materialized_offer_keeps_its_stock_id_without_allowing_real_collisions() {
                 entity_id: offer.canonical_item_id(),
                 description: "Marek lends the clothes for inspection.".into(),
                 kind: SceneChangeKind::Given {
-                    holder_id: "shop-adventurer".into(),
+                    holder_id: "cloth-shop-bystander-1".into(),
                     owner_id: None,
                 },
             }],
@@ -447,7 +450,7 @@ fn materialized_offer_keeps_its_stock_id_without_allowing_real_collisions() {
         serde_json::from_str(&snapshot).expect("snapshot JSON");
     snapshot
         .model
-        .validate_structure()
+        .validate_state_structure()
         .expect("the same canonical ID may be stock or its generated item");
     assert_eq!(
         snapshot
@@ -611,13 +614,13 @@ fn purchase_change_cannot_claim_a_different_seller() {
 fn theft_moves_custody_without_rewriting_owner() {
     let mut model = merchant_shop();
     add_test_hero(&mut model, "hero-brynn", "Brynn");
-    model.things[0].owner_id = Some("patron".into());
     let target = model
         .things
-        .iter()
-        .find(|thing| thing.owner_id.is_some() && thing.portable)
-        .expect("shop has an owned portable object")
-        .clone();
+        .iter_mut()
+        .find(|thing| thing.portable)
+        .expect("shop has a portable object");
+    target.owner_id = Some("patron".into());
+    let target = target.clone();
     let snapshot = model
         .as_it_is_now(
             super::super::pack::SceneKey::Opening,
@@ -625,14 +628,14 @@ fn theft_moves_custody_without_rewriting_owner() {
                 entity_id: target.id.clone(),
                 description: "Brynn steals the object.".into(),
                 kind: SceneChangeKind::Stolen {
-                    holder_id: "Brynn".into(),
+                    holder_id: "hero-brynn".into(),
                     adjudication: Some(super::scene_model::SceneStealAdjudication {
                         operation_id: "01010101010101010101010101010101".into(),
                         source_revision: format!(
                             "srd521-p6:test:sleight-of-hand:target-thing-{}",
                             target.id
                         ),
-                        actor_id: "Brynn".into(),
+                        actor_id: "hero-brynn".into(),
                         die: 20,
                         ability_modifier: 0,
                         proficiency_bonus: 0,
@@ -651,8 +654,8 @@ fn theft_moves_custody_without_rewriting_owner() {
         .find(|thing| thing["id"] == target.id)
         .unwrap();
     assert_eq!(item["owner_id"], target.owner_id.as_deref().unwrap());
-    assert_eq!(item["holder_id"], "Brynn");
-    assert_eq!(item["position"], "held by Brynn");
+    assert_eq!(item["holder_id"], "hero-brynn");
+    assert_eq!(item["position"], "held by hero-brynn");
 }
 
 #[test]
@@ -852,6 +855,12 @@ fn scene_now_applies_item_and_person_changes_to_the_prompt_projection() {
         .expect("taproom model has its bar tankard")
         .id
         .clone();
+    model
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == mug_id)
+        .expect("taproom model has its bar tankard")
+        .owner_id = Some("hero-brakka".into());
     let door_id = model.ways_out[0].id.clone();
     let serving_woman_id = model
         .people
@@ -914,7 +923,8 @@ fn scene_now_applies_item_and_person_changes_to_the_prompt_projection() {
         .find(|thing| thing["id"] == mug_id)
         .expect("the taken item remains represented by its state");
     assert_eq!(tankard["holder_id"], "hero-sigrun");
-    assert!(!tankard["in_scene"].as_bool().unwrap_or(true));
+    assert_eq!(tankard["position"], "held by hero-sigrun");
+    assert_eq!(tankard["in_scene"], true);
     assert!(tankard["broken"].as_bool().unwrap_or(false));
     let door = snapshot["model"]["ways_out"]
         .as_array()
@@ -949,6 +959,12 @@ fn giving_a_borrowed_observation_changes_holder_without_minting_ownership() {
         .expect("taproom model has its bar tankard")
         .id
         .clone();
+    model
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == mug_id)
+        .expect("taproom model has its bar tankard")
+        .owner_id = None;
     let changes = [
         SceneChange {
             entity_id: mug_id.clone(),
