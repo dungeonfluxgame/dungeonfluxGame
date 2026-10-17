@@ -1418,3 +1418,58 @@ Status reflects source commits; every fix still needs a live retest on a fresh b
 | MPX-72 | 2 | Freeform refusals use machine wording: "refused because there is no available target", "the spell is refused as unknown", "cannot write the note because no target is specified". Refusals must be in-world sentences. Writing a note to leave on the counter should simply happen. | Open |
 | MPX-73 | 2 | Thin freeform answers: "I stop and listen to the street outside." -> no sounds; "I look at myself in the fitting mirror" -> no reflection; "I walk up to the counter" -> "Brakka moves forward."; a failed Insight on Marek repeats his appearance instead of "you can't tell". Pronoun "themself" used for Sigrun. | Open |
 | MPX-74 | 2 | Reading is misread as taking: "I pick up the folded label and read it" runs a theft check ("fails to steal folded paper label, and Corin notices"). Reading visible text needs no custody change. | Open |
+
+## Work in flight and open findings, 2026-10-17
+
+Everything being worked on or found during the 2026-10-17 session, written down so it survives a crash.
+
+- **WIP rows** are workstreams with uncommitted work in the shared working tree. Each lists the files it owns.
+- **NEW rows** are findings that have not been fixed yet.
+
+Commits landed this session up to `32bcad49`:
+- `e1a8e3b7`: stock and theft
+- `969290e7`: open-ended acts
+- `aaa6a17f`: local canon, Deception vs Insight
+- `f81490e6`: coin and goods movement
+- `263f6d26`: NPC-reply leaks
+- `d1249ac0`: merchant quotes every item and service, read without taking, template grammar
+- `fb6bfd93`: fights with any shop NPC
+- `560b4afd`: doors, freeform misreads, refusals, thin answers
+- `32bcad49`: failed Insight, throwing is not giving
+
+Owner decisions recorded this session:
+- Art is photographic only. Painted references are deleted. Missing depictions (monsters, villains, patrons) are generated live when first needed, never ahead of time.
+- No keyword tables anywhere, not even as fallbacks. Jev or an LLM decides meaning; without Jev the result is neutral and audited.
+- Every system has logs in the dev CLI, plus create/read/update/delete where feasible.
+- Every generated resource goes through one contract: ResourceSpec, then ResourceKey, then the hub's get_or_request. The hub owns the spend ledger, single-flight, the RESOURCE audit line and the dev-CLI hooks.
+- Splat worlds (World Labs Marble): the narrative engine flags from the conversation that a fight is likely, early enough to generate the world in time. It also decides where the fight happens (inside the shop, or moved outside).
+- The DM remembers everything, or everything relevant, to keep the story consistent. Story memory uses OpenAI embeddings and pgvector in the game's own Postgres.
+- The landing display plate becomes a gentle ambience video loop: the same still is the first and last frame, and the still crossfades to the video in place. Try cheaper fal models.
+
+| ID | Sev | Item | Status |
+|---|---|---|---|
+| WIP-01 | 2 | Photographic-only art contract and the single resource hub. Painted UI art is deleted from `assets/ui/generated`. The universal resolver is `df-render/src/art_contract.rs`; the hub is `gameplay/resources.rs` plus `resource_adapters.rs`. Also touches imagery/*, living_scenes/plates*, the battle-scene content JSON, the proto `floor`/`interior` fields and staging.rs. | In progress (agent) |
+| WIP-02 | 2 | Place music on demand. Replaces the bed_of keyword table, which gave every place the night harbour score. A MusicSpec is chosen by content or Jev, and ElevenLabs generates the music through the hub. Files: `gameplay/place_music*`, `df-providers/src/eleven_music.rs` and its test. | In progress (agent) |
+| WIP-03 | 2 | Keyword removal, NPC conversation (K1): npc_reply.rs, npc_room.rs, and local_lore role knowledge (now a Jev role-domain choice). Leftovers handed over: the dead `classify_keywords` branches near npc_reply.rs:1901 and :2022, npc_room.rs:275, and the CLAIM_WORDS/RULE_WORDS/RUMOUR_OPENERS lists in local_lore check_text. | In progress (agent) |
+| WIP-04 | 2 | Keyword removal, commerce (K2). Done but not verified. The merchant_bargaining phrase lists are deleted; Jev `judge_trade_item` now picks the item; living_scene interactions use Jev gift/give and a recipient choice. Files: journey/merchant_bargaining.rs and its tests, journey/living_scene.rs and its tests, adventure/shop.rs. Lost feature: asking about several items at once needs a Jev multi-select. | Waiting on WIP-05 |
+| WIP-05 | 2 | Keyword removal, line routing (K3). Done in approach_model, dialogue, investigation, freeform_action and line_cleanup, with a source-scan test. It now also owns the dialogue.rs call sites for K2's new signatures, and verifies K2 and K3 together on a clean HEAD copy with all files LF. Next: replace the scene_model name resolvers (`resolve_target`, `resolve_item`, `service_for_line`, `person_for_line`) with Jev picks. | In progress (agent) |
+| WIP-06 | 3 | Dev CLI reads and writes for the new systems: `dev lore` (with add), `dev social`, `dev fight`, `dev scene-changes`, `dev economy`, `dev audit`, `dev decisions`, `dev music`, and the market and offers in `dev ledger`. Files: dev_cli.rs, dev_control/{mod,parse,reads,timeline,audit_log,economy,fight,lore,music,social_view}.rs, plus hunks in local_lore.rs (visibility and `development_facts`), living_scene.rs (`scene_change_journal`) and gameplay.rs (`lore:`). Verified on a clean HEAD copy: dev_control 66 of 67 pass (the one failure also fails at HEAD), dev_cli 18 of 18, dev_write_request 2 of 2, bin and wasm build. | Committing |
+| WIP-07 | 2 | Phase-2 hub: moves video, voice, text and speech-to-text onto the hub, and fixes scene-clip charging and keys and the voice key (which omits model, format and language). Owns home_video.rs, voice.rs, storyteller.rs, speech_input.rs, and df-providers native_http and speech_adapter. It has been asked to log the provider's status and body on failure, and to build the HomeLoop spec with the same still as first and last frame and an ambient prompt. | In progress (agent) |
+| WIP-08 | 2 | PLY Gaussian splats and a walkable grid from the World Labs collider GLB, in df-render: battle/scene_file.rs, stage.rs, layout.rs, hud.rs, gpu/renderer.rs. Research and proof files are in `artifacts/tmp/worldlabs`. Next: a SplatWorld hub resource kind, plus narrative-engine Jev/LLM judgements for fight likelihood (when to generate) and arena choice (where). | In progress (agent) |
+| WIP-09 | 3 | Meta SAM 3.1 research: segmentation for cut-outs, splats and masks. A CPU torch run is in progress. | In progress (agent) |
+| WIP-10 | 2 | Automated end-to-end voice-input test using a generated voice clip. Its `dev speech` command design feeds the dev CLI. | In progress (agent) |
+| WIP-11 | 1 | DM total recall (story memory). Every table line, ruling, roll, narration, canon fact, grievance, promise and scene change becomes an append-only `story_memory` event in Postgres, embedded with OpenAI text-embedding-3-small into pgvector (HNSW) alongside full-text search. Before the DM writes, recall returns pinned facts, related events and per-entity dossiers. Jev judges contradictions; superseded events are marked and kept, never deleted. `dev memory` reads it, and spend goes through the hub. Research: `artifacts/tmp/vector-memory-research/report.txt`. Wiring recall into the storyteller, NPC reply and freeform prompts waits for WIP-03, WIP-05 and WIP-07 to land. | In progress (agent) |
+| WIP-12 | 2 | pgvector, built from source (MSVC, nmake) for the bundled EDB Postgres 18.6, which ships without it. Pinned in `development/postgres.sh` and proven on a scratch cluster, never the durable one. | In progress (agent) |
+| WIP-13 | 2 | Landing ambience loop. The landing still is `assets/ui/scenes/mara-harbor-v4.png`. Diagnosis and scratch tools are in `artifacts/tmp/video-diag`: `fal.py`, `call1_mirror.py`, and `seam.py` (seam checker and contact sheet). Recommended models: `fal-ai/wan-flf2v` at 720p (about $0.40 per clip) or `fal-ai/pixverse/v5/transition` (about $0.20). Kling o1 is about $0.56 per 5 s. | Blocked on NEW-01 |
+| NEW-01 | 1 | The fal key in `.env` (`DF_FAL_KEY`, the only fal key on the machine) is rejected: queue submit, pricing and status calls all return `401 invalid key credentials`. No video call has ever succeeded here, and there is no mp4 anywhere under artifacts. The owner needs to supply a working key. | Open (owner) |
+| NEW-02 | 2 | The home-video prompt works against the loop. HOME_MOTION asks for "a slow, almost imperceptible optical push-in", but with the same still as the last frame the camera has to push back out. Make it fully locked-off. FILM_LOOK asks for "real adult performers, skin pores" in an empty boat shed; ambience loops need a landscape-only look clause. | Open (WIP-07) |
+| NEW-03 | 2 | `run_job` / `validate_output` in home_video.rs require exactly 1920x1080, so a clip of any other size is paid for and then discarded. Kling, Wan and PixVerse all return smaller sizes. Accept the real output size. | Open (WIP-07) |
+| NEW-04 | 3 | Three request problems: the same 712 KB still is sent twice as data URIs (about 1.4 MB body), so upload it once and reuse the URL; a submit error such as 401 is reported as `QueueIdentity` instead of its HTTP status; and `with_video_model` accepts only two endpoints. | Open (WIP-07) |
+| NEW-05 | 2 | Two TV loop problems. First, the still runs `df-drift` (scale 1.02 to 1.07) and the lobby filter, so the fade to video jumps in framing and grade. Copy the computed transform and filter onto `.tv-loop` and pause the drift when the fade starts. Second, the swap runs only from requestAnimationFrame when `near_end && !paused`, so in a throttled tab the clip ends and the loop freezes for good; add an `ended` listener. Fade in only after the first frame has painted, over 1.2 s ease-in-out. Files: gameplay_browser/live_home_video.rs, live_tv.rs, CSS. | Open (client, after WIP-01) |
+| NEW-06 | 2 | After K2, `coin_amount_cp` reads "a gold ring" as 1 GP, and this feeds the gift path. Parse a coin amount only when Jev says coin is being handed over. | Open (WIP-05) |
+| NEW-07 | 3 | living_scene.rs ~3577 classifies an offer by `name.contains("ale")`. Use a structured content field instead. | Open (WIP-05) |
+| NEW-08 | 3 | Freeform adjudication writes no audit line on success; only `FREEFORM plan=unavailable` is logged. Add an audit line with the act, target, roll and consequences (freeform_action.rs, dialogue.rs). | Open |
+| NEW-09 | 3 | Dev CLI writes not supported yet. Lore edit/delete and social edits need ledger mutators. Fight restore/end and purse, coin and offer edits go through the override path, which stays off until the milestone 3 projection-safety proof. `dev art` and `dev music regenerate/clear` wait for WIP-01 and WIP-02. | Open |
+| NEW-10 | 3 | Two failures already present at HEAD: `dev_control::layout::tests::visibility_round_trips_without_resetting_transforms` panics with `Shape` (layout.rs:747), and `adventure/expression_tests.rs` is not rustfmt-clean (lines 1 and 576). | Open |
+| NEW-11 | 3 | Line-ending churn: several workers saved CRLF copies of LF files. The repo is LF (`.gitattributes` eol=lf, rustfmt newline_style=Unix), and every commit must be LF. | Open (process) |
+| NEW-12 | 3 | Disk is tight: 13 GB free on the afternoon of 2026-10-17, after hitting 100% earlier. Prune each agent's build directory under `artifacts/build` as it finishes. | Open (process) |
