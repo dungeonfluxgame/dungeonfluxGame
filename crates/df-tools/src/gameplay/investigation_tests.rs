@@ -348,10 +348,15 @@ fn repeats_and_absence_are_answered_without_a_refusal_or_secret() {
         finding: None,
         private_finding: false,
     };
-    assert_eq!(observation.fallback(), "There is no notice on the door.");
+    assert_eq!(
+        observation.fallback(),
+        "The hero observes: There is no notice on the door."
+    );
     observation.repeated = true;
-    assert!(observation.fallback().contains("already"));
-    assert!(observation.fallback().contains("notice"));
+    assert_eq!(
+        observation.fallback(),
+        "The hero has already examined the notice; nothing new turns up."
+    );
     assert!(observation.facts()["finding"].is_null());
 }
 
@@ -433,7 +438,7 @@ async fn target_choice_timeout_is_absent_and_named_by_the_players_words() {
 async fn storyteller_receives_only_target_facts_and_no_failed_finding() {
     use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
     let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
-        "observation": "You see the hearth, but cannot make out anything further in its ashes."
+        "observation": "Brakka notices the hearth, but cannot make out anything further in its ashes."
     }))]);
     let cache = cache_directory("V08-target-expression");
     let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
@@ -451,13 +456,12 @@ async fn storyteller_receives_only_target_facts_and_no_failed_finding() {
     let answer = describe(&storyteller, &observation).await;
     assert_eq!(
         answer,
-        "You see the hearth, but cannot make out anything further in its ashes."
+        "Brakka notices the hearth, but cannot make out anything further in its ashes."
     );
-    assert!(
-        !serde_json::to_string(&endpoint.bodies())
-            .unwrap()
-            .contains("PRIVATE-FINDING-MUST-NOT-ENTER-PROMPT")
-    );
+    let request = serde_json::to_string(&endpoint.bodies()).unwrap();
+    assert!(request.contains("Narrate in third person"));
+    assert!(request.contains("never address the player as you"));
+    assert!(!request.contains("PRIVATE-FINDING-MUST-NOT-ENTER-PROMPT"));
     assert_eq!(observation.facts()["finding"], Value::Null);
 }
 
@@ -493,7 +497,37 @@ fn a_failed_insight_read_says_the_hero_cannot_tell_instead_of_restating_the_appe
     };
     assert_eq!(
         observation.fallback(),
-        format!("You can't tell what {name} is thinking.")
+        format!("The hero can't tell what {name} is thinking.")
+    );
+}
+
+#[test]
+fn an_absent_target_fallback_uses_third_person_without_changing_its_identity() {
+    let target = Target {
+        id: "absent-racks".into(),
+        name: "the dark corner behind the racks".into(),
+        description: "Nothing of that is visible here.".into(),
+        aliases: Vec::new(),
+        present: false,
+        person: false,
+        finding_ids: Vec::new(),
+    };
+    let observation = Observation {
+        target,
+        skill: "perception".into(),
+        succeeded: true,
+        repeated: false,
+        finding: None,
+        private_finding: false,
+    };
+
+    assert_eq!(
+        observation.fallback(),
+        "The hero observes: Nothing of that is visible here."
+    );
+    assert_eq!(
+        observation.facts()["target"]["name"],
+        "the dark corner behind the racks"
     );
 }
 

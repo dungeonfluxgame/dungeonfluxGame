@@ -568,7 +568,7 @@ pub(super) fn check_target(scene: &pack::Scene, check: &rpc::AbilityCheckResult)
         return Some(entry);
     }
     let name = decoded_name(id.strip_prefix("absent-")?)?;
-    let mut absent = target(&name, "You see nothing of that here.", false);
+    let mut absent = target(&name, "Nothing of that is visible here.", false);
     absent.id = id.to_owned();
     absent.present = false;
     Some(absent)
@@ -970,12 +970,12 @@ impl Observation {
     pub(super) fn fallback(&self) -> String {
         if self.repeated {
             return format!(
-                "You have already examined {}; nothing new turns up.",
+                "The hero has already examined {}; nothing new turns up.",
                 self.target.name
             );
         }
         if !self.target.present {
-            return self.target.description.clone();
+            return format!("The hero observes: {}", self.target.description);
         }
         if self.succeeded {
             if let Some(finding) = &self.finding {
@@ -984,10 +984,10 @@ impl Observation {
             self.target.description.clone()
         } else if self.skill == "insight" {
             // A failed read of a person says so; their appearance is not an answer to it.
-            format!("You can't tell what {} is thinking.", self.target.name)
+            format!("The hero can't tell what {} is thinking.", self.target.name)
         } else {
             format!(
-                "{} You do not notice anything further about {}.",
+                "{} The hero notices nothing further about {}.",
                 self.target.description,
                 the_phrase(&self.target.name)
             )
@@ -1039,9 +1039,9 @@ pub(super) async fn describe(storyteller: &Storyteller, observation: &Observatio
     let facts = observation.facts();
     let slots = [Slot::new("observation", 320).mentioning(vec![observation.target.name.clone()])];
     let result = storyteller.express(&Expression { purpose: "investigation", facts: &facts, slots: &slots,
-        style: "One plain sentence about the target, in a warm narrator's voice.",
+        style: "One plain sentence about the target, in a warm narrator's voice. Narrate in third person and name the acting hero when their identity is provided; never address the player as you.",
         profile: CallProfile { output_tokens: Some(180), deadline: Some(Duration::from_secs(8)),
-            guidance: "Describe only the target's facts. An absent target must be plainly absent. Failure cannot reveal a finding or assert hidden facts. A repeat says it was already examined and nothing new turns up. A success describes what was noticed, including the supplied finding if any. Never paste the scene title/narration, invent items, or perform taking/using/buying actions.", ..Default::default() },
+            guidance: "Describe only the target's facts. Narrate the hero in third person, using the hero's name and pronouns when provided; never address the player as you. An absent target must be plainly absent. Failure cannot reveal a finding or assert hidden facts. A repeat says it was already examined and nothing new turns up. A success describes what was noticed, including the supplied finding if any. Never paste the scene title/narration, invent items, or perform taking/using/buying actions.", ..Default::default() },
     }).await;
     match result {
         Ok(mut values) => match values.remove("observation") {
