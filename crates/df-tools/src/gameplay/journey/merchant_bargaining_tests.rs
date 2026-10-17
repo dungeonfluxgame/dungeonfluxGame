@@ -1499,6 +1499,14 @@ fn merchant_sells_context_gives_the_bounds_and_the_hero_named_amount() {
     assert_eq!(entry["lowest_price_cp"], 100);
     assert_eq!(entry["listed_price_cp"], 200);
     assert_eq!(entry["hero_offer_cp"], 150);
+    assert_eq!(
+        offer["server_bargaining_bounds"][0]["minimum_price_cp"],
+        100
+    );
+    assert_eq!(
+        offer["server_bargaining_bounds"][0]["maximum_price_cp"],
+        200
+    );
     assert!(
         offer["negotiation_rules"]
             .as_array()

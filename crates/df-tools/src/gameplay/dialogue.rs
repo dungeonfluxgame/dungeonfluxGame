@@ -1200,13 +1200,49 @@ mod classified_line_tests {
 }
 
 impl Service {
+    async fn judged_freeform_plan(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        scene: &super::pack::Scene,
+    ) -> Result<Option<freeform_action::FreeformPlan>, Status> {
+        let (member_reply, member_wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::SpeechMember {
+                credential,
+                reply: member_reply,
+            })
+            .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
+        let member = tokio::time::timeout(super::timing::active().reply, member_wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("dialogue actor did not resolve the player"))?
+            .map_err(|_| Status::unavailable("dialogue actor stopped"))??;
+        let current = self.updates.borrow().clone();
+        let hero_entity = journey::player_entity(member, &current).map_err(actor::unavailable)?;
+        let cast = wire::scene_cast(scene);
+        let situation =
+            freeform_action::Situation::read(current.state(), hero_entity, scene, &cast)
+                .map_err(actor::unavailable)?;
+        let (_, approach_model) = self.npc_voice.hero_identity_models();
+        match freeform_action::plan(approach_model, &request.text, &situation).await {
+            Ok(plan) => Ok(Some(plan)),
+            Err(reason) => {
+                actor::record_audit_line(
+                    "gameplay.freeform_plan",
+                    format!("FREEFORM plan=unavailable reason={}", reason.label()),
+                );
+                Ok(None)
+            }
+        }
+    }
+
     async fn judge_listed_service_request(
         &self,
         credential: [u8; 32],
         request: &rpc::RawDialogueRequest,
         scene: &super::pack::Scene,
         party_scene: &super::pack::Scene,
-    ) -> Result<Option<(String, u32)>, Status> {
+    ) -> Result<Option<(String, u32, String)>, Status> {
         let cast = wire::scene_cast(scene);
         let party = self.party_heroes(credential).await?;
         let (_, approach_model) = self.npc_voice.hero_identity_models();
@@ -1305,7 +1341,7 @@ impl Service {
                     services
                         .get(index)
                         .zip(service_ids.get(index))
-                        .map(|(service, id)| (id.clone(), service.price_cp))
+                        .map(|(service, id)| (id.clone(), service.price_cp, provider_id.clone()))
                 })),
             Err(reason) => {
                 actor::record_audit_line(
@@ -2120,16 +2156,48 @@ impl Service {
                 .judge_listed_service_request(credential, &request, &scene, &party_scene)
                 .await?
         {
-            return self
+            let (service_id, price_cp, provider_id) = service;
+            let committed = self
                 .interaction_call(
                     credential,
                     &request,
-                    &service.0,
+                    &service_id,
                     "buy",
                     None,
-                    Some(service.1),
+                    Some(price_cp),
                 )
-                .await;
+                .await?;
+            let DialogueReply::Raw(mut response, _) = committed else {
+                return Ok(committed);
+            };
+            if response.npc_reply == NOTHING_HERE_NARRATION {
+                return Ok(DialogueReply::Raw(response, None));
+            }
+            let current = self.updates.borrow().clone();
+            let mut service_request = request.clone();
+            service_request.context = rpc::DialogueContext::Social as i32;
+            service_request.observed_revision = Some(wire::revision(current.basis().revision));
+            let reply = self
+                .dialogue_call(
+                    credential,
+                    DialogueRequest::RawTarget {
+                        bytes: RawDialogueBytes::new(
+                            encode(&service_request)?,
+                            HeroTradeIntent::not_requested(),
+                        ),
+                        actor_id: provider_id,
+                    },
+                )
+                .await?;
+            if let DialogueReply::Raw(service_reply, _) = reply
+                && !service_reply.npc_reply.is_empty()
+            {
+                response.npc_reply = service_reply.npc_reply;
+                response.npc_actor_id = service_reply.npc_actor_id;
+                response.npc_speaker = service_reply.npc_speaker;
+                response.revision = service_reply.revision;
+            }
+            return Ok(DialogueReply::Raw(response, None));
         }
         // A give of something the scene model does not list (a kit item) cannot be a scene interaction,
         // so it takes the freeform route a freeform reading takes.
@@ -2145,6 +2213,7 @@ impl Service {
         let scene_interaction = scene_interaction
             .filter(|(_, option)| !freeform || freeform_action::keeps_scene_interaction(option));
         let mut freeform_speech_target = None;
+        let mut pending_freeform_plan = None;
         if freeform
             && finality(request.finality)? == InputFinality::Final
             && matches!(
@@ -2161,36 +2230,46 @@ impl Service {
                 .resolve_addressee_with_party(&request.text, &cast, &party, &scene.speaker)
                 .await;
             if let AddresseeRoute::Npc(Some(actor_id)) = addressee_route(&decision, &cast, &party) {
-                freeform = false;
-                freeform_speech_target = Some(actor_id.clone());
-                request.context = rpc::DialogueContext::Social as i32;
-                if let Some(npc_name) = cast
-                    .iter()
-                    .find(|character| character.id == actor_id)
-                    .map(|character| character.name.as_str())
-                {
-                    let (_, approach_model) = self.npc_voice.hero_identity_models();
-                    match approach_model
-                        .judge_coin_handover(&request.text, npc_name, &public_scene)
-                        .await
-                    {
-                        Ok(Some(handover)) => {
-                            if let Some(amount_cp) = handover.amount_cp {
-                                hero_trade = HeroTradeIntent::coin_gift(amount_cp);
+                let plan = self
+                    .judged_freeform_plan(credential, &request, &scene)
+                    .await?;
+                let hostile_assault = plan.as_ref().is_some_and(freeform_action::assaults_person);
+                if !hostile_assault {
+                    if plan.is_some() {
+                        freeform = false;
+                        freeform_speech_target = Some(actor_id.clone());
+                        request.context = rpc::DialogueContext::Social as i32;
+                        if let Some(npc_name) = cast
+                            .iter()
+                            .find(|character| character.id == actor_id)
+                            .map(|character| character.name.as_str())
+                        {
+                            let (_, approach_model) = self.npc_voice.hero_identity_models();
+                            match approach_model
+                                .judge_coin_handover(&request.text, npc_name, &public_scene)
+                                .await
+                            {
+                                Ok(Some(handover)) => {
+                                    if let Some(amount_cp) = handover.amount_cp {
+                                        hero_trade = HeroTradeIntent::coin_gift(amount_cp);
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(reason) => actor::record_audit_line(
+                                    "gameplay.coin_handover",
+                                    format!("COIN_HANDOVER source=unavailable reason={reason:?}"),
+                                ),
                             }
                         }
-                        Ok(None) => {}
-                        Err(reason) => actor::record_audit_line(
-                            "gameplay.coin_handover",
-                            format!("COIN_HANDOVER source=unavailable reason={reason:?}"),
-                        ),
                     }
+                } else {
+                    pending_freeform_plan = plan;
                 }
             }
         }
         if freeform && scene_interaction.is_none() {
             return self
-                .freeform_action_call(credential, &request, &scene)
+                .freeform_action_call(credential, &request, &scene, pending_freeform_plan)
                 .await;
         }
         if scene_turn && reading.intent == super::approach_model::LineIntent::PhysicalAction {
@@ -2843,6 +2922,7 @@ impl Service {
         credential: [u8; 32],
         request: &rpc::RawDialogueRequest,
         scene: &super::pack::Scene,
+        pending_plan: Option<freeform_action::FreeformPlan>,
     ) -> Result<DialogueReply, Status> {
         let (member_reply, member_wait) = oneshot::channel();
         self.actor
@@ -2866,14 +2946,16 @@ impl Service {
         let die = freeform_action::draw_die().map_err(actor::unavailable)?;
         let state = current.state();
         let (storyteller, approach_model) = self.npc_voice.hero_identity_models();
-        let resolution = freeform_action::resolve(
-            approach_model,
-            &situation,
-            &request.text,
-            die,
-            |skill, face, dc| freeform_action::skill_roll(state, hero_entity, skill, face, dc),
-        )
-        .await;
+        let check = |skill: &str, face: u8, dc: u8| {
+            freeform_action::skill_roll(state, hero_entity, skill, face, dc)
+        };
+        let resolution = match pending_plan {
+            Some(plan) => freeform_action::adjudicate(&situation, &plan, die, check),
+            None => {
+                freeform_action::resolve(approach_model, &situation, &request.text, die, check)
+                    .await
+            }
+        };
         // A blow at a scene person who has a stat block is the start of a real fight, not a single
         // roll; so is rough contact with a person who is already hostile to this hero.
         if journey::tactical::scene_assault_only()

@@ -168,6 +168,65 @@ async fn harmless_counter_rap_is_judged_as_attention_contact() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn jev_keeps_an_unarmed_assault_out_of_the_present_npc_dialogue_route() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+
+    let situation = shop();
+    let strike_choice = ACT_KINDS
+        .iter()
+        .position(|(act, _, _)| *act == ActKind::Strike)
+        .expect("strike is a listed act")
+        + 1;
+    let corin_choice = situation
+        .options()
+        .iter()
+        .position(|target| target.name == "Corin")
+        .expect("Corin is present")
+        + 1;
+    let endpoint = FakeEndpoint::start(vec![
+        answer(&format!("o{strike_choice}")),
+        answer(&format!("o{corin_choice}")),
+        answer("o1"), // No additional difficulty.
+        answer("o1"), // Unarmed.
+    ]);
+    let judged = super::plan(
+        &model(&endpoint),
+        "That's it. I punch Corin square in the jaw!",
+        &situation,
+    )
+    .await
+    .expect("Jev judges the typed line");
+
+    assert_eq!(judged.act, ActKind::Strike);
+    assert_eq!(
+        judged.target.as_ref().map(|target| target.name.as_str()),
+        Some("Corin")
+    );
+    assert!(assaults_person(&judged));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jev_routes_non_hostile_contact_to_the_present_npc_dialogue_turn() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+
+    let endpoint = FakeEndpoint::start(vec![
+        answer("o12"), // Harmless contact.
+        answer("o6"),  // Corin.
+        answer("o1"),  // No additional difficulty.
+    ]);
+    let situation = shop();
+    let judged = super::plan(
+        &model(&endpoint),
+        "I laugh and clap Corin on the back. Cheer up, friend.",
+        &situation,
+    )
+    .await
+    .expect("Jev judges the typed line");
+
+    assert!(!assaults_person(&judged));
+}
+
 fn performance(resolution: &Resolution) -> &Performance {
     match &resolution.verdict {
         Verdict::Performed(performance) => performance,

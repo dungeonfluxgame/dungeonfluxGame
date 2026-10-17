@@ -905,6 +905,16 @@ pub(super) async fn plan(
     })
 }
 
+/// A freeform act is an assault on this person only when Jev's closed plan selects a strike and
+/// this exact present person as its target.
+pub(super) fn assaults_person(plan: &FreeformPlan) -> bool {
+    plan.act == ActKind::Strike
+        && plan
+            .target
+            .as_ref()
+            .is_some_and(|target| target.kind == TargetKind::Person)
+}
+
 /// Jev's choice of the hero's known spell that a cast names, or none. Jev chooses only among the
 /// hero's own spells, so a spell the hero does not know cannot be named.
 async fn chosen_spell(

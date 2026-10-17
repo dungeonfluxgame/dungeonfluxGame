@@ -1435,6 +1435,15 @@ fn reply_context_with_quote(
     let context = json!({
         "merchant_facts": facts,
         "available_trades": inventory,
+        "server_bargaining_bounds": available.iter().map(|term| json!({
+            "item": term.item_name,
+            "direction": match term.direction {
+                TradeDirection::HeroBuys => "merchant_sells",
+                TradeDirection::HeroSells => "merchant_buys",
+            },
+            "minimum_price_cp": term.minimum_price_cp,
+            "maximum_price_cp": term.maximum_price_cp,
+        })).collect::<Vec<_>>(),
         "live_quote": live_quote.map(|quote| json!({
             "direction": match quote.direction {
                 TradeDirection::HeroBuys => "merchant_sells",
@@ -1451,6 +1460,7 @@ fn reply_context_with_quote(
             "Mood decides only how willing this individual is to bargain and how the answer is worded. It never sets a numeric price, skill bonus, or guaranteed outcome. Follow current in-game stock and answer only for the named item.",
             "Do not infer ability, honesty, or price from ancestry or race, or generalize about an ancestry. Speak only from this character's explicitly authored and listener-safe personal experience or bias; it never changes the server's price bounds.",
             "A request or player offer does not earn a discount by itself. For merchant_sells, any price you state must be one exact in-game currency amount, at least lowest_price_cp and at most listed_price_cp, and never below or above that range.",
+            "Treat server_bargaining_bounds as the final allowed range. Before speaking an amount for an item, choose an amount inside that item's minimum_price_cp and maximum_price_cp inclusive.",
             "When hero_offer_cp is present on a merchant_sells entry and lies from lowest_price_cp to listed_price_cp inclusive, you may accept it by stating that exact amount as your present, unconditional price for the named item. When it is above listed_price_cp, decline that figure or make one counteroffer within the range. Never ask the player for a figure once hero_offer_cp is present.",
             "When hero_offer_cp is below lowest_price_cp, do not refuse by restating listed_price_cp: make one counteroffer at lowest_price_cp, the lowest figure you may take, unless the Influence check facts for this reply say the check failed, in which case offer no new price.",
             "State exactly one currency amount in a reply that makes a price. Do not repeat the hero's amount, the listed price, a quantity, or another item's price in the same reply; more than one amount makes the quote invalid.",
