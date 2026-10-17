@@ -5,17 +5,18 @@ use serde_json::json;
 use crate::gameplay::storyteller::Storyteller;
 use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
 
+use super::living_scene::{MerchantQuoteStatus, SceneTradeQuote};
 use super::merchant_bargaining::{
     HERO_TRADE_INSTRUCTIONS, HeroLine, HeroTradeIntent, HeroTradeMeaning, ListedQuoteAction,
     MerchantBuybackMemory, MerchantMeaning, MerchantReplyCommitment, OfferChoices, QuoteDecision,
     QuoteRejection, SERVICE_DECISION_INSTRUCTIONS, TradeDirection, TradeExchange, TradeFocus,
-    TradeItemChoices, TradeJudgement, TradeTerms, attach_bulk_ask, attach_buyback_memory,
-    bulk_ask_from_picks, bundle_discount_ask, constrain_buyback_ceiling, discount_ask,
-    discount_willingness, explicit_price_cp, firm_buyback_quote_cp, fixed_price_purchase,
-    hero_intent_from_judgement, hero_judgement_state, hero_stated_price_cp, judge_trade_item,
-    judged_bulk_picks, listed_quote_action, merchant_commitment_from_judgement, parse_bulk_picks,
-    quote_candidate, quote_candidate_for_item, quote_candidate_for_reply, quote_decision,
-    referenced_item_id, reply_context, reply_context_for_quote, revalidate_quote,
+    TradeItemChoices, TradeJudgement, TradeTerms, accepted_quote_purchase, attach_bulk_ask,
+    attach_buyback_memory, bulk_ask_from_picks, bundle_discount_ask, constrain_buyback_ceiling,
+    discount_ask, discount_willingness, explicit_price_cp, firm_buyback_quote_cp,
+    fixed_price_purchase, hero_intent_from_judgement, hero_judgement_state, hero_stated_price_cp,
+    judge_trade_item, judged_bulk_picks, listed_quote_action, merchant_commitment_from_judgement,
+    parse_bulk_picks, quote_candidate, quote_candidate_for_item, quote_candidate_for_reply,
+    quote_decision, referenced_item_id, reply_context, reply_context_for_quote, revalidate_quote,
     service_decision_from_judgement, service_facts, set_bundle_offer, set_discount_offer,
     sold_out_purchase_item, sold_out_refusal, trade_influence_applies, unlisted_service_quote_cp,
 };
@@ -875,6 +876,70 @@ fn typed_quote_decision_follows_jev_acceptance_and_the_stated_amount() {
         QuoteDecision::Unclear,
         "Jev's unclear label keeps the quote open even when the words sound like agreement"
     );
+}
+
+#[test]
+fn accepting_a_pending_quote_produces_purchase_at_the_quoted_price() {
+    let sale = terms(TradeDirection::HeroBuys);
+    let quote = SceneTradeQuote {
+        quote_id: "quote-7".into(),
+        direction: TradeDirection::HeroBuys,
+        place_id: "shop".into(),
+        item_id: CLOTHES_ITEM.into(),
+        offer_id: sale.offer_id.clone(),
+        seller_id: "marek".into(),
+        buyer_id: "sigrun".into(),
+        price_cp: 700,
+        stock_revision: sale.stock_revision,
+        purse_revision: sale.purse_revision,
+        source_line_id: "source-1".into(),
+        source_line_sequence: 1,
+        source_revision: "1:1".into(),
+        source_actor_id: "marek".into(),
+    };
+    let request = accepted_quote_purchase(
+        &quote,
+        MerchantQuoteStatus::Pending,
+        "sigrun",
+        "marek",
+        "shop",
+        jev_line("accept_quote", "Done. Here's seven gold."),
+    )
+    .expect("Jev accepted Marek's live 700 CP quote");
+
+    assert_eq!(request.quote_id, "quote-7");
+    assert_eq!(request.item_id, CLOTHES_ITEM);
+    assert_eq!(request.price_cp, 700);
+    assert!(request.price_cp < sale.maximum_price_cp);
+}
+
+#[test]
+fn an_expired_or_withdrawn_quote_cannot_produce_a_purchase() {
+    let quote = SceneTradeQuote {
+        quote_id: "quote-7".into(),
+        direction: TradeDirection::HeroBuys,
+        place_id: "shop".into(),
+        item_id: CLOTHES_ITEM.into(),
+        offer_id: Some("clothes-travelers".into()),
+        seller_id: "marek".into(),
+        buyer_id: "sigrun".into(),
+        price_cp: 700,
+        stock_revision: 1,
+        purse_revision: 1,
+        source_line_id: "source-1".into(),
+        source_line_sequence: 1,
+        source_revision: "1:1".into(),
+        source_actor_id: "marek".into(),
+    };
+    let acceptance = jev_line("accept_quote", "Done. Here's seven gold.");
+
+    for status in [MerchantQuoteStatus::Stale, MerchantQuoteStatus::Withdrawn] {
+        assert_eq!(
+            accepted_quote_purchase(&quote, status, "sigrun", "marek", "shop", acceptance),
+            None,
+            "a {status:?} quote cannot be redeemed"
+        );
+    }
 }
 
 #[test]

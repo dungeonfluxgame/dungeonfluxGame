@@ -9,7 +9,7 @@ use std::time::Duration;
 use df_providers::ReasoningEffort;
 use serde_json::{Value, json};
 
-use super::living_scene::SceneTradeQuote;
+use super::living_scene::{MerchantQuoteStatus, SceneTradeQuote};
 use crate::gameplay::approach_model::{ApproachModel, JevUnavailable};
 use crate::gameplay::social::InfluenceWillingness;
 use crate::gameplay::storyteller::{CallProfile, Expression, Slot, Storyteller, StorytellerError};
@@ -53,6 +53,15 @@ pub(in crate::gameplay) enum QuoteDecision {
     Decline,
     Counteroffer,
     Unclear,
+}
+
+/// The purchase details to send through the existing scene trade action after Jev accepts a live
+/// merchant quote.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct AcceptedQuotePurchase {
+    pub(in crate::gameplay) quote_id: String,
+    pub(in crate::gameplay) item_id: String,
+    pub(in crate::gameplay) price_cp: u32,
 }
 
 /// Closed rejection vocabulary safe for diagnostics. It contains no words or prompt payloads.
@@ -1169,6 +1178,36 @@ pub(in crate::gameplay) fn quote_decision(
         HeroTradeMeaning::DeclineQuote => QuoteDecision::Decline,
         _ => QuoteDecision::Unclear,
     }
+}
+
+/// Build an exact-price purchase request only for Jev's acceptance of the authenticated hero's
+/// pending merchant sale quote. The scene transaction authority still revalidates stock, purse,
+/// quote revisions, payment, and item ownership before committing.
+pub(in crate::gameplay) fn accepted_quote_purchase(
+    quote: &SceneTradeQuote,
+    status: MerchantQuoteStatus,
+    authenticated_hero_id: &str,
+    merchant_id: &str,
+    place_id: &str,
+    line: HeroLine<'_>,
+) -> Option<AcceptedQuotePurchase> {
+    if status != MerchantQuoteStatus::Pending
+        || quote.direction != TradeDirection::HeroBuys
+        || quote.buyer_id != authenticated_hero_id
+        || quote.seller_id != merchant_id
+        || quote.place_id != place_id
+        || quote.quote_id.trim().is_empty()
+        || quote.item_id.trim().is_empty()
+        || quote.price_cp == 0
+        || quote_decision(line.intent, line.words, quote.price_cp) != QuoteDecision::Accept
+    {
+        return None;
+    }
+    Some(AcceptedQuotePurchase {
+        quote_id: quote.quote_id.clone(),
+        item_id: quote.item_id.clone(),
+        price_cp: quote.price_cp,
+    })
 }
 
 /// A bare whole number with no currency unit ("Would you take 160?") is read as the in-game
