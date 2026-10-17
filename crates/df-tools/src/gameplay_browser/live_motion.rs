@@ -115,6 +115,15 @@ struct RollDetail {
     /// The target's hit points after this outcome, from the outcome itself (never from the
     /// newest view, which may already carry later blows).
     target_hp_after: u32,
+    /// A roll that is not an attack (a death save, a stabilise check): its die and card play,
+    /// with no lunge, strike, hit or miss.
+    check: bool,
+    /// Where the mover stands while the reaction that interrupts its move plays: the first
+    /// part of a split move holds it here until the second part walks it on.
+    then_hold: Option<GridCell>,
+    /// When the view carrying this beat reached the display (performance ms): the beat's
+    /// queue lag is measured from here to the moment it starts playing.
+    arrived_ms: u64,
 }
 
 #[derive(Clone)]
@@ -144,6 +153,8 @@ struct LineDetail {
     /// Silent queue item that opens the matching check card when it reaches the conductor front.
     check_roll: Option<super::live_stage::CheckDisplay>,
     check_settled: bool,
+    /// A server d20 roll to play as a die and result card at this line's turn (a dice line).
+    dice: Option<crate::roll_card::RollCard>,
 }
 
 impl LineDetail {
@@ -159,6 +170,7 @@ impl LineDetail {
             check_sequence: None,
             check_roll: None,
             check_settled: false,
+            dice: None,
         }
     }
 }
@@ -334,12 +346,22 @@ fn restore_pending_move_origin(
 
 fn roll_detail(
     outcome: &rpc::CombatOutcome,
-    lines: &[TableLine],
+    group: Option<(usize, usize)>,
     transitions: Transitions,
     voices: &HashMap<String, df_render::battle::VoiceSet>,
     fight_over: bool,
 ) -> Option<RollDetail> {
     let turn_only = outcome.kind == rpc::OutcomeKind::Move as i32;
+    // A death save or a stabilise check is a roll of its own kind, never an attack with zeros.
+    let check = matches!(
+        rpc::OutcomeKind::try_from(outcome.kind),
+        Ok(rpc::OutcomeKind::DeathSave | rpc::OutcomeKind::Stabilisation)
+    );
+    let check_roll = crate::table_roll::outcome_roll(outcome).filter(|_| check);
+    if check && check_roll.is_none() {
+        // A healer's kit rolls no die: nothing to stage.
+        return None;
+    }
     let description = live_combat::describe(outcome).map(|description| RollDescriptionOwned {
         label: description.label,
         value: description.value,
@@ -348,27 +370,26 @@ fn roll_detail(
         verdict: description.verdict,
         tone: description.tone,
     });
-    // The server's own line for this attacker; the roll's phrase only while it has none yet.
-    let action_line = lines
-        .iter()
-        .rev()
-        .find(|line| line.kind == TableKind::Action && line.speaker == outcome.actor_name)
-        .map_or_else(
-            || presentation::action_text(outcome),
-            |line| line.text.clone(),
-        );
+    // This beat's own words, labelled from its own outcome (an opportunity attack, one attack of
+    // a Multiattack, the creature that drops): never borrowed from the table log, whose lines
+    // are in another order.
+    let action_line = crate::combat_beats::beat_text(outcome, group);
     Some(RollDetail {
         attacker: outcome.actor_name.clone(),
-        target: if turn_only {
+        target: if turn_only
+            || rpc::OutcomeKind::try_from(outcome.kind) == Ok(rpc::OutcomeKind::DeathSave)
+        {
             outcome.actor_name.clone()
         } else {
             outcome.target_name.clone()
         },
-        hit: outcome.hit,
+        hit: outcome.hit && !check,
         critical: outcome.critical,
         grazed: outcome.grazed,
         damage: outcome.damage,
-        target_down: !turn_only && (outcome.knocked_out || outcome.target_hit_points == 0),
+        target_down: !turn_only
+            && !check
+            && (outcome.knocked_out || outcome.target_hit_points == 0),
         fight_over,
         turn_changed: transitions.turn_changed,
         action_line,
@@ -386,9 +407,15 @@ fn roll_detail(
             outcome.attack_style == 2,
             &outcome.weapon,
         ),
-        attack_die: outcome.attack_die,
-        faces: outcome.faces.clone(),
-        roll_mode: outcome.roll_mode,
+        attack_die: check_roll
+            .as_ref()
+            .map_or(outcome.attack_die, |roll| roll.kept),
+        faces: check_roll
+            .as_ref()
+            .map_or_else(|| outcome.faces.clone(), |roll| roll.faces.clone()),
+        roll_mode: check_roll
+            .as_ref()
+            .map_or(outcome.roll_mode, |roll| roll.roll_mode),
         attack_voice: voices.get(&outcome.actor_name).copied(),
         target_voice: voices.get(&outcome.target_name).copied(),
         turn_start: false,
@@ -397,6 +424,9 @@ fn roll_detail(
         beat: Vec::new(),
         sequence: outcome.sequence,
         target_hp_after: outcome.target_hit_points,
+        check,
+        then_hold: None,
+        arrived_ms: now_ms(),
     })
 }
 
@@ -419,6 +449,7 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
             check_sequence: None,
             check_roll: None,
             check_settled: false,
+            dice: None,
         }),
     })
 }
@@ -468,6 +499,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                     check_sequence: None,
                     check_roll: None,
                     check_settled: false,
+                    dice: None,
                 }),
             })
         })
@@ -568,6 +600,7 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
             check_sequence: None,
             check_roll: None,
             check_settled: false,
+            dice: None,
         }),
     }
 }
@@ -598,6 +631,7 @@ fn check_voice_script_line(
             check_sequence: Some(check.sequence),
             check_roll: None,
             check_settled: false,
+            dice: None,
         }),
     }
 }
@@ -635,8 +669,38 @@ fn check_roll_script_line(
             check_sequence: Some(check.sequence),
             check_roll: Some(payload),
             check_settled: settled,
+            dice: None,
         }),
     }
+}
+
+/// A roll the server attached to a table line as a stage line: its die tumbles and its result
+/// card is held for its whole reading time before the next line opens, so the hero's line, the
+/// die and result, then the outcome follow one another with no overlap. Silent, and never
+/// skipped by catch-up.
+fn dice_script_line(line: &TableLine) -> Option<ScriptLine<Detail>> {
+    let card = line.roll.clone()?;
+    let timing = card.timing(super::live_dice::expected_rest_ms(), false);
+    Some(ScriptLine {
+        voiceable: false,
+        read_ms: u32::try_from(timing.end_ms).unwrap_or(u32::MAX),
+        slot: None,
+        settled: false,
+        timing: LineTiming::Dice,
+        detail: Detail::Line(LineDetail {
+            speaker: NARRATOR_NAME.to_owned(),
+            actor_id: String::new(),
+            role: TableRole::Narrator,
+            kind: TableKind::Action,
+            text: String::new(),
+            fight_line: false,
+            voice: None,
+            check_sequence: None,
+            check_roll: None,
+            check_settled: false,
+            dice: Some(card),
+        }),
+    })
 }
 
 /// A table line as a line of the stage script, or `None` when no figure carries it.
@@ -799,6 +863,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         .filter_map(|line| match line {
             SceneScriptLine::Narration(text) => Some(narration_line(text, &voices, restart)),
             SceneScriptLine::Table(line) => script_line(line, &cast, &voices, restart, fighting),
+            SceneScriptLine::Dice(line) => dice_script_line(line),
             SceneScriptLine::CheckRoll => check_voice
                 .as_ref()
                 .zip(check_roll.clone())
@@ -861,13 +926,22 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                 .as_ref()
                 .filter(|_| matches!(snapshot.stage, CombatStage::Finished { .. }))
                 .and_then(|combat| combat.outcomes.last().map(|outcome| outcome.sequence));
-            shown
+            let groups = crate::combat_beats::multiattack_positions(&shown);
+            // A move an opportunity attack interrupts is told in two: it walks to the last
+            // square in the reactor's reach, the attack plays, and the mover walks on.
+            let splits = crate::combat_beats::plan_move_splits(
+                &shown,
+                |name| before_cells.get(name).copied(),
+                |name| standing.get(name).copied(),
+            );
+            let mut details: Vec<RollDetail> = shown
                 .into_iter()
                 .zip(marks)
-                .filter_map(|(outcome, mark)| {
+                .zip(groups)
+                .filter_map(|((outcome, mark), group)| {
                     let mut detail = roll_detail(
                         outcome,
-                        &lines,
+                        group,
                         transitions,
                         &voices,
                         finishing_sequence == Some(outcome.sequence),
@@ -888,7 +962,32 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                     }
                     Some(detail)
                 })
-                .collect()
+                .collect();
+            for plan in &splits {
+                let Some(move_at) = details
+                    .iter()
+                    .position(|detail| detail.turn_only && detail.sequence == plan.move_sequence)
+                else {
+                    continue;
+                };
+                let Some(reaction_at) = details.iter().position(|detail| {
+                    !detail.turn_only && detail.sequence == plan.reaction_sequence
+                }) else {
+                    continue;
+                };
+                if reaction_at <= move_at {
+                    continue;
+                }
+                let mut rest = details[move_at].clone();
+                details[move_at].walk = Some(plan.split.first);
+                details[move_at].then_hold = Some(plan.split.first.1);
+                rest.walk = Some(plan.split.second);
+                rest.turn_start = false;
+                rest.sequence = plan.reaction_sequence;
+                rest.beat = Vec::new();
+                details.insert(reaction_at + 1, rest);
+            }
+            details
         } else {
             Vec::new()
         };
@@ -1545,6 +1644,8 @@ fn battlefield_cue_named(state: &str, detail: Option<&Detail>) {
             turn_start: roll.turn_start,
             walk: roll.walk,
             target_hp_after: roll.target_hp_after,
+            check: roll.check,
+            then_hold: roll.then_hold,
             card: roll
                 .description
                 .as_ref()
@@ -1617,17 +1718,38 @@ fn start_roll(client: &Rc<RefCell<Client>>, roll: &RollDetail, short: bool) -> R
     })
     .unwrap_or(false);
     mark_roll(client, tick, verdict_name(roll))?;
+    // How long this beat waited between its view reaching the display and its start, logged
+    // with the die. Shortening is decided by the director from the excess over what the
+    // queue explains (`short`), not from this raw wait.
+    let lag_ms = now_ms().saturating_sub(roll.arrived_ms);
     // The clip plays now and the server's number lands at its manifest rest time; catch-up
     // shortens the stage, not the die animation. If clips are unavailable, show_roll uses
     // a shipped resting image and never waits.
     let rest_ms = if let Some(play) =
         crate::dice_roll::play_of(roll.attack_die, &roll.faces, roll.roll_mode)
     {
-        super::live_dice::show_roll(client, play, short)?
+        let rest_ms = super::live_dice::show_roll(client, play, short)?;
+        super::live_dice::log_fight_roll(client, roll.sequence, lag_ms, rest_ms, short);
+        rest_ms
     } else {
         super::live_dice::clear(client)?;
         0
     };
+    if roll.check {
+        // A death save or a stabilise check: the die lands and the card shows; nobody lunges,
+        // and the result is no hit or miss.
+        live_sfx::cancel_unstarted();
+        live_sfx::play(Cue::DiceRattle, Duration::ZERO);
+        live_sfx::play(
+            Cue::DiceLand,
+            if rest_ms > 0 {
+                Duration::from_millis(rest_ms)
+            } else {
+                DICE_LAND
+            },
+        );
+        return Ok(());
+    }
     // The attacker's effort on the flat stage; the battlefield voices its own tokens.
     voice_event(
         &roll.attacker,
@@ -1747,6 +1869,10 @@ fn mark_roll(client: &Rc<RefCell<Client>>, tick: bool, verdict: &str) -> Result<
 }
 
 fn impact(client: &Rc<RefCell<Client>>, roll: &RollDetail) -> Result<(), JsValue> {
+    if roll.check {
+        // Nobody struck anybody: the die and the roll card were the beat.
+        return Ok(());
+    }
     let state = client.borrow();
     let Some(stage) = state.live.tv.as_ref() else {
         return Ok(());
@@ -1898,6 +2024,9 @@ fn line_command(
     let Detail::Line(line) = detail else {
         return Ok(());
     };
+    if let Some(card) = line.dice.as_ref() {
+        return super::live_dice::line_state(client, id, state, card, interrupted);
+    }
     if let Some(check) = line.check_roll.as_ref() {
         let state_ref = client.borrow();
         if let Some(stage) = state_ref.live.tv.as_ref() {
@@ -2548,6 +2677,7 @@ mod tests {
             kind: crate::presentation::TableKind::Speech,
             text: text.to_owned(),
             scripted: false,
+            roll: None,
         }
     }
 
@@ -2660,6 +2790,7 @@ mod tests {
             kind: TableKind::Action,
             text: "Sigrun picks up folded paper label.".into(),
             scripted: false,
+            roll: None,
         };
         let voices = vec![VoiceLine {
             role: crate::voice_line::NARRATOR_ROLE.into(),

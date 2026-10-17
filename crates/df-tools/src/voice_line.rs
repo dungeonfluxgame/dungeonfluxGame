@@ -829,6 +829,7 @@ mod tests {
         text: &str,
     ) -> rpc::TableLine {
         rpc::TableLine {
+            roll: None,
             actor_id: String::new(),
             sequence: 1,
             speaker: speaker.to_owned(),

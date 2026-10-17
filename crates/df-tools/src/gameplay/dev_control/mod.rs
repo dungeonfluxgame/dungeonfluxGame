@@ -51,6 +51,7 @@ mod music;
 mod notebook;
 pub(super) mod npc;
 mod parse;
+mod place;
 mod reads;
 mod social_view;
 pub(super) mod timeline;
@@ -234,6 +235,9 @@ pub(super) fn setup(
         .route("/dev/dice", get(dice::read))
         .route("/dev/dice/next", post(dice::next))
         .route("/dev/dice/clear", post(dice::clear))
+        .route("/dev/place", get(place::read))
+        .route("/dev/place/list", get(place::list))
+        .route("/dev/place/go", post(place::go))
         .route("/dev/art", get(art::list))
         .route("/dev/art/edit", post(art::edit))
         .route("/dev/music", get(music::read))

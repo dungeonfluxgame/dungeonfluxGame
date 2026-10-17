@@ -531,6 +531,19 @@ pub(in crate::gameplay) fn vocabulary_lights() -> Vec<&'static str> {
     lights
 }
 
+/// Every place kind the director can stage: the kinds a new place may be created as.
+pub(in crate::gameplay) fn place_kinds() -> Vec<&'static str> {
+    vocabulary()
+        .map(|vocabulary| {
+            vocabulary
+                .families
+                .values()
+                .flat_map(|family| family.table_kinds.iter().map(String::as_str))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The family of a setting kind.
 fn family_of(place_kind: &str) -> Result<(&'static str, &'static Family), ShotError> {
     vocabulary()?

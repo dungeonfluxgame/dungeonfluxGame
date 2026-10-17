@@ -19,6 +19,116 @@ pub(super) const SYSTEM_SPEAKER: &str = "table";
 /// The speaker of a check's line, written by [`TableLog::push_check`].
 pub(super) const CHECK_SPEAKER: &str = "Roll";
 
+/// One roll row: the text the table reads and, when the server knows the numbers, the structured
+/// roll the shared display plays as a die (never parsed back out of the text).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RollRow {
+    pub(super) text: String,
+    pub(super) roll: Option<rpc::TableRoll>,
+}
+
+/// The short label a roll's result card shows: "Brakka · Deception" from the subject and the
+/// check's label ("Charisma (Deception, Advantage: 8 and 1)"). The skill is the parenthesised
+/// name up to its first comma, else the whole label ("Dexterity save").
+pub(super) fn roll_label(subject: &str, label: &str) -> String {
+    let skill = match label.split_once('(') {
+        Some((_, rest)) => rest
+            .split([',', ')'])
+            .next()
+            .unwrap_or(rest)
+            .trim()
+            .to_owned(),
+        None => label.trim().to_owned(),
+    };
+    if skill.is_empty() {
+        subject.trim().to_owned()
+    } else {
+        format!("{} \u{b7} {skill}", subject.trim())
+    }
+}
+
+/// The display name of a skill id as the check receipts carry it ("sleight-of-hand").
+fn skill_display(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "perception" => "Perception",
+        "insight" => "Insight",
+        "survival" => "Survival",
+        "medicine" => "Medicine",
+        "investigation" => "Investigation",
+        "arcana" => "Arcana",
+        "history" => "History",
+        "nature" => "Nature",
+        "religion" => "Religion",
+        "stealth" => "Stealth",
+        "athletics" => "Athletics",
+        "acrobatics" => "Acrobatics",
+        "sleight-of-hand" => "Sleight of Hand",
+        "persuasion" => "Persuasion",
+        "deception" => "Deception",
+        "intimidation" => "Intimidation",
+        "performance" => "Performance",
+        _ => return None,
+    })
+}
+
+/// The roll row of an accepted ability check receipt: `text` is the row's words, and the die, the
+/// modifier, the total, the difficulty class and the verdict come from the receipt itself. The
+/// receipt's source revision (`..:..:<skill id>:<detail>`) names the skill for the short label.
+pub(super) fn ability_check_row(
+    text: String,
+    hero: &str,
+    check: &rpc::AbilityCheckResult,
+) -> RollRow {
+    let skill = check
+        .source_revision
+        .splitn(4, ':')
+        .nth(2)
+        .and_then(skill_display);
+    let faces = if check.faces.is_empty() {
+        vec![check.die]
+    } else {
+        check.faces.clone()
+    };
+    RollRow {
+        text,
+        roll: Some(rpc::TableRoll {
+            faces,
+            kept: check.die,
+            roll_mode: check.roll_mode,
+            modifier: check
+                .ability_modifier
+                .saturating_add(i32::try_from(check.proficiency_bonus).unwrap_or_default()),
+            total: check.total,
+            against: rpc::RollAgainst::Dc as i32,
+            target_number: check.difficulty_class,
+            succeeded: check.succeeded,
+            label: roll_label(hero, skill.map_or("", |skill| skill)),
+            kind: rpc::RollKind::Check as i32,
+        }),
+    }
+}
+
+impl From<&str> for RollRow {
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            roll: None,
+        }
+    }
+}
+
+impl From<&String> for RollRow {
+    fn from(text: &String) -> Self {
+        text.as_str().into()
+    }
+}
+
+impl From<String> for RollRow {
+    fn from(text: String) -> Self {
+        Self { text, roll: None }
+    }
+}
+
 /// Receives a copy of every public line as it is appended, and the floor of a rewind. The story
 /// memory's tap: it must not block, because it runs on whichever thread appended the line.
 pub(super) trait LineSink: Send + Sync {
@@ -411,7 +521,7 @@ impl TableLog {
         kind: rpc::TableKind,
         text: &str,
     ) -> Option<u64> {
-        self.push_line(None, (speaker, ""), role, hero_index, kind, text)
+        self.push_line(None, (speaker, ""), role, hero_index, kind, (text, None))
     }
 
     pub(super) fn push_actor(
@@ -423,7 +533,14 @@ impl TableLog {
         kind: rpc::TableKind,
         text: &str,
     ) -> Option<u64> {
-        self.push_line(None, (speaker, actor_id), role, hero_index, kind, text)
+        self.push_line(
+            None,
+            (speaker, actor_id),
+            role,
+            hero_index,
+            kind,
+            (text, None),
+        )
     }
 
     pub(super) fn push_speech(&self, speaker: &str, hero_index: u32, text: &str) {
@@ -452,8 +569,28 @@ impl TableLog {
             role,
             hero_index,
             kind,
-            text,
+            (text, None),
         )
+    }
+
+    /// Appends one line an accepted action produced, with the roll the display plays for it.
+    /// The first line of an action fills the sequence the action reserved when it was
+    /// submitted; the others take the next sequences.
+    pub(super) fn push_action_line(
+        &self,
+        reservation: Option<TableLogReservation>,
+        line: &ActionLine,
+        role: rpc::TableRole,
+        hero_index: u32,
+    ) {
+        self.push_line(
+            reservation.and_then(|reservation| reservation.sequence),
+            (&line.speaker, ""),
+            role,
+            hero_index,
+            rpc::TableKind::Action,
+            (&line.text, line.roll.clone()),
+        );
     }
 
     /// A scene interaction's rows, in table order: its roll row when it rolled one, then the
@@ -462,7 +599,7 @@ impl TableLog {
         &self,
         reservation: TableLogReservation,
         roller_index: u32,
-        check: Option<&str>,
+        check: Option<impl Into<RollRow>>,
         outcome: &str,
     ) {
         match check {
@@ -489,20 +626,22 @@ impl TableLog {
         }
     }
 
-    /// A check is rules narration; the hero's name and outcome belong in its text.
+    /// A check is rules narration; the hero's name and outcome belong in its text. A row that
+    /// carries its structured roll lets the shared display play the die for it.
     pub(super) fn push_check(
         &self,
         reservation: TableLogReservation,
         roller_index: u32,
-        text: &str,
+        row: impl Into<RollRow>,
     ) {
-        self.push_reserved(
-            reservation,
-            CHECK_SPEAKER,
+        let row = row.into();
+        self.push_line(
+            reservation.sequence,
+            (CHECK_SPEAKER, ""),
             rpc::TableRole::Narrator,
             roller_index,
             rpc::TableKind::Action,
-            text,
+            (&row.text, row.roll),
         );
     }
 
@@ -513,9 +652,10 @@ impl TableLog {
         role: rpc::TableRole,
         hero_index: u32,
         kind: rpc::TableKind,
-        text: &str,
+        body: (&str, Option<rpc::TableRoll>),
     ) -> Option<u64> {
         let (speaker, actor_id) = speaker;
+        let (text, roll) = body;
         if let Some((entry_kind, title, scene)) = notebook_entry_log_fields(text) {
             let context = df_observe::OperationContext {
                 trace_parent: String::new(),
@@ -564,6 +704,7 @@ impl TableLog {
                 hero_index,
                 kind: kind as i32,
                 text,
+                roll,
             };
             let tapped = self.sink.get().map(|_| entry.clone());
             ring.lines.insert(position, entry);
@@ -1035,6 +1176,22 @@ impl TableLog {
             .collect()
     }
 
+    /// The newest public lines, oldest first, as (speaker, text): the table's recent talk, for a
+    /// generator that must agree with what was just said. Roll rows are left out.
+    pub(super) fn recent_public(&self, count: usize) -> Vec<(String, String)> {
+        let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut lines: Vec<(String, String)> = ring
+            .lines
+            .iter()
+            .rev()
+            .filter(|line| line.speaker != "Roll" && !line.text.trim().is_empty())
+            .take(count)
+            .map(|line| (line.speaker.clone(), line.text.clone()))
+            .collect();
+        lines.reverse();
+        lines
+    }
+
     /// Checks the exact current NPC speech line that a Jev proposal names. Sequence is
     /// captured when the reply enters the table log, so another character's later line
     /// cannot make a previous NPC proposal look current by matching its text.
@@ -1205,6 +1362,9 @@ impl Drop for ReplyPending {
 pub(super) struct ActionLine {
     pub(super) speaker: String,
     pub(super) text: String,
+    /// The d20 roll the line tells, when it tells one the display plays (a death save, a
+    /// stabilise check). Attacks play from their combat outcome and carry none here.
+    pub(super) roll: Option<rpc::TableRoll>,
 }
 
 /// The public lines of an accepted action: the acting hero's short phrase from the offer's
@@ -1296,16 +1456,48 @@ pub(super) fn action_lines(
             _ => third_person(label),
         }
     };
-    let mut lines = vec![ActionLine {
+    // A stabilise check is the hero's own roll: it carries the Medicine die for the display.
+    let phrase_roll = stabilisation
+        .filter(|_| !(attacking && own.is_some()))
+        .and_then(crate::table_roll::outcome_roll);
+    let mut phrase_line = Some(ActionLine {
         speaker: hero.to_owned(),
         text: phrase,
-    }];
-    for outcome in combat {
+        roll: phrase_roll,
+    });
+    // Lines follow the server's resolution order: the hero's own line stands where the hero's
+    // first outcome stands, so a reaction that came before the hero's move is told before it.
+    let anchor = combat
+        .iter()
+        .position(|outcome| outcome.actor_name == hero)
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    let mut told_saves: Vec<(String, u32, u32, u32, i32)> = Vec::new();
+    let mut index = 0;
+    while index < combat.len() {
+        if index == anchor {
+            lines.extend(phrase_line.take());
+        }
+        let outcome = &combat[index];
+        index += 1;
         match rpc::OutcomeKind::try_from(outcome.kind) {
             Ok(rpc::OutcomeKind::DeathSave) => {
+                // One Death Saving Throw is told once, however many times it is handed over.
+                let key = (
+                    outcome.actor_name.clone(),
+                    outcome.attack_die,
+                    outcome.death_successes,
+                    outcome.death_failures,
+                    outcome.death_save_result,
+                );
+                if told_saves.contains(&key) {
+                    continue;
+                }
+                told_saves.push(key);
                 lines.push(ActionLine {
                     speaker: outcome.actor_name.clone(),
                     text: death_save_text(outcome),
+                    roll: crate::table_roll::outcome_roll(outcome),
                 });
                 continue;
             }
@@ -1321,6 +1513,7 @@ pub(super) fn action_lines(
                         "{} has been stable for {} {unit} and regains 1 hit point",
                         outcome.actor_name, outcome.recovery_hours
                     ),
+                    roll: None,
                 });
                 continue;
             }
@@ -1333,46 +1526,126 @@ pub(super) fn action_lines(
                             outcome.path.len(),
                             outcome.cost_ft
                         ),
+                        roll: None,
                     });
                 }
                 continue;
             }
+            Ok(rpc::OutcomeKind::Stabilisation) => continue,
             _ => {}
         }
         if outcome.actor_name == hero {
             continue;
         }
-        let text = if outcome.hit {
-            let weapon = outcome.weapon.replace('-', " ");
-            let attack = match attack_action_verb(outcome) {
-                AttackActionVerb::Throw if !weapon.is_empty() => {
-                    format!("throws the {weapon} at {}", outcome.target_name)
-                }
-                AttackActionVerb::Throw => format!("throws at {}", outcome.target_name),
-                AttackActionVerb::Shoot if !weapon.is_empty() => {
-                    format!("shoots at {} with the {weapon}", outcome.target_name)
-                }
-                AttackActionVerb::Shoot => format!("shoots at {}", outcome.target_name),
-                AttackActionVerb::Strike => format!("strikes {}", outcome.target_name),
-            };
-            format!(
-                "{attack} \u{2014} hit, {} damage{}",
-                damage_words(outcome),
-                if outcome.knocked_out {
-                    format!(", {} falls unconscious", outcome.target_name)
-                } else {
-                    String::new()
-                }
-            )
-        } else {
-            format!("misses {}", outcome.target_name)
-        };
+        // A Multiattack is one line: the same attacker's consecutive attacks on one target.
+        let mut group = vec![outcome];
+        while let Some(next) = combat.get(index) {
+            if next.kind == outcome.kind
+                && next.kind == rpc::OutcomeKind::Attack as i32
+                && next.actor_name == outcome.actor_name
+                && next.target_name == outcome.target_name
+            {
+                group.push(next);
+                index += 1;
+            } else {
+                break;
+            }
+        }
         lines.push(ActionLine {
             speaker: outcome.actor_name.clone(),
-            text,
+            text: enemy_attack_text(&group),
+            roll: None,
         });
     }
+    lines.extend(phrase_line);
     lines
+}
+
+/// The word for how many attacks a Multiattack made.
+fn attack_count_word(count: usize) -> String {
+    match count {
+        2 => "two".to_owned(),
+        3 => "three".to_owned(),
+        4 => "four".to_owned(),
+        count => count.to_string(),
+    }
+}
+
+/// Whether a blow dropped its target: knocked out (unconscious at 1 HP) or down at 0 HP.
+fn blow_dropped_target(outcome: &rpc::CombatOutcome) -> Option<&'static str> {
+    if outcome.knocked_out {
+        Some("falls unconscious")
+    } else if outcome.hit && outcome.target_hit_points == 0 {
+        Some("is down")
+    } else {
+        None
+    }
+}
+
+/// The public sentence for what an opponent did with one attack, an opportunity attack or a
+/// Multiattack (several consecutive attacks of one attacker on one target, in resolution order).
+fn enemy_attack_text(group: &[&rpc::CombatOutcome]) -> String {
+    let Some(first) = group.first() else {
+        return String::new();
+    };
+    let result_of = |outcome: &rpc::CombatOutcome| {
+        if outcome.hit {
+            format!(
+                "{}hit, {} damage",
+                if outcome.critical { "critical " } else { "" },
+                damage_words(outcome)
+            )
+        } else if outcome.grazed {
+            format!("graze, {} damage", damage_words(outcome))
+        } else {
+            "miss".to_owned()
+        }
+    };
+    let down = group
+        .iter()
+        .find_map(|outcome| blow_dropped_target(outcome))
+        .map(|words| format!(", {} {words}", first.target_name))
+        .unwrap_or_default();
+    if group.len() > 1 {
+        let results = group
+            .iter()
+            .map(|outcome| result_of(outcome))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return format!(
+            "makes {} attacks on {} \u{2014} {results}{down}",
+            attack_count_word(group.len()),
+            first.target_name
+        );
+    }
+    let outcome = first;
+    if rpc::OutcomeKind::try_from(outcome.kind) == Ok(rpc::OutcomeKind::OpportunityAttack) {
+        return format!(
+            "makes an opportunity attack on {} \u{2014} {}{down}",
+            outcome.target_name,
+            result_of(outcome)
+        );
+    }
+    if outcome.hit {
+        let weapon = outcome.weapon.replace('-', " ");
+        let attack = match attack_action_verb(outcome) {
+            AttackActionVerb::Throw if !weapon.is_empty() => {
+                format!("throws the {weapon} at {}", outcome.target_name)
+            }
+            AttackActionVerb::Throw => format!("throws at {}", outcome.target_name),
+            AttackActionVerb::Shoot if !weapon.is_empty() => {
+                format!("shoots at {} with the {weapon}", outcome.target_name)
+            }
+            AttackActionVerb::Shoot => format!("shoots at {}", outcome.target_name),
+            AttackActionVerb::Strike => format!("strikes {}", outcome.target_name),
+        };
+        format!(
+            "{attack} \u{2014} hit, {} damage{down}",
+            damage_words(outcome)
+        )
+    } else {
+        format!("misses {}", outcome.target_name)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1648,9 +1921,13 @@ fn death_save_text(outcome: &rpc::CombatOutcome) -> String {
         Ok(rpc::DeathSaveResult::Revived) => "a natural 20, back on their feet with 1 hit point",
         _ => "no result",
     };
+    let count =
+        |number: u32, word: &str| format!("{number} {word}{}", if number == 1 { "" } else { "s" });
     format!(
-        "makes a Death Saving Throw: {} \u{2014} {result} ({} successes, {} failures)",
-        outcome.attack_die, outcome.death_successes, outcome.death_failures
+        "makes a Death Saving Throw: {} \u{2014} {result} ({}, {})",
+        outcome.attack_die,
+        count(outcome.death_successes, "success"),
+        count(outcome.death_failures, "failure")
     )
 }
 
@@ -2185,6 +2462,122 @@ mod tests {
         }
     }
 
+    fn deception_record() -> super::super::freeform_action::CheckRecord {
+        super::super::freeform_action::CheckRecord {
+            kind: rpc::RollKind::Check,
+            subject: "Brakka".to_owned(),
+            label: "Charisma (Deception, Advantage: 8 and 1)".to_owned(),
+            die: 8,
+            modifier: -1,
+            total: 7,
+            against: "DC",
+            number: 15,
+            result: "failure",
+            success: false,
+        }
+    }
+
+    #[test]
+    fn a_check_row_carries_its_faces_modifier_total_dc_and_verdict_to_the_display() {
+        let log = TableLog::new();
+        log.push_check(
+            log.reserve(),
+            1,
+            deception_record().row_with_draws(&[8, 1], 1),
+        );
+
+        let journey = attached(&log);
+        let [line] = journey.table_log.as_slice() else {
+            panic!("one roll row: {:?}", journey.table_log);
+        };
+        assert_eq!(line.speaker, CHECK_SPEAKER);
+        assert_eq!(line.hero_index, 1);
+        assert_eq!(
+            line.text,
+            "Brakka: Charisma (Deception, Advantage: 8 and 1) 8 - 1 = 7 vs DC 15 \u{2014} failure."
+        );
+        assert_eq!(
+            line.roll,
+            Some(rpc::TableRoll {
+                faces: vec![8, 1],
+                kept: 8,
+                roll_mode: 1,
+                modifier: -1,
+                total: 7,
+                against: rpc::RollAgainst::Dc as i32,
+                target_number: 15,
+                succeeded: false,
+                label: "Brakka \u{b7} Deception".to_owned(),
+                kind: rpc::RollKind::Check as i32,
+            })
+        );
+    }
+
+    #[test]
+    fn a_plain_roll_is_one_face_and_an_armour_class_roll_says_so() {
+        let mut record = deception_record();
+        record.label = "Strength (unarmed strike)".to_owned();
+        record.against = "AC";
+        record.number = 10;
+        record.success = true;
+        let row = record.row();
+        let roll = row.roll.expect("a plain roll is structured");
+        assert_eq!(roll.faces, [8]);
+        assert_eq!(roll.kept, 8);
+        assert_eq!(roll.roll_mode, 0);
+        assert_eq!(roll.against, rpc::RollAgainst::Ac as i32);
+        assert_eq!(roll.target_number, 10);
+        assert!(roll.succeeded);
+        assert_eq!(roll.label, "Brakka \u{b7} unarmed strike");
+    }
+
+    #[test]
+    fn a_text_only_row_carries_no_roll_and_every_roll_row_stays_in_table_order() {
+        let log = TableLog::new();
+        log.push_check(log.reserve(), 0, "Brynn rolls Persuasion: 12, fails.");
+        log.push_check(log.reserve(), 0, deception_record().row());
+
+        let lines = attached(&log).table_log;
+        assert_eq!(lines[0].roll, None);
+        assert!(lines[1].roll.is_some());
+        assert!(lines[0].sequence < lines[1].sequence);
+    }
+
+    #[test]
+    fn an_ability_check_receipt_becomes_a_structured_row_with_its_skill_label() {
+        let check = rpc::AbilityCheckResult {
+            die: 12,
+            ability_modifier: 3,
+            proficiency_bonus: 2,
+            total: 17,
+            difficulty_class: 14,
+            succeeded: true,
+            source_revision: "a:b:perception:visible".to_owned(),
+            faces: vec![12, 4],
+            roll_mode: 1,
+        };
+        let row = ability_check_row("Brakka searches.".to_owned(), "Brakka", &check);
+        let roll = row.roll.expect("a receipt is structured");
+        assert_eq!(roll.faces, [12, 4]);
+        assert_eq!(roll.kept, 12);
+        assert_eq!((roll.modifier, roll.total, roll.target_number), (5, 17, 14));
+        assert!(roll.succeeded);
+        assert_eq!(roll.label, "Brakka \u{b7} Perception");
+    }
+
+    #[test]
+    fn roll_labels_name_the_skill_and_survive_unusual_labels() {
+        assert_eq!(
+            roll_label("Brakka", "Charisma (Deception, Advantage: 8 and 1)"),
+            "Brakka \u{b7} Deception"
+        );
+        assert_eq!(
+            roll_label("Mira", "Dexterity save"),
+            "Mira \u{b7} Dexterity save"
+        );
+        assert_eq!(roll_label("Mira", ""), "Mira");
+    }
+
     #[test]
     fn every_change_moves_the_presentation_sequence_and_wakes_watchers() {
         let log = TableLog::new();
@@ -2415,6 +2808,8 @@ mod tests {
             target_name: target.to_owned(),
             hit,
             damage,
+            // Still standing after the blow: a hit that leaves 0 is a creature that dropped.
+            target_hit_points: 12,
             ..Default::default()
         }
     }
@@ -2506,6 +2901,185 @@ mod tests {
             "",
         );
         assert_eq!(miss[0].text, "swings the greatsword \u{2014} miss");
+    }
+
+    fn reaction(actor: &str, target: &str, hit_points_after: u32) -> rpc::CombatOutcome {
+        rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::OpportunityAttack as i32,
+            damage_type: "piercing".to_owned(),
+            target_hit_points: hit_points_after,
+            ..outcome(actor, target, true, 7)
+        }
+    }
+
+    fn attack(actor: &str, target: &str, hit: bool) -> rpc::CombatOutcome {
+        rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::Attack as i32,
+            damage_type: "piercing".to_owned(),
+            ..outcome(actor, target, hit, if hit { 5 } else { 0 })
+        }
+    }
+
+    #[test]
+    fn a_reaction_is_told_as_one_and_the_creature_it_drops_says_so() {
+        let lines = action_lines(
+            rpc::GameplayActionKind::Move,
+            "Brakka",
+            &[
+                reaction("Jessa", "Brakka", 13),
+                rpc::CombatOutcome {
+                    kind: rpc::OutcomeKind::Move as i32,
+                    actor_name: "Brakka".to_owned(),
+                    path: vec![
+                        rpc::GridCell { col: 0, row: 4 },
+                        rpc::GridCell { col: 0, row: 3 },
+                    ],
+                    cost_ft: 10,
+                    ..Default::default()
+                },
+                reaction("Corin", "Brakka", 0),
+            ],
+            "greatsword",
+            "",
+            "Move",
+        );
+
+        // The lines follow the server's resolution order: Jessa's reaction came before the
+        // move, Corin's after it, and the hero's own line stands at the hero's move.
+        let told: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|line| (line.speaker.as_str(), line.text.as_str()))
+            .collect();
+        assert_eq!(
+            told,
+            [
+                (
+                    "Jessa",
+                    "makes an opportunity attack on Brakka \u{2014} hit, 7 piercing damage"
+                ),
+                ("Brakka", "moves 2 squares (10 ft)"),
+                (
+                    "Corin",
+                    "makes an opportunity attack on Brakka \u{2014} hit, 7 piercing damage, Brakka is down"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_knockout_says_the_creature_falls_unconscious() {
+        let knocked = rpc::CombatOutcome {
+            knocked_out: true,
+            target_hit_points: 1,
+            ..attack("Corin", "Perrin", true)
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::EndTurn,
+            "Sigrun",
+            &[knocked],
+            "greatsword",
+            "",
+            "",
+        );
+        assert_eq!(
+            lines[1].text,
+            "strikes Perrin \u{2014} hit, 5 piercing damage, Perrin falls unconscious"
+        );
+    }
+
+    #[test]
+    fn a_multiattack_is_one_line_with_every_roll_in_it() {
+        let lines = action_lines(
+            rpc::GameplayActionKind::EndTurn,
+            "Sigrun",
+            &[
+                attack("Corin", "Sigrun", false),
+                attack("Corin", "Sigrun", true),
+                attack("Jessa", "Sigrun", true),
+            ],
+            "greatsword",
+            "",
+            "",
+        );
+        let told: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|line| (line.speaker.as_str(), line.text.as_str()))
+            .collect();
+        assert_eq!(
+            told,
+            [
+                ("Sigrun", "ends the turn"),
+                (
+                    "Corin",
+                    "makes two attacks on Sigrun \u{2014} miss; hit, 5 piercing damage"
+                ),
+                ("Jessa", "strikes Sigrun \u{2014} hit, 5 piercing damage"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_death_save_is_told_once_as_the_heros_roll_with_its_die_attached() {
+        let save = rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::DeathSave as i32,
+            actor_name: "Brakka".to_owned(),
+            attack_die: 16,
+            death_save_result: rpc::DeathSaveResult::Success as i32,
+            death_successes: 1,
+            ..Default::default()
+        };
+        // The same save handed over twice is still one line.
+        let lines = action_lines(
+            rpc::GameplayActionKind::EndTurn,
+            "Sigrun",
+            &[save.clone(), save],
+            "greatsword",
+            "",
+            "",
+        );
+        let saves: Vec<&ActionLine> = lines
+            .iter()
+            .filter(|line| line.speaker == "Brakka")
+            .collect();
+        assert_eq!(saves.len(), 1);
+        assert_eq!(
+            saves[0].text,
+            "makes a Death Saving Throw: 16 \u{2014} success (1 success, 0 failures)"
+        );
+        let roll = saves[0].roll.as_ref().expect("the die rides on the line");
+        assert_eq!(roll.kind, rpc::RollKind::DeathSave as i32);
+        assert_eq!(roll.kept, 16);
+        assert!(roll.succeeded);
+    }
+
+    #[test]
+    fn a_stabilise_check_line_carries_the_medicine_die() {
+        let stabilise = rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::Stabilisation as i32,
+            actor_name: "Sigrun".to_owned(),
+            target_name: "Brakka".to_owned(),
+            stabilization: Some(rpc::StabilizationResult {
+                method: rpc::StabilizationMethod::Medicine as i32,
+                die: 13,
+                wisdom_modifier: 1,
+                dc: 10,
+                succeeded: true,
+                uses_left: 0,
+            }),
+            ..Default::default()
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::HelpAttack,
+            "Sigrun",
+            &[stabilise],
+            "greatsword",
+            "",
+            "",
+        );
+        let roll = lines[0].roll.as_ref().expect("the hero's check is a roll");
+        assert_eq!(roll.label, "Sigrun \u{b7} Medicine (stabilize Brakka)");
+        assert_eq!((roll.kept, roll.modifier, roll.total), (13, 1, 14));
+        assert_eq!(roll.kind, rpc::RollKind::Stabilize as i32);
     }
 
     #[test]

@@ -741,7 +741,8 @@ fn facts_of(stage: &Stage, social: &SocialLedger) -> SceneFacts {
                     })
                 })
             });
-        let Some(scene) = scene else {
+        // A place the run created is not in the pack; the stage found it where it is published.
+        let Some(scene) = scene.or(stage.story_scene.as_ref()) else {
             return SceneFacts {
                 place: None,
                 tone: SceneTone::Neutral,

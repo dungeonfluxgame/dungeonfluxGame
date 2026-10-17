@@ -171,6 +171,13 @@ pub(crate) fn fresh_combat_beats(combat: &rpc::CombatView, after: u64) -> Vec<&r
     let mut outcomes: Vec<_> = combat
         .outcomes
         .iter()
+        // A Death Saving Throw is a roll beat of its own, in its place in the server's order.
+        .chain(
+            combat
+                .death_save_outcomes
+                .iter()
+                .filter(|outcome| outcome.kind == rpc::OutcomeKind::DeathSave as i32),
+        )
         .chain(combat.move_outcomes.iter().filter(|movement| {
             pending_move != Some(movement.sequence)
                 && !combat
@@ -945,6 +952,8 @@ pub(crate) struct TableLine {
     pub(crate) text: String,
     /// The scene's own authored speaker line, as opposed to something said at the table.
     pub(crate) scripted: bool,
+    /// The d20 roll the server attached to this line, which the display plays as a die.
+    pub(crate) roll: Option<crate::roll_card::RollCard>,
 }
 
 impl TableLine {
@@ -961,25 +970,6 @@ fn clamp_line(text: &str) -> String {
     }
     let kept: String = text.chars().take(LINE_LIMIT - 1).collect();
     format!("{}…", kept.trim_end())
-}
-
-/// A short phrase for a roll of the combat window, used only when the table log has no line
-/// for the attacker yet.
-pub(crate) fn action_text(outcome: &rpc::CombatOutcome) -> String {
-    let target = &outcome.target_name;
-    let mut text = if outcome.hit && outcome.critical {
-        format!("lands a critical blow on {target} for {}", outcome.damage)
-    } else if outcome.hit {
-        format!("strikes at {target} — hit for {}", outcome.damage)
-    } else if outcome.grazed {
-        format!("grazes {target} for {}", outcome.damage)
-    } else {
-        format!("swings at {target} and misses")
-    };
-    if outcome.knocked_out {
-        text.push_str(" — down!");
-    }
-    text
 }
 
 /// The line the scene itself opens with: its speaker's words, which the server's table log does
@@ -1012,6 +1002,7 @@ fn scene_line(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) ->
         kind: TableKind::Speech,
         text: text.to_owned(),
         scripted: true,
+        roll: None,
     })
 }
 
@@ -1327,6 +1318,10 @@ fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> +
             kind,
             text: line.text.trim().to_owned(),
             scripted: false,
+            roll: line
+                .roll
+                .as_ref()
+                .and_then(crate::roll_card::RollCard::from_wire),
         })
     })
 }
@@ -2178,8 +2173,11 @@ mod tests {
         assert_eq!(sigrun_changes, [(12, 0, 0), (10, 4, impact_times[&4])]);
         let final_blow_at = impact_times[&4];
         let next_hero_at = headings.last().unwrap().0;
+        // The blow's result card is held for its whole beat before the next heading, so the
+        // heading follows the impact by at most the held result and the old slack.
+        let held_result = u64::from(crate::stage_director::IMPACT_CUE_MS);
         assert!(
-            next_hero_at >= final_blow_at && next_hero_at - final_blow_at <= 1_500,
+            next_hero_at >= final_blow_at && next_hero_at - final_blow_at <= held_result + 1_500,
             "next active hero heading at {next_hero_at} ms after blow at {final_blow_at} ms"
         );
 
@@ -2487,6 +2485,8 @@ mod tests {
             attack_die: die,
             hit,
             damage: if hit { 6 } else { 0 },
+            // Still standing after the blow: a hit that leaves 0 is a creature that dropped.
+            target_hit_points: 12,
             ..Default::default()
         }
     }
@@ -2686,6 +2686,7 @@ mod tests {
         text: &str,
     ) -> rpc::TableLine {
         rpc::TableLine {
+            roll: None,
             actor_id: String::new(),
             sequence,
             speaker: speaker.to_owned(),
@@ -3167,15 +3168,63 @@ mod tests {
     }
 
     #[test]
-    fn action_text_describes_a_roll_by_its_result() {
+    fn a_beat_is_described_by_its_result() {
         assert_eq!(
-            action_text(&outcome("Brakka", "Perrin", 13, true)),
+            crate::combat_beats::beat_text(&outcome("Brakka", "Perrin", 13, true), None),
             "strikes at Perrin — hit for 6"
         );
         assert_eq!(
-            action_text(&outcome("Perrin", "Thrain", 4, false)),
+            crate::combat_beats::beat_text(&outcome("Perrin", "Thrain", 4, false), None),
             "swings at Thrain and misses"
         );
+    }
+
+    fn beat(
+        sequence: u64,
+        kind: rpc::OutcomeKind,
+        actor: &str,
+        target: &str,
+    ) -> rpc::CombatOutcome {
+        rpc::CombatOutcome {
+            sequence,
+            kind: kind as i32,
+            actor_name: actor.to_owned(),
+            target_name: target.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_fights_beats_come_in_the_servers_sequence_order_with_the_death_save_among_them() {
+        // One server step: Brakka's death save, Jessa's reaction, Brakka's move, Corin's
+        // reaction, Corin's two shortsword attacks and Jessa's attack. The views carry them in
+        // separate lists; the display plays them in the server's order, once each.
+        let combat = rpc::CombatView {
+            outcomes: vec![
+                beat(5, rpc::OutcomeKind::OpportunityAttack, "Jessa", "Brakka"),
+                beat(7, rpc::OutcomeKind::OpportunityAttack, "Corin", "Brakka"),
+                beat(8, rpc::OutcomeKind::Attack, "Corin", "Sigrun"),
+                beat(9, rpc::OutcomeKind::Attack, "Corin", "Sigrun"),
+                beat(10, rpc::OutcomeKind::Attack, "Jessa", "Sigrun"),
+            ],
+            move_outcomes: vec![beat(6, rpc::OutcomeKind::Move, "Brakka", "")],
+            death_save_outcomes: vec![
+                beat(4, rpc::OutcomeKind::DeathSave, "Brakka", ""),
+                beat(3, rpc::OutcomeKind::Recovery, "Brakka", ""),
+            ],
+            active_actor: "Sigrun".to_owned(),
+            latest_sequence: 10,
+            ..Default::default()
+        };
+
+        let sequences = |after| {
+            fresh_combat_beats(&combat, after)
+                .iter()
+                .map(|beat| beat.sequence)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sequences(0), [4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(sequences(6), [7, 8, 9, 10], "only what has not been shown");
     }
 
     #[test]

@@ -181,3 +181,20 @@ talk never replays it, and while a line presents the choice chips are hidden. `d
 on the stage hides the chip row and gives its space to the narrator box. A session view may be as
 large as one RPC message (`RPC_MESSAGE_BYTES`); a smaller bound silently broke the acting hero's
 phone, whose tactical view is the largest.
+
+Rolls on the display. Every d20 roll the table shows carries its numbers to the display on the table
+line itself (`TableLine.roll`: the server's faces, which face counts, mode, modifier, total, the DC or
+AC, the verdict, a short label, a roll kind), never read back out of text. Outside a fight a line with a
+roll becomes a dice line in the same queue as speech (`LineTiming::Dice`): after the hero's line, the
+die (two for Advantage or Disadvantage, the counted one marked) tumbles large and centred over the stage
+(at least 22% of its height; above the plate, below the subtitle), the server's number lands at the
+clip's rest time, and a result card (label, sum against the DC or AC, verdict) is held for its reading
+time (never under 3 s) before the next line opens. A dice line is silent and is not skipped by catch-up;
+a reconnect does not replay it. In a fight a roll is a beat of the cue sequencer: one at a time, die,
+result card held, then the next beat; death saves and stabilise checks are beats of their own kind, not
+attacks. Beats play in the server's sequence order, and a beat's consequences (hit points, the down
+marker, the position) show when the beat plays (`combat_beats.rs`). A display more than a few seconds
+behind what its queue explains shortens the waiting beats (the die and its result still show). Each
+roll's presentation is a `component=dice` record in the DISPLAY log (`opened_ms`, `closed_ms`,
+`held_ms`; a fight beat's record also carries `lag_ms`). The die plays whatever the machine's
+reduced-motion preference says: a shared screen's one indispensable visual.

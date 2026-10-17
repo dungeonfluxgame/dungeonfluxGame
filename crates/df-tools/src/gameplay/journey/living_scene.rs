@@ -90,6 +90,7 @@ pub(in crate::gameplay) fn install(
 }
 
 pub(in crate::gameplay) fn clear() {
+    crate::gameplay::place::clear();
     if let Some(models) = MODELS.get() {
         models
             .lock()
@@ -1370,6 +1371,34 @@ fn finish_interaction_with_draws(
     )
 }
 
+/// Commits a change of place as its own journal entry (`place`): the entry rolls no die and changes
+/// no scene model, and carries the created place whole on its first use.
+pub(in crate::gameplay) fn commit_place_move(
+    current: &Checkpoint,
+    operation: OperationId,
+    entry: &crate::gameplay::place::PlaceEntry,
+) -> Result<Checkpoint, RepositoryError> {
+    let mut basis = current.basis();
+    basis.revision = basis.revision.next_sequence().map_err(|_| invalid())?;
+    finish(
+        current,
+        basis,
+        current.state().clone(),
+        operation,
+        Vec::new(),
+        DecisionContent {
+            entry: "scene-interaction",
+            semantic: Some(entry.encode()?),
+            policy: crate::gameplay::place::POLICY,
+            audience: AudienceScope::Shared,
+            reaction: None,
+            escort_target: None,
+            objective_command: None,
+            script_choice: None,
+        },
+    )
+}
+
 fn invalid() -> RepositoryError {
     refusal_detail::note("living-scene-state");
     RepositoryError::InvalidCandidate
@@ -1793,6 +1822,8 @@ pub(in crate::gameplay) fn publish(current: &Checkpoint) -> Result<(), Repositor
     if let (Some(setting), Some(snapshot)) = (&scene.setting, snapshot(current.state(), &scene)?) {
         crate::gameplay::adventure::scene_model::publish_scene(&setting.place_id, snapshot);
     }
+    // A created place is not in the pack: the screens look its scene up where it is published.
+    crate::gameplay::place::publish(&scene);
     Ok(())
 }
 
@@ -1908,7 +1939,7 @@ pub(in crate::gameplay) fn last_line(state: &GameState) -> Result<Option<String>
 /// a steal, a failed steal, or a pickpocket. Nothing else rolls a row here.
 pub(in crate::gameplay) fn last_check_line(
     state: &GameState,
-) -> Result<Option<String>, RepositoryError> {
+) -> Result<Option<crate::gameplay::table_log::RollRow>, RepositoryError> {
     let Some(entry) = state.decisions.last().map(read).transpose()?.flatten() else {
         return Ok(None);
     };
@@ -1919,7 +1950,7 @@ pub(in crate::gameplay) fn last_check_line(
     else {
         return Ok(None);
     };
-    Ok(steal_check_record(&entry.hero, adjudication).map(|record| record.line()))
+    Ok(steal_check_record(&entry.hero, adjudication).map(|record| record.row()))
 }
 
 fn steal_adjudication_of(kind: &SceneChangeKind) -> Option<&SceneStealAdjudication> {
@@ -1944,6 +1975,7 @@ fn steal_check_record(
     })
     .ok()?;
     Some(crate::gameplay::freeform_action::CheckRecord {
+        kind: df_protocol::common::RollKind::Check,
         subject: hero.to_owned(),
         label: "Dexterity (Sleight of Hand)".to_owned(),
         die: check.die,

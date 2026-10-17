@@ -83,3 +83,38 @@ excessive coincidence rejection, personal-hook privacy, fail-forward rules
 integrity, source edits/replay, stale completions and bounded candidate/LLM work.
 Frontier playtests check agency and comprehensibility; measured scores cannot
 prove a story is fun. F39/G10/G11/G12 own remaining tasks and evidence.
+
+## Places and exits (SCENE-01, 2026-10-17)
+
+A place lists its exits (`SceneWayOut`: id, name, position, what lies beyond, open). A freeform act
+Jev reads as a successful move is put to Jev again as a closed choice among the open exits and a
+last option for staying (`place_creation::judge_exit`); the choice is an exit position and nothing
+else. The owner then repeats every check (`place::plan`): the party stands where the move leaves
+from, the exit exists and is open, and the destination is exactly where the exit leads. An exit
+leads to a place id, authored (`beyond_place_id`) or bound by the first move through it. The beat's
+own place is returned to; a place the run created is returned to; a place the story owns is not
+walked to (its beats move the party); anything else is created once.
+
+The storyteller creates the place from the exit, the adventure's setting, the canon the town's
+people have spoken, the recent public table lines and the story memory (`place_creation::create`,
+purpose `place_creation`, three JSON slots under the schema in the facts, one retry that names the
+rule broken). The server parses the slots into a compact `PlaceRecord`, bounds every field, and
+expands it deterministically into a scene model, a cast and a way back to where the party came
+from. The checkpoint codec keeps every stored text to 4,096 bytes, so the record is stored as the
+compact answer, not the expanded model.
+
+A move is a journal entry with its own policy (`place-move-1`) in the session checkpoint, so the
+created place is durable world state in PostgreSQL and a replay, a reconnect and a return read the
+same record. `place::overlay` is the one place the rest of the game learns where the party stands:
+the beat's scene with the created place's title, narration, cast and scene model in its stead,
+until the beat changes. The party moves together because the scene is shared. The display view,
+the room photograph, the scene plates (the living-scenes pipeline, found through the published
+scene) and the place music follow the new `location_id`. The table is told a move only from the
+committed result; a refused or failed move changes nothing and claims nothing. Audit lines:
+`PLACE judged`, `PLACE change from=<id> to=<id> exit=<id> created=<bool>`, `PLACE refused ...`.
+`dev place`, `dev place list` and `dev place go <exit|place>` reach the same path.
+
+Not yet: a person who follows the party out (escort), a dossier for the people a place creates (they
+stand in the scene and on the TV but have no dossier to talk from), and carrying a hero's
+purchases from an earlier place into the phone inventory of a later one (items are still scoped
+to the place whose scene model holds them).

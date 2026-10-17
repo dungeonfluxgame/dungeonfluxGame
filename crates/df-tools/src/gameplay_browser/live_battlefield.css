@@ -8,9 +8,11 @@
 .battlefield[data-closing]{opacity:0;transition:opacity .7s ease}
 .bf-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .bf-hud{position:absolute;inset:0;pointer-events:none;z-index:2}
-/* FIGHT-001 dice seat: the visible d20 joins the attack card at the battlefield's bottom
-centre. It stays in the card's flex row, where the HUD paints it alongside the roll result. */
-.battlefield .bf-roll>.tv-dice{position:static;transform:none;z-index:auto;margin:0;animation-delay:calc(var(--dice-rest,900ms) + 800ms)}
+/* FIGHT-001 dice seat: the visible d20 is large and centred in the battlefield's own
+container. The canvas has no z-index and is first in the container, so the dice (z 1) paint
+above it; the HUD (z 2) paints above the dice, so a die never covers a card or a label. */
+.battlefield>.tv-dice{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);z-index:1;margin:0}
+.battlefield>.tv-roll{z-index:1;top:44%}
 
 .bf-top{position:absolute;top:calc(var(--u)*2.2);left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*.5);text-align:center;transition:opacity .6s ease}
 .bf-title{margin:0;font-size:calc(var(--u)*2.3);font-weight:400;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);text-shadow:0 3px 22px #000}

@@ -64,6 +64,10 @@ pub(crate) enum SettingKind {
     ReadingGallery,
 }
 impl SettingKind {
+    /// Whether a place of this kind is outdoors.
+    pub(crate) fn is_exterior(self) -> bool {
+        self.exterior()
+    }
     fn exterior(self) -> bool {
         matches!(
             self,

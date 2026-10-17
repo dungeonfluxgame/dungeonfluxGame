@@ -365,15 +365,18 @@ fn ready_plan(spec: &MusicSpec, set: &MusicSetSpec, ready: ReadyMusicSet) -> rpc
 /// The content and view facts Jev is shown. The pack's scene setting supplies the explicit
 /// fields; the public view supplies the rest.
 fn place_facts(scene: &rpc::GameplayScene) -> PlaceFacts {
-    let setting = pack::active().and_then(|loaded| {
-        loaded
-            .pack
-            .scenes
-            .iter()
-            .filter_map(|authored| authored.setting.as_ref())
-            .find(|setting| setting.place_id == scene.location_id)
-            .cloned()
-    });
+    let setting = pack::active()
+        .and_then(|loaded| {
+            loaded
+                .pack
+                .scenes
+                .iter()
+                .filter_map(|authored| authored.setting.as_ref())
+                .find(|setting| setting.place_id == scene.location_id)
+                .cloned()
+        })
+        // A place the run created is not in the pack; the session owner published its setting.
+        .or_else(|| super::place::registered_setting(&scene.location_id));
     let contents: Option<Value> = serde_json::from_str(&scene.scene_contents_json).ok();
     let field = |name: &str| {
         contents

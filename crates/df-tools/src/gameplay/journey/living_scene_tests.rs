@@ -1377,9 +1377,15 @@ fn a_theft_attempt_orders_the_hero_row_then_the_roll_row_then_the_outcome() {
         let operation = OperationId::from_bytes(&[24; 16]).unwrap();
         let hero = living_scene::hero(attempted.state(), operation).unwrap();
         let outcome = living_scene::last_line(attempted.state()).unwrap().unwrap();
-        let check = living_scene::last_check_line(attempted.state())
+        let check_row = living_scene::last_check_line(attempted.state())
             .unwrap()
             .unwrap();
+        let roll = check_row.roll.clone().expect("a theft roll is structured");
+        assert_eq!(roll.faces, [1]);
+        assert_eq!(roll.kept, 1);
+        assert!(!roll.succeeded);
+        assert_eq!(roll.label, format!("{hero} \u{b7} Sleight of Hand"));
+        let check = check_row.text.clone();
         assert!(check.starts_with(&format!("{hero}: ")), "{check}");
         assert!(check.contains("Dexterity (Sleight of Hand) 1 "), "{check}");
         assert!(check.ends_with("— failure."), "{check}");
@@ -1388,7 +1394,7 @@ fn a_theft_attempt_orders_the_hero_row_then_the_roll_row_then_the_outcome() {
         let log = crate::gameplay::table_log::TableLog::new();
         let words = "I slip the gloves into my satchel.";
         crate::gameplay::freeform_action::publish_hero_line(&log, &hero, 0, words);
-        log.push_scene_outcome(log.reserve(), 0, Some(&check), &outcome);
+        log.push_scene_outcome(log.reserve(), 0, Some(check_row), &outcome);
         let lines = log.lines();
         let [hero_row, roll_row, outcome_row] = lines.as_slice() else {
             panic!("a theft is three table rows: {lines:?}");

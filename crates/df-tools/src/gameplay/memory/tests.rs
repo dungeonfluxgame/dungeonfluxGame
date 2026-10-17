@@ -297,6 +297,7 @@ async fn a_superseded_event_leaves_recall_but_stays_in_the_record_and_the_entity
 async fn the_same_source_event_written_twice_is_stored_once() {
     let memory = memory_with(None);
     let line = rpc::TableLine {
+        roll: None,
         sequence: 7,
         speaker: "Marek".to_owned(),
         role: rpc::TableRole::Npc as i32,

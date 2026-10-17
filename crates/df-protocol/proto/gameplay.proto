@@ -129,7 +129,11 @@ enum TableRole { TABLE_ROLE_UNSPECIFIED = 0; HERO = 1; NPC = 2; NARRATOR = 3; }
 enum TableKind { TABLE_KIND_UNSPECIFIED = 0; ACTION = 1; SPEECH = 2; }
 // Player view only: how a present NPC feels about this hero. attitude: 0 unknown, 1 hostile, 2 indifferent, 3 friendly (standard 2024 scale).
 message NpcStanding { string npc_id = 1; string name = 2; uint32 attitude = 3; string perceived_reaction = 4; }
-message TableLine { uint64 sequence = 1; string speaker = 2; TableRole role = 3; uint32 hero_index = 4; TableKind kind = 5; string text = 6; string actor_id = 7; }
+// What a d20 roll row carries for the shared display, so the table can show the die without reading its text. `faces` are the server's draws (two for advantage or disadvantage), `kept` is the face that counts, `modifier` is added to it for `total`, and `target_number` is the DC or AC named by `against` (unspecified when no number is known). `label` is the short name shown on the result card.
+enum RollKind { ROLL_KIND_UNSPECIFIED = 0; ROLL_KIND_CHECK = 1; ROLL_KIND_SAVE = 2; ROLL_KIND_ATTACK = 3; ROLL_KIND_DEATH_SAVE = 4; ROLL_KIND_STABILIZE = 5; ROLL_KIND_INITIATIVE = 6; }
+enum RollAgainst { ROLL_AGAINST_UNSPECIFIED = 0; ROLL_AGAINST_DC = 1; ROLL_AGAINST_AC = 2; }
+message TableRoll { repeated uint32 faces = 1; uint32 kept = 2; sint32 roll_mode = 3; sint32 modifier = 4; sint32 total = 5; RollAgainst against = 6; uint32 target_number = 7; bool succeeded = 8; string label = 9; RollKind kind = 10; }
+message TableLine { uint64 sequence = 1; string speaker = 2; TableRole role = 3; uint32 hero_index = 4; TableKind kind = 5; string text = 6; string actor_id = 7; TableRoll roll = 8; }
 
 service DialogueService {
   rpc Submit(RawDialogueRequest) returns (DialogueResponse);

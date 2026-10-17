@@ -78,41 +78,63 @@ clip, or two different clips for advantage or disadvantage with the counted one 
 The die tumbles, comes to rest, and at the clip's own rest time (--dice-rest, set per
 roll from the manifest) the server's number appears on the upward face, positioned,
 scaled and rotated from the manifest's face coordinates; then the roll card resolves.
-The number is only ever the server's. A shortened catch-up beat and reduced motion show
-the resting frame with the number at once; a roll whose clip is not ready shows the card
-and never waits. After the rest the die leaves (fade), and a new roll clears first, so
-an old number never stands on screen.
+The number is only ever the server's. The clip plays whatever the machine's reduced-motion
+preference says (a shared screen's one indispensable visual; the pane that showed only the
+resting frame reported "reduce"); a roll whose clip is not ready shows the resting frame,
+animated, and never waits. After the rest the die stays for its hold (--dice-hold) and leaves
+(fade), and a new roll takes the old dice down first, so two rolls never share the screen.
+Dice are large: at least 22% of the stage height, centred.
 Stacking order, lowest first: the flat stage paints its scene and figures at z 3 and
 below, the dice ride at z 3 (appended last, so above the figures), and every flat HUD
 card paints above them (roll panel z 4, narrator box and big cards z 7/8, bubbles z 9),
 so a die never covers a roll card, turn label, health card or bubble. The 3D battlefield
 is a fixed overlay at z 40 over the whole stage: while it is mounted the dice join the
-attack card's row at the bottom centre of its HUD (see live_dice.rs and
-live_battlefield.css). The toast (z 60) and the loading splash (z 41) stay above
+battlefield's own container, centred, above its canvas (z 0) and below its HUD (z 2)
+(see live_dice.rs and live_battlefield.css). A scene roll (.tv-roll, the die and its result
+card for a check, a save or a contest outside a fight) rides the stage at z 6: above the
+plate (3-5) and its scrim, below the subtitle lane, lower third and choices (7). The toast (z 60) and the loading splash (z 41) stay above
 everything. The overlay is DOM, so it is in front of the scene at every fight camera. */
-.tv-dice{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:calc(var(--u)*3);z-index:3;pointer-events:none;animation:tv-dice-leave 320ms ease forwards;animation-delay:calc(var(--dice-rest,900ms) + 800ms)}
+.tv-dice{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:calc(var(--u)*3);z-index:3;pointer-events:none;animation:tv-dice-leave 320ms ease forwards;animation-delay:calc(var(--dice-rest,900ms) + var(--dice-hold,800ms))}
 @keyframes tv-dice-leave{to{opacity:0}}
 /* No background here: the drawn die (dark square) is gone; the clip paints the die. */
-.tv-die{position:relative;width:calc(var(--u)*13);height:calc(var(--u)*13)}
-.tv-die[data-kept="true"]{outline:calc(var(--u)*0.35) solid #e8cb94}
-.tv-die[data-kept="false"]{width:calc(var(--u)*8);height:calc(var(--u)*8);opacity:.72}
+/* The clip's square is mostly empty margin: the die itself fills about 42% of it, so a square
+of 52vh puts a die of about 22vh (22% of the stage height) on screen. */
+.tv-die{position:relative;--die-size:min(52vh,38vw);width:var(--die-size);height:var(--die-size)}
+.tv-die[data-kept="false"]{opacity:.55}
+.combat-roll-panel>.tv-dice .tv-die{--die-size:calc(var(--u)*13)}
+.combat-roll-panel>.tv-dice .tv-die[data-kept="false"]{--die-size:calc(var(--u)*8);opacity:.72}
+.combat-roll-panel>.tv-dice .tv-die[data-kept="true"]{outline:calc(var(--u)*0.35) solid #e8cb94}
 .tv-die[data-nat="20"]{outline-color:#ffe9b0}
 .tv-die[data-nat="1"]{outline-color:#d96a4b}
 .tv-die-clip,.tv-die-canvas{position:absolute;inset:0;width:100%;height:100%}
 .tv-die-src{display:none}
 .tv-die-rest{position:absolute;inset:0;width:100%;height:100%;display:none}
-.tv-die[data-still] .tv-die-rest{display:block}
+.tv-die[data-still] .tv-die-rest{display:block;animation:tv-die-tumble 1.1s cubic-bezier(.2,.7,.3,1) both}
+@keyframes tv-die-tumble{0%{transform:translateY(-30%) rotate(-540deg) scale(.55);opacity:0}55%{opacity:1}100%{transform:none;opacity:1}}
 .tv-die[data-stalled] .tv-die-clip,.tv-die[data-stalled] .tv-die-canvas{display:none}
 .tv-die[data-stalled] .tv-die-rest{display:block}
 .tv-die-num{position:absolute;display:flex;align-items:center;justify-content:center;color:var(--gold);font-family:var(--serif);line-height:1;opacity:0;text-shadow:0 2px 18px #000}
 .tv-die-num[data-settled]{opacity:1}
 .tv-die-num[data-nat="20"]{color:#ffe9b0}
 .tv-die-num[data-nat="1"]{color:#e08a63}
-/* Reduced motion without a media-query binding in the client: the probe element the
-client reads (see live_dice.rs). The rules below stay the backstop and hide any playing
-clip regardless of what the client decided. */
-.tv-motion-probe{position:absolute;width:0;height:0;overflow:hidden;pointer-events:none}
-@media (prefers-reduced-motion:reduce){.tv-motion-probe{width:7px}.tv-dice{animation:none}.tv-die-clip,.tv-die-canvas{display:none}.tv-die-rest{display:block!important}.tv-die-num{opacity:1!important}}
+/* A scene roll: the die (or two) large and centred over the stage, the server's number
+landing on the face at the clip's rest time, then the result card (label, sum against the
+DC or AC, verdict), held for its reading time and faded by the line machine. */
+.tv-roll{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);z-index:6;display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*1.4);pointer-events:none;animation:tv-roll-in 260ms ease both}
+@keyframes tv-roll-in{from{opacity:0}to{opacity:1}}
+@keyframes tv-roll-out{to{opacity:0}}
+.tv-roll[data-phase=closing]{animation:tv-roll-out 320ms ease forwards}
+.tv-roll-dice{display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*3)}
+.tv-roll[data-dice="2"] .tv-die[data-kept="true"]::before,.tv-dice:is([data-mode=advantage],[data-mode=disadvantage]) .tv-die[data-kept="true"]::before{content:"";position:absolute;left:50%;top:49%;width:52%;height:52%;transform:translate(-50%,-50%);border:max(3px,.5vh) solid #e8cb94;border-radius:50%;box-shadow:0 0 3vh #e8cb94aa}
+.tv-roll[data-dice="2"] .tv-die[data-kept="true"]::after,.tv-dice:is([data-mode=advantage],[data-mode=disadvantage]) .tv-die[data-kept="true"]::after{content:"counts";position:absolute;left:50%;top:78%;transform:translateX(-50%);font:700 calc(var(--u)*1.6)/1 var(--serif);letter-spacing:.2em;text-transform:uppercase;color:#e8cb94;text-shadow:0 2px 10px #000}
+.tv-roll-card{margin-top:-9vh;min-width:34vw;max-width:62vw;padding:calc(var(--u)*1) calc(var(--u)*2.6);text-align:center;background:linear-gradient(135deg,#0b1623f2,#050b13f5);border:1px solid #c9a35fb3;border-radius:calc(var(--u)*.8);box-shadow:0 .6vh 3vh #000a;opacity:0;transform:translateY(calc(var(--u)*1));transition:opacity .3s ease,transform .3s ease}
+.tv-roll[data-phase=result] .tv-roll-card,.tv-roll[data-phase=closing] .tv-roll-card{opacity:1;transform:none}
+.tv-roll-label{margin:0;font-size:calc(var(--u)*2.2);letter-spacing:.06em;color:var(--gold)}
+.tv-roll-sum{margin:calc(var(--u)*.3) 0;font-size:calc(var(--u)*3.4);font-weight:700;color:var(--ivory)}
+.tv-roll-verdict{margin:0;font-size:calc(var(--u)*2.8);letter-spacing:.18em;text-transform:uppercase}
+.tv-roll-verdict:empty{display:none}
+.tv-roll-verdict[data-verdict=success]{color:#bfe0b4}
+.tv-roll-verdict[data-verdict=failure]{color:#e7a39a}
 /* FIGHT-001: on the flat stage the dice join the roll panel in flow, so they never cover
 its text and never hide behind it. The panel is a flex column; the dice ride centered
 above its entries. */

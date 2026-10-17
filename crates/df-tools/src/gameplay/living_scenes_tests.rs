@@ -904,6 +904,7 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     }),
                     table_log: vec![
                         rpc::TableLine {
+                            roll: None,
                             actor_id: String::new(),
                             sequence: 1,
                             speaker: "Hero".to_owned(),
@@ -913,6 +914,7 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                             text: "private words never read".to_owned(),
                         },
                         rpc::TableLine {
+                            roll: None,
                             actor_id: String::new(),
                             sequence: 2,
                             speaker: "Brakka".to_owned(),

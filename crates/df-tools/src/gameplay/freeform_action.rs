@@ -26,7 +26,7 @@ use super::{
     beat_script_runtime, hero_identity, journey, pack, pack_contents,
     social::{Appraisal, Approach, EmotionLevel, EmotionReaction, SocialLedger},
     storyteller::{CallProfile, Expression, Slot, Storyteller},
-    table_log::TableLog,
+    table_log::{RollRow, TableLog},
 };
 
 /// The stat block of every scene NPC until one is authored (Commoner-like). One place, so a later
@@ -959,6 +959,7 @@ fn skill_label(skill: &str) -> &'static str {
 /// A d20 check shown on the table as one roll row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CheckRecord {
+    pub(super) kind: rpc::RollKind,
     pub(super) subject: String,
     pub(super) label: String,
     pub(super) die: u8,
@@ -985,6 +986,35 @@ impl CheckRecord {
             self.number,
             self.result,
         )
+    }
+
+    /// The roll row for a single d20: its text and the structured roll the display plays.
+    pub(super) fn row(&self) -> RollRow {
+        self.row_with_draws(&[self.die], 0)
+    }
+
+    /// The roll row for a roll whose draws are known: two faces for Advantage (`roll_mode` 1) or
+    /// Disadvantage (`roll_mode` -1), of which `self.die` is the one that counted.
+    pub(super) fn row_with_draws(&self, faces: &[u8], roll_mode: i32) -> RollRow {
+        RollRow {
+            text: self.line(),
+            roll: Some(rpc::TableRoll {
+                faces: faces.iter().map(|face| u32::from(*face)).collect(),
+                kept: u32::from(self.die),
+                roll_mode,
+                modifier: self.modifier,
+                total: self.total,
+                against: match self.against {
+                    "DC" => rpc::RollAgainst::Dc,
+                    "AC" => rpc::RollAgainst::Ac,
+                    _ => rpc::RollAgainst::Unspecified,
+                } as i32,
+                target_number: u32::try_from(self.number).unwrap_or_default(),
+                succeeded: self.success,
+                label: super::table_log::roll_label(&self.subject, &self.label),
+                kind: self.kind as i32,
+            }),
+        }
     }
 }
 
@@ -1448,6 +1478,7 @@ fn decide(
             let roll = check("stealth", die, dc_byte).ok_or(Unavailable)?;
             // TODO(scene-state): persist the hidden state until the hero moves or is noticed.
             let record = CheckRecord {
+                kind: rpc::RollKind::Check,
                 subject: hero.to_owned(),
                 label: "Dexterity (Stealth)".to_owned(),
                 die,
@@ -1476,6 +1507,7 @@ fn decide(
                 let total = i32::from(die) + modifier;
                 let saved = total >= dc;
                 let record = CheckRecord {
+                    kind: rpc::RollKind::Save,
                     subject: target.name.clone(),
                     label: label.to_owned(),
                     die,
@@ -1509,6 +1541,7 @@ fn decide(
                 let total = i32::from(die) + modifier;
                 let hit = die == 20 || (die != 1 && total >= SCENE_NPC_ARMOR_CLASS);
                 let record = CheckRecord {
+                    kind: rpc::RollKind::Attack,
                     subject: hero.to_owned(),
                     label: "Strength (unarmed strike)".to_owned(),
                     die,
@@ -1562,6 +1595,7 @@ fn difficulty_roll(
     let dc_byte = u8::try_from(dc).map_err(|_| Unavailable)?;
     let roll = check(skill, die, dc_byte).ok_or(Unavailable)?;
     Ok(Some(CheckRecord {
+        kind: rpc::RollKind::Check,
         subject: hero.to_owned(),
         label: skill_label(skill).to_owned(),
         die,
@@ -2100,7 +2134,7 @@ pub(super) fn publish_hero_line(log: &TableLog, hero: &str, hero_index: u32, typ
 pub(super) fn publish_outcome(
     log: &TableLog,
     hero_index: u32,
-    roll: Option<&str>,
+    roll: Option<impl Into<RollRow>>,
     narration: &str,
 ) {
     if let Some(roll) = roll {

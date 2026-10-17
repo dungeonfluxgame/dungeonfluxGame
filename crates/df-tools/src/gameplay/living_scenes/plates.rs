@@ -38,6 +38,7 @@ use super::{
             flux_scene_plate, hero_locator_phrase, plate_moment, scene_plate,
         },
         pack::{self, Age, Gender, SceneKey},
+        place,
         scene_mood::Face,
         shot::{
             self, ActorHead, HeroHead, PlateLayout, PlatePlacement, ShotError, ShotInput, ShotSpec,
@@ -390,7 +391,9 @@ pub(super) fn locate(
                 .iter()
                 .filter(|scene| matches(scene, &scene.asset));
             let Some(scene) = candidates.next() else {
-                return Err(LookupFailure::MissingBaseScene);
+                // A place the run created is not in the pack; the session owner published it.
+                return place::registered(title, asset, source)
+                    .ok_or(LookupFailure::MissingBaseScene);
             };
             if candidates.next().is_some() {
                 return Err(LookupFailure::AmbiguousBaseScene);

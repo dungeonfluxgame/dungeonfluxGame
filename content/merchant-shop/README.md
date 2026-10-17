@@ -26,6 +26,14 @@ people who fled are gone. Heroes at 0 hit points are Stable; if every hero is do
 drags them out or the survivors leave them. Loot is not modelled.
 Native scene interactions persist independently in the existing checkpoint journal.
 
+The street door leads out of the pack: its `beyond_place_id` is `none`, so the first time a hero
+goes through it the narrative engine creates the place beyond (the market street) from the
+shop's setting, the canon its people have spoken and the story memory, and keeps it as a journal
+entry of the run (`planning/narrative-engine.md`, Places and exits). The shop stays in the world:
+the street's way back returns the party to this scene, and the door leads to the same street
+every time. `dev place` shows the exits and the known places; `dev place go street-door` moves the
+party for testing.
+
 The serialized content contains only the room and store-entry scenes, their two
 creation/entry labels and the observation loop. Tuning contains only the schema,
 pack identity and core character creation rules. The record owns one

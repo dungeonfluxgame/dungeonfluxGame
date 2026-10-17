@@ -33,6 +33,7 @@ mod reconnect;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sound_switch;
 mod speech_clip;
+mod table_roll;
 mod voice_line;
 
 // PLAY-L01: when a same-revision display view may replace the shown one (generated art only).
@@ -46,7 +47,11 @@ mod presentation;
 mod scene_script;
 // FIGHT-001: pure dice-face plan shared by the TV overlay and the phone mini, unit-tested.
 #[cfg(any(target_arch = "wasm32", test))]
+mod combat_beats;
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod dice_roll;
+#[cfg(any(target_arch = "wasm32", test))]
+mod roll_card;
 #[cfg(any(target_arch = "wasm32", test))]
 mod speech_capture;
 // PLAY-H01: the one definition of the health tiers, shared by the server and both clients.

@@ -79,6 +79,9 @@ pub(crate) struct Cue<D> {
     keep: bool,
     short: bool,
     queued_ms: u64,
+    /// How many blows were already playing or waiting ahead of this cue when it was queued: the
+    /// wait they explain is not lag (see `combat_beats::excess_lag_ms`).
+    ahead_blows: u32,
     /// The server's beat sequence this cue belongs to (`CombatOutcome.sequence`); 0 is no beat.
     sequence: u64,
     skip_reason: Option<&'static str>,
@@ -237,10 +240,17 @@ fn phase_kind(state: StageState) -> &'static str {
     }
 }
 
-/// The longest a blow waits for the battlefield to finish the one before it.
-pub(crate) const ROLLING_MS: u32 = 1_150;
+/// The die's tumble: a blow's d20 lands within this, whether or not the display is behind. A
+/// roll's die is never skipped or cut short, so catch-up leaves this alone.
+pub(crate) const ROLLING_MS: u32 = crate::dice_roll::FIGHT_REST_BUDGET_MS as u32;
 const TURN_CUE_MS: u32 = 650;
-const IMPACT_CUE_MS: u32 = 650;
+/// The result after the die lands: the roll card is held for three seconds and the die fades,
+/// so Rolling and Impact together are one whole d20 beat and the next blow's die can start
+/// only after this one has gone. A display that is behind holds it for two.
+pub(crate) const IMPACT_CUE_MS: u32 =
+    (crate::dice_roll::fight_beat_ms(false) - crate::dice_roll::FIGHT_REST_BUDGET_MS) as u32;
+const IMPACT_CUE_CATCH_UP_MS: u32 =
+    (crate::dice_roll::fight_beat_ms(true) - crate::dice_roll::FIGHT_REST_BUDGET_MS) as u32;
 const BATTLEFIELD_WAIT_CAP_MS: u64 = 20_000;
 
 impl<D: Clone> Default for StageDirector<D> {
@@ -410,8 +420,34 @@ impl<D: Clone> StageDirector<D> {
             keep: false,
             short: false,
             queued_ms: now_ms,
+            ahead_blows: 0,
             sequence,
             skip_reason: None,
+        }
+    }
+
+    /// Blows already playing or waiting, for the cues about to be queued behind them.
+    fn blows_ahead(&self) -> u32 {
+        let waiting = self
+            .queue
+            .iter()
+            .filter(|cue| cue.kind == CueKind::Roll)
+            .count();
+        let playing = self
+            .active
+            .as_ref()
+            .is_some_and(|active| matches!(active.state, StageState::Rolling | StageState::Impact));
+        u32::try_from(waiting + usize::from(playing)).unwrap_or(u32::MAX)
+    }
+
+    /// Stamps new cues with the blows ahead of them, each Roll adding one for those after it.
+    fn stamp_blows_ahead(&self, cues: &mut [Cue<D>]) {
+        let mut ahead = self.blows_ahead();
+        for cue in cues.iter_mut() {
+            cue.ahead_blows = ahead;
+            if cue.kind == CueKind::Roll {
+                ahead += 1;
+            }
         }
     }
 
@@ -514,6 +550,7 @@ impl<D: Clone> StageDirector<D> {
                 }
             }
         }
+        self.stamp_blows_ahead(&mut cues);
         self.queue.extend(cues);
         self.collapse_if_behind(now_ms);
         self.advance(now_ms)
@@ -534,6 +571,7 @@ impl<D: Clone> StageDirector<D> {
         Self::mark_unskippable(&mut cues, memorable);
         let redraw_queued = self.queue.iter().any(|cue| cue.kind == CueKind::Render);
         self.queue.retain(|cue| cue.kind != CueKind::Render);
+        self.stamp_blows_ahead(&mut cues);
         self.queue.extend(cues);
         if redraw_queued {
             self.queue
@@ -587,6 +625,25 @@ impl<D: Clone> StageDirector<D> {
             .iter()
             .filter(|cue| cue.kind == CueKind::Roll)
             .count();
+        // A display more than a few seconds behind what the blows ahead of a cue explain plays
+        // it shortened, so the display catches up. Every roll's die and result still show:
+        // nothing is dropped at this stage (see the skip rule below for the extreme).
+        for cue in self.queue.iter_mut().filter(|cue| {
+            matches!(
+                cue.kind,
+                CueKind::Roll | CueKind::Turn | CueKind::Impact | CueKind::Defeat
+            )
+        }) {
+            let waited = now_ms.saturating_sub(cue.queued_ms);
+            let excess = crate::combat_beats::excess_lag_ms(
+                waited,
+                usize::try_from(cue.ahead_blows).unwrap_or(0),
+            );
+            if crate::combat_beats::catch_up_for(excess) == crate::combat_beats::CatchUp::Shortened
+            {
+                cue.short = true;
+            }
+        }
         let combat = self.queue.iter().any(|cue| {
             matches!(
                 cue.kind,
@@ -717,15 +774,16 @@ impl<D: Clone> StageDirector<D> {
 
     fn begin(&mut self, now_ms: u64, cue: &Cue<D>, state: StageState) -> (Active<D>, Command<D>) {
         let (minimum_ms, maximum_ms) = match state {
-            StageState::Rolling => (
-                shorten(ROLLING_MS, cue.short, 3),
-                shorten(ROLLING_MS, cue.short, 3),
-            ),
+            StageState::Rolling => (ROLLING_MS, ROLLING_MS),
             StageState::Turn => (TURN_CUE_MS, TURN_CUE_MS),
-            StageState::Impact => (
-                shorten(IMPACT_CUE_MS, cue.short, 3),
-                shorten(IMPACT_CUE_MS, cue.short, 3),
-            ),
+            StageState::Impact => {
+                let impact = if cue.short {
+                    IMPACT_CUE_CATCH_UP_MS
+                } else {
+                    IMPACT_CUE_MS
+                };
+                (impact, impact)
+            }
             StageState::Defeat => (
                 shorten(DEFEAT_HOLD_MS, cue.short, 3),
                 shorten(DEFEAT_HOLD_MS, cue.short, 3),
@@ -889,6 +947,7 @@ impl<D: Clone> StageDirector<D> {
                 keep: false,
                 short: ended.short,
                 queued_ms: ended.started_ms,
+                ahead_blows: 0,
                 sequence: ended.sequence,
                 skip_reason: None,
             },
@@ -995,6 +1054,111 @@ mod tests {
         stuck.set_battlefield_busy(true);
         let all = run(&mut stuck, 50, 40_000);
         assert_eq!(rolls(&all), 1);
+    }
+
+    /// The times, to the tick, at which each state of the blows began.
+    fn state_times(
+        director: &mut Director,
+        mut commands: Vec<Command<&'static str>>,
+        from_ms: u64,
+        until_ms: u64,
+    ) -> Vec<(u64, String)> {
+        let mut times = Vec::new();
+        let mut now = from_ms;
+        loop {
+            for command in commands.drain(..) {
+                match command {
+                    Command::Enter { state, .. } => times.push((now, format!("{state:?}"))),
+                    Command::Rest => times.push((now, "Rest".to_owned())),
+                    _ => {}
+                }
+            }
+            now += 50;
+            if now > until_ms {
+                return times;
+            }
+            commands = director.on_tick(now);
+        }
+    }
+
+    #[test]
+    fn each_blow_is_one_whole_d20_beat_so_two_dice_never_share_the_screen() {
+        let mut director = Director::new();
+        director.set_battlefield_busy(false);
+        let mut commands = director.on_view(0, blow("first"));
+        commands.extend(director.on_view(0, blow("second")));
+        let times = state_times(&mut director, commands, 0, 15_000);
+        let rolls: Vec<u64> = times
+            .iter()
+            .filter(|(_, state)| state == "Rolling")
+            .map(|(at, _)| *at)
+            .collect();
+        assert_eq!(rolls.len(), 2, "{times:?}");
+        // The die tumbles, the result is held three seconds, the die fades: only then the next.
+        let beat = crate::dice_roll::fight_beat_ms(false);
+        assert!(rolls[1] - rolls[0] >= beat, "{times:?}");
+        assert!(rolls[1] - rolls[0] <= beat + 100, "no idle gap: {times:?}");
+        let impact = times
+            .iter()
+            .find(|(_, state)| state == "Impact")
+            .map(|(at, _)| *at)
+            .expect("the first blow's result");
+        assert_eq!(
+            impact - rolls[0],
+            u64::from(ROLLING_MS),
+            "the result follows when the die has rested"
+        );
+    }
+
+    #[test]
+    fn a_display_behind_its_queue_shortens_the_hold_but_never_the_tumble() {
+        let mut director = Director::new();
+        director.set_battlefield_busy(false);
+        let mut commands = director.on_view(0, blow("first"));
+        commands.extend(director.on_view(0, blow("second")));
+        // The battlefield stalls with the first blow: the second waits far longer than one
+        // blow ahead of it explains, so it plays shortened when it finally starts.
+        director.set_battlefield_busy(true);
+        let mut times = state_times(&mut director, commands, 0, 14_000);
+        director.set_battlefield_busy(false);
+        let later = director.on_tick(14_050);
+        let shortened = later.iter().any(|command| {
+            matches!(
+                command,
+                Command::Enter {
+                    state: StageState::Rolling,
+                    short: true,
+                    ..
+                }
+            )
+        });
+        assert!(shortened, "{later:?} after {times:?}");
+        times.extend(state_times(&mut director, later, 14_050, 24_000));
+        let after_wait: Vec<&(u64, String)> =
+            times.iter().filter(|(at, _)| *at >= 14_000).collect();
+        let rolling = after_wait
+            .iter()
+            .find(|(_, state)| state == "Rolling")
+            .map(|(at, _)| *at)
+            .expect("the second die tumbles");
+        let impact = after_wait
+            .iter()
+            .find(|(_, state)| state == "Impact")
+            .map(|(at, _)| *at)
+            .expect("and its result shows");
+        assert_eq!(impact - rolling, u64::from(ROLLING_MS), "never shortened");
+        let rest = after_wait
+            .iter()
+            .find(|(at, state)| state == "Rest" && *at > impact)
+            .map(|(at, _)| *at)
+            .expect("then it ends");
+        let held = rest - impact;
+        assert!(
+            (u64::from(IMPACT_CUE_CATCH_UP_MS)..u64::from(IMPACT_CUE_CATCH_UP_MS) + 50)
+                .contains(&held),
+            "held {held} ms"
+        );
+        assert!(IMPACT_CUE_CATCH_UP_MS < IMPACT_CUE_MS);
     }
 
     #[test]
@@ -1134,7 +1298,7 @@ mod tests {
                 ..ViewDiff::default()
             },
         ));
-        commands.extend(run(&mut director, LAG_LIMIT_MS + 2, 8_000));
+        commands.extend(run(&mut director, LAG_LIMIT_MS + 2, 16_000));
 
         let second_blow = commands
             .iter()
@@ -1347,7 +1511,7 @@ mod tests {
         for (n, label) in labels.iter().enumerate() {
             commands.extend(director.on_view((n as u64) * 100, blow(label)));
         }
-        commands.extend(run(&mut director, 800, 12_000));
+        commands.extend(run(&mut director, 800, 40_000));
         let staged = rolling_labels(&commands);
         // The first blow was already on screen and the newest is what the table converges on.
         assert_eq!(staged.first(), Some(&"b0"));
@@ -1378,7 +1542,7 @@ mod tests {
         commands.extend(director.on_view(500, blow("turn-f")));
         commands.extend(director.on_view(600, blow("turn-g")));
         commands.extend(director.on_view(700, blow("turn-h")));
-        commands.extend(run(&mut director, 750, 14_000));
+        commands.extend(run(&mut director, 750, 40_000));
         let staged = rolling_labels(&commands);
         // The ordinary early turns are skipped, but the critical hit plays in order and the
         // newest turn is always staged, so the label lands on the server's turn.
@@ -1425,12 +1589,12 @@ mod tests {
                 ..ViewDiff::default()
             },
         );
-        // Rolling 1.15 s and the impact 0.65 s come first; the defeat then holds 2.5 s.
-        run(&mut director, 50, 1_850);
+        // The die tumbles 1.5 s and its result is held 3.32 s first; the defeat then holds 2.5 s.
+        run(&mut director, 50, 4_850);
         assert_eq!(director.state(), StageState::Defeat);
-        run(&mut director, 1_900, 4_250);
+        run(&mut director, 4_900, 7_300);
         assert_eq!(director.state(), StageState::Defeat);
-        run(&mut director, 4_300, 4_450);
+        run(&mut director, 7_350, 7_450);
         assert_eq!(director.state(), StageState::Idle);
     }
 
@@ -1484,10 +1648,10 @@ mod tests {
         director.on_view(0, sequenced_blow(3, "blow"));
         assert_eq!(director.latest, 3);
         assert_eq!(director.presented_sequence(), 0);
-        // The roll (1.15 s) ending is not the beat presented; the impact is still to come.
-        run(&mut director, 50, 1_200);
+        // The roll (1.5 s) ending is not the beat presented; the impact is still to come.
+        run(&mut director, 50, 1_550);
         assert_eq!(director.presented_sequence(), 0);
-        run(&mut director, 1_250, 2_000);
+        run(&mut director, 1_600, 4_900);
         assert_eq!(director.presented_sequence(), 3);
         let kinds: Vec<&str> = director
             .beat_log()
@@ -1509,7 +1673,7 @@ mod tests {
         let mut director = Director::new();
         director.on_view(0, sequenced_blow(3, "bite"));
         director.set_battlefield_busy(true);
-        run(&mut director, 50, 1_200);
+        run(&mut director, 50, 1_600);
         assert_eq!(director.state(), StageState::Impact);
         assert_eq!(director.presented_sequence(), 0);
 
@@ -1525,9 +1689,9 @@ mod tests {
         director.observe_presented(2);
         director.on_view(0, sequenced_blow(3, "Weasel 1"));
         assert_eq!(director.presented_sequence(), 2);
-        run(&mut director, 50, 1_750);
+        run(&mut director, 50, 4_750);
         assert_eq!(director.presented_sequence(), 2);
-        run(&mut director, 1_800, 2_000);
+        run(&mut director, 4_800, 4_900);
         assert_eq!(director.presented_sequence(), 3);
     }
 
@@ -1543,7 +1707,7 @@ mod tests {
             0,
             "skip is not applied ahead of the first hit"
         );
-        commands.extend(run(&mut director, 50, 10_000));
+        commands.extend(run(&mut director, 50, 30_000));
         assert!(
             commands
                 .iter()
@@ -1567,12 +1731,12 @@ mod tests {
     fn a_replayed_beat_is_never_staged_twice() {
         let mut director = Director::new();
         director.on_view(0, sequenced_blow(1, "first"));
-        run(&mut director, 50, 2_000);
+        run(&mut director, 50, 5_000);
         assert_eq!(director.presented_sequence(), 1);
         // The same view again (a duplicate, a reconnect): no roll is staged again.
-        let commands = director.on_view(2_100, sequenced_blow(1, "first"));
+        let commands = director.on_view(5_100, sequenced_blow(1, "first"));
         assert!(!states(&commands).iter().any(|state| state == "Rolling"));
-        run(&mut director, 2_150, 4_000);
+        run(&mut director, 5_150, 7_000);
         assert_eq!(director.presented_sequence(), 1);
         assert_eq!(director.beat_log().len(), 2);
     }
@@ -1581,13 +1745,13 @@ mod tests {
     fn a_new_fight_restarts_the_sequence() {
         let mut director = Director::new();
         director.on_view(0, sequenced_blow(9, "old"));
-        run(&mut director, 50, 2_000);
+        run(&mut director, 50, 5_000);
         assert_eq!(director.presented_sequence(), 9);
         let mut opening = sequenced_blow(1, "new");
         opening.enters_combat = true;
-        director.on_view(2_100, opening);
+        director.on_view(5_100, opening);
         assert_eq!(director.latest, 1);
-        run(&mut director, 2_150, 4_500);
+        run(&mut director, 5_150, 10_500);
         assert_eq!(director.presented_sequence(), 1);
     }
 
@@ -1600,7 +1764,7 @@ mod tests {
         assert_eq!(director.state(), StageState::Idle);
         assert!(!director.is_idle());
         director.set_battlefield_busy(false);
-        run(&mut director, 50, 2_500);
+        run(&mut director, 50, 5_000);
         assert!(director.is_idle());
         assert_eq!(director.presented_sequence(), 1);
     }
@@ -1624,7 +1788,7 @@ mod tests {
 
         let mut commands = director.on_view(0, first);
         commands.extend(director.on_blow(0, finishing));
-        commands.extend(run(&mut director, 50, 10_000));
+        commands.extend(run(&mut director, 50, 30_000));
 
         let finishing_defeat = commands.iter().position(|command| {
             matches!(

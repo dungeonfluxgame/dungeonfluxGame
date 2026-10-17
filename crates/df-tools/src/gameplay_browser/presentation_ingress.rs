@@ -224,6 +224,7 @@ fn presentation_fields(
             "visible_held_ms".to_owned(),
             serde_json::json!(event.visible_held_ms),
         );
+        fields.insert("lag_ms".to_owned(), serde_json::json!(event.lag_ms));
     }
     let mut attributes = vec![
         (
@@ -286,6 +287,9 @@ fn presentation_fields(
                 "gameplay.presentation.visible_held_ms",
                 visible_held_ms.to_string(),
             ));
+        }
+        if let Some(lag_ms) = event.lag_ms {
+            attributes.push(("gameplay.presentation.lag_ms", lag_ms.to_string()));
         }
     }
     if let Some(details) = &event.visual_source {

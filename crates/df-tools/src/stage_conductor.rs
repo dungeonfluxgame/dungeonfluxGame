@@ -40,8 +40,14 @@ const BEAT_SPEECH_CAP_MS: u64 = 10_000;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LineTiming {
     Ordinary,
-    CheckRoll { reveal_ms: u32 },
+    CheckRoll {
+        reveal_ms: u32,
+    },
     CheckResult,
+    /// A server d20 roll's die and result card: silent, it opens at once, stays for its whole
+    /// `read_ms` (the die's tumble and the card's hold) with no speech linger, and is never
+    /// skipped by catch-up (a roll's die and result always show).
+    Dice,
 }
 
 /// One line a view puts on the stage. The payload is opaque to the conductor.
@@ -1458,7 +1464,7 @@ impl<D: Clone> Conductor<D> {
                     in_state >= u64::from(run.line.read_ms)
                 } else if let LineTiming::CheckRoll { reveal_ms } = run.line.timing {
                     in_state >= u64::from(reveal_ms)
-                } else if run.line.timing == LineTiming::CheckResult {
+                } else if matches!(run.line.timing, LineTiming::CheckResult | LineTiming::Dice) {
                     true
                 } else if has_next {
                     let linger = if catching_up {
@@ -1496,7 +1502,10 @@ impl<D: Clone> Conductor<D> {
             run.clip = next;
         }
         let read = run.opened_ms.is_some_and(|opened| {
-            let entrance_ms = if matches!(run.line.timing, LineTiming::CheckRoll { .. }) {
+            let entrance_ms = if matches!(
+                run.line.timing,
+                LineTiming::CheckRoll { .. } | LineTiming::Dice
+            ) {
                 0
             } else {
                 LINE_OPEN_MS
@@ -1525,7 +1534,12 @@ impl<D: Clone> Conductor<D> {
         else {
             return;
         };
-        if catching_up {
+        if catching_up
+            && self
+                .lines
+                .get(index)
+                .is_some_and(|run| run.line.timing != LineTiming::Dice)
+        {
             let Some(snapshot) = self.lines.get(index).cloned() else {
                 return;
             };
@@ -1922,6 +1936,53 @@ mod tests {
         assert_eq!(harness.play_at("result"), None);
     }
 
+    fn dice_script(read_ms: u32) -> Vec<ScriptLine<&'static str>> {
+        let mut dice = line("dice", false, None);
+        dice.read_ms = read_ms;
+        dice.timing = LineTiming::Dice;
+        vec![
+            line("hero line", false, None),
+            dice,
+            line("reply", false, None),
+        ]
+    }
+
+    #[test]
+    fn a_dice_line_holds_its_whole_read_time_between_the_heros_line_and_the_reply() {
+        let mut harness = Harness::new(Voice::working(1_000), true, dice_script(5_000), vec![]);
+        harness.run_to(40_000);
+        let hero_done = harness.line_at("hero line", LineState::Closing).unwrap();
+        let opened = harness.opened("dice").expect("the die opens");
+        assert!(opened >= hero_done, "the die follows the hero's line");
+        let finished = harness.line_at("dice", LineState::Lingering).unwrap();
+        assert_eq!(finished, opened + 5_000, "no speech entrance, no linger");
+        let reply = harness.opened("reply").expect("the reply opens");
+        assert!(reply >= finished, "the outcome never comes before the die");
+        assert!(
+            reply - finished <= 700,
+            "and follows it without a speech linger"
+        );
+    }
+
+    #[test]
+    fn a_dice_line_is_never_skipped_by_catch_up() {
+        let mut conductor: Conductor<&'static str> = Conductor::new();
+        conductor.scene = SceneState::Presenting;
+        let mut dice = line("dice", false, None);
+        dice.timing = LineTiming::Dice;
+        dice.read_ms = 4_000;
+        let run = conductor.make_run(dice, 0);
+        conductor.lines.push(run);
+        let mut out = Vec::new();
+        conductor.start_next_line(0, true, &mut out);
+        assert_eq!(conductor.lines[0].state, LineState::Opening);
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Skip { .. })),
+            "a roll's die and result always show"
+        );
+    }
+
     #[test]
     fn consecutive_managed_checks_wait_for_each_results_complete_reading_window() {
         let mut script = managed_check_script(5_000);
@@ -2279,8 +2340,9 @@ mod tests {
     fn live_a_voice_without_an_end_signal_holds_the_next_blow_only_to_the_cap() {
         for (length_ms, before_ms, deadline_ms) in [
             (120_000, 9_000, BEAT_SPEECH_CAP_MS + 50),
-            (1_000, 1_700, 1_850),
-            (4_000, 3_900, 4_250),
+            // The first blow's whole d20 beat (die 1.5 s, result held 3.32 s) is over at 4.82 s.
+            (1_000, 4_700, 4_900),
+            (4_000, 4_700, 4_900),
         ] {
             let voice = Voice {
                 length_ms: None,
@@ -2384,7 +2446,7 @@ mod tests {
                     .on_clip(100, id.unwrap(), ClipSignal::Error);
                 harness.record(commands);
             }
-            harness.run_to(3_500);
+            harness.run_to(6_500);
             let second = harness
                 .log
                 .iter()
@@ -2397,7 +2459,8 @@ mod tests {
                     _ => None,
                 })
                 .expect("no wait for absent audio");
-            assert!(second <= 3_300, "sound={sound}, fails={fails}: {second}");
+            // Nothing waits for the absent voice: the second blow follows the first's d20 beat.
+            assert!(second <= 4_900, "sound={sound}, fails={fails}: {second}");
         }
     }
 
@@ -2425,7 +2488,7 @@ mod tests {
             script: Vec::new(),
             cast: Vec::new(),
         });
-        harness.run_to(4_000);
+        harness.run_to(7_000);
         let cues: Vec<_> = harness
             .log
             .iter()
@@ -3184,7 +3247,7 @@ mod tests {
             .conductor
             .on_battlefield(harness.now, Battlefield::Ready);
         harness.record(commands);
-        harness.run_to(harness.now + 3_000);
+        harness.run_to(harness.now + 8_000);
         let rolling = harness
             .entered(StageState::Rolling)
             .expect("the attack now plays");
@@ -3743,9 +3806,9 @@ mod tests {
         let leaving = harness
             .entered_after(StageState::LeavingScene, kill_at)
             .expect("released at the cap");
-        // The blow's cues (about 4.3 s) plus the cap bound the wait.
+        // The blow's cues (the d20 beat 4.82 s and the fall 2.5 s) plus the cap bound the wait.
         assert!(
-            leaving <= start + 4_500 + BATTLE_FINISH_CAP_MS + 500,
+            leaving <= start + 8_000 + BATTLE_FINISH_CAP_MS + 500,
             "{}",
             leaving - start
         );

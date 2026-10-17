@@ -67,6 +67,9 @@ mod npc_target;
 mod pack;
 mod pack_contents;
 mod plate_segments;
+mod place;
+mod place_creation;
+mod place_move;
 mod place_music;
 #[cfg(test)]
 mod pack_tests;

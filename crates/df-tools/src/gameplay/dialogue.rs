@@ -2471,14 +2471,23 @@ impl Service {
                 ),
             }
         }
+        // A move that goes out through one of the place's exits changes the party's place. The
+        // table is told only what was committed (`place_move`); otherwise the act is narrated as
+        // it stands, inside the place.
+        if let Some(moved) = self
+            .leave_by_freeform(credential, request, scene, &hero, hero_index, &resolution)
+            .await
+        {
+            return Ok(moved);
+        }
         let narration = freeform_action::narrate(storyteller, &resolution, &request.text).await;
         let roll = match &resolution.verdict {
             freeform_action::Verdict::Performed(performance) => {
-                performance.check.as_ref().map(|check| check.line())
+                performance.check.as_ref().map(|check| check.row())
             }
             _ => None,
         };
-        freeform_action::publish_outcome(&self.table_log, hero_index, roll.as_deref(), &narration);
+        freeform_action::publish_outcome(&self.table_log, hero_index, roll, &narration);
         let scene_key = format!("{:?}", scene.key);
         if freeform_action::apply_consequences(
             &self.social,

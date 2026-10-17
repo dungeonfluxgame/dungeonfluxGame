@@ -71,6 +71,8 @@ impl Drop for Capture {
 thread_local! {
     static CAPTURES: RefCell<Vec<Capture>> = const { RefCell::new(Vec::new()) };
     static NEXT_COMPONENT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    // The queue lag of the combat beat whose component record is written next.
+    static NEXT_LAG_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     // The join controls may be usable before a credential exists. Retain only their time;
     // uploading still waits for authenticated scope and the existing connection.
     static FIRST_USABLE: RefCell<Vec<(Weak<RefCell<Client>>, u64)>> = const { RefCell::new(Vec::new()) };
@@ -268,6 +270,12 @@ pub(super) fn close_reason(id: u64, reason: &'static str) {
     });
 }
 
+/// Notes how long the beat about to open waited between its view arriving and its start; the
+/// next component record carries it as `lag_ms` (taken, so it is written once).
+pub(super) fn note_lag(lag_ms: u64) {
+    NEXT_LAG_MS.set(Some(lag_ms));
+}
+
 /// Record one real presentation-component transition after the UI applies it. The element is
 /// sampled for computed style, viewport intersection and occlusion; a mounted DOM node alone
 /// never counts as readable.
@@ -379,6 +387,7 @@ pub(super) fn component(
             event.read_ms = active.read_ms;
             event.opened_ms = active.clock.opened_ms();
             event.visible_held_ms = Some(visible_held_ms);
+            event.lag_ms = NEXT_LAG_MS.take();
             if active.phase == ComponentPhase::Closing && active.close_reason == "ended" {
                 active.close_reason = reason;
             }

@@ -1,3 +1,5 @@
+#[path = "place_actor.rs"]
+pub(super) mod place_actor;
 #[path = "tempo.rs"]
 pub(super) mod tempo;
 
@@ -207,6 +209,13 @@ pub(super) enum Call {
         proposal: Proposal,
         reply: oneshot::Sender<Result<NpcEventOutcome, tonic::Status>>,
     },
+    /// A change of place (see `place`): the owner repeats every check and commits the journal
+    /// entry, or says why it did not.
+    PlaceMove {
+        credential: [u8; 32],
+        proposal: place_actor::MoveProposal,
+        reply: oneshot::Sender<Result<place_actor::MoveOutcome, tonic::Status>>,
+    },
     Dialogue {
         credential: [u8; 32],
         request: super::dialogue::DialogueRequest,
@@ -363,6 +372,7 @@ impl ActorInput for Call {
             | Self::NpcEvent { .. }
             | Self::Presence { .. }
             | Self::Presented { .. } => Some(0),
+            Self::PlaceMove { proposal, .. } => Some(proposal.retained_bytes()),
             Self::Dev { order, .. } => order.retained_heap_bytes(),
             Self::DevDirect { order, request, .. } => order
                 .text
@@ -3005,7 +3015,7 @@ impl Actor {
                     }
                 };
                 self.table_log
-                    .push_scene_outcome(reservation, index, check.as_deref(), &line);
+                    .push_scene_outcome(reservation, index, check, &line);
                 record_audit_line(
                     "gameplay.scene_interaction",
                     format!("SCENE actor={hero:?} result={line:?}"),
@@ -3030,7 +3040,11 @@ impl Actor {
                 record_unavailable("search-audit", "check result cannot be displayed");
                 return;
             };
-            self.table_log.push_check(reservation, index, &table_line);
+            self.table_log.push_check(
+                reservation,
+                index,
+                super::table_log::ability_check_row(table_line, &hero, check),
+            );
             if let Some(finding) = super::beat_script_runtime::observation_finding(&scene, check) {
                 let Ok(scene_name) = notebook::scene_name(scene.key) else {
                     record_unavailable("notebook-save", "finding scene invalid");
@@ -3123,6 +3137,7 @@ impl Actor {
                 match rest_hit_die_details(before, &after, member) {
                     Ok(Some(details)) => {
                         vec![super::table_log::ActionLine {
+                            roll: None,
                             speaker: hero.clone(),
                             text: short_rest_die_action_text(
                                 details.die,
@@ -3149,39 +3164,27 @@ impl Actor {
                     &label,
                 )
             };
-        let mut lines = action_lines.into_iter();
-        if let Some(line) = lines.next() {
-            let (role, hero_index) = if line.speaker == hero {
-                (rpc::TableRole::Hero, index)
-            } else if line.speaker == "Narrator" {
-                (rpc::TableRole::Narrator, 0)
-            } else {
-                (rpc::TableRole::Npc, 0)
-            };
-            self.table_log.push_reserved(
-                reservation,
-                &line.speaker,
-                role,
-                hero_index,
-                rpc::TableKind::Action,
-                &line.text,
-            );
-        }
-        for line in lines {
-            let (role, hero_index) = if line.speaker == hero {
-                (rpc::TableRole::Hero, index)
-            } else if line.speaker == "Narrator" {
-                (rpc::TableRole::Narrator, 0)
-            } else {
-                (rpc::TableRole::Npc, 0)
-            };
-            self.table_log.push(
-                &line.speaker,
-                role,
-                hero_index,
-                rpc::TableKind::Action,
-                &line.text,
-            );
+        // A party member's line is the hero's (a death save is the hero's roll); anyone else
+        // who acted is the table's non-player voice.
+        let role_of = |speaker: &str| -> (rpc::TableRole, u32) {
+            if speaker == "Narrator" {
+                return (rpc::TableRole::Narrator, 0);
+            }
+            match journey
+                .party
+                .iter()
+                .position(|member| member.name == speaker)
+                .and_then(|position| u32::try_from(position).ok())
+            {
+                Some(position) => (rpc::TableRole::Hero, position),
+                None => (rpc::TableRole::Npc, 0),
+            }
+        };
+        let mut reservation = Some(reservation);
+        for line in action_lines {
+            let (role, hero_index) = role_of(&line.speaker);
+            self.table_log
+                .push_action_line(reservation.take(), &line, role, hero_index);
         }
         if !super::journey::rewards::paid(before.state())
             && super::journey::rewards::paid(after.state())
@@ -3769,6 +3772,11 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
+                Call::PlaceMove { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite demonstration call budget exhausted",
+                    )));
+                }
                 Call::Dialogue { reply, .. } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
                         "finite dialogue budget exhausted",
@@ -3893,6 +3901,15 @@ impl Reducer<Call> for Actor {
             } => reply
                 .send(after_grant_reconnect(reconnected, || {
                     self.npc_event(&credential, proposal)
+                }))
+                .is_ok(),
+            Call::PlaceMove {
+                credential,
+                proposal,
+                reply,
+            } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    self.place_move(&credential, proposal)
                 }))
                 .is_ok(),
             Call::View {

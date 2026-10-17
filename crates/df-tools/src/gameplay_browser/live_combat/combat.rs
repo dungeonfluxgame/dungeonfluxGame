@@ -189,6 +189,33 @@ fn death_save_roll(outcome: &rpc::CombatOutcome, index: usize) -> Option<RollTex
     })
 }
 
+/// A stabilise check is its own kind of roll on the card: the Medicine die against its DC (or a
+/// healer's kit that rolls nothing), never an attack with zeros.
+fn stabilise_roll(outcome: &rpc::CombatOutcome, index: usize) -> Option<RollText> {
+    let card = crate::table_roll::stabilise_card(outcome)?;
+    let rolled = card.value.parse::<u32>().ok();
+    Some(RollText {
+        key: format!("roll-{index}"),
+        label: card.label,
+        value: card.value,
+        explanation: card.explanation,
+        source: card.source,
+        verdict: (
+            card.verdict,
+            if card.succeeded {
+                CombatTone::Success
+            } else {
+                CombatTone::Failure
+            },
+        ),
+        die_face: rolled
+            .and_then(|die| u8::try_from(die).ok())
+            .filter(|face| (1..=20).contains(face)),
+        die_rest: rolled
+            .and_then(|die| crate::gameplay_browser::live_dice::rest_url_for(die, &[die], 0)),
+    })
+}
+
 fn conditions_resource(member: &rpc::PartyMemberView) -> Option<String> {
     if member
         .conditions
@@ -473,6 +500,9 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
         .enumerate()
         .filter_map(|(index, outcome)| {
             if let Some(roll) = death_save_roll(outcome, index) {
+                return Some(roll);
+            }
+            if let Some(roll) = stabilise_roll(outcome, index) {
                 return Some(roll);
             }
             let damage_rolls = outcome

@@ -11,6 +11,8 @@ use std::{ffi::OsString, time::Duration};
 mod dice;
 #[path = "dev_cli/layout.rs"]
 mod layout;
+#[path = "dev_cli/place.rs"]
+mod place;
 #[path = "dev_cli/play.rs"]
 mod play;
 
@@ -230,6 +232,7 @@ fn print_help() {
          decisions [--kind <kind>] [--last <n>]  Jev classifications; neutral marks the rules fallback\n\
          art [list <prefix>]          generated depictions on the hub; art regenerate|clear character:<id>|place:<id>\n\
          fx [<effect> on|off]         the TV's screen-space effects: blur drift scrim grain vignette firelight dust grade\n\
+         place [list|go <exit|place>]  where the party stands, its exits and the places the run knows; go moves the whole party (an exit to a new place creates it)\n\
          dice [next <face…>|clear] [--die d20]  forced faces for the next die draws (d4 d6 d8 d10 d12 d20 d100), first in first out\n\
          music                        the current music plan; music regenerate|clear <place> unsupported\n\
          memory [status]              story memory: counts by kind, embedding backlog and model, spend, queue\n\
@@ -433,6 +436,7 @@ async fn dispatch(
         "art" => art(client, positional).await,
         "fx" => fx(client, positional).await,
         "dice" => dice::run(client, positional, options).await,
+        "place" => place::run(client, positional, options).await,
         "music" => music(client, positional).await,
         "memory" => memory(client, positional, options).await,
         "scene-changes" => {

@@ -661,6 +661,66 @@ mod tests {
         );
         assert!(locked(&inner.state).canonical.take_jobs().is_empty());
     }
+
+    #[test]
+    fn a_created_place_is_admitted_like_the_shop_with_a_room_photo_and_each_person_by_this_path() {
+        use crate::gameplay::{
+            place,
+            place_creation::{self, tests as made},
+        };
+        let record = place_creation::build(
+            &made::request(),
+            &made::place_slot().to_string(),
+            &made::people_slot().to_string(),
+            &made::things_slot().to_string(),
+        )
+        .unwrap();
+        let scene = place::scene_of(&record, &pack::scene(pack::SceneKey::Opening)).unwrap();
+        let mut canonical = references("run-with-a-created-place");
+        canonical.observe_room(&scene);
+        // The room is the place's own, the current one, and each person has an identity to make.
+        let room = canonical
+            .selected_rooms
+            .get("place-market-street")
+            .cloned()
+            .expect("the street's room is admitted");
+        assert_eq!(canonical.current_room, Some(room));
+        let people: BTreeSet<String> = canonical
+            .entries
+            .keys()
+            .filter_map(|target| match target {
+                Target::Npc(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            people,
+            ["market-street-hobb", "market-street-wenna"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+        assert_eq!(canonical.current_npcs, people);
+        // What the photograph is asked for is the street's own layout, never the shop's.
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let prompt = imagery::canonical_room(
+            ContentRating::Restrained,
+            model,
+            "place-market-street",
+            "binding",
+        )
+        .unwrap();
+        assert!(prompt.as_str().contains("spice stall"));
+        assert!(!prompt.as_str().contains("wooden counter"));
+        let hobb = model
+            .people
+            .iter()
+            .find(|person| person.name == "Hobb")
+            .unwrap();
+        let person =
+            imagery::canonical_npc(ContentRating::Restrained, hobb, false, false, "b").unwrap();
+        assert!(person.as_str().contains("broad carter"));
+    }
 }
 
 /// The art contract's subject of a canonical target: what the `IMAGERY` audit lines name.

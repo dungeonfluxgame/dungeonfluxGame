@@ -44,7 +44,7 @@ use super::{
         CallProfile, Expression, Slot, Storyteller, StorytellerError, ValidationFailure, age_group,
         contains_whole_word, sexual_content_allowed,
     },
-    table_log::TableLog,
+    table_log::{RollRow, TableLog},
 };
 
 #[path = "npc_answer.rs"]
@@ -316,7 +316,7 @@ impl HesitantRoll {
     }
 
     /// The table's roll row for this request, when a check was rolled. No check, no row.
-    fn roll_row(&self, hero: &str) -> Option<String> {
+    fn roll_row(&self, hero: &str) -> Option<RollRow> {
         match self {
             Self::Rolled(result) => influence_roll_row(hero, result),
             Self::Unavailable(_) => None,
@@ -356,7 +356,7 @@ fn influence_skill(approach: Approach) -> InfluenceSkill {
 /// The table's roll row for one Influence check, in the shape of the theft row. Advantage or
 /// Disadvantage names the faces rolled, and the counted face is the die shown. None when no
 /// roll was made.
-fn influence_roll_row(hero: &str, result: &InfluenceResult) -> Option<String> {
+fn influence_roll_row(hero: &str, result: &InfluenceResult) -> Option<RollRow> {
     let success = match result.outcome {
         InfluenceOutcome::Success => true,
         InfluenceOutcome::Failure => false,
@@ -380,6 +380,7 @@ fn influence_roll_row(hero: &str, result: &InfluenceResult) -> Option<String> {
     };
     Some(
         CheckRecord {
+            kind: rpc::RollKind::Check,
             subject: hero.to_owned(),
             label,
             die,
@@ -390,13 +391,21 @@ fn influence_roll_row(hero: &str, result: &InfluenceResult) -> Option<String> {
             result: if success { "success" } else { "failure" },
             success,
         }
-        .line(),
+        .row_with_draws(
+            &result.faces,
+            match result.mode {
+                RollMode::Normal => 0,
+                RollMode::Advantage => 1,
+                RollMode::Disadvantage => -1,
+            },
+        ),
     )
 }
 
 /// The table's roll row for a hero's Deception check against the NPC's passive Insight.
-fn deception_roll_row(hero: &str, check: &AbilityCheckResult) -> String {
+fn deception_roll_row(hero: &str, check: &AbilityCheckResult) -> RollRow {
     CheckRecord {
+        kind: rpc::RollKind::Check,
         subject: hero.to_owned(),
         label: "Charisma (Deception)".to_owned(),
         die: check.die,
@@ -411,7 +420,7 @@ fn deception_roll_row(hero: &str, check: &AbilityCheckResult) -> String {
         },
         success: check.succeeded,
     }
-    .line()
+    .row()
 }
 
 fn rules_attitude(attitude: Attitude) -> RulesAttitude {
@@ -517,7 +526,7 @@ impl LieRoll {
     }
 
     /// The table's roll row for this lie, when a Deception check was rolled.
-    fn roll_row(&self, hero: &str) -> Option<String> {
+    fn roll_row(&self, hero: &str) -> Option<RollRow> {
         match self {
             Self::Rolled { check, .. } => Some(deception_roll_row(hero, check)),
             Self::Unavailable(_) => None,
@@ -1772,6 +1781,21 @@ impl NpcVoice {
         self
     }
 
+    /// The canon this run's people have spoken for `scene`, as quoted world data: what a place
+    /// made later must agree with.
+    pub(super) fn local_canon(
+        &self,
+        scene: &str,
+        heroes: &[String],
+        game_state: &[String],
+    ) -> serde_json::Value {
+        self.lore.canon_for_listener(
+            scene,
+            &local_lore::Names { heroes, game_state },
+            &|_: &str| false,
+        )
+    }
+
     pub(super) async fn classify_input(
         &self,
         words: &str,
@@ -2064,7 +2088,7 @@ impl NpcVoice {
         // A hesitant urging that already failed in this scene is refused without another roll.
         let mut repeated_urging = false;
         // The table rows of the checks rolled for this reply, published before the reply's line.
-        let mut roll_rows: Vec<String> = Vec::new();
+        let mut roll_rows: Vec<RollRow> = Vec::new();
         let publication_guard = context.publication_guard.clone();
         if let Some(turn) = context.turn.as_mut() {
             let similar_asks = if approach == Approach::Question {
@@ -2609,7 +2633,7 @@ impl NpcVoice {
         };
         // Each check rolled for this reply shows its row before the NPC's own line, which comes
         // after the hero's line already on the table.
-        for row in &roll_rows {
+        for row in roll_rows {
             log.push_check(log.reserve(), context.hero_index, row);
         }
         let mut source_line_sequence = None;
@@ -2959,7 +2983,10 @@ mod tests {
         .expect("a valid hesitant Persuasion check resolves");
 
         assert_eq!(
-            HesitantRoll::Rolled(result).roll_row("Sigrun").as_deref(),
+            HesitantRoll::Rolled(result)
+                .roll_row("Sigrun")
+                .map(|row| row.text)
+                .as_deref(),
             Some("Sigrun: Charisma (Persuasion) 15 - 1 = 14 vs DC 15 — failure.")
         );
     }

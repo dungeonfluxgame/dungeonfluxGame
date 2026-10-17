@@ -900,3 +900,27 @@ enum-value dungeonflux.public.v1.CreatureSize 0 CREATURE_SIZE_UNSPECIFIED
 enum-value dungeonflux.public.v1.CreatureSize 1 SMALL
 enum-value dungeonflux.public.v1.CreatureSize 2 MEDIUM
 enum-value dungeonflux.public.v1.CreatureSize 3 LARGE
+field dungeonflux.public.v1.TableLine 8 roll type=11 label=1 presence=false target=.dungeonflux.public.v1.TableRoll oneof=-
+message dungeonflux.public.v1.TableRoll
+field dungeonflux.public.v1.TableRoll 1 faces type=13 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 2 kept type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 3 roll_mode type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 4 modifier type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 5 total type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 6 against type=14 label=1 presence=false target=.dungeonflux.public.v1.RollAgainst oneof=-
+field dungeonflux.public.v1.TableRoll 7 target_number type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 8 succeeded type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 9 label type=9 label=1 presence=false target=- oneof=-
+enum dungeonflux.public.v1.RollAgainst
+enum-value dungeonflux.public.v1.RollAgainst 0 ROLL_AGAINST_UNSPECIFIED
+enum-value dungeonflux.public.v1.RollAgainst 1 ROLL_AGAINST_DC
+enum-value dungeonflux.public.v1.RollAgainst 2 ROLL_AGAINST_AC
+field dungeonflux.public.v1.TableRoll 10 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.RollKind oneof=-
+enum dungeonflux.public.v1.RollKind
+enum-value dungeonflux.public.v1.RollKind 0 ROLL_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.RollKind 1 ROLL_KIND_CHECK
+enum-value dungeonflux.public.v1.RollKind 2 ROLL_KIND_SAVE
+enum-value dungeonflux.public.v1.RollKind 3 ROLL_KIND_ATTACK
+enum-value dungeonflux.public.v1.RollKind 4 ROLL_KIND_DEATH_SAVE
+enum-value dungeonflux.public.v1.RollKind 5 ROLL_KIND_STABILIZE
+enum-value dungeonflux.public.v1.RollKind 6 ROLL_KIND_INITIATIVE

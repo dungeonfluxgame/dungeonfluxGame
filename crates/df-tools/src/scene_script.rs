@@ -25,6 +25,9 @@ pub(crate) enum SceneScriptLine<'a> {
     Table(&'a TableLine),
     CheckRoll,
     CheckResult,
+    /// The die and result card of a roll the server attached to this line, told in table order
+    /// before whatever the line itself says.
+    Dice(&'a TableLine),
 }
 
 impl<'a> SceneScript<'a> {
@@ -81,26 +84,42 @@ impl<'a> SceneScript<'a> {
             {
                 script.push(SceneScriptLine::Narration(added));
             }
+            // The check's own roll row tumbles its die before the check card tells the finding.
+            let checked_roll = self
+                .check
+                .filter(|_| fresh_check)
+                .map(|check| check.sequence);
             if fresh_check {
+                if let Some(line) = self
+                    .fresh
+                    .iter()
+                    .copied()
+                    .find(|line| Some(line.sequence) == checked_roll && line.roll.is_some())
+                {
+                    script.push(SceneScriptLine::Dice(line));
+                }
                 script.push(SceneScriptLine::CheckRoll);
                 script.push(SceneScriptLine::CheckResult);
             }
-            script.extend(
-                self.fresh
-                    .iter()
-                    .filter(|line| match line.kind {
-                        TableKind::Speech => {
-                            matches!(line.role, TableRole::Hero(_))
-                                || (line.role == TableRole::Npc && !line.scripted)
-                        }
-                        TableKind::Action => {
-                            !self.in_fight
-                                && (line.role != TableRole::Narrator
-                                    || public_outcome(line, self.check))
-                        }
-                    })
-                    .map(|line| SceneScriptLine::Table(line)),
-            );
+            for line in self.fresh.iter().copied() {
+                if line.roll.is_some() && !self.in_fight && Some(line.sequence) != checked_roll {
+                    script.push(SceneScriptLine::Dice(line));
+                }
+                let shown = match line.kind {
+                    TableKind::Speech => {
+                        matches!(line.role, TableRole::Hero(_))
+                            || (line.role == TableRole::Npc && !line.scripted)
+                    }
+                    TableKind::Action => {
+                        !self.in_fight
+                            && (line.role != TableRole::Narrator
+                                || public_outcome(line, self.check))
+                    }
+                };
+                if shown {
+                    script.push(SceneScriptLine::Table(line));
+                }
+            }
         }
         script
     }
@@ -143,6 +162,7 @@ mod tests {
             kind: TableKind::Action,
             text: text.into(),
             scripted: false,
+            roll: None,
         }
     }
 
@@ -155,6 +175,7 @@ mod tests {
             kind: TableKind::Speech,
             text: text.to_owned(),
             scripted: false,
+            roll: None,
         }
     }
 
@@ -167,6 +188,7 @@ mod tests {
                 SceneScriptLine::Table(line) => line.text.as_str(),
                 SceneScriptLine::CheckRoll => "[roll]",
                 SceneScriptLine::CheckResult => script.check.unwrap().voice.text.as_str(),
+                SceneScriptLine::Dice(_) => "[dice]",
             })
             .collect()
     }
@@ -181,6 +203,99 @@ mod tests {
                 text: format!("Success. {FINDING}"),
             },
         }
+    }
+
+    fn rolled(sequence: u64) -> TableLine {
+        let mut row = outcome(sequence, "Brakka: Charisma (Deception) 8 - 1 = 7 vs DC 15.");
+        row.speaker = "Roll".into();
+        row.roll = crate::roll_card::RollCard::from_wire(&rpc::TableRoll {
+            faces: vec![8, 1],
+            kept: 8,
+            roll_mode: 1,
+            modifier: -1,
+            total: 7,
+            against: rpc::RollAgainst::Dc as i32,
+            target_number: 15,
+            succeeded: false,
+            label: "Brakka \u{b7} Deception".into(),
+            kind: rpc::RollKind::Check as i32,
+        });
+        row
+    }
+
+    #[test]
+    fn a_roll_row_tells_its_die_after_the_heros_line_and_before_the_npcs_reply() {
+        let lines = [
+            speech(
+                20,
+                TableRole::Hero(0),
+                "Brakka",
+                "You are a fine honest man.",
+            ),
+            rolled(21),
+            speech(22, TableRole::Npc, "Marek", "Hmm. Is that so."),
+        ];
+        let fresh = lines.iter().collect::<Vec<_>>();
+        let script = SceneScript {
+            narration: OPENING,
+            previous_narration: OPENING,
+            lines: &lines,
+            fresh: &fresh,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            text(&script),
+            ["You are a fine honest man.", "[dice]", "Hmm. Is that so."]
+        );
+    }
+
+    #[test]
+    fn a_fights_rolls_play_from_its_combat_beats_not_from_the_table_log() {
+        let lines = [rolled(21)];
+        let fresh = lines.iter().collect::<Vec<_>>();
+        let script = SceneScript {
+            narration: OPENING,
+            previous_narration: OPENING,
+            lines: &lines,
+            fresh: &fresh,
+            in_fight: true,
+            ..Default::default()
+        };
+        assert!(text(&script).is_empty());
+    }
+
+    #[test]
+    fn a_reconnect_does_not_replay_a_roll() {
+        let lines = [rolled(21), speech(22, TableRole::Npc, "Marek", "Hmm.")];
+        let fresh = lines.iter().collect::<Vec<_>>();
+        let script = SceneScript {
+            narration: OPENING,
+            lines: &lines,
+            fresh: &fresh,
+            restart: true,
+            ..Default::default()
+        };
+        assert_eq!(text(&script), ["Hmm."]);
+    }
+
+    #[test]
+    fn a_checks_own_roll_row_tumbles_before_the_check_card() {
+        let check = check(10);
+        let mut roll = rolled(10);
+        roll.text = "Brakka studies the brass balance: 10 + 0 = 10.".into();
+        let finding = outcome(11, FINDING);
+        let lines = [roll, finding];
+        let fresh = lines.iter().collect::<Vec<_>>();
+        let script = SceneScript {
+            narration: OPENING,
+            previous_narration: OPENING,
+            lines: &lines,
+            fresh: &fresh,
+            check: Some(&check),
+            ..Default::default()
+        };
+        assert_eq!(text(&script), ["[dice]", "[roll]", &check.voice.text]);
     }
 
     #[test]

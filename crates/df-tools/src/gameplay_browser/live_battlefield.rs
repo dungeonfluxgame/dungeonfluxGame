@@ -1328,6 +1328,12 @@ pub(super) struct RollSummary {
     /// The target's hit points after this blow, from the outcome itself: the strike shows
     /// exactly this when it lands, never the newest view's later state.
     pub(super) target_hp_after: u32,
+    /// A roll that is not an attack (a death save, a stabilise check): the roll card shows, with
+    /// no approach and no strike.
+    pub(super) check: bool,
+    /// The first part of a move an opportunity attack interrupts: the mover is held on this
+    /// square while the reaction plays, and the second part walks it on.
+    pub(super) then_hold: Option<GridCell>,
     pub(super) card: Option<RollCard>,
 }
 
@@ -1385,6 +1391,8 @@ struct Live {
     /// Per HP change `(sequence, target name, before, after)`, oldest first: the values used to
     /// project the newest view's hit points to the last presented beat.
     beat_hp: Vec<(u64, String, u32, u32)>,
+    /// `(sequence, name, down)` for each beat that set or cleared a creature's down mark.
+    beat_down: Vec<(u64, String, bool)>,
     /// The hit currently in its strike timeline, matched against the renderer's landed event.
     active_strike: Option<(u64, String, String)>,
     /// Nominal stages and budgets for the recent battlefield cues, oldest first.
@@ -1418,6 +1426,7 @@ thread_local! {
         presented_seq: 0,
         latest_seq: 0,
         beat_hp: Vec::new(),
+        beat_down: Vec::new(),
         active_strike: None,
         battlefield_beat_log: VecDeque::new(),
         card_values: std::collections::HashMap::new(),
@@ -1805,6 +1814,22 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 ));
                 live.beat_hp.sort_by_key(|(sequence, ..)| *sequence);
             }
+            let beats = crate::combat_beats::in_resolution_order(
+                combat
+                    .outcomes
+                    .iter()
+                    .chain(combat.death_save_outcomes.iter()),
+            );
+            for mark in crate::combat_beats::down_marks(&beats) {
+                if !live
+                    .beat_down
+                    .iter()
+                    .any(|(sequence, name, _)| *sequence == mark.0 && *name == mark.1)
+                {
+                    live.beat_down.push(mark);
+                }
+            }
+            live.beat_down.sort_by_key(|(sequence, ..)| *sequence);
             let mut heals = Vec::new();
             if let Some(previous) = &live.latest {
                 for member in &snapshot.members {
@@ -2108,8 +2133,30 @@ fn sync(writer: &str) {
                         after: *after,
                     })
                     .collect();
+                let (newest_hit_points, newest_down) = (
+                    member.hit_points,
+                    member.hit_points == 0
+                        || member.statuses.contains(&battle::Status::Unconscious),
+                );
                 member.hit_points =
                     battle::hit_points_at_sequence(member.hit_points, presented_seq, &changes);
+                // The down marker, the blood and the stance follow the beat on screen with the
+                // hit points: a creature the newest view lays low is shown down only with the
+                // hit that dropped it.
+                let down = crate::combat_beats::down_at(
+                    &live.beat_down,
+                    &member.name,
+                    presented_seq,
+                    newest_down,
+                );
+                if member.hit_points != newest_hit_points || down != newest_down {
+                    member.statuses = crate::combat_beats::statuses_at_beat(
+                        &member.statuses,
+                        member.hit_points,
+                        member.maximum_hit_points,
+                        down,
+                    );
+                }
             }
         }
         if live.begun_live {
@@ -2257,6 +2304,12 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
         if matches!(state, "rolling" | "turn" | "skipped") {
             live.held_moves.retain(|(name, ..)| *name != roll.attacker);
         }
+        if state == "turn"
+            && let Some(cell) = roll.then_hold.and_then(cell_of)
+        {
+            live.held_moves
+                .push((roll.attacker.clone(), cell, now_ms()));
+        }
         if matches!(state, "impact" | "turn" | "skipped") {
             live.pending_cues = live.pending_cues.saturating_sub(1);
             if live.pending_cues == 0 {
@@ -2301,6 +2354,10 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                 guard.presented_seq,
             ));
             match state {
+                "skipped" if roll.check => {
+                    // A skipped death save or stabilise check changes no token.
+                    stage.skip_to_idle();
+                }
                 "skipped" => {
                     // The director emits skips in sequence, after the previous impact drains.
                     // Land every layer on this blow's result before the next roll starts.
@@ -2337,6 +2394,13 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                     if state == "turn" {
                         return;
                     }
+                    if roll.check {
+                        // The card alone: no approach, no strike.
+                        if let Some(card) = roll.card.clone() {
+                            stage.show_roll_card(card);
+                        }
+                        return;
+                    }
                     stage.set_attack_style(&attacker, roll.attack_style);
                     let _ = stage.stage(Beat::Approach { attacker, target });
                     // The card waits for the camera to arrive on the two fighters.
@@ -2344,6 +2408,7 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                         stage.show_roll_card(card);
                     }
                 }
+                "impact" if roll.check => {}
                 "impact" => {
                     if let Some(label) = &roll.attack_label {
                         stage.set_attack_label(&attacker, label, &roll.damage_type);
@@ -2837,6 +2902,7 @@ fn reset_fight(live: &mut Live) {
     live.presented_seq = 0;
     live.latest_seq = 0;
     live.beat_hp.clear();
+    live.beat_down.clear();
     live.feed = CombatFeed::new(FeedMode::HoldForCues);
 }
 

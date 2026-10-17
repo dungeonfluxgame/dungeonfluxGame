@@ -259,6 +259,8 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
         {
             scene.asset = asset;
         }
+        // Where the party has gone from the beat's own place (see `place`).
+        let mut scene = super::place::overlay(state, &beat.id, scene)?;
         if let Some(snapshot) = journey::living_scene::snapshot(state, &scene)?
             && let Some(setting) = scene.setting.as_mut()
         {

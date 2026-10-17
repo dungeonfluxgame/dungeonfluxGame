@@ -368,12 +368,39 @@ pub(crate) struct DiceTiming {
 const RESULT_READ_MS: u64 = 800;
 const DICE_FADE_MS: u64 = 320;
 const DAMAGE_ROLL_MS: u64 = 1_000;
+/// How long a fight's d20 stays on screen after it lands, so the roll card beside it is read
+/// with the die in view. A display that is catching up shortens this, never the tumble.
+pub(crate) const FIGHT_RESULT_HOLD_MS: u64 = 3_000;
+pub(crate) const FIGHT_RESULT_HOLD_CATCH_UP_MS: u64 = 2_000;
+/// The rest time budgeted for one fight blow's die before the clip's own time is known: the
+/// director holds the next blow back at least this long plus the hold and fade.
+pub(crate) const FIGHT_REST_BUDGET_MS: u64 = 1_500;
 
-pub(crate) fn d20_timing(rest_ms: u64) -> DiceTiming {
+/// The least time one d20 beat of a fight takes from the die starting to the next die being
+/// allowed to start: the tumble, the held result and the fade.
+pub(crate) const fn fight_beat_ms(catching_up: bool) -> u64 {
+    FIGHT_REST_BUDGET_MS
+        + if catching_up {
+            FIGHT_RESULT_HOLD_CATCH_UP_MS
+        } else {
+            FIGHT_RESULT_HOLD_MS
+        }
+        + DICE_FADE_MS
+}
+
+/// When a fight's d20 lands and when it clears: it stays for [`FIGHT_RESULT_HOLD_MS`] after it
+/// lands (or the catch-up hold), then fades.
+pub(crate) fn d20_timing(rest_ms: u64, catching_up: bool) -> DiceTiming {
     let land_ms = rest_ms;
     DiceTiming {
         land_ms,
-        clear_ms: land_ms + RESULT_READ_MS + DICE_FADE_MS,
+        clear_ms: land_ms
+            + if catching_up {
+                FIGHT_RESULT_HOLD_CATCH_UP_MS
+            } else {
+                FIGHT_RESULT_HOLD_MS
+            }
+            + DICE_FADE_MS,
     }
 }
 
@@ -574,15 +601,31 @@ mod tests {
     }
 
     #[test]
-    fn d20_result_holds_after_the_server_face_lands() {
-        let timing = d20_timing(1_200);
+    fn d20_result_holds_three_seconds_after_the_server_face_lands() {
+        let timing = d20_timing(1_200, false);
 
         assert_eq!(timing.land_ms, 1_200);
-        assert_eq!(timing.clear_ms, 2_320);
+        assert_eq!(timing.clear_ms, 1_200 + 3_000 + 320);
 
-        let resting_still = d20_timing(0);
-        assert_eq!(resting_still.land_ms, 0);
-        assert_eq!(resting_still.clear_ms, 1_120);
+        let catching_up = d20_timing(1_200, true);
+        assert_eq!(
+            catching_up.land_ms, 1_200,
+            "the die still tumbles to its rest"
+        );
+        assert_eq!(catching_up.clear_ms, 1_200 + 2_000 + 320);
+    }
+
+    #[test]
+    fn the_next_fight_die_waits_for_the_previous_one_to_clear() {
+        // The director holds a blow at least this long, so two dice are never on screen
+        // together: the slowest clip rest the manifest names (2.5 s clamp) is covered by the
+        // budget the clips actually use (1.2-1.4 s).
+        for rest in [1_200, 1_300, 1_400, FIGHT_REST_BUDGET_MS] {
+            assert!(fight_beat_ms(false) >= d20_timing(rest, false).clear_ms);
+            assert!(fight_beat_ms(true) >= d20_timing(rest, true).clear_ms);
+        }
+        assert!(fight_beat_ms(true) < fight_beat_ms(false));
+        assert!(FIGHT_RESULT_HOLD_CATCH_UP_MS >= 2_000);
     }
 
     #[test]
