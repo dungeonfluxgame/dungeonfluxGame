@@ -1,6 +1,7 @@
 //! The resource generation hub: the one place the program asks for a generated resource (a
-//! picture of a person, creature or place, a scene plate, a plate edit, an item close-up, and
-//! later a music set, a voice line or a video clip) and the one place that remembers what was
+//! picture of a person, creature or place, a scene plate, a plate edit, an item close-up, a
+//! splat-world place, and later a music set, a voice line or a video clip) and the one place that
+//! remembers what was
 //! asked for, what is in flight, what is ready, what failed and what it cost.
 //!
 //! # The contract
@@ -81,6 +82,8 @@ pub(in crate::gameplay) enum ResourceKind {
     /// Who and where everyone is in a scene plate (identity, facing, layout): derived from the
     /// plate's segments and the vision judge, kept as a note beside the cached plate.
     PlateStaging,
+    /// A generated 3D splat world for a place.
+    SplatWorld,
     /// Reserved for the music worker.
     MusicSet,
     /// Reserved for the voice migration.
@@ -98,6 +101,7 @@ impl ResourceKind {
             Self::ItemCloseUp => "item_close_up",
             Self::PlateSegments => "plate_segments",
             Self::PlateStaging => "plate_staging",
+            Self::SplatWorld => "splat_world",
             Self::MusicSet => "music_set",
             Self::VoiceLine => "voice_line",
             Self::VideoClip => "video_clip",
@@ -231,6 +235,7 @@ impl Limits {
             // The fal call has its own deadline; the staging runs two vision calls after it.
             ResourceKind::PlateSegments => 120,
             ResourceKind::PlateStaging => 240,
+            ResourceKind::SplatWorld => 180,
             ResourceKind::MusicSet => 600,
             ResourceKind::VoiceLine => 90,
             ResourceKind::VideoClip => 900,
@@ -580,6 +585,71 @@ image_spec!(
     1
 );
 
+/// The supported generated splat-world encodings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) enum SplatWorldFormat {
+    Ply,
+    Sog,
+}
+
+impl SplatWorldFormat {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Ply => "ply",
+            Self::Sog => "sog",
+        }
+    }
+}
+
+/// A place-specific request for a Gaussian-splat world.
+#[derive(Clone, Debug)]
+pub(in crate::gameplay) struct SplatWorldSpec {
+    place_id: String,
+    prompt_facts: Vec<String>,
+    format: SplatWorldFormat,
+}
+
+impl SplatWorldSpec {
+    pub(in crate::gameplay) fn new(
+        place_id: impl Into<String>,
+        prompt_facts: Vec<String>,
+        format: SplatWorldFormat,
+    ) -> Self {
+        Self {
+            place_id: place_id.into(),
+            prompt_facts,
+            format,
+        }
+    }
+}
+
+impl ResourceSpec for SplatWorldSpec {
+    const KIND: ResourceKind = ResourceKind::SplatWorld;
+    const CONTRACT_VERSION: u32 = 1;
+
+    fn canonical(&self) -> String {
+        serde_json::json!({
+            "place_id": self.place_id,
+            "prompt_facts": self.prompt_facts,
+            "format": self.format.label(),
+        })
+        .to_string()
+    }
+
+    fn subject(&self) -> String {
+        format!("place:{}", self.place_id)
+    }
+
+    fn chrome(&self) -> Chrome {
+        Neutral::Nothing
+    }
+}
+
+/// Stub generator port; callers receive the hub's normal fallback while Marble is unwired.
+pub(in crate::gameplay) fn unavailable_splat_world() -> Generation {
+    Box::pin(async { Err(ResourceFailure::Permanent("unavailable")) })
+}
+
 /// The hub handle: cheap to clone, shared by every consumer.
 #[derive(Clone, Default)]
 pub(in crate::gameplay) struct Hub {
@@ -594,12 +664,23 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 fn audit(state: &str, key: &ResourceKey, entry: &Entry, ms: u128, handle: &str, error: &str) {
     super::actor::record_audit_line(
         "gameplay.resource",
-        format!(
-            "RESOURCE {state} kind={} key={key} subject={} ms={ms} handle={handle} error={error}",
-            entry.kind.label(),
-            entry.subject
-        ),
+        resource_audit_line(state, key, entry, ms, handle, error),
     );
+}
+
+fn resource_audit_line(
+    state: &str,
+    key: &ResourceKey,
+    entry: &Entry,
+    ms: u128,
+    handle: &str,
+    error: &str,
+) -> String {
+    format!(
+        "RESOURCE {state} kind={} key={key} subject={} ms={ms} handle={handle} error={error}",
+        entry.kind.label(),
+        entry.subject
+    )
 }
 
 impl Hub {
@@ -991,6 +1072,82 @@ mod tests {
         };
         assert_ne!(base, ResourceKey::of(&changed));
         assert_ne!(base, ResourceKey::of(&VersionTwo(wolf())));
+    }
+
+    #[test]
+    fn splat_world_keys_are_stable_and_cover_place_facts_and_format() {
+        let spec = SplatWorldSpec::new(
+            "harbor",
+            vec!["stone quay".to_owned(), "red lighthouse".to_owned()],
+            SplatWorldFormat::Ply,
+        );
+        let key = ResourceKey::of(&spec);
+        assert_eq!(key, ResourceKey::of(&spec));
+        assert_ne!(
+            key,
+            ResourceKey::of(&SplatWorldSpec::new(
+                "harbor",
+                vec!["stone quay".to_owned(), "red lighthouse".to_owned()],
+                SplatWorldFormat::Sog,
+            ))
+        );
+        assert_ne!(
+            key,
+            ResourceKey::of(&SplatWorldSpec::new(
+                "harbor",
+                vec!["stone quay".to_owned()],
+                SplatWorldFormat::Ply,
+            ))
+        );
+        assert_ne!(
+            key,
+            ResourceKey::of(&SplatWorldSpec::new(
+                "market",
+                vec!["stone quay".to_owned(), "red lighthouse".to_owned()],
+                SplatWorldFormat::Ply,
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn splat_world_stub_returns_unavailable_through_the_hub() {
+        let hub = Hub::new();
+        let spec = SplatWorldSpec::new(
+            "harbor",
+            vec!["stone quay".to_owned()],
+            SplatWorldFormat::Ply,
+        );
+
+        assert_eq!(
+            hub.render(&spec, unavailable_splat_world()).await,
+            Err(ResourceFailure::Permanent("unavailable"))
+        );
+        assert_eq!(
+            hub.status(&ResourceKey::of(&spec)),
+            ResourceStatus::Failed(ResourceFailure::Permanent("unavailable"), Neutral::Nothing)
+        );
+    }
+
+    #[test]
+    fn splat_world_resource_audit_uses_the_hub_line_shape() {
+        let spec = SplatWorldSpec::new("harbor", Vec::new(), SplatWorldFormat::Sog);
+        let key = ResourceKey::of(&spec);
+        let entry = Entry {
+            kind: ResourceKind::SplatWorld,
+            subject: spec.subject(),
+            chrome: spec.chrome(),
+            maker: None,
+            state: State::Failed(ResourceFailure::Permanent("unavailable")),
+            attempts: 1,
+            elapsed: Some(Duration::ZERO),
+        };
+
+        assert_eq!(
+            resource_audit_line("failed", &key, &entry, 0, "", "unavailable"),
+            format!(
+                "RESOURCE failed kind=splat_world key={key} subject=place:harbor ms=0 handle= error=unavailable"
+            )
+        );
     }
 
     #[tokio::test]

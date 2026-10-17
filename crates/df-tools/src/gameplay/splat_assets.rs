@@ -5,8 +5,9 @@
 //!
 //! Splat scenes are large, so they have their own route and bounds instead of the 8 MiB generic
 //! art route. Only regular files found at startup are routed (no symlinks), at most
-//! [`MAXIMUM_DEPTH`] directories deep, with lowercase `[a-z0-9._-]` names and a `.splat`, `.json`
-//! or `.webp` extension, each at most [`MAXIMUM_FILE_BYTES`] and at most [`MAXIMUM_FILES`] in all.
+//! [`MAXIMUM_DEPTH`] directories deep, with lowercase `[a-z0-9._-]` names and a `.splat`, `.ply`,
+//! `.sog`, `.json` or `.webp` extension, each at most [`MAXIMUM_FILE_BYTES`] and at most
+//! [`MAXIMUM_FILES`] in all.
 //! The path in a request never reaches the filesystem: it is only a key into the table built at
 //! startup, and each file is read from its own recorded path, re-checked against its size bound.
 //! An oversized, unreadable or too numerous set refuses startup like the other owned assets; an
@@ -35,7 +36,7 @@ struct Entry {
 }
 
 fn mime_for(name: &str) -> Option<&'static str> {
-    if name.ends_with(".splat") {
+    if name.ends_with(".splat") || name.ends_with(".ply") || name.ends_with(".sog") {
         Some("application/octet-stream")
     } else if name.ends_with(".json") {
         Some("application/json")
@@ -202,8 +203,12 @@ mod tests {
     use tonic::codegen::Service;
 
     fn scratch(label: &str) -> PathBuf {
+        let lane_directory = std::env::current_dir()
+            .unwrap()
+            .join("artifacts/tmp/lanes/M6");
+        std::fs::create_dir_all(&lane_directory).unwrap();
         let directory =
-            std::env::temp_dir().join(format!("df-splat-assets-{label}-{}", std::process::id()));
+            lane_directory.join(format!("df-splat-assets-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         directory
@@ -223,6 +228,8 @@ mod tests {
     async fn splat_files_and_nested_scan_layouts_are_served_and_everything_else_is_not() {
         let directory = scratch("served");
         std::fs::write(directory.join("quay.splat"), vec![7u8; 64]).unwrap();
+        std::fs::write(directory.join("world.ply"), b"ply-data").unwrap();
+        std::fs::write(directory.join("world.sog"), b"sog-data").unwrap();
         std::fs::create_dir_all(directory.join("pass")).unwrap();
         std::fs::write(directory.join("pass/meta.json"), b"{}").unwrap();
         std::fs::write(directory.join("pass/means_l.webp"), b"webp").unwrap();
@@ -243,6 +250,15 @@ mod tests {
         conditional.insert(header::IF_NONE_MATCH, etag);
         let again = get_path(&mut router, "/assets/splat/quay.splat", conditional).await;
         assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+
+        for path in ["/assets/splat/world.ply", "/assets/splat/world.sog"] {
+            let response = get_path(&mut router, path, HeaderMap::new()).await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "application/octet-stream"
+            );
+        }
 
         let meta = get_path(
             &mut router,
@@ -269,6 +285,7 @@ mod tests {
 
         for path in [
             "/assets/splat/notes.txt",
+            "/assets/splat/world.spz",
             "/assets/splat/Upper.splat",
             "/assets/splat/../quay.splat",
             "/assets/splat/pass/other.json",
@@ -287,15 +304,19 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_directory_routes_nothing_and_an_oversized_file_refuses_startup() {
-        let absent = std::env::temp_dir().join("df-splat-assets-absent-directory");
+    fn an_absent_directory_routes_nothing_and_oversized_supported_files_refuse_startup() {
+        let absent = std::env::current_dir()
+            .unwrap()
+            .join("artifacts/tmp/lanes/M6/df-splat-assets-absent-directory");
         assert!(router(&absent).is_ok());
 
-        let directory = scratch("oversized");
-        let file = std::fs::File::create(directory.join("big.splat")).unwrap();
-        file.set_len(MAXIMUM_FILE_BYTES + 1).unwrap();
-        assert!(router(&directory).is_err());
-        std::fs::remove_dir_all(directory).unwrap();
+        for extension in ["splat", "ply", "sog"] {
+            let directory = scratch(&format!("oversized-{extension}"));
+            let file = std::fs::File::create(directory.join(format!("big.{extension}"))).unwrap();
+            file.set_len(MAXIMUM_FILE_BYTES + 1).unwrap();
+            assert!(router(&directory).is_err(), "{extension}");
+            std::fs::remove_dir_all(directory).unwrap();
+        }
     }
 
     #[test]
