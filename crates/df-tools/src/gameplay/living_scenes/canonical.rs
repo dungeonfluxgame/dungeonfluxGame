@@ -397,10 +397,11 @@ mod tests {
         let inner = inner(fixture.imagery.clone(), canonical);
         inner.render_canonical(&work).await.unwrap();
         assert_eq!(fixture.calls(), 1);
-        assert_eq!(fixture.image_count(), 3);
+        // Only the two real photographs are sent; there is no blank carrier before them.
+        assert_eq!(fixture.image_count(), 2);
         let prompt = fixture.prompt();
-        assert!(prompt.contains("Image 2 is the approved documentary face portrait"));
-        assert!(prompt.contains("Image 3 is the approved full-body photograph"));
+        assert!(prompt.contains("Image 1 is the approved documentary face portrait"));
+        assert!(prompt.contains("Image 2 is the approved full-body photograph"));
     }
 
     fn inner(imagery: Imagery, canonical: References) -> Inner {
@@ -864,7 +865,8 @@ impl Inner {
     }
 
     pub(super) async fn render_canonical(&self, work: &Work) -> Result<ImageKey, ImageFailure> {
-        let mut references = vec![self.neutral_photographic_reference().await?];
+        // Only real photographs are sent; with none the request is generated from text alone.
+        let mut references = Vec::new();
         match &work.source {
             Source::Hero {
                 visual_dossier: Some(dossier),

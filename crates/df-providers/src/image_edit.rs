@@ -28,6 +28,9 @@ use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
 
 const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/images/edits";
+/// A request with no reference image is generated from text alone: an edit of a blank carrier
+/// came back smooth and painted, so nothing synthetic is ever sent as the image to edit.
+const LIVE_GENERATIONS_ENDPOINT: &str = "https://api.openai.com/v1/images/generations";
 const MAXIMUM_REFERENCES: usize = 4;
 const MAXIMUM_REFERENCE_BYTES: usize = 4 * 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -35,6 +38,8 @@ const MAXIMUM_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MINIMUM_PIXELS: u64 = 655_360;
 const MAXIMUM_PIXELS: u64 = 4_194_304;
 const JPEG_COMPRESSION: &str = "88";
+/// `JPEG_COMPRESSION` as the number a JSON generation request carries.
+const JPEG_COMPRESSION_PERCENT: u8 = 88;
 
 /// An edit model this adapter calls. Both accept `background: transparent` and any size whose
 /// sides are multiples of 16.
@@ -90,7 +95,7 @@ pub enum ImageFormat {
 }
 
 impl ImageFormat {
-    const fn mime(self) -> &'static str {
+    pub(crate) const fn mime(self) -> &'static str {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
@@ -239,6 +244,7 @@ impl ImageEditConfig {
 
 pub struct NativeImageEditProvider {
     endpoint: String,
+    generations_endpoint: String,
     credential: String,
     http: NativeHttp,
 }
@@ -280,22 +286,30 @@ impl NativeImageEditProvider {
                 || LIVE_ENDPOINT.to_owned(),
                 |address| format!("http://{address}/v1/images/edits"),
             ),
+            generations_endpoint: config.fixture.map_or_else(
+                || LIVE_GENERATIONS_ENDPOINT.to_owned(),
+                |address| format!("http://{address}/v1/images/generations"),
+            ),
             credential: credential.to_owned(),
             http,
         })
     }
 
-    /// Edits the references per the prompt; one call, never retried. `deadline` is the time this
-    /// call may still take.
+    /// Edits the references per the prompt, or generates from the prompt alone when there are no
+    /// references; one call, never retried. `deadline` is the time this call may still take.
     pub async fn edit(
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
     ) -> Result<GeneratedImage, ImageEditError> {
         validate(edit)?;
-        let (content_type, body) = multipart(edit);
-        let request =
-            HttpRequest::bearer_native(&self.endpoint, &self.credential, content_type, body);
+        let (endpoint, content_type, body) = if edit.references.is_empty() {
+            (&self.generations_endpoint, "application/json".to_owned(), generation_body(edit))
+        } else {
+            let (content_type, body) = multipart(edit);
+            (&self.endpoint, content_type, body)
+        };
+        let request = HttpRequest::bearer_native(endpoint, &self.credential, content_type, body);
         let response = self
             .http
             .execute(request, deadline, std::future::pending())
@@ -326,8 +340,7 @@ fn validate(edit: &ImageEdit<'_>) -> Result<(), ImageEditError> {
         && edit.height.is_multiple_of(16)
         && edit.width.max(edit.height) <= 3840
         && edit.width.max(edit.height) <= edit.width.min(edit.height) * 3;
-    let references_ok = !edit.references.is_empty()
-        && edit.references.len() <= MAXIMUM_REFERENCES
+    let references_ok = edit.references.len() <= MAXIMUM_REFERENCES
         && edit.references.iter().all(|reference| {
             !reference.bytes.is_empty() && reference.bytes.len() <= MAXIMUM_REFERENCE_BYTES
         });
@@ -379,6 +392,31 @@ fn boundary(parts: &[&[u8]]) -> String {
             return text;
         }
     }
+}
+
+/// The JSON body of a text-only generation: the same model, size, quality, background, format
+/// and moderation an edit would use, and no image.
+fn generation_body(edit: &ImageEdit<'_>) -> Vec<u8> {
+    let mut body = serde_json::json!({
+        "model": edit.model.model_id(),
+        "prompt": edit.prompt,
+        "size": format!("{}x{}", edit.width, edit.height),
+        "quality": edit.quality.wire(),
+        "background": match edit.background {
+            ImageBackground::Opaque => "opaque",
+            ImageBackground::Transparent => "transparent",
+        },
+        "output_format": edit.output.wire(),
+        "moderation": match edit.moderation {
+            ImageModeration::Auto => "auto",
+            ImageModeration::Low => "low",
+        },
+        "n": 1,
+    });
+    if matches!(edit.output, ImageFormat::Jpeg | ImageFormat::Webp) {
+        body["output_compression"] = serde_json::json!(JPEG_COMPRESSION_PERCENT);
+    }
+    body.to_string().into_bytes()
 }
 
 fn multipart(edit: &ImageEdit<'_>) -> (String, Vec<u8>) {
@@ -499,7 +537,7 @@ fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, ImageEd
 /// Width, height and whether it carries alpha, of a complete WebP: the RIFF container's size
 /// matches the file and its first chunk is a lossy (`VP8 `), lossless (`VP8L`) or extended
 /// (`VP8X`) image header.
-fn webp_facts(bytes: &[u8]) -> Option<(u32, u32, bool)> {
+pub(crate) fn webp_facts(bytes: &[u8]) -> Option<(u32, u32, bool)> {
     let u32_le = |at: usize| -> Option<u32> {
         Some(u32::from_le_bytes(
             bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
@@ -545,7 +583,7 @@ fn webp_facts(bytes: &[u8]) -> Option<(u32, u32, bool)> {
 
 /// Width and height of a complete JPEG: it starts with the start-of-image marker, ends with the
 /// end-of-image marker and declares a frame.
-fn jpeg_size(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn jpeg_size(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.get(..2)? != [0xff, 0xd8] || bytes.get(bytes.len().checked_sub(2)?..)? != [0xff, 0xd9]
     {
         return None;

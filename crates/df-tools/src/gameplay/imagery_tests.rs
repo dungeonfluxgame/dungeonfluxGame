@@ -541,7 +541,11 @@ fn answer(mut socket: TcpStream, delay: Duration, reply: Reply, state: &FakeStat
         head.push(byte[0]);
     }
     let head = String::from_utf8(head).unwrap();
-    assert!(head.starts_with("POST /v1/images/edits "), "{head}");
+    let generation = head.starts_with("POST /v1/images/generations ");
+    assert!(
+        generation || head.starts_with("POST /v1/images/edits "),
+        "{head}"
+    );
     assert!(
         head.to_ascii_lowercase()
             .contains("authorization: bearer test-credential"),
@@ -557,7 +561,24 @@ fn answer(mut socket: TcpStream, delay: Duration, reply: Reply, state: &FakeStat
         .unwrap();
     let mut body = vec![0; length];
     socket.read_exact(&mut body).unwrap();
-    let (fields, images) = parse_multipart(&head, &body);
+    // A request with no reference is a JSON text-only generation; an edit is multipart.
+    let (fields, images) = if generation {
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields = value
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| {
+                let text = value
+                    .as_str()
+                    .map_or_else(|| value.to_string(), str::to_owned);
+                (name.clone(), text)
+            })
+            .collect();
+        (fields, 0)
+    } else {
+        parse_multipart(&head, &body)
+    };
     state.requests.fetch_add(1, Ordering::SeqCst);
     let active = state.active.fetch_add(1, Ordering::SeqCst) + 1;
     state.peak.fetch_max(active, Ordering::SeqCst);
@@ -1073,7 +1094,14 @@ async fn a_call_is_recorded_in_the_ledger_before_the_provider_answers_and_never_
 async fn no_number_of_calls_is_refused_there_is_no_spend_cap() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
     let (service, _dir) = imagery(&fake, "uncapped");
-    for mood in [Mood::Warm, Mood::Grim, Mood::Tense, Mood::Calm, Mood::Menacing, Mood::Brutal] {
+    for mood in [
+        Mood::Warm,
+        Mood::Grim,
+        Mood::Tense,
+        Mood::Calm,
+        Mood::Menacing,
+        Mood::Brutal,
+    ] {
         service.render(refresh(mood)).await.unwrap();
     }
     assert_eq!(fake.calls(), 6);
@@ -1153,7 +1181,9 @@ async fn a_provider_refusal_is_a_failure_never_retried_or_reworded() {
         // Invalidation is the one way to forget it: the next ask is a new, paid request.
         service
             .hub()
-            .invalidate(crate::gameplay::resources::Invalidate::Subject("place:refused"));
+            .invalidate(crate::gameplay::resources::Invalidate::Subject(
+                "place:refused",
+            ));
         assert_eq!(
             service.generate("place:refused", request()).await,
             Err(ImageFailure::Refused)

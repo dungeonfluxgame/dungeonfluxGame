@@ -43,7 +43,6 @@ fn assembled_with(
         Part::Fact(text),
         Part::Fixed(rating),
     ])
-    .with_neutral_reference()
     .with_canonical_binding(binding);
     if prompt.character_count() > df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS {
         return Err(ImageFailure::InvalidRequest);
@@ -59,7 +58,6 @@ pub(in crate::gameplay) fn canonical_character(
 ) -> Result<AssembledPrompt, ImageFailure> {
     let mut prompt = hero_portrait(rating, hero)
         .map_err(|_| ImageFailure::InvalidRequest)?
-        .with_neutral_reference()
         .with_canonical_binding(binding);
     if let Some(dossier) = accepted_dossier {
         prompt = prompt.with_accepted_appearance_dossier(dossier);
@@ -82,13 +80,13 @@ pub(in crate::gameplay) fn canonical_npc(
     });
     let identity_instruction = match (has_identity_photo, has_identity_figure_photo) {
         (true, true) => {
-            "Image 2 is the approved documentary face portrait of this exact person and is authoritative for the face. Image 3 is the approved full-body photograph and is authoritative for body proportions and build. Reproduce the same recognizable face, apparent age, hairline, facial hair and skin tone. Preserve the build and clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
+            "Image 1 is the approved documentary face portrait of this exact person and is authoritative for the face. Image 2 is the approved full-body photograph and is authoritative for body proportions and build. Reproduce the same recognizable face, apparent age, hairline, facial hair and skin tone. Preserve the build and clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
         }
         (true, false) => {
-            "Image 2 is the approved documentary identity photograph of this exact person and is authoritative for identity. Reproduce the same recognizable face, apparent age, hairline, facial hair and skin tone. Preserve the build and clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
+            "Image 1 is the approved documentary identity photograph of this exact person and is authoritative for identity. Reproduce the same recognizable face, apparent age, hairline, facial hair and skin tone. Preserve the build and clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
         }
         (false, true) => {
-            "Image 2 is the approved full-body photograph of this exact person and is authoritative for identity. Reproduce the same recognizable face, apparent age, hairline, facial hair, skin tone and body proportions. Preserve the clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
+            "Image 1 is the approved full-body photograph of this exact person and is authoritative for identity. Reproduce the same recognizable face, apparent age, hairline, facial hair, skin tone and body proportions. Preserve the clothing described in the public appearance JSON; do not de-age, slim, beautify or substitute another person. Change pose, crop, background and lighting."
         }
         (false, false) => {
             "The quoted public description defines this person's stable physical identity. Preserve its age, face, hair, facial hair, skin tone and build across scenes; do not de-age, slim, beautify or substitute another person."

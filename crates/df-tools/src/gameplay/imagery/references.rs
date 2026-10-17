@@ -63,22 +63,6 @@ impl ReferenceStore {
         }
     }
 
-    /// Returns the checked-in empty photographic carrier used only to satisfy the image edit
-    /// endpoint when no live identity references have been generated yet. It has no scene,
-    /// subject or composition for the provider to copy.
-    pub(in crate::gameplay) fn neutral_photographic(
-        &self,
-    ) -> Result<ReferenceImage, ReferenceError> {
-        let path = self
-            .directory
-            .parent()
-            .ok_or(ReferenceError::Missing)?
-            .join("scenes")
-            .join(format!("{}.png", art_contract::NEUTRAL_CARRIER));
-        let bytes = read_file(&path)?;
-        Ok(ReferenceImage::new(ImageFormat::Png, bytes))
-    }
-
     /// Reads the reviewed photograph that answers `path`: a reviewed stem
     /// (`sprite-courier-documentary-photo`), an identity key that has one (`portrait-hero-1`) or
     /// a base stem whose `-documentary-photo` form is reviewed. Only the last path segment is
@@ -207,16 +191,5 @@ mod tests {
         assert_eq!(read("../secret"), Err(ReferenceError::NotPhotographic));
         assert_eq!(read("Figure-Hero-1"), Err(ReferenceError::Name));
         std::fs::remove_dir_all(directory).expect("remove temporary reference directory");
-    }
-
-    #[test]
-    fn neutral_photographic_carrier_is_provider_sized_and_nonempty() {
-        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated");
-        let carrier = ReferenceStore::new(directory)
-            .neutral_photographic()
-            .expect("checked-in neutral photographic carrier");
-        assert_eq!(carrier.format, ImageFormat::Png);
-        assert!(!carrier.bytes.is_empty());
-        assert!(carrier.bytes.len() as u64 <= MAXIMUM_REFERENCE_BYTES);
     }
 }

@@ -332,7 +332,7 @@ pub(super) struct Stats {
 }
 
 struct Engine {
-    provider: NativeImageEditProvider,
+    provider: ImageRoute,
     model: ImageEditModel,
     quality: ImageQuality,
     rating: ContentRating,
@@ -395,6 +395,73 @@ struct ManifestLine {
     elapsed_ms: u64,
 }
 
+/// Where images are made. FLUX (fal) is the default whenever its key is set: the owner judged
+/// only FLUX's output a real photograph (2026-10-17); the OpenAI image-edit route remains for runs
+/// without a fal key and for the loopback test fakes.
+pub(super) enum ImageRoute {
+    OpenAi(NativeImageEditProvider),
+    Flux(df_providers::NativeFalImageProvider),
+}
+
+impl From<NativeImageEditProvider> for ImageRoute {
+    fn from(provider: NativeImageEditProvider) -> Self {
+        Self::OpenAi(provider)
+    }
+}
+
+impl ImageRoute {
+    /// `DF_GAMEPLAY_IMAGERY_PROVIDER` is `flux` (needs `FAL_KEY`), `openai`, or unset: FLUX when
+    /// `FAL_KEY` is set, OpenAI otherwise.
+    fn configured(configuration: &ImageryConfiguration) -> Result<Self, io::Error> {
+        let fal_key = std::env::var("FAL_KEY").ok().filter(|key| !key.is_empty());
+        let wanted = std::env::var("DF_GAMEPLAY_IMAGERY_PROVIDER").unwrap_or_default();
+        let flux = match (wanted.as_str(), &fal_key) {
+            ("openai", _) => None,
+            ("flux", None) => {
+                return Err(io::Error::other(
+                    "DF_GAMEPLAY_IMAGERY_PROVIDER=flux needs FAL_KEY",
+                ));
+            }
+            ("" | "flux", key) => key.clone(),
+            _ => return Err(io::Error::other("DF_GAMEPLAY_IMAGERY_PROVIDER refused")),
+        };
+        match flux {
+            Some(key) => df_providers::NativeFalImageProvider::new(
+                df_providers::FalImageConfig::live(),
+                &key,
+                configuration.deadline,
+            )
+            .map(Self::Flux)
+            .map_err(|_| io::Error::other("imagery provider configuration refused")),
+            None => NativeImageEditProvider::new(
+                ImageEditConfig::live(),
+                configuration.credential.expose(),
+                configuration.deadline,
+            )
+            .map(Self::OpenAi)
+            .map_err(|_| io::Error::other("imagery provider configuration refused")),
+        }
+    }
+
+    fn label(&self, model: ImageEditModel) -> &'static str {
+        match self {
+            Self::OpenAi(_) => model.model_id(),
+            Self::Flux(_) => "flux-1.1-ultra-raw+kontext-max",
+        }
+    }
+
+    async fn edit(
+        &self,
+        edit: &ImageEdit<'_>,
+        deadline: Duration,
+    ) -> Result<df_providers::GeneratedImage, ImageEditError> {
+        match self {
+            Self::OpenAi(provider) => provider.edit(edit, deadline).await,
+            Self::Flux(provider) => provider.edit(edit, deadline).await,
+        }
+    }
+}
+
 impl Imagery {
     /// An image service that registers nothing and never renders.
     pub(super) fn disabled(reason: ImageryOff) -> Self {
@@ -417,12 +484,7 @@ impl Imagery {
             ImagerySettings::Off(reason) => return Ok(Self::disabled(reason)),
             ImagerySettings::On(configuration) => configuration,
         };
-        let provider = NativeImageEditProvider::new(
-            ImageEditConfig::live(),
-            configuration.credential.expose(),
-            configuration.deadline,
-        )
-        .map_err(|_| io::Error::other("imagery provider configuration refused"))?;
+        let provider = ImageRoute::configured(&configuration)?;
         let locator = NativeHeadLocator::new(
             HeadLocateConfig::live(),
             configuration.credential.expose(),
@@ -535,13 +597,14 @@ impl Imagery {
     /// Uses `provider`; tests pass one pointed at a loopback fake.
     pub(super) fn new(
         configuration: ImageryConfiguration,
-        provider: NativeImageEditProvider,
+        provider: impl Into<ImageRoute>,
         manifest_directory: Option<&Path>,
     ) -> Result<Self, io::Error> {
+        let provider = provider.into();
         std::fs::create_dir_all(&configuration.cache_dir)?;
         let summary = format!(
             "IMAGERY on model={} interval={}s rating={} quality={}",
-            configuration.model.model_id(),
+            provider.label(configuration.model),
             configuration.interval.as_secs(),
             configuration.rating.label(),
             match configuration.quality {
@@ -913,8 +976,13 @@ impl Engine {
         let micro_dollars = usage_cost(generated.usage);
         self.micro_dollars
             .fetch_add(micro_dollars, Ordering::SeqCst);
+        // FLUX may answer a WebP request with a PNG; it is kept in a format the request accepts.
+        if !Self::stored_formats(format).contains(&generated.format) {
+            return Err(ImageFailure::BadOutput);
+        }
+        let stored_format = generated.format;
         let bytes = Bytes::from(generated.bytes);
-        let stored = self.store(key, format, bytes.clone()).await.is_ok();
+        let stored = self.store(key, stored_format, bytes.clone()).await.is_ok();
         if stored {
             self.record(key, &request, bytes.len() as u64, micro_dollars, elapsed_ms)
                 .await;

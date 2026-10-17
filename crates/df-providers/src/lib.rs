@@ -120,10 +120,29 @@ pub use image_edit::{
     ReferenceImage,
 };
 #[cfg(not(target_arch = "wasm32"))]
+mod fal_image;
+#[cfg(not(target_arch = "wasm32"))]
+pub use fal_image::{
+    BACKGROUND_REMOVAL, FLUX_KONTEXT_MULTI, FLUX_ULTRA, FalImageConfig, NativeFalImageProvider,
+};
+#[cfg(not(target_arch = "wasm32"))]
 mod eleven_music;
 #[cfg(not(target_arch = "wasm32"))]
 pub use eleven_music::{
     AMBIENCE_MAXIMUM_SECONDS, ElevenMusicConfig, ElevenMusicError, GeneratedAudio,
     MUSIC_MAXIMUM_LENGTH_MILLIS, MUSIC_MAXIMUM_PROMPT_CHARACTERS, MUSIC_MINIMUM_LENGTH_MILLIS,
     NativeElevenMusicProvider,
+};
+#[cfg(not(target_arch = "wasm32"))]
+mod fal_segment;
+#[cfg(not(target_arch = "wasm32"))]
+pub use fal_segment::{
+    FalSegmentConfig, FalSegmentError, MAXIMUM_MASKS, MaskError, MaskRows, MaskRun,
+    NativeFalSegmenter, PixelBox, SegmentAnswer, SegmentInstance, SegmentModel, SegmentRequest,
+};
+#[cfg(not(target_arch = "wasm32"))]
+mod plate_judge;
+#[cfg(not(target_arch = "wasm32"))]
+pub use plate_judge::{
+    JudgeAnswer, JudgePicture, NativePlateJudge, PlateJudgeConfig, PlateJudgeError,
 };

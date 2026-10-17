@@ -169,7 +169,7 @@ impl AssembledPrompt {
         dossier: &'static str,
     ) -> Self {
         self.text.push_str(
-            "\nImage 2 is the approved documentary photograph of this exact accepted hero. \
+            "\nImage 1 is the approved documentary photograph of this exact accepted hero. \
              Match its face, hair, build and costume; do not copy its background or pose. \
              The accepted quickstart portrait defines this hero's full public physical identity. \
              Preserve these exact details across every depiction: ",
@@ -217,13 +217,6 @@ impl AssembledPrompt {
     pub(in crate::gameplay) fn with_development_direction(mut self, direction: &str) -> Self {
         self.text.push_str("\nDevelopment picture direction (change the action only; preserve the scene, cast identities, faces, art style and content rating):\n");
         self.text.push_str(direction);
-        self
-    }
-
-    pub(in crate::gameplay) fn with_neutral_reference(mut self) -> Self {
-        self.text.push_str(
-            "\nImage 1 is a neutral photographic carrier only; create the entire scene from the written direction and use no visual content from this carrier.",
-        );
         self
     }
 
@@ -433,8 +426,9 @@ pub(in crate::gameplay) fn hero_portrait(
     rating: ContentRating,
     hero: HeroVisualIdentity<'_>,
 ) -> Result<AssembledPrompt, IdentityError> {
+    // No pose carrier is sent any more (editing a blank carrier made the result read as
+    // painted), so the portrait opens with its direction rather than a reference description.
     let mut parts = vec![
-        Part::Fixed(HERO_PORTRAIT_REFERENCE),
         Part::Fixed(HERO_PORTRAIT),
         Part::Fixed(HERO_SELECTED_IDENTITY),
         Part::Fact(hero.description()?),

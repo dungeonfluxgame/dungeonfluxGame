@@ -59,13 +59,18 @@ fn malformed_edits_are_refused_before_anything_is_sent() {
         output: ImageFormat::Jpeg,
         ..good()
     });
-    cases.push(ImageEdit {
-        references: &[],
-        ..good()
-    });
     for case in &cases {
         assert_eq!(case.validate(), Err(ImageEditError::InvalidRequest));
     }
+    // No reference at all is a text-only generation, never an edit of a blank carrier.
+    assert_eq!(
+        ImageEdit {
+            references: &[],
+            ..good()
+        }
+        .validate(),
+        Ok(())
+    );
     let long = "x".repeat(df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS + 1);
     assert_eq!(
         ImageEdit {
