@@ -372,7 +372,9 @@ pub(super) fn proposal(
     {
         return Err(ClassificationError::UnknownItem);
     }
-    if let Some(item_id) = &item_id {
+    if let Some(item_id) = &item_id
+        && !try_on_permission
+    {
         validate_item_event(kind, item_id, &typed_words, &reply_text, room)?;
     }
     Ok(Proposal {
@@ -611,6 +613,39 @@ mod tests {
                 item_id: "item-fur-cloak".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn merchant_stock_is_a_try_on_permission_candidate() {
+        let mut room = room();
+        room.model.offers = vec![super::super::adventure::scene_model::SceneOffer {
+            id: "warm-cloak-lined".to_owned(),
+            item_id: "item-warm-cloak-lined".to_owned(),
+            seller_id: "merchant".to_owned(),
+            name: "fur-lined cloak".to_owned(),
+            aliases: vec!["lined cloak".to_owned()],
+            description: "A warm fur-lined cloak.".to_owned(),
+            cost_cp: 1_000,
+        }];
+        let choices = items(&room);
+        assert!(choices.iter().any(|(id, _)| id == "item-warm-cloak-lined"));
+        assert!(
+            choice_labels(&choices).contains(&"try_on_permission:item-warm-cloak-lined".to_owned())
+        );
+        let result = proposal(
+            "try_on_permission:item-warm-cloak-lined",
+            "merchant",
+            "marek",
+            "shop|plate".to_owned(),
+            "npc-line:try-on-stock".to_owned(),
+            "3:8".to_owned(),
+            "May I try on the fur-lined cloak?".to_owned(),
+            "Of course. The fitting curtain is beside the mirror.".to_owned(),
+            &choices,
+            &room,
+        )
+        .unwrap();
+        assert_eq!(result.item_id.as_deref(), Some("item-warm-cloak-lined"));
     }
 
     #[test]
