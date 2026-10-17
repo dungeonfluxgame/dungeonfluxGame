@@ -71,6 +71,8 @@ const REGISTERED_MODEL: &str = ELEVEN_STT_MODEL;
 /// The most the provider may take, end to end; it is also the request deadline.
 const PROVIDER_DEADLINE: Duration = Duration::from_secs(12);
 const IDENTITY_DEADLINE: Duration = Duration::from_secs(5);
+/// An upload cannot occupy a player's speech slot indefinitely before reaching the provider.
+const BODY_READ_DEADLINE: Duration = Duration::from_secs(15);
 /// A line is no longer than the dialogue path accepts.
 const MAXIMUM_TRANSCRIPT_BYTES: usize = 4096;
 /// A transcript JSON of a fifteen second clip is far smaller; this bounds a hostile answer.
@@ -365,6 +367,7 @@ impl Admission {
     async fn hear(
         &mut self,
         body: &[u8],
+        cancellation: oneshot::Receiver<()>,
         span: &mut OperationSpan,
         provider_elapsed_ms: &mut Option<u128>,
         audio_ms: &mut Option<u128>,
@@ -394,10 +397,6 @@ impl Admission {
                 ("gameplay.speech.charged_seconds", seconds.to_string()),
             ],
         );
-        let cancellation = self
-            .cancellation
-            .take()
-            .ok_or(SpeechOutcome::ProviderFailed)?;
         let provider_started = Instant::now();
         let text = transcribe(active, pcm, duration, cancellation, u64::from(seconds)).await;
         *provider_elapsed_ms = Some(provider_started.elapsed().as_millis());
@@ -801,6 +800,7 @@ impl RouteState {
         audio_ms: &mut Option<u128>,
     ) -> Result<String, SpeechOutcome> {
         if !origin_known(headers, &self.allowed_origins) {
+            discard_body(body).await;
             return Err(SpeechOutcome::Refused);
         }
         if matches!(*self.input.mode, Mode::Off(_)) {
@@ -819,7 +819,13 @@ impl RouteState {
             return Err(SpeechOutcome::TooLarge);
         }
         let member = (self.identify)(credential).await?;
-        let mut admission = self.input.admit(member, upload_id)?;
+        let mut admission = match self.input.admit(member, upload_id) {
+            Ok(admission) => admission,
+            Err(outcome) => {
+                discard_body(body).await;
+                return Err(outcome);
+            }
+        };
         record_speech_resource(
             "gameplay.speech_input.queued",
             resource_id,
@@ -833,25 +839,47 @@ impl RouteState {
             Some(admission.started.elapsed().as_millis()),
             0,
         );
-        let clip = axum::body::to_bytes(body, MAXIMUM_CLIP_BYTES)
-            .await
-            .map_err(|_| SpeechOutcome::TooLarge)?;
-        *received = clip.len();
-        let result = admission
-            .hear(&clip, span, provider_elapsed_ms, audio_ms)
-            .await;
-        if admission.cancelled.load(Ordering::Acquire) {
-            *cancelled = true;
-            span.event(
-                "STT cancelled",
-                &[
-                    ("actor", format!("{member:?}")),
-                    ("bytes", clip.len().to_string()),
-                    ("ms", admission.started.elapsed().as_millis().to_string()),
-                ],
-            );
+        let mut audit = QueuedAuditGuard::new(resource_id);
+        let Some(cancellation) = admission.cancellation.take() else {
+            audit.complete();
             return Err(SpeechOutcome::ProviderFailed);
-        }
+        };
+        let mut cancellation = cancellation;
+        let result = tokio::select! {
+            cancellation_result = &mut cancellation => {
+                let _ = cancellation_result;
+                *cancelled = true;
+                Err(SpeechOutcome::ProviderFailed)
+            }
+            read_result = tokio::time::timeout(
+                BODY_READ_DEADLINE,
+                axum::body::to_bytes(body, MAXIMUM_CLIP_BYTES),
+            ) => match read_result {
+                Err(_) => Err(SpeechOutcome::TimedOut),
+                Ok(Err(_)) => Err(SpeechOutcome::TooLarge),
+                Ok(Ok(clip)) => {
+                    *received = clip.len();
+                    let result = admission
+                        .hear(&clip, cancellation, span, provider_elapsed_ms, audio_ms)
+                        .await;
+                    if admission.cancelled.load(Ordering::Acquire) {
+                        *cancelled = true;
+                        span.event(
+                            "STT cancelled",
+                            &[
+                                ("actor", format!("{member:?}")),
+                                ("bytes", clip.len().to_string()),
+                                ("ms", admission.started.elapsed().as_millis().to_string()),
+                            ],
+                        );
+                        Err(SpeechOutcome::ProviderFailed)
+                    } else {
+                        result
+                    }
+                }
+            }
+        };
+        audit.complete();
         result
     }
 
@@ -866,6 +894,62 @@ impl RouteState {
         let upload_id = upload_id_from(headers)?;
         let member = (self.identify)(credential).await?;
         Ok(self.input.cancel(member, upload_id))
+    }
+}
+
+async fn discard_body(body: Body) {
+    let _ = tokio::time::timeout(
+        BODY_READ_DEADLINE,
+        axum::body::to_bytes(body, MAXIMUM_CLIP_BYTES),
+    )
+    .await;
+}
+
+/// Emits a terminal audit outcome if the upload future is dropped after queue admission.
+struct QueuedAuditGuard {
+    resource_id: Option<String>,
+    started: Instant,
+    armed: bool,
+}
+
+impl QueuedAuditGuard {
+    fn new(resource_id: Option<&str>) -> Self {
+        Self {
+            resource_id: resource_id.map(str::to_owned),
+            started: Instant::now(),
+            armed: true,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for QueuedAuditGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        transcription_line(
+            "failed",
+            self.resource_id.as_deref(),
+            self.started.elapsed(),
+            "client_aborted",
+        );
+        record_speech_resource(
+            "gameplay.speech_input.failed",
+            self.resource_id.as_deref(),
+            "failed",
+            "client_aborted",
+            Some("client_aborted"),
+            0,
+            None,
+            None,
+            None,
+            Some(self.started.elapsed().as_millis()),
+            499,
+        );
     }
 }
 
@@ -1524,6 +1608,103 @@ mod tests {
         );
         assert_eq!(fake.calls(), 0);
         assert_eq!(charged(&input), 0);
+    }
+
+    #[tokio::test]
+    async fn a_foreign_origin_upload_is_consumed_before_the_refusal_is_returned() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let consumed = Arc::new(AtomicBool::new(false));
+        let mut request = Upload::from(1, Vec::new()).request();
+        request.headers_mut().insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://evil.example"),
+        );
+        let body_consumed = consumed.clone();
+        *request.body_mut() = Body::from_stream(futures::stream::once(async move {
+            body_consumed.store(true, Ordering::Release);
+            Ok::<_, io::Error>(axum::body::Bytes::from_static(b"untrusted"))
+        }));
+
+        let reply = Service::call(&mut app, request).await.unwrap();
+        assert_eq!(reply.status(), StatusCode::FORBIDDEN);
+        assert!(consumed.load(Ordering::Acquire));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancelling_during_upload_body_read_releases_the_player_slot() {
+        const UPLOAD_ID: &str = "10112233445566778899aabbccddeeff";
+
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let mut upload_app = app.clone();
+        let mut upload = Upload::from(1, Vec::new())
+            .with_upload_id(UPLOAD_ID)
+            .request();
+        *upload.body_mut() = Body::from_stream(futures::stream::pending::<
+            Result<axum::body::Bytes, io::Error>,
+        >());
+        let upload_task =
+            tokio::spawn(async move { Service::call(&mut upload_app, upload).await.unwrap() });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Mode::On(active) = &*input.mode {
+                    if locked(&active.in_flight)
+                        .contains_key(&MemberId::from_bytes(&[1; 16]).unwrap())
+                    {
+                        break;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let cancel = Request::builder()
+            .method(Method::POST)
+            .uri(CANCEL_PATH)
+            .header(BINDING_HEADER, binding_hex(1))
+            .header(UPLOAD_ID_HEADER, UPLOAD_ID)
+            .header(header::ORIGIN, ORIGIN)
+            .body(Body::empty())
+            .unwrap();
+        let reply = Service::call(&mut app, cancel).await.unwrap();
+        assert_eq!(reply.status(), StatusCode::NO_CONTENT);
+        let upload_reply = tokio::time::timeout(Duration::from_secs(2), upload_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(upload_reply.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_upload_body_times_out_and_releases_the_player_slot() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let mut upload = Upload::from(1, Vec::new()).request();
+        *upload.body_mut() = Body::from_stream(futures::stream::pending::<
+            Result<axum::body::Bytes, io::Error>,
+        >());
+
+        let reply = tokio::time::timeout(
+            BODY_READ_DEADLINE + Duration::from_secs(2),
+            Service::call(&mut app, upload),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(reply.status(), StatusCode::GATEWAY_TIMEOUT);
+
+        let (outcome, _) = send(&mut app, Upload::from(1, clip(1_000))).await;
+        assert_eq!(outcome, SpeechOutcome::Heard);
+        assert_eq!(fake.calls(), 1);
     }
 
     #[tokio::test]

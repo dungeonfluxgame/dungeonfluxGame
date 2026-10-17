@@ -159,6 +159,61 @@ fn known_name<'a>(word: &str, names: &'a [String]) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+/// Capitalises sentence starts without treating abbreviations or ellipses as sentence ends.
+fn capitalise_sentence_starts(text: &str) -> String {
+    const ABBREVIATIONS: [&str; 11] = [
+        "dr", "etc", "jr", "mr", "mrs", "ms", "prof", "sr", "st", "vs", "u.s",
+    ];
+
+    let mut result = text.to_owned();
+    let punctuation: Vec<(usize, char)> = result
+        .char_indices()
+        .filter(|(_, character)| matches!(character, '.' | '!' | '?'))
+        .collect();
+    for (position, mark) in punctuation.into_iter().rev() {
+        if mark == '.' {
+            let bytes = result.as_bytes();
+            if bytes.get(position.wrapping_sub(1)) == Some(&b'.')
+                || bytes.get(position + 1) == Some(&b'.')
+            {
+                continue;
+            }
+            let word_start = result[..position]
+                .char_indices()
+                .rev()
+                .find(|(_, character)| character.is_whitespace())
+                .map_or(0, |(index, character)| index + character.len_utf8());
+            let preceding = result[word_start..position]
+                .trim_matches(is_quotation_mark)
+                .to_lowercase();
+            if preceding.chars().count() <= 1 || ABBREVIATIONS.contains(&preceding.as_str()) {
+                continue;
+            }
+        }
+
+        let after_mark = position + mark.len_utf8();
+        let Some((offset, first)) = result[after_mark..]
+            .char_indices()
+            .find(|(_, character)| !is_quotation_mark(*character) && !character.is_whitespace())
+        else {
+            continue;
+        };
+        if !first.is_alphabetic()
+            || !result[after_mark..after_mark + offset]
+                .chars()
+                .any(char::is_whitespace)
+        {
+            continue;
+        }
+        let start = after_mark + offset;
+        let end = start + first.len_utf8();
+        if first.is_lowercase() {
+            result.replace_range(start..end, &first.to_uppercase().to_string());
+        }
+    }
+    result
+}
+
 /// The deterministic cleaner: casing, spacing, punctuation, the filler list, a few common
 /// slips, and names corrected to those present in the scene. It never invents a word.
 pub(super) fn normalise(raw: &str, names: &[String]) -> String {
@@ -257,7 +312,7 @@ pub(super) fn normalise(raw: &str, names: &[String]) -> String {
     if body.chars().any(char::is_alphanumeric) && !body.ends_with(['.', '!', '?', '\u{2026}']) {
         body.push('.');
     }
-    cut(&format!("{body}{closers}"))
+    cut(&capitalise_sentence_starts(&format!("{body}{closers}")))
 }
 
 /// A line longer than [`DISPLAY_CHARACTERS`] is cut at a word with an ellipsis, not rewritten. A
@@ -486,7 +541,7 @@ pub(super) fn validate(raw: &str, candidate: &str, names: &[String]) -> Option<S
     if negations(&clean_words) != negations(&kept_raw) {
         return None;
     }
-    Some(cut(candidate))
+    Some(cut(&capitalise_sentence_starts(candidate)))
 }
 
 const STYLE: &str = "Tidy one line a player typed or said aloud; slot \"clean\" is only that line. Keep \
@@ -583,6 +638,25 @@ mod tests {
         assert_eq!(
             normalise("and who is it that follows you?", &[]),
             "And who is it that follows you?"
+        );
+    }
+
+    #[test]
+    fn sentence_starts_are_capitalised_without_splitting_abbreviations_or_ellipses() {
+        assert_eq!(
+            normalise(
+                "Take the market street outside to the square. there's an inn nearby.",
+                &[]
+            ),
+            "Take the market street outside to the square. There's an inn nearby."
+        );
+        assert_eq!(
+            normalise("Ask Dr. smith to wait... he's still on the road.", &[]),
+            "Ask Dr. smith to wait... he's still on the road."
+        );
+        assert_eq!(
+            normalise("She says \"Wait... there's an inn.\" Then she leaves.", &[]),
+            "She says \"Wait... there's an inn.\" Then she leaves."
         );
     }
 

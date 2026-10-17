@@ -21,6 +21,10 @@ use sha2::{Digest, Sha256};
 use super::{Job, StoryMemory, current, locked};
 use crate::gameplay::table_log::{self, LineSink, TableLog};
 
+#[cfg(test)]
+#[path = "capture_tests.rs"]
+mod capture_tests;
+
 /// The longest text a capture keeps, in characters.
 const KEPT_CHARACTERS: usize = 1200;
 
@@ -431,6 +435,7 @@ pub(in crate::gameplay) fn canon_fact(
     established_by: &str,
 ) {
     with_memory(|memory| {
+        memory.set_scene(scene);
         memory.record(canon_fact_draft(scene, kind, name, content, established_by));
     });
 }
