@@ -135,9 +135,9 @@ pub(super) fn unrelated_payload(
         || (kind != rpc::GameplayActionKind::GreatswordAttack
             && (request.savage_attacker || request.graze))
 }
-/// Most action choices one submit may carry. A fight action carries its tactical choice and at
-/// most the two attack variants (weapon mastery, Savage Attacker).
-const FIGHT_CHOICE_BOUND: usize = 3;
+/// Most action choices one submit may carry. A fight action carries its tactical choice, the two
+/// attack variants (weapon mastery, Savage Attacker) and the knock-out choice.
+const FIGHT_CHOICE_BOUND: usize = 4;
 /// Most action choices a scene interaction may carry. dialogue.rs sends scene-target and
 /// scene-option, then at most two of scene-payment, scene-recipient, scene-amount and
 /// scene-quote-id (a trade sends payment and quote id; a buy sends payment and recipient).
@@ -1665,10 +1665,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_scene_interaction_may_carry_four_choices_and_a_fight_action_three() {
-        // A quote acceptance sends target, option, payment and quote id.
+    fn a_scene_interaction_and_a_fight_action_may_each_carry_four_choices() {
+        // A quote acceptance sends target, option, payment and quote id; an attack sends its
+        // tactical choice, weapon mastery, Savage Attacker and the knock-out choice.
         assert_eq!(choice_bound(true), 4);
-        assert_eq!(choice_bound(false), 3);
+        assert_eq!(choice_bound(false), 4);
     }
 
     #[test]
