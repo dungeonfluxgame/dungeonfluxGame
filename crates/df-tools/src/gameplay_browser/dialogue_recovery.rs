@@ -131,11 +131,17 @@ fn current_scene(client: &Client) -> Option<&rpc::GameplayScene> {
 
 fn reply_attribution(
     reply: &rpc::DialogueResponse,
+    kind: rpc::DialogueDisposition,
     scene: Option<&rpc::GameplayScene>,
     selected_speaker: &str,
 ) -> (String, String) {
     let actor_id = reply.npc_actor_id.trim();
     let canonical_speaker = reply.npc_speaker.trim();
+    // A table notice (a saved note, a whisper that cannot be kept private) names no speaker; it
+    // is the narrator's, never the NPC in focus.
+    if kind == rpc::DialogueDisposition::Meta && canonical_speaker.is_empty() {
+        return ("Narrator".to_owned(), portrait_url("Narrator").to_owned());
+    }
     if !actor_id.is_empty() && !canonical_speaker.is_empty() {
         let portrait = scene
             .and_then(|scene| {
@@ -152,6 +158,11 @@ fn reply_attribution(
     let speaker = selected_speaker.to_owned();
     let portrait = speaker_portrait_url(scene, &speaker);
     (speaker, portrait)
+}
+
+/// The player's line as the exchange echoes it: a notebook command shows only the note itself.
+fn shown_input(text: &str) -> &str {
+    text.strip_prefix("note: ").unwrap_or(text)
 }
 
 fn reply_status(kind: rpc::DialogueDisposition, reply_text: &str, speaker: &str) -> String {
@@ -1009,6 +1020,7 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                                 let selected_speaker = current_speaker(&state);
                                 let (speaker, portrait) = reply_attribution(
                                     &reply,
+                                    kind,
                                     current_scene(&state),
                                     &selected_speaker,
                                 );
@@ -1017,7 +1029,7 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                                 {
                                     state.dialogue.exchange = Some(Exchange {
                                         revision: reply.revision,
-                                        you: input.text.clone(),
+                                        you: shown_input(&input.text).to_owned(),
                                         disposition: None,
                                         speaker: speaker.clone(),
                                         portrait,
@@ -1297,7 +1309,12 @@ mod tests {
             ..Default::default()
         };
 
-        let (speaker, portrait) = reply_attribution(&reply, Some(&scene), "Marek");
+        let (speaker, portrait) = reply_attribution(
+            &reply,
+            super::rpc::DialogueDisposition::Social,
+            Some(&scene),
+            "Marek",
+        );
 
         assert_eq!(speaker, "Corin");
         assert_eq!(portrait, "/assets/concept-art/corin-avatar.webp");
@@ -1316,12 +1333,40 @@ mod tests {
 
         let (speaker, portrait) = reply_attribution(
             &super::rpc::DialogueResponse::default(),
+            super::rpc::DialogueDisposition::Social,
             Some(&scene),
             "Marek",
         );
 
         assert_eq!(speaker, "Marek");
         assert_eq!(portrait, "/assets/concept-art/marek-avatar.webp");
+    }
+
+    #[test]
+    fn a_table_notice_is_the_narrators_and_a_note_echoes_without_its_command() {
+        let scene = super::rpc::GameplayScene {
+            speaker_portrait: "/assets/concept-art/marek-avatar.webp".to_owned(),
+            ..Default::default()
+        };
+        let notice = super::rpc::DialogueResponse {
+            npc_reply: "Noted in the party notes.".to_owned(),
+            ..Default::default()
+        };
+
+        let (speaker, portrait) = reply_attribution(
+            &notice,
+            super::rpc::DialogueDisposition::Meta,
+            Some(&scene),
+            "Marek",
+        );
+
+        assert_eq!(speaker, "Narrator");
+        assert_eq!(portrait, "/assets/concept-art/dm-avatar.webp");
+        assert_eq!(
+            shown_input("note: Marek is out of cloth."),
+            "Marek is out of cloth."
+        );
+        assert_eq!(shown_input("Good day, Marek."), "Good day, Marek.");
     }
 
     use super::*;
