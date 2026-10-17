@@ -443,8 +443,7 @@ mod tests {
             for (operation, target) in [
                 (13, "thing-item-clothes-travelers"),
                 (14, "thing-folded-label"),
-            ]
-            {
+            ] {
                 let choices = [
                     (runtime::CHOICE_GROUP, "look-around"),
                     ("attempt-thing", target),
@@ -904,6 +903,15 @@ mod tests {
             assert_eq!(sell_terms.maximum_price_cp, 100);
             let buyback_request =
                 "Marek, will you buy these travelers clothes back from me? What would you pay?";
+            // Jev is not called in this test; the phrase fallback reads the same buyback line.
+            let buyback_line = journey::merchant_bargaining::HeroLine {
+                intent: journey::merchant_bargaining::rules_hero_intent(
+                    buyback_request,
+                    None,
+                    crate::gameplay::approach_model::JevUnavailable::ProviderUnavailable,
+                ),
+                words: buyback_request,
+            };
             let mut trade_terms =
                 journey::living_scene::merchant_trade_terms(&bought, "Brynn").unwrap();
             assert_eq!(
@@ -911,7 +919,7 @@ mod tests {
                     &trade_terms,
                     "Brynn",
                     &merchant_id,
-                    buyback_request,
+                    buyback_line,
                 )
                 .as_deref(),
                 Some(item_id.as_str()),
@@ -933,7 +941,7 @@ mod tests {
                 &trade_terms,
                 "Brynn",
                 &merchant_id,
-                buyback_request,
+                buyback_line,
                 Some(&item_id),
                 &json!({"npc": {"name": "Marek", "role": "merchant"}}),
             )

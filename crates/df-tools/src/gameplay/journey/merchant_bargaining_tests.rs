@@ -1,12 +1,16 @@
 use serde_json::json;
 
 use super::merchant_bargaining::{
-    MerchantBuybackMemory, QuoteDecision, QuoteRejection, TradeDirection, TradeTerms,
-    attach_buyback_memory, constrain_buyback_ceiling, explicit_price_cp, fixed_price_purchase,
-    is_trade_dialogue_request, quote_candidate, quote_candidate_for_item,
+    HeroLine, HeroTradeIntent, HeroTradeMeaning, MerchantBuybackMemory, MerchantMeaning,
+    MerchantReplyCommitment, QuoteDecision, QuoteRejection, TradeDirection, TradeExchange,
+    TradeJudgement, TradeTerms, attach_buyback_memory, constrain_buyback_ceiling,
+    explicit_price_cp, fixed_price_purchase, hero_intent_from_judgement, is_trade_dialogue_request,
+    merchant_commitment_from_judgement, quote_candidate, quote_candidate_for_item,
     quote_candidate_for_reply, quote_decision, referenced_item_id, reply_context,
-    reply_context_for_quote,
+    reply_context_for_quote, revalidate_quote, rules_hero_intent, rules_merchant_commitment,
+    rules_quote_decision,
 };
+use crate::gameplay::approach_model::JevUnavailable;
 
 fn terms(direction: TradeDirection) -> TradeTerms {
     TradeTerms {
@@ -42,14 +46,52 @@ fn terms(direction: TradeDirection) -> TradeTerms {
     }
 }
 
+/// The phrase fallback reading of one hero line. Used only where Jev is unavailable, which is the
+/// behaviour these tests pin down.
+fn rules_line(words: &str) -> HeroLine<'_> {
+    HeroLine {
+        intent: rules_hero_intent(words, None, JevUnavailable::ProviderUnavailable),
+        words,
+    }
+}
+
+/// The phrase fallback reading of one negotiation turn.
+fn rules_turn<'a>(player_words: &'a str, merchant_reply: &'a str) -> TradeExchange<'a> {
+    TradeExchange {
+        hero: rules_line(player_words),
+        merchant: rules_merchant_commitment(merchant_reply, JevUnavailable::ProviderUnavailable),
+        merchant_reply,
+    }
+}
+
+/// A negotiation turn typed from Jev's labels, as the service builds it when Jev answers.
+fn jev_turn<'a>(
+    hero_label: &'static str,
+    player_words: &'a str,
+    merchant_label: &'static str,
+    merchant_reply: &'a str,
+) -> TradeExchange<'a> {
+    TradeExchange {
+        hero: HeroLine {
+            intent: HeroTradeIntent::from_label(hero_label).expect("hero label is in the Jev set"),
+            words: player_words,
+        },
+        merchant: MerchantReplyCommitment::from_label(merchant_label)
+            .expect("merchant label is in the Jev set"),
+        merchant_reply,
+    }
+}
+
 #[test]
 fn seller_quotes_are_exact_bounded_and_directional() {
     let purchase = quote_candidate(
         &terms(TradeDirection::HeroBuys),
         "sigrun",
         "marek",
-        "Can you do better on the fine clothes?",
-        "I can do the fine clothes for 1,200 copper pieces.",
+        &rules_turn(
+            "Can you do better on the fine clothes?",
+            "I can do the fine clothes for 1,200 copper pieces.",
+        ),
     )
     .unwrap();
     assert_eq!(purchase.item_id, "item-clothes-travelers");
@@ -62,8 +104,10 @@ fn seller_quotes_are_exact_bounded_and_directional() {
         &terms(TradeDirection::HeroSells),
         "sigrun",
         "marek",
-        "Would you take this fine clothes item back?",
-        "I can buy the fine clothes for 12 gold.",
+        &rules_turn(
+            "Would you take this fine clothes item back?",
+            "I can buy the fine clothes for 12 gold.",
+        ),
     )
     .unwrap();
     assert_eq!(buyback.item_id, "item-clothes-travelers");
@@ -75,8 +119,10 @@ fn seller_quotes_are_exact_bounded_and_directional() {
         &terms(TradeDirection::HeroSells),
         "sigrun",
         "marek",
-        "What's your offer for the fine clothes?",
-        "I'll pay 12 gold for the fine clothes.",
+        &rules_turn(
+            "What's your offer for the fine clothes?",
+            "I'll pay 12 gold for the fine clothes.",
+        ),
     )
     .unwrap();
     assert_eq!(requested_buyback, buyback);
@@ -85,8 +131,10 @@ fn seller_quotes_are_exact_bounded_and_directional() {
         &terms(TradeDirection::HeroBuys),
         "sigrun",
         "marek",
-        "Could you do better for this?",
-        "I can do it for 1,200 copper.",
+        &rules_turn(
+            "Could you do better for this?",
+            "I can do it for 1,200 copper.",
+        ),
     )
     .unwrap();
     assert_eq!(contextual.item_id, "item-clothes-travelers");
@@ -96,8 +144,10 @@ fn seller_quotes_are_exact_bounded_and_directional() {
         &terms(TradeDirection::HeroSells),
         "sigrun",
         "marek",
-        "What would you pay for the fine clothes?",
-        "I offer 12 gold for the fine clothes.",
+        &rules_turn(
+            "What would you pay for the fine clothes?",
+            "I offer 12 gold for the fine clothes.",
+        ),
     )
     .unwrap();
     assert_eq!(natural_buyback.price_cp, 1_200);
@@ -106,8 +156,10 @@ fn seller_quotes_are_exact_bounded_and_directional() {
         &terms(TradeDirection::HeroBuys),
         "sigrun",
         "marek",
-        "Can you do better on the fine clothes?",
-        "I'll take 1,200 copper for the fine clothes.",
+        &rules_turn(
+            "Can you do better on the fine clothes?",
+            "I'll take 1,200 copper for the fine clothes.",
+        ),
     )
     .unwrap();
     assert_eq!(natural_buy.price_cp, 1_200);
@@ -119,15 +171,20 @@ fn combined_show_and_sell_uses_the_canonical_held_item() {
     let sale_terms = terms(TradeDirection::HeroSells);
     assert!(is_trade_dialogue_request(request));
     assert_eq!(
-        referenced_item_id(&[sale_terms.clone()], "sigrun", "marek", request).as_deref(),
+        referenced_item_id(
+            &[sale_terms.clone()],
+            "sigrun",
+            "marek",
+            rules_line(request)
+        )
+        .as_deref(),
         Some("item-clothes-travelers")
     );
     let candidate = quote_candidate_for_reply(
         &[sale_terms],
         "sigrun",
         "marek",
-        request,
-        "I can pay 1 GP for the travelers clothes.",
+        &rules_turn(request, "I can pay 1 GP for the travelers clothes."),
     )
     .unwrap();
     assert_eq!(candidate.direction, TradeDirection::HeroSells);
@@ -147,7 +204,7 @@ fn exact_buyback_uses_owned_item_history_and_stays_below_the_prior_purchase() {
 
     assert!(is_trade_dialogue_request(request));
     assert_eq!(
-        referenced_item_id(&trade_terms, "sigrun", "marek", request).as_deref(),
+        referenced_item_id(&trade_terms, "sigrun", "marek", rules_line(request)).as_deref(),
         Some("item-clothes-travelers")
     );
     assert!(constrain_buyback_ceiling(
@@ -169,8 +226,7 @@ fn exact_buyback_uses_owned_item_history_and_stays_below_the_prior_purchase() {
         &trade_terms,
         "sigrun",
         "marek",
-        request,
-        "I can pay 199 copper for the travelers clothes.",
+        &rules_turn(request, "I can pay 199 copper for the travelers clothes."),
     )
     .unwrap();
     assert_eq!(candidate.direction, TradeDirection::HeroSells);
@@ -180,8 +236,7 @@ fn exact_buyback_uses_owned_item_history_and_stays_below_the_prior_purchase() {
             &trade_terms,
             "sigrun",
             "marek",
-            request,
-            "I can pay 2 gold for the travelers clothes.",
+            &rules_turn(request, "I can pay 2 gold for the travelers clothes."),
         ),
         Err(QuoteRejection::OutOfRange)
     );
@@ -190,7 +245,7 @@ fn exact_buyback_uses_owned_item_history_and_stays_below_the_prior_purchase() {
         &trade_terms,
         "sigrun",
         "marek",
-        request,
+        rules_line(request),
         Some("item-clothes-travelers"),
         &json!({"npc": {"name": "Marek"}}),
     )
@@ -229,7 +284,7 @@ fn buyback_direction_survives_an_unfunded_merchant_term() {
     sale.available = false;
     sale.stock_units = 0;
     assert_eq!(
-        referenced_item_id(&[sale], "sigrun", "marek", request).as_deref(),
+        referenced_item_id(&[sale], "sigrun", "marek", rules_line(request)).as_deref(),
         Some("item-clothes-travelers")
     );
 }
@@ -243,15 +298,14 @@ fn buyer_bid_is_not_misread_as_the_hero_selling_the_merchant_item() {
     let request = "I offer 1 GP for those travelers clothes.";
     assert!(is_trade_dialogue_request(request));
     assert_eq!(
-        referenced_item_id(&trade_terms, "sigrun", "marek", request),
+        referenced_item_id(&trade_terms, "sigrun", "marek", rules_line(request)),
         None
     );
     let candidate = quote_candidate_for_reply(
         &trade_terms,
         "sigrun",
         "marek",
-        request,
-        "I can sell the travelers clothes for 2 GP.",
+        &rules_turn(request, "I can sell the travelers clothes for 2 GP."),
     )
     .unwrap();
     assert_eq!(candidate.direction, TradeDirection::HeroBuys);
@@ -268,8 +322,10 @@ fn counteroffer_keeps_the_live_quote_item_and_trade_direction() {
         "marek",
         TradeDirection::HeroSells,
         "item-clothes-travelers",
-        request,
-        "I can meet you at 12 GP for the travelers clothes.",
+        &rules_turn(
+            request,
+            "I can meet you at 12 GP for the travelers clothes.",
+        ),
     )
     .unwrap();
     assert_eq!(candidate.direction, TradeDirection::HeroSells);
@@ -323,8 +379,7 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
                 &terms(TradeDirection::HeroBuys),
                 "sigrun",
                 "marek",
-                request,
-                reply
+                &rules_turn(request, reply),
             ),
             Err(expected),
             "{reply}"
@@ -338,8 +393,10 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             &two_gp_terms,
             "sigrun",
             "marek",
-            "Tell me about the fine clothes.",
-            "I can do the fine clothes for 1,200 copper.",
+            &rules_turn(
+                "Tell me about the fine clothes.",
+                "I can do the fine clothes for 1,200 copper.",
+            ),
         ),
         Err(QuoteRejection::NotBargaining)
     );
@@ -348,8 +405,10 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             &two_gp_terms,
             "sigrun",
             "marek",
-            "How much for the fine clothes?",
-            "The set costs two gold pieces. It’s practical traveler’s clothing in sturdy wool and linen.",
+            &rules_turn(
+                "How much for the fine clothes?",
+                "The set costs two gold pieces. It’s practical traveler’s clothing in sturdy wool and linen.",
+            ),
         )
         .unwrap()
         .price_cp,
@@ -360,8 +419,10 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             std::slice::from_ref(&two_gp_terms),
             "sigrun",
             "marek",
-            "How much for the travelers clothes?",
-            "The set costs two gold pieces. It’s practical traveler’s clothing in sturdy wool and linen.",
+            &rules_turn(
+                "How much for the travelers clothes?",
+                "The set costs two gold pieces. It’s practical traveler’s clothing in sturdy wool and linen.",
+            ),
         )
         .unwrap()
         .price_cp,
@@ -372,8 +433,10 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             &two_gp_terms,
             "sigrun",
             "marek",
-            "How much for the travelers clothes?",
-            "Two gold pieces, then.",
+            &rules_turn(
+                "How much for the travelers clothes?",
+                "Two gold pieces, then.",
+            ),
         )
         .unwrap()
         .price_cp,
@@ -388,8 +451,7 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
                 &two_gp_terms,
                 "sigrun",
                 "marek",
-                "How much for the travelers clothes?",
-                reply,
+                &rules_turn("How much for the travelers clothes?", reply),
             )
             .unwrap()
             .price_cp,
@@ -402,8 +464,7 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             &terms(TradeDirection::HeroBuys),
             "sigrun",
             "marek",
-            request,
-            "I can do 2 fine clothes for 1,200 copper pieces.",
+            &rules_turn(request, "I can do 2 fine clothes for 1,200 copper pieces.",),
         ),
         Err(QuoteRejection::AmbiguousAmount)
     );
@@ -412,28 +473,22 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             &terms(TradeDirection::HeroBuys),
             "sigrun",
             "marek",
-            request,
-            "My price is 1,200 copper.",
+            &rules_turn(request, "My price is 1,200 copper."),
         ),
         Err(QuoteRejection::ItemUnclear)
     );
+    // The non-cash words in this reply are a judged meaning (conditional_or_future), so the
+    // fallback now reports no merchant commitment; before, it reported an ambiguous amount. Both
+    // reject the quote.
     assert_eq!(
         quote_candidate(
             &terms(TradeDirection::HeroBuys),
             "sigrun",
             "marek",
-            request,
-            "I can do the fine clothes for 1,200 copper plus a favor.",
-        ),
-        Err(QuoteRejection::AmbiguousAmount)
-    );
-    assert_eq!(
-        quote_candidate(
-            &terms(TradeDirection::HeroBuys),
-            "sigrun",
-            "marek",
-            request,
-            "I can do the fine clothes for 1,200 copper?",
+            &rules_turn(
+                request,
+                "I can do the fine clothes for 1,200 copper plus a favor.",
+            ),
         ),
         Err(QuoteRejection::NoMerchantCommitment)
     );
@@ -442,8 +497,16 @@ fn quote_needs_a_bargaining_request_a_merchant_commitment_and_one_price() {
             &terms(TradeDirection::HeroBuys),
             "sigrun",
             "marek",
-            request,
-            "No, I can do the fine clothes for 1,200 copper.",
+            &rules_turn(request, "I can do the fine clothes for 1,200 copper?",),
+        ),
+        Err(QuoteRejection::NoMerchantCommitment)
+    );
+    assert_eq!(
+        quote_candidate(
+            &terms(TradeDirection::HeroBuys),
+            "sigrun",
+            "marek",
+            &rules_turn(request, "No, I can do the fine clothes for 1,200 copper.",),
         )
         .unwrap()
         .price_cp,
@@ -489,9 +552,16 @@ fn amount_parser_uses_exact_integer_in_game_currency() {
         explicit_price_cp("1,200 cp plus a favor"),
         Err(QuoteRejection::AmbiguousAmount)
     );
+    // The parser reads the exact amount only. "next week" is a meaning, judged by Jev as
+    // conditional_or_future, and by the phrase fallback in rules_merchant_commitment.
+    assert_eq!(explicit_price_cp("12 gp next week"), Ok(1_200));
     assert_eq!(
-        explicit_price_cp("12 gp next week"),
-        Err(QuoteRejection::AmbiguousAmount)
+        rules_merchant_commitment(
+            "I can do the fine clothes for 12 gp next week.",
+            JevUnavailable::ProviderUnavailable,
+        )
+        .meaning,
+        MerchantMeaning::ConditionalOrFuture
     );
     assert_eq!(
         explicit_price_cp("I'll buy it from you for 12 gp"),
@@ -519,7 +589,7 @@ fn direct_purchase_requires_an_explicit_commitment_at_the_current_listing_price(
         fixed_price_purchase(
             std::slice::from_ref(&buy_terms),
             "sigrun",
-            "I buy the travelers clothes from Marek for 2 GP.",
+            rules_line("I buy the travelers clothes from Marek for 2 GP."),
         ),
         Some(("item-clothes-travelers".into(), 200))
     );
@@ -527,7 +597,7 @@ fn direct_purchase_requires_an_explicit_commitment_at_the_current_listing_price(
         fixed_price_purchase(
             std::slice::from_ref(&buy_terms),
             "sigrun",
-            "I offer 2 GP for those travelers clothes.",
+            rules_line("I offer 2 GP for those travelers clothes."),
         ),
         None
     );
@@ -535,7 +605,7 @@ fn direct_purchase_requires_an_explicit_commitment_at_the_current_listing_price(
         fixed_price_purchase(
             std::slice::from_ref(&buy_terms),
             "sigrun",
-            "Could I buy the travelers clothes for 2 GP?",
+            rules_line("Could I buy the travelers clothes for 2 GP?"),
         ),
         None
     );
@@ -543,7 +613,7 @@ fn direct_purchase_requires_an_explicit_commitment_at_the_current_listing_price(
         fixed_price_purchase(
             std::slice::from_ref(&buy_terms),
             "sigrun",
-            "I buy the travelers clothes for 13 GP.",
+            rules_line("I buy the travelers clothes for 13 GP."),
         ),
         None
     );
@@ -554,48 +624,307 @@ fn direct_purchase_requires_an_explicit_commitment_at_the_current_listing_price(
         fixed_price_purchase(
             &[unavailable],
             "sigrun",
-            "I buy the travelers clothes for 2 GP.",
+            rules_line("I buy the travelers clothes for 2 GP."),
         ),
         None
     );
 }
 
 #[test]
-fn player_must_accept_the_live_quote_price_or_make_a_counteroffer() {
-    assert_eq!(quote_decision("Deal.", 1_200), QuoteDecision::Accept);
+fn fixed_price_purchase_follows_jev_buy_now_not_the_phrase_list() {
+    let mut buy_terms = terms(TradeDirection::HeroBuys);
+    buy_terms.minimum_price_cp = 100;
+    buy_terms.maximum_price_cp = 200;
+    let words = "The travelers clothes are mine at 2 GP, I suppose.";
+    let jev_buy_now = HeroLine {
+        intent: HeroTradeIntent::from_label("buy_now").unwrap(),
+        words,
+    };
     assert_eq!(
-        quote_decision("I buy the fine clothes for 12 gold.", 1_200),
+        fixed_price_purchase(std::slice::from_ref(&buy_terms), "sigrun", jev_buy_now),
+        Some(("item-clothes-travelers".into(), 200))
+    );
+    let jev_offer = HeroLine {
+        intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+        words: "I buy the travelers clothes for 2 GP.",
+    };
+    assert_eq!(
+        fixed_price_purchase(std::slice::from_ref(&buy_terms), "sigrun", jev_offer),
+        None,
+        "a bid is never a commitment, whatever its wording"
+    );
+}
+
+#[test]
+fn player_must_accept_the_live_quote_price_or_make_a_counteroffer() {
+    assert_eq!(rules_quote_decision("Deal.", 1_200), QuoteDecision::Accept);
+    assert_eq!(
+        rules_quote_decision("I buy the fine clothes for 12 gold.", 1_200),
         QuoteDecision::Accept
     );
     assert_eq!(
-        quote_decision("I buy the fine clothes for 1,300 cp instead.", 1_200),
+        rules_quote_decision("I buy the fine clothes for 1,300 cp instead.", 1_200),
         QuoteDecision::Counteroffer
     );
     assert_eq!(
-        quote_decision("No, how about 1,300 cp?", 1_200),
+        rules_quote_decision("No, how about 1,300 cp?", 1_200),
         QuoteDecision::Counteroffer
     );
     assert_eq!(
-        quote_decision("Maybe, I accept.", 1_200),
+        rules_quote_decision("Maybe, I accept.", 1_200),
         QuoteDecision::Unclear
     );
     assert_eq!(
-        quote_decision("Yes, but I need a moment.", 1_200),
+        rules_quote_decision("Yes, but I need a moment.", 1_200),
         QuoteDecision::Unclear
     );
     assert_eq!(
-        quote_decision("I accept 12 gp next week.", 1_200),
+        rules_quote_decision("I accept 12 gp next week.", 1_200),
         QuoteDecision::Unclear
     );
     assert_eq!(
-        quote_decision("No, thank you.", 1_200),
+        rules_quote_decision("No, thank you.", 1_200),
         QuoteDecision::Decline
     );
     assert_eq!(
-        quote_decision("Yes, but only if you include the belt.", 1_200),
+        rules_quote_decision("Yes, but only if you include the belt.", 1_200),
         QuoteDecision::Unclear
     );
-    assert_eq!(quote_decision("1,200 cp?", 1_200), QuoteDecision::Unclear);
+    assert_eq!(
+        rules_quote_decision("1,200 cp?", 1_200),
+        QuoteDecision::Unclear
+    );
+}
+
+#[test]
+fn typed_quote_decision_follows_jev_acceptance_and_the_stated_amount() {
+    let accept = HeroTradeIntent::from_label("accept_quote").unwrap();
+    let decline = HeroTradeIntent::from_label("decline_quote").unwrap();
+    let counter = HeroTradeIntent::from_label("counter_offer").unwrap();
+    let unclear = HeroTradeIntent::from_label("unclear").unwrap();
+    assert_eq!(
+        quote_decision(accept, "Deal.", 1_200),
+        QuoteDecision::Accept
+    );
+    assert_eq!(
+        quote_decision(accept, "I'll take 12 gold for it.", 1_200),
+        QuoteDecision::Accept
+    );
+    assert_eq!(
+        quote_decision(accept, "I'll take 1,300 cp for it.", 1_200),
+        QuoteDecision::Counteroffer,
+        "a stated different amount is a counteroffer, never an acceptance"
+    );
+    assert_eq!(
+        quote_decision(decline, "No, thank you.", 1_200),
+        QuoteDecision::Decline
+    );
+    assert_eq!(
+        quote_decision(counter, "No, how about 1,300 cp?", 1_200),
+        QuoteDecision::Counteroffer
+    );
+    assert_eq!(
+        quote_decision(counter, "Could we talk about it?", 1_200),
+        QuoteDecision::Unclear,
+        "a counter without an amount is not yet a price"
+    );
+    assert_eq!(
+        quote_decision(unclear, "Deal.", 1_200),
+        QuoteDecision::Unclear,
+        "Jev's unclear label keeps the quote open even when the words sound like agreement"
+    );
+}
+
+#[test]
+fn jev_labels_map_to_one_typed_meaning_each_and_back() {
+    for (label, _) in HeroTradeMeaning::CHOICES {
+        let meaning = HeroTradeIntent::from_label(label).unwrap().meaning;
+        assert_eq!(meaning.label(), label);
+    }
+    for (label, _) in MerchantMeaning::CHOICES {
+        let commitment = MerchantReplyCommitment::from_label(label).unwrap();
+        assert_eq!(commitment.meaning.label(), label);
+    }
+    assert!(HeroTradeIntent::from_label("maybe").is_none());
+    assert!(MerchantReplyCommitment::from_label("probably").is_none());
+    let firm = MerchantReplyCommitment::from_label("firm_price").unwrap();
+    assert!(
+        firm.binds_active_item,
+        "a judged firm price binds the item in discussion"
+    );
+    let hedged = MerchantReplyCommitment::from_label("hedges_or_asks").unwrap();
+    assert!(!hedged.binds_active_item);
+    let sell = HeroTradeIntent::from_label("sell_to_merchant").unwrap();
+    assert_eq!(sell.direction, Some(TradeDirection::HeroSells));
+    let ask = HeroTradeIntent::from_label("ask_price").unwrap();
+    assert_eq!(
+        ask.direction, None,
+        "a price question takes the item's only direction"
+    );
+    assert_eq!(ask.judgement, TradeJudgement::Jev);
+}
+
+#[test]
+fn accepted_offer_then_firm_price_reply_yields_the_exact_candidate() {
+    let sale = travelers_clothes_sale();
+    let turn = jev_turn(
+        "offer_price",
+        "I'll pay you 150 copper for the traveler's clothes.",
+        "firm_price",
+        "Fine, 150 copper it is.",
+    );
+    let candidate =
+        quote_candidate_for_reply(std::slice::from_ref(&sale), "sigrun", "marek", &turn)
+            .expect("a judged firm price in bounds is a quote");
+    assert_eq!(candidate.item_id, "item-clothes-travelers");
+    assert_eq!(candidate.direction, TradeDirection::HeroBuys);
+    assert_eq!(candidate.price_cp, 150);
+}
+
+#[test]
+fn judged_merchant_meanings_decide_the_candidate_before_any_phrase_is_read() {
+    let sale = travelers_clothes_sale();
+    let request = "I'll pay you 150 copper for the traveler's clothes.";
+    let reply = "I can do 150 copper for the traveler's clothes.";
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn("offer_price", request, "hedges_or_asks", reply)
+        ),
+        Err(QuoteRejection::NoMerchantCommitment),
+        "a hedged reply makes no quote even when its wording looks firm"
+    );
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn("offer_price", request, "conditional_or_future", reply)
+        ),
+        Err(QuoteRejection::NoMerchantCommitment)
+    );
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn("offer_price", request, "refuses", reply)
+        ),
+        Err(QuoteRejection::MerchantRefused)
+    );
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn("offer_price", request, "not_trade", reply)
+        ),
+        Err(QuoteRejection::NoMerchantCommitment)
+    );
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn("unclear", request, "firm_price", reply)
+        ),
+        Err(QuoteRejection::NotBargaining),
+        "an unclear hero line opens no negotiation"
+    );
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn("not_trade", request, "firm_price", reply)
+        ),
+        Err(QuoteRejection::NotBargaining)
+    );
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn("offer_price", request, "firm_price", reply)
+        )
+        .unwrap()
+        .price_cp,
+        150
+    );
+}
+
+#[test]
+fn judged_firm_price_out_of_range_and_sold_out_still_reject() {
+    let sale = travelers_clothes_sale();
+    let request = "I'll pay you 50 copper for the traveler's clothes.";
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &jev_turn(
+                "offer_price",
+                request,
+                "accepts_hero_price",
+                "I can do 50 copper for the traveler's clothes."
+            )
+        ),
+        Err(QuoteRejection::OutOfRange)
+    );
+    let mut sold = travelers_clothes_sale();
+    sold.available = false;
+    sold.stock_units = 0;
+    assert_eq!(
+        quote_candidate(
+            &sold,
+            "sigrun",
+            "marek",
+            &jev_turn(
+                "buy_now",
+                "I buy the traveler's clothes for 2 gold.",
+                "firm_price",
+                "I can do 200 copper for the traveler's clothes."
+            )
+        ),
+        Err(QuoteRejection::Unavailable)
+    );
+}
+
+#[test]
+fn judgement_from_jev_or_the_fallback_is_recorded_on_the_typed_value() {
+    let words = "Could you lower the price on the fine clothes?";
+    let from_jev = hero_intent_from_judgement(Ok("ask_price"), words, None);
+    assert_eq!(from_jev.judgement, TradeJudgement::Jev);
+    assert_eq!(from_jev.meaning, HeroTradeMeaning::AskPrice);
+
+    let unavailable =
+        hero_intent_from_judgement(Err(JevUnavailable::ProviderUnavailable), words, None);
+    assert_eq!(
+        unavailable,
+        rules_hero_intent(words, None, JevUnavailable::ProviderUnavailable),
+        "with Jev unavailable the phrase fallback reads the line as it always did"
+    );
+    assert_eq!(
+        unavailable.judgement,
+        TradeJudgement::Rules(JevUnavailable::ProviderUnavailable)
+    );
+    assert_eq!(unavailable.judgement.reason_label(), "provider_unavailable");
+
+    let merchant = merchant_commitment_from_judgement(
+        Err(JevUnavailable::Timeout),
+        "I can do the fine clothes for 1,200 copper.",
+    );
+    assert_eq!(merchant.meaning, MerchantMeaning::FirmPrice);
+    assert_eq!(merchant.judgement.source_label(), "rules");
+    assert_eq!(merchant.judgement.reason_label(), "timeout");
+
+    let unknown = merchant_commitment_from_judgement(
+        Ok("definitely_a_price"),
+        "I can do the fine clothes for 1,200 copper.",
+    );
+    assert_eq!(unknown.judgement.reason_label(), "unknown_choice");
 }
 
 #[test]
@@ -616,7 +945,7 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
         &[terms(TradeDirection::HeroBuys)],
         "sigrun",
         "marek",
-        "How much for the fine clothes?",
+        rules_line("How much for the fine clothes?"),
         None,
         &first,
     )
@@ -625,7 +954,7 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
         &[terms(TradeDirection::HeroBuys)],
         "sigrun",
         "marek",
-        "How much for the fine clothes?",
+        rules_line("How much for the fine clothes?"),
         None,
         &second,
     )
@@ -658,7 +987,7 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
             &[terms(TradeDirection::HeroBuys)],
             "sigrun",
             "marek",
-            "How much for the fine clothes?",
+            rules_line("How much for the fine clothes?"),
             None,
             facts,
         )
@@ -667,8 +996,10 @@ fn mood_experience_and_relationship_are_narrative_context_not_price_authority() 
             &terms(TradeDirection::HeroBuys),
             "sigrun",
             "marek",
-            "Can you offer a lower price on the fine clothes?",
-            "I can do the fine clothes for 1,200 copper.",
+            &rules_turn(
+                "Can you offer a lower price on the fine clothes?",
+                "I can do the fine clothes for 1,200 copper.",
+            ),
         )
         .unwrap()
     };
@@ -703,7 +1034,7 @@ fn live_counteroffer_context_preserves_the_exact_item_and_direction() {
         ],
         "sigrun",
         "marek",
-        "What about 11 GP?",
+        rules_line("What about 11 GP?"),
         &quote,
         &json!({"attitude_toward_hero": "wary"}),
     )
@@ -727,7 +1058,7 @@ fn prompt_context_keeps_only_listener_safe_facts_and_excludes_private_authority(
         &[terms(TradeDirection::HeroBuys)],
         "sigrun",
         "marek",
-        "Could I buy the fine clothes?",
+        rules_line("Could I buy the fine clothes?"),
         None,
         &facts,
     )
@@ -759,7 +1090,7 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
         &[terms(TradeDirection::HeroBuys), owned_item.clone()],
         "sigrun",
         "marek",
-        "How much for the fine clothes?",
+        rules_line("How much for the fine clothes?"),
         None,
         &facts,
     )
@@ -772,7 +1103,7 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
         &[terms(TradeDirection::HeroBuys), owned_item],
         "sigrun",
         "marek",
-        "What would you pay for my silver brooch?",
+        rules_line("What would you pay for my silver brooch?"),
         None,
         &facts,
     )
@@ -789,7 +1120,7 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
         &[terms(TradeDirection::HeroBuys), silver_brooch],
         "sigrun",
         "marek",
-        "How much would you pay for my silver brooch?",
+        rules_line("How much would you pay for my silver brooch?"),
         None,
         &facts,
     )
@@ -810,7 +1141,7 @@ fn reply_context_never_lists_unasked_hero_inventory_to_the_merchant() {
         ],
         "another-hero",
         "marek",
-        "What would you pay for my item?",
+        rules_line("What would you pay for my item?"),
         None,
         &facts,
     );
@@ -828,7 +1159,7 @@ fn reply_context_shares_named_stockout_and_not_unmentioned_unavailable_stock() {
         &[sold_out.clone()],
         "sigrun",
         "marek",
-        "Do you still have the fine clothes?",
+        rules_line("Do you still have the fine clothes?"),
         None,
         &facts,
     )
@@ -841,7 +1172,7 @@ fn reply_context_shares_named_stockout_and_not_unmentioned_unavailable_stock() {
         &[sold_out],
         "sigrun",
         "marek",
-        "What are you selling?",
+        rules_line("What are you selling?"),
         None,
         &facts,
     );
@@ -850,6 +1181,7 @@ fn reply_context_shares_named_stockout_and_not_unmentioned_unavailable_stock() {
 
 #[test]
 fn stale_stock_wrong_buyer_and_out_of_range_prices_reject_before_quote_creation() {
+    let request = "Could you do better on the fine clothes?";
     let mut changed_stock = terms(TradeDirection::HeroBuys);
     changed_stock.stock_units = 0;
     changed_stock.available = false;
@@ -858,8 +1190,7 @@ fn stale_stock_wrong_buyer_and_out_of_range_prices_reject_before_quote_creation(
             &changed_stock,
             "sigrun",
             "marek",
-            "Could you do better on the fine clothes?",
-            "I can do the fine clothes for 1,200 copper.",
+            &rules_turn(request, "I can do the fine clothes for 1,200 copper."),
         ),
         Err(QuoteRejection::Unavailable)
     );
@@ -868,8 +1199,7 @@ fn stale_stock_wrong_buyer_and_out_of_range_prices_reject_before_quote_creation(
             &terms(TradeDirection::HeroBuys),
             "someone-else",
             "marek",
-            "Could you do better on the fine clothes?",
-            "I can do the fine clothes for 1,200 copper.",
+            &rules_turn(request, "I can do the fine clothes for 1,200 copper."),
         ),
         Err(QuoteRejection::InvalidTerms)
     );
@@ -878,8 +1208,7 @@ fn stale_stock_wrong_buyer_and_out_of_range_prices_reject_before_quote_creation(
             &terms(TradeDirection::HeroBuys),
             "sigrun",
             "marek",
-            "Could you do better on the fine clothes?",
-            "I can do the fine clothes for 900 copper.",
+            &rules_turn(request, "I can do the fine clothes for 900 copper."),
         ),
         Err(QuoteRejection::OutOfRange)
     );
@@ -888,9 +1217,254 @@ fn stale_stock_wrong_buyer_and_out_of_range_prices_reject_before_quote_creation(
             &terms(TradeDirection::HeroBuys),
             "sigrun",
             "marek",
-            "Could you do better on the fine clothes?",
-            "I can do the fine clothes for 1,600 copper.",
+            &rules_turn(request, "I can do the fine clothes for 1,600 copper."),
         ),
         Err(QuoteRejection::OutOfRange)
+    );
+}
+
+fn travelers_clothes_sale() -> TradeTerms {
+    let mut sale = terms(TradeDirection::HeroBuys);
+    sale.item_name = "traveler's clothes".into();
+    sale.aliases = vec!["travelers clothes".into()];
+    sale.minimum_price_cp = 100;
+    sale.maximum_price_cp = 200;
+    sale
+}
+
+#[test]
+fn merchant_sells_context_gives_the_bounds_and_the_hero_named_amount() {
+    let sale = travelers_clothes_sale();
+    let facts = json!({"npc": {"name": "Marek", "role": "merchant"}});
+    let offer = reply_context(
+        std::slice::from_ref(&sale),
+        "sigrun",
+        "marek",
+        rules_line("I'll pay you 150 copper for the traveler's clothes."),
+        None,
+        &facts,
+    )
+    .unwrap();
+    let entry = &offer["available_trades"][0];
+    assert_eq!(entry["direction"], "merchant_sells");
+    assert_eq!(entry["lowest_price_cp"], 100);
+    assert_eq!(entry["listed_price_cp"], 200);
+    assert_eq!(entry["hero_offer_cp"], 150);
+    assert!(
+        offer["negotiation_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule
+                .as_str()
+                .is_some_and(|rule| rule.contains("hero_offer_cp")))
+    );
+
+    let question = reply_context(
+        std::slice::from_ref(&sale),
+        "sigrun",
+        "marek",
+        rules_line("How much for the traveler's clothes?"),
+        None,
+        &facts,
+    )
+    .unwrap();
+    assert_eq!(question["available_trades"][0]["lowest_price_cp"], 100);
+    assert!(
+        question["available_trades"][0]
+            .get("hero_offer_cp")
+            .is_none()
+    );
+}
+
+#[test]
+fn plain_hero_offer_within_bounds_yields_an_exact_quote() {
+    let sale = travelers_clothes_sale();
+    let request = "I'll pay you 150 copper for the traveler's clothes.";
+    let candidate = quote_candidate(
+        &sale,
+        "sigrun",
+        "marek",
+        &rules_turn(request, "I can do 150 copper for the traveler's clothes."),
+    )
+    .unwrap();
+    assert_eq!(candidate.direction, TradeDirection::HeroBuys);
+    assert_eq!(candidate.item_id, "item-clothes-travelers");
+    assert_eq!(candidate.price_cp, 150);
+}
+
+#[test]
+fn sold_out_item_context_says_so_and_no_quote_is_created_for_it() {
+    let mut sold = travelers_clothes_sale();
+    sold.available = false;
+    sold.stock_units = 0;
+    let context = reply_context(
+        std::slice::from_ref(&sold),
+        "sigrun",
+        "marek",
+        rules_line("I buy the traveler's clothes for 2 gold."),
+        None,
+        &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+    )
+    .unwrap();
+    let entry = &context["available_trades"][0];
+    assert_eq!(entry["direction"], "merchant_sells");
+    assert_eq!(entry["available"], false);
+    assert_eq!(entry["stock_units"], 0);
+    assert!(
+        context["negotiation_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule.as_str().is_some_and(|rule| rule.contains("sold out")))
+    );
+
+    let request = "I buy the traveler's clothes for 2 gold.";
+    let reply = "I can do 200 copper for the traveler's clothes.";
+    assert_eq!(
+        quote_candidate(&sold, "sigrun", "marek", &rules_turn(request, reply)),
+        Err(QuoteRejection::Unavailable)
+    );
+    assert_eq!(
+        quote_candidate_for_item(
+            &[sold],
+            "sigrun",
+            "marek",
+            TradeDirection::HeroBuys,
+            "item-clothes-travelers",
+            &rules_turn(request, reply),
+        ),
+        Err(QuoteRejection::Unavailable)
+    );
+}
+
+#[test]
+fn buyback_hero_ask_is_passed_and_bounded_by_the_maximum_bid() {
+    let mut buyback = terms(TradeDirection::HeroSells);
+    buyback.item_name = "traveler's clothes".into();
+    buyback.minimum_price_cp = 1;
+    buyback.maximum_price_cp = 100;
+    let request = "Marek, will you buy these traveler's clothes back from me for 150 copper? They are unworn.";
+    let context = reply_context(
+        std::slice::from_ref(&buyback),
+        "sigrun",
+        "marek",
+        rules_line(request),
+        Some("item-clothes-travelers"),
+        &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+    )
+    .unwrap();
+    let entry = &context["available_trades"][0];
+    assert_eq!(entry["direction"], "merchant_buys");
+    assert_eq!(entry["hero_offer_cp"], 150);
+    assert_eq!(entry["maximum_bid_cp"], 100);
+
+    let candidate = quote_candidate(
+        &buyback,
+        "sigrun",
+        "marek",
+        &rules_turn(request, "I can offer 90 copper for them."),
+    )
+    .unwrap();
+    assert_eq!(candidate.direction, TradeDirection::HeroSells);
+    assert_eq!(candidate.price_cp, 90);
+    assert_eq!(
+        quote_candidate(
+            &buyback,
+            "sigrun",
+            "marek",
+            &rules_turn(request, "I can offer 150 copper for them."),
+        ),
+        Err(QuoteRejection::OutOfRange)
+    );
+}
+
+#[test]
+fn merchant_accepting_a_hero_offer_below_the_lowest_price_is_out_of_range() {
+    let sale = travelers_clothes_sale();
+    assert_eq!(
+        quote_candidate(
+            &sale,
+            "sigrun",
+            "marek",
+            &rules_turn(
+                "I'll pay you 50 copper for the traveler's clothes.",
+                "I can do 50 copper for the traveler's clothes.",
+            ),
+        ),
+        Err(QuoteRejection::OutOfRange)
+    );
+}
+
+#[test]
+fn merchant_asking_for_a_figure_or_name_produces_no_quote() {
+    let sale = travelers_clothes_sale();
+    let request = "I'll pay you 150 copper for the traveler's clothes.";
+    for reply in [
+        "I'm listening, but I need a figure before I can weigh it.",
+        "Name the amount you're offering, and I'll consider it.",
+    ] {
+        assert_eq!(
+            quote_candidate(&sale, "sigrun", "marek", &rules_turn(request, reply)),
+            Err(QuoteRejection::NoMerchantCommitment),
+            "{reply}"
+        );
+    }
+}
+
+#[test]
+fn withdrawal_recheck_uses_the_judged_refusal_and_the_same_turn() {
+    let sale = travelers_clothes_sale();
+    let request = "I'll pay you 150 copper for the traveler's clothes.";
+    let refusal = jev_turn(
+        "offer_price",
+        request,
+        "refuses",
+        "No, I won't do 150 copper.",
+    );
+    assert_eq!(
+        quote_candidate(&sale, "sigrun", "marek", &refusal),
+        Err(QuoteRejection::MerchantRefused)
+    );
+    let accepted = jev_turn(
+        "offer_price",
+        request,
+        "firm_price",
+        "I can do 150 copper for the traveler's clothes.",
+    );
+    let terms_slice = std::slice::from_ref(&sale);
+    assert!(
+        revalidate_quote(
+            terms_slice,
+            "sigrun",
+            "marek",
+            TradeDirection::HeroBuys,
+            "item-clothes-travelers",
+            "I can do 150 copper for the traveler's clothes.",
+        )
+        .is_ok()
+    );
+    assert!(
+        quote_candidate_for_item(
+            terms_slice,
+            "sigrun",
+            "marek",
+            TradeDirection::HeroBuys,
+            "item-clothes-travelers",
+            &accepted,
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        revalidate_quote(
+            terms_slice,
+            "sigrun",
+            "marek",
+            TradeDirection::HeroBuys,
+            "item-clothes-travelers",
+            "I can do 50 copper for the traveler's clothes.",
+        ),
+        Err(QuoteRejection::OutOfRange),
+        "the deterministic bounds are checked again without repeating the judgement"
     );
 }

@@ -1780,13 +1780,14 @@ impl Actor {
                 )
                 .map_err(unavailable)?;
             }
-            let validated = match super::journey::merchant_bargaining::quote_candidate_for_item(
+            // The judgement that created this candidate was made by the service before the
+            // proposal existed; the actor repeats only the deterministic checks.
+            let validated = match super::journey::merchant_bargaining::revalidate_quote(
                 &terms,
                 &hero_id,
                 &proposal.actor_id,
                 quote.direction,
                 &quote.item_id,
-                &proposal.typed_words,
                 &source_text,
             ) {
                 Ok(validated) => validated,

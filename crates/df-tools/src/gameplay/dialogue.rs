@@ -20,6 +20,10 @@ use super::{
     npc_reply::{NpcReplyContext, StoryFacts},
     wire,
 };
+use journey::merchant_bargaining::{
+    HeroLine, HeroTradeIntent, HeroTradeMeaning, MerchantMeaning, MerchantReplyCommitment,
+    QuoteDecision, QuoteRejection, TradeExchange, TradeJudgement,
+};
 
 const MAXIMUM_MESSAGE_BYTES: usize = 8192;
 const MAXIMUM_TEXT_BYTES: usize = 4096;
@@ -91,6 +95,35 @@ fn record_merchant_quote_candidate(
     );
 }
 
+/// Records which judgement decided a trade reading, so a Jev-unavailable fallback is visible.
+fn record_trade_judgement(stage: &str, meaning: &str, judgement: TradeJudgement) {
+    let source = judgement.source_label();
+    let reason = judgement.reason_label();
+    actor::record_audit_diagnostic(
+        "gameplay.merchant.trade_judgement",
+        format!(
+            "MERCHANT_TRADE_JUDGEMENT stage={stage} source={source} meaning={meaning} reason={reason}"
+        ),
+        serde_json::Map::from_iter([
+            ("stage".into(), serde_json::json!(stage)),
+            ("source".into(), serde_json::json!(source)),
+            ("meaning".into(), serde_json::json!(meaning)),
+            ("reason".into(), serde_json::json!(reason)),
+        ]),
+        &[
+            ("gameplay.merchant.trade_judgement.stage", stage.to_owned()),
+            (
+                "gameplay.merchant.trade_judgement.source",
+                source.to_owned(),
+            ),
+            (
+                "gameplay.merchant.trade_judgement.reason",
+                reason.to_owned(),
+            ),
+        ],
+    );
+}
+
 fn record_merchant_reply_context(
     actor_id: &str,
     quote_followup: bool,
@@ -146,18 +179,48 @@ fn record_merchant_reply_context(
     );
 }
 
+/// Encoded raw dialogue input and the typed trade reading of the same line. Only the async submit
+/// path builds it, so the actor reads the reading and never re-parses the text for trade meaning.
+pub(super) struct RawDialogueBytes {
+    bytes: Vec<u8>,
+    hero_trade: HeroTradeIntent,
+}
+
+impl RawDialogueBytes {
+    pub(super) fn new(bytes: Vec<u8>, hero_trade: HeroTradeIntent) -> Self {
+        Self { bytes, hero_trade }
+    }
+
+    pub(super) fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn retained_heap_bytes(&self) -> usize {
+        self.bytes.capacity()
+    }
+}
+
+/// The judgements the actor needs to close a merchant quote without calling a model. The hero
+/// reading is the one made for the hero line; the merchant reading is present only for a
+/// withdrawal, which is judged from the merchant's reply.
+pub(super) struct QuoteClosureEvidence {
+    source_line_sequence: u64,
+    player_line_sequence: Option<u64>,
+    hero: HeroTradeIntent,
+    merchant: Option<MerchantReplyCommitment>,
+}
+
 pub(super) enum DialogueRequest {
     SyncNotes,
     PendingMerchantQuote,
     CloseMerchantQuote {
         quote_id: String,
         reason: journey::living_scene::MerchantQuoteClosureReason,
-        source_line_sequence: u64,
-        player_line_sequence: Option<u64>,
+        evidence: QuoteClosureEvidence,
     },
-    Raw(Vec<u8>),
+    Raw(RawDialogueBytes),
     RawTarget {
-        bytes: Vec<u8>,
+        bytes: RawDialogueBytes,
         actor_id: String,
     },
     Confirm(Vec<u8>),
@@ -280,10 +343,11 @@ impl DialogueRequest {
             Self::SyncNotes => 0,
             Self::PendingMerchantQuote => 0,
             Self::CloseMerchantQuote { quote_id, .. } => quote_id.capacity(),
-            Self::RawTarget { bytes, actor_id } => {
-                bytes.capacity().saturating_add(actor_id.capacity())
-            }
-            Self::Raw(bytes) | Self::Confirm(bytes) | Self::Cancel(bytes) => bytes.capacity(),
+            Self::RawTarget { bytes, actor_id } => bytes
+                .retained_heap_bytes()
+                .saturating_add(actor_id.capacity()),
+            Self::Raw(bytes) => bytes.retained_heap_bytes(),
+            Self::Confirm(bytes) | Self::Cancel(bytes) => bytes.capacity(),
         }
     }
 }
@@ -306,9 +370,15 @@ pub(super) enum DialogueReply {
         revision: String,
     },
     /// The response, plus what a spoken in-character reply needs when the line qualifies.
-    Raw(rpc::DialogueResponse, Option<NpcReplyContext>),
+    Raw(rpc::DialogueResponse, Option<SpokenTurn>),
     Confirmed(rpc::SubmitActionResponse),
     Cancelled(rpc::DialogueResponse),
+}
+
+/// A spoken-reply context with the hero line's typed trade reading, made by the same submission.
+pub(super) struct SpokenTurn {
+    context: NpcReplyContext,
+    hero_trade: HeroTradeIntent,
 }
 
 struct PendingConfirmation {
@@ -515,8 +585,7 @@ impl Service {
         credential: [u8; 32],
         quote_id: &str,
         reason: journey::living_scene::MerchantQuoteClosureReason,
-        source_line_sequence: u64,
-        player_line_sequence: Option<u64>,
+        evidence: QuoteClosureEvidence,
     ) -> Result<String, Status> {
         match self
             .dialogue_call(
@@ -524,8 +593,7 @@ impl Service {
                 DialogueRequest::CloseMerchantQuote {
                     quote_id: quote_id.to_owned(),
                     reason,
-                    source_line_sequence,
-                    player_line_sequence,
+                    evidence,
                 },
             )
             .await?
@@ -533,6 +601,64 @@ impl Service {
             DialogueReply::MerchantQuoteClosed { revision } => Ok(revision),
             _ => Err(Status::internal("merchant quote closure binding invalid")),
         }
+    }
+
+    /// Jev's reading of the hero line for the merchant trade scope. Falls back to the phrase
+    /// rules only when Jev gives no label, and records which judgement decided.
+    async fn judge_hero_trade(
+        &self,
+        words: &str,
+        pending_quote: Option<&journey::living_scene::SceneTradeQuote>,
+        terms: &[journey::living_scene::MerchantTradeTerms],
+    ) -> HeroTradeIntent {
+        let (_, approach_model) = self.npc_voice.hero_identity_models();
+        let state = journey::merchant_bargaining::hero_judgement_state(words, pending_quote, terms);
+        let choice = approach_model
+            .choose_label(
+                &state,
+                journey::merchant_bargaining::HERO_TRADE_INSTRUCTIONS,
+                &HeroTradeMeaning::CHOICES,
+            )
+            .await;
+        let quoted_price_cp = pending_quote.map(|quote| quote.price_cp);
+        let intent = journey::merchant_bargaining::hero_intent_from_judgement(
+            choice,
+            words,
+            quoted_price_cp,
+        );
+        record_trade_judgement("hero", intent.meaning.label(), intent.judgement);
+        intent
+    }
+
+    /// Jev's reading of the merchant reply to a trade turn. Falls back to the phrase rules only
+    /// when Jev gives no label, and records which judgement decided.
+    async fn judge_merchant_reply(
+        &self,
+        hero: &HeroLine<'_>,
+        merchant_reply: &str,
+        pending_quote: Option<&journey::living_scene::SceneTradeQuote>,
+        terms: &[journey::living_scene::MerchantTradeTerms],
+    ) -> MerchantReplyCommitment {
+        let (_, approach_model) = self.npc_voice.hero_identity_models();
+        let state = journey::merchant_bargaining::merchant_judgement_state(
+            hero,
+            merchant_reply,
+            pending_quote,
+            terms,
+        );
+        let choice = approach_model
+            .choose_label(
+                &state,
+                journey::merchant_bargaining::MERCHANT_REPLY_INSTRUCTIONS,
+                &MerchantMeaning::CHOICES,
+            )
+            .await;
+        let commitment = journey::merchant_bargaining::merchant_commitment_from_judgement(
+            choice,
+            merchant_reply,
+        );
+        record_trade_judgement("merchant", commitment.meaning.label(), commitment.judgement);
+        commitment
     }
 
     fn request_committed_item(
@@ -609,70 +735,73 @@ impl Service {
         let mut quote_followup = None;
         let mut authenticated_hero_id = None;
         let mut current_quote_is_actionable = false;
-        if finality(request.finality)? == InputFinality::Final
+        let mut hero_trade = HeroTradeIntent::not_requested();
+        let trade_turn = finality(request.finality)? == InputFinality::Final
             && matches!(
                 declared,
                 DiscourseContext::Unspecified
                     | DiscourseContext::Social
                     | DiscourseContext::Question
-            )
-        {
+            );
+        if trade_turn {
             let (hero_id, quote) = self.pending_merchant_quote(credential).await?;
             authenticated_hero_id = Some(hero_id.clone());
-            if let Some(quote) = quote {
-                let hero_bound = match quote.direction {
-                    journey::living_scene::SceneTradeDirection::HeroBuys => {
-                        quote.buyer_id == hero_id
-                    }
-                    journey::living_scene::SceneTradeDirection::HeroSells => {
-                        quote.seller_id == hero_id
+            // The public source was checked and journaled when the quote was issued.
+            // TableLog is a bounded presentation ring, so it may no longer retain that
+            // line after enough speech or a server restart.
+            let hero_bound_quote = quote.filter(|quote| match quote.direction {
+                journey::living_scene::SceneTradeDirection::HeroBuys => quote.buyer_id == hero_id,
+                journey::living_scene::SceneTradeDirection::HeroSells => quote.seller_id == hero_id,
+            });
+            let latest = self.updates.borrow().clone();
+            let merchant_terms =
+                match journey::living_scene::merchant_trade_terms(&latest, &hero_id) {
+                    Ok(terms) => terms,
+                    Err(error) => {
+                        actor::record_unavailable(
+                            "merchant-direct-purchase-terms",
+                            &format!("{error:?}"),
+                        );
+                        Vec::new()
                     }
                 };
-                // The public source was checked and journaled when the quote was issued.
-                // TableLog is a bounded presentation ring, so it may no longer retain that
-                // line after enough speech or a server restart.
-                if hero_bound {
-                    current_quote_is_actionable = true;
-                    match super::journey::merchant_bargaining::quote_decision(
-                        &request.text,
-                        quote.price_cp,
-                    ) {
-                        super::journey::merchant_bargaining::QuoteDecision::Accept => {
-                            return self
-                                .interaction_call(
-                                    credential,
-                                    &request,
-                                    &quote.item_id,
-                                    "trade",
-                                    Some(&quote),
-                                    None,
-                                )
-                                .await;
-                        }
-                        super::journey::merchant_bargaining::QuoteDecision::Counteroffer
-                        | super::journey::merchant_bargaining::QuoteDecision::Decline => {
-                            quote_followup = Some(quote);
-                        }
-                        super::journey::merchant_bargaining::QuoteDecision::Unclear
-                            if super::journey::merchant_bargaining::is_trade_dialogue_request(
-                                &request.text,
-                            ) =>
-                        {
-                            quote_followup = Some(quote);
-                        }
-                        super::journey::merchant_bargaining::QuoteDecision::Unclear => {}
+            // Jev reads the hero line only when a merchant trade scope can apply here.
+            if hero_bound_quote.is_some() || !merchant_terms.is_empty() {
+                hero_trade = self
+                    .judge_hero_trade(&request.text, hero_bound_quote.as_ref(), &merchant_terms)
+                    .await;
+            }
+            if let Some(quote) = hero_bound_quote {
+                current_quote_is_actionable = true;
+                match journey::merchant_bargaining::quote_decision(
+                    hero_trade,
+                    &request.text,
+                    quote.price_cp,
+                ) {
+                    QuoteDecision::Accept => {
+                        return self
+                            .interaction_call(
+                                credential,
+                                &request,
+                                &quote.item_id,
+                                "trade",
+                                Some(&quote),
+                                None,
+                            )
+                            .await;
                     }
+                    QuoteDecision::Counteroffer | QuoteDecision::Decline => {
+                        quote_followup = Some(quote);
+                    }
+                    QuoteDecision::Unclear if hero_trade.is_trade() => {
+                        quote_followup = Some(quote);
+                    }
+                    QuoteDecision::Unclear => {}
                 }
             }
         }
-        if finality(request.finality)? == InputFinality::Final
-            && matches!(
-                declared,
-                DiscourseContext::Unspecified
-                    | DiscourseContext::Social
-                    | DiscourseContext::Question
-            )
-            && super::journey::merchant_bargaining::is_trade_dialogue_request(&request.text)
+        if trade_turn
+            && hero_trade.meaning == HeroTradeMeaning::BuyNow
             && !current_quote_is_actionable
             && let Some(hero_id) = authenticated_hero_id.as_deref()
         {
@@ -680,10 +809,13 @@ impl Service {
             match journey::living_scene::merchant_trade_terms(&latest, hero_id) {
                 Ok(terms) => {
                     if let Some((item_id, price_cp)) =
-                        super::journey::merchant_bargaining::fixed_price_purchase(
+                        journey::merchant_bargaining::fixed_price_purchase(
                             &terms,
                             hero_id,
-                            &request.text,
+                            HeroLine {
+                                intent: hero_trade,
+                                words: &request.text,
+                            },
                         )
                     {
                         return self
@@ -730,21 +862,23 @@ impl Service {
                     | DiscourseContext::Social
                     | DiscourseContext::Question
             )
-            && (super::journey::merchant_bargaining::is_trade_dialogue_request(&request.text)
-                || quote_followup.is_some())
+            && (hero_trade.is_trade() || quote_followup.is_some())
             && journey::living_scene::snapshot(current.state(), &scene)
                 .ok()
                 .flatten()
                 .is_some_and(|snapshot| !snapshot.model.offers.is_empty());
-        if merchant_trade_request
+        // Jev's general intent is kept as read. A merchant trade still takes the NPC route, so
+        // its physical and game-question routes are skipped; only the reply context follows speech.
+        let context_intent = if merchant_trade_request
             && matches!(
                 reading.intent,
                 super::approach_model::LineIntent::PhysicalAction
                     | super::approach_model::LineIntent::GameQuestion
-            )
-        {
-            reading.intent = super::approach_model::LineIntent::CharacterSpeech;
-        }
+            ) {
+            super::approach_model::LineIntent::CharacterSpeech
+        } else {
+            reading.intent
+        };
         if finality(request.finality)? == InputFinality::Final
             && matches!(
                 context(request.context)?,
@@ -773,14 +907,18 @@ impl Service {
         let input_finality = finality(request.finality)?;
         if input_finality == InputFinality::Final
             && reading.intent == super::approach_model::LineIntent::GameQuestion
+            && !merchant_trade_request
         {
             let response = self
                 .dialogue_call(
                     credential,
-                    DialogueRequest::Raw(encode(&rpc::RawDialogueRequest {
-                        context: rpc::DialogueContext::Meta as i32,
-                        ..request.clone()
-                    })?),
+                    DialogueRequest::Raw(RawDialogueBytes::new(
+                        encode(&rpc::RawDialogueRequest {
+                            context: rpc::DialogueContext::Meta as i32,
+                            ..request.clone()
+                        })?,
+                        HeroTradeIntent::not_requested(),
+                    )),
                 )
                 .await?;
             if let DialogueReply::Raw(mut response, _) = response {
@@ -798,7 +936,7 @@ impl Service {
                 None,
             ));
         }
-        request.context = match reading.intent {
+        request.context = match context_intent {
             super::approach_model::LineIntent::PartyNote => rpc::DialogueContext::Meta as i32,
             super::approach_model::LineIntent::HeroSpeech => {
                 let party = current
@@ -893,7 +1031,7 @@ impl Service {
             }
             target = selected;
         }
-        let bytes = encode(&request)?;
+        let bytes = RawDialogueBytes::new(encode(&request)?, hero_trade);
         let request = match target {
             Some(actor_id) => DialogueRequest::RawTarget { bytes, actor_id },
             None => DialogueRequest::Raw(bytes),
@@ -1215,7 +1353,13 @@ impl Service {
             spoken.observed_revision = receipt.revision.clone();
             spoken.context = rpc::DialogueContext::Social as i32;
             if let DialogueReply::Raw(mut response, npc) = self
-                .dialogue_call(credential, DialogueRequest::Raw(encode(&spoken)?))
+                .dialogue_call(
+                    credential,
+                    DialogueRequest::Raw(RawDialogueBytes::new(
+                        encode(&spoken)?,
+                        HeroTradeIntent::not_requested(),
+                    )),
+                )
                 .await?
             {
                 response.disposition = rpc::DialogueDisposition::Action as i32;
@@ -1509,7 +1653,7 @@ impl Service {
         &self,
         credential: [u8; 32],
         mut response: rpc::DialogueResponse,
-        npc: Option<NpcReplyContext>,
+        npc: Option<SpokenTurn>,
     ) -> Result<DialogueCompletion, Status> {
         let mut npc_outcome = None;
         let mut npc_fallback = None;
@@ -1517,7 +1661,11 @@ impl Service {
         let mut npc_event_result = None;
         // The model call runs here, off the actor thread; on any failure the
         // response is exactly the classification the actor produced.
-        if let Some(mut context) = npc {
+        if let Some(SpokenTurn {
+            mut context,
+            hero_trade,
+        }) = npc
+        {
             let bargain_source = (
                 context.actor_id.clone(),
                 context.npc_id.clone(),
@@ -1537,20 +1685,26 @@ impl Service {
             if let (Some(quote), Some(line)) =
                 (context.pending_quote.as_ref(), player_line.as_ref())
             {
-                let decision =
-                    super::journey::merchant_bargaining::quote_decision(&line.text, quote.price_cp);
+                let decision = journey::merchant_bargaining::quote_decision(
+                    hero_trade,
+                    &line.text,
+                    quote.price_cp,
+                );
                 if matches!(
                     decision,
-                    super::journey::merchant_bargaining::QuoteDecision::Decline
-                        | super::journey::merchant_bargaining::QuoteDecision::Counteroffer
+                    QuoteDecision::Decline | QuoteDecision::Counteroffer
                 ) {
                     match self
                         .close_merchant_quote(
                             credential,
                             &quote.quote_id,
                             journey::living_scene::MerchantQuoteClosureReason::HeroDeclined,
-                            line.sequence,
-                            None,
+                            QuoteClosureEvidence {
+                                source_line_sequence: line.sequence,
+                                player_line_sequence: None,
+                                hero: hero_trade,
+                                merchant: None,
+                            },
                         )
                         .await
                     {
@@ -1589,15 +1743,51 @@ impl Service {
                     let revision = self.updates.borrow().basis().revision;
                     source_revision = format!("{}:{}", revision.epoch().get(), revision.sequence());
                 }
-                let trade_request = pending_quote.is_some()
-                    || super::journey::merchant_bargaining::is_trade_dialogue_request(&typed_words);
-                let quote_proposal = if trade_request
+                let trade_request = pending_quote.is_some() || hero_trade.is_trade();
+                // Jev judges the merchant's reply only for a spoken, public trade turn.
+                let merchant_commitment = if trade_request
                     && exchange.outcome == super::npc_reply::ExchangeOutcome::Spoken
                     && !exchange.private
                 {
                     let current = self.updates.borrow().clone();
+                    let judged_terms =
+                        match journey::living_scene::merchant_trade_terms(&current, &hero_id) {
+                            Ok(terms) => terms,
+                            Err(error) => {
+                                actor::record_unavailable(
+                                    "merchant-dialogue-terms",
+                                    &format!("{error:?}"),
+                                );
+                                Vec::new()
+                            }
+                        };
+                    Some(
+                        self.judge_merchant_reply(
+                            &HeroLine {
+                                intent: hero_trade,
+                                words: &typed_words,
+                            },
+                            &exchange.text,
+                            pending_quote.as_ref(),
+                            &judged_terms,
+                        )
+                        .await,
+                    )
+                } else {
+                    None
+                };
+                let quote_proposal = if let Some(merchant) = merchant_commitment {
+                    let current = self.updates.borrow().clone();
                     match journey::living_scene::merchant_trade_terms(&current, &hero_id) {
                         Ok(mut terms) => {
+                            let turn = TradeExchange {
+                                hero: HeroLine {
+                                    intent: hero_trade,
+                                    words: &typed_words,
+                                },
+                                merchant,
+                                merchant_reply: &exchange.text,
+                            };
                             let item_to_sell = pending_quote
                                 .as_ref()
                                 .filter(|quote| {
@@ -1606,11 +1796,8 @@ impl Service {
                                 })
                                 .map(|quote| quote.item_id.clone())
                                 .or_else(|| {
-                                    super::journey::merchant_bargaining::referenced_item_id(
-                                        &terms,
-                                        &hero_id,
-                                        &actor_id,
-                                        &typed_words,
+                                    journey::merchant_bargaining::referenced_item_id(
+                                        &terms, &hero_id, &actor_id, turn.hero,
                                     )
                                 });
                             let history_valid = if let (Some(item_id), Some(place_id)) = (
@@ -1642,24 +1829,19 @@ impl Service {
                                 item_to_sell.is_none()
                             };
                             let candidate = if !history_valid {
-                                Err(super::journey::merchant_bargaining::QuoteRejection::InvalidTerms)
+                                Err(QuoteRejection::InvalidTerms)
                             } else if let Some(quote) = pending_quote.as_ref() {
-                                super::journey::merchant_bargaining::quote_candidate_for_item(
+                                journey::merchant_bargaining::quote_candidate_for_item(
                                     &terms,
                                     &hero_id,
                                     &actor_id,
                                     quote.direction,
                                     &quote.item_id,
-                                    &typed_words,
-                                    &exchange.text,
+                                    &turn,
                                 )
                             } else {
-                                super::journey::merchant_bargaining::quote_candidate_for_reply(
-                                    &terms,
-                                    &hero_id,
-                                    &actor_id,
-                                    &typed_words,
-                                    &exchange.text,
+                                journey::merchant_bargaining::quote_candidate_for_reply(
+                                    &terms, &hero_id, &actor_id, &turn,
                                 )
                             };
                             match candidate {
@@ -1730,7 +1912,8 @@ impl Service {
                     && quote_proposal.is_none()
                     && exchange.outcome == super::npc_reply::ExchangeOutcome::Spoken
                     && !exchange.private
-                    && super::journey::merchant_bargaining::is_merchant_refusal(&exchange.text)
+                    && merchant_commitment
+                        .is_some_and(|merchant| merchant.meaning == MerchantMeaning::Refuses)
                     && let (Some(source_line_sequence), Some(player_line)) =
                         (exchange.source_line_sequence, player_line.as_ref())
                 {
@@ -1739,8 +1922,12 @@ impl Service {
                             credential,
                             &quote.quote_id,
                             journey::living_scene::MerchantQuoteClosureReason::MerchantWithdrew,
-                            source_line_sequence,
-                            Some(player_line.sequence),
+                            QuoteClosureEvidence {
+                                source_line_sequence,
+                                player_line_sequence: Some(player_line.sequence),
+                                hero: hero_trade,
+                                merchant: merchant_commitment,
+                            },
                         )
                         .await
                     {
@@ -2187,9 +2374,14 @@ impl actor::Actor {
         member: MemberId,
         quote_id: &str,
         reason: journey::living_scene::MerchantQuoteClosureReason,
-        source_line_sequence: u64,
-        player_line_sequence: Option<u64>,
+        evidence: QuoteClosureEvidence,
     ) -> Result<String, Status> {
+        let QuoteClosureEvidence {
+            source_line_sequence,
+            player_line_sequence,
+            hero: hero_trade,
+            merchant: merchant_commitment,
+        } = evidence;
         if self.fenced || self.owner.has_uncertain_operation() {
             return Err(Status::unavailable(
                 "resolve the retained operation before quote closure",
@@ -2216,16 +2408,18 @@ impl actor::Actor {
         let (actor_id, source_text) = match reason {
             journey::living_scene::MerchantQuoteClosureReason::HeroDeclined => {
                 let latest_hero = self.table_log.latest_hero_speech_after(0);
-                let decision =
-                    super::journey::merchant_bargaining::quote_decision(&line.text, quote.price_cp);
+                let decision = journey::merchant_bargaining::quote_decision(
+                    hero_trade,
+                    &line.text,
+                    quote.price_cp,
+                );
                 if latest_hero.as_ref().map(|line| line.sequence) != Some(source_line_sequence)
                     || line.role != rpc::TableRole::Hero as i32
                     || line.kind != rpc::TableKind::Speech as i32
                     || line.speaker != hero.chars().take(48).collect::<String>()
                     || !matches!(
                         decision,
-                        super::journey::merchant_bargaining::QuoteDecision::Decline
-                            | super::journey::merchant_bargaining::QuoteDecision::Counteroffer
+                        QuoteDecision::Decline | QuoteDecision::Counteroffer
                     )
                 {
                     return Err(Status::failed_precondition(
@@ -2249,27 +2443,34 @@ impl actor::Actor {
                     .is_some();
                 let terms = journey::living_scene::merchant_trade_terms(current, &hero)
                     .map_err(actor::unavailable)?;
-                let replacement = super::journey::merchant_bargaining::quote_candidate_for_item(
+                let merchant = merchant_commitment.ok_or_else(|| {
+                    Status::failed_precondition("merchant reply judgement missing")
+                })?;
+                let turn = TradeExchange {
+                    hero: HeroLine {
+                        intent: hero_trade,
+                        words: &player_line.text,
+                    },
+                    merchant,
+                    merchant_reply: &line.text,
+                };
+                let replacement = journey::merchant_bargaining::quote_candidate_for_item(
                     &terms,
                     &hero,
                     merchant_id,
                     quote.direction,
                     &quote.item_id,
-                    &player_line.text,
-                    &line.text,
+                    &turn,
                 );
-                let decision = super::journey::merchant_bargaining::quote_decision(
+                let decision = journey::merchant_bargaining::quote_decision(
+                    hero_trade,
                     &player_line.text,
                     quote.price_cp,
                 );
                 let player_was_negotiating = matches!(
                     decision,
-                    super::journey::merchant_bargaining::QuoteDecision::Decline
-                        | super::journey::merchant_bargaining::QuoteDecision::Counteroffer
-                )
-                    || super::journey::merchant_bargaining::is_trade_dialogue_request(
-                        &player_line.text,
-                    );
+                    QuoteDecision::Decline | QuoteDecision::Counteroffer
+                ) || hero_trade.is_trade();
                 if player_sequence >= source_line_sequence
                     || latest_hero.as_ref().map(|line| line.sequence) != Some(player_sequence)
                     || player_line.role != rpc::TableRole::Hero as i32
@@ -2280,7 +2481,7 @@ impl actor::Actor {
                     || line.actor_id != merchant_id.as_str()
                     || !latest_npc_matches
                     || !player_was_negotiating
-                    || !super::journey::merchant_bargaining::is_merchant_refusal(&line.text)
+                    || merchant.meaning != MerchantMeaning::Refuses
                     || replacement.is_ok()
                 {
                     return Err(Status::failed_precondition(
@@ -2455,30 +2656,24 @@ impl actor::Actor {
             DialogueRequest::CloseMerchantQuote {
                 quote_id,
                 reason,
-                source_line_sequence,
-                player_line_sequence,
+                evidence,
             } => {
                 let member = self.dialogue_member(&credential)?;
                 let revision = self.close_merchant_quote_from_table(
-                    credential,
-                    member,
-                    &quote_id,
-                    reason,
-                    source_line_sequence,
-                    player_line_sequence,
+                    credential, member, &quote_id, reason, evidence,
                 )?;
                 Ok(DialogueReply::MerchantQuoteClosed { revision })
             }
             DialogueRequest::Raw(bytes) => {
                 let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
                     .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
-                self.raw_dialogue(credential, request, None)
+                self.raw_dialogue(credential, request, None, bytes.hero_trade)
                     .map(|(response, npc)| DialogueReply::Raw(response, npc))
             }
             DialogueRequest::RawTarget { bytes, actor_id } => {
                 let request = rpc::RawDialogueRequest::decode(bytes.as_slice())
                     .map_err(|_| Status::invalid_argument("dialogue input invalid"))?;
-                self.raw_dialogue(credential, request, Some(&actor_id))
+                self.raw_dialogue(credential, request, Some(&actor_id), bytes.hero_trade)
                     .map(|(response, npc)| DialogueReply::Raw(response, npc))
             }
             DialogueRequest::Confirm(bytes) => {
@@ -2501,7 +2696,8 @@ impl actor::Actor {
         credential: [u8; 32],
         request: rpc::RawDialogueRequest,
         target: Option<&str>,
-    ) -> Result<(rpc::DialogueResponse, Option<NpcReplyContext>), Status> {
+        hero_trade: HeroTradeIntent,
+    ) -> Result<(rpc::DialogueResponse, Option<SpokenTurn>), Status> {
         let member = self.dialogue_member(&credential)?;
         if self.fenced || self.owner.has_uncertain_operation() {
             return Err(Status::unavailable(
@@ -2663,7 +2859,7 @@ impl actor::Actor {
                         | IntentDisposition::Joke
                         | IntentDisposition::Clarify
                 )))
-        .then(|| self.npc_reply_context(member, &request.text, target))
+        .then(|| self.npc_reply_context(member, &request.text, target, hero_trade))
         .flatten();
         if finality == InputFinality::Final
             && declared != DiscourseContext::Meta
@@ -2702,7 +2898,10 @@ impl actor::Actor {
                     .map(|context| context.speaker.clone())
                     .unwrap_or_default(),
             },
-            npc,
+            npc.map(|context| SpokenTurn {
+                context,
+                hero_trade,
+            }),
         ))
     }
 
@@ -2713,6 +2912,7 @@ impl actor::Actor {
         member: MemberId,
         typed: &str,
         target: Option<&str>,
+        hero_trade: HeroTradeIntent,
     ) -> Option<NpcReplyContext> {
         let current = self.owner.checkpoint();
         let scene = match super::beat_script_runtime::scene(current.state()) {
@@ -2772,28 +2972,31 @@ impl actor::Actor {
             quote.source_actor_id == *expected_merchant
                 && quote.source_actor_id == reply.actor_id
                 && {
-                    let decision =
-                        super::journey::merchant_bargaining::quote_decision(typed, quote.price_cp);
+                    let decision = journey::merchant_bargaining::quote_decision(
+                        hero_trade,
+                        typed,
+                        quote.price_cp,
+                    );
                     matches!(
                         decision,
-                        super::journey::merchant_bargaining::QuoteDecision::Counteroffer
-                            | super::journey::merchant_bargaining::QuoteDecision::Decline
-                    ) || (decision == super::journey::merchant_bargaining::QuoteDecision::Unclear
-                        && super::journey::merchant_bargaining::is_trade_dialogue_request(typed))
+                        QuoteDecision::Counteroffer | QuoteDecision::Decline
+                    ) || (decision == QuoteDecision::Unclear && hero_trade.is_trade())
                 }
         });
         reply.pending_quote = quote_followup.clone();
-        if super::journey::merchant_bargaining::is_trade_dialogue_request(typed)
-            || quote_followup.is_some()
-        {
+        if hero_trade.is_trade() || quote_followup.is_some() {
+            let line = HeroLine {
+                intent: hero_trade,
+                words: typed,
+            };
             match journey::living_scene::merchant_trade_terms(current, &hero_id) {
                 Ok(mut terms) => {
                     let tendered_item = if quote_followup.is_none() {
-                        super::journey::merchant_bargaining::referenced_item_id(
+                        journey::merchant_bargaining::referenced_item_id(
                             &terms,
                             &hero_id,
                             &reply.actor_id,
-                            typed,
+                            line,
                         )
                     } else {
                         None
@@ -2830,20 +3033,20 @@ impl actor::Actor {
                         }
                     }
                     let mut trade_facts = if let Some(quote) = quote_followup.as_ref() {
-                        super::journey::merchant_bargaining::reply_context_for_quote(
+                        journey::merchant_bargaining::reply_context_for_quote(
                             &terms,
                             &hero_id,
                             &reply.actor_id,
-                            typed,
+                            line,
                             quote,
                             &reply.facts,
                         )
                     } else {
-                        super::journey::merchant_bargaining::reply_context(
+                        journey::merchant_bargaining::reply_context(
                             &terms,
                             &hero_id,
                             &reply.actor_id,
-                            typed,
+                            line,
                             tendered_item.as_deref(),
                             &reply.facts,
                         )
