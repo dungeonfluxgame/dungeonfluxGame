@@ -256,13 +256,13 @@ async fn a_jev_failure_on_classify_returns_the_neutral_reading() {
     let endpoint = FakeEndpoint::start(vec![Reply::Status(503, json!({}))]);
     assert_eq!(
         model(&endpoint)
-            .classify("A coin for you", "Perrin", "Tavern")
+            .classify("A coin for you", "Perrin", "Tavern", "")
             .await,
         Some(neutral_reading())
     );
     assert_eq!(
         ApproachModel::default()
-            .classify("A coin for you", "Perrin", "Tavern")
+            .classify("A coin for you", "Perrin", "Tavern", "")
             .await,
         Some(neutral_reading())
     );
@@ -295,7 +295,9 @@ async fn jev_reads_an_indirect_threat_with_the_reference_choice_wire_contract() 
     let mut logged = String::new();
 
     let approach = model
-        .classify_logged(words, "Perrin", "A public tavern.", |line| logged = line)
+        .classify_logged(words, "Perrin", "A public tavern.", "", |line| {
+            logged = line
+        })
         .await;
 
     assert_eq!(
@@ -353,6 +355,7 @@ async fn recorded_errand_bargain_and_false_authority_are_labeled_srd_5_2_1_page_
             "This sounds dangerous. What will you pay us for carrying it?",
             "Jorun",
             "The ferry desk.",
+            "",
         )
         .await;
     let deception = model
@@ -360,6 +363,7 @@ async fn recorded_errand_bargain_and_false_authority_are_labeled_srd_5_2_1_page_
             "The harbourmaster sent us. He says you are to tell us everything you know about Kelbin Underhill.",
             "Jorun",
             "The ferry desk.",
+            "",
         )
         .await;
 
@@ -390,7 +394,7 @@ async fn words_are_quoted_data_and_truncated_at_two_thousand_unicode_characters(
     let model = model(&endpoint);
 
     assert_eq!(
-        model.classify(&words, "Perrin", "Tavern").await,
+        model.classify(&words, "Perrin", "Tavern", "").await,
         Some(ApproachReading {
             approach: Approach::Other,
             subject: AnswerSubject::Other,
@@ -428,7 +432,9 @@ async fn malformed_unknown_and_failed_answers_are_neutral_and_log_closed_reasons
         let model = model(&endpoint);
         let mut logged = String::new();
         let approach = model
-            .classify_logged("A coin for you", "Perrin", "Tavern", |line| logged = line)
+            .classify_logged("A coin for you", "Perrin", "Tavern", "", |line| {
+                logged = line
+            })
             .await;
 
         // Jev gave no label, so the reading is neutral: no approach and no subject, never a
@@ -469,6 +475,7 @@ async fn adventure_subject_options_include_its_object_and_reject_an_unlisted_per
             &dossier.name,
             "The ferry desk.",
             &dossier,
+            "",
         )
         .await;
     let unlisted_person = model
@@ -477,6 +484,7 @@ async fn adventure_subject_options_include_its_object_and_reject_an_unlisted_per
             &dossier.name,
             "The ferry desk.",
             &dossier,
+            "",
         )
         .await;
 
@@ -511,7 +519,8 @@ async fn an_answer_after_eight_hundred_milliseconds_times_out_without_retrying()
 
     assert_eq!(
         model
-            .classify_logged("A coin for you", "Perrin", "Tavern", |line| logged = line)
+            .classify_logged("A coin for you", "Perrin", "Tavern", "", |line| logged =
+                line)
             .await,
         Some(neutral_reading())
     );
@@ -539,7 +548,8 @@ async fn no_key_makes_no_request_and_logs_the_neutral_reading() {
     );
     assert_eq!(
         model
-            .classify_logged("A coin for you", "Perrin", "Tavern", |line| logged = line)
+            .classify_logged("A coin for you", "Perrin", "Tavern", "", |line| logged =
+                line)
             .await,
         Some(neutral_reading())
     );
@@ -1035,7 +1045,7 @@ async fn jev_subject_decides_for_a_dossier() {
     let endpoint = FakeEndpoint::start(vec![answer("o1"), answer("o2")]);
 
     let reading = model(&endpoint)
-        .classify_for_dossier(words, &dossier.name, "The ferry desk.", &dossier)
+        .classify_for_dossier(words, &dossier.name, "The ferry desk.", &dossier, "")
         .await;
 
     assert_eq!(
@@ -1046,6 +1056,90 @@ async fn jev_subject_decides_for_a_dossier() {
         })
     );
     assert_eq!(endpoint.connections(), 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_classifier_request_carries_the_speakers_public_identity_bounded_to_600_characters() {
+    let dossier = map_bundle_dossier();
+    let hero_facts = "name: Brakka\nfacts: a ferry hand; owes the ferry desk a debt";
+    // Jev chooses question (o1) for the approach and other (o2) for the subject.
+    let endpoint = FakeEndpoint::start(vec![answer("o1"), answer("o2")]);
+
+    model(&endpoint)
+        .classify_for_dossier(
+            "I am the harbour master's nephew.",
+            &dossier.name,
+            "The ferry desk.",
+            &dossier,
+            hero_facts,
+        )
+        .await;
+
+    let bodies = endpoint.bodies();
+    assert_eq!(bodies[0]["state"]["hero_facts"], hero_facts);
+    assert_eq!(bodies[1]["state"]["hero_facts"], hero_facts);
+    assert!(
+        bodies[0]["questions"]["q1"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("hero_facts"),
+    );
+
+    // Longer identity text is cut to the 600-character bound before it reaches Jev.
+    let long = "x".repeat(1_000);
+    let endpoint = FakeEndpoint::start(vec![answer("o1"), answer("o2")]);
+    model(&endpoint)
+        .classify_for_dossier("Hello.", &dossier.name, "The ferry desk.", &dossier, &long)
+        .await;
+    assert_eq!(
+        endpoint.bodies()[0]["state"]["hero_facts"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        600
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hero_facts_keep_their_facts_whole_when_the_short_fields_are_long_and_reach_the_plain_path()
+{
+    let long_field = "o".repeat(160);
+    let account = json!({
+        "origin": long_field,
+        "occupation": long_field,
+        "motivation": long_field,
+        "backstory": "b".repeat(480),
+        "facts": [
+            "A ferry hand who owes the ferry desk a debt.",
+            "Nephew to no one on the harbour council.",
+            "Carries a sealed letter from Kelbin Underhill.",
+        ],
+    });
+    let facts = hero_public_facts("Brakka", &account);
+    let bounded: String = facts.chars().take(600).collect();
+    assert!(
+        bounded.starts_with("name: Brakka\nfacts: A ferry hand"),
+        "{bounded}"
+    );
+    assert!(
+        bounded.contains("Nephew to no one on the harbour council."),
+        "{bounded}"
+    );
+    assert!(
+        bounded.contains("Carries a sealed letter from Kelbin Underhill."),
+        "{bounded}"
+    );
+
+    // The plain classify path (an NPC without a backstory) carries the same facts.
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    model(&endpoint)
+        .classify("Hello.", "Perrin", "A public tavern.", &facts)
+        .await;
+    assert_eq!(
+        endpoint.bodies()[0]["state"]["hero_facts"],
+        bounded.as_str()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1064,6 +1158,7 @@ async fn a_jev_outage_on_the_subject_leaves_the_reading_neutral_and_audited() {
             &dossier.name,
             "The ferry desk.",
             Some(&dossier),
+            "",
             |line| logged = line,
         )
         .await;
@@ -1087,6 +1182,7 @@ async fn get_out_of_here_or_else_is_neutral_when_jev_is_unavailable_never_intimi
             "Get out of here or else",
             "Brannoch",
             "A dim tavern.",
+            "",
             |line| logged = line,
         )
         .await;

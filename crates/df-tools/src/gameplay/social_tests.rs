@@ -177,7 +177,7 @@ async fn without_jev_every_line_reads_neutral_and_its_words_decide_nothing() {
     for line in lines {
         for reader in [&off, &failing] {
             let reading = reader
-                .classify(line, "Perrin", "A public tavern.")
+                .classify(line, "Perrin", "A public tavern.", "")
                 .await
                 .unwrap_or_else(neutral_reading);
 
@@ -239,7 +239,7 @@ async fn jev_decides_the_approach_and_subject_of_a_line_whatever_its_words() {
         let endpoint = FakeEndpoint::start(vec![answer(approach_option), answer(subject_option)]);
 
         let reading = model(&endpoint)
-            .classify(words, "Perrin", "A public tavern.")
+            .classify(words, "Perrin", "A public tavern.", "")
             .await
             .unwrap_or_else(neutral_reading);
 
@@ -327,7 +327,7 @@ async fn jev_picks_a_subject_only_among_the_facts_in_this_adventure() {
         let endpoint = FakeEndpoint::start(vec![answer("o1"), answer(subject_option)]);
 
         let reading = model(&endpoint)
-            .classify_for_dossier(line, &dossier.name, "The ferry desk.", &dossier)
+            .classify_for_dossier(line, &dossier.name, "The ferry desk.", &dossier, "")
             .await
             .unwrap_or_else(neutral_reading);
 
@@ -350,6 +350,7 @@ async fn jev_picks_a_subject_only_among_the_facts_in_this_adventure() {
             &dossier.name,
             "The ferry desk.",
             &dossier,
+            "",
         )
         .await
         .unwrap_or_else(neutral_reading);
@@ -447,7 +448,7 @@ async fn jev_readings_of_the_played_evidence_set_approach_subject_and_roll_eligi
         let endpoint = FakeEndpoint::start(vec![answer(approach_option), answer(subject_option)]);
 
         let reading = model(&endpoint)
-            .classify_for_dossier(line, "Ulric", "The guardhouse.", &dossier)
+            .classify_for_dossier(line, "Ulric", "The guardhouse.", &dossier, "")
             .await
             .unwrap_or_else(neutral_reading);
 

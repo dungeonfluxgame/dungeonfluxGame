@@ -19,12 +19,13 @@ use df_protocol::common as rpc;
 use df_rules::ability_check::{AbilityCheckInput, AbilityCheckResult};
 use df_rules::influence::{
     Attitude as RulesAttitude, InfluenceInput, InfluenceOutcome, InfluenceResult, InfluenceSkill,
-    Willingness, WordQuality, WordTilt,
+    RollMode, Willingness, WordQuality, WordTilt,
 };
 use df_session::submission::RepositoryError;
 use df_types::MemberId;
 use serde_json::{Value, json};
 
+use super::freeform_action::CheckRecord;
 use super::{
     adventure::dossier::{
         AnswerSubject, Attitude, Dossier, Effect, NpcRole, QuestionSubject, mentions_term,
@@ -320,6 +321,14 @@ impl HesitantRoll {
         }
     }
 
+    /// The table's roll row for this request, when a check was rolled. No check, no row.
+    fn roll_row(&self, hero: &str) -> Option<String> {
+        match self {
+            Self::Rolled(result) => influence_roll_row(hero, result),
+            Self::Unavailable(_) => None,
+        }
+    }
+
     /// The one audit line for this request: the check as the rules explain it, and its result.
     fn audit_text(&self, npc_id: &str, hero: &str) -> String {
         match self {
@@ -348,6 +357,67 @@ fn influence_skill(approach: Approach) -> InfluenceSkill {
         Approach::Flattery | Approach::Flirting => InfluenceSkill::Performance,
         _ => InfluenceSkill::Persuasion,
     }
+}
+
+/// The table's roll row for one Influence check, in the shape of the theft row. Advantage or
+/// Disadvantage names the faces rolled, and the counted face is the die shown. None when no
+/// roll was made.
+fn influence_roll_row(hero: &str, result: &InfluenceResult) -> Option<String> {
+    let success = match result.outcome {
+        InfluenceOutcome::Success => true,
+        InfluenceOutcome::Failure => false,
+        InfluenceOutcome::NoRoll(_) => return None,
+    };
+    let die = result.counted?;
+    let total = result.total?;
+    let ability = result.skill.ability();
+    let skill = result.skill.name();
+    let label = match result.mode {
+        RollMode::Normal => format!("{ability} ({skill})"),
+        RollMode::Advantage | RollMode::Disadvantage => {
+            let faces = result
+                .faces
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(" and ");
+            format!("{ability} ({skill}, {}: {faces})", result.mode.word())
+        }
+    };
+    Some(
+        CheckRecord {
+            subject: hero.to_owned(),
+            label,
+            die,
+            modifier: i32::from(result.ability_modifier) + i32::from(result.proficiency_bonus),
+            total: i32::from(total),
+            against: "DC",
+            number: i32::from(result.difficulty_class),
+            result: if success { "success" } else { "failure" },
+            success,
+        }
+        .line(),
+    )
+}
+
+/// The table's roll row for a hero's Deception check against the NPC's passive Insight.
+fn deception_roll_row(hero: &str, check: &AbilityCheckResult) -> String {
+    CheckRecord {
+        subject: hero.to_owned(),
+        label: "Charisma (Deception)".to_owned(),
+        die: check.die,
+        modifier: i32::from(check.ability_modifier) + i32::from(check.proficiency_bonus),
+        total: i32::from(check.total),
+        against: "DC",
+        number: i32::from(check.difficulty_class),
+        result: if check.succeeded {
+            "success"
+        } else {
+            "failure"
+        },
+        success: check.succeeded,
+    }
+    .line()
 }
 
 fn rules_attitude(attitude: Attitude) -> RulesAttitude {
@@ -449,6 +519,14 @@ impl LieRoll {
                 appraisal.effect = Effect::Cool;
             }
             Self::Unavailable(_) => {}
+        }
+    }
+
+    /// The table's roll row for this lie, when a Deception check was rolled.
+    fn roll_row(&self, hero: &str) -> Option<String> {
+        match self {
+            Self::Rolled { check, .. } => Some(deception_roll_row(hero, check)),
+            Self::Unavailable(_) => None,
         }
     }
 
@@ -1789,6 +1867,10 @@ impl NpcVoice {
                 &context.typed_words,
                 &context.speaker,
                 &context.public_scene,
+                &super::approach_model::hero_public_facts(
+                    &context.hero_name,
+                    &context.hero_visible["hero_account"],
+                ),
             )
             .await
         {
@@ -1910,6 +1992,10 @@ impl NpcVoice {
                 &context.speaker,
                 &context.public_scene,
                 dossier,
+                &super::approach_model::hero_public_facts(
+                    &context.hero_name,
+                    &context.hero_visible["hero_account"],
+                ),
             )
             .await
             .unwrap_or_else(super::social::neutral_reading);
@@ -1983,6 +2069,8 @@ impl NpcVoice {
         let mut influence_willingness = None;
         // A hesitant urging that already failed in this scene is refused without another roll.
         let mut repeated_urging = false;
+        // The table rows of the checks rolled for this reply, published before the reply's line.
+        let mut roll_rows: Vec<String> = Vec::new();
         let publication_guard = context.publication_guard.clone();
         if let Some(turn) = context.turn.as_mut() {
             let similar_asks = if approach == Approach::Question {
@@ -2052,6 +2140,7 @@ impl NpcVoice {
                         check.audit_text(&turn.dossier.npc_id, &context.hero_name),
                     );
                     context.facts["deception_check"] = check.facts();
+                    roll_rows.extend(check.roll_row(&context.hero_name));
                     check.apply_to(&mut appraisal);
                 }
                 // An ordinary low-stakes question does not rewrite a relationship.
@@ -2329,6 +2418,7 @@ impl NpcVoice {
                 "gameplay.social.influence_check",
                 rolled.audit_text(&turn.dossier.npc_id, &context.hero_name),
             );
+            roll_rows.extend(rolled.roll_row(&context.hero_name));
             if matches!(&rolled, HesitantRoll::Rolled(result) if result.outcome == InfluenceOutcome::Failure)
             {
                 turn.ledger
@@ -2523,6 +2613,11 @@ impl NpcVoice {
         } else {
             None
         };
+        // Each check rolled for this reply shows its row before the NPC's own line, which comes
+        // after the hero's line already on the table.
+        for row in &roll_rows {
+            log.push_check(log.reserve(), context.hero_index, row);
+        }
         let mut source_line_sequence = None;
         if outcome == ExchangeOutcome::Withheld {
             super::actor::record_audit_line(
@@ -2850,6 +2945,30 @@ mod tests {
     use super::super::adventure::dossier::Attitude;
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_hesitant_persuasion_check_publishes_its_roll_row() {
+        let result = df_rules::influence::resolve(InfluenceInput {
+            ability_modifier: -1,
+            proficiency_bonus: 0,
+            skill: InfluenceSkill::Persuasion,
+            attitude: RulesAttitude::Indifferent,
+            monster_intelligence: UNAUTHORED_NPC_INTELLIGENCE,
+            willingness: Willingness::Hesitant,
+            words: WordQuality {
+                tilt: WordTilt::Neutral,
+                reason: "the hero's words",
+            },
+            extra_sources: &[],
+            faces: &[15],
+        })
+        .expect("a valid hesitant Persuasion check resolves");
+
+        assert_eq!(
+            HesitantRoll::Rolled(result).roll_row("Sigrun").as_deref(),
+            Some("Sigrun: Charisma (Persuasion) 15 - 1 = 14 vs DC 15 — failure.")
+        );
+    }
 
     #[test]
     fn a_place_name_is_one_scene_name_so_its_words_are_not_names() {
