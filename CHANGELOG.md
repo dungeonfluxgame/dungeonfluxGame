@@ -14,6 +14,139 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-10-17T12:00:00-04:00 to 2026-10-17T15:46:31-04:00
+
+Range: a221b240c0102a1e3375c7ca54b69a3378e63e68..9f98619a3659dff3036e54ec9c0131bdb2186ce5
+
+- 99d55fc5ad04e5ef85839d7aa417995f9d5af54a — Show scene photographs on the TV exactly as the camera made them
+- a2849e109e33f085fb28961a0b0f681374a90264 — Keep the colour grade and screen-space dust the owner likes on scene photographs
+- 3f509f3a122cf2cef13c6b7d2135e85655b99568 — Make every image with FLUX and stop editing a blank carrier
+- 7fd4398b9f61ae94d97c13f0c2d9b0fcfa998b06 — Format image_edit
+- 54837cea574a8535ac47d70a5894887976d43181 — Add the hosted SAM 3.1 segmentation adapter and the plate vision judge
+- aca6088e4e5e7ab7c18769984cf714964372d7cb — Bring back every TV screen effect, on by default, with a dev fx toggle each
+- 369a81205535f44a538c205eb78dda6de5b17c91 — Add the SAM 3.1 plate segments module and its hub kinds
+- 47cc90b8b2a1fc936ab23062f3636654322cbdd0 — Mark the backlog rows today's commits completed and add the play session r6 findings
+- 0be6eaf94a0273c669d36826b66faf026ba0d1f3 — Print the full run id on the MEMORY startup line
+- d375ab8be83a25b4ebcd3d3b585170761d5d21e8 — Keep the merchant's stock and prices when a question is reselected
+- 508ff9cf6adba289e71b3b27fbf75c264728126c — Give investigation narration the same 8 s deadline as bargaining
+- 12c591198d87febd53ad775e2dc10961f75f15d3 — Backlog the r6 play-test findings P6-20 to P6-50
+- 676ac570233c1779bf6ef51f2c5ca26a4a4c9042 — Let heroes handle a present merchant's stock, and read smell as a sense
+- aac8ee2b97ce7f24a7bb1d46e8d6b0942ee65271 — Let the dev CLI take back a seat a phone joined, and say why a join is refused
+- 18b16b191aa65a7383dffae193a99d75e72ca725 — Request health faces only when a character reaches that tier
+- 61f35a56777d7c0bacc1b5a46163af49e6beafd3 — Show speakers' real photos and the room's own picture on TV and phone
+- 7c6f4e8432b297affc05de8641dec83fe363ebe7 — Show the hero's line and the roll for scene interactions, and answer gifts from the recipient
+- d1896248c11e87c990e0ae23936d8f47aeaf2567 — Clear a refused phone join so the hero can still be taken back
+- a2fa1b2728d442790893765e143b3b809e6d06d5 — Never record the seller as the buyer of their own stock
+- 05412ca2f01e0421373b95064ceba2fe00df892d — Ask freeform narration for no hidden reasoning, and log why a text call broke its contract
+- 9214d73f5cfe32d18a9e45e157a8d1f3ba159e91 — Accept an action answer that changes no state, and clear the composer
+- f5b1dea61b6a1f230fa7ae3b3100e3e93ea3111a — Route a hand-over of a kit item to the freeform path, and never refuse an interaction silently
+- bf743f1dd270c4f471ed60e62f4d6c9d039435b1 — Name each FLUX plate reference first and compose story beats afresh
+- 9ec40ccb6f1ec91868985737a43a2f03ab7599a6 — Tell the approach judge what a bribe is
+- e1f924e71753720eecc93c9203331a89bad61551 — Keep the narrator from speaking for another player hero
+- 864f289b6af08b5271e3d5441bf4b14c2f9e880c — Research: capturing a player's face for the hero portrait and plate identity
+- e38e40ce44714b8ab85b6a2f211fbb0870187242 — Let Jev see the hero's own facts to spot a lie, and show social rolls at the table
+- 0aca24302a912276d6ee08c715206eb3dce307cb — Give SRD packs their contents and let heroes use what is in them
+- 2ac10c67a8ff7b536329f328abcaa84f3d06e900 — Backlog the rebuild 1-3 retests and findings P6-51 to P6-74, CLI-03, DICE-01, TIME-01 to TIME-05
+- a280cccb8c12e84862902af944f2d35465f52483 — Draw the battle with the place's own picture and each fighter's live image
+- 966e6b33804bdd438cd42b6b6196a3d05e98b132 — Keep narration in the place the scene is actually in
+- 9f98619a3659dff3036e54ec9c0131bdb2186ce5 — Dev CLI: control NPCs and force dice faces
+
+## 2026-10-17T06:00:00-04:00 to 2026-10-17T12:00:00-04:00
+
+Range: f81490e699a4abb0065dafa4c5c1114cebdd4df7..a221b240c0102a1e3375c7ca54b69a3378e63e68
+
+- 4b291d437d6609a6dee53f64964ffc184a1b7064 — Add interaction-probe round 3 findings to the playtest backlog
+- 263f6d26880f59c9d830a014966170214f967b4c — Close three NPC-reply leaks found by security review of aaa6a17f
+- d1249ac07336275c2c36f1ccbb75202fc0983146 — Let the merchant quote every item and service, read without taking, and fix template grammar
+- fb6bfd93bc17194516bd824d21ac1c50216cb34c — Let heroes start a real fight with any shop NPC who has a stat block
+- 560b4afd55a014a9cf6e21bd608ea61b08146e90 — Restore doors and fix freeform misreads, refusals and thin answers
+- 32bcad49926baf5be2bd367a02a036f1750929c7 — Say when an Insight read fails, and keep throwing out of give
+- 69f6f60d373cccfa15dec09802629ed2b9727156 — Record the 2026-10-17 workstreams, owner decisions and open findings in the backlog
+- 0dbae2c9434c24d0ab0f63d7df8167d040c20463 — Show lore, social state, fights, scene changes, the economy, audit and Jev decisions in the dev CLI
+- 00e276d69306f87807b4795d73103eb8f5010eee — Mark the dev CLI commit and the bulk-ask LLM decision in the backlog
+- 97aed77d4852960d0edbd4323dfa74846b6bb98b — Add the fal video-loop provider research
+- cd51c9e8c8e3909b92a645393b47a8490193382a — Add the story-memory vector search research and correct the pgvector backlog row
+- 7ffef027f4968a12d2884f99a97838c107312c24 — Add a pinned pgvector 0.8.7 build for the bundled Windows PostgreSQL
+- 00d99915bc22b6d3796d24707f4183d2efaba83a — Add the World Labs Marble splat-world research
+- 56ff77e6c7387ec13549bd89c29f1bde5728101a — Record the no-spend-caps decision in the backlog
+- 57fa45300c292377fc89168299d8ba3efcdfea15 — Add the voice-input end-to-end findings to the backlog
+- 40b0fac20856fec41a26d41aff29d95088f9e1a0 — Add measured Kling, PixVerse and Wan landing-loop results to the video research
+- f29528c438a63be2f2160297efb96db00cb0713a — Add the hosted SAM 3 / 3.1 segmentation research
+- 82dc403b2c4970b8b7d51461893e97742eb599f7 — Load World Labs Marble PLY splats and derive a walkable grid from their collider
+- c2b403efe692a2839c50473cfcbd877d78b3bcbb — Let Jev and the model decide line routing and trade meaning, with no keyword tables
+- 3aaebc9816181bddef2da07edc1f0ca3569c24c5 — Release the phone microphone after every recording
+- 4684b8f63296a718a6b554aabe33e80a1d12afd7 — Correct the SAM RLE start indexing to 1-based in the research note
+- 613839eb98ca3faa76840656a4088daf82b7d021 — Make every depiction photographic through one art contract and one resource hub
+- 77e9a08a717892907e8920588ddb90fece13020a — Give every place its own music, chosen from content or Jev and generated on demand
+- 0885e9f84a155d82a2900acd03a3ccd4080453c7 — Move video, voice, text and speech-to-text onto the generation hub
+- 48a7439396a5a2d2feb4985577269517a93a9ff9 — Give the DM a story memory in Postgres with OpenAI embeddings and pgvector
+- 76d68a627f5cebd3f0c158ef3f99bd661e54d6ed — Wire the art hub, place music, hub media and story memory into the server and protocol
+- 09c911b495e28fdba9d37698409c8b9bd5f13ca2 — Let Jev decide NPC conversation meaning, with no keyword tables
+- 8704b77220e71c11a0604b2aa10d0e59dbecbbd3 — Show every view on the TV whatever its base scene art, and keep the stream on a draw failure
+- c4dd06f6020970f91b1c536153f093f2035de3e2 — Give the landing one generic photographic plate and keep its loop across runs
+- 090b892dca4ba0fe9df0c1ad7e4c340b3ada72f8 — Key story memory by the game's database, not a placeholder run id
+- 3457fad0c463ce510ae0ccef4192858495a6395e — Match the scene video prompt test to the current film look wording
+- 8ed8683d9542955e112a5eec79354b02eb2f6764 — Log the message and location of a browser client panic
+- 85d0f5e1f9829616fb2892d4afb54b558ee47ac8 — Ask for rooms as candid location photographs, not a film set or an architectural shot
+- 4ba6c3bd7bc97ec2c982044f68be8488479eb3a4 — Shoot every image like a live-action fantasy TV drama set in a lived-in D&D world
+- f317bc1157b204cc6eeed119013517ea45469454 — Add dev art: list generated depictions and clear or regenerate a room or cast photo
+- a211f5668447dea872292db368ca62380d4bda25 — Stop the TV client aborting on SVG elements while it walks the view
+- a11d4a3dbcf0bdfa921dfa9c0182328502273cf5 — Format the scene-art status calls
+- 786aa399805e48946f9018870e33ec7c40d844b7 — Format live_screens and live_stage
+- a221b240c0102a1e3375c7ca54b69a3378e63e68 — Keep the place photograph sharp on the TV instead of blurring it into a painting
+
+## 2026-10-17T00:00:00-04:00 to 2026-10-17T06:00:00-04:00
+
+Range: 8282d33413d2dfc49a9164a8f6e3bd11ad6b1e47..f81490e699a4abb0065dafa4c5c1114cebdd4df7
+
+- 0d0f645c9c25052d44d4637e33b3c143587d4c61 — Add merchant buyback, lost-send and phone findings to the playtest backlog
+- 04216a2e4149ced58bf16e2f39302d72d1151e36 — Correct the phone reconnect finding and add sold-out merchant findings to the backlog
+- debf79bb2f427e57b991eae5787fa2b462aaa437 — Add party-note and give findings to the playtest backlog
+- 73f7b6072402a0d917e2215d9c7f7a6b924003db — Add quote-mark, holder and whisper-label findings to the playtest backlog
+- 48564b6165e879dcc63af75e6c2531d9d5b7ef87 — Add quotation-mark and not-for-sale findings to the playtest backlog
+- bbf64b1f768bfdcd2643c6bfe134884846ba046a — Reconnect phones on return, keep their place, and fix the feed greeting and hero-card text
+- 4f3c9c540046d7549809ae9c86d79962e4647cbf — Make threats and other wrongs stay with the NPC toward that hero
+- 168c9b2d3171ffee75e48417be8637150d5af22f — Show party notes on every phone as soon as they are written
+- 695aa060df54568e138047d0f7a39c2cca3828a4 — Keep the player's quotation marks when a line is tidied
+- 32f58390d1d3f1e80c863af20d692d0edc1ed073 — Quote in-terms buybacks, roll for discounts and keep listed quotes open
+- e36174d7f8f9248f9a75c3f9a21c1b49247808cc — Start the hero line's tidy-up while the line is routed
+- f953b05a3a170c3fd08cfcb7fed618c666cba94e — Show table notices as the narrator's, not the NPC in focus
+- 4cf5e66010b9432f4055393f2c5267376c45d512 — Add interaction-probe round 1 findings to the playtest backlog
+- eda1bc3cca8aa72db0ff1e09c76bdb64c97a4cbd — Add interaction-probe round 2 findings to the playtest backlog
+- 3710933109ff4b1f236b43d429bb53ada968116a — Let a hero use Help to give an ally advantage on an attack
+- 8f8b451d7f8353f333083937927406aa31f1b52b — Restore the gameplay view delivery test build
+- e1a8e3b79cdf5850706491218b82c5960a49b833 — Stock Marek's shop and make theft a caught-or-clean Sleight of Hand check
+- 969290e79b9e1ae429afb3896150cb2c55638212 — Adjudicate open-ended acts: senses, handling things, performing, contact and moving
+- aaa6a17fb219757b43b799e4acfc45e5882d8c30 — Let NPCs establish lasting local canon and roll Deception against Insight
+- f81490e699a4abb0065dafa4c5c1114cebdd4df7 — Move coin and goods whenever the story does: gifts, pickpockets, services, coercion
+
+## 2026-10-16T19:59:24-04:00 to 2026-10-17T00:00:00-04:00
+
+Range: 8c5f7d8145c48a32885800e56b345a06f7f97ada..8282d33413d2dfc49a9164a8f6e3bd11ad6b1e47
+
+- 593c7e0071a206bbd47e8f22fb4343fd59573b72 — Record merchant limit-test fix work block
+- 4375a3ad79606d15880e02f578fad708f388529c — Let Jev judge merchant trade lines and give Marek usable price terms
+- 4e84aa86dec157880618228bb17251b117d13650 — Let Jev read NPC questions, topics and private asks
+- 747e841c127917db1d50d3d6114db6b1d4e1a3ae — Let Jev decide scene interactions, handoffs and question form
+- fe771e0588c6aeb669195b1ac9c1ac12ab3e3922 — Pass the hero's stated buyback price to the merchant
+- b50a4f2023a575ca98d1877cf1ecb66aaec5100e — Record merchant and multiplayer playtest backlog
+- 1e00f096c5faf2f926e578bc2e98e4e42c86c75f — Retire typing bubbles when their scene line is dropped
+- a3a047e9a59d1b9c4e5a49dba6398f790deb7a9c — Make hero line cleanup reach the model and keep players' casing
+- 05ce81173122aab3b64bc1a3688f04b37293b813 — Add notebook findings to the playtest backlog
+- da72ae57410c7799ad1ba9536c9b5b84e94933b0 — Add hero-directed action failure to the playtest backlog
+- 00aea669cf7241948f31d48557560a0f3370b596 — Add party roster gap to the playtest backlog
+- 0bb844477099f8d392d7a490d07b0e8f57b5c4fa — Keep hand-overs to party heroes out of merchant trade and name bought items
+- 7990780618e0a51b0a1b354178c7425e4ccb734b — Let merchant quote acceptance carry its four choices
+- 8a21a3298173e97934c8d26b7ef42cbfc0cb5f42 — Show every player's lines on every phone
+- 76788964b273d0003fdab86d4d1a4da54dac85e2 — Resolve hesitant Influence attempts and let refusing NPCs answer in character
+- 962d296c7b4664aaf79b6e45358e72ac8fb173ab — Let party heroes be the addressee of a line
+- d41be284f20f1d41ebad43b0ed33f414ee8ac6bd — Edit scene plates from the fresh render so they stay photographic
+- e70fe8a3d655002903c5f4344402ff3d3048c49a — Add lasting-consequence and regression findings to the playtest backlog
+- cf08c614f090e6222be05f3554ea64a773091e22 — Add private aside and resend findings to the playtest backlog
+- 9af6258255bc67d6d5424c2d401b44568b090f81 — Route lines to fellow heroes and write party notes reliably
+- ff460540ccc81aee2e0647c2a1769ee8144b563e — Keep private asides off the shared table
+- 8282d33413d2dfc49a9164a8f6e3bd11ad6b1e47 — Let unanswered NPC questions reach the model instead of a stock non-answer
+
 ## 2026-10-16T18:11:31-04:00 to 2026-10-16T19:59:24-04:00
 
 Range: de410db1c92735315682fa0cc1420bf10d2357c2..8c5f7d8145c48a32885800e56b345a06f7f97ada
