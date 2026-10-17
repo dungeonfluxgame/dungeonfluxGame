@@ -2175,3 +2175,99 @@ async fn uncertain_confirmation(
     );
     Ok(())
 }
+
+// Jev-judged routing: the phrase gates in approach_model.rs and the trailing-question rule are
+// fallbacks, so these tests pin what the Rust side does with a typed Jev reading.
+
+#[test]
+fn a_jev_physical_line_resolves_its_exact_target_past_the_keyword_gate() {
+    use super::dialogue::named_physical_action;
+    let things = vec!["lantern".to_owned()];
+    let words = "I take the lantern when the bell rings.";
+    // Jev decided the line is an action, so the ungated parse names the lantern.
+    assert_eq!(
+        named_physical_action(words, &things, false).map(|action| action.target),
+        Some("lantern".to_owned())
+    );
+    // The rules reading keeps the keyword gate, so the same words remain dialogue.
+    assert!(named_physical_action(words, &things, true).is_none());
+}
+
+#[test]
+fn a_jev_physical_line_with_no_named_target_resolves_to_no_action() {
+    use super::dialogue::named_physical_action;
+    // The caller answers a None through the narrator; it is never an error status.
+    assert!(named_physical_action("I attack.", &[], false).is_none());
+}
+
+#[test]
+fn a_hero_line_is_a_question_by_jev_label_and_by_punctuation_only_without_one() {
+    use super::dialogue::HeroLineForm::{self, Question, Statement};
+    use crate::gameplay::approach_model::JevUnavailable;
+    use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
+    let judged = TradeJudgement::Jev;
+    assert_eq!(
+        HeroLineForm::from_judgement(Ok("statement"), "Will you help me?"),
+        (Statement, judged),
+        "Jev's statement label overrides a trailing question mark"
+    );
+    assert_eq!(
+        HeroLineForm::from_judgement(Ok("question"), "Help me."),
+        (Question, judged)
+    );
+    assert_eq!(
+        HeroLineForm::from_judgement(Err(JevUnavailable::Timeout), "Will you help me?"),
+        (Question, TradeJudgement::Rules(JevUnavailable::Timeout))
+    );
+    assert_eq!(
+        HeroLineForm::from_judgement(Err(JevUnavailable::ProviderUnavailable), "Help me."),
+        (
+            Statement,
+            TradeJudgement::Rules(JevUnavailable::ProviderUnavailable)
+        )
+    );
+    assert_eq!(
+        HeroLineForm::from_judgement(Ok("unsure"), "Will you help me?"),
+        (
+            Question,
+            TradeJudgement::Rules(JevUnavailable::UnknownChoice)
+        )
+    );
+    let labels = HeroLineForm::CHOICES.map(|(label, _)| label);
+    assert_eq!(labels, ["question", "statement"]);
+}
+
+#[test]
+fn a_watched_question_subject_follows_jev_and_keywords_only_for_held_facts() {
+    use super::dialogue::{watched_subject_choices, watched_subject_from_judgement};
+    use crate::gameplay::adventure::dossier::AnswerSubject;
+    use crate::gameplay::approach_model::JevUnavailable;
+    use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
+    let held = [AnswerSubject::Reward, AnswerSubject::Enemy];
+    let price = "What is the price?";
+    assert_eq!(
+        watched_subject_from_judgement(&held, price, Ok("enemy")),
+        (Some(AnswerSubject::Enemy), TradeJudgement::Jev)
+    );
+    assert_eq!(
+        watched_subject_from_judgement(&held, price, Ok("none")),
+        (None, TradeJudgement::Jev)
+    );
+    assert_eq!(
+        watched_subject_from_judgement(&held, price, Err(JevUnavailable::ProviderUnavailable)),
+        (
+            Some(AnswerSubject::Reward),
+            TradeJudgement::Rules(JevUnavailable::ProviderUnavailable)
+        )
+    );
+    // A keyword subject with no held fact is not a subject, as before.
+    assert_eq!(
+        watched_subject_from_judgement(&held, "Where is it?", Err(JevUnavailable::Timeout)),
+        (None, TradeJudgement::Rules(JevUnavailable::Timeout))
+    );
+    let labels = watched_subject_choices(&held)
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect::<Vec<_>>();
+    assert_eq!(labels, ["reward", "enemy", "none"]);
+}

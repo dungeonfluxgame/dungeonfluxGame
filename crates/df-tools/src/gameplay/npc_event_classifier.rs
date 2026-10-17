@@ -119,6 +119,9 @@ pub(super) enum ClassificationError {
     ItemNotInRequest,
     ItemNotInReply,
     WrongItemInReply,
+    // Never constructed now that Jev's intent_to_give decides handoff presence; approach_model.rs
+    // still matches this label exhaustively, so the variant stays.
+    #[allow(dead_code)]
     HandoffNotPresent,
 }
 
@@ -225,81 +228,9 @@ fn mentions_item(text: &str, room: &SceneNow, item_id: &str) -> bool {
         .any(|anchor| contains_anchor(text, anchor))
 }
 
-fn present_handoff_words(reply: &str) -> bool {
-    let reply = normalized_words(reply);
-    let words = format!(" {reply} ");
-    let conditional_or_future = [
-        " if ",
-        " when ",
-        " could ",
-        " may ",
-        " might ",
-        " would ",
-        " will ",
-        " shall ",
-        " perhaps ",
-        " maybe ",
-        " later ",
-        " tomorrow ",
-        " someday ",
-        " some day ",
-        " next time ",
-        " eventually ",
-    ];
-    if conditional_or_future
-        .iter()
-        .any(|marker| words.contains(marker))
-    {
-        return false;
-    }
-    if [
-        " no ",
-        " won t ",
-        " will not ",
-        " can t ",
-        " cannot ",
-        " do not give ",
-        " don t give ",
-        " refuse to ",
-        " not giving ",
-        " not handing ",
-        " not going to ",
-    ]
-    .iter()
-    .any(|marker| words.contains(marker))
-    {
-        return false;
-    }
-    [
-        " here have a look ",
-        " here take a look ",
-        " here look at it ",
-        " have a look at it ",
-        " here take ",
-        " here you go ",
-        " here it is ",
-        " take it ",
-        " take the ",
-        " take this ",
-        " hold it ",
-        " here is the ",
-        " here s the ",
-        " i hand you ",
-        " i have handed you ",
-        " i pass you ",
-        " i give you ",
-        " i am giving you ",
-        " i m giving you ",
-        " i place it in your hand ",
-        " i put it in your hand ",
-    ]
-    .iter()
-    .any(|cue| words.contains(cue))
-}
-
-/// Revalidates the textual grounding before an item proposal can cross the actor boundary.
-/// A handoff also needs present physical language: permission, refusal, conditionals, and future
-/// promises never become custody changes.
+/// Revalidates the exact grounding before an item proposal can cross the actor boundary: a known
+/// canonical ID, the item named in the player's request, and no other item named in the reply.
+/// Whether the reply is a present handoff is Jev's judgement in `intent_to_give`, not a phrase list.
 pub(super) fn validate_item_event(
     kind: EventKind,
     item_id: &str,
@@ -327,27 +258,9 @@ pub(super) fn validate_item_event(
     if reply_items.iter().any(|mentioned| *mentioned != item_id) {
         return Err(ClassificationError::WrongItemInReply);
     }
-    if kind == EventKind::IntentToGive {
-        if !present_handoff_words(reply) {
-            return Err(ClassificationError::HandoffNotPresent);
-        }
-        let has_selected_item = mentions_item(reply, room, item_id);
-        let has_direct_reference = [
-            "here have a look",
-            "here take a look",
-            "here look at it",
-            "have a look at it",
-            "here you go",
-            "here it is",
-            "take it",
-            "hold it",
-        ]
-        .iter()
-        .any(|cue| format!(" {} ", normalized_words(reply)).contains(&format!(" {cue} ")));
-        if !has_selected_item && !has_direct_reference {
-            return Err(ClassificationError::ItemNotInReply);
-        }
-    } else if !mentions_item(reply, room, item_id) {
+    // A deictic handoff ("here, have a look") names no item, so an intent_to_give reply needs no
+    // anchor here: Jev chose this item from the request, and the wrong-item check above applies.
+    if kind != EventKind::IntentToGive && !mentions_item(reply, room, item_id) {
         return Err(ClassificationError::ItemNotInReply);
     }
     Ok(())
@@ -615,29 +528,6 @@ mod tests {
             ),
             Err(ClassificationError::WrongItemInReply)
         );
-    }
-
-    #[test]
-    fn refuses_conditional_future_and_refusal_lines_as_handoffs() {
-        let room = room();
-        let ask = "May I hold the brass hand bell?";
-        for reply in [
-            "I can give you the brass hand bell if you pay first.",
-            "I will hand you the brass hand bell tomorrow.",
-            "No, I will not hand you the brass hand bell.",
-        ] {
-            assert_eq!(
-                validate_item_event(
-                    EventKind::IntentToGive,
-                    "item-brass-hand-bell",
-                    ask,
-                    reply,
-                    &room,
-                ),
-                Err(ClassificationError::HandoffNotPresent),
-                "reply must not commit custody: {reply}"
-            );
-        }
     }
 
     #[test]

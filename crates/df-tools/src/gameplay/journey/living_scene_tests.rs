@@ -903,3 +903,87 @@ fn first_player_projection_contains_committed_room_state_without_a_display_obser
         assert!(!contents.contains("finding_id"));
     });
 }
+
+#[test]
+fn interaction_labels_are_a_closed_set_that_names_existing_kinds() {
+    assert_eq!(living_scene::InteractionMeaning::CHOICES.len(), 13);
+    for (label, _) in living_scene::InteractionMeaning::CHOICES {
+        assert!(
+            living_scene::InteractionMeaning::from_label(label).is_some(),
+            "{label}"
+        );
+    }
+    assert_eq!(
+        living_scene::InteractionMeaning::from_label("none"),
+        Some(living_scene::InteractionMeaning::NotInteraction)
+    );
+    assert_eq!(living_scene::InteractionMeaning::from_label("use"), None);
+}
+
+#[test]
+fn a_give_with_a_gold_amount_is_a_gift_and_none_has_no_option() {
+    use living_scene::InteractionMeaning;
+    assert_eq!(
+        InteractionMeaning::Give.option("I give Ilsa 5 GP."),
+        Some("gift")
+    );
+    assert_eq!(
+        InteractionMeaning::Give.option("I give Ilsa the key."),
+        Some("give")
+    );
+    assert_eq!(
+        InteractionMeaning::NotInteraction.option("I give Ilsa 5 GP."),
+        None
+    );
+}
+
+#[test]
+fn jev_meaning_decides_the_scene_interaction_and_keywords_answer_only_without_a_label() {
+    use crate::gameplay::approach_model::JevUnavailable;
+    use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
+    taproom(|| {
+        let (current, _member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let thing = model
+            .things
+            .iter()
+            .find(|thing| {
+                thing.portable
+                    && !thing.in_use
+                    && thing.holder_id.is_none()
+                    && thing.owner_id.is_some()
+            })
+            .unwrap();
+        let steal = format!("I steal the {}.", thing.name);
+        let question = format!("Can I take the {}?", thing.name);
+        // Jev's take label is executed on a question-form line: the keyword gate is not in Jev's path.
+        assert_eq!(
+            living_scene::interaction_for_meaning(
+                &scene,
+                &question,
+                living_scene::InteractionMeaning::Take
+            ),
+            Some((thing.id.clone(), "take"))
+        );
+        // Jev's none label is not an interaction even though the keyword rules would match.
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &steal, Ok("none")),
+            (None, TradeJudgement::Jev)
+        );
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &steal, Ok("steal")),
+            (Some((thing.id.clone(), "steal")), TradeJudgement::Jev)
+        );
+        // Without a Jev label the keyword rules answer exactly as they did before Jev.
+        let unavailable = Err(JevUnavailable::ProviderUnavailable);
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &steal, unavailable).0,
+            Some((thing.id.clone(), "steal"))
+        );
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &question, unavailable).0,
+            None
+        );
+    });
+}
