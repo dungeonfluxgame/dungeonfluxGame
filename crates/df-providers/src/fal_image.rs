@@ -6,6 +6,7 @@
 //! One submit, status reads until completion or the deadline, one result read; never retried.
 
 use std::{
+    collections::HashSet,
     net::SocketAddr,
     time::{Duration, Instant},
 };
@@ -268,10 +269,12 @@ fn generation_body(edit: &ImageEdit<'_>, format: ImageFormat) -> Value {
 }
 
 fn kontext_body(edit: &ImageEdit<'_>, format: ImageFormat) -> Value {
+    let mut seen = HashSet::new();
     let images: Vec<String> = edit
         .references
         .iter()
         .map(|reference| data_uri(reference.format, reference.bytes))
+        .filter(|image| seen.insert(image.clone()))
         .collect();
     json!({
         "prompt": edit.prompt,
@@ -523,5 +526,49 @@ mod tests {
         );
         assert_eq!(edited["image_urls"].as_array().map(Vec::len), Some(1));
         assert_eq!(edited["output_format"], "png");
+    }
+
+    #[test]
+    fn kontext_request_body_sends_each_distinct_reference_data_uri_once() {
+        let references = [
+            crate::ReferenceImage {
+                format: ImageFormat::Png,
+                bytes: b"first",
+            },
+            crate::ReferenceImage {
+                format: ImageFormat::Png,
+                bytes: b"first",
+            },
+            crate::ReferenceImage {
+                format: ImageFormat::Jpeg,
+                bytes: b"first",
+            },
+            crate::ReferenceImage {
+                format: ImageFormat::Png,
+                bytes: b"second",
+            },
+        ];
+        let edit = ImageEdit {
+            model: crate::ImageEditModel::Gpt25Flare,
+            prompt: "a room",
+            references: &references,
+            width: 1024,
+            height: 1024,
+            quality: crate::ImageQuality::High,
+            background: ImageBackground::Opaque,
+            output: ImageFormat::Png,
+            moderation: ImageModeration::Auto,
+        };
+
+        let body = kontext_body(&edit, ImageFormat::Png);
+
+        assert_eq!(
+            body["image_urls"],
+            json!([
+                data_uri(ImageFormat::Png, b"first"),
+                data_uri(ImageFormat::Jpeg, b"first"),
+                data_uri(ImageFormat::Png, b"second"),
+            ])
+        );
     }
 }
