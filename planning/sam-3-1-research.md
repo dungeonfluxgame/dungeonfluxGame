@@ -88,7 +88,7 @@ Measured output formats:
   returned). The RGB channels are the original pixels and the alpha channel is hard 0 or 255, so each
   mask file is already a transparent cut-out of that instance. No soft edge.
 - RLE endpoint: a space-separated list of `start length` integer pairs over the row-major flattened
-  mask (index = y * width + x). Decoded and checked: the pixel totals equal the PNG alpha counts
+  mask, with 1-based starts (pixel index = start - 1 = y * width + x; read 0-based, runs spill one pixel into the next row, found in the plate integration). Decoded and checked: the pixel totals equal the PNG alpha counts
   exactly (353,181, 218,848, 48,379, 106,413, 130,604). A person mask is 3.5 to 17.5 KB of text.
 - Boxes are normalised centre/size, not corner pairs. Masks come back in score order and `metadata.index`
   is the original instance index.
