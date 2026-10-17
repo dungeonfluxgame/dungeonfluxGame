@@ -17,6 +17,7 @@ mod speech_bubble;
 
 mod camera;
 pub mod collider;
+mod collider_mesh;
 mod combat_feed;
 mod director;
 pub mod feel;
@@ -35,6 +36,7 @@ mod model;
 pub mod occupancy;
 mod pacing;
 pub mod particles;
+mod ply;
 pub mod rest_shot;
 mod scene_file;
 mod sound;
@@ -45,8 +47,10 @@ mod stage;
 mod status;
 mod terrain;
 mod theme;
+mod world_grid;
 
 pub use camera::{CameraPose, CameraRig, PoseError, ShotName};
+pub use collider_mesh::{ColliderMesh, MAX_GLB_BYTES, MAX_TRIANGLES, MAX_VERTICES, MeshError};
 pub use combat_feed::{
     CombatFeed, CombatSnapshot, FeedMode, FeedReport, InitiativeEntry, Member, Outcome,
 };
@@ -68,6 +72,7 @@ pub use model::{
 };
 pub use occupancy::{Occupancy, OccupancyError};
 pub use pacing::{BattleFps, FramePacer, Pace};
+pub use ply::{MAX_PLY_BYTES, PlyError, PlyLoader, WorldFrameError, marble_world_transform};
 pub use scene_file::{
     Attribution, BackdropLayer, BattleScene, DEFAULT_SCENE_ID, Distribution, GroundLayer,
     SceneChoice, SceneFileError, SplatFormat, SplatGrade, SplatLayer, embedded_ids, load_embedded,
@@ -93,6 +98,10 @@ pub use terrain::{
     blocker_density, estimate_height_field, estimate_height_field_covered,
 };
 pub use theme::{ColorGrade, Theme};
+pub use world_grid::{
+    CellCounts, CrossCheck, DEFAULT_CELL_M, MAX_WORLD_GRID_SIDE, OpenArea, WorldBounds, WorldCell,
+    WorldGrid, WorldGridError, WorldGridSettings, world_grid,
+};
 
 #[cfg(target_arch = "wasm32")]
 pub use host::{Availability, BattleStage, FixedQuality, StageOptions, UnavailableReason};

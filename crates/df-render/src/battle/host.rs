@@ -20,6 +20,7 @@ use super::{
     },
     hud::Hud,
     pacing::{BattleFps, FramePacer, Pace},
+    ply::PlyLoader,
     scene_file::{BackdropLayer, BattleScene, GroundLayer, SplatFormat, SplatGrade, SplatLayer},
     sound::SoundEvent,
     speech_bubble::SpeechBubble,
@@ -821,6 +822,12 @@ fn spawn_splat_load(
             SplatFormat::Splat => {
                 match textures::fetch_bytes(&layer.url, MAX_SPLAT_FILE_BYTES).await {
                     Ok(bytes) => SplatFileLoader { bytes: &bytes }.load().ok(),
+                    Err(_) => None,
+                }
+            }
+            SplatFormat::Ply => {
+                match textures::fetch_bytes(&layer.url, MAX_SPLAT_FILE_BYTES).await {
+                    Ok(bytes) => PlyLoader { bytes: &bytes }.load().ok(),
                     Err(_) => None,
                 }
             }

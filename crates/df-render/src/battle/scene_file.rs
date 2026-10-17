@@ -281,6 +281,8 @@ pub enum SplatFormat {
     Splat,
     /// PlayCanvas SOG: `meta.json` plus WebP planes, fetched beside the URL.
     Sog,
+    /// The standard 3D Gaussian Splatting binary PLY (what World Labs Marble exports).
+    Ply,
     /// The built-in procedural ground used to verify the pass without external data.
     Procedural,
     /// A streamed level-of-detail scan: `lod-meta.json` plus `<level>_<chunk>/` SOG chunks.
