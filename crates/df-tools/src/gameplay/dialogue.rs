@@ -1,6 +1,7 @@
 //! Raw dialogue remains inert; only a separate native confirmed choice reaches Session.
 use std::collections::BTreeMap;
 use std::mem::size_of;
+use std::sync::Arc;
 
 use df_intent::dialogue::{DialogueLimits, classify_dialogue, confirm_final_input};
 use df_model::checkpoint::{CommandInput, GameCommand, GameInput};
@@ -13,12 +14,16 @@ use df_types::{MemberId, OperationId};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tonic::{Request, Response, Status};
 
 use super::adventure::dossier::AnswerSubject;
 use super::{
-    Service, actor, credential, journey, model,
-    npc_reply::{NpcReplyContext, StoryFacts},
+    Service, actor, credential, journey,
+    line_cleanup::{self, DisplayLine},
+    model,
+    npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
+    startup_configuration::content_rating,
     wire,
 };
 use journey::merchant_bargaining::{
@@ -544,6 +549,83 @@ pub(super) enum DialogueReply {
 pub(super) struct SpokenTurn {
     context: NpcReplyContext,
     hero_trade: HeroTradeIntent,
+    cleanup: Option<SpeechCleanup>,
+}
+
+/// The model's tidy-up of a hero's typed line, started while routing runs so that its wait
+/// overlaps routing instead of following it. It is used only for the words it was started with;
+/// dropping it unused cancels the call.
+struct SpeechCleanup {
+    words: String,
+    task: Option<JoinHandle<DisplayLine>>,
+}
+
+impl SpeechCleanup {
+    /// `names` must be the reply's `known_names` for this scene (see `speech_names`).
+    fn start(voice: Arc<NpcVoice>, words: String, names: Vec<String>) -> Self {
+        let task = tokio::spawn({
+            let (words, names) = (words.clone(), names);
+            async move {
+                let (teller, _) = voice.hero_identity_models();
+                line_cleanup::display_line(teller, &words, &names, content_rating()).await
+            }
+        });
+        Self {
+            words,
+            task: Some(task),
+        }
+    }
+
+    fn is_for(&self, words: &str) -> bool {
+        self.words == words
+    }
+
+    async fn finish(mut self) -> Option<DisplayLine> {
+        self.task.take()?.await.ok()
+    }
+}
+
+impl Drop for SpeechCleanup {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+/// The names the reply's facts list for this scene: heroes, speaker, cast and place. Mirrors
+/// npc_reply's `scene_names`, which reads the projected view, so the early start can happen
+/// before the reply context exists. The reply's own list is private too and cannot be compared here: keep
+/// the two in step when either changes.
+fn speech_names(
+    state: &df_model::checkpoint::GameState,
+    scene: &super::pack::Scene,
+) -> Option<Vec<String>> {
+    let party = state
+        .characters
+        .iter()
+        .map(|character| journey::name(state, character.entity))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let title = scene.title.trim();
+    let place = if title
+        .get(..4)
+        .is_some_and(|start| start.eq_ignore_ascii_case("the "))
+    {
+        title[4..].trim().to_owned()
+    } else {
+        title.to_owned()
+    };
+    let mut names: Vec<String> = party
+        .into_iter()
+        .chain(std::iter::once(scene.speaker.clone()))
+        .chain(wire::scene_cast(scene).into_iter().map(|actor| actor.name))
+        .chain(std::iter::once(place))
+        .collect();
+    names.retain(|name| !name.trim().is_empty());
+    names.sort();
+    names.dedup();
+    Some(names)
 }
 
 struct PendingConfirmation {
@@ -1340,6 +1422,23 @@ impl Service {
         {
             reading = local;
         }
+        // A line that may be spoken to an NPC starts its tidy-up now, so the model's wait overlaps
+        // the routing below. Any other route drops it, which cancels the call.
+        let mut speech_cleanup = None;
+        if finality(request.finality)? == InputFinality::Final
+            && matches!(
+                reading.intent,
+                super::approach_model::LineIntent::CharacterSpeech
+                    | super::approach_model::LineIntent::HeroSpeech
+            )
+            && let Some(names) = speech_names(current.state(), &scene)
+        {
+            speech_cleanup = Some(SpeechCleanup::start(
+                Arc::clone(&self.npc_voice),
+                super::npc_reply::sanitize_player_words(&request.text),
+                names,
+            ));
+        }
         let merchant_trade_request = finality(request.finality)? == InputFinality::Final
             && matches!(
                 declared,
@@ -1523,7 +1622,11 @@ impl Service {
             Some(actor_id) => DialogueRequest::RawTarget { bytes, actor_id },
             None => DialogueRequest::Raw(bytes),
         };
-        self.dialogue_call(credential, request).await
+        let mut reply = self.dialogue_call(credential, request).await?;
+        if let DialogueReply::Raw(_, Some(turn)) = &mut reply {
+            turn.cleanup = speech_cleanup;
+        }
+        Ok(reply)
     }
 
     async fn observation_call(
@@ -2180,6 +2283,32 @@ impl Service {
 }
 
 impl Service {
+    /// The display version of the hero's line: the tidy-up started during routing when it was for
+    /// these same words, else one made now (see `line_cleanup`).
+    async fn shown_line(
+        &self,
+        context: &NpcReplyContext,
+        cleanup: Option<SpeechCleanup>,
+    ) -> String {
+        let Some(cleanup) = cleanup else {
+            return self.npc_voice.display_line(context).await;
+        };
+        if cleanup.is_for(&context.typed_words)
+            && let Some(line) = cleanup.finish().await
+        {
+            actor::record_audit_line(
+                "gameplay.line_cleanup",
+                "LINE_CLEANUP speculative=used".to_owned(),
+            );
+            return line.text;
+        }
+        actor::record_audit_line(
+            "gameplay.line_cleanup",
+            "LINE_CLEANUP speculative=recomputed".to_owned(),
+        );
+        self.npc_voice.display_line(context).await
+    }
+
     pub(super) async fn complete_dialogue_response(
         &self,
         credential: [u8; 32],
@@ -2195,6 +2324,7 @@ impl Service {
         if let Some(SpokenTurn {
             mut context,
             hero_trade,
+            cleanup,
         }) = npc
         {
             let bargain_source = (
@@ -2210,7 +2340,7 @@ impl Service {
             // The table sees the hero's line cleaned up (within its deadline), then
             // the speaker thinking until the reply (or the lack of one) is in; the
             // mark clears when this scope ends.
-            let shown = self.npc_voice.display_line(&context).await;
+            let shown = self.shown_line(&context, cleanup).await;
             let player_line = context.publish_typed_line(&self.table_log, &shown);
             let mut closed_prior_quote = false;
             // The listed quote's fate is read from the typed words that Jev's judgement read, never
@@ -3494,6 +3624,7 @@ impl actor::Actor {
             npc.map(|context| SpokenTurn {
                 context,
                 hero_trade,
+                cleanup: None,
             }),
         ))
     }
@@ -3869,5 +4000,125 @@ impl actor::Actor {
             npc_actor_id: String::new(),
             npc_speaker: String::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod speech_cleanup_tests {
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use super::super::line_cleanup::{CLEANUP_DEADLINE, Source};
+    use super::super::npc_reply::NpcVoice;
+    use super::super::npc_reply::sanitize_player_words as speech_words;
+    use super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
+    use super::SpeechCleanup;
+
+    fn voice(endpoint: &FakeEndpoint, cache: &Path) -> Arc<NpcVoice> {
+        Arc::new(NpcVoice::new(Arc::new(teller(
+            endpoint.address,
+            20_000,
+            Duration::from_secs(30),
+            cache,
+        ))))
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_started_tidy_up_is_used_for_the_words_it_was_started_with_and_answers_once() {
+        let cache = cache_directory("speech-cleanup-used");
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(serde_json::json!({
+            "clean": "Garick, what's so special about the whistle?"
+        }))]);
+        let words = speech_words("uhh  garick whats  so special abt the wistle");
+        let cleanup = SpeechCleanup::start(
+            voice(&endpoint, &cache),
+            words.clone(),
+            vec!["Garick".to_owned()],
+        );
+        assert!(cleanup.is_for(&words));
+        assert!(!cleanup.is_for("a different line"));
+        let line = cleanup
+            .finish()
+            .await
+            .expect("the started tidy-up finishes");
+        assert_eq!(line.source, Source::Model);
+        assert_eq!(line.text, "Garick, what's so special about the whistle?");
+        assert_eq!(endpoint.bodies().len(), 1);
+        if cache.exists() {
+            std::fs::remove_dir_all(cache).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_model_call_goes_out_while_routing_runs_before_the_tidy_up_is_awaited() {
+        let cache = cache_directory("speech-cleanup-in-flight");
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(
+            serde_json::json!({"clean": "Hello there."}),
+        )]);
+        let cleanup = SpeechCleanup::start(
+            voice(&endpoint, &cache),
+            speech_words("hello there"),
+            Vec::new(),
+        );
+        // Routing is still running here: nobody has awaited the tidy-up, yet the call is out.
+        let started = Instant::now();
+        while endpoint.bodies().is_empty() && started.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(endpoint.bodies().len(), 1);
+        let line = cleanup
+            .finish()
+            .await
+            .expect("the started tidy-up finishes");
+        assert_eq!(line.source, Source::Model);
+        assert_eq!(line.text, "Hello there.");
+        if cache.exists() {
+            std::fs::remove_dir_all(cache).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_tidy_up_leaves_the_line_as_typed_once_without_a_second_call() {
+        let cache = cache_directory("speech-cleanup-failed");
+        let endpoint =
+            FakeEndpoint::start(vec![Reply::Status(500, serde_json::json!({"error": {}}))]);
+        let cleanup = SpeechCleanup::start(
+            voice(&endpoint, &cache),
+            speech_words("um whats this"),
+            Vec::new(),
+        );
+        let line = cleanup
+            .finish()
+            .await
+            .expect("a refused call still finishes with a line");
+        assert_eq!(line.source, Source::Fallback);
+        assert_eq!(line.text, "What's this?");
+        assert_eq!(endpoint.bodies().len(), 1);
+        if cache.exists() {
+            std::fs::remove_dir_all(cache).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_hanging_tidy_up_gives_up_at_the_deadline_with_the_usual_fallback() {
+        let cache = cache_directory("speech-cleanup-hung");
+        let endpoint = FakeEndpoint::start(vec![Reply::Hang]);
+        let cleanup = SpeechCleanup::start(
+            voice(&endpoint, &cache),
+            speech_words("um whats that"),
+            Vec::new(),
+        );
+        let started = Instant::now();
+        let line = cleanup
+            .finish()
+            .await
+            .expect("a timed-out call still finishes with a line");
+        assert!(started.elapsed() < CLEANUP_DEADLINE + Duration::from_millis(600));
+        assert_eq!(line.source, Source::Fallback);
+        assert_eq!(line.text, "What's that?");
+        if cache.exists() {
+            std::fs::remove_dir_all(cache).unwrap();
+        }
     }
 }
