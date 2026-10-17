@@ -469,7 +469,9 @@ fn truncated_corrupt_and_extended_backing_never_resolve() {
         let (path, store, metadata, requested) = fixture();
         let replacement_path = path.join("replacement-fixture");
         fs::write(&replacement_path, replacement).unwrap();
-        fs::rename(replacement_path, object_path(&path)).unwrap();
+        let object = object_path(&path);
+        fs::remove_file(&object).unwrap();
+        fs::rename(replacement_path, object).unwrap();
         let resolver = AssetResolver::new(&metadata, &requested, &0);
         assert!(matches!(
             resolver.open_native(
@@ -520,7 +522,9 @@ fn same_path_replacement_cannot_change_the_already_verified_stream() {
     replacement[0] ^= 1;
     let replacement_path = path.join("replacement-fixture");
     fs::write(&replacement_path, replacement).unwrap();
-    fs::rename(replacement_path, object_path(&path)).unwrap();
+    let object = object_path(&path);
+    fs::remove_file(&object).unwrap();
+    fs::rename(replacement_path, object).unwrap();
     let mut output = [0; 4];
     let mut received = Vec::with_capacity(CONTENT.len());
     while let ChunkOutcome::Bytes(length) = stream.read_chunk(&mut output).unwrap() {

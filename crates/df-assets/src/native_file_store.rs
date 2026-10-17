@@ -31,7 +31,7 @@ impl NativeFileStore {
         fs::create_dir_all(root.join("objects"))?;
         fs::create_dir_all(root.join("promotion"))?;
         require_objects_dir(&root.join("objects"))?;
-        File::open(&root)?.sync_all()?;
+        sync_directory(&root)?;
         Ok(Self {
             root,
             max_object_bytes,
@@ -125,7 +125,7 @@ impl AssetStore for NativeFileStore {
             let _ = fs::remove_file(&path);
             return Err(error);
         }
-        File::open(self.root.join("staging"))?.sync_all()?;
+        sync_directory(&self.root.join("staging"))?;
         Ok(StagedUpload {
             root: self.root.clone(),
             path,
@@ -227,9 +227,7 @@ impl AssetStore for NativeFileStore {
             let path = temporary.as_ref().ok_or(StoreError::StagingConflict)?;
             match fs::hard_link(path, &destination) {
                 Ok(()) => {
-                    File::open(self.root.join("objects"))
-                        .and_then(|dir| dir.sync_all())
-                        .map_err(StoreError::from)?;
+                    sync_directory(&self.root.join("objects")).map_err(StoreError::from)?;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     let mut destination_file = self
@@ -241,10 +239,9 @@ impl AssetStore for NativeFileStore {
                     {
                         return Err(PublicationError::Store(StoreError::BackingIntegrity));
                     }
+                    #[cfg(not(windows))]
                     destination_file.sync_all().map_err(StoreError::from)?;
-                    File::open(self.root.join("objects"))
-                        .and_then(|dir| dir.sync_all())
-                        .map_err(StoreError::from)?;
+                    sync_directory(&self.root.join("objects")).map_err(StoreError::from)?;
                 }
                 Err(error) => return Err(PublicationError::Store(StoreError::Io(error))),
             }
@@ -254,13 +251,27 @@ impl AssetStore for NativeFileStore {
             let removed = fs::remove_file(&temporary);
             if result.is_ok() {
                 removed.map_err(StoreError::from)?;
-                File::open(self.root.join("promotion"))
-                    .and_then(|dir| dir.sync_all())
-                    .map_err(StoreError::from)?;
+                sync_directory(&self.root.join("promotion")).map_err(StoreError::from)?;
             }
         }
         result
     }
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+#[cfg(windows)]
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
+    // Windows does not support flushing directory handles like Unix fsync.
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn verify_file(path: &Path, expected: AssetManifest) -> Result<(), StoreError> {
@@ -466,6 +477,23 @@ mod tests {
             byte_len: u64::try_from(bytes.len()).unwrap(),
             sha256: Sha256::digest(bytes).into(),
         }
+    }
+
+    #[test]
+    fn native_store_initializes_directory_tree() {
+        let temporary =
+            PathBuf::from(std::env::var_os("TMPDIR").expect("owned TMPDIR is required"));
+        let number = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = temporary.join(format!(
+            "df-assets-native-store-{}-{number}",
+            std::process::id()
+        ));
+
+        let store = NativeFileStore::new(&root, 1024).unwrap();
+
+        assert!(store.root.join("staging").is_dir());
+        assert!(store.root.join("objects").is_dir());
+        assert!(store.root.join("promotion").is_dir());
     }
 
     fn verified_files(left: &[u8], right: &[u8]) -> (File, File, PathBuf, PathBuf) {
