@@ -75,6 +75,12 @@ pub(in crate::gameplay) enum ResourceKind {
     ScenePlate,
     PlateEdit,
     ItemCloseUp,
+    /// The SAM 3.1 instances (masks, scores) of a scene plate for one noun phrase set: a hosted
+    /// provider call, kept as a note beside the cached plate.
+    PlateSegments,
+    /// Who and where everyone is in a scene plate (identity, facing, layout): derived from the
+    /// plate's segments and the vision judge, kept as a note beside the cached plate.
+    PlateStaging,
     /// Reserved for the music worker.
     MusicSet,
     /// Reserved for the voice migration.
@@ -90,6 +96,8 @@ impl ResourceKind {
             Self::ScenePlate => "scene_plate",
             Self::PlateEdit => "plate_edit",
             Self::ItemCloseUp => "item_close_up",
+            Self::PlateSegments => "plate_segments",
+            Self::PlateStaging => "plate_staging",
             Self::MusicSet => "music_set",
             Self::VoiceLine => "voice_line",
             Self::VideoClip => "video_clip",
@@ -220,6 +228,9 @@ impl Limits {
             | ResourceKind::ScenePlate
             | ResourceKind::PlateEdit
             | ResourceKind::ItemCloseUp => 180,
+            // The fal call has its own deadline; the staging runs two vision calls after it.
+            ResourceKind::PlateSegments => 120,
+            ResourceKind::PlateStaging => 240,
             ResourceKind::MusicSet => 600,
             ResourceKind::VoiceLine => 90,
             ResourceKind::VideoClip => 900,
@@ -256,6 +267,8 @@ pub(in crate::gameplay) enum Unit {
     MusicCall,
     /// One input token of a text-embedding call (the story memory).
     EmbeddingToken,
+    /// One hosted segmentation call (SAM on fal); its price is the model's, in the audit line.
+    SegmentCall,
 }
 
 impl Unit {
@@ -268,6 +281,7 @@ impl Unit {
             Self::TextToken => "text_token",
             Self::MusicCall => "music_call",
             Self::EmbeddingToken => "embedding_token",
+            Self::SegmentCall => "segment_call",
         }
     }
 }
