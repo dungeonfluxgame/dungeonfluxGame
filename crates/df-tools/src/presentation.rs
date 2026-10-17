@@ -559,6 +559,17 @@ pub(crate) fn place_picture(
         .or_else(|| plan.reviewed.map(|photo| format!("{GENERATED}/{photo}")))
 }
 
+/// The picture a story scene shows on the player's phone: its ready plate, then the served or
+/// reviewed picture the scene names, then its live room photograph. Nothing else stands in. The
+/// exploration surface's concept art is the harbour photograph, so a scene with no picture of its
+/// own answers `None` and shows the neutral base surface.
+pub(crate) fn story_scene_picture(scene: &rpc::GameplayScene) -> Option<String> {
+    plate_of(scene)
+        .url
+        .or_else(|| asset_url(&scene.scene_asset))
+        .or_else(|| imagery_url(&scene.live_backdrop))
+}
+
 /// The TV's screen-space effects a display view can switch off (`DisplayGameplayView.effects_off`,
 /// set with `dev fx`); each maps to `data-fx-<effect>="off"` on the stage. The server's list in
 /// `gameplay/display_effects.rs` must name the same effects.
@@ -833,7 +844,7 @@ pub(crate) fn scene_cast(view: &rpc::ViewMessage) -> Vec<StageActor> {
 }
 
 /// [`scene_cast`] for a view already split into its journey and scene.
-fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageActor> {
+pub(crate) fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageActor> {
     let fighting = matches!(
         rpc::JourneyPhase::try_from(journey.phase),
         Ok(rpc::JourneyPhase::Combat)
@@ -886,8 +897,8 @@ fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) -> Vec<StageA
                     actor_id: actor.id.clone(),
                     name: actor.name.clone(),
                     role: String::new(),
-                    sprite: asset_url(&actor.sprite).unwrap_or_default(),
-                    portrait: asset_url(&actor.portrait).unwrap_or_default(),
+                    sprite: served_picture(&actor.sprite).unwrap_or_default(),
+                    portrait: served_picture(&actor.portrait).unwrap_or_default(),
                     hit_points: participant.and_then(hit_points),
                     speaking: if fighting {
                         participant.is_some_and(|participant| participant.active_turn)
@@ -1111,6 +1122,94 @@ pub(crate) fn newest_scene_speech(journey: &rpc::JourneyView) -> Option<(u64, &s
             && !line.text.trim().is_empty())
         .then_some((line.sequence, line.speaker.as_str(), line.text.trim()))
     })
+}
+
+impl StageActor {
+    /// The picture this cast member shows in a caption or on the stage: the live image already
+    /// made for them, else the portrait, else the cut-out. Empty references are absent.
+    pub(crate) fn picture(&self) -> Option<String> {
+        self.live_sprite
+            .clone()
+            .or_else(|| (!self.portrait.is_empty()).then(|| self.portrait.clone()))
+            .or_else(|| (!self.sprite.is_empty()).then(|| self.sprite.clone()))
+    }
+}
+
+/// A served picture for a cast reference: a local asset path, or the reviewed photograph the art
+/// contract names for it (a bare stem or an identity key). A role token with no picture yet, such
+/// as `live-canonical-photo`, answers `None`.
+pub(crate) fn served_picture(reference: &str) -> Option<String> {
+    asset_url(reference).or_else(|| {
+        art_contract::plan(art_contract::Role::CharacterToken, reference)
+            .reviewed
+            .map(|photo| format!("{GENERATED}/{photo}"))
+    })
+}
+
+/// Which character speaks a caption. Identity is the party position or the server's actor id,
+/// never the name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CaptionSpeaker<'a> {
+    /// The party member at this position.
+    Hero(usize),
+    /// The non-player character the server names by actor id.
+    Npc(&'a str),
+    /// No character on stage speaks it: the narrator, or a line that names no actor.
+    Unknown,
+}
+
+/// The speaker of a logged table line, from its role and actor id.
+pub(crate) fn caption_speaker(role: TableRole, actor_id: &str) -> CaptionSpeaker<'_> {
+    match role {
+        TableRole::Hero(index) => CaptionSpeaker::Hero(index),
+        TableRole::Npc if !actor_id.is_empty() => CaptionSpeaker::Npc(actor_id),
+        TableRole::Npc | TableRole::Narrator => CaptionSpeaker::Unknown,
+    }
+}
+
+/// The speaker of the scene's speech for the stage. A logged line names its speaker by role and
+/// actor id. The scene's own opening line (`sequence` is `None`) is spoken by the non-player the
+/// server marks as speaking.
+pub(crate) fn scene_speech_speaker<'a>(
+    journey: &'a rpc::JourneyView,
+    cast: &'a [StageActor],
+    sequence: Option<u64>,
+) -> CaptionSpeaker<'a> {
+    let Some(sequence) = sequence else {
+        return cast
+            .iter()
+            .find(|actor| actor.speaking && matches!(actor.slot, ActorSlot::Npc(_)))
+            .map_or(CaptionSpeaker::Unknown, |actor| {
+                CaptionSpeaker::Npc(&actor.actor_id)
+            });
+    };
+    let Some(line) = journey
+        .table_log
+        .iter()
+        .find(|line| line.sequence == sequence)
+    else {
+        return CaptionSpeaker::Unknown;
+    };
+    match rpc::TableRole::try_from(line.role) {
+        Ok(rpc::TableRole::Hero) => {
+            usize::try_from(line.hero_index).map_or(CaptionSpeaker::Unknown, CaptionSpeaker::Hero)
+        }
+        Ok(rpc::TableRole::Npc) if !line.actor_id.is_empty() => CaptionSpeaker::Npc(&line.actor_id),
+        _ => CaptionSpeaker::Unknown,
+    }
+}
+
+/// The picture of the character who speaks, found among the stage's cast by party position or
+/// actor id. `None` means the photograph is not ready (or the speaker is not on stage), so the
+/// caption shows the speaker's initial.
+pub(crate) fn caption_picture(cast: &[StageActor], speaker: CaptionSpeaker<'_>) -> Option<String> {
+    cast.iter()
+        .find(|actor| match speaker {
+            CaptionSpeaker::Hero(index) => actor.slot == ActorSlot::Hero(index),
+            CaptionSpeaker::Npc(id) => !id.is_empty() && actor.actor_id == id,
+            CaptionSpeaker::Unknown => false,
+        })
+        .and_then(|actor| actor.picture())
 }
 
 /// The table lines of one audience view, oldest first: the scene's own speaker line, then the
@@ -3549,5 +3648,298 @@ mod scene_art_admission {
     fn the_client_never_reads_class_name_from_an_element_it_walks() {
         let source = include_str!("gameplay_browser.rs");
         assert!(!source.contains(".class_name()"));
+    }
+}
+
+#[cfg(test)]
+mod caption_speakers {
+    use super::*;
+
+    const LIVE_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const REVIEWED: &str = "sprite-patron-merchant-documentary-photo";
+
+    fn live_path() -> String {
+        format!("{}{LIVE_KEY}", art_contract::LIVE_IMAGERY_PREFIX)
+    }
+
+    fn stage_actor(
+        actor_id: &str,
+        slot: ActorSlot,
+        sprite: &str,
+        live_sprite: Option<String>,
+        speaking: bool,
+    ) -> StageActor {
+        StageActor {
+            actor_id: actor_id.to_owned(),
+            slot,
+            name: String::new(),
+            role: String::new(),
+            sprite: sprite.to_owned(),
+            portrait: String::new(),
+            hit_points: None,
+            speaking,
+            down: false,
+            live_sprite,
+        }
+    }
+
+    fn npc_line(sequence: u64, actor_id: &str) -> rpc::TableLine {
+        rpc::TableLine {
+            sequence,
+            actor_id: actor_id.to_owned(),
+            speaker: "Marek".to_owned(),
+            role: rpc::TableRole::Npc as i32,
+            kind: rpc::TableKind::Speech as i32,
+            text: "Marek names his price.".to_owned(),
+            ..Default::default()
+        }
+    }
+
+    fn journey_with(table_log: Vec<rpc::TableLine>) -> rpc::JourneyView {
+        rpc::JourneyView {
+            table_log,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_non_player_speaker_shows_the_live_photograph_the_server_made_for_them() {
+        let cast = [stage_actor(
+            "merchant",
+            ActorSlot::Npc(0),
+            "",
+            Some(live_path()),
+            true,
+        )];
+
+        assert_eq!(
+            caption_picture(&cast, CaptionSpeaker::Npc("merchant")),
+            Some(live_path())
+        );
+    }
+
+    #[test]
+    fn the_initial_stands_while_the_speakers_photograph_is_not_ready() {
+        let cast = [stage_actor("merchant", ActorSlot::Npc(0), "", None, true)];
+
+        assert_eq!(
+            caption_picture(&cast, CaptionSpeaker::Npc("merchant")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_reviewed_photograph_named_by_its_bare_stem_is_shown_when_no_live_image_exists() {
+        let cast = [stage_actor(
+            "merchant",
+            ActorSlot::Npc(0),
+            REVIEWED,
+            None,
+            true,
+        )];
+
+        let picture = caption_picture(&cast, CaptionSpeaker::Npc("merchant"));
+        assert!(
+            picture
+                .as_deref()
+                .is_some_and(|url| url.ends_with(REVIEWED)),
+            "{picture:?}"
+        );
+    }
+
+    #[test]
+    fn the_speaker_is_found_by_actor_id_and_never_by_name() {
+        // The line's words say Marek, but its actor id is the bandit's: only the bandit's entry
+        // answers, and the bandit has no photograph yet.
+        let cast = [
+            stage_actor("merchant", ActorSlot::Npc(0), "", Some(live_path()), false),
+            stage_actor("bandit", ActorSlot::Npc(1), "", None, false),
+        ];
+
+        assert_eq!(caption_picture(&cast, CaptionSpeaker::Npc("bandit")), None);
+    }
+
+    #[test]
+    fn a_speaker_who_is_not_on_stage_has_no_picture() {
+        let cast = [stage_actor(
+            "merchant",
+            ActorSlot::Npc(0),
+            "",
+            Some(live_path()),
+            false,
+        )];
+
+        assert_eq!(caption_picture(&cast, CaptionSpeaker::Npc("ghost")), None);
+        assert_eq!(caption_picture(&cast, CaptionSpeaker::Npc("")), None);
+        assert_eq!(caption_picture(&cast, CaptionSpeaker::Unknown), None);
+    }
+
+    #[test]
+    fn a_hero_caption_shows_that_party_members_picture_and_no_npc_picture() {
+        let hero = stage_actor(
+            "",
+            ActorSlot::Hero(1),
+            "/assets/ui/generated/sprite-hero-2",
+            None,
+            false,
+        );
+        let npc = stage_actor("merchant", ActorSlot::Npc(0), "", Some(live_path()), false);
+        let cast = [hero, npc];
+
+        assert_eq!(
+            caption_picture(&cast, CaptionSpeaker::Hero(1)),
+            Some("/assets/ui/generated/sprite-hero-2".to_owned())
+        );
+        assert_eq!(caption_picture(&cast, CaptionSpeaker::Hero(0)), None);
+    }
+
+    #[test]
+    fn a_logged_npc_line_names_its_speaker_by_actor_id() {
+        let journey = journey_with(vec![npc_line(7, "merchant")]);
+
+        assert_eq!(
+            scene_speech_speaker(&journey, &[], Some(7)),
+            CaptionSpeaker::Npc("merchant")
+        );
+    }
+
+    #[test]
+    fn a_logged_hero_line_names_its_party_position() {
+        let hero_line = rpc::TableLine {
+            sequence: 9,
+            role: rpc::TableRole::Hero as i32,
+            hero_index: 1,
+            kind: rpc::TableKind::Speech as i32,
+            speaker: "Brakka".to_owned(),
+            text: "Could I inspect the coats?".to_owned(),
+            ..Default::default()
+        };
+        let journey = journey_with(vec![hero_line]);
+
+        assert_eq!(
+            scene_speech_speaker(&journey, &[], Some(9)),
+            CaptionSpeaker::Hero(1)
+        );
+    }
+
+    #[test]
+    fn a_logged_npc_line_with_no_actor_id_has_no_speaker_picture() {
+        let journey = journey_with(vec![npc_line(7, "")]);
+
+        assert_eq!(
+            scene_speech_speaker(&journey, &[], Some(7)),
+            CaptionSpeaker::Unknown
+        );
+    }
+
+    #[test]
+    fn the_scene_opening_line_is_spoken_by_the_non_player_the_server_marks_speaking() {
+        let cast = [
+            stage_actor("bandit", ActorSlot::Npc(0), "", None, false),
+            stage_actor("merchant", ActorSlot::Npc(1), "", Some(live_path()), true),
+        ];
+        let journey = journey_with(vec![]);
+
+        let speaker = scene_speech_speaker(&journey, &cast, None);
+        assert_eq!(speaker, CaptionSpeaker::Npc("merchant"));
+        assert_eq!(caption_picture(&cast, speaker), Some(live_path()));
+    }
+
+    #[test]
+    fn a_table_line_speaker_comes_from_its_role_and_actor_id() {
+        assert_eq!(
+            caption_speaker(TableRole::Npc, "merchant"),
+            CaptionSpeaker::Npc("merchant")
+        );
+        assert_eq!(caption_speaker(TableRole::Npc, ""), CaptionSpeaker::Unknown);
+        assert_eq!(
+            caption_speaker(TableRole::Hero(2), ""),
+            CaptionSpeaker::Hero(2)
+        );
+        assert_eq!(
+            caption_speaker(TableRole::Narrator, ""),
+            CaptionSpeaker::Unknown
+        );
+    }
+
+    #[test]
+    fn a_role_token_is_not_a_served_picture_but_a_reviewed_stem_is() {
+        assert_eq!(served_picture(art_contract::CANONICAL_PHOTO), None);
+        let picture = served_picture(REVIEWED);
+        assert!(
+            picture
+                .as_deref()
+                .is_some_and(|url| url.ends_with(REVIEWED)),
+            "{picture:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod story_scene_picture {
+    use super::*;
+
+    fn live(digit: char) -> String {
+        format!(
+            "{}{}",
+            art_contract::LIVE_IMAGERY_PREFIX,
+            digit.to_string().repeat(64)
+        )
+    }
+
+    fn shop(scene_asset: &str, live_backdrop: String, live_plate: String) -> rpc::GameplayScene {
+        rpc::GameplayScene {
+            title: "Marek's Cloth Shop".to_owned(),
+            scene_asset: scene_asset.to_owned(),
+            live_backdrop,
+            live_plate,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_scene_with_no_picture_yet_shows_none_not_the_harbour_photograph() {
+        // Arrange: the shop names the room token, and neither its room photograph nor its plate
+        // has been made.
+        let scene = shop(art_contract::ROOM_PHOTO, String::new(), String::new());
+
+        // Act and assert
+        assert_eq!(story_scene_picture(&scene), None);
+    }
+
+    #[test]
+    fn the_live_room_photograph_stands_once_the_server_has_made_it() {
+        let scene = shop(art_contract::ROOM_PHOTO, live('a'), String::new());
+
+        assert_eq!(story_scene_picture(&scene), Some(live('a')));
+    }
+
+    #[test]
+    fn a_ready_scene_plate_leads_the_live_room_photograph() {
+        let mut scene = shop(art_contract::ROOM_PHOTO, live('a'), live('b'));
+        scene.plate_state = rpc::PlateState::Ready as i32;
+
+        assert_eq!(story_scene_picture(&scene), Some(live('b')));
+    }
+
+    #[test]
+    fn a_plate_not_yet_ready_does_not_lead_the_live_room_photograph() {
+        let scene = shop(art_contract::ROOM_PHOTO, live('a'), live('b'));
+
+        assert_eq!(story_scene_picture(&scene), Some(live('a')));
+    }
+
+    #[test]
+    fn a_painted_stem_names_no_picture_and_a_reviewed_photograph_is_kept() {
+        let painted = shop(
+            "assets/ui/generated/scene-place-guardhouse",
+            String::new(),
+            String::new(),
+        );
+        assert_eq!(story_scene_picture(&painted), None);
+        let candid = "assets/ui/generated/scene-salt-quay-candid-documentary-photo";
+        let reviewed = shop(candid, live('a'), String::new());
+
+        assert_eq!(story_scene_picture(&reviewed), Some(format!("/{candid}")));
     }
 }

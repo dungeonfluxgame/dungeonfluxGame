@@ -16,8 +16,7 @@ use super::*;
 use crate::{
     plate_layout::{PlateFrame, Rect},
     presentation::{
-        Card, CardKind, HERO_ROLE, PlateState, PlateView, SceneFamily, StageActor, asset_url,
-        shot_of,
+        Card, CardKind, HERO_ROLE, PlateState, PlateView, SceneFamily, StageActor, shot_of,
     },
     stage_machines::LineState,
 };
@@ -199,8 +198,8 @@ pub(super) struct TvStage {
     establish_title: Element,
     establish_place: Element,
     lower: LowerThird,
-    /// The portraits of the characters on stage, by name, for the lower third.
-    portraits: RefCell<Vec<(String, String)>>,
+    /// The characters on stage, for the lower third's speaker portrait (found by slot or actor id).
+    caption_cast: RefCell<Vec<StageActor>>,
     /// The newest narrator line the stage has heard of, and the one the current scene's entry
     /// began after: only a later line is this scene's narration.
     last_narrator_line: Cell<u64>,
@@ -1935,7 +1934,7 @@ impl TvStage {
             establish_title,
             establish_place,
             lower,
-            portraits: RefCell::new(Vec::new()),
+            caption_cast: RefCell::new(Vec::new()),
             last_narrator_line: Cell::new(0),
             narration_floor: Cell::new(0),
             scene_context_retired: Cell::new(false),
@@ -2998,11 +2997,7 @@ impl TvStage {
         self.establish_title.set_text_content(Some(establish_title));
         self.establish_place.set_text_content(Some(&model.place));
         set_hidden(&self.establish_place, model.place.is_empty())?;
-        *self.portraits.borrow_mut() = model
-            .cast
-            .iter()
-            .map(|actor| (actor.name.clone(), actor.portrait.clone()))
-            .collect();
+        *self.caption_cast.borrow_mut() = model.cast.clone();
         self.set_plate(&model.plate, &model.scene_key, model.narrated)?;
         if lobby {
             self.figures.update(
@@ -3196,7 +3191,7 @@ impl TvStage {
                 .get_attribute("data-component-id")
                 .and_then(|value| value.parse::<u64>().ok())
                 != Some(id);
-            self.lower_third(id, bubble.speaker, bubble.text, state)?;
+            self.lower_third(id, bubble.speaker_actor, bubble.speaker, bubble.text, state)?;
             let scene = self
                 .root
                 .get_attribute("data-scene-key")
@@ -3219,6 +3214,7 @@ impl TvStage {
     pub(super) fn lower_third(
         &self,
         id: u64,
+        speaker_actor: crate::presentation::CaptionSpeaker<'_>,
         speaker: &str,
         text: &str,
         state: LineState,
@@ -3288,18 +3284,15 @@ impl TvStage {
             lower.name.set_text_content(Some(speaker));
             lower.text.set_text_content(Some(text));
             lower.glyph.set_text_content(Some(&initial(speaker)));
-            let portrait = self
-                .portraits
-                .borrow()
-                .iter()
-                .find(|(name, _)| name == speaker)
-                .and_then(|(_, path)| asset_url(path));
-            lower.portrait.set_attribute(
-                "style",
-                &portrait
-                    .map(|url| format!("background-image:url({url})"))
-                    .unwrap_or_default(),
-            )?;
+        }
+        // The photograph can arrive after the line has opened, so the portrait is checked on every
+        // call and changes only when the server's picture for this speaker differs.
+        let style =
+            crate::presentation::caption_picture(&self.caption_cast.borrow(), speaker_actor)
+                .map(|url| format!("background-image:url({url})"))
+                .unwrap_or_default();
+        if lower.portrait.get_attribute("style").unwrap_or_default() != style {
+            lower.portrait.set_attribute("style", &style)?;
         }
         lower.root.set_attribute("data-line-state", state.name())?;
         lower.root.set_attribute(
@@ -3798,6 +3791,7 @@ mod tests {
             .unwrap();
         let previous = LineBubble {
             kind: BubbleKind::Typed,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Brakka",
             text: "Earlier line",
             voiced: false,
@@ -3806,6 +3800,7 @@ mod tests {
         assert_eq!(text.chars().count(), 332);
         let current = LineBubble {
             kind: BubbleKind::Typed,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Brakka",
             text: &text,
             voiced: false,
@@ -3845,6 +3840,7 @@ mod tests {
         assert!(!stage.root.has_attribute("data-unplaced-line"));
         let npc = LineBubble {
             kind: BubbleKind::Speech,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Courier",
             text: "An earlier NPC reply",
             voiced: false,
@@ -3911,6 +3907,7 @@ mod tests {
             .unwrap();
         let line = LineBubble {
             kind: BubbleKind::Speech,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Courier",
             text: "You can call me the courier.",
             voiced: true,
@@ -4017,6 +4014,7 @@ mod tests {
         let slot = super::super::live_stage::slot_index(ActorSlot::Npc(1)).unwrap();
         let old = LineBubble {
             kind: BubbleKind::Speech,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Bandit",
             text: "Keep away.",
             voiced: false,
@@ -4066,6 +4064,7 @@ mod tests {
         assert!(!stage.root.has_attribute("data-unplaced-line"));
         let next = LineBubble {
             kind: BubbleKind::Speech,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Bandit",
             text: "Give me the packet.",
             voiced: false,
@@ -4331,7 +4330,13 @@ mod tests {
         let (parent, stage) = mounted_stage();
         seed_active_plate(&stage);
         stage
-            .lower_third(7, "Courier", "Keep this line steady.", LineState::Speaking)
+            .lower_third(
+                7,
+                crate::presentation::CaptionSpeaker::Unknown,
+                "Courier",
+                "Keep this line steady.",
+                LineState::Speaking,
+            )
             .unwrap();
         let plate = PlateView {
             state: PlateState::Ready,
@@ -4353,7 +4358,13 @@ mod tests {
             Some("0")
         );
         stage
-            .lower_third(7, "Courier", "Keep this line steady.", LineState::Lingering)
+            .lower_third(
+                7,
+                crate::presentation::CaptionSpeaker::Unknown,
+                "Courier",
+                "Keep this line steady.",
+                LineState::Lingering,
+            )
             .unwrap();
         stage
             .root
@@ -4388,7 +4399,13 @@ mod tests {
         let (parent, stage) = mounted_stage();
         seed_active_plate(&stage);
         stage
-            .lower_third(7, "Courier", "Keep this line steady.", LineState::Speaking)
+            .lower_third(
+                7,
+                crate::presentation::CaptionSpeaker::Unknown,
+                "Courier",
+                "Keep this line steady.",
+                LineState::Speaking,
+            )
             .unwrap();
         let plate = PlateView {
             state: PlateState::Ready,
@@ -4405,7 +4422,13 @@ mod tests {
             Some("0")
         );
         stage
-            .lower_third(7, "Courier", "Keep this line steady.", LineState::Done)
+            .lower_third(
+                7,
+                crate::presentation::CaptionSpeaker::Unknown,
+                "Courier",
+                "Keep this line steady.",
+                LineState::Done,
+            )
             .unwrap();
         stage.set_speaker("").unwrap();
         assert_eq!(

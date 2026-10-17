@@ -283,34 +283,28 @@ fn art(
 fn lobby_art_source(scene_asset: &str, live_backdrop: &str) -> Option<String> {
     crate::presentation::place_picture(art_contract::Role::LobbyArt, scene_asset, live_backdrop, "")
 }
-
 fn validated_join_scene_asset(scene_asset: Option<&str>) -> Option<String> {
     scene_asset.and_then(asset_url)
-}
-
-fn speaker_portrait_stem(name: &str) -> Option<&'static str> {
-    match name {
-        "Courier" => Some("sprite-courier-documentary-photo"),
-        "Bandit" => Some("sprite-bandit-documentary-photo"),
-        _ => None,
-    }
 }
 
 fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
     let lobby = input.phase == rpc::JourneyPhase::Room;
     let join_url = join_address(input.journey)?;
     let (art, art_fallback, art_source) = art(input.phase, input.scene);
-    let speaker = exploration_speech(input.journey, input.scene).map(|(_, name, line)| TvSpeaker {
-        name: if name.is_empty() {
-            "Narrator".to_owned()
-        } else {
-            name.to_owned()
-        },
-        line: line.to_owned(),
-        portrait: asset_url(&input.scene.speaker_portrait).or_else(|| {
-            speaker_portrait_stem(name).map(|stem| format!("/assets/ui/generated/{stem}"))
-        }),
-    });
+    let cast = crate::presentation::cast_of(input.journey, input.scene);
+    let speaker =
+        exploration_speech(input.journey, input.scene).map(|(sequence, name, line)| TvSpeaker {
+            name: if name.is_empty() {
+                "Narrator".to_owned()
+            } else {
+                name.to_owned()
+            },
+            line: line.to_owned(),
+            portrait: crate::presentation::caption_picture(
+                &cast,
+                crate::presentation::scene_speech_speaker(input.journey, &cast, sequence),
+            ),
+        });
     Ok(TvModel {
         mode: if lobby { TvMode::Lobby } else { TvMode::Scene },
         title: input.scene.title.clone(),
@@ -586,7 +580,7 @@ fn exploration_model(
     let plate = crate::presentation::plate_of(input.scene);
     Ok(ExplorationModel {
         plate_focus: plate.layout.map(|layout| layout.head_x),
-        scene_asset: plate.url.or_else(|| asset_url(&input.scene.scene_asset)),
+        scene_asset: crate::presentation::story_scene_picture(input.scene),
         scene_alt: authored_scene_alt(input.scene, art_scene),
         portrait_asset: asset_url(&input.scene.speaker_portrait),
         has_whisper: show_clue,
@@ -1486,7 +1480,13 @@ mod tests {
                     .is_some()
             );
             stage
-                .lower_third(7, "Courier", "Keep the letter safe.", LineState::Lingering)
+                .lower_third(
+                    7,
+                    crate::presentation::CaptionSpeaker::Unknown,
+                    "Courier",
+                    "Keep the letter safe.",
+                    LineState::Lingering,
+                )
                 .unwrap();
             assert!(
                 stage

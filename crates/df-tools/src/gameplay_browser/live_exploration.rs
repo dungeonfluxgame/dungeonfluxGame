@@ -164,6 +164,18 @@ fn render_error(client: &Rc<RefCell<Client>>, error: &dyn std::fmt::Display) -> 
     JsValue::from_str(&format!("The scene could not be displayed: {error}"))
 }
 
+/// Shows no scene picture: the mounted art element loses its source and is hidden. The surface
+/// mounts a concept photograph of the harbour in every exploration phase, which must not stand in
+/// for a scene that has no picture of its own.
+fn hide_scene_art(screen: &ExplorationScreen) -> Result<(), JsValue> {
+    let Some(art) = screen.phase.root().query_selector(".scene-art")? else {
+        return Ok(());
+    };
+    art.remove_attribute("src")?;
+    art.set_attribute("hidden", "")?;
+    Ok(())
+}
+
 /// Marks the mounted surface for the player theme: whether the narration box carries a private
 /// whisper, and which icon leads each choice. Both are presentation only.
 fn decorate(screen: &ExplorationScreen, model: &ExplorationModel) -> Result<(), JsValue> {
@@ -172,15 +184,10 @@ fn decorate(screen: &ExplorationScreen, model: &ExplorationModel) -> Result<(), 
     if let Some(art) = root.query_selector(".scene-art")? {
         art.set_attribute("alt", &model.scene_alt)?;
     }
-    server_image(
-        screen,
-        ".scene-art",
-        &model.scene_asset,
-        model
-            .scene_asset
-            .is_none()
-            .then(|| format!("/{}", model.scene.asset_path())),
-    )?;
+    server_image(screen, ".scene-art", &model.scene_asset, None)?;
+    if model.scene_asset.is_none() {
+        hide_scene_art(screen)?;
+    }
     let portrait_fallback = model
         .speaker
         .as_ref()

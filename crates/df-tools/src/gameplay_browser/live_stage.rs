@@ -367,6 +367,8 @@ struct HudCard {
 /// What a line's bubble shows.
 pub(super) struct LineBubble<'a> {
     pub(super) kind: BubbleKind,
+    /// Which character speaks, by slot or actor id; the speaker's portrait is found by it.
+    pub(super) speaker_actor: crate::presentation::CaptionSpeaker<'a>,
     pub(super) speaker: &'a str,
     pub(super) text: &'a str,
     pub(super) voiced: bool,
@@ -3081,6 +3083,7 @@ mod tests {
             .remove();
         let line = LineBubble {
             kind: BubbleKind::Typed,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Brakka",
             text: "Tell me about the seal.",
             voiced: false,
@@ -3152,6 +3155,7 @@ mod tests {
             .unwrap();
         let line = LineBubble {
             kind: BubbleKind::Typed,
+            speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
             speaker: "Brakka",
             text: "A long question must remain readable.",
             voiced: false,

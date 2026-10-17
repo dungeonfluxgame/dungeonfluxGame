@@ -130,6 +130,8 @@ struct RollDescriptionOwned {
 #[derive(Clone)]
 struct LineDetail {
     speaker: String,
+    /// The server's actor id of the speaker; empty for the narrator and for a line with none.
+    actor_id: String,
     role: TableRole,
     kind: TableKind,
     text: String,
@@ -148,6 +150,7 @@ impl LineDetail {
     fn of(line: &TableLine) -> Self {
         Self {
             speaker: line.speaker.clone(),
+            actor_id: line.actor_id.clone(),
             role: line.role,
             kind: line.kind,
             text: line.text.clone(),
@@ -407,6 +410,7 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
         timing: LineTiming::Ordinary,
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
+            actor_id: String::new(),
             role: TableRole::Narrator,
             kind: TableKind::Speech,
             text: text.to_owned(),
@@ -455,6 +459,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                 timing: LineTiming::Ordinary,
                 detail: Detail::Line(LineDetail {
                     speaker,
+                    actor_id: voice.actor_id().unwrap_or_default().to_owned(),
                     role: TableRole::Npc,
                     kind: TableKind::Speech,
                     text: line.text.clone(),
@@ -554,6 +559,7 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
         timing: LineTiming::Ordinary,
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
+            actor_id: String::new(),
             role: TableRole::Narrator,
             kind: TableKind::Speech,
             text: narration.to_owned(),
@@ -583,6 +589,7 @@ fn check_voice_script_line(
         timing: LineTiming::CheckResult,
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
+            actor_id: String::new(),
             role: TableRole::Narrator,
             kind: TableKind::Speech,
             text: check.voice.text.clone(),
@@ -619,6 +626,7 @@ fn check_roll_script_line(
         },
         detail: Detail::Line(LineDetail {
             speaker: NARRATOR_NAME.to_owned(),
+            actor_id: String::new(),
             role: TableRole::Narrator,
             kind: TableKind::Action,
             text: String::new(),
@@ -1934,6 +1942,10 @@ fn line_command(
                     state,
                     &super::live_stage::LineBubble {
                         kind,
+                        speaker_actor: crate::presentation::caption_speaker(
+                            line.role,
+                            &line.actor_id,
+                        ),
                         speaker: &line.speaker,
                         text: &line.text,
                         voiced: line.voice.is_some() && line.role == TableRole::Npc,
@@ -2428,6 +2440,14 @@ pub(super) fn on_player_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue
     render_log(client, &journey.party)
 }
 
+/// The picture behind a hero's table-log chip, by the art contract: `portrait-hero-N` answers the
+/// reviewed `figure-hero-N-documentary-photo`, the art that exists. A portrait id with no reviewed
+/// photograph has no URL, so the chip stays plain instead of asking for a missing file.
+fn hero_chip_url(portrait_id: &str) -> Option<String> {
+    df_render::art_contract::fetch_target(portrait_id)
+        .map(|target| format!("{}/{target}", live_tv::GENERATED))
+}
+
 /// The compact "table log": the latest lines with their speaker above the phone's choices.
 fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> Result<(), JsValue> {
     let (document, root) = {
@@ -2471,14 +2491,9 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
         let chip = node(&document, &row, "span", "table-chip", "")?;
         match line.role {
             TableRole::Hero(index) if party.get(index).is_some() => {
-                chip.set_attribute(
-                    "style",
-                    &format!(
-                        "background-image:url({}/portrait-hero-{})",
-                        live_tv::GENERATED,
-                        index + 1
-                    ),
-                )?;
+                if let Some(url) = hero_chip_url(&format!("portrait-hero-{}", index + 1)) {
+                    chip.set_attribute("style", &format!("background-image:url({url})"))?;
+                }
             }
             TableRole::Narrator => chip.set_text_content(Some("DM")),
             _ => chip.set_text_content(Some(
@@ -2509,6 +2524,16 @@ mod tests {
     use crate::stage_machines::LineState;
     use crate::voice_line::VoiceLine;
     use std::collections::HashMap;
+
+    #[test]
+    fn hero_chip_never_names_the_missing_portrait_file() {
+        let url = super::hero_chip_url("portrait-hero-1");
+        assert_eq!(
+            url.as_deref(),
+            Some("/assets/ui/generated/figure-hero-1-documentary-photo")
+        );
+        assert_ne!(url.as_deref(), Some("/assets/ui/generated/portrait-hero-1"));
+    }
 
     fn feed_line(
         sequence: u64,
