@@ -717,7 +717,7 @@ fn an_absent_scene_target_is_described_without_drawing_a_die() {
             living_scene::last_line(after.state())
                 .unwrap()
                 .unwrap()
-                .contains("You see nothing of that here.")
+                .contains("Nothing like that is here.")
         );
         assert_eq!(phase(&after).unwrap(), phase(&current).unwrap());
         assert_eq!(

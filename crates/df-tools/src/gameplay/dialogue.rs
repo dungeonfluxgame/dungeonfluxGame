@@ -979,8 +979,29 @@ fn table_speaker(
 fn is_observation_submission(
     request: &rpc::RawDialogueRequest,
     reading: &super::approach_model::LineReading,
+    addressed_present_person: bool,
 ) -> Result<bool, Status> {
-    Ok(finality(request.finality)? == InputFinality::Final && reading.intent.is_attempt())
+    Ok(finality(request.finality)? == InputFinality::Final
+        && !addressed_present_person
+        && matches!(
+            reading.intent,
+            super::approach_model::LineIntent::Examine
+                | super::approach_model::LineIntent::WatchPerson
+                | super::approach_model::LineIntent::KeepWatch
+                | super::approach_model::LineIntent::Track
+        ))
+}
+
+fn canonical_target_name<'a>(
+    selected: &str,
+    catalog: &'a [super::investigation::Target],
+) -> Option<&'a str> {
+    catalog
+        .iter()
+        .find(|target| {
+            target.name == selected || target.aliases.iter().any(|alias| alias == selected)
+        })
+        .map(|target| target.name.as_str())
 }
 
 fn accepted_quote_purchase_choices(
@@ -1033,8 +1054,126 @@ mod classified_line_tests {
                 finality: rpc::DialogueFinality::Final as i32,
                 ..Default::default()
             };
-            assert!(is_observation_submission(&request, &reading).unwrap());
+            assert!(is_observation_submission(&request, &reading, false).unwrap());
         }
+    }
+
+    #[test]
+    fn recall_and_person_addressed_attempts_do_not_enter_investigation() {
+        let request = rpc::RawDialogueRequest {
+            finality: rpc::DialogueFinality::Final as i32,
+            ..Default::default()
+        };
+        for intent in [
+            super::super::approach_model::LineIntent::StudyRecall,
+            super::super::approach_model::LineIntent::Examine,
+            super::super::approach_model::LineIntent::WatchPerson,
+        ] {
+            let reading = super::super::approach_model::LineReading {
+                intent,
+                skill: Some("insight"),
+                thing: "Marek".to_owned(),
+                physical_kind: None,
+                source: "jev",
+                elapsed_ms: 0,
+            };
+            assert!(!is_observation_submission(&request, &reading, true).unwrap());
+            if intent == super::super::approach_model::LineIntent::StudyRecall {
+                assert!(!is_observation_submission(&request, &reading, false).unwrap());
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn jev_routes_bluff_reading_to_insight_and_recall_out_of_investigation() {
+        use super::super::approach_model::tests::{answer, model};
+        use crate::gameplay::storyteller::tests::FakeEndpoint;
+
+        let request = rpc::RawDialogueRequest {
+            finality: rpc::DialogueFinality::Final as i32,
+            ..Default::default()
+        };
+        let endpoint = FakeEndpoint::start(vec![answer("o3"), answer("o3"), answer("o1")]);
+        let bluff = model(&endpoint)
+            .classify_input(
+                "I study Marek's face to see whether he's bluffing about that price.",
+                "Marek stands behind the counter.",
+                &["Marek".to_owned()],
+            )
+            .await;
+        assert_eq!(bluff.skill, Some("insight"));
+        assert!(is_observation_submission(&request, &bluff, false).unwrap());
+
+        let endpoint = FakeEndpoint::start(vec![answer("o7"), answer("o7"), answer("o1")]);
+        let recall = model(&endpoint)
+            .classify_input(
+                "I try to remember what I've heard about bandits on the north road.",
+                "A cloth shop.",
+                &["the room".to_owned()],
+            )
+            .await;
+        assert_eq!(recall.skill, Some("history"));
+        assert!(!is_observation_submission(&request, &recall, false).unwrap());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn jev_can_select_a_present_addressee_for_a_typed_attempt() {
+        use super::super::approach_model::tests::{answer, model};
+        use crate::gameplay::storyteller::tests::FakeEndpoint;
+
+        let actor = rpc::SceneActor {
+            id: "corin".to_owned(),
+            name: "Corin".to_owned(),
+            role: rpc::SceneRole::Contact as i32,
+            ..Default::default()
+        };
+        let endpoint = FakeEndpoint::start(vec![answer("o4")]);
+        let decision = model(&endpoint)
+            .resolve_addressee(
+                "Corin, it's not what it looks like. I was just looking at the label.",
+                &[actor.clone()],
+                "Marek",
+            )
+            .await;
+        assert_eq!(
+            addressee_route(&decision, &[actor], &[]),
+            AddresseeRoute::Npc(Some("corin".to_owned()))
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn jev_short_item_alias_resolves_to_the_present_scene_item() {
+        use super::super::approach_model::tests::{answer, model};
+        use crate::gameplay::storyteller::tests::FakeEndpoint;
+
+        let endpoint = FakeEndpoint::start(vec![answer("o11"), answer("o2")]);
+        let reading = model(&endpoint)
+            .classify_input(
+                "I pick up the label anyway.",
+                "The folded paper label rests on the counter. Recent public table lines: Marek: We were discussing the label.",
+                &["folded paper label".to_owned(), "label".to_owned()],
+            )
+            .await;
+        assert_eq!(reading.thing, "label");
+        assert!(
+            endpoint.bodies()[0]["state"]["public_scene"]
+                .as_str()
+                .unwrap()
+                .contains("Marek: We were discussing the label.")
+        );
+        let catalog = [super::super::investigation::Target {
+            id: "thing-paper-label".to_owned(),
+            name: "folded paper label".to_owned(),
+            description: "A folded paper label rests on the counter.".to_owned(),
+            aliases: vec!["label".to_owned()],
+            present: true,
+            person: false,
+            finding_ids: Vec::new(),
+        }];
+        assert_eq!(
+            canonical_target_name(&reading.thing, &catalog),
+            Some("folded paper label")
+        );
     }
 
     #[test]
@@ -1858,13 +1997,58 @@ impl Service {
         );
         let available_things = catalog
             .iter()
-            .map(|target| target.name.clone())
+            .flat_map(|target| {
+                std::iter::once(target.name.clone()).chain(target.aliases.iter().cloned())
+            })
             .collect::<Vec<_>>();
-        let public_scene = format!("{} {}", scene.title, scene.narration);
-        let reading = self
+        let recent_public = self
+            .table_log
+            .recent_public(4)
+            .into_iter()
+            .map(|(speaker, line)| {
+                format!(
+                    "{}: {}",
+                    speaker,
+                    line.chars().take(240).collect::<String>()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let public_scene = format!(
+            "{} {} Recent public table lines: {}",
+            scene.title, scene.narration, recent_public
+        );
+        let mut reading = self
             .npc_voice
             .classify_input(&request.text, &public_scene, &available_things)
             .await;
+        if let Some(target_name) = canonical_target_name(&reading.thing, &catalog) {
+            reading.thing = target_name.to_owned();
+        }
+        let addressed_present_person = if finality(request.finality)? == InputFinality::Final
+            && reading.intent.is_attempt()
+            && matches!(
+                context(request.context)?,
+                DiscourseContext::Unspecified
+                    | DiscourseContext::Social
+                    | DiscourseContext::Question
+            ) {
+            let cast = wire::scene_cast(&scene);
+            let party = self.party_heroes(credential).await?;
+            let (_, approach_model) = self.npc_voice.hero_identity_models();
+            let decision = approach_model
+                .resolve_addressee_with_party(&request.text, &cast, &party, &scene.speaker)
+                .await;
+            matches!(
+                addressee_route(&decision, &cast, &party),
+                AddresseeRoute::Npc(Some(_))
+            )
+        } else {
+            false
+        };
+        if addressed_present_person {
+            request.context = rpc::DialogueContext::Social as i32;
+        }
         // A line that may be spoken to an NPC starts its tidy-up now, so the model's wait overlaps
         // the routing below. Any other route drops it, which cancels the call.
         let mut speech_cleanup = None;
@@ -1913,7 +2097,11 @@ impl Service {
                 DiscourseContext::Unspecified | DiscourseContext::Social
             )
             && !merchant_trade_request
-            && reading.intent != super::approach_model::LineIntent::PartyNote;
+            && !matches!(
+                reading.intent,
+                super::approach_model::LineIntent::PartyNote
+                    | super::approach_model::LineIntent::StudyRecall
+            );
         // Jev reads the line as a scene interaction once; a physical line and a plain interaction
         // both use that reading; without Jev's label the line is neutral speech, never a keyword read.
         // Jev's freeform-act reading is the adjudicator's, except for a scene door or lid that the
@@ -2057,7 +2245,7 @@ impl Service {
             }
             return Err(Status::internal("game question response binding invalid"));
         }
-        if is_observation_submission(&request, &reading)? {
+        if is_observation_submission(&request, &reading, addressed_present_person)? {
             return Ok(DialogueReply::Raw(
                 self.observation_call(credential, &request, &reading, &scene)
                     .await?,
@@ -2066,6 +2254,7 @@ impl Service {
         }
         request.context = match context_intent {
             super::approach_model::LineIntent::PartyNote => rpc::DialogueContext::Meta as i32,
+            super::approach_model::LineIntent::StudyRecall => rpc::DialogueContext::Meta as i32,
             super::approach_model::LineIntent::HeroSpeech => {
                 // Jev decides whether the hero line addresses a party hero; no name is matched here.
                 let cast = wire::scene_cast(&scene);

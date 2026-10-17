@@ -74,7 +74,7 @@ const INTENTS: [(&str, &str); 14] = [
     ("game-question", "The hero asks about the game itself."),
     (
         "physical-attack",
-        "The hero explicitly attacks a present target now with a weapon. Unarmed blows are freeform-act. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+        "The hero clearly intends a hostile attack on a present target now with a weapon. A gesture, knock, nudge, harmless contact or attention-getting act is never an attack; unarmed blows are freeform-act. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
     ),
     (
         "physical-item",
@@ -1130,7 +1130,7 @@ async fn choose_listed_thing(
     state: &serde_json::Value,
     available_things: &[String],
 ) -> Result<String, &'static str> {
-    let things: Vec<&String> = available_things.iter().take(8).collect();
+    let things: Vec<&String> = available_things.iter().take(24).collect();
     if things.is_empty() {
         return Ok(String::new());
     }

@@ -473,7 +473,7 @@ fn absent_target(words: &str) -> Target {
         .find(|(index, character)| index + character.len_utf8() > 60)
         .map_or(noun.len(), |(index, _)| index);
     let noun = &noun[..end];
-    let mut absent = target(noun, "You see nothing of that here.", false);
+    let mut absent = target(noun, "Nothing like that is here.", false);
     absent.present = false;
     absent.id = format!(
         "absent-{}",

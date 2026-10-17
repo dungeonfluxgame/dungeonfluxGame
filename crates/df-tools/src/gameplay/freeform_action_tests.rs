@@ -126,6 +126,48 @@ fn run(situation: &Situation, plan: &FreeformPlan, _words: &str, die: u8) -> Res
     adjudicate(situation, plan, die, fair(3))
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn harmless_counter_rap_is_judged_as_attention_contact() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+
+    let endpoint = FakeEndpoint::start(vec![answer("o12"), answer("o10"), answer("o1")]);
+    let mut situation = shop();
+    situation.people.push(PersonFact {
+        id: "marek".to_owned(),
+        name: "Marek".to_owned(),
+        role: rpc::SceneRole::Contact,
+        passive_perception: 10,
+    });
+    let judged = super::plan(
+        &model(&endpoint),
+        "I rap my knuckles on the counter to catch Marek's eye.",
+        &situation,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(judged.act, ActKind::ContactFriendly);
+    assert_eq!(
+        judged.target.as_ref().map(|target| target.name.as_str()),
+        Some("Marek")
+    );
+    let choices = endpoint.bodies();
+    let act_options = choices[0]["questions"]["q1"]["criteria"]
+        .as_object()
+        .unwrap();
+    assert!(act_options.values().any(|choice| {
+        choice
+            .as_str()
+            .unwrap()
+            .contains("light rap of knuckles on a counter")
+    }));
+    assert!(
+        act_options
+            .values()
+            .any(|choice| { choice.as_str().unwrap().contains("never an assault") })
+    );
+}
+
 fn performance(resolution: &Resolution) -> &Performance {
     match &resolution.verdict {
         Verdict::Performed(performance) => performance,

@@ -182,17 +182,17 @@ const ACT_KINDS: [(ActKind, &str, &str); 26] = [
     (
         ActKind::ContactFriendly,
         "contact-friendly",
-        "Friendly bodily contact with a person: a hug, a handshake, a pat on the shoulder.",
+        "Harmless contact with a person to get attention or show warmth: a light rap of knuckles on a counter near them, a wave, a gentle nudge, a hug, handshake or pat on the shoulder. This is never an assault.",
     ),
     (
         ActKind::ContactRough,
         "contact-rough",
-        "Rough bodily contact with a person or thing: a shove, a grab, a trip or a rough pull.",
+        "Rough bodily contact with a person or thing, such as a shove, grab, trip or rough pull. Choose only the contact described; do not turn an attention gesture into violence.",
     ),
     (
         ActKind::Strike,
         "strike",
-        "Hits a person or a thing: a punch or kick with fists or feet, or a blow with a weapon held in hand.",
+        "Deliberately attacks a person or thing with a punch, kick or blow from a weapon. Choose only when the hero clearly intends a hostile attack; harmless knocks, nudges, gestures and attention-getting contact are not attacks.",
     ),
     (
         ActKind::Move,
