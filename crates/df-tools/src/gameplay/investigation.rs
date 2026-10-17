@@ -12,6 +12,64 @@ use crate::gameplay::{
     storyteller::{CallProfile, Expression, Slot, Storyteller},
 };
 
+/// The definite phrase a narration uses for a scene thing: "the folded paper label". A name that
+/// already carries an article, or is a proper name such as "Corin's pack", is left as written.
+pub(in crate::gameplay) fn the_phrase(name: &str) -> String {
+    let trimmed = name.trim();
+    let lower = trimmed.to_lowercase();
+    let determined = [
+        "the ", "a ", "an ", "your ", "his ", "her ", "their ", "its ",
+    ]
+    .iter()
+    .any(|determiner| lower.starts_with(determiner));
+    let proper = trimmed.chars().next().is_some_and(char::is_uppercase);
+    if determined || proper || trimmed.is_empty() {
+        trimmed.to_owned()
+    } else {
+        format!("the {trimmed}")
+    }
+}
+
+/// The room's authored short description as a sentence the player reads. A fragment such as
+/// "a small cloth shop" becomes "You are in a small cloth shop ..."; text that already opens with a
+/// capital is only given its full stop.
+fn room_sentence(short: &str) -> String {
+    let text = short.trim();
+    if text.is_empty() {
+        return "You can see the room around you.".to_owned();
+    }
+    if text.chars().next().is_some_and(char::is_uppercase) {
+        narration_sentence(text)
+    } else {
+        narration_sentence(&format!("You are in {text}"))
+    }
+}
+
+/// Authored description text as a sentence: its first letter capitalised and a full stop added
+/// when it has no closing punctuation.
+pub(in crate::gameplay) fn narration_sentence(text: &str) -> String {
+    let trimmed = text.trim();
+    let mut chars = trimmed.chars();
+    let mut sentence: String = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => return String::new(),
+    };
+    if !sentence.ends_with(['.', '!', '?']) {
+        sentence.push('.');
+    }
+    sentence
+}
+
+/// [`the_phrase`] opening a sentence, so its first letter is capitalised.
+pub(in crate::gameplay) fn sentence_the(name: &str) -> String {
+    let phrase = the_phrase(name);
+    let mut chars = phrase.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Target {
     pub(super) id: String,
@@ -56,9 +114,9 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
     let room_description = scene
         .setting
         .as_ref()
-        .map(|setting| setting.short.as_str())
-        .unwrap_or("You can see the room around you.");
-    let mut room = target("the room", room_description, false);
+        .map(|setting| room_sentence(&setting.short))
+        .unwrap_or_else(|| "You can see the room around you.".to_owned());
+    let mut room = target("the room", &room_description, false);
     room.id = "room".to_owned();
     room.aliases = vec![
         "room".into(),
@@ -94,7 +152,8 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
             let model = model.for_scene(scene.key);
             options.retain(|entry| entry.id == "room");
             for person in &model.people {
-                let mut entry = target(&person.name, &person.description, true);
+                let mut entry =
+                    target(&person.name, &narration_sentence(&person.description), true);
                 entry.id = format!("person-{}", person.id.replace(':', "-"));
                 entry.aliases.extend(person.aliases.clone());
                 if person.name == scene.speaker {
@@ -117,7 +176,7 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
                 let description = if thing.in_scene {
                     thing.detail.clone()
                 } else {
-                    format!("You cannot see {} here.", thing.name)
+                    format!("You cannot see {} here.", the_phrase(&thing.name))
                 };
                 let mut entry = target(&thing.name, &description, false);
                 entry.id = format!("thing-{}", thing.id);
@@ -134,7 +193,11 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
             for way in &model.ways_out {
                 let mut entry = target(
                     &way.name,
-                    &format!("{} leads to {}.", way.name, way.beyond),
+                    &format!(
+                        "{} leads to {}.",
+                        sentence_the(&way.name),
+                        the_phrase(&way.beyond)
+                    ),
                     false,
                 );
                 entry.id = format!("way-{}", way.id);
@@ -146,7 +209,7 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
                 .iter()
                 .filter(|offer| model.offer_available(&offer.id))
             {
-                let mut entry = target(&offer.name, &offer.description, false);
+                let mut entry = target(&offer.name, &narration_sentence(&offer.description), false);
                 entry.id = format!("offer-{}", offer.id);
                 entry.aliases.extend(offer.aliases.clone());
                 options.push(entry);
@@ -171,7 +234,13 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
                         thing.in_scene
                             && word_position(&normalized(&thing.position), surface).is_some()
                     })
-                    .map(|thing| format!("You can see {} {}.", thing.short, thing.position))
+                    .map(|thing| {
+                        format!(
+                            "You can see {} {}.",
+                            the_phrase(&thing.short),
+                            thing.position
+                        )
+                    })
                     .collect::<Vec<_>>();
                 let person_here = model
                     .people
@@ -240,7 +309,7 @@ pub(super) fn targets(scene: &pack::Scene, canonical: &[Target]) -> Vec<Target> 
                     for dressing in plate.dressing {
                         options.push(target(
                             dressing.item,
-                            &format!("You see {}.", dressing.item),
+                            &format!("You see {}.", the_phrase(&dressing.item)),
                             false,
                         ));
                     }
@@ -318,9 +387,9 @@ fn legacy_finding_target(scene: &pack::Scene, finding: &pack::Finding) -> Target
         .as_ref()
         .is_some_and(|setting| normalized(&setting.name) == normalized(name));
     let description = if present {
-        format!("You examine {name}.")
+        format!("You examine {}.", the_phrase(name))
     } else {
-        format!("You cannot see {name} from here.")
+        format!("You cannot see {} from here.", the_phrase(name))
     };
     let mut entry = target(name, &description, false);
     entry.id = format!("finding-{}", finding.id);
@@ -1138,7 +1207,8 @@ impl Observation {
         } else {
             format!(
                 "{} You do not notice anything further about {}.",
-                self.target.description, self.target.name
+                self.target.description,
+                the_phrase(&self.target.name)
             )
         }
     }

@@ -1250,6 +1250,40 @@ impl Service {
         commitment
     }
 
+    /// Jev's pick of the listed in-stock offer a merchant's firm price line concerns. Jev chooses one
+    /// position among the offers and a final "none"; an unavailable Jev is recorded and returned.
+    async fn judge_offer_pick(
+        &self,
+        choices: &journey::merchant_bargaining::OfferChoices,
+        words: &str,
+        merchant_reply: &str,
+    ) -> Result<Option<String>, super::approach_model::JevUnavailable> {
+        let (_, approach_model) = self.npc_voice.hero_identity_models();
+        let state = journey::merchant_bargaining::offer_pick_state(words, merchant_reply);
+        let picked = approach_model
+            .choose_option(
+                &state,
+                journey::merchant_bargaining::OFFER_PICK_INSTRUCTIONS,
+                choices.criteria(),
+            )
+            .await;
+        match picked {
+            Ok(choice) => {
+                let item_id = choices.item_for(choice).map(str::to_owned);
+                record_trade_judgement(
+                    "offer",
+                    if item_id.is_some() { "item" } else { "none" },
+                    TradeJudgement::Jev,
+                );
+                Ok(item_id)
+            }
+            Err(reason) => {
+                record_trade_judgement("offer", "unavailable", TradeJudgement::Rules(reason));
+                Err(reason)
+            }
+        }
+    }
+
     /// Jev's reading of a line as a scene interaction. Keyword rules run only when Jev gives no
     /// label, and the typed interaction is returned to the caller that owns the routing.
     async fn judge_scene_interaction(
@@ -2808,6 +2842,34 @@ impl Service {
                                     &quote.item_id,
                                     &turn,
                                 )
+                            } else if let Some(choices) =
+                                journey::merchant_bargaining::OfferChoices::new(
+                                    &terms, &hero_id, &actor_id,
+                                )
+                            {
+                                // Jev picks the listed offer a price line concerns. A "none" pick is
+                                // no quote; Jev unavailable leaves the reading to the phrase rules.
+                                match self
+                                    .judge_offer_pick(&choices, &typed_words, &exchange.text)
+                                    .await
+                                {
+                                    Ok(Some(item_id)) => {
+                                        journey::merchant_bargaining::quote_candidate_for_item(
+                                            &terms,
+                                            &hero_id,
+                                            &actor_id,
+                                            journey::living_scene::SceneTradeDirection::HeroBuys,
+                                            &item_id,
+                                            &turn,
+                                        )
+                                    }
+                                    Ok(None) => Err(QuoteRejection::ItemUnclear),
+                                    Err(_) => {
+                                        journey::merchant_bargaining::quote_candidate_for_reply(
+                                            &terms, &hero_id, &actor_id, &turn,
+                                        )
+                                    }
+                                }
                             } else {
                                 journey::merchant_bargaining::quote_candidate_for_reply(
                                     &terms, &hero_id, &actor_id, &turn,

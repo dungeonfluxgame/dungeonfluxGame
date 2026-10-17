@@ -26,6 +26,7 @@ use super::{
     table_settings::{self, TableSettings},
     wire,
 };
+use crate::gameplay::investigation::the_phrase;
 
 #[derive(Clone)]
 pub(super) struct QualificationSnapshot {
@@ -110,7 +111,7 @@ fn observation_table_line(
         .map(|choice| choice.option_id.trim())
         .filter(|thing| !thing.is_empty())
     {
-        thing.replace('-', " ")
+        the_phrase(&thing.replace('-', " "))
     } else {
         let label = detail
             .strip_prefix("finding-")
@@ -119,7 +120,7 @@ fn observation_table_line(
             } else {
                 detail
             });
-        label.replace('-', " ")
+        the_phrase(&label.replace('-', " "))
     };
     let modifier = check.ability_modifier + i32::try_from(check.proficiency_bonus).ok()?;
     let verb = match *skill {

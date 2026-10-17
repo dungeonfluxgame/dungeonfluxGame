@@ -1136,7 +1136,7 @@ fn a_hand_over_names_a_party_hero_after_to_and_moves_the_held_item() {
             living_scene::last_line(handed.state())
                 .unwrap()
                 .unwrap()
-                .contains(&format!("gives {} to {}", ale.name, companion.name))
+                .contains(&format!("gives the {} to {}", ale.name, companion.name))
         );
     });
 }
@@ -1250,6 +1250,131 @@ fn taking_an_owned_item_openly_requires_the_check() {
                 .holder_id,
             None
         );
+    });
+}
+
+#[test]
+fn scene_narration_gives_each_thing_its_article_and_a_capital_at_the_start() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let item = owned_portable_thing(model);
+        let name = model
+            .things
+            .iter()
+            .find(|thing| thing.id == item)
+            .unwrap()
+            .name
+            .clone();
+        // A failed theft names the item with its article.
+        let attempted = interact_with_roll(&current, member, 25, &item, "take", Some(1));
+        let theft = living_scene::last_line(attempted.state()).unwrap().unwrap();
+        assert!(
+            theft.contains(&format!("fails to steal the {name}")),
+            "{theft}"
+        );
+        // Handing over an item that is not held by the hero, and that belongs to someone else.
+        let handed = interact(&current, member, 26, &item, "give");
+        let owned = living_scene::last_line(handed.state()).unwrap().unwrap();
+        assert_eq!(
+            owned,
+            format!("The {name} belongs to someone else; ask its owner first."),
+        );
+        // Returning an item the hero does not hold.
+        let returned = interact(&current, member, 27, &item, "return");
+        let unheld = living_scene::last_line(returned.state()).unwrap().unwrap();
+        assert_eq!(unheld, format!("You are not holding the {name}."));
+        // Opening a way out names it with its article, as the scene narrates it.
+        let way = model.ways_out[0].name.clone();
+        let opened = interact(&current, member, 28, &model.ways_out[0].id, "open");
+        let door = living_scene::last_line(opened.state()).unwrap().unwrap();
+        assert!(
+            door.ends_with(&format!(
+                " opens {}.",
+                crate::gameplay::investigation::the_phrase(&way)
+            )),
+            "{door}"
+        );
+    });
+}
+
+#[test]
+fn reading_a_scene_item_while_picking_it_up_is_an_examine_and_never_a_take() {
+    use crate::gameplay::approach_model::JevUnavailable;
+    use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
+    taproom(|| {
+        let (current, _member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let item = owned_portable_thing(model);
+        let name = model
+            .things
+            .iter()
+            .find(|thing| thing.id == item)
+            .unwrap()
+            .name
+            .clone();
+        let reads = format!("I pick up the {name} and read it.");
+        // Jev's examine label routes a line that picks the item up and reads it to examine.
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &reads, Ok("examine")),
+            (Some((item.clone(), "examine")), TradeJudgement::Jev)
+        );
+        // Without Jev, the fallback reads the same line as an examine too.
+        let unavailable = Err(JevUnavailable::ProviderUnavailable);
+        assert_eq!(
+            living_scene::interaction_from_judgement(&scene, &reads, unavailable).0,
+            Some((item.clone(), "examine"))
+        );
+        // A clear wish to keep the item, or a bare pick-up, is still a take.
+        let keeps = format!("I pick up the {name} and keep it.");
+        let bare = format!("I pick up the {name}.");
+        for line in [keeps, bare] {
+            assert_eq!(
+                living_scene::interaction_for_line(&scene, &line).map(|(_, option)| option),
+                Some("take"),
+                "{line}"
+            );
+        }
+    });
+}
+
+#[test]
+fn picking_up_an_owned_item_only_to_read_it_is_an_examine_with_no_theft() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let item = owned_portable_thing(model);
+        let owner = model
+            .things
+            .iter()
+            .find(|thing| thing.id == item)
+            .unwrap()
+            .owner_id
+            .clone();
+        let after = interact(&current, member, 25, &item, "examine");
+        let line = living_scene::last_line(after.state()).unwrap().unwrap();
+        assert!(
+            line.contains("picks up") && line.contains("puts it back"),
+            "the hero handles the item and puts it back: {line}"
+        );
+        assert!(
+            last_offence(&after).is_none(),
+            "reading someone else's item in front of its owner is not theft"
+        );
+        let snapshot = living_scene::snapshot(after.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let thing = snapshot
+            .model
+            .things
+            .iter()
+            .find(|thing| thing.id == item)
+            .unwrap();
+        assert_eq!(thing.holder_id, None, "an examine changes no custody");
+        assert_eq!(thing.owner_id, owner, "an examine changes no ownership");
     });
 }
 

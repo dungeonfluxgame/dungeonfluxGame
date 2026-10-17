@@ -2,11 +2,11 @@ use serde_json::json;
 
 use super::merchant_bargaining::{
     HERO_TRADE_INSTRUCTIONS, HeroLine, HeroTradeIntent, HeroTradeMeaning, ListedQuoteAction,
-    MerchantBuybackMemory, MerchantMeaning, MerchantReplyCommitment, QuoteDecision, QuoteRejection,
-    TradeDirection, TradeExchange, TradeJudgement, TradeTerms, attach_buyback_memory,
-    constrain_buyback_ceiling, discount_ask, discount_willingness, explicit_price_cp,
-    firm_buyback_quote_cp, fixed_price_purchase, hero_intent_from_judgement, hero_judgement_state,
-    hero_stated_price_cp, is_trade_dialogue_request, listed_quote_action,
+    MerchantBuybackMemory, MerchantMeaning, MerchantReplyCommitment, OfferChoices, QuoteDecision,
+    QuoteRejection, TradeDirection, TradeExchange, TradeJudgement, TradeTerms,
+    attach_buyback_memory, bulk_ask, constrain_buyback_ceiling, discount_ask, discount_willingness,
+    explicit_price_cp, firm_buyback_quote_cp, fixed_price_purchase, hero_intent_from_judgement,
+    hero_judgement_state, hero_stated_price_cp, is_trade_dialogue_request, listed_quote_action,
     merchant_commitment_from_judgement, quote_candidate, quote_candidate_for_item,
     quote_candidate_for_reply, quote_decision, referenced_item_id, reply_context,
     reply_context_for_quote, revalidate_quote, rules_hero_intent, rules_merchant_commitment,
@@ -1939,4 +1939,237 @@ fn merchant_reply_facts_quote_each_service_at_its_exact_price() {
             .to_string()
             .contains("exact price_cp")
     );
+}
+
+/// The authored shop's nine offers as the merchant's sale terms for one hero, built as the live
+/// terms are: the bounds run from half the listed price, rounded up, to the listed price.
+fn authored_sale_terms(hero: &str) -> Vec<TradeTerms> {
+    let mut model: crate::gameplay::adventure::scene_model::SceneModel = serde_json::from_slice(
+        include_bytes!("../../../../../content/merchant-shop/scene-model.json"),
+    )
+    .unwrap();
+    model.migrate_inventory_version().unwrap();
+    model
+        .offers
+        .iter()
+        .map(|offer| TradeTerms {
+            direction: TradeDirection::HeroBuys,
+            item_id: offer.canonical_item_id(),
+            item_name: offer.name.clone(),
+            aliases: offer.aliases.clone(),
+            offer_id: Some(offer.id.clone()),
+            seller_id: "merchant".into(),
+            buyer_id: hero.into(),
+            minimum_price_cp: offer.cost_cp / 2 + offer.cost_cp % 2,
+            maximum_price_cp: offer.cost_cp,
+            available: true,
+            stock_units: 1,
+            stock_revision: 1,
+            purse_revision: 1,
+            counterparty_name: "Marek".into(),
+            party_hero_names: vec![hero.into()],
+        })
+        .collect()
+}
+
+#[test]
+fn a_stock_question_lists_every_offer_and_service_at_its_exact_price() {
+    let terms = authored_sale_terms("sigrun");
+    assert_eq!(terms.len(), 9);
+    let facts = json!({
+        "npc": {"name": "Marek", "role": "merchant"},
+        "services": [{"service": "mending", "price_cp": 50, "done": false}],
+        "services_rules": ["When the hero asks what a listed service costs, quote it by name."],
+    });
+    let context = reply_context(
+        &terms,
+        "sigrun",
+        "merchant",
+        rules_line("Marek, what have you got for sale today?"),
+        None,
+        &facts,
+    )
+    .unwrap();
+    let trades = context["available_trades"].as_array().unwrap();
+    assert_eq!(trades.len(), 9, "{trades:?}");
+    let wool_cloak = trades
+        .iter()
+        .find(|entry| entry["item"] == "warm wool cloak")
+        .unwrap();
+    assert_eq!(wool_cloak["listed_price_cp"], 300);
+    assert_eq!(wool_cloak["lowest_price_cp"], 150);
+    let gloves = trades
+        .iter()
+        .find(|entry| entry["item"] == "pair of gloves")
+        .unwrap();
+    assert_eq!(gloves["listed_price_cp"], 100);
+    // The services reach the trade context and are not dropped by its fact whitelist.
+    assert_eq!(context["merchant_facts"]["services"][0]["price_cp"], 50);
+    assert!(context["merchant_facts"]["services_rules"].is_array());
+    assert!(
+        context["negotiation_rules"]
+            .to_string()
+            .contains("asks what you have for sale")
+    );
+}
+
+#[test]
+fn a_sold_out_offer_in_the_stock_question_names_no_price() {
+    let mut terms = authored_sale_terms("sigrun");
+    let gloves = terms
+        .iter_mut()
+        .find(|term| term.item_name == "pair of gloves")
+        .unwrap();
+    gloves.available = false;
+    gloves.stock_units = 0;
+    let facts = json!({"npc": {"name": "Marek", "role": "merchant"}});
+    let context = reply_context(
+        &terms,
+        "sigrun",
+        "merchant",
+        rules_line("What are you selling today?"),
+        None,
+        &facts,
+    )
+    .unwrap();
+    // An unasked sold-out offer is not listed, so the stock question names no price for it.
+    let trades = context["available_trades"].as_array().unwrap();
+    assert_eq!(trades.len(), 8, "{trades:?}");
+    assert!(trades.iter().all(|entry| entry["item"] != "pair of gloves"));
+    // Asked for by name, the same sold-out offer is shared as sold out, with no price.
+    let asked = reply_context(
+        &terms,
+        "sigrun",
+        "merchant",
+        rules_line("Do you still have the gloves?"),
+        None,
+        &facts,
+    )
+    .unwrap();
+    let entry = asked["available_trades"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"] == "pair of gloves")
+        .unwrap();
+    assert_eq!(entry["sold_out"], true);
+    assert!(entry.get("listed_price_cp").is_none());
+    assert!(entry.get("lowest_price_cp").is_none());
+}
+
+#[test]
+fn a_described_cloak_price_question_is_picked_by_jev_and_quoted_as_that_offer() {
+    let terms = authored_sale_terms("sigrun");
+    let choices = OfferChoices::new(&terms, "sigrun", "merchant").unwrap();
+    // Every in-stock offer is a numbered choice, and the last position names none of them.
+    assert_eq!(choices.criteria().len(), 10);
+    assert!(choices.criteria()[0].contains("traveler"));
+    assert_eq!(choices.item_for(9), None);
+    let wool = choices
+        .criteria()
+        .iter()
+        .position(|c| c.starts_with("warm wool cloak"))
+        .unwrap();
+    assert_eq!(choices.item_for(wool), Some("item-warm-cloak-wool"));
+
+    let turn = jev_turn(
+        "ask_price",
+        "How much for one of those warm cloaks?",
+        "firm_price",
+        "300 copper for the warm wool cloak, and that is my price.",
+    );
+    let quote = quote_candidate_for_item(
+        &terms,
+        "sigrun",
+        "merchant",
+        TradeDirection::HeroBuys,
+        choices.item_for(wool).unwrap(),
+        &turn,
+    )
+    .unwrap();
+    assert_eq!(quote.item_id, "item-warm-cloak-wool");
+    assert_eq!(quote.price_cp, 300);
+    assert_eq!(quote.direction, TradeDirection::HeroBuys);
+}
+
+#[test]
+fn a_generic_cloak_word_cannot_pick_the_fur_lined_cloak_without_jev() {
+    // "cloak" is an alias of the warm wool cloak, so the words alone name two offers and the
+    // deterministic reading refuses. Jev's pick among the listed offers settles it.
+    let terms = authored_sale_terms("sigrun");
+    let turn = jev_turn(
+        "ask_price",
+        "How much for the fur-lined cloak?",
+        "firm_price",
+        "1000 copper for the fur-lined cloak.",
+    );
+    assert_eq!(
+        quote_candidate_for_reply(&terms, "sigrun", "merchant", &turn),
+        Err(QuoteRejection::ItemUnclear)
+    );
+    let choices = OfferChoices::new(&terms, "sigrun", "merchant").unwrap();
+    let fur = choices
+        .criteria()
+        .iter()
+        .position(|c| c.starts_with("fur-lined cloak"))
+        .unwrap();
+    let quote = quote_candidate_for_item(
+        &terms,
+        "sigrun",
+        "merchant",
+        TradeDirection::HeroBuys,
+        choices.item_for(fur).unwrap(),
+        &turn,
+    )
+    .unwrap();
+    assert_eq!(quote.item_id, "item-warm-cloak-lined");
+    assert_eq!(quote.price_cp, 1000);
+}
+
+#[test]
+fn a_bulk_ask_sums_the_named_offers_at_their_listed_prices_and_is_not_a_bundle_quote() {
+    let terms = authored_sale_terms("sigrun");
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("ask_price").unwrap(),
+        words: "How much for two cloaks and the gloves?",
+    };
+    let ask = bulk_ask(&terms, "sigrun", "merchant", line).unwrap();
+    assert_eq!(ask.items.len(), 2);
+    let listed: u32 = ask.items.iter().map(|item| item.listed_cp).sum();
+    let lowest: u32 = ask.items.iter().map(|item| item.lowest_cp).sum();
+    assert_eq!(listed, 400);
+    assert_eq!(lowest, 200);
+
+    let facts = json!({"npc": {"name": "Marek", "role": "merchant"}});
+    let context = reply_context(&terms, "sigrun", "merchant", line, None, &facts).unwrap();
+    assert_eq!(context["bulk_ask"]["listed_total_cp"], 400);
+    assert_eq!(context["bulk_ask"]["lowest_total_cp"], 200);
+    assert!(
+        context["negotiation_rules"]
+            .to_string()
+            .contains("sold separately")
+    );
+
+    let single = HeroLine {
+        intent: HeroTradeIntent::from_label("ask_price").unwrap(),
+        words: "How much for the gloves?",
+    };
+    assert!(bulk_ask(&terms, "sigrun", "merchant", single).is_none());
+    let single_context = reply_context(&terms, "sigrun", "merchant", single, None, &facts).unwrap();
+    assert!(single_context.get("bulk_ask").is_none());
+}
+
+#[test]
+fn a_purchase_for_another_hero_quotes_the_named_offer_at_its_listed_price() {
+    let terms = authored_sale_terms("brakka");
+    let turn = jev_turn(
+        "buy_now",
+        "I'll buy the gloves for Sigrun.",
+        "firm_price",
+        "100 copper for the gloves, and they are yours.",
+    );
+    let quote = quote_candidate_for_reply(&terms, "brakka", "merchant", &turn).unwrap();
+    assert_eq!(quote.item_id, "item-gloves");
+    assert_eq!(quote.price_cp, 100);
+    assert_eq!(quote.buyer_id, "brakka");
 }

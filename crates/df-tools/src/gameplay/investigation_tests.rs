@@ -750,6 +750,70 @@ fn looking_behind_the_counter_is_an_investigation_in_the_keyless_route() {
 }
 
 #[test]
+fn the_phrase_gives_common_nouns_their_article_and_leaves_names_and_articles_alone() {
+    assert_eq!(the_phrase("folded paper label"), "the folded paper label");
+    assert_eq!(the_phrase("street door"), "the street door");
+    assert_eq!(
+        the_phrase("the market street outside"),
+        "the market street outside"
+    );
+    assert_eq!(the_phrase("a wooden counter"), "a wooden counter");
+    assert_eq!(the_phrase("Corin's pack"), "Corin's pack");
+    assert_eq!(sentence_the("folded paper label"), "The folded paper label");
+    assert_eq!(sentence_the("Corin's pack"), "Corin's pack");
+}
+
+#[test]
+fn authored_fragments_become_capitalised_sentences_with_a_full_stop() {
+    assert_eq!(
+        room_sentence("a small cloth shop with a wooden counter"),
+        "You are in a small cloth shop with a wooden counter."
+    );
+    assert_eq!(room_sentence("A quiet taproom."), "A quiet taproom.");
+    assert_eq!(
+        narration_sentence("a practical set of traveler's clothes"),
+        "A practical set of traveler's clothes."
+    );
+}
+
+#[test]
+fn every_looked_at_target_reads_as_a_grammatical_sentence() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
+    let mut scene = generated
+        .pack
+        .scenes
+        .iter()
+        .find(|scene| scene.key == pack::SceneKey::Opening)
+        .unwrap()
+        .clone();
+    scene.setting = Some(generated.settings.meeting);
+    let options = targets(&scene, &[]);
+    assert!(options.iter().any(|target| target.id == "room"));
+    for option in &options {
+        let first = option.description.chars().next();
+        assert!(
+            first.is_some_and(char::is_uppercase),
+            "description must open with a capital: {}",
+            option.description
+        );
+        assert!(
+            option.description.ends_with(['.', '!', '?']),
+            "description must end a sentence: {}",
+            option.description
+        );
+    }
+    let way = options
+        .iter()
+        .find(|target| target.id.starts_with("way-"))
+        .expect("the scene has a way out");
+    assert!(
+        way.description.contains(" leads to "),
+        "{}",
+        way.description
+    );
+}
+
+#[test]
 fn scene_names_accept_ordinary_synonyms_without_matching_nearby_objects() {
     let mut scene = pack::scene(pack::SceneKey::Opening);
     let generated = crate::gameplay::npc_dossier_tests::adventure(0xa7d1f297b79d0c83);
