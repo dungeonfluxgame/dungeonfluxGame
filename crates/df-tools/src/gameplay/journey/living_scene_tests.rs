@@ -2021,3 +2021,29 @@ fn examining_or_talking_to_a_person_reads_the_act_and_the_description_never_the_
     assert!(talked.contains(&person.description));
     assert!(!talked.contains(&person.relation_to_speaker));
 }
+
+#[test]
+fn a_purchase_that_names_the_seller_as_recipient_leaves_the_item_with_the_hero() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let offer = scene
+            .setting
+            .as_ref()
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .offers
+            .first()
+            .unwrap()
+            .clone();
+        // "Here you are, Marek": the seller is paid, so naming them never makes them the buyer.
+        let bought =
+            interact_with_recipient(&current, member, 12, &offer.id, "buy", &offer.seller_id);
+        let card = living_scene::item_for(bought.state(), &scene, "Brynn")
+            .unwrap()
+            .expect("the purchased item remains reviewable");
+        assert_eq!(card.holder, "Brynn");
+    });
+}

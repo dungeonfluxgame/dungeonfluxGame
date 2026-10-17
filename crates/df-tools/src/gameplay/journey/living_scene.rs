@@ -3611,7 +3611,11 @@ fn stage_inner(
                     )
                 } else {
                     paid_cp = cost_cp;
-                    let buyer = named_recipient.unwrap_or(&hero);
+                    // The seller is paid, never the one the item is bought for: a recipient that
+                    // names the seller ("here you are, Marek") leaves the item with the hero.
+                    let buyer = named_recipient
+                        .filter(|recipient| *recipient != offer.seller_id)
+                        .unwrap_or(&hero);
                     if !snapshot
                         .model
                         .people
