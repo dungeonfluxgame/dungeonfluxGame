@@ -66,13 +66,14 @@
 .tv-stage[data-battle-state]:not([data-battle-state=absent]) .tv-plate,.tv-stage[data-arrange=combat] .tv-plate{display:none}
 
 /* ---------- PLAY-V12: every story scene opens on an establishing shot ---------- */
-/* the place picture alone, sharp and lit, pushed in slowly (restarted for each scene by
+/* the place picture alone, sharp and lit, pushed in slowly and only slightly (a large push-in
+   magnifies the photograph until it goes soft) (restarted for each scene by
    data-shot-tick); it keeps moving under the plate, so the cut to the plate has no jump */
 .tv-stage[data-shot=establishing]>.tv-art{filter:brightness(.92) saturate(1) blur(0);transition:filter .6s ease}
 .tv-stage:is([data-shot=establishing],[data-shot=plate])[data-shot-tick=a]>.tv-art{animation:df-establish-a 70s cubic-bezier(.2,.5,.3,1) forwards}
 .tv-stage:is([data-shot=establishing],[data-shot=plate])[data-shot-tick=b]>.tv-art{animation:df-establish-b 70s cubic-bezier(.2,.5,.3,1) forwards}
-@keyframes df-establish-a{from{transform:scale(1.02)}to{transform:scale(1.13)}}
-@keyframes df-establish-b{from{transform:scale(1.02)}to{transform:scale(1.13)}}
+@keyframes df-establish-a{from{transform:scale(1)}to{transform:scale(1.04)}}
+@keyframes df-establish-b{from{transform:scale(1)}to{transform:scale(1.04)}}
 /* the cut: the plate comes in from a blur over the establishing shot */
 .tv-stage:not([data-shot=plate]) .tv-plate:not([data-pull=focus]) .tv-plate-frame{filter:blur(24px);transition:none}
 /* the title card of the place: the adventure and where this is, while the narrator speaks */
