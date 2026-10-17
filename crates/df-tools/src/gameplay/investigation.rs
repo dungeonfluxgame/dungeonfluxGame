@@ -1204,6 +1204,9 @@ impl Observation {
                 return format!("{} {finding}", self.target.description);
             }
             self.target.description.clone()
+        } else if self.skill == "insight" {
+            // A failed read of a person says so; their appearance is not an answer to it.
+            format!("You can't tell what {} is thinking.", self.target.name)
         } else {
             format!(
                 "{} You do not notice anything further about {}.",

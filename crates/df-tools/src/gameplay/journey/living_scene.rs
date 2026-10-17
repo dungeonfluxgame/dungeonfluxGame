@@ -2283,7 +2283,7 @@ impl InteractionMeaning {
     pub(in crate::gameplay) const CHOICES: [(&'static str, &'static str); 14] = [
         (
             "give",
-            "hands an item, coin or gift to another character now",
+            "hands an item, coin or gift to another character now; throwing, tossing or dropping an item is not giving",
         ),
         (
             "take",

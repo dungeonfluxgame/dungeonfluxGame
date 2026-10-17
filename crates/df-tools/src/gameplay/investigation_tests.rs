@@ -482,6 +482,24 @@ fn private_findings_do_not_change_public_expression_facts() {
 }
 
 #[test]
+fn a_failed_insight_read_says_the_hero_cannot_tell_instead_of_restating_the_appearance() {
+    let target = room().into_iter().find(|entry| entry.id == "ilsa").unwrap();
+    let name = target.name.clone();
+    let observation = Observation {
+        target,
+        skill: "insight".into(),
+        succeeded: false,
+        repeated: false,
+        finding: None,
+        private_finding: false,
+    };
+    assert_eq!(
+        observation.fallback(),
+        format!("You can't tell what {name} is thinking.")
+    );
+}
+
+#[test]
 fn exact_target_binding_is_required_even_when_two_targets_use_the_same_skill() {
     let mut scene = pack::scene(pack::SceneKey::Opening);
     scene.findings = vec![pack::Finding {
