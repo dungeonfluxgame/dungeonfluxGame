@@ -1571,17 +1571,57 @@ From `artifacts/tmp/play-r6/findings.txt` (room MEGOPU, build main-3aaebc98 plus
 | P6-67 | 2 | "I punch Corin" started the fight, but the Attack selector defaulted to Greatsword → first target (Jessa); the declared means and target are not preselected. | Open |
 | P6-68 | 2 | Battle HUD shows letter tiles ("C", "J") for NPCs; flat grey obstacle blocks and tiny figures over a near-black backdrop. | Partly addressed by P6-65 (crests); letter tile source not found |
 | P6-69 | 1 | No way to talk a fight down: "Stop! Enough! Corin, Brakka, put it down" is refused on the phone with "Name just one person here to address." Group speech and stand-down/parley in a fight must reach the narrative engine. | Open |
-| P6-70 | 2 | A line refused on the phone before sending is still cleared from the draft; the player loses the text. | Open |
-| P6-71 | 1 | Lethal by default: a brawl started by a punch killed Jessa with one greatsword hit; the SRD knock-out option on reducing a creature to 0 HP with a melee attack is never offered. TV shows an unconscious marker while the phone says dead. | Open |
+| P6-70 | 2 | A line refused on the phone before sending is still cleared from the draft; the player loses the text. | Fixed `e3345516` |
+| P6-71 | 1 | Lethal by default: a brawl started by a punch killed Jessa with one greatsword hit; the SRD knock-out option on reducing a creature to 0 HP with a melee attack is never offered. TV shows an unconscious marker while the phone says dead. | Partly fixed `d2986345` (knock-out choice and default); scene presence still lethal |
 | P6-72 | 3 | Combat wording: "strikes with the unarmed strike", "moves 1 squares". | Open |
 | P6-73 | 2 | Fight ending narration is one 495-character wall of small text that repeats the present-tense room description before the outcome, after the heroes were dragged out. | Open |
-| P6-74 | 3 | Brakka's death save is published with role=Npc. | Open |
+| P6-74 | 3 | Brakka's death save is published with role=Npc. | Fixed `0c8b483c` (published once as role Hero) |
 | CLI-03 | 1 | Dev CLI cannot control NPCs or dice (Cam): dev npc say/act/hold, dev social edit, dev dice next/clear. | In progress: NPC control agent and dice queue agent |
-| DICE-01 | 1 | Dice on the display (Cam): in fights the TV shows only a small static rest image inside the roll card (clips download but the tumbling clip never plays); checks outside fights show no die at all, and the Roll row carries no structured check data for the client. | Open (queued after the battle-art commit) |
+| DICE-01 | 1 | Dice on the display (Cam): in fights the TV shows only a small static rest image inside the roll card (clips download but the tumbling clip never plays); checks outside fights show no die at all, and the Roll row carries no structured check data for the client. | Fixed `0c8b483c` (die and card on the TV for checks and blows; verified live) |
 | TIME-01 | 1 | Measured: die appears ~4.5-5 s after the Attack tap; die 2.6 s on screen; roll card fades in 1.5 s after the die, ~3.4 s fully shown; hit banner 3.7 s. | Open |
 | TIME-02 | 1 | The fight's last beats are never shown: death save, Corin's two hits on Sigrun and both downs resolved, but the TV showed nothing until the battlefield was torn down and the ending narration appeared. | Open |
 | TIME-03 | 1 | Combat presentation is not in the DISPLAY log: no roll card, die, banner, turn-change or battlefield mount/unmount records. | Open |
 | TIME-04 | 1 | DISPLAY records: fight-start narration line held 40.3 s through the fight; no line or component records for 70 s of combat before the scene change. | Open |
 | TIME-05 | 2 | Ending card component record turns visibility=transparent while still readable and unclosed, yet the screen shows it fully visible: the visibility probe disagrees with the screen. | Open |
+| P6-97 | 1 | An accepted haggle took the hero's coin but gave no goods (Sigrun 1800→1760 cp, Marek +40, bolt of linen still in stock). | Fixed `dd41448e` (accepted quote goes through the quoted trade path); retest |
+| P6-98 | 2 | Two linen entries contradict: scene item blue-linen "blue linen bolt" 500 cp and offer "bolt of undyed linen" 400 cp; Marek denies it is blue while the folded label reads "linen, blue". | Open (content) |
+| P6-99 | 2 | Payment narration ("Sigrun hands Marek four silver pieces.") is published before the hero's line that pays; same for a tip to Corin. | Fixed `dd41448e` for accepted quotes; retest tips |
+| P6-100 | 1 | Try-on consent ignored for merchant stock: Marek says "Of course. The fitting curtain is beside the mirror." but wearing the cloak reads "Marek looks offended" (no try_on_permission candidate for offer items). | Partly fixed `dd41448e` (offer items are candidates); the wear check must honour the consent |
+| P6-101 | 2 | Jessa refuses the directions service she lists ("I'd rather we deal plainly"); paying for a listed service read as a bribe. | Fixed `dd41448e`; retest |
+| P6-102 | 1 | Listed services cannot be bought in words: "Name one coin amount to give." / "Nothing like that is here to act on." | Fixed `dd41448e`; retest |
+| P6-103 | 2 | NPCs say "I can't say" about decisions that are theirs (Marek on buying a crowbar, pricing his own stolen hat; Jessa on directions). | Fixed in L31, verifying |
+| P6-104 | 3 | Roll row drops the article and the DC: "Brakka studies folded paper label: ... 18 + 0 = 18 — success." | Open |
+| P6-105 | 2 | Reading a plain visible label calls for an Investigation check. | Open |
+| P6-106 | 1 | A gesture plus speech to a present NPC ("I laugh and clap Corin on the back. 'Cheer up...'") answers "there's nothing like that here to greet". | Fixed `dd41448e` (routed to the NPC); retest |
+| P6-107 | 1 | "I rap my knuckles on the counter to catch Marek's eye." started a fight: the line was matched to the offered "Start a fight" choice (STORY choice action=scene_assault). The hero row then reads "starts a fight". | Open (offered-choice mapping, L29/request.md 5) |
+| P6-108 | 3 | TV headline printed the place name twice and the sound button overlapped the title. | Fixed `2a815a03` |
+| P6-109 | 1 | After `dev back` out of a fight the TV stays in battle mode (data-battlefield-live=true) and shows stale lines, even from another place; new lines never present until a reload. Reproduced on two builds. | Open |
+| P6-110 | 1 | A scene plate came out as a modern confrontation (business suits, no Marek or Jessa): identity text cut mid-phrase, missing sentence break, no period-clothing clause, Corin set to "furious anger" for "Let's keep this civil." | Fixed in L32, verifying; expression judgement upstream (L32/request.md) |
+| P6-111 | 1 | Recalling knowledge ("I try to remember what I've heard about bandits on the north road.") answers "You see nothing of that here." | Open (same route as P6-89/P6-119) |
+| P6-112 | 3 | "I sit down on the bench by the window" → "finds nothing here to lean on": wrong verb and a dead end. | Open |
+| P6-113 | 2 | Listening at the street door gives no content ("taking in the sounds beyond"). | Open |
+| P6-114 | 3 | "Updating scene…" stays on in the TV corner while the plate is ready. | Open |
+| P6-115 | 3 | Phone offers list "Look around" twice. | Open |
+| P6-116 | 3 | Purchase narration reads "who pays Marek 1000 CP" and Marek says nothing after a sale. | Open |
+| P6-117 | 3 | Phone coin line "7 GP, 90 CP" skips silver (790 cp = 7 gp 9 sp). | Open |
+| P6-118 | 1 | A present item named briefly ("the label") is not found; the full name works. | Open |
+| P6-119 | 1 | Speech to a person that is an attempt ("Corin, it's not what it looks like...") becomes "Sigrun studies Corin" with no reply and no Deception check. | Open (is_observation_submission routes attempts to investigation) |
+| P6-120 | 2 | Phone "Look around" ran "Brakka watches Marek" (Insight): a reused button kept its old action. | Retest after `e3345516` |
+| P6-121 | 2 | "I study Marek's face to see whether he's bluffing" gets a description, no Insight check. | Open |
+| P6-122 | 2 | A stale narration sits under the next hero's die, so the roll reads as belonging to the previous line. | Open |
+| P6-123 | 2 | "I push the door open and step out" only opens the door; leaving needs a second line. | Open (compound act) |
+| P6-124 | 2 | After a place change the TV keeps the old room's picture with its people for 40-60 s. | Open |
+| P6-125 | 3 | Created NPCs have no portrait (initial only). | Open |
+| P6-126 | 1 | A created NPC (Talla Reed) claims a sale ("Here's your bag.") but no coin or item moves; created places have no wares in the ledger. | Open |
+| P6-127 | 3 | Return narration repeats the destination: "through the way back to Marek's Cloth Shop to Marek's Cloth Shop". | Open |
+| P6-128 | 3 | Returning to the shop replays the first-visit description. | Open |
+| P6-129 | 2 | Initiative badges mix a raw d20 face (7) with totals (Brakka's total is 11). | Open |
+| P6-131 | 2 | Brakka's phone combat panel shows "Arrows 20" with no bow. | Open |
+| P6-132 | 2 | Tapping Attack acts at once on a preselected target with two foes adjacent. | Open |
+| P6-133 | 3 | Opportunity attack rows lack the label; TV header keeps "(0s remaining)"; the phone reaction panel shows the room text. | Open |
+| P6-134 | 2 | Mid-fight the phone stream drops ("Reconnect before sending input") until a reload. | Open |
+| P6-136 | 3 | Death save row typo "0 successs". | Open |
+| P6-137 | 2 | A critical hit is not called out in the table row. | Open |
+| CLI-06 | 1 | The dev CLI cannot see or answer a pending reaction, so a CLI-seated hero stalls the fight (P6-80: the countdown reaches 0 s and nothing continues). | Open |
 
 Withdrawn, so not in the table: P6-28 (a "lost" send was the playtest tool's click closing the composer, not the game) and CLI-02 (the mojibake in `log.json` came from the reader's cp1252 default, not the server).
