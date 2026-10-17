@@ -1,3 +1,5 @@
+> Newer hosted-API research with measured fal calls (2026-10-17): [sam-3-1-research.md](sam-3-1-research.md).
+
 <!-- Saved for later at the owner's request; SAM integration is deferred. -->
 
 # Segment Anything feasibility for scene coordinates
