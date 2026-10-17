@@ -215,6 +215,7 @@ mod tests {
     #[test]
     fn canonical_npc_keeps_the_authored_physical_dossier_and_public_privacy_boundary() {
         let person = ScenePerson {
+            passive_perception: 10,
             id: "merchant".to_owned(),
             name: "Marek".to_owned(),
             role: "cloth merchant".to_owned(),

@@ -637,7 +637,9 @@ pub(super) fn validate(
         }
         beat = next;
     }
-    if state.draws.len() != observation_draws {
+    // Every die is an observation check or a scene-interaction theft check; the scene replay
+    // re-validates each theft draw against its receipt.
+    if state.draws.len() != observation_draws + journey::living_scene::interaction_draws(state) {
         return invalid();
     }
     if creations != state.characters.len()

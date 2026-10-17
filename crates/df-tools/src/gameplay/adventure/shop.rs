@@ -194,6 +194,28 @@ mod tests {
     fn interaction(current: &Checkpoint, operation: u8, target: &str, option: &str) -> Checkpoint {
         interaction_with_choices(current, operation, target, option, &[])
     }
+    /// An open take of an item the merchant owns is an attempted theft: the d20 decides it.
+    fn open_take(current: &Checkpoint, operation: u8, target: &str, face: u32) -> Checkpoint {
+        let choices = [("scene-target", target), ("scene-option", "take")]
+            .into_iter()
+            .map(|(key, value)| (model::label(key).unwrap(), model::label(value).unwrap()))
+            .collect();
+        journey::stage_with_supplier(
+            current,
+            &input(
+                current,
+                native::first(),
+                operation,
+                "script-choice",
+                choices,
+            ),
+            &mut |sides| {
+                assert_eq!(sides, 20, "a theft uses one d20");
+                Ok(face)
+            },
+        )
+        .unwrap()
+    }
     fn interaction_with_choices(
         current: &Checkpoint,
         operation: u8,
@@ -335,13 +357,23 @@ mod tests {
             let checked = native::act(&opening, native::first(), 6, "look-around");
             assert_eq!(checked.state().draws.len(), 1);
             let checked = native::persisted(&checked);
-            let taken = interaction(&checked, 7, "folded-label", "take");
+            // Taking the merchant's label openly is an attempted theft: a failed check leaves it on
+            // the counter, and a successful one hands it over without changing its owner.
+            let failed = open_take(&checked, 7, "folded-label", 1);
+            assert!(
+                journey::living_scene::last_line(failed.state())
+                    .unwrap()
+                    .unwrap()
+                    .contains("fails to steal"),
+                "an owned display item taken openly is a checked theft"
+            );
+            let taken = open_take(&checked, 17, "folded-label", 20);
             assert!(
                 journey::living_scene::last_line(taken.state())
                     .unwrap()
                     .unwrap()
-                    .contains("ask its owner first"),
-                "an owned display item cannot be taken without permission"
+                    .contains("steals"),
+                "a successful check takes the owned display item"
             );
             let scene = runtime::scene(taken.state()).unwrap();
             assert_eq!(
@@ -402,7 +434,14 @@ mod tests {
                 .unwrap();
             let public: serde_json::Value =
                 serde_json::from_str(&now.model.public_contents().unwrap()).unwrap();
-            assert!(public["offers"].as_array().unwrap().is_empty());
+            // The bought stock leaves the public offers; the shop's other stock stays on sale.
+            assert!(
+                public["offers"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|offer| offer["item_id"] != "item-clothes-travelers")
+            );
             let owned = now
                 .model
                 .things
@@ -475,7 +514,8 @@ mod tests {
                     "latest rolled inspection must supersede historical purchase"
                 );
             }
-            assert_eq!(checked.state().draws.len(), 3);
+            // Three inspection checks plus the d20 of the open take of the merchant's label.
+            assert_eq!(checked.state().draws.len(), 4);
         });
     }
 
@@ -563,12 +603,12 @@ mod tests {
                 .unwrap();
             assert_eq!(item.holder_id.as_deref(), Some("shop-adventurer"));
             assert_eq!(item.owner_id.as_deref(), Some("shop-adventurer"));
-            let borrowed = interaction(&given, 9, "folded-label", "take");
+            let borrowed = open_take(&given, 9, "folded-label", 1);
             assert!(
                 journey::living_scene::last_line(borrowed.state())
                     .unwrap()
                     .unwrap()
-                    .contains("belongs to someone else")
+                    .contains("fails to steal")
             );
             let refused = interaction_with_choices(
                 &borrowed,

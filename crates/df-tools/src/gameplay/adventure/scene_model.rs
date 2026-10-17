@@ -10,6 +10,8 @@ const SCHEMA: &str =
     include_str!("../../../../../content/adventure-tables/scene-model.schema.json");
 const PROMPT: &str = include_str!("../../../../../content/adventure-tables/scene-model.prompt.md");
 const MAXIMUM_CHANGES: usize = 64;
+/// Finite stock offers one scene model may list; matches the live projection bound.
+const MAXIMUM_OFFERS: usize = 12;
 const CURRENT_INVENTORY_VERSION: u8 = 1;
 
 /// Detached presentation copies published by the session owner after loading or committing state.
@@ -84,6 +86,21 @@ pub(crate) struct SceneModel {
     pub(crate) things: Vec<SceneThing>,
     pub(crate) ways_out: Vec<SceneWayOut>,
     pub(crate) offers: Vec<SceneOffer>,
+    /// Failed, noticed theft attempts found by replaying the journal. Not serialized: they are
+    /// server-side projection data for the social layer and never part of a client payload.
+    #[serde(skip)]
+    pub(crate) witnessed_thefts: Vec<SceneTheftWitness>,
+}
+
+/// A failed Sleight of Hand attempt that a person noticed. The member is the hero's player, so
+/// the social layer can keep the grievance for that hero only.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SceneTheftWitness {
+    pub(crate) operation_id: String,
+    pub(crate) member_id: String,
+    pub(crate) item_name: String,
+    pub(crate) owner_id: Option<String>,
+    pub(crate) noticer_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -106,6 +123,14 @@ pub(crate) struct ScenePerson {
     /// Private purse used only by server-authorized NPC commerce actions.
     #[serde(default)]
     pub(crate) coin_cp: u32,
+    /// SRD 5.2.1 passive Perception (10 + Wisdom (Perception) modifier + proficiency). A person
+    /// who is present sets the Sleight of Hand DC against theft of anything they could see.
+    #[serde(default = "default_passive_perception")]
+    pub(crate) passive_perception: u8,
+}
+
+fn default_passive_perception() -> u8 {
+    10
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -290,6 +315,18 @@ pub(crate) struct SceneStealAdjudication {
     pub(crate) ability_modifier: i8,
     pub(crate) proficiency_bonus: u8,
     pub(crate) difficulty_class: u8,
+    /// The person whose passive Perception set `difficulty_class`; `None` when nobody could see.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dc_setter_id: Option<String>,
+}
+
+/// The Sleight of Hand DC for one scene item and the observer who set it (SRD 5.2.1 pp. 22, 188).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SceneStealDifficulty {
+    pub(crate) item_name: String,
+    pub(crate) owner_id: Option<String>,
+    pub(crate) difficulty_class: u8,
+    pub(crate) observer_id: Option<String>,
 }
 
 fn valid_steal_adjudication(
@@ -353,12 +390,14 @@ pub(crate) enum SceneChangeKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         adjudication: Option<SceneStealAdjudication>,
     },
-    /// Durable intent only. Rules adjudication must replace this with `Stolen` before
-    /// custody changes; recording the attempt preserves witnesses and replay context.
+    /// A failed Sleight of Hand attempt. Custody does not change. When the DC setter noticed it,
+    /// `noticed_by_id` names that person and the owner keeps a theft grievance against the hero.
     StealAttempt {
         actor_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         adjudication: Option<SceneStealAdjudication>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        noticed_by_id: Option<String>,
     },
     Given {
         holder_id: String,
@@ -449,6 +488,79 @@ impl SceneModel {
         self.offer(target_id).is_some_and(|offer| {
             let item_id = offer.canonical_item_id();
             !self.things.iter().any(|thing| thing.id == item_id)
+        })
+    }
+
+    /// Sleight of Hand DC for taking one item in `scene_key` (SRD 5.2.1 pp. 22, 188). The DC is
+    /// the highest passive Perception among the item's owner and every other non-hero person
+    /// present in the scene; that person sets it and notices a failed attempt. Nobody present
+    /// leaves the baseline DC 10 and no noticer.
+    pub(crate) fn steal_difficulty(
+        &self,
+        item_id: &str,
+        scene_key: SceneKey,
+    ) -> Option<SceneStealDifficulty> {
+        let (item_name, owner_id) =
+            if let Some(thing) = self.things.iter().find(|thing| thing.id == item_id) {
+                (thing.name.clone(), thing.owner_id.clone())
+            } else {
+                let offer = self.offer(item_id)?;
+                (offer.name.clone(), Some(offer.seller_id.clone()))
+            };
+        // Only people on this scene's stage observe, so the authored full model and the
+        // scene-filtered projection give the same DC for the same action.
+        let scene = scene_key_label(scene_key);
+        let present = |person: &&ScenePerson| {
+            person.role != "hero" && person.present_in.iter().any(|present| present == scene)
+        };
+        let owner = owner_id.as_deref().and_then(|owner| {
+            self.people
+                .iter()
+                .filter(present)
+                .find(|person| person.id == owner)
+        });
+        let others = self
+            .people
+            .iter()
+            .filter(present)
+            .filter(|person| Some(person.id.as_str()) != owner_id.as_deref());
+        let mut observer: Option<&ScenePerson> = None;
+        for person in owner.into_iter().chain(others) {
+            if observer.is_none_or(|best| person.passive_perception > best.passive_perception) {
+                observer = Some(person);
+            }
+        }
+        Some(SceneStealDifficulty {
+            item_name,
+            owner_id,
+            difficulty_class: observer.map_or(10, |person| person.passive_perception),
+            observer_id: observer.map(|person| person.id.clone()),
+        })
+    }
+
+    /// Applies one accepted change to a replayed model, in the order the journal recorded it.
+    pub(crate) fn apply_change(&mut self, change: &SceneChange) -> Result<(), SceneModelError> {
+        self.apply(change)
+    }
+
+    /// Item-first target for a line Jev already labelled as taking something: a scene item or
+    /// stock offer named in the line wins over a person in the same line. No verb gate runs here.
+    pub(crate) fn resolve_item(&self, line: &str) -> Option<ResolvedTarget> {
+        let line = normalize(line);
+        if line.is_empty() {
+            return None;
+        }
+        if let Some(thing) = best_visible_thing(&self.things, &line) {
+            return Some(ResolvedTarget {
+                kind: SceneTargetKind::Thing,
+                ids: vec![thing.id.clone()],
+                name: thing.name.clone(),
+            });
+        }
+        best_match(&self.offers, &line, |offer| &offer.aliases).map(|offer| ResolvedTarget {
+            kind: SceneTargetKind::Offer,
+            ids: vec![offer.id.clone()],
+            name: offer.name.clone(),
         })
     }
 
@@ -679,6 +791,7 @@ impl SceneModel {
             things,
             ways_out,
             offers,
+            witnessed_thefts: Vec::new(),
         };
         model.validate_structure()?;
         Ok(model)
@@ -713,7 +826,7 @@ impl SceneModel {
         allow_party_people: bool,
     ) -> Result<(), SceneModelError> {
         if self.inventory_version != CURRENT_INVENTORY_VERSION
-            || self.offers.len() > 8
+            || self.offers.len() > MAXIMUM_OFFERS
             || self.time_of_day.trim().is_empty()
             || self.weather.trim().is_empty()
             || self.time_of_day.chars().count() > 32
@@ -734,6 +847,7 @@ impl SceneModel {
                 || !valid_text(&person.relation_to_speaker, 100)
                 || !valid_text(&person.position, 48)
                 || !valid_text(&person.wants, 100)
+                || !(1..=30).contains(&person.passive_perception)
                 || person.aliases.is_empty()
                 || person.aliases.len() > 8
                 || person.present_in.is_empty()
@@ -1188,6 +1302,7 @@ impl SceneModel {
                 SceneChangeKind::StealAttempt {
                     actor_id,
                     adjudication: Some(adjudication),
+                    ..
                 } if !valid_steal_adjudication(adjudication, actor_id, &thing.id, false) => {
                     return Err(SceneModelError::Contradiction);
                 }
@@ -1309,6 +1424,7 @@ impl SceneModel {
                 SceneChangeKind::StealAttempt {
                     actor_id,
                     adjudication: Some(adjudication),
+                    ..
                 } => {
                     if !valid_steal_adjudication(adjudication, actor_id, &item_id, false) {
                         return Err(SceneModelError::Contradiction);
@@ -1478,6 +1594,7 @@ fn named_people(
             } else {
                 500
             },
+            passive_perception: default_passive_perception(),
         });
         Ok(())
     };
@@ -1625,6 +1742,7 @@ fn background_people(
             ],
             wants,
             coin_cp: 500,
+            passive_perception: default_passive_perception(),
         });
     }
     Ok(people)

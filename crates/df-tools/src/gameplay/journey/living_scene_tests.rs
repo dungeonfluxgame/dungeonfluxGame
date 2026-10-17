@@ -88,7 +88,13 @@ fn interact(
     target: &str,
     option: &str,
 ) -> Checkpoint {
-    let roll = (option == "steal").then_some(1);
+    // Taking someone else's item is a checked theft: a failing steal rolls 1, and a take of an
+    // owned item rolls a natural 20 so it succeeds. Ordinary takes of unowned items never roll.
+    let roll = match option {
+        "steal" => Some(1),
+        "take" => Some(20),
+        _ => None,
+    };
     interact_with_roll(current, member, op, target, option, roll)
 }
 
@@ -1128,6 +1134,118 @@ fn a_hand_over_names_a_party_hero_after_to_and_moves_the_held_item() {
                 .unwrap()
                 .unwrap()
                 .contains(&format!("gives {} to {}", ale.name, companion.name))
+        );
+    });
+}
+
+/// The first owned portable scene item that is not already held by the test hero.
+fn owned_portable_thing(model: &crate::gameplay::adventure::scene_model::SceneModel) -> String {
+    model
+        .things
+        .iter()
+        .find(|thing| {
+            thing.portable
+                && !thing.in_use
+                && thing.holder_id.is_none()
+                && thing
+                    .owner_id
+                    .as_deref()
+                    .is_some_and(|owner| owner != "Brynn")
+        })
+        .expect("the room has an owned portable object")
+        .id
+        .clone()
+}
+
+#[test]
+fn a_steal_receipt_with_a_lower_dc_is_rejected_on_replay() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let item = owned_portable_thing(model);
+        let attempted = interact_with_roll(&current, member, 22, &item, "steal", Some(1));
+        assert!(
+            living_scene::snapshot(attempted.state(), &scene)
+                .unwrap()
+                .is_some()
+        );
+        let mut forged = attempted.state().clone();
+        let decision = forged.decisions.last_mut().unwrap();
+        let semantic = decision.semantic_output.as_mut().unwrap();
+        let honest = semantic.clone();
+        *semantic = semantic.replacen("\"difficulty_class\":10", "\"difficulty_class\":5", 1);
+        assert_ne!(
+            *semantic, honest,
+            "the receipt records its difficulty class"
+        );
+        assert!(
+            living_scene::snapshot(&forged, &scene).is_err(),
+            "replay recomputes the DC and refuses a receipt that lowers it"
+        );
+    });
+}
+
+#[test]
+fn a_successful_steal_records_no_witness_and_a_noticed_failure_names_the_noticer() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let item = owned_portable_thing(model);
+        let stolen = interact_with_roll(&current, member, 23, &item, "steal", Some(20));
+        let after = living_scene::snapshot(stolen.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert!(
+            after.model.witnessed_thefts.is_empty(),
+            "a successful theft is not noticed"
+        );
+        let failed = interact_with_roll(&current, member, 24, &item, "steal", Some(1));
+        let after = living_scene::snapshot(failed.state(), &scene)
+            .unwrap()
+            .unwrap();
+        let [witness] = after.model.witnessed_thefts.as_slice() else {
+            panic!("a failed theft is one witnessed attempt");
+        };
+        assert!(!witness.noticer_id.is_empty());
+        assert!(!witness.member_id.is_empty());
+        assert!(
+            living_scene::last_line(failed.state())
+                .unwrap()
+                .unwrap()
+                .contains("notices")
+        );
+    });
+}
+
+#[test]
+fn taking_an_owned_item_openly_requires_the_check() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+        let item = owned_portable_thing(model);
+        let attempted = interact_with_roll(&current, member, 25, &item, "take", Some(1));
+        assert!(
+            living_scene::last_line(attempted.state())
+                .unwrap()
+                .unwrap()
+                .contains("fails to steal"),
+            "an open take of someone else's item is checked, not handed over"
+        );
+        let after = living_scene::snapshot(attempted.state(), &scene)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after
+                .model
+                .things
+                .iter()
+                .find(|thing| thing.id == item)
+                .unwrap()
+                .holder_id,
+            None
         );
     });
 }

@@ -2,7 +2,8 @@
 use super::*;
 use crate::gameplay::adventure::scene_model::{
     SceneChange, SceneChangeKind, SceneInventoryEntry, SceneInventoryLocation, SceneModel,
-    SceneNow, ScenePerson, SceneStealAdjudication, StartingAttitude,
+    SceneNow, ScenePerson, SceneStealAdjudication, SceneStealDifficulty, SceneTheftWitness,
+    StartingAttitude,
 };
 use crate::gameplay::approach_model::JevUnavailable;
 use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
@@ -522,6 +523,7 @@ pub(crate) fn commit_npc_inventory_action(
                     kind: SceneChangeKind::StealAttempt {
                         actor_id: actor.id.clone(),
                         adjudication: None,
+                        noticed_by_id: None,
                     },
                 }),
                 line,
@@ -1453,35 +1455,55 @@ pub(in crate::gameplay) fn snapshot(
                 knowledge: Vec::new(),
                 wants: "Stay with the party.".into(),
                 coin_cp: 0,
+                passive_perception: 10,
             });
         }
     }
     let mut changes = Vec::new();
+    let mut witnessed = Vec::new();
+    // Replay the journal in order on the same base the projection uses, so each steal receipt
+    // is checked against the owner, observers and DC that held when that action was accepted.
+    let mut replay = model.clone();
     for decision in &state.decisions {
         if let Some(interaction) = read(decision)?
             && interaction.place == setting.place_id
             && let Some(mut change) = interaction.change
         {
-            let adjudication = match &change.kind {
+            let (receipt, attempt_noticer) = match &change.kind {
                 SceneChangeKind::Stolen {
                     adjudication: Some(adjudication),
                     ..
-                }
-                | SceneChangeKind::StealAttempt {
+                } => (Some(adjudication), None),
+                SceneChangeKind::StealAttempt {
                     adjudication: Some(adjudication),
+                    noticed_by_id,
                     ..
-                } => Some(adjudication),
-                _ => None,
+                } => (Some(adjudication), Some(noticed_by_id.as_deref())),
+                _ => (None, None),
             };
-            if let Some(adjudication) = adjudication {
-                validate_steal_receipt(
+            if let Some(receipt) = receipt {
+                let difficulty = validate_steal_receipt(
                     state,
                     decision,
-                    &setting.place_id,
                     &interaction.hero,
                     &change.entity_id,
-                    adjudication,
+                    receipt,
+                    attempt_noticer,
+                    scene.key,
+                    &replay,
                 )?;
+                // A failed attempt that someone noticed is a witnessed theft for the social layer.
+                if let Some(Some(noticer)) = attempt_noticer
+                    && let Some(member_id) = member_for_hero(state, &interaction.hero)
+                {
+                    witnessed.push(SceneTheftWitness {
+                        operation_id: receipt.operation_id.clone(),
+                        member_id,
+                        item_name: difficulty.item_name,
+                        owner_id: difficulty.owner_id,
+                        noticer_id: noticer.to_owned(),
+                    });
+                }
             }
             // Older v1 purchases recorded the debit on the interaction but not the price
             // inside the scene change. Recover it during replay so the seller purse is
@@ -1491,6 +1513,7 @@ pub(in crate::gameplay) fn snapshot(
             {
                 *cost_cp = interaction.paid_cp;
             }
+            replay.apply_change(&change).map_err(|_| invalid())?;
             changes.push(change);
         }
     }
@@ -1498,6 +1521,7 @@ pub(in crate::gameplay) fn snapshot(
         .as_it_is_now(scene.key, &changes)
         .map_err(|_| invalid())?;
     let mut snapshot: SceneNow = serde_json::from_str(&encoded).map_err(|_| invalid())?;
+    snapshot.model.witnessed_thefts = witnessed;
     for change in &changes {
         if matches!(change.kind, SceneChangeKind::PersonMoved { .. })
             && let Some(person) = snapshot
@@ -1512,17 +1536,20 @@ pub(in crate::gameplay) fn snapshot(
     Ok(Some(snapshot))
 }
 
+/// Replays one steal receipt. The DC is recomputed from `replay`, the model as it stood when this
+/// action was accepted, so a receipt cannot lower its DC or name a different noticer. The place is
+/// not re-derived from the current scene: this function runs inside that scene's own replay, and
+/// the journal filter already selected this place's entries.
 fn validate_steal_receipt(
     state: &GameState,
     decision: &AcceptedDecision,
-    place_id: &str,
     hero_id: &str,
     item_id: &str,
     receipt: &SceneStealAdjudication,
-) -> Result<(), RepositoryError> {
-    let current_place = crate::gameplay::beat_script_runtime::scene(state)?
-        .setting
-        .map(|setting| setting.place_id);
+    attempt_noticer: Option<Option<&str>>,
+    scene_key: pack::SceneKey,
+    replay: &SceneModel,
+) -> Result<SceneStealDifficulty, RepositoryError> {
     let scope = crate::gameplay::beat_script_runtime::scene_scope(state)?;
     let source_revision = format!("srd521-p6:{scope}:sleight-of-hand:target-thing-{item_id}");
     let operation_id = hex(decision.operation.as_bytes());
@@ -1533,8 +1560,16 @@ fn validate_steal_receipt(
     else {
         return Err(invalid());
     };
-    if current_place.as_deref() != Some(place_id)
-        || decision.draws.as_slice() != [0]
+    let expected = replay
+        .steal_difficulty(item_id, scene_key)
+        .ok_or_else(invalid)?;
+    if receipt.difficulty_class != expected.difficulty_class
+        || receipt.dc_setter_id != expected.observer_id
+        || attempt_noticer.is_some_and(|noticer| noticer != receipt.dc_setter_id.as_deref())
+    {
+        return Err(invalid());
+    }
+    if decision.draws.as_slice() != [0]
         || receipt.operation_id != operation_id
         || receipt.source_revision != source_revision
         || receipt.actor_id != hero_id
@@ -1561,7 +1596,24 @@ fn validate_steal_receipt(
     {
         return Err(invalid());
     }
-    Ok(())
+    Ok(expected)
+}
+
+/// The hero's player, found from the party roster. Witnesses carry it so the social layer keeps a
+/// theft grievance with that hero only.
+fn member_for_hero(state: &GameState, hero: &str) -> Option<String> {
+    // Name the hero first, tolerating other entities whose name is unavailable, as the steal
+    // receipt check does; only then find the player linked to that character.
+    let character = state
+        .characters
+        .iter()
+        .find(|character| name(state, character.entity).is_ok_and(|name| name == hero))?
+        .entity;
+    state
+        .members
+        .iter()
+        .find(|link| link.character == Some(character))
+        .map(|link| hex(link.member.as_bytes()))
 }
 
 pub(in crate::gameplay) fn publish(current: &Checkpoint) -> Result<(), RepositoryError> {
@@ -1623,6 +1675,17 @@ pub(super) fn has_interactions(state: &GameState) -> bool {
         .decisions
         .iter()
         .any(|decision| decision.source_policy.as_str() == POLICY)
+}
+
+/// Dice drawn by accepted scene interactions. Only a steal or a checked take draws (one d20), and
+/// replaying the scene re-validates that draw against its receipt (`validate_steal_receipt`).
+pub(in crate::gameplay) fn interaction_draws(state: &GameState) -> usize {
+    state
+        .decisions
+        .iter()
+        .filter(|decision| decision.source_policy.as_str() == POLICY)
+        .map(|decision| decision.draws.len())
+        .sum()
 }
 
 pub(in crate::gameplay) fn offer_id(current: &Checkpoint) -> String {
@@ -2089,7 +2152,24 @@ pub(in crate::gameplay) fn interaction_for_meaning(
     meaning: InteractionMeaning,
 ) -> Option<(String, &'static str)> {
     let option = meaning.option(words)?;
-    resolve_interaction_target(scene, words).map(|id| (id, option))
+    let target = match meaning {
+        // A line that takes something names that thing even when it also names a person,
+        // as in "I pocket the gloves while Marek is busy".
+        InteractionMeaning::Take | InteractionMeaning::Steal => resolve_item_target(scene, words),
+        _ => resolve_interaction_target(scene, words),
+    }?;
+    Some((target, option))
+}
+
+fn resolve_item_target(scene: &pack::Scene, words: &str) -> Option<String> {
+    let model = scene.setting.as_ref()?.model.as_ref()?.for_scene(scene.key);
+    let resolved = model.resolve_item(words)?;
+    let resolved_id = resolved.ids.first()?;
+    if resolved.kind == crate::gameplay::adventure::scene_model::SceneTargetKind::Offer {
+        Some(model.offer(resolved_id)?.canonical_item_id())
+    } else {
+        Some(resolved_id.clone())
+    }
 }
 
 /// Jev's label decides the interaction; the keyword rules answer only when Jev gave no label.
@@ -2261,64 +2341,92 @@ pub(super) fn stage_with_supplier(
             .find(|(key, _)| key.as_str() == group)
             .map(|(_, value)| value.as_str())
     };
-    let adjudication = if selected("scene-option") == Some("steal") {
-        let target = selected("scene-target").ok_or_else(invalid)?;
-        let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
-        let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
-        let (item_id, owner_id, portable, in_use, held, dc) = if let Some(thing) = snapshot
-            .model
-            .things
-            .iter()
-            .find(|thing| thing.id == target)
-        {
-            (
-                thing.id.clone(),
-                thing.owner_id.clone(),
-                thing.portable,
-                thing.in_use,
-                thing.holder_id.is_some(),
-                thing.dc,
-            )
-        } else if let Some(offer) = snapshot.model.offer(target) {
-            let item_id = offer.canonical_item_id();
-            (
-                item_id,
-                Some(offer.seller_id.clone()),
-                true,
-                false,
-                !snapshot.model.offer_available(&offer.canonical_item_id()),
-                10,
-            )
-        } else {
-            return stage_inner(current, command, None, std::mem::take(draws));
-        };
-        let hero = name(current.state(), *actor)?;
-        if !portable || in_use || held || owner_id.as_deref().is_none_or(|owner| owner == hero) {
-            return stage_inner(current, command, None, std::mem::take(draws));
+    let adjudication = match (selected("scene-option"), selected("scene-target")) {
+        (Some(option @ ("steal" | "take")), Some(target)) => {
+            let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+            let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+            let hero = name(current.state(), *actor)?;
+            match steal_target(&snapshot.model, target, option, &hero) {
+                Some(item_id) => {
+                    let difficulty = snapshot
+                        .model
+                        .steal_difficulty(&item_id, scene.key)
+                        .ok_or_else(invalid)?;
+                    let face = super::draw(command.operation, 20, draws, supplier)?;
+                    let result = crate::gameplay::beat_script_runtime::resolve_skill_check(
+                        current.state(),
+                        *actor,
+                        "sleight-of-hand",
+                        u8::try_from(face).map_err(|_| invalid())?,
+                        difficulty.difficulty_class,
+                    )?;
+                    let scope = crate::gameplay::beat_script_runtime::scene_scope(current.state())?;
+                    Some(SceneStealAdjudication {
+                        operation_id: hex(command.operation.as_bytes()),
+                        source_revision: format!(
+                            "srd521-p6:{scope}:sleight-of-hand:target-thing-{item_id}"
+                        ),
+                        actor_id: hero,
+                        die: result.die,
+                        ability_modifier: result.ability_modifier,
+                        proficiency_bonus: result.proficiency_bonus,
+                        difficulty_class: result.difficulty_class,
+                        dc_setter_id: difficulty.observer_id,
+                    })
+                }
+                None => None,
+            }
         }
-        let face = super::draw(command.operation, 20, draws, supplier)?;
-        let result = crate::gameplay::beat_script_runtime::resolve_skill_check(
-            current.state(),
-            *actor,
-            "sleight-of-hand",
-            u8::try_from(face).map_err(|_| invalid())?,
-            dc,
-        )?;
-        let scope = crate::gameplay::beat_script_runtime::scene_scope(current.state())?;
-        let adjudication = SceneStealAdjudication {
-            operation_id: hex(command.operation.as_bytes()),
-            source_revision: format!("srd521-p6:{scope}:sleight-of-hand:target-thing-{item_id}"),
-            actor_id: hero,
-            die: result.die,
-            ability_modifier: result.ability_modifier,
-            proficiency_bonus: result.proficiency_bonus,
-            difficulty_class: result.difficulty_class,
-        };
-        Some(adjudication)
-    } else {
-        None
+        _ => None,
     };
     stage_inner(current, command, adjudication, std::mem::take(draws))
+}
+
+/// The option a scene line resolves to once ownership is known. Taking something that belongs to
+/// someone else is an attempted theft, and an unowned portable thing is simply taken. A stock
+/// offer belongs to its seller, so taking one without paying is a steal as well.
+fn effective_option<'a>(model: &SceneModel, target: &str, option: &'a str, hero: &str) -> &'a str {
+    if !matches!(option, "take" | "steal") {
+        return option;
+    }
+    if let Some(thing) = model.things.iter().find(|thing| thing.id == target) {
+        if !thing.portable || thing.in_use || thing.holder_id.is_some() {
+            return option;
+        }
+        return match thing.owner_id.as_deref() {
+            Some(owner) if owner != hero => "steal",
+            _ => "take",
+        };
+    }
+    match model.offer(target) {
+        Some(offer) if option == "take" && model.offer_available(&offer.canonical_item_id()) => {
+            "steal"
+        }
+        _ => option,
+    }
+}
+
+/// The item a steal attempt would act on, when a die is warranted. Anything else gets no die and
+/// `stage_inner` explains why the action fails or succeeds without a roll.
+fn steal_target(model: &SceneModel, target: &str, option: &str, hero: &str) -> Option<String> {
+    if effective_option(model, target, option, hero) != "steal" {
+        return None;
+    }
+    if let Some(thing) = model.things.iter().find(|thing| thing.id == target) {
+        return Some(thing.id.clone());
+    }
+    let offer = model.offer(target)?;
+    model
+        .offer_available(&offer.canonical_item_id())
+        .then(|| offer.canonical_item_id())
+}
+
+/// Describes a failed steal. A person who noticed it is named in the record.
+fn attempt_line(model: &SceneModel, hero: &str, item: &str, noticer: Option<&str>) -> String {
+    match noticer.and_then(|id| model.people.iter().find(|person| person.id == id)) {
+        Some(person) => format!("{hero} fails to steal {item}, and {} notices.", person.name),
+        None => format!("{hero} fails to steal {item}."),
+    }
 }
 
 fn stage_inner(
@@ -2371,6 +2479,8 @@ fn stage_inner(
     let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
     let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
     let hero = name(current.state(), *who)?;
+    // Taking an owned item in front of its owner is the same attempted theft as `steal`.
+    let option = effective_option(&snapshot.model, target, option, &hero);
     let stored_quote = quoted_id
         .map(|quote_id| {
             merchant_quote_history(current).map(|history| {
@@ -2449,12 +2559,6 @@ fn stage_inner(
                 "take" if thing.in_use || thing.holder_id.is_some() => {
                     format!("{} is being used; ask its holder first.", thing.name)
                 }
-                "take" if thing.owner_id.as_deref().is_some_and(|owner| owner != hero) => {
-                    format!(
-                        "{} belongs to someone else; ask its owner first.",
-                        thing.name
-                    )
-                }
                 "take" => {
                     let description = format!("{hero} picks up {}.", thing.name);
                     change = Some(SceneChange {
@@ -2485,6 +2589,9 @@ fn stage_inner(
                         )
                         .is_ok_and(|result| result.succeeded)
                     });
+                    let noticer = adjudication
+                        .as_ref()
+                        .and_then(|check| check.dc_setter_id.clone());
                     let (description, kind) = if succeeded {
                         (
                             format!("{hero} steals {}.", thing.name),
@@ -2495,10 +2602,11 @@ fn stage_inner(
                         )
                     } else {
                         (
-                            format!("{hero} fails to steal {}.", thing.name),
+                            attempt_line(&snapshot.model, &hero, &thing.name, noticer.as_deref()),
                             SceneChangeKind::StealAttempt {
                                 actor_id: hero.clone(),
                                 adjudication,
+                                noticed_by_id: noticer,
                             },
                         )
                     };
@@ -2750,6 +2858,9 @@ fn stage_inner(
                 })
                 .is_ok_and(|result| result.succeeded)
             });
+            let noticer = adjudication
+                .as_ref()
+                .and_then(|check| check.dc_setter_id.clone());
             let (description, kind) = if succeeded && snapshot.model.offer_available(&item_id) {
                 (
                     format!("{hero} steals {}.", offer.name),
@@ -2760,10 +2871,11 @@ fn stage_inner(
                 )
             } else {
                 (
-                    format!("{hero} fails to steal {}.", offer.name),
+                    attempt_line(&snapshot.model, &hero, &offer.name, noticer.as_deref()),
                     SceneChangeKind::StealAttempt {
                         actor_id: hero.clone(),
                         adjudication,
+                        noticed_by_id: noticer,
                     },
                 )
             };

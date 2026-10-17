@@ -37,7 +37,8 @@
         }
       ],
       "wants": "Sell suitable clothing at a fair price.",
-      "coin_cp": 5000
+      "coin_cp": 5000,
+      "passive_perception": 11
     },
     {
       "id": "shop-adventurer",
@@ -72,7 +73,8 @@
           "statement": "Wool keeps its warmth better than linen when the weather turns cold."
         }
       ],
-      "wants": "Find a durable jacket without wasting coin."
+      "wants": "Find a durable jacket without wasting coin.",
+      "passive_perception": 13
     },
     {
       "id": "shop-soldier",
@@ -107,7 +109,8 @@
           "statement": "I prefer a roomy shoulder to an impressive-looking buckle."
         }
       ],
-      "wants": "Buy a comfortable warm layer and enjoy an ordinary afternoon."
+      "wants": "Buy a comfortable warm layer and enjoy an ordinary afternoon.",
+      "passive_perception": 12
     }
   ],
   "things": [
@@ -186,8 +189,8 @@
       "dc": 10,
       "finding_id": null,
       "clue_fact_id": null,
-      "portable": false,
-      "value_cp": null,
+      "portable": true,
+      "value_cp": 500,
       "use_effect": "It can be handled and examined.",
       "position": "on the wooden counter",
       "owner_id": "merchant",
@@ -302,6 +305,107 @@
       ],
       "description": "A practical set of traveler’s clothes in sturdy wool and linen.",
       "cost_cp": 200
+    },
+    {
+      "id": "warm-cloak-wool",
+      "item_id": "item-warm-cloak-wool",
+      "seller_id": "merchant",
+      "name": "warm wool cloak",
+      "aliases": [
+        "warm wool cloak",
+        "wool cloak",
+        "warm cloak",
+        "cloak"
+      ],
+      "description": "A thick wool cloak with a deep hood, warm against the cold wind.",
+      "cost_cp": 300
+    },
+    {
+      "id": "warm-cloak-lined",
+      "item_id": "item-warm-cloak-lined",
+      "seller_id": "merchant",
+      "name": "fur-lined cloak",
+      "aliases": [
+        "fur-lined cloak",
+        "lined cloak",
+        "fur cloak"
+      ],
+      "description": "A heavy cloak lined with soft fur and fastened with a leather tie.",
+      "cost_cp": 1000
+    },
+    {
+      "id": "padded-jacket",
+      "item_id": "item-padded-jacket",
+      "seller_id": "merchant",
+      "name": "padded jacket",
+      "aliases": [
+        "padded jacket",
+        "quilted jacket"
+      ],
+      "description": "A quilted jacket with a padded lining for cold mornings.",
+      "cost_cp": 500
+    },
+    {
+      "id": "bolt-of-wool",
+      "item_id": "item-bolt-of-wool",
+      "seller_id": "merchant",
+      "name": "bolt of wool",
+      "aliases": [
+        "bolt of wool",
+        "grey wool bolt"
+      ],
+      "description": "A bolt of close-woven grey wool, enough for a coat.",
+      "cost_cp": 500
+    },
+    {
+      "id": "bolt-of-linen",
+      "item_id": "item-bolt-of-linen",
+      "seller_id": "merchant",
+      "name": "bolt of undyed linen",
+      "aliases": [
+        "bolt of undyed linen",
+        "undyed linen",
+        "pale linen"
+      ],
+      "description": "A bolt of pale undyed linen, cool and light.",
+      "cost_cp": 400
+    },
+    {
+      "id": "gloves",
+      "item_id": "item-gloves",
+      "seller_id": "merchant",
+      "name": "pair of gloves",
+      "aliases": [
+        "pair of gloves",
+        "gloves"
+      ],
+      "description": "A pair of stitched leather gloves with a wool lining.",
+      "cost_cp": 100
+    },
+    {
+      "id": "hat",
+      "item_id": "item-hat",
+      "seller_id": "merchant",
+      "name": "wool hat",
+      "aliases": [
+        "wool hat",
+        "hat"
+      ],
+      "description": "A close-fitting wool hat with a turned brim.",
+      "cost_cp": 200
+    },
+    {
+      "id": "clothes-fine",
+      "item_id": "item-clothes-fine",
+      "seller_id": "merchant",
+      "name": "fine clothes",
+      "aliases": [
+        "fine clothes",
+        "fine clothing",
+        "good clothes"
+      ],
+      "description": "A set of fine clothes in dyed wool and silk-blend cloth.",
+      "cost_cp": 1500
     }
   ]
 }

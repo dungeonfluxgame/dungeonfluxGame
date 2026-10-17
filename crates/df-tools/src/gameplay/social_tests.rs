@@ -1994,3 +1994,44 @@ fn every_change_names_the_npc_in_its_public_line() {
         "Marek grows wary of Brakka."
     );
 }
+
+#[test]
+fn a_witnessed_theft_keeps_the_owners_wrong_for_that_hero_only_and_turns_the_owner_hostile() {
+    let dossiers = dossiers_of(0x5eed_7717);
+    let owner = dossiers[0].clone();
+    let noticer = dossiers[1].clone();
+    let person = |dossier: &Dossier| dossier.npc_id.split_once(':').unwrap().1.to_owned();
+    let (owner_id, noticer_id) = (person(&owner), person(&noticer));
+    let ledger = SocialLedger::open(dossiers.clone(), "adventure", None).unwrap();
+    let (brynn, vale) = (member(1), member(2));
+    let witness = |hero: MemberId| SceneTheftWitness {
+        operation_id: "0123456789abcdef0123456789abcdef".into(),
+        member_id: hex(hero.as_bytes()),
+        item_name: "blue linen bolt".into(),
+        owner_id: Some(owner_id.clone()),
+        noticer_id: noticer_id.clone(),
+    };
+    assert!(ledger.record_witnessed_thefts(&[witness(brynn)]).unwrap());
+    assert!(
+        !ledger.record_witnessed_thefts(&[witness(brynn)]).unwrap(),
+        "a replayed journal records each attempt once"
+    );
+    assert_eq!(ledger.standing(brynn, &owner).attitude, Attitude::Hostile);
+    for dossier in [&owner, &noticer] {
+        assert!(
+            ledger
+                .grievance_lines(brynn, dossier)
+                .iter()
+                .any(|line| line.contains("caught trying to steal")),
+            "{} keeps the theft against this hero",
+            dossier.name
+        );
+    }
+    assert!(ledger.grievance_lines(vale, &owner).is_empty());
+    assert!(ledger.grievance_lines(vale, &noticer).is_empty());
+    assert_eq!(
+        ledger.standing(vale, &owner).attitude,
+        owner.starting_attitude,
+        "a second hero's standing is unchanged"
+    );
+}

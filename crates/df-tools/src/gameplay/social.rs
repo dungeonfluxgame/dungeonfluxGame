@@ -47,6 +47,8 @@ use super::{
     storyteller::contains_whole_word,
 };
 
+use super::adventure::scene_model::SceneTheftWitness;
+
 #[path = "social_scene.rs"]
 mod scene_state;
 
@@ -60,6 +62,8 @@ const MAXIMUM_FILE_BYTES: u64 = 256 * 1024;
 const FILE_NAME: &str = "social.json";
 /// Lasting wrongs kept per hero and NPC; the oldest is forgotten past this bound.
 const MAXIMUM_GRIEVANCES: usize = 8;
+/// Theft attempts remembered per standing so a replayed journal is never recorded twice.
+const MAXIMUM_WITNESSED_THEFTS: usize = 32;
 /// Characters of a hero's own words kept in one grievance.
 const GRIEVANCE_CHARACTERS: usize = 200;
 /// Warm exchanges an NPC holding a grievance needs before trust counts toward recovery.
@@ -1087,6 +1091,8 @@ pub(super) struct Grievance {
 pub(super) enum GrievanceAct {
     Threat,
     Wrong,
+    /// A failed Sleight of Hand the hero was caught making against this NPC or the NPC's property.
+    Theft,
 }
 
 impl Grievance {
@@ -1126,6 +1132,7 @@ impl Grievance {
         let deed = match self.act {
             GrievanceAct::Threat => "You threatened me",
             GrievanceAct::Wrong => "You wronged me",
+            GrievanceAct::Theft => "You were caught trying to steal from me",
         };
         if self.words.is_empty() {
             format!("{deed}.")
@@ -1194,6 +1201,9 @@ struct Relationship {
     /// Wrongs this hero did to this NPC, oldest first. They outlast every scene and restart.
     #[serde(default)]
     grievances: Vec<Grievance>,
+    /// Operation IDs of theft attempts already recorded against this hero.
+    #[serde(default)]
+    witnessed_thefts: Vec<String>,
     /// Warm exchanges counted toward recovery since the last grievance or attitude level gained.
     /// Only counted while grievances last; a grievance-holding NPC's trust waits on it.
     #[serde(default)]
@@ -1227,6 +1237,7 @@ impl Relationship {
             patience_spent: 0,
             influence_failed: false,
             grievances: Vec::new(),
+            witnessed_thefts: Vec::new(),
             mended: 0,
             threat_applied: false,
             appraised: false,
@@ -1336,6 +1347,44 @@ impl Relationship {
             self.lower_attitude()
         }
     }
+
+    /// Keeps one caught theft, once per attempt. Whoever keeps it gets the grievance; the owner
+    /// also turns Hostile and resents the hero most, and never forgives where the owner's profile
+    /// allows it. Returns whether the attempt was new.
+    fn record_theft(&mut self, operation: &str, item: &str, keeper: TheftKeeper) -> bool {
+        if self.witnessed_thefts.iter().any(|known| known == operation) {
+            return false;
+        }
+        self.witnessed_thefts.push(operation.to_owned());
+        let excess = self
+            .witnessed_thefts
+            .len()
+            .saturating_sub(MAXIMUM_WITNESSED_THEFTS);
+        self.witnessed_thefts.drain(..excess);
+        let words: String = item.chars().take(GRIEVANCE_CHARACTERS).collect();
+        self.record_grievance(
+            Grievance {
+                act: GrievanceAct::Theft,
+                words,
+            },
+            false,
+        );
+        if let TheftKeeper::Owner { unforgiving } = keeper {
+            self.attitude = Attitude::Hostile;
+            self.emotional.resentful = EmotionLevel::Much;
+            if unforgiving {
+                self.emotional.never_forgives = Some(format!("caught stealing {item}"));
+            }
+        }
+        true
+    }
+}
+
+/// Who keeps a witnessed theft: the owner, or a different person who noticed the attempt.
+#[derive(Clone, Copy)]
+enum TheftKeeper {
+    Owner { unforgiving: bool },
+    Noticer,
 }
 
 /// What a reply may draw on: the attitude and trust the hero has earned.
@@ -2130,6 +2179,60 @@ impl SocialLedger {
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier))
             .threaten(scene)
+    }
+
+    /// The NPC dossier for a scene person, by person id. Dossier ids are `role:person`.
+    fn dossier_for_person(&self, person_id: &str) -> Option<&Dossier> {
+        self.dossiers.iter().find(|dossier| {
+            dossier
+                .npc_id
+                .split_once(':')
+                .is_some_and(|(_, id)| id == person_id)
+        })
+    }
+
+    /// Records every witnessed theft in a replayed journal. The owner keeps the wrong and turns
+    /// hostile to that hero; a different noticer keeps the wrong. Each attempt is recorded once per
+    /// standing, so repeating the same journal changes nothing. Returns whether anything was new;
+    /// the caller saves.
+    pub(super) fn record_witnessed_thefts(
+        &self,
+        witnesses: &[SceneTheftWitness],
+    ) -> Result<bool, SocialError> {
+        let mut recorded = false;
+        for witness in witnesses {
+            let member =
+                member_from_hex(&witness.member_id).ok_or(SocialError::Invalid("theft member"))?;
+            let owner = witness
+                .owner_id
+                .as_deref()
+                .and_then(|id| self.dossier_for_person(id));
+            if let Some(owner) = owner {
+                let keeper = TheftKeeper::Owner {
+                    unforgiving: owner.emotional_profile().forgiveness == Forgiveness::Unforgiving,
+                };
+                recorded |= self
+                    .lock()
+                    .entry((member, owner.npc_id.clone()))
+                    .or_insert_with(|| Relationship::new(owner))
+                    .record_theft(&witness.operation_id, &witness.item_name, keeper);
+            }
+            let noticer = self
+                .dossier_for_person(&witness.noticer_id)
+                .filter(|noticer| owner.is_none_or(|owner| owner.npc_id != noticer.npc_id));
+            if let Some(noticer) = noticer {
+                recorded |= self
+                    .lock()
+                    .entry((member, noticer.npc_id.clone()))
+                    .or_insert_with(|| Relationship::new(noticer))
+                    .record_theft(
+                        &witness.operation_id,
+                        &witness.item_name,
+                        TheftKeeper::Noticer,
+                    );
+            }
+        }
+        Ok(recorded)
     }
 
     /// The latest exchange of the run, if any.

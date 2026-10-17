@@ -88,6 +88,7 @@ fn add_test_hero(model: &mut SceneModel, id: &str, name: &str) {
         knowledge: Vec::new(),
         wants: "Stay with the party.".into(),
         coin_cp: 0,
+        passive_perception: 10,
     });
 }
 
@@ -636,6 +637,7 @@ fn theft_moves_custody_without_rewriting_owner() {
                         ability_modifier: 0,
                         proficiency_bonus: 0,
                         difficulty_class: 10,
+                        dc_setter_id: None,
                     }),
                 },
             }],
@@ -1025,4 +1027,68 @@ fn canonical_facts(model: &SceneModel) -> BTreeMap<String, String> {
             ("ant.id".into(), "giant rats".into()),
         ])
         .collect()
+}
+
+fn authored_merchant_shop() -> SceneModel {
+    serde_json::from_slice(include_bytes!(
+        "../../../../../content/merchant-shop/scene-model.json"
+    ))
+    .expect("the authored merchant shop model deserializes")
+}
+
+#[test]
+fn merchant_pack_offers_load_validate_and_keep_the_travelers_clothes_identity() {
+    let model = authored_merchant_shop();
+    model
+        .validate_structure()
+        .expect("the authored shop validates");
+    let travelers = model
+        .offer("item-clothes-travelers")
+        .expect("the existing offer keeps its item id");
+    assert_eq!(
+        (travelers.id.as_str(), travelers.cost_cp),
+        ("clothes-travelers", 200)
+    );
+    for id in [
+        "warm-cloak-wool",
+        "warm-cloak-lined",
+        "padded-jacket",
+        "bolt-of-wool",
+        "bolt-of-linen",
+        "gloves",
+        "hat",
+        "clothes-fine",
+    ] {
+        let item = format!("item-{id}");
+        let offer = model
+            .offer(&item)
+            .unwrap_or_else(|| panic!("{id} is stocked by the merchant"));
+        assert_eq!(offer.seller_id, "merchant");
+        assert!(model.offer_available(&item));
+    }
+    assert_eq!(model.offer("item-clothes-fine").unwrap().cost_cp, 1500);
+}
+
+#[test]
+fn blue_linen_is_stealable_and_the_highest_present_passive_perception_sets_the_dc() {
+    let model = authored_merchant_shop();
+    let linen = model
+        .things
+        .iter()
+        .find(|thing| thing.id == "blue-linen")
+        .expect("the shop lists the blue linen");
+    assert!(linen.portable && !linen.in_use && linen.holder_id.is_none());
+    assert!(
+        model
+            .inventory()
+            .iter()
+            .any(|entry| entry.item_id == "blue-linen" && entry.available)
+    );
+    // Marek 11, Jessa 12 and Corin 13 are all present in the opening; Corin sets the DC.
+    let difficulty = model
+        .steal_difficulty("blue-linen", super::super::pack::SceneKey::Opening)
+        .expect("the blue linen has a theft difficulty");
+    assert_eq!(difficulty.difficulty_class, 13);
+    assert_eq!(difficulty.observer_id.as_deref(), Some("shop-adventurer"));
+    assert_eq!(difficulty.owner_id.as_deref(), Some("merchant"));
 }

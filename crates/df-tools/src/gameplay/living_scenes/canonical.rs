@@ -214,6 +214,7 @@ mod tests {
 
     fn model() -> SceneModel {
         SceneModel {
+            witnessed_thefts: Vec::new(),
             inventory_version: 1,
             time_of_day: "morning".to_owned(),
             weather: "clear".to_owned(),
@@ -251,6 +252,7 @@ mod tests {
 
         let mut authored = model();
         authored.people.push(ScenePerson {
+            passive_perception: 10,
             id: "merchant".to_owned(),
             name: "Marek".to_owned(),
             role: "cloth merchant".to_owned(),
@@ -510,6 +512,7 @@ mod tests {
         let original = model();
         let mut changed_cast = original.clone();
         changed_cast.people.push(ScenePerson {
+            passive_perception: 10,
             id: "merchant".to_owned(),
             name: "Marek".to_owned(),
             role: "cloth merchant".to_owned(),

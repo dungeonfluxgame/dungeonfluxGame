@@ -29,6 +29,7 @@ fn failed_canonical_dependency_projects_terminal_plate_failure_without_redispatc
         .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
     let mut authored = scene(SceneKey::DialogueSeal, "Failed room", Some("Kestrel"));
     authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        witnessed_thefts: Vec::new(),
         inventory_version: 1,
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
@@ -73,6 +74,7 @@ async fn authored_room_does_not_substitute_static_npc_or_hero_art_for_missing_bi
     let (shared, _) = shared(8);
     let mut authored = scene(SceneKey::DialogueSeal, "Bound room", Some("Kestrel"));
     authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        witnessed_thefts: Vec::new(),
         inventory_version: 1,
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
@@ -125,10 +127,12 @@ fn authored_plate_waits_until_all_canonical_references_are_ready() {
         .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
     let mut authored = scene(SceneKey::Opening, "Bound opening", Some("Kestrel"));
     authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        witnessed_thefts: Vec::new(),
         inventory_version: 1,
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: vec![ScenePerson {
+            passive_perception: 10,
             id: "keeper".to_owned(),
             name: "Kestrel".to_owned(),
             role: "shopkeeper".to_owned(),
@@ -187,10 +191,12 @@ async fn canonical_plate_and_locator_use_generated_speaker_bytes_after_readiness
     inner.observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
     let mut authored = scene(SceneKey::DialogueSeal, "Canonical room", Some("Kestrel"));
     authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        witnessed_thefts: Vec::new(),
         inventory_version: 1,
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: vec![ScenePerson {
+            passive_perception: 10,
             id: "keeper".to_owned(),
             name: "Kestrel".to_owned(),
             role: "shopkeeper".to_owned(),
@@ -285,10 +291,12 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
         Some("Kestrel"),
     );
     authored.setting.as_mut().unwrap().model = Some(SceneModel {
+        witnessed_thefts: Vec::new(),
         inventory_version: 1,
         time_of_day: "morning".to_owned(),
         weather: "clear".to_owned(),
         people: vec![ScenePerson {
+            passive_perception: 10,
             id: "keeper".to_owned(),
             name: "Kestrel".to_owned(),
             role: "shopkeeper".to_owned(),

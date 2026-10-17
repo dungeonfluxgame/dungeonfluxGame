@@ -59,12 +59,19 @@ impl SocialLedger {
         {
             return Err(SocialError::Invalid("scene snapshot changes"));
         }
-        let mut rooms = self.rooms.lock().unwrap_or_else(PoisonError::into_inner);
-        if !rooms.scenes.contains_key(scene) {
-            return Err(SocialError::Invalid("unknown scene"));
+        let witnesses = snapshot.model.witnessed_thefts.clone();
+        {
+            let mut rooms = self.rooms.lock().unwrap_or_else(PoisonError::into_inner);
+            if !rooms.scenes.contains_key(scene) {
+                return Err(SocialError::Invalid("unknown scene"));
+            }
+            rooms.projections.insert(scene.to_owned(), snapshot);
+            rooms.active_scene = Some(scene.to_owned());
         }
-        rooms.projections.insert(scene.to_owned(), snapshot);
-        rooms.active_scene = Some(scene.to_owned());
+        // The journal-derived witnesses are idempotent, so a repeated projection records nothing.
+        if self.record_witnessed_thefts(&witnesses)? {
+            self.save()?;
+        }
         Ok(())
     }
 
