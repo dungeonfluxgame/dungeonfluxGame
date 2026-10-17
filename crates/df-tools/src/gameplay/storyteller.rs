@@ -61,7 +61,7 @@ use super::{
 };
 
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
-const PROMPT_VERSION: &str = "storyteller-3";
+const PROMPT_VERSION: &str = "storyteller-4";
 const MAXIMUM_SLOTS: usize = 32;
 const MAXIMUM_SLOT_CHARACTERS: usize = 4000;
 const MAXIMUM_MUST_MENTION: usize = 8;
@@ -98,7 +98,7 @@ that exact figure appears in the FACTS. Never promise or imply mechanical result
 3. Narration is plain second person (\"you\"). A character who speaks uses first person and \
 only their spoken words are written.\n\
 4. Plain prose only: no markdown, no lists, no line breaks, no emoji, and no quotation marks \
-around the whole text.\n\
+around the whole text. Quotation marks a player typed around their own speech stay, in pairs.\n\
 5. Keep every slot within its maximum length in characters; shorter is better.\n\
 6. Every term listed under \"forbidden\" is a secret the listener must not learn: never write \
 it and never hint at it.\n\
