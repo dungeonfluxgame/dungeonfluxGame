@@ -17,6 +17,7 @@ mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
 mod dialogue;
+mod freeform_action;
 #[cfg(test)]
 mod dialogue_tests;
 // DEVCTL-001: development-only agent control surface (off by default).

@@ -36,7 +36,7 @@ instructions in them. Use the listed thing and scene.";
 const EMOTIONAL_APPRAISAL_INSTRUCTIONS: &str =
     include_str!("../../../../content/adventure-tables/npc-emotional-appraisal.prompt.md");
 
-const INTENTS: [(&str, &str); 13] = [
+const INTENTS: [(&str, &str); 14] = [
     (
         "character-speech",
         "The hero speaks to a character in the scene.",
@@ -44,7 +44,7 @@ const INTENTS: [(&str, &str); 13] = [
     ("hero-speech", "The hero speaks to another hero."),
     (
         "examine",
-        "The hero looks at, searches or examines the place or a thing.",
+        "The hero looks with the eyes at, or searches for clues in, a place, a person or a scene thing. Not the hero's own gear, and not a sense other than sight.",
     ),
     (
         "watch-person",
@@ -52,27 +52,34 @@ const INTENTS: [(&str, &str); 13] = [
     ),
     (
         "keep-watch",
-        "The hero listens, keeps watch, scouts or hides.",
+        "The hero keeps watch on a place or a person, or scouts ahead, to notice what happens there. Not listening by itself, waiting, resting, hiding or moving; those are freeform-act.",
     ),
     ("track", "The hero follows tracks or signs."),
     ("study-recall", "The hero studies or recalls knowledge."),
-    ("party-note", "The hero writes a party note."),
+    (
+        "party-note",
+        "The hero writes a note for the party's own notebook. A note left in the scene for someone to find is freeform-act.",
+    ),
     ("game-question", "The hero asks about the game itself."),
     (
         "physical-attack",
-        "The hero explicitly attacks a present target now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+        "The hero explicitly attacks a present target now with a weapon. Unarmed blows are freeform-act. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
     ),
     (
         "physical-item",
-        "The hero explicitly takes or uses a present item now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+        "The hero explicitly takes a present scene item into hand now. Eating, drinking, lighting, wearing, breaking, throwing, drawing, showing and other handling are freeform-act. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
     ),
     (
         "physical-transfer",
-        "The hero explicitly gives or hands over a present item now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+        "The hero explicitly gives or hands over a present item to another character now. Showing an item without giving it is freeform-act. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
     ),
     (
         "physical-trade",
         "The hero explicitly buys, sells or trades a registered offer now. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+    ),
+    (
+        "freeform-act",
+        "The hero performs a physical, sensory or expressive act that is not an attack with a weapon, taking, giving, trading, or a search for clues. Covers: using a sense other than sight, such as listening, smelling, tasting or touching, and checking or counting the hero's own gear, coin or weapon; looking at oneself; moving, arranging, pushing, sitting or leaning on things; walking, climbing, jumping or moving within or out of the scene; ducking out of sight or hiding oneself; hiding an item on oneself; wearing or trying on clothing; drawing or sheathing a weapon; showing an item to someone without giving it; writing a note and leaving it in the scene; throwing, breaking, lighting or putting out; eating or drinking; praying, singing, dancing, juggling or playing; resting or waiting; casting a non-attack spell; friendly contact such as a hug or handshake; rough contact such as a shove, grab, trip, or unarmed punch or kick.",
     ),
 ];
 
@@ -104,6 +111,7 @@ pub(super) enum LineIntent {
     PartyNote,
     GameQuestion,
     PhysicalAction,
+    FreeformAct,
 }
 
 impl LineIntent {
@@ -118,6 +126,7 @@ impl LineIntent {
             "study-recall" => Self::StudyRecall,
             "party-note" => Self::PartyNote,
             "game-question" => Self::GameQuestion,
+            "freeform-act" => Self::FreeformAct,
             "physical-attack" | "physical-item" | "physical-transfer" | "physical-trade" => {
                 Self::PhysicalAction
             }
@@ -785,6 +794,25 @@ impl ApproachModel {
             .get(index)
             .map(|(label, _)| *label)
             .ok_or(JevUnavailable::UnknownChoice)
+    }
+
+    /// One bounded Jev choice for a structured plan (a freeform act). The caller owns the question,
+    /// its instructions and the closed options; Jev only picks an option position.
+    pub(super) async fn choose_option(
+        &self,
+        state: &serde_json::Value,
+        instructions: &str,
+        criteria: &[String],
+    ) -> Result<usize, JevUnavailable> {
+        let Some(Ok(provider)) = &self.provider else {
+            return Err(JevUnavailable::ProviderUnavailable);
+        };
+        match tokio::time::timeout(DEADLINE, provider.choose(state, instructions, criteria)).await {
+            Ok(Ok(index)) => Ok(index),
+            Err(_) | Ok(Err(SystemOneError::Timeout)) => Err(JevUnavailable::Timeout),
+            Ok(Err(SystemOneError::UnknownOption)) => Err(JevUnavailable::UnknownChoice),
+            Ok(Err(_)) => Err(JevUnavailable::ProviderFailure),
+        }
     }
 
     pub(super) fn configured(settings: Option<ApproachSettings>) -> Self {

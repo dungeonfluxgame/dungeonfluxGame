@@ -19,7 +19,7 @@ use tonic::{Request, Response, Status};
 
 use super::adventure::dossier::AnswerSubject;
 use super::{
-    Service, actor, credential, journey,
+    Service, actor, credential, freeform_action, journey,
     line_cleanup::{self, DisplayLine},
     model,
     npc_reply::{NpcReplyContext, NpcVoice, StoryFacts},
@@ -875,6 +875,21 @@ pub(super) fn party_note_text(text: &str) -> String {
     }
 }
 
+/// The speaking hero's name and party position, as the table shows them.
+fn table_speaker(
+    state: &df_model::checkpoint::GameState,
+    hero: df_model::checkpoint::EntityId,
+) -> Result<(String, u32), Status> {
+    let name = journey::name(state, hero).map_err(actor::unavailable)?;
+    let index = state
+        .characters
+        .iter()
+        .position(|character| character.entity == hero)
+        .and_then(|position| u32::try_from(position).ok())
+        .ok_or_else(|| Status::failed_precondition("speaking hero is not in the party"))?;
+    Ok((name, index))
+}
+
 fn is_observation_submission(
     request: &rpc::RawDialogueRequest,
     reading: &super::approach_model::LineReading,
@@ -1473,12 +1488,20 @@ impl Service {
             && reading.intent != super::approach_model::LineIntent::PartyNote;
         // Jev reads the line as a scene interaction once; a physical line and a plain interaction
         // both use that reading, so the keyword rules run only if Jev gave no label.
-        let scene_interaction = if scene_turn {
+        // Jev's freeform-act reading is never a scene interaction: the adjudicator owns it.
+        let freeform =
+            scene_turn && reading.intent == super::approach_model::LineIntent::FreeformAct;
+        let scene_interaction = if scene_turn && !freeform {
             self.judge_scene_interaction(&request.text, &scene, &available_things)
                 .await
         } else {
             None
         };
+        if freeform {
+            return self
+                .freeform_action_call(credential, &request, &scene)
+                .await;
+        }
         if scene_turn && reading.intent == super::approach_model::LineIntent::PhysicalAction {
             return self
                 .physical_action_call(
@@ -1662,6 +1685,9 @@ impl Service {
         }
         let offer_id = observation_offer
             .ok_or_else(|| Status::failed_precondition("this scene has no observation offer"))?;
+        let hero_entity = journey::player_entity(member, &current).map_err(actor::unavailable)?;
+        let (hero, hero_index) = table_speaker(current.state(), hero_entity)?;
+        freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
         let catalog = super::investigation::targets(
             scene,
             &super::investigation::party_targets(current.state()).map_err(actor::unavailable)?,
@@ -1982,6 +2008,79 @@ impl Service {
                 npc_reply: line,
                 npc_actor_id: String::new(),
                 npc_speaker: String::new(),
+                ..Default::default()
+            },
+            None,
+        ))
+    }
+
+    /// A freeform act: the hero's own line goes on the table first, then the server's roll and the
+    /// narration. Scene state does not change here; persistence is a TODO in freeform_action.
+    async fn freeform_action_call(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        scene: &super::pack::Scene,
+    ) -> Result<DialogueReply, Status> {
+        let (member_reply, member_wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::SpeechMember {
+                credential,
+                reply: member_reply,
+            })
+            .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
+        let member = tokio::time::timeout(super::timing::active().reply, member_wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("dialogue owner did not resolve the player"))?
+            .map_err(|_| Status::unavailable("dialogue actor stopped"))??;
+        let current = self.updates.borrow().clone();
+        let hero_entity = journey::player_entity(member, &current).map_err(actor::unavailable)?;
+        let (hero, hero_index) = table_speaker(current.state(), hero_entity)?;
+        freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
+        let cast = wire::scene_cast(scene);
+        let situation =
+            freeform_action::Situation::read(current.state(), hero_entity, scene, &cast)
+                .map_err(actor::unavailable)?;
+        let die = freeform_action::draw_die().map_err(actor::unavailable)?;
+        let state = current.state();
+        let (storyteller, approach_model) = self.npc_voice.hero_identity_models();
+        let resolution = freeform_action::resolve(
+            approach_model,
+            &situation,
+            &request.text,
+            die,
+            |skill, face, dc| freeform_action::skill_roll(state, hero_entity, skill, face, dc),
+        )
+        .await;
+        let narration = freeform_action::narrate(storyteller, &resolution, &request.text).await;
+        let roll = match &resolution.verdict {
+            freeform_action::Verdict::Performed(performance) => {
+                performance.check.as_ref().map(|check| check.line())
+            }
+            _ => None,
+        };
+        freeform_action::publish_outcome(&self.table_log, hero_index, roll.as_deref(), &narration);
+        let scene_key = format!("{:?}", scene.key);
+        if freeform_action::apply_consequences(
+            &self.social,
+            member,
+            &scene_key,
+            &request.text,
+            &narration,
+            &resolution.consequences,
+        ) {
+            let ledger = self.social.clone();
+            let saved = tokio::task::spawn_blocking(move || ledger.save()).await;
+            if !matches!(saved, Ok(Ok(()))) {
+                actor::record_unavailable("freeform-social-save", &format!("{saved:?}"));
+            }
+        }
+        Ok(DialogueReply::Raw(
+            rpc::DialogueResponse {
+                input_id: request.input_id.clone(),
+                disposition: rpc::DialogueDisposition::Action as i32,
+                revision: Some(wire::revision(current.basis().revision)),
+                npc_reply: narration,
                 ..Default::default()
             },
             None,
