@@ -744,6 +744,73 @@ async fn a_storyteller_narration_that_validates_is_used_and_names_the_hero() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn the_narration_asks_for_no_hidden_reasoning_so_the_cap_is_for_the_answer() {
+    let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
+        "narration": "Marek sits on the edge of the counter."
+    }))]);
+    let cache = cache_directory("freeform-narration-profile");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let resolution = run(
+        &shop(),
+        &plan(
+            ActKind::Lean,
+            Some(target(&shop(), "counter")),
+            Difficulty::None,
+        ),
+        "I sit on the edge of the counter.",
+        12,
+    );
+    narrate(
+        &storyteller,
+        &resolution,
+        "I sit on the edge of the counter.",
+    )
+    .await;
+    let bodies = endpoint.bodies();
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["reasoning"], json!({"effort": "none"}));
+    assert_eq!(bodies[0]["max_output_tokens"], 220);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_narration_cut_off_at_its_cap_falls_back_to_the_rules_sentence() {
+    let incomplete = |sent: &Value| {
+        (
+            200,
+            json!({"object":"response","id":"resp_fixture","status":"incomplete","model":sent["model"],
+                "metadata":sent["metadata"],"text":sent["text"],"error":null,
+                "incomplete_details":{"reason":"max_output_tokens"},"output":[],
+                "usage":{"input_tokens":100,"output_tokens":120,"total_tokens":220,
+                    "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":100}}}),
+        )
+    };
+    let endpoint = FakeEndpoint::start(vec![Reply::ComputeResponse(std::sync::Arc::new(
+        incomplete,
+    ))]);
+    let cache = cache_directory("freeform-narration-cut-off");
+    let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+    let resolution = run(
+        &shop(),
+        &plan(
+            ActKind::Lean,
+            Some(target(&shop(), "counter")),
+            Difficulty::None,
+        ),
+        "I sit on the edge of the counter.",
+        12,
+    );
+    let line = narrate(
+        &storyteller,
+        &resolution,
+        "I sit on the edge of the counter.",
+    )
+    .await;
+    assert_eq!(line, fallback_line(&resolution));
+    let _ = std::fs::remove_dir_all(cache);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn with_the_storyteller_off_the_deterministic_sentence_is_used() {
     let resolution = run(
         &shop(),

@@ -1237,3 +1237,23 @@ async fn a_cached_text_with_a_withheld_term_is_not_served() {
     assert_eq!(endpoint.connections(), 1);
     std::fs::remove_dir_all(cache).unwrap();
 }
+
+#[test]
+fn a_provider_contract_failure_is_labelled_by_the_part_of_the_contract_that_failed() {
+    let contract = |reason| TextResponseError::Contract {
+        reason,
+        usage: None,
+    };
+    assert_eq!(
+        provider_reason_label(&contract(TextResponseContract::Status)),
+        "contract_status"
+    );
+    assert_eq!(
+        provider_reason_label(&contract(TextResponseContract::Json)),
+        "contract_json"
+    );
+    assert_eq!(
+        provider_reason_label(&TextResponseError::Supplier(ProviderFailureClass::Capacity)),
+        "supplier"
+    );
+}

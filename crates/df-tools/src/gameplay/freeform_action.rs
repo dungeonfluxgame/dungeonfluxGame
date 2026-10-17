@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use df_model::checkpoint::{EntityId, GameState};
 use df_protocol::common as rpc;
+use df_providers::ReasoningEffort;
 use df_session::submission::RepositoryError;
 use df_types::MemberId;
 use serde_json::{Value, json};
@@ -1978,6 +1979,7 @@ pub(super) async fn narrate(
         slots: &slots,
         style: NARRATION_STYLE,
         profile: CallProfile {
+            reasoning: Some(ReasoningEffort::None),
             output_tokens: Some(220),
             deadline: Some(Duration::from_secs(8)),
             guidance: NARRATION_GUIDANCE,

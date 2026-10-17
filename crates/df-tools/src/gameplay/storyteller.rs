@@ -1084,7 +1084,7 @@ impl Online {
         .await;
         let response = match submitted {
             Err(_) => return Err(StorytellerError::DeadlineExceeded),
-            Ok(Err(error)) => return self.settle_failure(error, reserved),
+            Ok(Err(error)) => return self.settle_failure(request, key, error, reserved),
             Ok(Ok(response)) => response,
         };
         let tokens = response.supplier_usage().total_tokens;
@@ -1094,9 +1094,10 @@ impl Online {
             .unwrap_or_else(PoisonError::into_inner)
             .push(response.supplier_usage());
         self.reconcile(reserved, tokens);
-        let events = response
-            .complete(owner())
-            .map_err(|error| StorytellerError::Provider(error.failure_class()))?;
+        let events = response.complete(owner()).map_err(|error| {
+            record_provider_reason(self, request, key, error.reason());
+            StorytellerError::Provider(error.failure_class())
+        })?;
         let [candidate, _completed] = events;
         let TextEventKind::Candidate(output) = candidate.kind else {
             return Ok(Attempt::BadShape);
@@ -1112,6 +1113,8 @@ impl Online {
     /// work, or a failure before sending, is given back.
     fn settle_failure(
         &self,
+        request: &Expression<'_>,
+        key: &[u8; 32],
         error: TextResponseError,
         reserved: u64,
     ) -> Result<Attempt, StorytellerError> {
@@ -1149,7 +1152,10 @@ impl Online {
             | TextResponseError::Transport(NativeHttpRefusal::Deadline) => {
                 Err(StorytellerError::DeadlineExceeded)
             }
-            _ => Err(StorytellerError::Provider(error.failure_class())),
+            _ => {
+                record_provider_reason(self, request, key, reason);
+                Err(StorytellerError::Provider(error.failure_class()))
+            }
         }
     }
 
@@ -1617,6 +1623,52 @@ fn record_text_attempt(
         fields,
         &attributes,
     );
+}
+
+/// The `TEXT_MODEL provider_error` line: which part of the provider contract failed the call. It
+/// carries a fixed label only, never prompt, output, credential or supplier text.
+fn record_provider_reason(
+    online: &Online,
+    request: &Expression<'_>,
+    key: &[u8; 32],
+    reason: &TextResponseError,
+) {
+    record_text_resource(
+        "gameplay.storyteller.provider_error",
+        online,
+        request,
+        key,
+        "provider_error",
+        "provider_error",
+        Some(provider_reason_label(reason)),
+        None,
+        None,
+    );
+}
+
+fn provider_reason_label(reason: &TextResponseError) -> &'static str {
+    match reason {
+        TextResponseError::UnregisteredRoute => "unregistered_route",
+        TextResponseError::InvalidConfiguration => "invalid_configuration",
+        TextResponseError::InvalidCredential => "invalid_credential",
+        TextResponseError::InvalidInput => "invalid_input",
+        TextResponseError::ModeDoesNotDispatch => "mode_does_not_dispatch",
+        TextResponseError::SchemaConfigurationMismatch => "schema_configuration_mismatch",
+        TextResponseError::Owner(_) => "owner",
+        TextResponseError::Transport(_) => "transport",
+        TextResponseError::Supplier(_) => "supplier",
+        TextResponseError::Contract { reason, .. } => match reason {
+            TextResponseContract::Json => "contract_json",
+            TextResponseContract::Usage => "contract_usage",
+            TextResponseContract::Identity => "contract_identity",
+            TextResponseContract::Status => "contract_status",
+            TextResponseContract::Schema => "contract_schema",
+            TextResponseContract::Output => "contract_output",
+            TextResponseContract::Refusal => "contract_refusal",
+        },
+        TextResponseError::UsageExceeded(_) => "usage_exceeded",
+        TextResponseError::Observed { .. } => "observed",
+    }
 }
 
 pub(super) fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {
