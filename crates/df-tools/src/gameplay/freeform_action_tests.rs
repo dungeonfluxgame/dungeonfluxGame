@@ -770,6 +770,13 @@ async fn the_narration_asks_for_no_hidden_reasoning_so_the_cap_is_for_the_answer
     assert_eq!(bodies.len(), 1);
     assert_eq!(bodies[0]["reasoning"], json!({"effort": "none"}));
     assert_eq!(bodies[0]["max_output_tokens"], 220);
+    assert!(bodies[0]["text"].to_string().find("hero_words").is_none());
+    assert!(
+        bodies[0]["text"]
+            .to_string()
+            .find("I sit on the edge of the counter.")
+            .is_none()
+    );
     std::fs::remove_dir_all(cache).unwrap();
 }
 
@@ -913,6 +920,59 @@ fn a_give_of_an_unlisted_kit_item_is_a_freeform_hand_over_and_a_listed_give_is_n
     for option in ["gift", "take", "open", "examine", "none"] {
         assert!(!is_unlisted_hand_over(option, false), "{option}");
     }
+}
+
+#[test]
+fn a_give_is_adjudicated_as_a_hand_over_to_the_judged_recipient() {
+    let mut situation = market_street();
+    situation.things.push(thing_fact(
+        "waterskin",
+        "waterskin",
+        "Part of the dungeoneer pack.",
+        true,
+        true,
+    ));
+    let plan = FreeformPlan {
+        recipient: Some(target(&situation, "brakka")),
+        ..plan(
+            ActKind::Give,
+            Some(target(&situation, "waterskin")),
+            Difficulty::None,
+        )
+    };
+    let resolution = run(
+        &situation,
+        &plan,
+        "I hand Brakka my waterskin. Drink, you look parched.",
+        12,
+    );
+    assert!(matches!(resolution.verdict, Verdict::Performed(_)));
+    assert_eq!(resolution.recipient.as_deref(), Some("Brakka"));
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun hands the waterskin to Brakka."
+    );
+    let facts = narration_facts(
+        &resolution,
+        "I hand Brakka my waterskin. Drink, you look parched.",
+    );
+    assert_eq!(facts["recipient"], "Brakka");
+    assert!(facts.get("hero_words").is_none());
+}
+
+#[test]
+fn a_give_requires_a_held_item_and_a_recipient() {
+    let situation = market_street();
+    let plan = plan(
+        ActKind::Give,
+        Some(target(&situation, "label")),
+        Difficulty::None,
+    );
+    let resolution = run(&situation, &plan, "I give Marek's label to Brakka.", 12);
+    assert_eq!(
+        resolution.verdict,
+        Verdict::Refused(Refusal::NotHeld { holder: None })
+    );
 }
 
 #[test]
