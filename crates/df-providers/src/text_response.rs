@@ -42,6 +42,9 @@ pub struct TextProviderConfig {
 /// The request carries the setting only when the caller chose one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReasoningEffort {
+    /// No hidden reasoning. GPT-6 models accept `none` and reject `minimal`; suited to short
+    /// judgement or rewriting tasks, not to anything that computes.
+    None,
     Minimal,
     Low,
     Medium,
@@ -51,6 +54,7 @@ pub enum ReasoningEffort {
 impl ReasoningEffort {
     fn wire_name(self) -> &'static str {
         match self {
+            Self::None => "none",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",

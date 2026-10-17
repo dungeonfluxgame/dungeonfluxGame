@@ -284,6 +284,34 @@ async fn a_chosen_reasoning_effort_is_sent_and_an_unchosen_one_is_omitted() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn no_reasoning_effort_is_sent_as_none_because_gpt6_rejects_minimal() {
+    let (address, server) = fixture(|sent| (200, serde_json::to_vec(&completed(sent)).unwrap()));
+    let current = binding(ExecutionMode::Live);
+    let request = request(&current);
+    let provider = registered_text_provider(
+        CandidateRouteId::OpenAiResponsesText,
+        TextProviderConfig::new("caller-model-snapshot", schema(), 50)
+            .unwrap()
+            .with_reasoning_effort(ReasoningEffort::None),
+        "credential-private-sentinel",
+        limits(),
+    )
+    .unwrap()
+    .for_loopback_fixture(address)
+    .unwrap();
+
+    provider
+        .submit(&request, owner(&current), future::pending())
+        .await
+        .unwrap();
+
+    let captured = tokio::task::spawn_blocking(move || server.join().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(captured.body["reasoning"], json!({"effort": "none"}));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn refusal_incomplete_tools_foreign_metadata_model_schema_and_invalid_output_never_complete()
 {
     for case in 0..9 {
