@@ -1299,3 +1299,49 @@ fn a_present_merchants_stock_is_listed_as_portable_things_and_an_absent_merchant
     let without_merchant = shop().people;
     assert!(present_stock(&model, &without_merchant).is_empty());
 }
+
+#[test]
+fn a_dungeoneers_pack_kit_row_holds_its_waterskin_and_stacks_are_named_with_their_count() {
+    let row = pack::EquipmentRow {
+        item: "dungeoneer-pack".to_owned(),
+        quantity: 1,
+    };
+    let things = kit_things(&row).expect("the catalog is readable");
+    let pack_thing = things
+        .iter()
+        .find(|thing| thing.id == "pack-dungeoneer-pack")
+        .expect("the pack stays as the backpack");
+    assert!(pack_thing.held_by_hero);
+    let waterskin = things
+        .iter()
+        .find(|thing| thing.name == "waterskin")
+        .expect("the hero holds the pack's waterskin");
+    assert!(waterskin.portable);
+    assert!(waterskin.held_by_hero);
+    assert!(waterskin.holder_name.is_none());
+    assert!(waterskin.owner_id.is_none());
+    let torches = things
+        .iter()
+        .find(|thing| thing.name == "10 torches")
+        .expect("ten torches are one held stack");
+    assert!(torches.held_by_hero);
+    assert!(things.iter().any(|thing| thing.name == "10 rations"));
+    assert!(things.iter().any(|thing| thing.name == "rope"));
+    // The pack is the backpack, so its own Backpack entry is not a second thing.
+    assert!(!things.iter().any(|thing| thing.name == "backpack"));
+    assert_eq!(
+        things
+            .iter()
+            .filter(|thing| thing.name == "10 torches")
+            .count(),
+        1
+    );
+    // A row that is not a catalog pack gives only the item itself.
+    let plain = kit_things(&pack::EquipmentRow {
+        item: "chain-mail".to_owned(),
+        quantity: 1,
+    })
+    .expect("the catalog is readable");
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0].id, "pack-chain-mail");
+}

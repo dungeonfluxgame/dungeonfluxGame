@@ -12,7 +12,7 @@
     "weapons_and_properties": "89-91",
     "armor": "92",
     "tools": "93-95",
-    "adventuring_gear_and_packs": "95-98",
+    "adventuring_gear_and_packs": "95-99",
     "skills_table": "9",
     "standard_languages": "20",
     "rare_languages": "20"
@@ -1278,7 +1278,54 @@
       "name": "Burglar’s Pack",
       "kind": "pack",
       "cost_cp": 1600,
-      "page": 95
+      "page": 95,
+      "contents_page": 96,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "ball-bearings",
+          "quantity": 1
+        },
+        {
+          "item": "bell",
+          "quantity": 1
+        },
+        {
+          "item": "candle",
+          "quantity": 10
+        },
+        {
+          "item": "crowbar",
+          "quantity": 1
+        },
+        {
+          "item": "lantern-hooded",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 7
+        },
+        {
+          "item": "rations",
+          "quantity": 5
+        },
+        {
+          "item": "rope",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
     },
     {
       "id": "caltrops",
@@ -1369,28 +1416,193 @@
       "name": "Diplomat’s Pack",
       "kind": "pack",
       "cost_cp": 3900,
-      "page": 95
+      "page": 95,
+      "contents_page": 97,
+      "contents": [
+        {
+          "item": "chest",
+          "quantity": 1
+        },
+        {
+          "item": "clothes-fine",
+          "quantity": 1
+        },
+        {
+          "item": "ink",
+          "quantity": 1
+        },
+        {
+          "item": "ink-pen",
+          "quantity": 5
+        },
+        {
+          "item": "lamp",
+          "quantity": 1
+        },
+        {
+          "item": "case-map-or-scroll",
+          "quantity": 2
+        },
+        {
+          "item": "oil",
+          "quantity": 4
+        },
+        {
+          "item": "paper",
+          "quantity": 5
+        },
+        {
+          "item": "parchment",
+          "quantity": 5
+        },
+        {
+          "item": "perfume",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        }
+      ]
     },
     {
       "id": "dungeoneers-pack",
       "name": "Dungeoneer’s Pack",
       "kind": "pack",
       "cost_cp": 1200,
-      "page": 95
+      "page": 95,
+      "contents_page": 97,
+      "kit_item": "dungeoneer-pack",
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "caltrops",
+          "quantity": 1
+        },
+        {
+          "item": "crowbar",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 2
+        },
+        {
+          "item": "rations",
+          "quantity": 10
+        },
+        {
+          "item": "rope",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "torch",
+          "quantity": 10
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
     },
     {
       "id": "entertainers-pack",
       "name": "Entertainer’s Pack",
       "kind": "pack",
       "cost_cp": 4000,
-      "page": 95
+      "page": 95,
+      "contents_page": 97,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "bedroll",
+          "quantity": 1
+        },
+        {
+          "item": "bell",
+          "quantity": 1
+        },
+        {
+          "item": "lantern-bullseye",
+          "quantity": 1
+        },
+        {
+          "item": "costume",
+          "quantity": 3
+        },
+        {
+          "item": "mirror",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 8
+        },
+        {
+          "item": "rations",
+          "quantity": 9
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
     },
     {
       "id": "explorers-pack",
       "name": "Explorer’s Pack",
       "kind": "pack",
       "cost_cp": 1000,
-      "page": 95
+      "page": 95,
+      "contents_page": 97,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "bedroll",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 2
+        },
+        {
+          "item": "rations",
+          "quantity": 10
+        },
+        {
+          "item": "rope",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        },
+        {
+          "item": "torch",
+          "quantity": 10
+        },
+        {
+          "item": "waterskin",
+          "quantity": 1
+        }
+      ]
     },
     {
       "id": "flask",
@@ -1586,7 +1798,38 @@
       "name": "Priest’s Pack",
       "kind": "pack",
       "cost_cp": 3300,
-      "page": 95
+      "page": 95,
+      "contents_page": 99,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "blanket",
+          "quantity": 1
+        },
+        {
+          "item": "holy-water",
+          "quantity": 1
+        },
+        {
+          "item": "lamp",
+          "quantity": 1
+        },
+        {
+          "item": "rations",
+          "quantity": 7
+        },
+        {
+          "item": "robe",
+          "quantity": 1
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        }
+      ]
     },
     {
       "id": "quiver",
@@ -1635,7 +1878,42 @@
       "name": "Scholar’s Pack",
       "kind": "pack",
       "cost_cp": 4000,
-      "page": 95
+      "page": 95,
+      "contents_page": 99,
+      "contents": [
+        {
+          "item": "backpack",
+          "quantity": 1
+        },
+        {
+          "item": "book",
+          "quantity": 1
+        },
+        {
+          "item": "ink",
+          "quantity": 1
+        },
+        {
+          "item": "ink-pen",
+          "quantity": 1
+        },
+        {
+          "item": "lamp",
+          "quantity": 1
+        },
+        {
+          "item": "oil",
+          "quantity": 10
+        },
+        {
+          "item": "parchment",
+          "quantity": 10
+        },
+        {
+          "item": "tinderbox",
+          "quantity": 1
+        }
+      ]
     },
     {
       "id": "shovel",

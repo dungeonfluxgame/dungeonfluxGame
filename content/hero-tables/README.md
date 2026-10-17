@@ -28,7 +28,9 @@ claims.
 standard array pp.19-22 (languages p.20); classes pp.28-82 with subclasses at 30, 35, 40,
 46, 49, 52, 56, 61, 64, 69, 76, 82; the four backgrounds p.83; species pp.84-86; feats
 p.87-88; Divine Order p.37; Primal Order p.42; weapons and armor pp.91-92; tools pp.93-95;
-adventuring gear, ammunition and packs pp.95-98. Costs are in copper pieces.
+adventuring gear, ammunition and packs pp.95-99. Costs are in copper pieces. Each pack's
+`contents` (`item`, `quantity`) is its description, on the page named by `contents_page`; a
+`kit_item` names the pack the starting kit uses when it differs from the catalog id.
 
 ## Schemas (short)
 

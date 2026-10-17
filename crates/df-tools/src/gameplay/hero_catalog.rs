@@ -8,6 +8,25 @@ pub(crate) struct Catalog {
     pub(crate) source: String,
     pub(crate) species: Vec<Species>,
     pub(crate) backgrounds: Vec<Background>,
+    pub(crate) items: Vec<Item>,
+}
+
+/// A gear entry. Only packs use `contents`; `kit_item` names the pack by the id the hero's
+/// starting kit uses when that id differs from the catalog id.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Item {
+    pub(crate) id: String,
+    pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) kit_item: Option<String>,
+    #[serde(default)]
+    pub(crate) contents: Vec<PackContent>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct PackContent {
+    pub(crate) item: String,
+    pub(crate) quantity: u8,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,5 +149,51 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    #[test]
+    fn every_srd_pack_lists_contents_that_exist_in_the_catalog_from_pages_96_to_99() {
+        let catalog = catalog().expect("source-backed catalog");
+        let gear: Vec<&str> = catalog.items.iter().map(|item| item.id.as_str()).collect();
+        let packs: Vec<&Item> = catalog
+            .items
+            .iter()
+            .filter(|item| item.kind == "pack")
+            .collect();
+        assert_eq!(packs.len(), 7);
+        for pack in packs {
+            assert!(!pack.contents.is_empty(), "{}", pack.id);
+            for content in &pack.contents {
+                assert!(
+                    gear.contains(&content.item.as_str()),
+                    "{}: {}",
+                    pack.id,
+                    content.item
+                );
+                assert!(content.quantity > 0, "{}: {}", pack.id, content.item);
+            }
+        }
+    }
+
+    #[test]
+    fn the_dungeoneers_pack_kit_row_names_the_pack_that_holds_rope_torches_and_a_waterskin() {
+        let catalog = catalog().expect("source-backed catalog");
+        let pack = catalog
+            .items
+            .iter()
+            .find(|item| item.kit_item.as_deref() == Some("dungeoneer-pack"))
+            .expect("the starting kit's dungeoneer pack is a catalog pack");
+        assert_eq!(pack.id, "dungeoneers-pack");
+        let quantity_of = |item: &str| {
+            pack.contents
+                .iter()
+                .find(|content| content.item == item)
+                .map(|content| content.quantity)
+        };
+        assert_eq!(quantity_of("waterskin"), Some(1));
+        assert_eq!(quantity_of("rope"), Some(1));
+        assert_eq!(quantity_of("rations"), Some(10));
+        assert_eq!(quantity_of("torch"), Some(10));
+        assert_eq!(quantity_of("tinderbox"), Some(1));
     }
 }

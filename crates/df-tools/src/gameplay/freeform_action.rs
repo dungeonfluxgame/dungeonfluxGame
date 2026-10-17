@@ -23,7 +23,7 @@ use super::{
     actor,
     adventure::{dossier::Effect, scene_model::SceneModel},
     approach_model::{ApproachModel, JevUnavailable},
-    beat_script_runtime, hero_identity, journey, model, pack,
+    beat_script_runtime, hero_identity, journey, model, pack, pack_contents,
     social::{Appraisal, Approach, EmotionLevel, EmotionReaction, SocialLedger},
     storyteller::{CallProfile, Expression, Slot, Storyteller},
     table_log::TableLog,
@@ -542,16 +542,7 @@ impl Situation {
                 coin_gp += u32::from(row.quantity);
                 continue;
             }
-            let name = row.item.replace('-', " ");
-            things.push(ThingFact {
-                id: format!("pack-{}", row.item),
-                detail: format!("Part of your starting kit: {name}."),
-                name,
-                portable: true,
-                held_by_hero: true,
-                holder_name: None,
-                owner_id: None,
-            });
+            things.extend(kit_things(&row)?);
         }
         let other_heroes = state
             .characters
@@ -640,6 +631,55 @@ fn name_of(people: &[PersonFact], id: &str) -> String {
         .iter()
         .find(|person| person.id == id)
         .map_or_else(|| id.to_owned(), |person| person.name.clone())
+}
+
+/// A starting-kit row as held things: the row's own item (the pack is the backpack), then what
+/// the catalog pack carries inside it. The pack's own Backpack entry is not a second backpack.
+/// Each stack is one thing named with its count ("10 torches"), not one thing per unit.
+fn kit_things(row: &pack::EquipmentRow) -> Result<Vec<ThingFact>, RepositoryError> {
+    let name = row.item.replace('-', " ");
+    let contents =
+        pack_contents::for_kit_item(&row.item).map_err(|_| RepositoryError::InvalidCandidate)?;
+    let mut things = vec![ThingFact {
+        id: format!("pack-{}", row.item),
+        detail: format!("Part of your starting kit: {name}."),
+        name: name.clone(),
+        portable: true,
+        held_by_hero: true,
+        holder_name: None,
+        owner_id: None,
+    }];
+    things.extend(
+        contents
+            .iter()
+            .filter(|content| content.item != "backpack")
+            .map(|content| ThingFact {
+                id: format!("kit-{}-{}", row.item, content.item),
+                name: stack_name(&content.item, content.quantity),
+                detail: format!("Carried in your {name}."),
+                portable: true,
+                held_by_hero: true,
+                holder_name: None,
+                owner_id: None,
+            }),
+    );
+    Ok(things)
+}
+
+/// The name of a held stack: the item alone, or its count and a plural ("10 torches").
+fn stack_name(item: &str, quantity: u8) -> String {
+    let noun = item.replace('-', " ");
+    if quantity == 1 {
+        return noun;
+    }
+    let plural = if noun.ends_with('s') {
+        noun
+    } else if noun.ends_with("ch") || noun.ends_with("sh") || noun.ends_with('x') {
+        format!("{noun}es")
+    } else {
+        format!("{noun}s")
+    };
+    format!("{quantity} {plural}")
 }
 
 /// The merchant stock the hero can look at, touch or take: each offer of a seller who is present

@@ -64,6 +64,7 @@ mod npc_talk_live_tests;
 mod npc_talk_rules;
 mod npc_target;
 mod pack;
+mod pack_contents;
 mod plate_segments;
 mod place_music;
 #[cfg(test)]
