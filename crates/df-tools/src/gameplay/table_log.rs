@@ -1419,7 +1419,14 @@ pub(super) fn action_lines(
         } else {
             "miss".to_owned()
         };
-        format!("{attack} \u{2014} {result}")
+        if kind == Kind::OpportunityAttack {
+            format!(
+                "makes an opportunity attack on {}: {attack} \u{2014} {result}",
+                outcome.target_name
+            )
+        } else {
+            format!("{attack} \u{2014} {result}")
+        }
     } else if let Some(outcome) = stabilisation {
         match &outcome.stabilization {
             Some(result) if result.succeeded => format!(
@@ -1449,7 +1456,10 @@ pub(super) fn action_lines(
                     .fold((0, 0), |(squares, feet), outcome| {
                         (squares + outcome.path.len(), feet + outcome.cost_ft)
                     });
-                format!("moves {squares} squares ({feet} ft)")
+                format!(
+                    "moves {squares} square{} ({feet} ft)",
+                    if squares == 1 { "" } else { "s" }
+                )
             }
             Kind::ChooseHarborScene => format!("leads on to {destination}"),
             Kind::ResolveErrand => third_person_or_choice(label),
@@ -1522,8 +1532,9 @@ pub(super) fn action_lines(
                     lines.push(ActionLine {
                         speaker: outcome.actor_name.clone(),
                         text: format!(
-                            "moves {} squares ({} ft)",
+                            "moves {} square{} ({} ft)",
                             outcome.path.len(),
+                            if outcome.path.len() == 1 { "" } else { "s" },
                             outcome.cost_ft
                         ),
                         roll: None,
@@ -1640,7 +1651,8 @@ fn enemy_attack_text(group: &[&rpc::CombatOutcome]) -> String {
             AttackActionVerb::Strike => format!("strikes {}", outcome.target_name),
         };
         format!(
-            "{attack} \u{2014} hit, {} damage{down}",
+            "{attack} \u{2014} {}hit, {} damage{down}",
+            if outcome.critical { "critical " } else { "" },
             damage_words(outcome)
         )
     } else {
@@ -1921,13 +1933,14 @@ fn death_save_text(outcome: &rpc::CombatOutcome) -> String {
         Ok(rpc::DeathSaveResult::Revived) => "a natural 20, back on their feet with 1 hit point",
         _ => "no result",
     };
-    let count =
-        |number: u32, word: &str| format!("{number} {word}{}", if number == 1 { "" } else { "s" });
+    let count = |number: u32, singular: &str, plural: &str| {
+        format!("{number} {}", if number == 1 { singular } else { plural })
+    };
     format!(
         "makes a Death Saving Throw: {} \u{2014} {result} ({}, {})",
         outcome.attack_die,
-        count(outcome.death_successes, "success"),
-        count(outcome.death_failures, "failure")
+        count(outcome.death_successes, "success", "successes"),
+        count(outcome.death_failures, "failure", "failures")
     )
 }
 
@@ -3158,8 +3171,78 @@ mod tests {
 
         assert_eq!(
             lines[0].text,
-            "shoots the longbow \u{2014} hit, 10 piercing damage"
+            "makes an opportunity attack on Snag: shoots the longbow \u{2014} hit, 10 piercing damage"
         );
+    }
+
+    #[test]
+    fn combat_wording_is_present_in_the_player_facing_table_rows() {
+        let log = TableLog::new();
+        let mut opportunity = rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::OpportunityAttack as i32,
+            weapon: "greatsword".to_owned(),
+            damage_type: "slashing".to_owned(),
+            ..outcome("Brakka", "Corin", true, 8)
+        };
+        opportunity.critical = true;
+        let attack_lines = action_lines(
+            rpc::GameplayActionKind::OpportunityAttack,
+            "Brakka",
+            &[opportunity],
+            "greatsword",
+            "",
+            "Opportunity attack",
+        );
+        for line in &attack_lines {
+            log.push_action_line(None, line, rpc::TableRole::Hero, 0);
+        }
+
+        let journey = attached(&log);
+        assert_eq!(
+            journey.table_log[0].text,
+            "makes an opportunity attack on Corin: strikes with the greatsword \u{2014} critical hit, 8 slashing damage"
+        );
+    }
+
+    #[test]
+    fn combat_table_rows_use_critical_hit_singular_movement_and_correct_save_counts() {
+        let log = TableLog::new();
+        let critical = rpc::CombatOutcome {
+            critical: true,
+            damage_type: "piercing".to_owned(),
+            ..attack("Corin", "Brakka", true)
+        };
+        let movement = rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::Move as i32,
+            actor_name: "Jessa".to_owned(),
+            path: vec![rpc::GridCell { col: 1, row: 2 }],
+            cost_ft: 5,
+            ..Default::default()
+        };
+        let save = rpc::CombatOutcome {
+            kind: rpc::OutcomeKind::DeathSave as i32,
+            actor_name: "Brakka".to_owned(),
+            attack_die: 4,
+            death_save_result: rpc::DeathSaveResult::Failure as i32,
+            death_failures: 1,
+            ..Default::default()
+        };
+        for line in action_lines(
+            rpc::GameplayActionKind::EndTurn,
+            "Sigrun",
+            &[critical, movement, save],
+            "",
+            "",
+            "End Turn",
+        ) {
+            log.push_action_line(None, &line, rpc::TableRole::Hero, 0);
+        }
+
+        let rows = attached(&log).table_log;
+        let text: Vec<&str> = rows.iter().map(|line| line.text.as_str()).collect();
+        assert!(text.contains(&"strikes Brakka — critical hit, 5 piercing damage"));
+        assert!(text.contains(&"moves 1 square (5 ft)"));
+        assert!(text.contains(&"makes a Death Saving Throw: 4 — failure (0 successes, 1 failure)"));
     }
 
     #[test]
