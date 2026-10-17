@@ -2,6 +2,8 @@
 use df_content::graph::{
     GraphAlternative, GraphBeat, GraphError, GraphLimits, GraphView, validate_graph,
 };
+
+type SceneGraphError = GraphError<(String, String), FactId, (String, String)>;
 use df_model::checkpoint::*;
 use df_narrative::{
     AdmittedBeatAlternative, BeatCause, BeatSelectionError, BeatSelectionLimits,
@@ -157,7 +159,7 @@ impl Fixture {
         }
     }
 
-    fn graph(&self) -> Result<(), GraphError<(String, String), FactId, (String, String)>> {
+    fn graph(&self) -> Result<(), Box<SceneGraphError>> {
         let room = graph_id(&self.room);
         let opening = graph_id(&self.opening);
         let seal = graph_id(&self.seal);
@@ -215,8 +217,11 @@ impl Fixture {
             },
             graph_limits(),
         )
+        .map_err(Box::new)
     }
 
+    // This test helper forwards the complete request shape accepted by the director.
+    #[allow(clippy::too_many_arguments)]
     fn select(
         &self,
         current: &Checkpoint,
@@ -303,11 +308,6 @@ fn authored_alternatives_have_current_canonical_prerequisites_and_distinct_termi
         expected_state.narrative.active_beats = vec![destination.clone()];
         expected_state.narrative.completed_beats = vec![fixture.opening.clone()];
         assert_eq!(staged.state(), &expected_state);
-        assert_eq!(staged.state().narrative.active_beats, [destination.clone()]);
-        assert_eq!(
-            staged.state().narrative.completed_beats,
-            [fixture.opening.clone()]
-        );
         assert_eq!(staged.state().facts, before.state().facts);
         assert_eq!(staged.state().decisions, before.state().decisions);
         assert_eq!(staged.state().draws, before.state().draws);
