@@ -1366,3 +1366,6 @@ Status reflects source commits; every fix still needs a live retest on a fresh b
 | MPX-20 | 3 | The imagery cache path is built from the source root, ignoring `DUNGEONFLUX_ARTIFACT_ROOT`, so a run from another root regenerates every image at cost. | Open |
 | MPX-21 | 3 | Cosmetic: "Fighter Â· level 1" mojibake on the hero sheet; the required portrait picker is an unlabelled "Choose..." select; the "Updating scene..." chip stays after the plate is ready. | Open |
 | MPX-22 | 3 | `HELP_ATTACK` existed in the protocol and rules but had no df-tools offer, wire mapping or dev action. | Wired in source, commit pending |
+| MPX-23 | 1 | Party notebook: Notes tab "Note it" shows "Noted." but the note never appears in Party notes on either phone and the server logs no notebook activity. | In progress |
+| MPX-24 | 2 | "I write in our party notes: ..." typed in the dialogue box was routed as speech to Marek (`STORY say ... target="Marek"`), then no table line and no reply: the line vanished. Jev's party-note intent was not reached. | Diagnosis in progress (server side in dialogue.rs) |
+| MPX-25 | 3 | `dev notes <hero>` still rejects heroes owned by a phone ("unknown hero"); the checkpoint read covers scene/view only. | Open |
