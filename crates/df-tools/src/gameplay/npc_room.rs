@@ -7,7 +7,7 @@ use crate::gameplay::adventure::{
     dossier::{AnswerSubject, Dossier},
     scene_model::{SceneNow, ScenePerson, SceneTargetKind},
 };
-use crate::gameplay::npc_facts::{AskReading, RoomReading};
+use crate::gameplay::npc_facts::AskReading;
 
 pub(super) fn is_speaker(person: &ScenePerson, dossier: &Dossier) -> bool {
     dossier.npc_id == format!("bystander:{}", person.id)
@@ -46,65 +46,9 @@ pub(super) fn facts(room: &SceneNow, dossier: &Dossier, withheld: &Withheld) -> 
     })
 }
 
-/// Mentioning a person in a question does not address that person. A vocative or approaching
-/// them does; target aliases are resolved against the scene model rather than invented names.
-pub(super) fn addresses(words: &str, name: &str) -> bool {
-    let line = words.trim().to_lowercase();
-    let name = name.to_lowercase();
-    let role_vocative = [
-        "merchant,",
-        "merchant:",
-        "soldier,",
-        "soldier:",
-        "adventurer,",
-        "adventurer:",
-    ];
-    line.starts_with(&format!("{name},"))
-        || line.starts_with(&format!("{name}:"))
-        || role_vocative.iter().any(|prefix| line.starts_with(prefix))
-        || line.starts_with("i walk over to ")
-        || line.starts_with("i talk to ")
-        || line.starts_with("i ask ")
-        || line.starts_with("excuse me, ")
-        || line.starts_with("serving woman,")
-        || line.starts_with("gentlemen")
-        || line.starts_with("carters,")
-}
-
-pub(super) fn question_body(context: &NpcReplyContext) -> String {
-    let lowered = context.typed_words.to_lowercase();
-    let mut names = vec![context.speaker.to_lowercase()];
-    if let Some(turn) = &context.turn {
-        names.push(turn.dossier.name.to_lowercase());
-        if let Some(person) = context.room.as_ref().and_then(|room| {
-            room.model
-                .people
-                .iter()
-                .find(|person| is_speaker(person, &turn.dossier))
-        }) {
-            names.extend(person.aliases.iter().map(|alias| alias.to_lowercase()));
-        }
-    }
-    names.sort_by_key(|name| std::cmp::Reverse(name.len()));
-    for name in names {
-        for prefix in [
-            format!("{name},"),
-            format!("{name}:"),
-            format!("i ask {name} "),
-            format!("i talk to {name} "),
-            format!("i walk over to {name} "),
-        ] {
-            if let Some(question) = lowered.strip_prefix(&prefix) {
-                return question.trim().to_owned();
-            }
-        }
-    }
-    lowered
-}
-
-/// The room answer for a question about the room's people, things and exits. The question kind
-/// is Jev's when Jev read the line; the keyword kind on the question body decides otherwise.
-/// Exact names of people, things and exits stay a data match against the scene model.
+/// The room answer for a question about the room's people, things and exits. The question kind is
+/// Jev's; a neutral reading asks no room question. Exact names of people, things and exits stay a
+/// data match against the scene model.
 pub(super) fn answer(
     context: &NpcReplyContext,
     reading: &AskReading,
@@ -113,13 +57,9 @@ pub(super) fn answer(
     let room = context.room.as_ref()?;
     let model = &room.model;
     let turn = context.turn.as_ref()?;
-    let body = question_body(context);
+    let body = context.typed_words.to_lowercase();
     let words = body.as_str();
-    let question = if reading.focus.is_some() {
-        reading.room
-    } else {
-        RoomReading::keywords(words)
-    };
+    let question = reading.room;
     if question.identity {
         return super::answer::identity(context).map(|(text, _)| text);
     }
@@ -151,6 +91,17 @@ pub(super) fn answer(
     let answer = if let Some(target) = target {
         match target.kind {
             SceneTargetKind::Person => {
+                // A person is described only when Jev read a question about people. A name in the
+                // line alone never answers, so an errand question about an equal-named bystander
+                // draws no room answer.
+                let asks_about_person = question.identity
+                    || question.self_name
+                    || question.unknown_person
+                    || question.follow_up
+                    || question.who_here;
+                if !asks_about_person {
+                    return None;
+                }
                 let people = model
                     .people
                     .iter()
@@ -171,22 +122,18 @@ pub(super) fn answer(
                     people
                         .iter()
                         .map(|person| {
-                            if words.contains("work") && words.contains("you") {
-                                let verb = if person.relation_to_speaker.starts_with("works ") {
-                                    ""
-                                } else {
-                                    "is "
-                                };
-                                format!("{} {verb}{}.", person.name, person.relation_to_speaker)
+                            // A follow-up about a named host's work says where they work with you.
+                            if question.follow_up
+                                && person.relation_to_speaker.starts_with("works ")
+                            {
+                                format!("{} {}.", person.name, person.relation_to_speaker)
+                            } else if person.role == "speaker" {
+                                format!("{} is {}.", person.name, person.position)
                             } else {
-                                if person.role == "speaker" {
-                                    format!("{} is {}.", person.name, person.position)
-                                } else {
-                                    format!(
-                                        "{} is the {} {}.",
-                                        person.name, person.role, person.position
-                                    )
-                                }
+                                format!(
+                                    "{} is the {} {}.",
+                                    person.name, person.role, person.position
+                                )
                             }
                         })
                         .collect::<Vec<_>>()
@@ -269,12 +216,6 @@ pub(super) fn answer(
             .collect::<Vec<_>>()
             .join(" ")
     } else if question.unknown_person {
-        let subject = if reading.focus.is_some() {
-            subject
-        } else {
-            super::super::social::classify_keywords_reading_for_dossier(words, &turn.dossier)
-                .subject
-        };
         if subject != crate::gameplay::adventure::dossier::AnswerSubject::Other
             && turn.dossier.subject_answers.contains_key(&subject)
         {

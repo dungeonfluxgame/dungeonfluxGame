@@ -68,7 +68,7 @@ know, asks, or claims, whatever words they use. Choose private_matter only when 
 private_confidence_exists is true and the part asks about a confidence the speaker shared with \
 this hero alone. Choose small_talk for casual talk. Choose other when no label fits.";
 
-/// One audit line for how a line was read: Jev or the keyword fallback, and why.
+/// One audit line for how a line was read: Jev or the neutral reading, and why.
 fn record_reading(source: &'static str, detail: &str) {
     super::actor::record_audit_line(
         "gameplay.social.reading",
@@ -177,53 +177,6 @@ fn clue_secret_terms(story: &StoryFacts) -> Vec<String> {
         })
         .cloned()
         .collect()
-}
-
-/// Exact data: the typed words name one of the clue's secret terms. Always releases the clue.
-fn exact_secret_term(words: &str, story: &StoryFacts) -> bool {
-    clue_secret_terms(story)
-        .iter()
-        .any(|term| mentions_term(words, term))
-}
-
-/// The keyword fallback for asking after the whisper. It decides only when Jev did not read the
-/// line; once Jev has read it, [`npc_facts::AskReading::private`] decides.
-fn keyword_asks_private_clue(words: &str) -> bool {
-    let lowered = words.to_lowercase();
-    [
-        "clue",
-        "whisper",
-        "what did you tell me",
-        "what did you say to me",
-        "what you told me quietly",
-        "tell me quietly",
-    ]
-    .iter()
-    .any(|phrase| contains_whole_word(&lowered, phrase))
-}
-
-/// The keyword fallback for a question about where the private packet goes.
-fn keyword_destination_question(words: &str) -> bool {
-    let lowered = words.to_lowercase();
-    [
-        "where is the packet going",
-        "where does the packet go",
-        "where do i take",
-        "where do we take",
-        "where should i take",
-        "where should we take",
-        "where to deliver",
-        "its destination",
-        "where exactly",
-    ]
-    .iter()
-    .any(|phrase| contains_whole_word(&lowered, phrase))
-}
-
-/// The keyword starting state for a private question: the phrase fallbacks only. Exact secret
-/// terms are checked separately and always count.
-fn keyword_private_question(words: &str) -> bool {
-    keyword_asks_private_clue(words) || keyword_destination_question(words)
 }
 
 fn private_clue_refusal(turn: &Turn) -> (String, String) {
@@ -715,15 +668,11 @@ impl NpcReplyContext {
             return false;
         }
         if let Some(turn) = self.turn.as_mut()
-            && let Some(release) = turn.release.as_ref()
+            && turn.release.is_some()
         {
-            let wanted = release.wanted(reading.private);
-            return turn.set_release(wanted);
+            return turn.set_release(reading.private);
         }
-        let wanted = self
-            .private_release
-            .as_ref()
-            .is_some_and(|release| release.wanted(reading.private));
+        let wanted = self.private_release.is_some() && reading.private;
         self.set_legacy_release(wanted)
     }
 }
@@ -734,7 +683,7 @@ pub(super) struct Exchange {
     /// Public NPC speech line sequence, when a line was actually shown in the table log.
     pub(super) source_line_sequence: Option<u64>,
     pub(super) outcome: ExchangeOutcome,
-    /// What the hero's words did, as the model or the keyword reader read them.
+    /// What the hero's words did, as the model or the neutral reading read them.
     pub(super) approach: Approach,
     /// False when the dossier's prepared answer replied instead of the text model.
     pub(super) from_model: bool,
@@ -866,23 +815,12 @@ impl FallbackReason {
     }
 }
 
-/// Who a typed line is for: the one on-stage NPC the words name, otherwise whoever is
-/// speaking, otherwise the only NPC on stage.
+/// Who a typed line is for when no present NPC was routed to: whoever is speaking, otherwise the
+/// only NPC on stage. Naming someone in the words does not address them; Jev's addressee decision
+/// routes such a line before this point.
 fn addressee<'a>(
     present: &[(&'a rpc::SceneActor, &'a Dossier)],
-    words: &str,
 ) -> Option<(&'a rpc::SceneActor, &'a Dossier)> {
-    let named: Vec<(&rpc::SceneActor, &Dossier)> = present
-        .iter()
-        .filter(|(actor, dossier)| {
-            room::addresses(words, &actor.name)
-                && (mentions_term(words, &dossier.name) || mentions_term(words, &actor.name))
-        })
-        .copied()
-        .collect();
-    if let [only] = named.as_slice() {
-        return Some(*only);
-    }
     present
         .iter()
         .find(|(actor, _)| actor.speaking)
@@ -993,7 +931,18 @@ impl NpcReplyContext {
             let Some(rpc::view_message::Audience::Player(player)) = &view.audience else {
                 return None;
             };
-            super::npc_target::current(&player.scene.as_ref()?.cast, id)?;
+            // A target is a present cast member or a background person of the room the scene
+            // model names; both are chosen by Jev's addressee decision, never by a name in the words.
+            let on_cast = super::npc_target::current(&player.scene.as_ref()?.cast, id).is_some();
+            let background = social.scene_now(scene).is_some_and(|room| {
+                room.model
+                    .people
+                    .iter()
+                    .any(|person| person.is_background && person.id == id)
+            });
+            if !on_cast && !background {
+                return None;
+            }
         }
         if social.is_active()
             && let Some(context) =
@@ -1062,48 +1011,10 @@ impl NpcReplyContext {
                 Some((actor, social.dossier_of(role, &actor.id)?))
             })
             .collect();
-        let lowered = words.to_lowercase();
-        let explicitly_named = present
-            .iter()
-            .find(|(actor, dossier)| {
-                actor.role != rpc::SceneRole::Bystander as i32
-                    && [&actor.name, &dossier.name].iter().any(|name| {
-                        let name = name.to_lowercase();
-                        [
-                            format!("{name},"),
-                            format!("{name}:"),
-                            format!("i ask {name} "),
-                            format!("i talk to {name} "),
-                            format!("i walk over to {name} "),
-                        ]
-                        .iter()
-                        .any(|prefix| lowered.starts_with(prefix))
-                    })
-            })
-            .copied();
-        let addressed = room
-            .as_ref()
-            .and_then(|room| room.model.resolve_target(&words))
-            .filter(|target| target.kind == super::adventure::scene_model::SceneTargetKind::Person)
-            .filter(|target| room::addresses(&words, &target.name))
-            .and_then(|target| {
-                present
-                    .iter()
-                    .find(|(actor, dossier)| {
-                        target.ids.iter().any(|id| {
-                            actor.id == *id
-                                || dossier.npc_id.starts_with(&format!("{id}:"))
-                                || dossier.npc_id.ends_with(&format!(":{id}"))
-                        })
-                    })
-                    .copied()
-            });
         let (actor, dossier) = if let Some(id) = target {
             present.iter().find(|(actor, _)| actor.id == id).copied()
         } else {
-            explicitly_named
-                .or(addressed)
-                .or_else(|| addressee(&present, &words))
+            addressee(&present)
         }?;
         let choices: Vec<&str> = player
             .offers
@@ -1123,24 +1034,20 @@ impl NpcReplyContext {
         );
         // Only the speaker who whispered the clue speaks of it, and only to the hero who was
         // told it: that hero is given the clue's secret terms, no other hero is.
-        let gave_clue = dossier.role == NpcRole::Patron
-            && !story.clue.is_empty()
-            && mentions_term(&story.clue, &dossier.name);
+        // The speaker who whispers the clue is the one who gave it. Naming a patron in the clue
+        // text is not a basis for that decision.
+        let gave_clue = dossier.role == NpcRole::Patron && !story.clue.is_empty() && actor.speaking;
         let standing = social.standing(member, dossier);
         let told =
             gave_clue && !player.private_clue.is_empty() && standing.attitude != Attitude::Hostile;
         let unheard = unheard_secret_terms(story, &public);
-        // The starting state is exact secret terms and the keyword phrases; once Jev has read the
-        // line, its private-matter reading decides the release (see `apply_private_reading`).
-        let release = told.then(|| {
-            let exact = exact_secret_term(&words, story);
-            Release {
-                clue: player.private_clue.clone(),
-                clue_terms: clue_secret_terms(story),
-                unheard: unheard.clone(),
-                exact,
-                released: exact || keyword_private_question(&words),
-            }
+        // The clue stays withheld until Jev's private-matter reading releases it (see
+        // `apply_private_reading`). No word or secret term releases it on its own.
+        let release = told.then(|| Release {
+            clue: player.private_clue.clone(),
+            clue_terms: clue_secret_terms(story),
+            unheard: unheard.clone(),
+            released: false,
         });
         let released = match &release {
             // Names the scenes say aloud are not the clue's to give: the table already hears them.
@@ -1411,33 +1318,18 @@ impl NpcReplyContext {
         } else {
             Vec::new()
         };
-        // Starting state: exact secret terms and the keyword phrases. Jev's reading settles it once
-        // the reply is written (see `reply_in_public_report`).
-        let exact = exact_secret_term(&words, story);
-        let private_reply = told && (exact || keyword_private_question(&words));
+        // The clue stays withheld until Jev's private-matter reading releases it (see
+        // `reply_in_public_report`). No word or secret term releases it on its own.
+        let private_reply = false;
         let private_release = told.then(|| Release {
             clue: player.private_clue.clone(),
             clue_terms: Vec::new(),
             unheard: unheard_secret_terms(story, &public),
-            exact,
             released: private_reply,
         });
-        if private_reply {
-            facts["secret_clue_this_player_was_privately_told"] = json!(player.private_clue);
-            facts["forbidden"] = json!(
-                unheard_secret_terms(story, &public)
-                    .into_iter()
-                    .filter(|term| !private_terms.contains(term))
-                    .collect::<Vec<_>>()
-            );
-            facts["listener_knowledge"] = json!(
-                "Answer only this hero in private about the clue they were told. Do not add facts to it."
-            );
-        } else {
-            facts["listener_knowledge"] = json!(
-                "This is public table talk. Never reveal or hint at the private clue or forbidden terms."
-            );
-        }
+        facts["listener_knowledge"] = json!(
+            "This is public table talk. Never reveal or hint at the private clue or forbidden terms."
+        );
         let hero_index = journey
             .party
             .iter()
@@ -1749,6 +1641,8 @@ pub(super) struct NpcVoice {
     approach_model: ApproachModel,
     /// The local facts this run's NPCs have established, shared by every scene reply.
     lore: Arc<local_lore::LocalLore>,
+    /// Each NPC's role knowledge, decided once by Jev for this run.
+    role_knowledge: local_lore::RoleKnowledgeCache,
 }
 
 impl NpcVoice {
@@ -1791,6 +1685,7 @@ impl NpcVoice {
             storyteller,
             approach_model: ApproachModel::default(),
             lore: Arc::new(local_lore::LocalLore::in_memory()),
+            role_knowledge: local_lore::RoleKnowledgeCache::default(),
         }
     }
 
@@ -1823,12 +1718,12 @@ impl NpcVoice {
     }
 
     /// Jev's focus for each question part of the hero's line: one closed label per part, read in
-    /// parallel. `None` when Jev did not answer for every part; the keyword reader then decides,
+    /// parallel. `None` when Jev did not answer for every part: the reply then reads neutrally,
     /// and the reason is logged.
     async fn read_focus(&self, context: &NpcReplyContext) -> Option<Vec<Focus>> {
         let parts = npc_facts::question_parts(&context.typed_words);
         if parts.is_empty() {
-            record_reading("keywords", "reason=no_question_parts");
+            record_reading("neutral", "reason=no_question_parts");
             return None;
         }
         let choices = npc_facts::focus_choices();
@@ -1854,12 +1749,12 @@ impl NpcVoice {
             let focus = match answer {
                 Ok(label) => npc_facts::focus_of_label(label),
                 Err(reason) => {
-                    record_reading("keywords", &format!("reason={}", reason.label()));
+                    record_reading("neutral", &format!("reason={}", reason.label()));
                     return None;
                 }
             };
             let Some(focus) = focus else {
-                record_reading("keywords", "reason=unknown_choice");
+                record_reading("neutral", "reason=unknown_choice");
                 return None;
             };
             foci.push(focus);
@@ -1887,7 +1782,7 @@ impl NpcVoice {
         mut context: NpcReplyContext,
         log: &TableLog,
     ) -> Option<Exchange> {
-        // Jev's approach first (the existing classification), keywords only when Jev is silent.
+        // Jev's approach first. When Jev is silent the reading is neutral: no approach, no focus.
         let approach = match self
             .approach_model
             .classify(
@@ -1898,15 +1793,15 @@ impl NpcVoice {
             .await
         {
             Some(reading) => reading.approach,
-            None => super::social::classify_keywords(&context.typed_words),
+            None => super::social::neutral_reading().approach,
         };
         let ask = match self.read_focus(&context).await {
             Some(foci) => AskReading::from_focus(foci).with_approach(approach),
-            None => AskReading::keywords(&context.typed_words),
+            None => AskReading::neutral(),
         };
         // The clue release follows Jev's private-matter reading; the legacy facts are rewritten.
         context.apply_private_reading(&ask);
-        let bounded = answer::prepare(&context, approach, &ask, AnswerSubject::Other);
+        let bounded = answer::prepare(&context, &ask, AnswerSubject::Other);
         let (text, outcome, from_model, fallback) = if let Some(answer) = bounded {
             let outcome = if answer.withheld && answer.text.is_empty() {
                 ExchangeOutcome::Withheld
@@ -2008,19 +1903,16 @@ impl NpcVoice {
             return None;
         }
         let dossier = &context.turn.as_ref()?.dossier;
-        let question_body = room::question_body(&context);
         let reading = self
             .approach_model
             .classify_for_dossier(
-                &question_body,
+                &context.typed_words,
                 &context.speaker,
                 &context.public_scene,
                 dossier,
             )
             .await
-            .unwrap_or_else(|| {
-                super::social::classify_keywords_reading_for_dossier(&context.typed_words, dossier)
-            });
+            .unwrap_or_else(super::social::neutral_reading);
         let approach = reading.approach;
         let subject = subject_for_trade_context(context.merchant_trade_scope, reading.subject);
         let influence_request = super::journey::merchant_bargaining::trade_influence_applies(
@@ -2031,16 +1923,17 @@ impl NpcVoice {
         // A lie is a Deception check against the NPC's passive Insight, not the Influence roll. It
         // only chooses the roll: the willingness and refusal gates still come from the influence
         // attempt. A firm buyback, a discount ask or a question keeps the existing path.
+        // Jev reads each question part of the line. Its reading decides the clue release and the
+        // facts the reply draws on; a neutral reading decides nothing when Jev did not answer.
+        let ask = match self.read_focus(&context).await {
+            Some(foci) => AskReading::from_focus(foci).with_approach(approach),
+            None => AskReading::neutral(),
+        };
+        // A lie is a statement. A line Jev reads as asking something is a question, never a lie.
         let lie_contest = approach == Approach::Deception
             && context.firm_buyback.is_none()
             && context.discount_ask.is_none()
-            && !context.typed_words.contains('?');
-        // Jev reads each question part of the line. Its reading decides the clue release and the
-        // facts the reply draws on; the keyword reader decides only when Jev did not answer.
-        let ask = match self.read_focus(&context).await {
-            Some(foci) => AskReading::from_focus(foci).with_approach(approach),
-            None => AskReading::keywords(&context.typed_words),
-        };
+            && !ask.asks_something();
         if ask.focus.is_some() {
             context.apply_private_reading(&ask);
             if let Some(turn) = context.turn.as_mut() {
@@ -2073,8 +1966,15 @@ impl NpcVoice {
                 },
                 &|text: &str| turn.withheld.leaks(text),
             );
-            context.facts["local_knowledge"] =
-                json!(local_lore::role_knowledge(&turn.dossier.role_label));
+            let local_knowledge = self
+                .role_knowledge
+                .knowledge(
+                    &self.approach_model,
+                    &turn.dossier.npc_id,
+                    &turn.dossier.role_label,
+                )
+                .await;
+            context.facts["local_knowledge"] = json!(local_knowledge);
             context.facts["may_establish_local_fact"] = json!(may_establish_local_fact);
             context.facts["local_fact_rules"] = json!(local_lore::LOCAL_FACT_RULES);
         }
@@ -2090,7 +1990,7 @@ impl NpcVoice {
                     context.member,
                     &turn.dossier,
                     &turn.scene,
-                    &question_body,
+                    &context.typed_words,
                 )
             } else {
                 0
@@ -2228,12 +2128,7 @@ impl NpcVoice {
                 }
             }
         }
-        let private_clue_withheld = context.facts.get("private_matter").is_some()
-            && if ask.focus.is_some() {
-                ask.private
-            } else {
-                keyword_asks_private_clue(&context.typed_words)
-            };
+        let private_clue_withheld = context.facts.get("private_matter").is_some() && ask.private;
         if private_clue_withheld {
             context.facts["npc_reaction"] = json!(
                 "This hero was not told the private clue. Say plainly that you will not share what was whispered, without hinting at its contents."
@@ -2335,8 +2230,7 @@ impl NpcVoice {
             && !lie_contest
             && influence_willingness == Some(InfluenceWillingness::Hesitant);
         // A lie's reply is written from its check, never from a prepared line that ignores it.
-        let bounded_answer =
-            answer::prepare(&context, approach, &ask, subject).filter(|_| !lie_contest);
+        let bounded_answer = answer::prepare(&context, &ask, subject).filter(|_| !lie_contest);
         let room_answer = (approach == Approach::Question && bounded_answer.is_none())
             .then(|| room::answer(&context, &ask, subject))
             .flatten();
@@ -2470,7 +2364,7 @@ impl NpcVoice {
         let turn = context.turn.as_ref()?;
         let proposed_local_fact = modeled.as_ref().ok().and_then(|(_, _, fact)| fact.clone());
         let (text, fallback) = match modeled {
-            // Jev (or the keyword fallback) decided before the reaction and reply.
+            // Jev (or the neutral reading) decided before the reaction and reply.
             Ok((reply, _, _)) => (reply, None),
             Err(reason) => {
                 // One server line per fallback, closed vocabulary, never reply text: the
@@ -2510,7 +2404,7 @@ impl NpcVoice {
                     npc_dossier::fallback(
                         &turn.dossier,
                         turn.standing,
-                        ask.fallback_topic(&context.typed_words, approach),
+                        ask.fallback_topic(approach),
                         approach,
                         &turn.withheld,
                         &npc_dossier::Memory {
@@ -2738,7 +2632,17 @@ impl NpcVoice {
             heroes: &context.party_names,
             game_state: &context.known_names,
         };
-        match self.lore.propose(scene, proposal, &context.speaker, &names) {
+        match self
+            .lore
+            .propose_judged(
+                &self.approach_model,
+                scene,
+                proposal,
+                &context.speaker,
+                &names,
+            )
+            .await
+        {
             Ok(Some(fact)) => {
                 super::actor::record_audit_line(
                     "gameplay.social.local_fact",
@@ -3101,10 +3005,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn jev_reads_each_question_part_and_the_keyword_reader_stands_in_when_jev_is_silent() {
+    async fn jev_reads_each_question_part_and_the_reading_is_neutral_when_jev_is_silent() {
         use crate::gameplay::{
             approach_model::tests::{answer as jev, model},
-            npc_facts::Focus,
             storyteller::tests::{FakeEndpoint, Reply},
         };
         let words = "What is this place like?";
@@ -3117,6 +3020,11 @@ mod tests {
         let silent = FakeEndpoint::start(vec![Reply::Status(500, json!({"error": "unavailable"}))]);
         let voice = NpcVoice::silent().with_approach_model(model(&silent));
         assert_eq!(voice.read_focus(&context).await, None);
+        let off = NpcVoice::silent();
+        assert_eq!(off.read_focus(&context).await, None);
+        let neutral = AskReading::neutral();
+        assert_eq!(neutral.focus, None);
+        assert!(!neutral.asks_something());
     }
 
     fn story() -> StoryFacts {
@@ -3286,13 +3194,17 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn a_threat_lowers_standing_before_the_model_generates_its_reply() {
+    async fn a_threat_jev_reads_lowers_standing_before_the_model_replies() {
         let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
             "reply": "Put that away. I will not be threatened.",
             "approach": "question",
             "local_fact": "none"
         }))]);
+        // Jev's threat is its approach choice (o7, intimidation); the line's words decide
+        // nothing. The later Jev requests (focus, role knowledge, appraisal) are unavailable.
+        let jev = FakeEndpoint::start(jev_threat_script());
         let (voice, cache) = voice(&endpoint, "voice-threat-attitude");
+        let voice = voice.with_approach_model(model(&jev));
         let mut adventure = super::super::npc_dossier_tests::adventure(1);
         let patron = adventure
             .dossiers
@@ -3345,13 +3257,15 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn a_threat_to_a_contact_lowers_standing_before_the_model_generates_its_reply() {
+    async fn a_threat_jev_reads_to_a_contact_lowers_standing_before_the_model_replies() {
         let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
             "reply": "Keep your voice down. Dangerous people are listening.",
             "approach": "question",
             "local_fact": "none"
         }))]);
+        let jev = FakeEndpoint::start(jev_threat_script());
         let (voice, cache) = voice(&endpoint, "voice-contact-threat-attitude");
+        let voice = voice.with_approach_model(model(&jev));
         let mut adventure = super::super::npc_dossier_tests::adventure(1);
         let contact = adventure
             .dossiers
@@ -3406,12 +3320,23 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_paraphrased_private_clue_reply_is_returned_to_hero_but_not_the_table() {
         const PARAPHRASE: &str = "It is meant for the person waiting at the waterfront lodging house. Keep its destination between us.";
+        const WORDS: &str = "Where is the packet going?";
         let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
             "reply": PARAPHRASE,
             "approach": "question",
             "local_fact": "none"
         }))]);
+        // Jev: approach question (o1), subject (o1), then the one part's focus, private matter
+        // (o12). Role knowledge and the appraisal are unavailable.
+        let jev = FakeEndpoint::start(
+            [answer("o1"), answer("o1")]
+                .into_iter()
+                .chain(jev_focus_replies(&[(WORDS, "o12")]))
+                .chain([jev_unavailable(), jev_unavailable()])
+                .collect(),
+        );
         let (voice, cache) = voice(&endpoint, "voice-private-clue-paraphrase");
+        let voice = voice.with_approach_model(model(&jev));
         let adventure = super::super::npc_dossier_tests::adventure(1);
         let patron = adventure
             .dossiers
@@ -3438,23 +3363,16 @@ mod tests {
             "{} tells you the sealed packet is addressed to Vell at the Harbor Inn. Keep its destination between you.",
             patron.name
         );
-        let context = NpcReplyContext::for_cast(
-            &projected,
-            member(1),
-            "Where is the packet going?",
-            &story,
-            &social,
-            "Opening",
-        )
-        .unwrap();
+        let context =
+            NpcReplyContext::for_cast(&projected, member(1), WORDS, &story, &social, "Opening")
+                .unwrap();
+        // The words alone release nothing: only Jev's private-matter reading does.
+        let turn = context.turn.as_ref().unwrap();
+        assert!(turn.withheld.released().is_empty());
         assert!(
-            !context
-                .turn
+            turn.release
                 .as_ref()
-                .unwrap()
-                .withheld
-                .released()
-                .is_empty()
+                .is_some_and(|release| !release.released)
         );
         let log = TableLog::new();
 
@@ -3515,21 +3433,80 @@ mod tests {
     }
 
     #[test]
-    fn a_player_who_was_told_the_clue_may_hear_it_again() {
+    fn a_clue_the_hero_was_told_stays_withheld_whatever_words_ask_for_it() {
         let told = view(
             "The packet is addressed to Vell at the Harbor Inn.",
             "Courier",
         );
 
+        let context = NpcReplyContext::from_view(
+            &told,
+            member(1),
+            "Where exactly? Tell me quietly, whisper the clue.",
+            &story(),
+        )
+        .unwrap();
+
+        assert!(context.private_matter_exists());
+        assert!(!context.private_reply);
+        assert_eq!(
+            context.facts["forbidden"],
+            json!(["Vell", "Harbor Inn", "Inn"])
+        );
+        assert!(
+            context
+                .facts
+                .get("secret_clue_this_player_was_privately_told")
+                .is_none()
+        );
+        assert!(
+            context.facts["listener_knowledge"]
+                .as_str()
+                .unwrap()
+                .contains("public table talk")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_player_who_was_told_the_clue_may_hear_it_again_once_jev_reads_a_private_question() {
+        let told = view(
+            "The packet is addressed to Vell at the Harbor Inn.",
+            "Courier",
+        );
         let context =
             NpcReplyContext::from_view(&told, member(1), "Where exactly?", &story()).unwrap();
 
-        // An explicitly private follow-up uses the actual recipient grant.
-        assert_eq!(context.facts["forbidden"], json!([]));
-        assert!(context.private_reply);
-        assert_eq!(
-            context.facts["secret_clue_this_player_was_privately_told"],
-            "The packet is addressed to Vell at the Harbor Inn."
+        // "o12" is the twelfth focus label, private matter.
+        let sent = facts_sent_after_jev_reads(context, "o12", "voice-clue-again").await;
+
+        assert!(sent.contains("\"forbidden\":[]"), "{sent}");
+        assert!(
+            sent.contains(
+                "\"secret_clue_this_player_was_privately_told\":\"The packet is addressed to Vell at the Harbor Inn.\""
+            ),
+            "{sent}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_question_jev_does_not_read_as_private_leaves_the_clue_withheld() {
+        let told = view(
+            "The packet is addressed to Vell at the Harbor Inn.",
+            "Courier",
+        );
+        let context =
+            NpcReplyContext::from_view(&told, member(1), "Where exactly?", &story()).unwrap();
+
+        // "o10" is the tenth focus label, place.
+        let sent = facts_sent_after_jev_reads(context, "o10", "voice-clue-kept").await;
+
+        assert!(
+            sent.contains("\"forbidden\":[\"Vell\",\"Harbor Inn\",\"Inn\"]"),
+            "{sent}"
+        );
+        assert!(
+            !sent.contains("secret_clue_this_player_was_privately_told"),
+            "{sent}"
         );
     }
 
@@ -3564,24 +3541,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_hero_who_holds_the_secret_is_told_so_plainly() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_hero_who_holds_the_secret_is_told_so_plainly_once_jev_reads_a_private_question() {
         let told = view(
             "The packet is addressed to Vell at the Harbor Inn.",
             "Courier",
         );
-
         let context =
             NpcReplyContext::from_view(&told, member(1), "Where exactly?", &listed_story())
                 .unwrap();
 
-        assert!(
-            context.facts["listener_knowledge"]
-                .as_str()
-                .unwrap()
-                .contains("only this hero in private")
-        );
-        assert_eq!(context.facts["forbidden"], json!([]));
+        let sent = facts_sent_after_jev_reads(context, "o12", "voice-secret-plainly").await;
+
+        assert!(sent.contains("only this hero in private"), "{sent}");
+        assert!(sent.contains("\"forbidden\":[]"), "{sent}");
     }
 
     #[test]
@@ -3635,12 +3608,93 @@ mod tests {
         assert_eq!(strip_outer_quotes("  Plain.  "), "Plain.");
     }
 
+    use super::super::approach_model::tests::{answer, model};
     use super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
 
     fn voice(endpoint: &FakeEndpoint, name: &str) -> (NpcVoice, std::path::PathBuf) {
         let cache = cache_directory(name);
         let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
         (NpcVoice::new(Arc::new(storyteller)), cache)
+    }
+
+    /// One Jev request that gets no answer.
+    fn jev_unavailable() -> Reply {
+        Reply::Status(500, json!({"error": "unavailable"}))
+    }
+
+    /// Jev's answers to the focus requests of a line's question parts, as `(part, option)` pairs.
+    /// The parts are asked concurrently, so each request is answered by the part it carries and
+    /// not by the order it arrives in. A part not listed is read as the last focus label, other.
+    fn jev_focus_replies(parts: &[(&str, &str)]) -> Vec<Reply> {
+        const SENTENCE_END: [char; 3] = ['.', '!', '?'];
+        let options: Vec<(String, String)> = parts
+            .iter()
+            .map(|(part, option)| {
+                (
+                    part.trim_end_matches(SENTENCE_END).to_owned(),
+                    (*option).to_owned(),
+                )
+            })
+            .collect();
+        let by_part = Arc::new(move |body: &Value| {
+            let asked = body["state"]["player_text"]
+                .as_str()
+                .unwrap_or_default()
+                .trim_end_matches(SENTENCE_END);
+            let option = options
+                .iter()
+                .find(|(part, _)| part == asked)
+                .map_or("o21", |(_, option)| option.as_str());
+            let Reply::Status(status, reply) = answer(option) else {
+                unreachable!("answer builds a status reply");
+            };
+            (status, reply)
+        });
+        parts
+            .iter()
+            .map(|_| Reply::ComputeResponse(by_part.clone()))
+            .collect()
+    }
+
+    /// Jev's answers for a line to a speaker without a backstory: the approach question (o1), the
+    /// subject other (o9, the last of the nine subjects), then each part's focus.
+    fn jev_legacy_line(parts: &[(&str, &str)]) -> Vec<Reply> {
+        [answer("o1"), answer("o9")]
+            .into_iter()
+            .chain(jev_focus_replies(parts))
+            .collect()
+    }
+
+    /// Jev's answers to a threat sent to a speaker with a backstory: the approach intimidation
+    /// (o7) and the first subject (o1). Its focus, role knowledge, appraisal and event requests
+    /// are unavailable, so the server's own threat handling applies.
+    fn jev_threat_script() -> Vec<Reply> {
+        [answer("o7"), answer("o1")]
+            .into_iter()
+            .chain((0..4).map(|_| jev_unavailable()))
+            .collect()
+    }
+
+    /// Runs the public reply path with Jev reading the context's one question part as `focus`
+    /// (a 1-based label option such as "o12"), and returns the facts the storyteller was sent.
+    async fn facts_sent_after_jev_reads(
+        context: NpcReplyContext,
+        focus: &str,
+        name: &str,
+    ) -> String {
+        let reply = FakeEndpoint::start(vec![Reply::Output(
+            json!({"reply": "Keep your voice down."}),
+        )]);
+        let jev = FakeEndpoint::start(jev_legacy_line(&[(context.typed_words.as_str(), focus)]));
+        let (voice, cache) = voice(&reply, name);
+        let voice = voice.with_approach_model(model(&jev));
+
+        let spoken = voice.reply_in_public(context, &TableLog::new()).await;
+
+        assert_eq!(spoken.as_deref(), Some("Keep your voice down."));
+        let sent = reply.bodies()[0]["input"].as_str().unwrap().to_owned();
+        std::fs::remove_dir_all(cache).unwrap();
+        sent
     }
 
     fn question(words: &str) -> NpcReplyContext {
@@ -3698,17 +3752,30 @@ mod tests {
         let endpoint = FakeEndpoint::start(vec![Reply::Output(
             json!({"reply": "I SAW it. I wasn’t hurt. Nobody sent me."}),
         )]);
+        // Jev reads each personal question as its own focus (condition, delivery history,
+        // payment, payment, evidence). With no authored answer the model reply would answer; with
+        // the model off nothing is spoken in place of a canned non-answer.
+        let personal_questions = [
+            ("Are you hurt?", "o9"),
+            ("Have you made this delivery before?", "o8"),
+            ("What payment was promised?", "o7"),
+            ("Were you paid?", "o7"),
+            ("How do you know the seal was broken before port?", "o5"),
+        ];
+        let jev = FakeEndpoint::start(
+            personal_questions
+                .iter()
+                .flat_map(|&(words, focus)| jev_legacy_line(&[(words, focus)]))
+                .chain(jev_legacy_line(&[
+                    ("Who are you?", "o2"),
+                    ("What happened?", "o21"),
+                ]))
+                .collect(),
+        );
         let (voice, cache) = voice(&endpoint, "harbor-personal-authority");
-        // With no authored answer the model reply would answer; with the model off nothing is
-        // spoken in place of a canned non-answer.
-        let silent = NpcVoice::silent();
-        for words in [
-            "Are you hurt?",
-            "Have you made this delivery before?",
-            "What payment was promised?",
-            "Were you paid?",
-            "How do you know the seal was broken before port?",
-        ] {
+        let voice = voice.with_approach_model(model(&jev));
+        let silent = NpcVoice::silent().with_approach_model(model(&jev));
+        for (words, _) in personal_questions {
             let context = harbor_question("courier", words, false);
             let exchange = silent
                 .converse_report(context, &TableLog::new())
@@ -3719,16 +3786,10 @@ mod tests {
             assert_eq!(exchange.fallback, Some(FallbackReason::ModelOff), "{words}");
             assert!(!exchange.from_model);
         }
-        let context = harbor_question("courier", "Who are you and what happened?", false);
-        let scripted = context.facts["npc_current_scripted_line"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        // A part Jev reads as no question subject adds no claim to the authored identity answer.
+        let context = harbor_question("courier", "Who are you? What happened?", false);
         let text = voice.converse(context, &TableLog::new()).await.unwrap();
-        assert_eq!(
-            text,
-            format!("You can call me the courier. My name can wait. {scripted}")
-        );
+        assert_eq!(text, "You can call me the courier. My name can wait.");
         assert_eq!(endpoint.connections(), 0);
         if let Err(error) = std::fs::remove_dir_all(cache) {
             assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
@@ -3751,6 +3812,8 @@ mod tests {
             (None, None),
             (Some("My name is Vell.".to_owned()), None),
         ] {
+            // Jev reads the one part as identity (o2) every time.
+            let jev = FakeEndpoint::start(jev_legacy_line(&[("courier, who are you?", "o2")]));
             let mut pack = source.clone();
             pack.speakers[0].identity_reply = identity_reply;
             let context =
@@ -3759,6 +3822,7 @@ mod tests {
             assert_eq!(context.speaker, "Courier");
             let log = TableLog::new();
             let exchange = NpcVoice::silent()
+                .with_approach_model(model(&jev))
                 .converse_report(context, &log)
                 .await
                 .unwrap();
@@ -3782,7 +3846,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn harbor_guarded_identity_closes_pending_and_preserves_other_authorized_clauses() {
+    async fn harbor_guarded_identity_closes_pending_and_a_compound_line_adds_no_claim() {
         let mut pack: PackFile =
             serde_json::from_str(include_str!("../../../../content/harbor-journey/pack.json"))
                 .unwrap();
@@ -3790,14 +3854,23 @@ mod tests {
         pack.speakers[0]
             .withheld_subjects
             .push(QuestionSubject::Identity);
+        // Jev reads the first line as identity (o2), then the compound line's two parts as
+        // identity (o2) and other (o21).
+        let jev = FakeEndpoint::start(
+            jev_legacy_line(&[("courier, who are you?", "o2")])
+                .into_iter()
+                .chain(jev_legacy_line(&[
+                    ("Who are you?", "o2"),
+                    ("What happened?", "o21"),
+                ]))
+                .collect(),
+        );
+        let voice = NpcVoice::silent().with_approach_model(model(&jev));
         let log = TableLog::new();
         let context = harbor_question_from_pack(&pack, "courier", "courier, who are you?", false);
         let exchange = {
             let _pending = log.reply_pending(&context.speaker);
-            NpcVoice::silent()
-                .converse_report(context, &log)
-                .await
-                .unwrap()
+            voice.converse_report(context, &log).await.unwrap()
         };
         assert_eq!(exchange.outcome, ExchangeOutcome::Withheld);
         assert!(exchange.text.is_empty() && !exchange.from_model);
@@ -3812,19 +3885,14 @@ mod tests {
             panic!("player")
         };
         assert!(player.journey.unwrap().reply_speaker.is_empty());
+        // A part Jev reads as no question subject has no authored answer here, so the guarded
+        // identity part leaves the whole line withheld and nothing is invented.
         let context =
-            harbor_question_from_pack(&pack, "courier", "Who are you and what happened?", false);
-        let scripted = context.facts["npc_current_scripted_line"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let compound = NpcVoice::silent()
-            .converse_report(context, &log)
-            .await
-            .unwrap();
-        assert_eq!(compound.outcome, ExchangeOutcome::Spoken);
-        assert_eq!(compound.text, scripted);
-        assert!(!compound.text.contains("Mara"));
+            harbor_question_from_pack(&pack, "courier", "Who are you? What happened?", false);
+        let compound = voice.converse_report(context, &log).await.unwrap();
+        assert_eq!(compound.outcome, ExchangeOutcome::Withheld);
+        assert!(compound.text.is_empty() && !compound.from_model);
+        assert!(log.lines().is_empty());
     }
 
     #[tokio::test]
@@ -3833,19 +3901,35 @@ mod tests {
         let (voice, cache) = voice(&endpoint, "harbor-withholding");
         let log = TableLog::new();
         let wake = log.subscribe();
-        for words in [
-            "Why do you want the packet?",
-            "Who sent you?",
-            "Bandit, why are you following the Courier?",
-            "Why he's following the courier?",
-        ] {
+        // Jev reads the bandit's questions as motive (o4) or employer (o6), the two subjects its
+        // profile withholds. Each line is read twice (converse, then converse_report), and the
+        // stale line once more.
+        let withheld_questions = [
+            ("Why do you want the packet?", "o4"),
+            ("Who sent you?", "o6"),
+            ("Bandit, why are you following the Courier?", "o4"),
+            ("Why he's following the courier?", "o4"),
+        ];
+        let jev = FakeEndpoint::start(
+            withheld_questions
+                .iter()
+                .flat_map(|&(words, focus)| {
+                    jev_legacy_line(&[(words, focus)])
+                        .into_iter()
+                        .chain(jev_legacy_line(&[(words, focus)]))
+                })
+                .chain(jev_legacy_line(&[("Who sent you?", "o6")]))
+                .collect(),
+        );
+        let reader = NpcVoice::new(voice.storyteller.clone()).with_approach_model(model(&jev));
+        for (words, _) in withheld_questions {
             let context = harbor_question("bandit", words, false);
             let reply = {
                 let _pending = log.reply_pending(&context.speaker);
-                voice.converse(context, &log).await
+                reader.converse(context, &log).await
             };
             assert_eq!(reply.as_deref(), Some(""));
-            let exchange = voice
+            let exchange = reader
                 .converse_report(harbor_question("bandit", words, false), &log)
                 .await
                 .unwrap();
@@ -3879,7 +3963,7 @@ mod tests {
         assert_eq!(failed.fallback, Some(FallbackReason::CallFailed));
         let mut stale = harbor_question("bandit", "Who sent you?", false);
         stale.publication_guard = Some(Arc::new(|| false));
-        assert!(voice.converse_report(stale, &log).await.is_none());
+        assert!(reader.converse_report(stale, &log).await.is_none());
         assert!(log.lines().is_empty());
         if let Err(error) = std::fs::remove_dir_all(cache) {
             assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
@@ -3958,10 +4042,18 @@ mod tests {
         let endpoint = FakeEndpoint::start(vec![Reply::Output(
             json!({"reply": "The packet is addressed to Vell at the Harbor Inn."}),
         )]);
+        // Jev reads the first line as a private matter (o12) and the second as identity (o2).
+        let jev = FakeEndpoint::start(
+            jev_legacy_line(&[("Where is the packet going?", "o12")])
+                .into_iter()
+                .chain(jev_legacy_line(&[("Who are you?", "o2")]))
+                .collect(),
+        );
         let (voice, cache) = voice(&endpoint, "harbor-private-scope");
+        let voice = voice.with_approach_model(model(&jev));
         let log = TableLog::new();
         let context = harbor_question("courier", "Where is the packet going?", true);
-        assert!(context.private_reply);
+        assert!(!context.private_reply, "the words alone release nothing");
         let private = voice.converse_report(context, &log).await.unwrap();
         assert!(private.private);
         assert!(private.text.contains("Vell"));
@@ -4131,7 +4223,20 @@ mod tests {
             Reply::Output(json!({"reply": "You know where it must go. Keep your voice down."})),
             Reply::Status(500, json!({"error": {}})),
         ]);
+        // Jev reads the first question as small talk (o1), the second as a private matter
+        // (o12) after an aside (o21, other), and the third as a next step (o13).
+        let jev = FakeEndpoint::start(
+            jev_legacy_line(&[("What can you say aloud?", "o1")])
+                .into_iter()
+                .chain(jev_legacy_line(&[
+                    ("You know.", "o21"),
+                    ("Tell me quietly.", "o12"),
+                ]))
+                .chain(jev_legacy_line(&[("And then?", "o13")]))
+                .collect(),
+        );
         let (voice, cache) = voice(&endpoint, "voice-table-log");
+        let voice = voice.with_approach_model(model(&jev));
         let log = TableLog::new();
         for line in action_lines(
             rpc::GameplayActionKind::AskCourier,

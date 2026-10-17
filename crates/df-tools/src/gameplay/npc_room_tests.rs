@@ -1,24 +1,66 @@
 use super::*;
 use crate::gameplay::{
     adventure::dossier::{NpcRole, Patience},
-    npc_dossier_tests::{adventure, member, view},
+    approach_model::tests::model as jev_model,
+    npc_dossier_tests::{JevLine, adventure, jev, member, view},
     pack::SceneKey,
     social::PatienceState,
 };
 use std::time::Duration;
 
+/// Canned output wording that is selected by turn history, never by the words of a line.
+const WORD_TABLE_ALLOWED: [&str; 1] = ["LINES"];
+
+/// The names of the `const` and `static` declarations in `text` whose type is an array or slice of
+/// string literals: the shape a keyword or phrase table takes.
+fn word_table_declarations(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let declaration = line
+                .trim_start()
+                .trim_start_matches("pub(super) ")
+                .trim_start_matches("pub(crate) ")
+                .trim_start_matches("pub ");
+            let rest = declaration
+                .strip_prefix("const ")
+                .or_else(|| declaration.strip_prefix("static "))?;
+            let (name, ty) = rest.split_once(':')?;
+            let string_table = ty.contains("[&str") || ty.contains("&[&str]");
+            string_table.then(|| name.trim().to_owned())
+        })
+        .collect()
+}
+
+/// Jev or an LLM decides what a line means. The NPC conversation files may not hold a constant
+/// table of English words or phrases that decides meaning. Validation lists elsewhere are allowed
+/// by name, and this scan is the guard that fails when one is added here.
 #[test]
-fn merchant_shop_role_vocatives_address_without_generated_names() {
-    assert!(room::addresses(
-        "Merchant, what do you sell?",
-        "Marten Vell"
-    ));
-    assert!(room::addresses("Soldier: is the road safe?", "Rusk"));
-    assert!(room::addresses(
-        "Adventurer, have you seen the road?",
-        "Mara"
-    ));
-    assert!(!room::addresses("I see the soldier by the door.", "Rusk"));
+fn the_npc_conversation_files_hold_no_word_tables_that_decide_meaning() {
+    assert_eq!(
+        word_table_declarations("const WORDS: [&str; 2] = [\"who\", \"what\"];"),
+        ["WORDS".to_owned()]
+    );
+    assert!(word_table_declarations("const NAME: &str = \"Ilsa\";").is_empty());
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/src/gameplay");
+    let mut offenders = Vec::new();
+    for file in [
+        "social.rs",
+        "npc_facts.rs",
+        "npc_answer.rs",
+        "npc_reply.rs",
+        "npc_room.rs",
+    ] {
+        let text = std::fs::read_to_string(format!("{root}/{file}")).unwrap();
+        for name in word_table_declarations(&text) {
+            if !WORD_TABLE_ALLOWED.contains(&name.as_str()) {
+                offenders.push(format!("{file}: {name}"));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "word tables decide meaning: {offenders:?}"
+    );
 }
 
 fn room() -> (
@@ -34,6 +76,26 @@ fn room() -> (
         .install_rooms(&adventure.settings, &adventure.pack.scenes)
         .unwrap();
     (adventure, ledger)
+}
+
+/// The context for a line Jev's addressee decision routed to the actor `target` (a cast member or a
+/// background person of the room), as the production dialogue path builds it.
+fn context_for(
+    adventure: &super::super::adventure::GeneratedAdventure,
+    ledger: &Arc<SocialLedger>,
+    words: &str,
+    target: &str,
+) -> NpcReplyContext {
+    NpcReplyContext::for_target(
+        &view(adventure, SceneKey::Opening, "Brakka"),
+        member(1),
+        words,
+        &StoryFacts::from_pack(&adventure.pack),
+        ledger,
+        "Opening",
+        Some(target),
+    )
+    .unwrap()
 }
 
 fn context(
@@ -95,7 +157,13 @@ async fn a_question_about_a_background_person_gets_a_room_answer_from_the_host()
             .unwrap()
             .name
     );
+    let endpoint = jev(vec![JevLine::new(
+        &format!("Who is {}?", person.name),
+        "question",
+        "unknown_person",
+    )]);
     let answer = NpcVoice::silent()
+        .with_approach_model(jev_model(&endpoint))
         .converse_in_character(context, &TableLog::new())
         .await
         .unwrap();
@@ -161,7 +229,8 @@ async fn repeated_questions_exhaust_patience_once_then_get_no_answer() {
     ledger
         .install_rooms(&adventure.settings, &adventure.pack.scenes)
         .unwrap();
-    let voice = NpcVoice::silent();
+    let endpoint = jev(vec![JevLine::new("Where are we?", "question", "place")]);
+    let voice = NpcVoice::silent().with_approach_model(jev_model(&endpoint));
     let log = TableLog::new();
     let mut refusal = 0;
     for _ in 0..5 {
@@ -298,7 +367,19 @@ fn compact_records_hydrate_runtime_scene_models_without_changing_document_pins()
 #[tokio::test]
 async fn a_named_hosts_followup_knows_her_coworker_instead_of_repeating_the_errand() {
     let (adventure, ledger) = room();
-    let voice = NpcVoice::silent();
+    let endpoint = jev(vec![
+        JevLine::new(
+            "Ilsa, who is the woman with the tray?",
+            "question",
+            "unknown_person",
+        ),
+        JevLine::new(
+            "Ilsa, does she work here with you?",
+            "question",
+            "follow_up",
+        ),
+    ]);
+    let voice = NpcVoice::silent().with_approach_model(jev_model(&endpoint));
     let log = TableLog::new();
     voice
         .converse_in_character(
@@ -330,13 +411,20 @@ async fn directly_addressing_a_bystander_uses_their_own_name_and_knowledge() {
         .iter()
         .find(|person| person.is_background)
         .unwrap();
-    let addressed = context(
+    let addressed = context_for(
         &adventure,
         &ledger,
         &format!("{}, what is your name?", person.name),
+        &person.id,
     );
     assert_eq!(addressed.speaker, person.name);
+    let endpoint = jev(vec![JevLine::new(
+        &format!("{}, what is your name?", person.name),
+        "question",
+        "identity",
+    )]);
     let answer = NpcVoice::silent()
+        .with_approach_model(jev_model(&endpoint))
         .converse_in_character(addressed, &TableLog::new())
         .await
         .unwrap();
@@ -451,7 +539,7 @@ fn a_named_object_is_not_confused_with_its_owners() {
     assert_eq!(
         room::answer(
             &given,
-            &crate::gameplay::npc_facts::AskReading::keywords(&given.typed_words),
+            &crate::gameplay::npc_facts::AskReading::neutral(),
             crate::gameplay::adventure::dossier::AnswerSubject::Other
         )
         .unwrap(),
@@ -471,7 +559,22 @@ async fn ordinary_questions_emit_no_emotion_caption_and_a_threat_emits_one() {
         .unwrap();
     let dossier = &adventure.dossiers[0];
     let initial = ledger.standing(member(1), dossier).attitude;
-    let voice = NpcVoice::silent();
+    let mut lines: Vec<JevLine> = (0..10)
+        .map(|number| {
+            JevLine::new(
+                &format!("Ilsa, who is traveler {number}?"),
+                "question",
+                "unknown_person",
+            )
+        })
+        .collect();
+    lines.push(JevLine::new(
+        "Ilsa, tell me or I will break your arm.",
+        "intimidation",
+        "other",
+    ));
+    let endpoint = jev(lines);
+    let voice = NpcVoice::silent().with_approach_model(jev_model(&endpoint));
     let log = TableLog::new();
     for number in 0..10 {
         voice
@@ -555,7 +658,16 @@ async fn a_patron_still_knows_the_errands_recipient_outside_the_room() {
     ledger
         .install_rooms(&adventure.settings, &adventure.pack.scenes)
         .unwrap();
+    let endpoint = jev(vec![
+        JevLine::new(
+            "Ilsa, who is Osric and why does this letter matter?",
+            "question",
+            "unknown_person",
+        )
+        .subject("people"),
+    ]);
     let reply = NpcVoice::silent()
+        .with_approach_model(jev_model(&endpoint))
         .converse_in_character(
             context(
                 &adventure,
@@ -644,6 +756,7 @@ fn an_explicit_patron_name_wins_over_a_bystander_with_the_same_name() {
         .find(|person| person.is_background)
         .unwrap();
     let bystander_id = format!("bystander:{}", person.id);
+    let bystander_person = person.id.clone();
     person.name = patron_name.clone();
     person.aliases = vec![patron_name.clone(), "the carter".to_owned()];
     adventure
@@ -664,14 +777,19 @@ fn an_explicit_patron_name_wins_over_a_bystander_with_the_same_name() {
     assert!(
         room::answer(
             &addressed,
-            &crate::gameplay::npc_facts::AskReading::keywords(&addressed.typed_words),
+            &crate::gameplay::npc_facts::AskReading::neutral(),
             crate::gameplay::adventure::dossier::AnswerSubject::Other
         )
         .is_none(),
         "the question body is about the errand, not the equal-named bystander"
     );
     assert_eq!(addressed.turn.unwrap().dossier.npc_id, patron_id);
-    let addressed = context(&adventure, &ledger, "I ask the carter what his name is.");
+    let addressed = context_for(
+        &adventure,
+        &ledger,
+        "I ask the carter what his name is.",
+        &bystander_person,
+    );
     assert_eq!(addressed.turn.unwrap().dossier.npc_id, bystander_id);
 }
 

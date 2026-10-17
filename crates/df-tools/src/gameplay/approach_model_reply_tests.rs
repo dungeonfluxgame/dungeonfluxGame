@@ -75,7 +75,7 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a_reply_models_label_cannot_override_a_keyless_keyword_reading() {
+async fn a_reply_models_label_cannot_override_a_neutral_reading_when_jev_is_silent() {
     let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
         "reply": "Keep your voice down. Dangerous people are listening.",
         "approach": "intimidation",

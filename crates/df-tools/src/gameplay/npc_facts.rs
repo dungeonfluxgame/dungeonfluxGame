@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 use super::{
     adventure::dossier::{Dossier, Knowledge, Length, QuestionSubject, ResolvedArchetype, Topic},
     npc_dossier::Withheld,
-    social::{Approach, Conversation, Standing, classify_keywords, topic_of},
-    speech_text::{normalised, sentences, shared_words, words},
+    social::{Approach, Conversation, Standing},
+    speech_text::{sentences, shared_words, words},
 };
 
 /// The exchange from which a trusted confidence is released, and a line is volunteered.
@@ -264,12 +264,13 @@ fn candidate_lines(inputs: &Inputs<'_>) -> Vec<Line> {
     found
 }
 
-/// Who answers the hero's words: Jev's closed reading of each question part, or the keyword
-/// reader when Jev did not answer in time.
+/// Who answers the hero's words: Jev's closed reading of each question part, or a neutral reading
+/// when Jev did not answer in time. No keyword table reads the words.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReadingSource {
     Jev,
-    Keywords,
+    /// Jev did not answer: no focus and no topic, and the reply is logged as neutral.
+    Neutral,
 }
 
 /// What the hero's words are about. Built from Jev's per-part [`Focus`] labels, or from the
@@ -291,7 +292,7 @@ pub(super) struct AskReading {
     pub(super) claims: bool,
     /// A genuine wh-question about the wider world.
     pub(super) world: bool,
-    /// The room question kind, read by Jev or by keywords on the room's question body.
+    /// The room question kind, read by Jev. A neutral reading asks no room question.
     pub(super) room: RoomReading,
     /// One Jev focus per question part, in part order. `None` when Jev did not read the line.
     pub(super) focus: Option<Vec<Focus>>,
@@ -311,27 +312,6 @@ pub(super) struct RoomReading {
     pub(super) follow_up: bool,
     /// Asks who an unnamed or absent person is.
     pub(super) unknown_person: bool,
-}
-
-impl RoomReading {
-    /// The keyword reading of the room question body, the fallback when Jev did not read it.
-    pub(super) fn keywords(body: &str) -> Self {
-        let words = body.to_lowercase();
-        Self {
-            identity: words.contains("your name") || words.starts_with("who are you"),
-            self_name: words.contains("name") || words.contains("who are you"),
-            owner: words.starts_with("whose") || words.contains("who owns"),
-            who_here: words.contains("who is here")
-                || words.contains("who else")
-                || words.contains("others listening"),
-            ways_out: words.contains("ways out") || words.contains("how do we leave"),
-            follow_up: words.starts_with("does she ")
-                || words.starts_with("does he ")
-                || words.starts_with("whose ")
-                || words.starts_with("what about "),
-            unknown_person: words.starts_with("who ") || words.starts_with("whose "),
-        }
-    }
 }
 
 /// One closed label Jev chooses for a question part. Rust keeps the fixed mapping from each
@@ -485,6 +465,15 @@ pub(super) fn focus_of_label(label: &str) -> Option<Focus> {
 }
 
 impl Focus {
+    /// Whether this focus reads a part as asking something. Small talk, a bare statement, and a
+    /// claim against the errand ask nothing, so they draw no answer line of their own.
+    pub(super) fn asks(self) -> bool {
+        !matches!(
+            self,
+            Self::SmallTalk | Self::Other | Self::ClaimAgainstErrand
+        )
+    }
+
     /// The question subject an authored answer is filed under, for the questions that have one.
     pub(super) fn question_subject(self) -> Option<QuestionSubject> {
         match self {
@@ -592,13 +581,31 @@ impl AskReading {
         ask
     }
 
-    /// The keyword reading of the hero's words: the fallback when Jev did not read them.
-    pub(super) fn keywords(typed: &str) -> Self {
-        read_ask(typed)
+    /// Whether Jev read any part of the line as asking something (see [`Focus::asks`]).
+    pub(super) fn asks_something(&self) -> bool {
+        self.focus.iter().flatten().any(|focus| focus.asks())
     }
 
-    /// Keeps the approach's own topic for a Jev reading. The keyword reading keeps its keyword
-    /// approach, so it is left as read.
+    /// The neutral reading when Jev did not read the line: no focus and no flags. The reply then
+    /// draws only on the speaker's own opinions, and the reading is logged as neutral.
+    pub(super) fn neutral() -> Self {
+        Self {
+            source: ReadingSource::Neutral,
+            about_you: false,
+            place: false,
+            danger: false,
+            private: false,
+            topic: Topic::WhyThisMatters,
+            directed: None,
+            task: false,
+            claims: false,
+            world: false,
+            room: RoomReading::default(),
+            focus: None,
+        }
+    }
+
+    /// Keeps the approach's own topic for a Jev reading. A neutral reading has no Jev topic to keep.
     pub(super) fn with_approach(mut self, approach: Approach) -> Self {
         if self.source == ReadingSource::Jev {
             self.directed = directed_for(approach);
@@ -606,241 +613,9 @@ impl AskReading {
         self
     }
 
-    /// The topic a fallback answer is filed under. Keyword readings keep today's topic rule.
-    pub(super) fn fallback_topic(&self, typed: &str, approach: Approach) -> Topic {
-        match self.source {
-            ReadingSource::Keywords => topic_of(typed, approach),
-            ReadingSource::Jev => directed_for(approach).unwrap_or(self.topic),
-        }
-    }
-}
-
-/// The keyword reading of the hero's words: the fallback when Jev did not read them.
-fn read_ask(typed: &str) -> AskReading {
-    let lowered = normalised(typed);
-    let has = |phrases: &[&str]| phrases.iter().any(|phrase| lowered.contains(phrase));
-    let mapped = topic_of(typed, classify_keywords(typed));
-    // Leading-space stems so "son" does not match "person", "war" does not match "warm".
-    let directed = match mapped {
-        Topic::ComplimentOrFlirt | Topic::Threat | Topic::Bribe => Some(mapped),
-        _ if has(&[
-            "lover", "flirt", "seduc", "to bed", "kiss", "charm", "marry me",
-        ]) =>
-        {
-            Some(Topic::ComplimentOrFlirt)
-        }
-        _ => None,
-    };
-    // Personal life (kin, home, service) is the speaker's past; knowing the cast is who
-    // they are. Without this the generic mapping sends family questions to the bond and
-    // want lines, which outrank the family lines they resemble.
-    let personal = has(&[
-        "family",
-        "children",
-        "child",
-        " kid",
-        "kids",
-        " son",
-        "sons",
-        "daughter",
-        "wife",
-        "husband",
-        "married",
-        "marry",
-        "partner",
-        "sweetheart",
-        "wedding",
-        "parents",
-        "mother",
-        "father",
-        "brother",
-        "sister",
-        " home",
-        "where do you live",
-        "where you live",
-        "house",
-        " lodg",
-        " live",
-        " living",
-        "grew up",
-        "where are you from",
-        "how did you end up",
-        "your service",
-        " serve",
-        " served",
-        " soldier",
-        " war",
-        " army",
-        " unit",
-        " rank",
-        "opinion",
-    ]);
-    let knowing = has(&[
-        "how do you know",
-        "do you know",
-        "know him",
-        "know her",
-        "know them",
-        "old friend",
-        "friends with",
-        "your friend",
-    ]);
-    let topic = match directed {
-        Some(topic) => topic,
-        None if knowing => Topic::WhoAreYou,
-        None if personal => Topic::YourPast,
-        None => mapped,
-    };
-    AskReading {
-        source: ReadingSource::Keywords,
-        about_you: has(&[
-            "who are you",
-            "your name",
-            "yourself",
-            "about you",
-            "your past",
-            "your life",
-            "your story",
-            "your family",
-            "family",
-            "children",
-            "child",
-            " kid",
-            "kids",
-            " son",
-            "sons",
-            "daughter",
-            "wife",
-            "husband",
-            "married",
-            "marry",
-            "partner",
-            "sweetheart",
-            "wedding",
-            "parents",
-            "mother",
-            "father",
-            "brother",
-            "sister",
-            " home",
-            "where do you live",
-            "where you live",
-            "house",
-            " lodg",
-            " live",
-            " living",
-            "grew up",
-            "where are you from",
-            "how did you end up",
-            "why do you",
-            "what do you want",
-            "to you",
-            "are you afraid",
-            "are you scared",
-            "do you fear",
-            "what are you hiding",
-            "what do you do",
-            "your job",
-            "your work",
-            "your service",
-            " serve",
-            " served",
-            " soldier",
-            " war",
-            " army",
-            " unit",
-            " rank",
-            "how do you know",
-            "do you know",
-            "know him",
-            "know her",
-            "know them",
-            "old friend",
-            "friends with",
-            "your friend",
-            "opinion",
-            "personally",
-            "have you ever",
-        ]),
-        place: has(&[
-            "this place",
-            "the place",
-            "town",
-            "village",
-            "around here",
-            "the area",
-            "this area",
-            "local",
-            "neighbourhood",
-            "the road",
-            "this road",
-            "the pass",
-            "what is it like",
-        ]),
-        danger: has(&[
-            "danger",
-            "making trouble",
-            "threat",
-            "in our way",
-            "stop us",
-            "watch for",
-            "look out",
-            "enemy",
-            "enemies",
-            "behind this",
-            "behind all",
-            "behind it",
-            "who is after",
-            "hunting",
-            "attack",
-            "ambush",
-            "bandit",
-            "risk",
-            "ahead",
-            "block",
-            "fight",
-            "after us",
-            "wants it",
-            "watching",
-            "who sent",
-            "refuse",
-        ]),
-        private: has(&[
-            "told me",
-            "whisper",
-            "quietly",
-            "privately",
-            "between us",
-            "secret",
-            "hinted",
-            "mentioned",
-            "other way",
-            "quicker way",
-            "you said",
-        ]),
-        topic,
-        directed,
-        task: has(&[
-            "anything else",
-            "what else",
-            "tell me more",
-            "go on",
-            "should",
-            "need",
-            "expect",
-            "next",
-            "first",
-            "plan",
-            "watch for",
-            "look out",
-            "ahead",
-        ]),
-        claims: words(typed)
-            .iter()
-            .any(|spoken| BREAK_WORDS.contains(&spoken.as_str())),
-        world: world_question(typed),
-        room: RoomReading::default(),
-        focus: None,
+    /// The topic a fallback answer is filed under: the approach's own topic, else the reading's.
+    pub(super) fn fallback_topic(&self, approach: Approach) -> Topic {
+        directed_for(approach).unwrap_or(self.topic)
     }
 }
 
@@ -850,18 +625,6 @@ fn read_ask(typed: &str) -> AskReading {
 fn small_talk(ask: &AskReading) -> bool {
     !(ask.about_you || ask.place || ask.danger || ask.private || ask.directed.is_some())
         && !ask.task
-}
-
-/// Whether the hero's words ask after the world with a wh-word ("what are the old wards?").
-/// A genuine question refuses in character when nothing answers it: it never takes small
-/// talk ("ever seen a dragon?" asks no wh-word) or padding.
-fn world_question(typed: &str) -> bool {
-    words(typed).iter().any(|word| {
-        matches!(
-            word.as_str(),
-            "what" | "who" | "whom" | "whose" | "where" | "when" | "why" | "how" | "which"
-        )
-    })
 }
 
 /// How well a line answers the hero's words; a line that cannot answer them scores zero or less.
@@ -906,89 +669,13 @@ fn score(line: &Line, ask: &AskReading, typed: &str, talk: bool) -> i32 {
     shared * 8 + kind + topic + private
 }
 
-/// Words that mark a question, for splitting "who ..., how ..., and who ..." into parts.
-const QUESTION_WORDS: [&str; 12] = [
-    "who", "what", "where", "when", "why", "how", "which", "whose", "name", "tell", "explain",
-    "describe",
-];
-
-/// Words by which a hero's claim breaks with the errand: the book burned, the friend dead.
-const BREAK_WORDS: [&str; 14] = [
-    "burned",
-    "burnt",
-    "destroyed",
-    "lost",
-    "sold",
-    "stole",
-    "stolen",
-    "dead",
-    "died",
-    "killed",
-    "took",
-    "taken",
-    "nothing",
-    "never",
-];
-
-/// Splits `chunk` on `separator` when both sides still ask something (each side keeps an
-/// interrogative or at least three words); otherwise the chunk stays whole.
-fn split_clause(chunk: &str, separator: &str) -> Vec<String> {
-    let split: Vec<String> = chunk.split(separator).map(str::to_owned).collect();
-    if split.len() < 2 {
-        return split;
-    }
-    let asks = |text: &str| {
-        let spoken = words(text);
-        spoken
-            .iter()
-            .any(|word| QUESTION_WORDS.contains(&word.as_str()))
-            || spoken.len() >= 3
-    };
-    if split.iter().all(|part| asks(part)) {
-        split
-    } else {
-        vec![chunk.to_owned()]
-    }
-}
-
-/// One clause of a chunk that asks more than one thing ("who ..., how ..., and who ...").
-fn split_clauses(chunk: &str) -> Vec<String> {
-    let spoken = words(chunk);
-    let interrogatives = spoken
-        .iter()
-        .filter(|word| QUESTION_WORDS.contains(&word.as_str()))
-        .count();
-    if interrogatives < 2 {
-        return vec![chunk.to_owned()];
-    }
-    let mut parts = vec![chunk.to_owned()];
-    for separator in [", and ", " and ", ", "] {
-        let mut split = Vec::new();
-        for part in &parts {
-            split.extend(split_clause(part, separator));
-        }
-        parts = split;
-    }
-    parts
-}
-
-/// Whether the part asks something: a question mark or a question word. Scene-setting
-/// ("forget the lantern a moment") does not, and draws no answer line of its own.
-fn asks(part: &str) -> bool {
-    part.contains('?')
-        || words(part)
-            .iter()
-            .any(|word| QUESTION_WORDS.contains(&word.as_str()))
-}
-
-/// The parts of what the hero said, up to three: sentences first, then the clauses of a
-/// sentence that asks more than one thing. The reply answers each part in order.
+/// The parts of what the hero said, up to three: each sentence, then each `;` clause of it. Only
+/// sentence punctuation splits the line. Jev reads each part's focus, so no word list splits or
+/// classifies the line.
 pub(super) fn question_parts(typed: &str) -> Vec<String> {
     let mut parts = Vec::new();
     for sentence in sentences(typed) {
-        for chunk in sentence.split(';') {
-            parts.extend(split_clauses(chunk));
-        }
+        parts.extend(sentence.split(';').map(str::to_owned));
     }
     parts
         .into_iter()
@@ -996,6 +683,15 @@ pub(super) fn question_parts(typed: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .take(QUESTION_PARTS)
         .collect()
+}
+
+/// Whether Jev read part `index` of the hero's line as asking something. Small talk, and a part
+/// Jev did not read, draw no answer line of their own.
+fn asks_by_focus(ask: &AskReading, index: usize) -> bool {
+    ask.focus
+        .as_ref()
+        .and_then(|foci| foci.get(index))
+        .is_some_and(|focus| focus.asks())
 }
 
 /// Whether the hero's words break with the errand the speaker can tell: a claim word (burned,
@@ -1025,8 +721,9 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &AskReading) -> Selec
     // grounded in an errand can score a matching biography word ("letter" / "letters").
     let grounded = question_parts(inputs.words)
         .into_iter()
-        .filter(|part| asks(part))
-        .any(|part| {
+        .enumerate()
+        .filter(|(index, _)| asks_by_focus(ask, *index))
+        .any(|(_, part)| {
             fresh.iter().any(|line| {
                 !matches!(line.kind, Kind::Yourself) && shared_words(&part, &line.text) > 0
             })
@@ -1071,15 +768,14 @@ fn select<'a>(lines: &'a [Line], inputs: &Inputs<'_>, ask: &AskReading) -> Selec
     let taken = |answer: &[&Line], line: &Line| answer.iter().any(|taken| taken.key == line.key);
     let mut answer: Vec<&Line> = Vec::new();
     // One line per part of a several-part question, in the parts' order: the best-ranked fresh
-    // line that shares a content word with the part. Only a part that asks (a question mark
-    // or a question word) draws a line: scene-setting ("forget the lantern a moment") must
-    // not harvest an errand line by a shared word. A part with no line of its own is left
-    // for the reply to refuse in character.
-    for part in question_parts(inputs.words) {
+    // line that shares a content word with the part. Only a part Jev read as asking draws a line:
+    // scene-setting ("forget the lantern a moment") must not harvest an errand line by a shared
+    // word. A part with no line of its own is left for the reply to refuse in character.
+    for (index, part) in question_parts(inputs.words).into_iter().enumerate() {
         if answer.len() >= ANSWER_LINES {
             break;
         }
-        if !asks(&part) {
+        if !asks_by_focus(ask, index) {
             continue;
         }
         if let Some((_, _, line)) = ranked.iter().find(|(_, _, line)| {
@@ -1205,9 +901,9 @@ fn public_role_archetype(profile: &ResolvedArchetype, withheld: &Withheld) -> Op
 /// `withheld` also drops any line that mentions one of its secrets. The facts sent to the
 /// model carry only the most recent of the said lines; the full list is for the speaking
 /// checks, so nothing already spoken anywhere in the conversation is repeated.
-/// The reply facts read from the keyword reader. Used when Jev has not read the line.
+/// The reply facts with a neutral reading. Used when Jev has not read the line.
 pub(super) fn facts(inputs: &Inputs<'_>) -> (Value, Vec<Offered>, Vec<String>) {
-    facts_for(inputs, &read_ask(inputs.words))
+    facts_for(inputs, &AskReading::neutral())
 }
 
 /// The reply facts for one reading of the hero's words: which lines answer, which is
@@ -1483,15 +1179,21 @@ mod tests {
     }
 
     #[test]
-    fn a_several_part_question_splits_into_parts_in_order_capped_at_three() {
+    fn a_several_part_line_splits_by_sentence_and_semicolon_in_order() {
         assert_eq!(
             question_parts(
                 "Name him. Who was this friend, how did he die, and who is Maren to you?"
             ),
             [
                 "Name him.".to_owned(),
-                "Who was this friend".to_owned(),
-                "how did he die".to_owned(),
+                "Who was this friend, how did he die, and who is Maren to you?".to_owned(),
+            ],
+        );
+        assert_eq!(
+            question_parts("Who sent you; what did they promise?"),
+            [
+                "Who sent you".to_owned(),
+                "what did they promise?".to_owned()
             ],
         );
     }
@@ -1562,43 +1264,43 @@ mod reading_tests {
     }
 
     #[test]
-    fn keyword_reading_keeps_the_break_words_and_the_wh_question_rule_it_always_had() {
-        assert!(AskReading::keywords("My book burned.").claims);
-        assert!(!AskReading::keywords("Good morning.").claims);
-        let wards = AskReading::keywords("What are the old wards?");
-        assert!(wards.world);
-        assert!(wards.focus.is_none());
-        assert_eq!(wards.source, ReadingSource::Keywords);
+    fn a_neutral_reading_asks_nothing_and_its_words_decide_no_flag() {
+        for words in [
+            "My book burned.",
+            "What are the old wards?",
+            "Whose cup is this, and who is here?",
+        ] {
+            let neutral = AskReading::neutral();
+            assert_eq!(neutral.source, ReadingSource::Neutral, "{words}");
+            assert!(neutral.focus.is_none());
+            assert!(small_talk(&neutral));
+            assert!(!neutral.claims && !neutral.world && !neutral.private);
+            assert_eq!(neutral.room, RoomReading::default());
+        }
     }
 
     #[test]
-    fn the_fallback_topic_follows_the_approach_then_the_jev_topic_or_the_keyword_rule() {
-        let typed = "Tell me about your childhood";
+    fn a_part_draws_a_line_only_when_jev_read_it_as_asking() {
+        let ask = AskReading::from_focus(vec![Focus::SmallTalk, Focus::Payment]);
+        assert!(!asks_by_focus(&ask, 0));
+        assert!(asks_by_focus(&ask, 1));
+        assert!(!asks_by_focus(&ask, 2));
+        assert!(!asks_by_focus(&AskReading::neutral(), 0));
+    }
+
+    #[test]
+    fn the_fallback_topic_follows_the_approach_then_the_jev_topic() {
         let jev = AskReading::from_focus(vec![Focus::SpeakerPast]);
+        assert_eq!(jev.fallback_topic(Approach::Question), Topic::YourPast);
+        assert_eq!(jev.fallback_topic(Approach::Intimidation), Topic::Threat);
+        let neutral = AskReading::neutral();
         assert_eq!(
-            jev.fallback_topic(typed, Approach::Question),
-            Topic::YourPast
+            neutral.fallback_topic(Approach::Question),
+            Topic::WhyThisMatters
         );
         assert_eq!(
-            jev.fallback_topic(typed, Approach::Intimidation),
-            Topic::Threat
+            neutral.fallback_topic(Approach::Flirting),
+            Topic::ComplimentOrFlirt
         );
-        let keywords = AskReading::keywords(typed);
-        assert_eq!(
-            keywords.fallback_topic(typed, Approach::Question),
-            topic_of(typed, Approach::Question)
-        );
-    }
-
-    #[test]
-    fn the_room_keyword_reading_matches_the_room_phrases_it_replaced() {
-        let owner = RoomReading::keywords("whose cup is this?");
-        assert!(owner.owner && owner.follow_up && owner.unknown_person && !owner.identity);
-        let name = RoomReading::keywords("what is your name?");
-        assert!(name.identity && name.self_name);
-        let follow = RoomReading::keywords("does she work here?");
-        assert!(follow.follow_up && !follow.owner);
-        assert!(RoomReading::keywords("who is here?").who_here);
-        assert!(RoomReading::keywords("what are the ways out?").ways_out);
     }
 }

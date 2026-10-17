@@ -2,6 +2,11 @@ use super::*;
 use crate::gameplay::adventure::{
     ForcedEntries, GenerateOptions, Tables, dossier::NpcRole, generate,
 };
+use crate::gameplay::approach_model::{
+    ApproachModel,
+    tests::{answer, model},
+};
+use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply};
 use std::sync::OnceLock;
 
 fn tables() -> &'static Tables {
@@ -152,66 +157,94 @@ fn steps(
     }
 }
 
-#[test]
-fn the_keyword_reader_names_the_social_approach_of_a_line() {
-    for (line, expected) in [
-        ("Who are you, really?", Approach::Question),
-        ("You are the wisest person I have met.", Approach::Flattery),
-        (
-            "You are beautiful, has anyone told you?",
-            Approach::Flirting,
-        ),
-        ("Hand over the key or else.", Approach::Intimidation),
-        ("Here is ten gold for your trouble.", Approach::Bribe),
-        ("Thank you, we will help you.", Approach::Kindness),
-        ("You pathetic coward.", Approach::Insult),
-        (
-            "The king sent me, I am the royal envoy.",
-            Approach::Deception,
-        ),
-        ("Please, trust me on this.", Approach::Persuasion),
-        ("Hmm.", Approach::Other),
-    ] {
-        assert_eq!(classify_keywords(line), expected, "{line}");
+#[tokio::test(flavor = "current_thread")]
+async fn without_jev_every_line_reads_neutral_and_its_words_decide_nothing() {
+    let lines = [
+        "Get out of here or else",
+        "Hand over the key or else.",
+        "Here is ten gold for your trouble.",
+        "Thank you, we will help you.",
+    ];
+    let failing_endpoint = FakeEndpoint::start(
+        lines
+            .iter()
+            .map(|_| Reply::Status(500, serde_json::json!({"error": "unavailable"})))
+            .collect(),
+    );
+    let failing = model(&failing_endpoint);
+    let off = ApproachModel::default();
+
+    for line in lines {
+        for reader in [&off, &failing] {
+            let reading = reader
+                .classify(line, "Perrin", "A public tavern.")
+                .await
+                .unwrap_or_else(neutral_reading);
+
+            assert_eq!(reading.approach, Approach::Other, "{line}");
+            assert_ne!(reading.approach, Approach::Intimidation, "{line}");
+            assert_eq!(reading.subject, AnswerSubject::Other, "{line}");
+        }
     }
 }
 
-#[test]
-fn the_keyword_reader_distinguishes_the_evidence_apology_introduction_refusal_and_lie() {
-    for (line, expected) in [
-        ("I spoke badly. I'm sorry.", Approach::Apology),
+#[tokio::test(flavor = "current_thread")]
+async fn jev_decides_the_approach_and_subject_of_a_line_whatever_its_words() {
+    // "oN" is Jev's N-th criterion: the approaches in their option order, then the subjects.
+    for (words, approach_option, subject_option, approach, subject) in [
         (
-            "I am Sigrun. Ignore him. We will carry your warning.",
-            Approach::Introduction,
-        ),
-        (
-            "No. We will not carry it. Find someone else.",
-            Approach::Refusal,
-        ),
-        (
-            "The watch captain already told us the whole plan.",
-            Approach::Deception,
-        ),
-        (
-            "This sounds dangerous. What will you pay us for carrying it?",
-            Approach::Bargain,
-        ),
-        (
-            "Double it. The road is dangerous at night and you know it.",
-            Approach::Bargain,
-        ),
-        (
-            "You were a soldier, Ulric. So was I. Give us everything you know, one soldier to another.",
-            Approach::Persuasion,
-        ),
-        ("Here, take five gold.", Approach::Bribe),
-        (
-            "Talk, old man, or I will break your shield.",
+            "It would be a shame if this place burned.",
+            "o7",
+            "o9",
             Approach::Intimidation,
+            AnswerSubject::Other,
         ),
-        ("You are the wisest person I have met.", Approach::Flattery),
+        (
+            "What will you pay us for carrying it?",
+            "o9",
+            "o6",
+            Approach::Bargain,
+            AnswerSubject::Reward,
+        ),
+        (
+            "Who is the danger? Who wants the bundle?",
+            "o1",
+            "o7",
+            Approach::Question,
+            AnswerSubject::Enemy,
+        ),
+        (
+            "I am sorry. I should not have threatened you.",
+            "o11",
+            "o9",
+            Approach::Apology,
+            AnswerSubject::Other,
+        ),
+        (
+            "I am Sigrun. We will carry your warning.",
+            "o12",
+            "o1",
+            Approach::Introduction,
+            AnswerSubject::Errand,
+        ),
+        (
+            "No. We will not carry it.",
+            "o13",
+            "o1",
+            Approach::Refusal,
+            AnswerSubject::Errand,
+        ),
+        ("Hmm.", "o14", "o9", Approach::Other, AnswerSubject::Other),
     ] {
-        assert_eq!(classify_keywords(line), expected, "{line}");
+        let endpoint = FakeEndpoint::start(vec![answer(approach_option), answer(subject_option)]);
+
+        let reading = model(&endpoint)
+            .classify(words, "Perrin", "A public tavern.")
+            .await
+            .unwrap_or_else(neutral_reading);
+
+        assert_eq!(reading, ApproachReading { approach, subject }, "{words}");
+        assert_eq!(endpoint.bodies()[0]["state"]["player_words"], words);
     }
 }
 
@@ -241,8 +274,8 @@ fn factual_questions_and_refusals_are_not_influence_attempts() {
     }
 }
 
-#[test]
-fn local_subjects_are_limited_to_facts_in_this_adventure() {
+#[tokio::test(flavor = "current_thread")]
+async fn jev_picks_a_subject_only_among_the_facts_in_this_adventure() {
     let mut dossier = crate::gameplay::npc_dossier_tests::adventure(1)
         .dossiers
         .into_iter()
@@ -272,308 +305,157 @@ fn local_subjects_are_limited_to_facts_in_this_adventure() {
         ),
     ]);
 
-    for (line, expected) in [
-        ("What is in the map bundle?", AnswerSubject::ErrandObject),
-        ("Show me the map bundle.", AnswerSubject::ErrandObject),
-        ("What is the Barrow-Cold Sentinel?", AnswerSubject::Enemy),
-        ("What is a giant rat?", AnswerSubject::Enemy),
-        ("What do you know about the goblin?", AnswerSubject::Other),
-        ("What sort of man is Tobin?", AnswerSubject::People),
-        ("Who is that lady with the tray?", AnswerSubject::Other),
-        ("Where is the clock?", AnswerSubject::Other),
-        ("What does the sealed letter say?", AnswerSubject::Other),
+    // The subjects offered are the dossier's own, in Jev's subject order, then "other".
+    for (line, subject_option, expected) in [
+        ("What sort of man is Tobin?", "o1", AnswerSubject::People),
         (
-            "What do you know about the sealed letter?",
+            "What is the Barrow-Cold Sentinel?",
+            "o2",
+            AnswerSubject::Enemy,
+        ),
+        (
+            "What is in the map bundle?",
+            "o3",
+            AnswerSubject::ErrandObject,
+        ),
+        (
+            "What do you know about the goblin?",
+            "o4",
             AnswerSubject::Other,
         ),
-        ("What do you know about the enemy?", AnswerSubject::Enemy),
     ] {
-        assert_eq!(
-            classify_keywords_reading_for_dossier(line, &dossier).subject,
-            expected,
-            "{line}"
-        );
+        let endpoint = FakeEndpoint::start(vec![answer("o1"), answer(subject_option)]);
+
+        let reading = model(&endpoint)
+            .classify_for_dossier(line, &dossier.name, "The ferry desk.", &dossier)
+            .await
+            .unwrap_or_else(neutral_reading);
+
+        assert_eq!(reading.subject, expected, "{line}");
+        let bodies = endpoint.bodies();
+        let offered = bodies[1]["questions"]["q1"]["criteria"]
+            .as_object()
+            .unwrap();
+        assert_eq!(offered.len(), 4, "{line}");
+        assert!(!offered.values().any(|criterion| {
+            criterion
+                .as_str()
+                .is_some_and(|text| text.contains("price"))
+        }));
     }
+
+    let without_jev = ApproachModel::default()
+        .classify_for_dossier(
+            "What is in the map bundle?",
+            &dossier.name,
+            "The ferry desk.",
+            &dossier,
+        )
+        .await
+        .unwrap_or_else(neutral_reading);
+    assert_eq!(without_jev, neutral_reading());
 }
 
-#[test]
-fn the_played_44_line_evidence_has_the_expected_approach_subject_and_roll_eligibility() {
+#[tokio::test(flavor = "current_thread")]
+async fn jev_readings_of_the_played_evidence_set_approach_subject_and_roll_eligibility() {
     let dossier = played_evidence_dossier();
+    // Every subject is offered for this dossier, so "oN" is the N-th of Jev's subjects.
     let evidence = [
         (
             "Who is Osric, and where exactly do I find him?",
+            "o1",
+            "o5",
             Approach::Question,
             AnswerSubject::Where,
             false,
         ),
         (
-            "What is the warning? Tell me the words I am to say to him.",
-            Approach::Question,
-            AnswerSubject::Errand,
-            false,
-        ),
-        (
             "What is in the map bundle, and whose lives does it protect?",
+            "o1",
+            "o8",
             Approach::Question,
             AnswerSubject::ErrandObject,
             false,
         ),
         (
-            "Who is the danger? Who wants the bundle?",
-            Approach::Question,
-            AnswerSubject::Enemy,
-            false,
-        ),
-        (
-            "And if he is not there when we arrive?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "Who is Osric, and where exactly do I find him?",
-            Approach::Question,
-            AnswerSubject::Where,
-            false,
-        ),
-        (
             "What do we get for carrying it?",
-            Approach::Bargain,
-            AnswerSubject::Reward,
-            true,
-        ),
-        (
-            "Double it. The road is dangerous at night and you know it.",
+            "o9",
+            "o6",
             Approach::Bargain,
             AnswerSubject::Reward,
             true,
         ),
         (
             "You were a soldier, Ulric. So was I. Give us everything you know, one soldier to another.",
+            "o5",
+            "o7",
             Approach::Persuasion,
             AnswerSubject::Enemy,
             true,
         ),
         (
             "The watch captain already told us the whole plan. He said you would hand over your shield as proof.",
+            "o6",
+            "o9",
             Approach::Deception,
             AnswerSubject::Other,
             true,
         ),
         (
             "Talk, old man, or I will break that shield over my knee.",
+            "o7",
+            "o9",
             Approach::Intimidation,
             AnswerSubject::Other,
             true,
         ),
         (
-            "I watch Ulric's face and hands while he talks. Is he lying to us, or afraid?",
-            Approach::Question,
+            "I spoke badly before, Ulric. I am sorry. I should not have threatened you.",
+            "o11",
+            "o9",
+            Approach::Apology,
             AnswerSubject::Other,
-            false,
-        ),
-        (
-            "I look around the guardhouse. What do I see?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "I take the old shield down from the door and examine it closely.",
-            Approach::Other,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "I search the desk and any papers on it.",
-            Approach::Other,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "I listen at the door. Is anyone outside?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "Whose shield is that by the door? What is its story?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "What do I know about the Reedmoor Boardwalk and the Ferryman's Hut? I was a soldier in these parts.",
-            Approach::Question,
-            AnswerSubject::Where,
-            false,
-        ),
-        (
-            "Brakka, do you trust him? I do not.",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "What is your favourite pizza topping, Ulric?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
+            true,
         ),
         (
             "No. We will not carry it. Find someone else.",
+            "o13",
+            "o1",
             Approach::Refusal,
             AnswerSubject::Errand,
             false,
         ),
         (
             "I am Sigrun. Ignore him. We will carry your warning.",
+            "o12",
+            "o1",
             Approach::Introduction,
             AnswerSubject::Errand,
             false,
         ),
         (
-            "note: Osric is the watch sergeant at the Ferryman's Hut. Warn him tonight.",
-            Approach::Other,
-            AnswerSubject::Where,
-            false,
-        ),
-        (
-            "What have we written down so far?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "Who did what? What was deliberate?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "You said someone is chasing us. Who are they, and how many?",
-            Approach::Question,
-            AnswerSubject::Enemy,
-            false,
-        ),
-        (
-            "The one with the green stone ring. Have you seen him yourself? Where?",
-            Approach::Question,
-            AnswerSubject::Enemy,
-            false,
-        ),
-        (
-            "What did he whisper to you, Sigrun?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "Brakka, he told me the one who hired our pursuers wears a ring with a green stone.",
-            Approach::Other,
-            AnswerSubject::Enemy,
-            false,
-        ),
-        (
-            "Ulric, is that true? A ring with a green stone?",
-            Approach::Question,
-            AnswerSubject::Enemy,
-            false,
-        ),
-        (
-            "I spoke badly before, Ulric. I am sorry. I should not have threatened you.",
-            Approach::Apology,
-            AnswerSubject::Other,
-            true,
-        ),
-        (
-            "Here, take five gold for the insult. Let us start again.",
-            Approach::Bribe,
-            AnswerSubject::Other,
-            true,
-        ),
-        (
-            "I look out of the window at the marsh lights. Is something moving out there?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "I keep watch at the door with my sword drawn, ready for an ambush.",
+            "I search the desk and any papers on it.",
+            "o14",
+            "o9",
             Approach::Other,
             AnswerSubject::Other,
-            false,
-        ),
-        (
-            "I go outside quietly and scout the boardwalk ahead, staying in the shadows.",
-            Approach::Other,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "I check the ground outside for tracks. How many came this way, and when?",
-            Approach::Question,
-            AnswerSubject::Other,
-            false,
-        ),
-        (
-            "Show me the map bundle, Ulric.",
-            Approach::Other,
-            AnswerSubject::ErrandObject,
-            false,
-        ),
-        (
-            "I unroll the maps and study them. What do they show, and what is marked?",
-            Approach::Question,
-            AnswerSubject::ErrandObject,
-            false,
-        ),
-        (
-            "What is the Barrow-Cold Sentinel?",
-            Approach::Question,
-            AnswerSubject::Enemy,
-            false,
-        ),
-        (
-            "What do I know about the walking dead? How are skeletons best fought?",
-            Approach::Question,
-            AnswerSubject::Enemy,
-            false,
-        ),
-        (
-            "Tell me again where Osric is.",
-            Approach::Question,
-            AnswerSubject::Where,
-            false,
-        ),
-        (
-            "And again. Where is Osric?",
-            Approach::Question,
-            AnswerSubject::Where,
-            false,
-        ),
-        (
-            "Once more. Where?",
-            Approach::Question,
-            AnswerSubject::Where,
-            false,
-        ),
-        (
-            "Where is Osric?",
-            Approach::Question,
-            AnswerSubject::Where,
             false,
         ),
     ];
 
-    assert_eq!(evidence.len(), 44);
-    for (line, expected_approach, expected_subject, expected_hesitant_roll) in evidence {
-        let reading = classify_keywords_reading_for_dossier(line, &dossier);
-        assert_eq!(reading.approach, expected_approach, "approach: {line}");
-        assert_eq!(reading.subject, expected_subject, "subject: {line}");
+    for (line, approach_option, subject_option, approach, subject, hesitant_roll) in evidence {
+        let endpoint = FakeEndpoint::start(vec![answer(approach_option), answer(subject_option)]);
+
+        let reading = model(&endpoint)
+            .classify_for_dossier(line, "Ulric", "The guardhouse.", &dossier)
+            .await
+            .unwrap_or_else(neutral_reading);
+
+        assert_eq!(reading.approach, approach, "approach: {line}");
+        assert_eq!(reading.subject, subject, "subject: {line}");
         assert_eq!(
             reading.approach.is_influence_attempt(),
-            expected_hesitant_roll,
+            hesitant_roll,
             "a hesitant listener's roll eligibility: {line}"
         );
     }
@@ -588,208 +470,6 @@ fn a_patron_who_offers_the_errand_never_starts_hostile() {
             .find(|dossier| dossier.role == super::super::adventure::dossier::NpcRole::Patron)
             .unwrap();
         assert_ne!(patron.starting_attitude, Attitude::Hostile, "seed {seed}");
-    }
-}
-
-#[test]
-fn the_keyword_reader_covers_ten_lines_for_each_approach_srd_5_2_1_page_184() {
-    // SRD 5.2.1, p. 184: “Describe or roleplay how you're communicating with the monster.”
-    // These examples classify table talk only; they do not make or resolve an Influence check.
-    let examples: [(Approach, [&str; 10]); 11] = [
-        (
-            Approach::Question,
-            [
-                "Who is waiting at the ferry?",
-                "What happened to the parcel?",
-                "Why did you come here?",
-                "Where should we go next?",
-                "When does the boat leave?",
-                "How do you know the mapmaker?",
-                "Could you explain the warning?",
-                "Tell me about this office.",
-                "Would you name the person involved?",
-                "May I ask what you need?",
-            ],
-        ),
-        (
-            Approach::Kindness,
-            [
-                "Thank you for trusting us.",
-                "I am sorry this frightened you.",
-                "We will help you carry it.",
-                "Don't worry, you're safe with us.",
-                "Are you alright after that journey?",
-                "I understand this must be hard.",
-                "Here to help, if you'll let us.",
-                "Thanks for telling us the truth.",
-                "Must be difficult to wait alone.",
-                "I will help you reach your friend.",
-            ],
-        ),
-        (
-            Approach::Flattery,
-            [
-                "You are wise to be cautious.",
-                "That was a brilliant plan.",
-                "Your work is impressive.",
-                "You are wonderfully clever.",
-                "That is an amazing map.",
-                "You have a famous reputation.",
-                "You are a talented guide.",
-                "Your judgment is magnificent.",
-                "That was a great choice.",
-                "You are the bravest clerk I know.",
-            ],
-        ),
-        (
-            Approach::Flirting,
-            [
-                "You look beautiful tonight.",
-                "That smile is charming.",
-                "Would you have dinner with me?",
-                "Your eyes are lovely.",
-                "I would gladly kiss you.",
-                "You are gorgeous in that coat.",
-                "May I call you sweetheart?",
-                "I fancy you, if I'm honest.",
-                "You have a handsome face.",
-                "Care to share a dance, darling?",
-            ],
-        ),
-        (
-            Approach::Persuasion,
-            [
-                "Trust me, we can do this.",
-                "I promise we will return it.",
-                "Believe me, this is the safest path.",
-                "Surely you can see the reason.",
-                "Please let us explain our plan.",
-                "The map will help us find him.",
-                "We can reach the inn before night.",
-                "Our plan gives everyone a chance.",
-                "This is the best way to protect them.",
-                "You should let us carry the message.",
-            ],
-        ),
-        (
-            Approach::Deception,
-            [
-                "I am the harbourmaster's deputy.",
-                "I'm the captain's new courier.",
-                "The harbourmaster sent us to inspect it.",
-                "I work for the city watch.",
-                "We came from the royal office.",
-                "The captain told us you agreed already.",
-                "I am a sworn mapmaker from the guild.",
-                "The guard ordered us to take charge.",
-                "I'm carrying an official order from the duke.",
-                "The magistrate says you must tell us everything.",
-            ],
-        ),
-        (
-            Approach::Intimidation,
-            [
-                "Give it to me or else.",
-                "Hand over the key or I will break your arm.",
-                "I will hurt you if you refuse.",
-                "Tell me or I will end you.",
-                "You will regret making me wait.",
-                "Talk or I draw my sword.",
-                "Last warning before I burn this place down.",
-                "I will make you bleed for that lie.",
-                "Tell me now or I leave and Tomas can fend for himself.",
-                "Give up the letter, or I'll cut your throat.",
-            ],
-        ),
-        (
-            Approach::Bribe,
-            [
-                "Here are ten gold pieces for your trouble.",
-                "I will pay you to keep quiet.",
-                "Take this silver if you help us.",
-                "I offer a purse of coins for the key.",
-                "Let me give you gold for the map.",
-                "A few coins will make this worth your while.",
-                "I'll pay you well to carry the note.",
-                "Accept this payment and open the door.",
-                "This gold is yours if you guide us.",
-                "I can reward you with coin for your silence.",
-            ],
-        ),
-        (
-            Approach::Bargain,
-            [
-                "What will you pay us for carrying it?",
-                "What do we get if we help you?",
-                "How much is the reward?",
-                "Name your price for the errand.",
-                "Our price is ten gold.",
-                "Will we be compensated for the danger?",
-                "What do you offer in return?",
-                "What's in it for us if we agree?",
-                "Is there a payment for the journey?",
-                "What reward can we expect?",
-            ],
-        ),
-        (
-            Approach::Insult,
-            [
-                "You are an idiot.",
-                "That was foolish of you.",
-                "You coward, answer me.",
-                "That is a stupid idea.",
-                "You are worthless at this job.",
-                "What a pathetic excuse.",
-                "You are useless to us.",
-                "Don't be such a liar.",
-                "You look disgusting in that coat.",
-                "Only a fool would lose the letter.",
-            ],
-        ),
-        (
-            Approach::Other,
-            [
-                "Hmm.",
-                "I tap the table twice.",
-                "The rain is getting heavier.",
-                "Let me think for a moment.",
-                "I set my pack down here.",
-                "That is a curious sound.",
-                "We should keep moving soon.",
-                "I look toward the doorway.",
-                "This room smells of smoke.",
-                "I nod once and wait.",
-            ],
-        ),
-    ];
-    for (expected, lines) in examples {
-        for line in lines {
-            assert_eq!(classify_keywords(line), expected, "{line}");
-        }
-    }
-}
-
-#[test]
-fn the_keyword_reader_recognizes_plain_threats_without_mistaking_unrelated_death_words() {
-    for line in [
-        "Hand over the coin you owe us or I will break your arm.",
-        "I said hand it over, old man, or you die here.",
-        "Kill you if you touch that again.",
-        "I will cut you if you refuse.",
-        "I will gut you if you lie.",
-        "I will break your arm.",
-        "I will hurt you.",
-        "I will burn it down if you make me.",
-        "I will draw my sword.",
-        "Put that blade to your throat.",
-        "Last warning: give it to me.",
-        "Or else, you will regret this.",
-        "Hand it over now.",
-    ] {
-        assert_eq!(classify_keywords(line), Approach::Intimidation, "{line}");
-    }
-    for line in ["I WOULD KILL FOR A HOT MEAL.", "She nearly died laughing."] {
-        assert_ne!(classify_keywords(line), Approach::Intimidation, "{line}");
     }
 }
 
@@ -996,18 +676,11 @@ fn attitude_and_the_recent_conversation_survive_a_reload() {
     let ledger =
         SocialLedger::open(vec![dossier.clone()], "0x01", Some(directory.clone())).unwrap();
     let hero = member(7);
-    for line in [
-        "Thank you, we will help you.",
-        "I am sorry for your trouble.",
+    for (approach, line) in [
+        (Approach::Kindness, "Thank you, we will help you."),
+        (Approach::Apology, "I am sorry for your trouble."),
     ] {
-        ledger.record_exchange(
-            hero,
-            &dossier,
-            "opening",
-            classify_keywords(line),
-            line,
-            "Hm.",
-        );
+        ledger.record_exchange(hero, &dossier, "opening", approach, line, "Hm.");
     }
     ledger.save().unwrap();
     let before = ledger.standing(hero, &dossier);
@@ -1461,7 +1134,7 @@ fn what_an_npc_has_said_survives_a_reload_and_a_new_scene_starts_a_new_conversat
         hero,
         &dossier,
         "opening",
-        classify_keywords("Who are you?"),
+        Approach::Question,
         "Who are you?",
         "I don't know who else would ask.",
     );
@@ -1469,7 +1142,7 @@ fn what_an_npc_has_said_survives_a_reload_and_a_new_scene_starts_a_new_conversat
         hero,
         &dossier,
         "opening",
-        classify_keywords("Why?"),
+        Approach::Question,
         "Why?",
         "Because someone has to.",
     );
@@ -1526,7 +1199,7 @@ fn a_question_at_the_end_of_a_reply_is_remembered_so_the_next_does_not_end_with_
         hero,
         &dossier,
         "opening",
-        classify_keywords("Who are you?"),
+        Approach::Question,
         "Who are you?",
         "Who wants to know?",
     );
@@ -1549,7 +1222,7 @@ fn a_snapshot_restores_standings_and_voiced_lines_in_memory_and_in_the_file() {
         hero,
         &dossier,
         "opening",
-        classify_keywords("Thank you, we will help you."),
+        Approach::Kindness,
         "Thank you, we will help you.",
         "Then we have a deal.",
     );

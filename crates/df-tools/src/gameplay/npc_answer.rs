@@ -8,114 +8,12 @@ use super::{NpcReplyContext, npc_dossier};
 use crate::gameplay::{
     adventure::dossier::{AnswerSubject, QuestionAuthority, QuestionSubject},
     npc_facts::{self, AskReading},
-    social::{self, Approach},
-    speech_text::shared_words,
 };
 
 pub(super) struct Answer {
     pub(super) text: String,
     pub(super) keys: Vec<String>,
     pub(super) withheld: bool,
-}
-
-/// Keyword fallback for the question subject of one part. It decides only when Jev did not read
-/// the line; the recognised questions are bounded so it never guesses whether a claim is true.
-fn keyword_subject(part: &str) -> Option<QuestionSubject> {
-    let part = part.to_lowercase().replace('’', "'");
-    let has = |phrases: &[&str]| phrases.iter().any(|phrase| part.contains(phrase));
-    let following_question = part.trim_start().starts_with("why he's following ")
-        || part.trim_start().starts_with("why is he following ");
-    if has(&[
-        "how do you know",
-        "how did you know",
-        "did you see",
-        "did you witness",
-        "what did you see",
-        "what's your evidence",
-        "what is your evidence",
-        "how can you be sure",
-    ]) {
-        Some(QuestionSubject::Evidence)
-    } else if has(&[
-        "who sent you",
-        "who hired you",
-        "who do you work for",
-        "who are you working for",
-        "your employer",
-        "who pays you",
-        "who's paying you",
-        "who is paying you",
-        "whose orders",
-    ]) {
-        Some(QuestionSubject::Employer)
-    } else if has(&[
-        "payment",
-        "paid",
-        "pay you",
-        "pay were",
-        "pay was",
-        "reward",
-        "promised",
-        "compensation",
-    ]) {
-        Some(QuestionSubject::Payment)
-    } else if has(&[
-        "delivery before",
-        "delivered before",
-        "deliveries before",
-        "made this delivery",
-        "done this before",
-        "first delivery",
-        "first time delivering",
-        "ever delivered",
-        "delivered this before",
-        "delivered it before",
-        "delivered packets before",
-        "previous deliveries",
-    ]) {
-        Some(QuestionSubject::DeliveryHistory)
-    } else if has(&[
-        "are you hurt",
-        "were you hurt",
-        "you injured",
-        "you wounded",
-        "you bleeding",
-        "you winded",
-        "are you all right",
-        "are you alright",
-        "are you okay",
-        "how badly are you hurt",
-        "your injuries",
-    ]) {
-        Some(QuestionSubject::Condition)
-    } else if following_question
-        || has(&[
-            "why do you want",
-            "why do you need",
-            "why want",
-            "why are you after",
-            "why are you chasing",
-            "why are you following",
-            "why do you follow",
-            "why are you pursuing",
-            "what do you want",
-            "what's in it for you",
-            "what is in it for you",
-            "your motive",
-            "why does this matter to you",
-        ])
-    {
-        Some(QuestionSubject::Motive)
-    } else if has(&[
-        "who are you",
-        "your name",
-        "what should i call you",
-        "what do i call you",
-    ]) {
-        Some(QuestionSubject::Identity)
-    } else {
-        None
-    }
 }
 
 fn authored(context: &NpcReplyContext, subject: QuestionSubject) -> Option<(String, String)> {
@@ -184,32 +82,16 @@ pub(super) fn identity(context: &NpcReplyContext) -> Option<(String, String)> {
     })
 }
 
-/// Answers a part that asks no question subject from the dossier's own subject answers. The
-/// subject is Jev's when Jev read the line, otherwise the keyword subject of this part.
-fn ordinary_part(
-    context: &NpcReplyContext,
-    part: &str,
-    subject: Option<AnswerSubject>,
-) -> Vec<(String, String)> {
+/// Answers a part that asks no question subject from the dossier's own subject answers, under the
+/// reply's subject (Jev's). Without a dossier there is no authored answer.
+fn ordinary_part(context: &NpcReplyContext, subject: AnswerSubject) -> Vec<(String, String)> {
     let Some(turn) = context.turn.as_ref() else {
-        let part = part.to_lowercase();
-        if (part.contains("what happened") || part.contains("what's happened"))
-            && let Some(line) = context.facts["npc_current_scripted_line"].as_str()
-            && !line.trim().is_empty()
-            && !context.facts["forbidden"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .any(|term| crate::gameplay::adventure::dossier::mentions_term(line, term))
-        {
-            return vec![(line.to_owned(), "current_scripted_line".to_owned())];
-        }
         return Vec::new();
     };
-    let subject = subject.unwrap_or_else(|| {
-        social::classify_keywords_reading_for_dossier(part, &turn.dossier).subject
-    });
+    // "Other" is no subject at all: it never speaks for an authored answer.
+    if subject == AnswerSubject::Other {
+        return Vec::new();
+    }
     if let Some(answer) = npc_dossier::subject_fallback(
         &turn.dossier,
         subject,
@@ -222,57 +104,34 @@ fn ordinary_part(
     ) {
         return vec![answer];
     }
-    // In a compound identity question, preserve the other offered, authored answer rather
-    // than reducing "who are you and what happened?" to the name alone.
-    let mut answers: Vec<_> = context.facts["answer_from"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .filter(|line| !turn.withheld.leaks(line) && shared_words(part, line) > 0)
-        .map(|line| (line.to_owned(), String::new()))
-        .collect();
-    let part = part.to_lowercase();
-    if answers.is_empty()
-        && (part.contains("what happened") || part.contains("what's happened"))
-        && let Some(opening) = context.facts["your_opening_words"].as_str()
-        && !turn.withheld.leaks(opening)
-    {
-        answers.push((opening.to_owned(), String::new()));
-    }
-    answers
+    // Only the subject's own authored answer answers an ordinary part. Other offered lines stay in
+    // the facts for the model, so a part Jev read as a room or small-talk question is not answered
+    // with an unrelated line.
+    Vec::new()
 }
 
-/// The authored answer for the hero's question parts. Jev's per-part focus names each part's
-/// question subject when it read the line; the keyword subject decides only without Jev. The
-/// reply's `subject` is the answer subject for parts that ask no question subject. `None` means
-/// the model reply answers: a question part has no authored answer, a price question sits in a
-/// merchant's trade scope, or nothing authored answered at all. Withheld parts stay withheld.
+/// The authored answer for the hero's question parts, from Jev's per-part focus. The reply's
+/// `subject` is Jev's answer subject for parts that ask no question subject. `None` means the model
+/// reply answers: Jev did not read the line (a neutral reading), a question part has no authored
+/// answer, a price question sits in a merchant's trade scope, or nothing authored answered at all.
+/// Withheld parts stay withheld.
 pub(super) fn prepare(
     context: &NpcReplyContext,
-    approach: Approach,
     reading: &AskReading,
     subject: AnswerSubject,
 ) -> Option<Answer> {
     let parts = npc_facts::question_parts(&context.typed_words);
-    let questions: Vec<Option<QuestionSubject>> = match &reading.focus {
-        Some(foci) => (0..parts.len())
-            .map(|index| foci.get(index).and_then(|focus| focus.question_subject()))
-            .collect(),
-        None => {
-            if approach != Approach::Question && !context.typed_words.contains('?') {
-                return None;
-            }
-            parts.iter().map(|part| keyword_subject(part)).collect()
-        }
-    };
+    let foci = reading.focus.as_ref()?;
+    let questions: Vec<Option<QuestionSubject>> = (0..parts.len())
+        .map(|index| foci.get(index).and_then(|focus| focus.question_subject()))
+        .collect();
     if questions.iter().all(Option::is_none) {
         return None;
     }
     let mut lines = Vec::new();
     let mut keys = Vec::new();
     let mut withheld = false;
-    for (part, question) in parts.iter().zip(questions) {
+    for question in questions {
         let answer = match question {
             Some(question)
                 if context.withheld_subjects.contains(&question)
@@ -296,7 +155,7 @@ pub(super) fn prepare(
                 // A missing authored answer is not an answer: the model reply runs instead.
                 vec![found?]
             }
-            None => ordinary_part(context, part, reading.focus.is_some().then_some(subject)),
+            None => ordinary_part(context, subject),
         };
         for (text, key) in answer {
             let length = lines
@@ -329,21 +188,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn following_motive_requires_a_question_instead_of_an_ordinary_mention() {
-        for question in [
-            "Bandit, why are you following the Courier?",
-            "Why he's following the courier?",
-            "Why he’s following the courier?",
-            "Why is he following the courier?",
-        ] {
-            assert_eq!(keyword_subject(question), Some(QuestionSubject::Motive));
-        }
-        for statement in [
-            "He's following the Courier.",
-            "I know why he's following the Courier.",
-        ] {
-            assert_eq!(keyword_subject(statement), None);
-        }
+    fn only_a_question_focus_names_a_question_subject() {
+        assert_eq!(
+            npc_facts::Focus::Motive.question_subject(),
+            Some(QuestionSubject::Motive)
+        );
+        assert_eq!(npc_facts::Focus::SmallTalk.question_subject(), None);
+        assert_eq!(npc_facts::Focus::Other.question_subject(), None);
+    }
+
+    #[test]
+    fn a_neutral_reading_leaves_every_part_to_the_model() {
+        let context = context_without_authored_answers(PRICE_LINE);
+        assert!(prepare(&context, &AskReading::neutral(), AnswerSubject::Other).is_none());
     }
 
     const PRICE_LINE: &str = "Good day, Marek. What are you asking for the traveler's clothes?";
@@ -377,10 +234,10 @@ mod tests {
         let reading =
             AskReading::from_focus(vec![npc_facts::Focus::SmallTalk, npc_facts::Focus::Payment]);
         let plain = context_without_authored_answers(PRICE_LINE);
-        assert!(prepare(&plain, Approach::Bargain, &reading, AnswerSubject::Other).is_none());
+        assert!(prepare(&plain, &reading, AnswerSubject::Other).is_none());
         let mut trade = context_without_authored_answers(PRICE_LINE);
         trade.merchant_trade_scope = true;
-        assert!(prepare(&trade, Approach::Bargain, &reading, AnswerSubject::Other).is_none());
+        assert!(prepare(&trade, &reading, AnswerSubject::Other).is_none());
     }
 
     #[test]
@@ -390,7 +247,7 @@ mod tests {
         let mut trade = context_without_authored_answers(PRICE_LINE);
         trade.merchant_trade_scope = true;
         trade.withheld_subjects.push(QuestionSubject::Payment);
-        let answer = prepare(&trade, Approach::Bargain, &reading, AnswerSubject::Other);
+        let answer = prepare(&trade, &reading, AnswerSubject::Other);
         assert!(answer.is_some_and(|answer| answer.withheld));
     }
 }

@@ -67,9 +67,8 @@ pub(super) fn answer_offered(facts: &serde_json::Value) -> bool {
         })
 }
 
-/// What the hero's clue release is, and whether this reply may speak it. The keyword phrases
-/// and the exact secret terms set the starting state. Once Jev has read the line, the state
-/// follows `exact || jev private`: an exact secret term always releases the clue.
+/// What the hero's clue release is, and whether this reply may speak it. The clue starts withheld.
+/// Jev's private-matter reading of the hero's line sets the state from then on.
 #[derive(Clone, Debug)]
 pub(super) struct Release {
     /// The whisper itself, given to the speaker's reply only while released.
@@ -78,17 +77,8 @@ pub(super) struct Release {
     pub(super) clue_terms: Vec<String>,
     /// Every secret term this reply withholds when the clue is not released.
     pub(super) unheard: Vec<String>,
-    /// The typed words contain one of the clue's exact secret terms.
-    pub(super) exact: bool,
     /// The state now in force.
     pub(super) released: bool,
-}
-
-impl Release {
-    /// The state Jev's reading asks for: exact secret terms, or a private-matter question.
-    pub(super) fn wanted(&self, private: bool) -> bool {
-        self.exact || private
-    }
 }
 
 /// Longest in-depth spoken reply, in characters: three short sentences.
