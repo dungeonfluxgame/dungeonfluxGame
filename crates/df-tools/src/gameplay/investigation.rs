@@ -1040,7 +1040,7 @@ pub(super) async fn describe(storyteller: &Storyteller, observation: &Observatio
     let slots = [Slot::new("observation", 320).mentioning(vec![observation.target.name.clone()])];
     let result = storyteller.express(&Expression { purpose: "investigation", facts: &facts, slots: &slots,
         style: "One plain sentence about the target, in a warm narrator's voice.",
-        profile: CallProfile { output_tokens: Some(180), deadline: Some(Duration::from_secs(4)),
+        profile: CallProfile { output_tokens: Some(180), deadline: Some(Duration::from_secs(8)),
             guidance: "Describe only the target's facts. An absent target must be plainly absent. Failure cannot reveal a finding or assert hidden facts. A repeat says it was already examined and nothing new turns up. A success describes what was noticed, including the supplied finding if any. Never paste the scene title/narration, invent items, or perform taking/using/buying actions.", ..Default::default() },
     }).await;
     match result {
