@@ -37,6 +37,7 @@ pub(crate) mod commands;
 pub(super) mod config;
 pub(super) mod direct;
 pub(super) mod directions;
+mod art;
 mod economy;
 mod fight;
 pub(crate) mod history;
@@ -222,6 +223,8 @@ pub(super) fn setup(
         .route("/dev/fight/edit", post(fight::unsupported_edit))
         .route("/dev/decisions", get(audit_log::decisions))
         .route("/dev/audit", get(audit_log::audit))
+        .route("/dev/art", get(art::list))
+        .route("/dev/art/edit", post(art::edit))
         .route("/dev/music", get(music::read))
         .route("/dev/music/edit", post(music::unsupported_edit))
         .route("/dev/memory", get(memory::status))
