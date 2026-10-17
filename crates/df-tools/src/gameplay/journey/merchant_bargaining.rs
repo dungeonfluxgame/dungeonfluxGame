@@ -408,7 +408,7 @@ pub(in crate::gameplay) fn merchant_judgement_state(
     json!({
         "hero_line": hero.words.chars().take(2_000).collect::<String>(),
         "hero_meaning": hero.intent.meaning.label(),
-        "hero_price_cp": explicit_price_cp(hero.words).ok(),
+        "hero_price_cp": hero_stated_price_cp(hero.words).ok(),
         "merchant_reply": merchant_reply.chars().take(2_000).collect::<String>(),
         "pending_quote": pending_quote.map(|quote| quote_state(quote, terms)),
         "trade_items": trade_items_state(terms),
@@ -1208,8 +1208,10 @@ fn reply_context_with_quote(
         }
     }
 
-    // The amount the hero named in this line, attached only to the one entry it can refer to.
-    let named_cp = explicit_price_cp(typed_words).ok();
+    // The amount the hero named in this line. It goes only to the entry in the judged direction: a
+    // live quote fixes that direction, otherwise the hero's typed reading does.
+    let named_cp = hero_stated_price_cp(typed_words).ok();
+    let offer_direction = live_quote.map_or(line.intent.direction, |quote| Some(quote.direction));
     let single_sale_entry = available
         .iter()
         .filter(|term| term.direction == TradeDirection::HeroBuys)
@@ -1242,8 +1244,10 @@ fn reply_context_with_quote(
                 entry["maximum_bid_cp"] = json!(term.maximum_price_cp);
             }
             if let Some(cp) = named_cp.filter(|_| {
-                mentions_item(term, typed_words)
-                    || (single_entry && (live_quote.is_some() || line.intent.refers_to_active_item))
+                offer_direction.is_none_or(|direction| direction == term.direction)
+                    && (mentions_item(term, typed_words)
+                        || (single_entry
+                            && (live_quote.is_some() || line.intent.refers_to_active_item)))
             }) {
                 entry["hero_offer_cp"] = json!(cp);
             }
@@ -1274,7 +1278,7 @@ fn reply_context_with_quote(
             "When hero_offer_cp is present on a merchant_sells entry and lies from lowest_price_cp to listed_price_cp inclusive, you may accept it by stating that exact amount as your present, unconditional price for the named item. When it is below lowest_price_cp or above listed_price_cp, decline that figure or make one counteroffer within the range. Never ask the player for a figure once hero_offer_cp is present.",
             "A merchant_sells entry with available false or stock_units 0 is sold out. Say so plainly, never state a price for it, and do not invite offers for it.",
             "A spoken offer is only a proposal. It does not buy, sell, transfer, or charge anything until the player explicitly accepts that exact live quote.",
-            "For merchant_buys, a bid is one exact in-game currency amount from minimum_bid_cp to maximum_bid_cp inclusive, and the server enforces the same bounds. When hero_offer_cp is present on a merchant_buys entry and lies within that range, you may accept it by stating that exact amount as your present, unconditional bid. When it is above maximum_bid_cp, decline that figure and counter with one bid within the range; if recent_committed_purchase is present, say briefly that you sold this item recently. Never ask the player for a figure once hero_offer_cp is present.",
+            "For merchant_buys, a bid is one exact in-game currency amount from minimum_bid_cp to maximum_bid_cp inclusive, and the server enforces the same bounds. When hero_offer_cp is present on a merchant_buys entry, you must answer that figure: if it lies within that range, state that exact amount as your present, unconditional bid; if it is above maximum_bid_cp or below minimum_bid_cp, decline that figure and counter with one bid within the range. If recent_committed_purchase is present, say briefly that you sold this item recently. Never ask the player what they propose, or for any figure, once hero_offer_cp is present.",
             "A merchant_buys entry with available false cannot be bought back now. Decline plainly and name no bid.",
             "You may answer naturally, make one counteroffer, or decline. Keep any explanation brief and professional, and do not reveal private character facts unless the listener-safe facts say the character has shared them.",
         ],
@@ -1368,7 +1372,7 @@ pub(in crate::gameplay) fn rules_hero_intent(
             };
         (meaning, Some(TradeDirection::HeroBuys))
     } else if buys {
-        let meaning = if explicit_price_cp(words).is_ok() {
+        let meaning = if hero_stated_price_cp(words).is_ok() {
             HeroTradeMeaning::OfferPrice
         } else {
             HeroTradeMeaning::AskPrice
@@ -1926,9 +1930,28 @@ fn normalized_words(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether an article ("a", "an") outside the stated amount makes the amount ambiguous.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UncoveredArticles {
+    /// Merchant commitments and acceptances: any extra number-like word is a second amount.
+    Strict,
+    /// Hero speech used as context: "They're a poor fit for 1 gold?" states one amount.
+    Ignored,
+}
+
 /// Parse the single exact in-game amount a line states. Qualifiers such as "about" and several
 /// amounts are ambiguous. Meaning words such as credit or a later payment are Jev's judgement.
 pub(super) fn explicit_price_cp(reply: &str) -> Result<u32, QuoteRejection> {
+    parse_price_cp(reply, UncoveredArticles::Strict)
+}
+
+/// The amount a hero line states, for the merchant's context. Apart from articles, the rules are
+/// those of [`explicit_price_cp`]; a hero's ordinary "a" is not a second amount.
+pub(super) fn hero_stated_price_cp(words: &str) -> Result<u32, QuoteRejection> {
+    parse_price_cp(words, UncoveredArticles::Ignored)
+}
+
+fn parse_price_cp(reply: &str, articles: UncoveredArticles) -> Result<u32, QuoteRejection> {
     if has_price_qualifier(reply) {
         return Err(QuoteRejection::AmbiguousAmount);
     }
@@ -1982,9 +2005,11 @@ pub(super) fn explicit_price_cp(reply: &str) -> Result<u32, QuoteRejection> {
         covered[*start..*end].fill(true);
     }
     if tokens.iter().enumerate().any(|(index, token)| {
+        let article = matches!(token.text.as_str(), "a" | "an");
         !covered[index]
             && (token.text.bytes().any(|byte| byte.is_ascii_digit())
-                || is_cardinal_word(&token.text))
+                || (is_cardinal_word(&token.text)
+                    && !(articles == UncoveredArticles::Ignored && article)))
     }) {
         return Err(QuoteRejection::AmbiguousAmount);
     }

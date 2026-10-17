@@ -4,11 +4,11 @@ use super::merchant_bargaining::{
     HeroLine, HeroTradeIntent, HeroTradeMeaning, MerchantBuybackMemory, MerchantMeaning,
     MerchantReplyCommitment, QuoteDecision, QuoteRejection, TradeDirection, TradeExchange,
     TradeJudgement, TradeTerms, attach_buyback_memory, constrain_buyback_ceiling,
-    explicit_price_cp, fixed_price_purchase, hero_intent_from_judgement, is_trade_dialogue_request,
-    merchant_commitment_from_judgement, quote_candidate, quote_candidate_for_item,
-    quote_candidate_for_reply, quote_decision, referenced_item_id, reply_context,
-    reply_context_for_quote, revalidate_quote, rules_hero_intent, rules_merchant_commitment,
-    rules_quote_decision,
+    explicit_price_cp, fixed_price_purchase, hero_intent_from_judgement, hero_stated_price_cp,
+    is_trade_dialogue_request, merchant_commitment_from_judgement, quote_candidate,
+    quote_candidate_for_item, quote_candidate_for_reply, quote_decision, referenced_item_id,
+    reply_context, reply_context_for_quote, revalidate_quote, rules_hero_intent,
+    rules_merchant_commitment, rules_quote_decision,
 };
 use crate::gameplay::approach_model::JevUnavailable;
 
@@ -1466,5 +1466,116 @@ fn withdrawal_recheck_uses_the_judged_refusal_and_the_same_turn() {
         ),
         Err(QuoteRejection::OutOfRange),
         "the deterministic bounds are checked again without repeating the judgement"
+    );
+}
+
+/// The post-purchase terms after Marek bought the only traveler's clothes: the sale is sold out and
+/// the buyback of the same instance is capped at half its 200 CP value.
+fn sold_out_sale_and_buyback() -> [TradeTerms; 2] {
+    let mut sold_out = travelers_clothes_sale();
+    sold_out.available = false;
+    sold_out.stock_units = 0;
+    let mut buyback = terms(TradeDirection::HeroSells);
+    buyback.item_name = "traveler's clothes".into();
+    buyback.aliases = vec!["travelers clothes".into()];
+    buyback.minimum_price_cp = 1;
+    buyback.maximum_price_cp = 100;
+    [sold_out, buyback]
+}
+
+#[test]
+fn live_buyback_line_after_purchase_gives_the_hero_figure_to_the_buyback_entry_only() {
+    let line_words = "They're a poor fit after all. Marek, would you buy these traveler's clothes back from me for 1 gold?";
+    let terms = sold_out_sale_and_buyback();
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("sell_to_merchant").unwrap(),
+        words: line_words,
+    };
+    let context = reply_context(
+        &terms,
+        "sigrun",
+        "marek",
+        line,
+        Some("item-clothes-travelers"),
+        &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+    )
+    .expect("the buyback line has a trade context");
+
+    let trades = context["available_trades"].as_array().unwrap();
+    assert_eq!(
+        trades.len(),
+        1,
+        "the sold-out sale is not offered in a buyback turn"
+    );
+    let buyback = &trades[0];
+    assert_eq!(buyback["direction"], "merchant_buys");
+    assert_eq!(buyback["maximum_bid_cp"], 100);
+    assert_eq!(buyback["hero_offer_cp"], 100);
+    let figures = trades
+        .iter()
+        .filter(|entry| entry.get("hero_offer_cp").is_some())
+        .count();
+    assert_eq!(figures, 1, "exactly one entry carries the hero's figure");
+    assert!(
+        context["negotiation_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule.as_str().is_some_and(|rule| {
+                rule.contains("you must answer that figure")
+                    && rule.contains("Never ask the player what they propose")
+            })),
+        "the merchant must answer the stated figure rather than ask for one"
+    );
+}
+
+#[test]
+fn buy_line_gives_the_hero_figure_to_the_sale_entry_and_not_to_the_buyback() {
+    let [sale, buyback] = sold_out_sale_and_buyback();
+    let mut available_sale = sale;
+    available_sale.available = true;
+    available_sale.stock_units = 1;
+    let line_words = "I'll buy the traveler's clothes for 1 gold.";
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+        words: line_words,
+    };
+    let context = reply_context(
+        &[available_sale, buyback],
+        "sigrun",
+        "marek",
+        line,
+        None,
+        &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+    )
+    .expect("the purchase line has a trade context");
+
+    let trades = context["available_trades"].as_array().unwrap();
+    assert_eq!(trades.len(), 1);
+    assert_eq!(trades[0]["direction"], "merchant_sells");
+    assert_eq!(trades[0]["hero_offer_cp"], 100);
+}
+
+#[test]
+fn hero_lines_state_their_figure_past_an_article_and_merchant_lines_stay_strict() {
+    for wording in [
+        "1 gold",
+        "1 gold?",
+        "a gold piece",
+        "one gold",
+        "100 copper",
+        "1 gp",
+    ] {
+        let line = format!("They're a poor fit after all. Would you buy these back for {wording}?");
+        assert_eq!(
+            hero_stated_price_cp(&line),
+            Ok(100),
+            "hero wording: {wording}"
+        );
+    }
+    assert_eq!(
+        explicit_price_cp("They're a poor fit after all. I can do 1 gold for them."),
+        Err(QuoteRejection::AmbiguousAmount),
+        "a merchant commitment keeps the strict reading of an extra article"
     );
 }
