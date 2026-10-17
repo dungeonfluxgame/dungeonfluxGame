@@ -7,6 +7,8 @@
 
 use std::{ffi::OsString, time::Duration};
 
+#[path = "dev_cli/dice.rs"]
+mod dice;
 #[path = "dev_cli/layout.rs"]
 mod layout;
 #[path = "dev_cli/play.rs"]
@@ -216,7 +218,10 @@ fn print_help() {
          lore add <scene> <kind> <name> <content>  add one fact through the reply validator; marks edited\n\
          lore edit|delete ...         unsupported here: answers unavailable with the reason\n\
          social <npc> [--hero <name>] attitude, trust, emotion and grievances with their causes\n\
-         social edit <op> <npc> <hero> [value]  unsupported here: answers unavailable\n\
+         social edit <npc> <hero> attitude friendly|indifferent|hostile | trust <-1..1>  set one standing (marks edited)\n\
+         npc say <npc> <text>         the NPC speaks one line on the table; it must be on stage\n\
+         npc act <npc> <action> [--target <foe>] [--weapon <name>] [--to <col,row>]  the NPC's fight turn: attack move dash dodge disengage end-turn\n\
+         npc hold <npc> on|off        hold the NPC's fight turns for the CLI; off lets the policy take a turn that waits\n\
          fight                        the open scene fight, its people and the latest roster\n\
          fight restore <person> | end unsupported here: answers unavailable\n\
          scene-changes [--last <n>]   committed scene changes with their receipts\n\
@@ -225,6 +230,7 @@ fn print_help() {
          decisions [--kind <kind>] [--last <n>]  Jev classifications; neutral marks the rules fallback\n\
          art [list <prefix>]          generated depictions on the hub; art regenerate|clear character:<id>|place:<id>\n\
          fx [<effect> on|off]         the TV's screen-space effects: blur drift scrim grain vignette firelight dust grade\n\
+         dice [next <face…>|clear] [--die d20]  forced faces for the next die draws (d4 d6 d8 d10 d12 d20 d100), first in first out\n\
          music                        the current music plan; music regenerate|clear <place> unsupported\n\
          memory [status]              story memory: counts by kind, embedding backlog and model, spend, queue\n\
          memory search <query> [--entity <id>] [--kind <kind>] [--audience public|party|member:<hero>] [--limit <n>]  the recall path the generators use\n\
@@ -422,9 +428,11 @@ async fn dispatch(
         "lore" => lore(client, positional, options).await,
         "social" => social(client, positional, options).await,
         "fight" => fight(client, positional).await,
+        "npc" => npc(client, positional, options).await,
         "economy" => economy(client, positional, options).await,
         "art" => art(client, positional).await,
         "fx" => fx(client, positional).await,
+        "dice" => dice::run(client, positional, options).await,
         "music" => music(client, positional).await,
         "memory" => memory(client, positional, options).await,
         "scene-changes" => {
@@ -763,14 +771,80 @@ async fn memory(
     }
 }
 
-/// The body of `dev social edit <op> <npc> <hero> [value…]`.
+/// The body of `dev social edit <npc> <hero> attitude|trust <value>`.
 fn social_edit_body(positional: &[String]) -> Result<Value, String> {
-    let (Some(op), Some(npc), Some(hero)) =
-        (positional.get(2), positional.get(3), positional.get(4))
-    else {
-        return Err("social edit needs <op> <npc> <hero> [value]".to_owned());
+    let (Some(npc), Some(hero), Some(op), Some(value)) = (
+        positional.get(2),
+        positional.get(3),
+        positional.get(4),
+        positional.get(5),
+    ) else {
+        return Err("social edit needs <npc> <hero> attitude|trust <value>".to_owned());
     };
-    Ok(json!({"op": op, "npc": npc, "hero": hero, "value": rest_text(positional, 5)}))
+    Ok(json!({"npc": npc, "hero": hero, "op": op, "value": value}))
+}
+
+/// The body of `dev npc say <npc> <text…>`.
+fn npc_say_body(positional: &[String]) -> Result<Value, String> {
+    let Some(npc) = positional.get(2) else {
+        return Err("npc say needs <npc> <text>".to_owned());
+    };
+    let text = rest_text(positional, 3);
+    if text.trim().is_empty() {
+        return Err("npc say needs <npc> <text>".to_owned());
+    }
+    Ok(json!({"npc": npc, "text": text}))
+}
+
+/// The body of `dev npc act <npc> <action> [--target] [--weapon] [--to]`.
+fn npc_act_body(positional: &[String], options: &[(String, String)]) -> Result<Value, String> {
+    let (Some(npc), Some(action)) = (positional.get(2), positional.get(3)) else {
+        return Err("npc act needs <npc> <action>".to_owned());
+    };
+    Ok(json!({
+        "npc": npc,
+        "action": action,
+        "target": option_value(options, "--target"),
+        "weapon": option_value(options, "--weapon"),
+        "to": option_value(options, "--to"),
+    }))
+}
+
+/// The body of `dev npc hold <npc> on|off`.
+fn npc_hold_body(positional: &[String]) -> Result<Value, String> {
+    let (Some(npc), Some(state)) = (positional.get(2), positional.get(3)) else {
+        return Err("npc hold needs <npc> on|off".to_owned());
+    };
+    let on = match state.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return Err("npc hold takes on or off".to_owned()),
+    };
+    Ok(json!({"npc": npc, "on": on}))
+}
+
+async fn npc(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    match positional.get(1).map(String::as_str) {
+        Some("say") => match npc_say_body(positional) {
+            Ok(body) => post(client, "/dev/npc/say", &body).await,
+            Err(message) => client.print_error(message),
+        },
+        Some("act") => match npc_act_body(positional, options) {
+            Ok(body) => post(client, "/dev/npc/act", &body).await,
+            Err(message) => client.print_error(message),
+        },
+        Some("hold") => match npc_hold_body(positional) {
+            Ok(body) => post(client, "/dev/npc/hold", &body).await,
+            Err(message) => client.print_error(message),
+        },
+        _ => client.print_error(
+            "npc takes say <npc> <text>, act <npc> <action> [...], or hold <npc> on|off",
+        ),
+    }
 }
 
 async fn social(
@@ -1239,12 +1313,13 @@ mod dev_write_request_tests {
     #[test]
     fn social_edit_and_economy_requests_name_their_target_and_refuse_missing_parts() {
         let edit =
-            social_edit_body(&words("social edit attitude merchant Brynn friendly")).unwrap();
+            social_edit_body(&words("social edit merchant Brynn attitude friendly")).unwrap();
         assert_eq!(edit["op"], "attitude");
         assert_eq!(edit["npc"], "merchant");
         assert_eq!(edit["hero"], "Brynn");
         assert_eq!(edit["value"], "friendly");
-        assert!(social_edit_body(&words("social edit attitude merchant")).is_err());
+        assert!(social_edit_body(&words("social edit merchant Brynn attitude")).is_err());
+        assert!(social_edit_body(&words("social edit merchant")).is_err());
 
         let options = [("--cp".to_owned(), "200".to_owned())];
         let purse = economy_body(&words("economy purse merchant"), &options).unwrap();
@@ -1263,6 +1338,34 @@ mod dev_write_request_tests {
         assert_eq!(offer["what"], "offer");
         assert_eq!(offer["op"], "restock");
         assert!(economy_body(&words("economy"), &[]).is_err());
+    }
+
+    #[test]
+    fn npc_say_act_and_hold_name_their_npc_and_refuse_missing_parts() {
+        let say = npc_say_body(&words("npc say merchant Keep the lamp lit.")).unwrap();
+        assert_eq!(say["npc"], "merchant");
+        assert_eq!(say["text"], "Keep the lamp lit.");
+        assert!(npc_say_body(&words("npc say merchant")).is_err());
+
+        let options = [
+            ("--target".to_owned(), "Brynn".to_owned()),
+            ("--weapon".to_owned(), "scimitar".to_owned()),
+        ];
+        let act = npc_act_body(&words("npc act bandit attack"), &options).unwrap();
+        assert_eq!(act["npc"], "bandit");
+        assert_eq!(act["action"], "attack");
+        assert_eq!(act["target"], "Brynn");
+        assert_eq!(act["weapon"], "scimitar");
+        assert!(act["to"].is_null());
+        assert!(npc_act_body(&words("npc act bandit"), &[]).is_err());
+
+        let hold = npc_hold_body(&words("npc hold bandit on")).unwrap();
+        assert_eq!(hold["on"], true);
+        assert_eq!(
+            npc_hold_body(&words("npc hold bandit off")).unwrap()["on"],
+            false
+        );
+        assert!(npc_hold_body(&words("npc hold bandit maybe")).is_err());
     }
 }
 

@@ -1107,6 +1107,51 @@ impl SocialLedger {
             })
     }
 
+    /// Sets one hero's attitude and/or trust with one NPC for a development edit. The values must
+    /// be a standing the dossier can hold: trust within one step either way, and no friendliness
+    /// for an opposing NPC that does not start friendly. A refused edit changes nothing.
+    pub(super) fn dev_set_standing(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        attitude: Option<Attitude>,
+        trust: Option<i8>,
+    ) -> Result<Standing, SocialError> {
+        if trust.is_some_and(|trust| trust.abs() >= TRUST_STEP) {
+            return Err(SocialError::Invalid("trust is out of range"));
+        }
+        let mut relationships = self.lock();
+        let key = (member, dossier.npc_id.clone());
+        let current = relationships.get(&key).map_or(
+            Standing {
+                attitude: dossier.starting_attitude,
+                trust: 0,
+            },
+            |relationship| Standing {
+                attitude: relationship.attitude,
+                trust: relationship.trust,
+            },
+        );
+        let next_attitude = attitude.unwrap_or(current.attitude);
+        if next_attitude == Attitude::Friendly
+            && dossier.role.opposes_party()
+            && dossier.starting_attitude != Attitude::Friendly
+        {
+            return Err(SocialError::Invalid(
+                "an opposing NPC does not become friendly",
+            ));
+        }
+        let relationship = relationships
+            .entry(key)
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.attitude = next_attitude;
+        relationship.trust = trust.unwrap_or(current.trust);
+        Ok(Standing {
+            attitude: relationship.attitude,
+            trust: relationship.trust,
+        })
+    }
+
     /// How this NPC feels about this hero right now.
     pub(super) fn standing(&self, member: MemberId, dossier: &Dossier) -> Standing {
         self.lock().get(&(member, dossier.npc_id.clone())).map_or(

@@ -57,6 +57,12 @@ pub(crate) enum DevJob {
     HitPoints { member: [u8; 16], value: i64 },
     /// Set the narrative (provider) budget (validated against the pack cap).
     Budget { value: u64, cap: u64 },
+    /// One fight turn for an NPC: its chosen action, or the policy once a hold is released. The
+    /// owner resolves it with the rules and commits the receipt as a fight decision.
+    NpcTurn {
+        npc: String,
+        act: super::npc::NpcAct,
+    },
 }
 
 impl DevJob {
@@ -65,6 +71,7 @@ impl DevJob {
             Self::Restore { moment, what } => {
                 moment.retained_heap_bytes()?.checked_add(what.capacity())?
             }
+            Self::NpcTurn { npc, act } => npc.capacity() + act.label().capacity(),
             Self::HitPoints { .. } | Self::Budget { .. } => 0,
         }
         .checked_add(size_of::<Self>())
@@ -76,6 +83,7 @@ impl DevJob {
             Self::Restore { what, .. } => format!("dev:restore:{what}"),
             Self::HitPoints { value, .. } => format!("dev:override:hp={value}"),
             Self::Budget { value, .. } => format!("dev:override:budget={value}"),
+            Self::NpcTurn { npc, act } => format!("dev:npc:{npc}:{}", act.label()),
         }
     }
 }

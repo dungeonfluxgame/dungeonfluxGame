@@ -1,10 +1,11 @@
 //! Native tactical orchestration. Rules alone own legality, positions and consequences.
+use super::super::dev_control::npc::NpcAct;
 use super::*;
 use df_rules::tactical as tactical_rules;
 use sha2::{Digest, Sha256};
 use tactical_rules::{
-    Action, AttackSpend, AttackUse, Battle, BattleMap, CombatantSpec, DrawBinding, RuleError, Side,
-    Weapon,
+    Action, AttackSpend, AttackUse, Battle, BattleMap, CombatantSpec, CreatureKind, DrawBinding,
+    RuleError, Side, Weapon,
 };
 
 const ENEMY_ENTITIES: [[u8; 16]; 4] = [[0x65; 16], [0x71; 16], [0x72; 16], [0x73; 16]];
@@ -1073,14 +1074,22 @@ fn enemy_turns(
         if battle.actor(actor).map_err(bad)?.side() == Side::Heroes {
             return Ok(());
         }
-        let action = policy(
-            current,
-            state,
-            &battle,
-            actor,
-            operation,
-            u32::try_from(draws.len()).map_err(bad)?,
-        )?;
+        // A held NPC's turn waits for the CLI: the battle stays stored with this NPC active until
+        // `dev npc act` or a released hold resolves it. The hold is read before the policy runs.
+        let held = super::super::dev_control::npc::held(&name(state, canonical(state, actor)?)?);
+        let Some(action) = super::super::dev_control::npc::choose_turn(held, || {
+            policy(
+                current,
+                state,
+                &battle,
+                actor,
+                operation,
+                u32::try_from(draws.len()).map_err(bad)?,
+            )
+        })?
+        else {
+            return Ok(());
+        };
         let (action_name, reason) = enemy_action_description(&action);
         super::super::actor::record_enemy_turn(
             &name(state, canonical(state, actor)?)?,
@@ -1127,6 +1136,262 @@ fn enemy_action_description(action: &Action) -> (&'static str, &'static str) {
         Action::DoffShield => ("doff-shield", "change equipment"),
         Action::PickUpWeapon(_) => ("pick-up-weapon", "recover a dropped weapon"),
     }
+}
+
+/// One NPC fight turn taken on the CLI's order, resolved by the rules and ready to commit as one
+/// thread decision: the state after the turn, the draws it consumed, the receipt the view reads,
+/// and the human before and after for the override log.
+pub(in crate::gameplay) struct StagedNpcTurn {
+    pub(in crate::gameplay) state: GameState,
+    pub(in crate::gameplay) draws: Vec<ActualDraw>,
+    pub(in crate::gameplay) receipt: String,
+    pub(in crate::gameplay) before: String,
+    pub(in crate::gameplay) after: String,
+}
+
+/// The combatant the battle is waiting on: a pending reaction first, otherwise the active turn.
+fn waiting_actor(battle: &Battle) -> Option<u32> {
+    battle
+        .reaction_offers()
+        .first()
+        .copied()
+        .or_else(|| battle.active_actor())
+}
+
+/// The display name of the NPC whose turn the open fight is waiting on, if it is an enemy's.
+pub(in crate::gameplay) fn waiting_npc(state: &GameState) -> Option<String> {
+    if !present(state) {
+        return None;
+    }
+    let battle = read(state).ok()?;
+    let id = waiting_actor(&battle)?;
+    if battle.actor(id).ok()?.side() == Side::Heroes {
+        return None;
+    }
+    name(state, canonical(state, id).ok()?).ok()
+}
+
+/// The waiting combatant, provided it is the NPC the CLI named.
+fn npc_waiting_actor(state: &GameState, battle: &Battle, npc: &str) -> Result<u32, String> {
+    let waiting = waiting_actor(battle).ok_or("no combatant is waiting for a turn")?;
+    if battle
+        .actor(waiting)
+        .map_err(|_| "the waiting combatant is not in the fight")?
+        .side()
+        == Side::Heroes
+    {
+        return Err(format!("it is a hero's turn, not {npc}'s"));
+    }
+    let display = name(
+        state,
+        canonical(state, waiting).map_err(|_| "fight roster")?,
+    )
+    .map_err(|_| "fight roster")?;
+    if !display.eq_ignore_ascii_case(npc) {
+        return Err(format!("it is {display}'s turn, not {npc}'s"));
+    }
+    Ok(waiting)
+}
+
+/// The foe the NPC named by display name or combatant id.
+fn foe_named(
+    state: &GameState,
+    battle: &Battle,
+    actor: u32,
+    requested: &str,
+) -> Result<u32, String> {
+    let side = battle
+        .actor(actor)
+        .map_err(|_| "the NPC is not in the fight")?
+        .side();
+    for other in battle.combatants() {
+        if other.side() == side {
+            continue;
+        }
+        let display = name(
+            state,
+            canonical(state, other.id()).map_err(|_| "fight roster")?,
+        )
+        .map_err(|_| "fight roster")?;
+        if display.eq_ignore_ascii_case(requested)
+            || requested.parse::<u32>().is_ok_and(|id| id == other.id())
+        {
+            return Ok(other.id());
+        }
+    }
+    Err(format!("{requested:?} is not a foe in this fight"))
+}
+
+/// The weapon the NPC attacks with: the one named, or its only one.
+fn chosen_weapon(
+    actor: &tactical_rules::Combatant,
+    requested: Option<&str>,
+) -> Result<Weapon, String> {
+    let weapons = &actor.spec().weapons;
+    match requested {
+        Some(text) => weapons
+            .iter()
+            .copied()
+            .find(|weapon| weapon.id().eq_ignore_ascii_case(text))
+            .ok_or_else(|| format!("{text:?} is not one of its weapons")),
+        None => match weapons.as_slice() {
+            [only] => Ok(*only),
+            _ => Err("name the weapon with --weapon".to_owned()),
+        },
+    }
+}
+
+/// The rules action a CLI act names, checked against the battle before the rules resolve it.
+/// `Policy` has none: the enemy policy chooses. A pending reaction admits only the policy.
+fn act_action(
+    state: &GameState,
+    battle: &Battle,
+    id: u32,
+    act: &NpcAct,
+) -> Result<Option<Action>, String> {
+    if battle.reaction_offers().first().is_some() && *act != NpcAct::Policy {
+        return Err(
+            "a reaction is waiting on this NPC: release the hold to let the policy answer it"
+                .to_owned(),
+        );
+    }
+    let actor = battle
+        .actor(id)
+        .map_err(|_| "the NPC is not in the fight")?;
+    let action = match act {
+        NpcAct::Policy => None,
+        NpcAct::EndTurn => Some(Action::EndTurn),
+        NpcAct::Dash => Some(Action::Dash),
+        NpcAct::Dodge => Some(Action::Dodge),
+        NpcAct::Disengage => Some(Action::Disengage),
+        NpcAct::Move { cell: (col, row) } => {
+            let path = battle
+                .shortest_path(
+                    id,
+                    tactical_rules::Cell(*col, *row),
+                    Some(actor.movement_remaining_ft()),
+                )
+                .map_err(|_| format!("no path to {col},{row} within this turn's movement"))?;
+            Some(Action::Move(path))
+        }
+        NpcAct::Attack {
+            target,
+            weapon: requested,
+        } => {
+            let target = foe_named(state, battle, id, target)?;
+            let chosen = chosen_weapon(actor, requested.as_deref())?;
+            let usage = weapon(actor, chosen);
+            if !battle
+                .legal_targets(id, usage)
+                .map_err(|_| "no attack is legal from here")?
+                .contains(&target)
+            {
+                return Err("that foe is not in reach of this weapon from here".to_owned());
+            }
+            let spend = if actor.budget().action_used
+                && actor.spec().kind == CreatureKind::Scout
+                && actor.extra_attacks_available()
+            {
+                AttackSpend::Multiattack
+            } else {
+                AttackSpend::Action
+            };
+            Some(Action::Attack {
+                target,
+                weapon: usage,
+                spend,
+            })
+        }
+    };
+    Ok(action)
+}
+
+/// Resolves one NPC turn against the open fight: the act the CLI chose, or `Policy` to let the
+/// enemy policy take a turn whose hold was released. Refused unless the battle is waiting on that
+/// NPC and the turn leaves the fight open. Nothing is committed here: the owner commits the
+/// returned turn as one decision, as a hero's action is committed.
+pub(in crate::gameplay) fn npc_turn(
+    current: &Checkpoint,
+    npc: &str,
+    act: &NpcAct,
+    operation: OperationId,
+) -> Result<StagedNpcTurn, String> {
+    if !present(current.state()) {
+        return Err("no fight is open: NPC actions outside a fight are a later step".to_owned());
+    }
+    let mut state = current.state().clone();
+    let battle = read(&state).map_err(|error| format!("fight state unavailable: {error:?}"))?;
+    let id = npc_waiting_actor(&state, &battle, npc)?;
+    let action = act_action(&state, &battle, id, act)?;
+    let mut draws = Vec::new();
+    let mut outcomes = Vec::new();
+    let mut sample = super::sample_face;
+    let supplier: super::DiceSource<'_> = &mut sample;
+    let next = match &action {
+        Some(action) => apply(
+            &mut state,
+            &battle,
+            id,
+            action,
+            operation,
+            (&mut draws, &mut outcomes),
+            supplier,
+        )
+        .map_err(|error| format!("the rules refused {}: {error:?}", act.label()))?,
+        None => battle,
+    };
+    enemy_turns(
+        current,
+        &mut state,
+        next,
+        operation,
+        &mut draws,
+        &mut outcomes,
+        supplier,
+    )
+    .map_err(|error| format!("the turn could not be resolved: {error:?}"))?;
+    let ended = match read(&state) {
+        Ok(battle) => battle.finished(),
+        Err(_) => true,
+    };
+    if ended {
+        return Err(
+            "this turn would end the fight: fight endings stay on the hero's path".to_owned(),
+        );
+    }
+    let receipt = rpc::AcceptedAction {
+        combat: outcomes,
+        phase: rpc::JourneyPhase::Combat as i32,
+        ..Default::default()
+    };
+    let encoded = super::hex(&receipt.encode_to_vec());
+    if encoded.len() > model::limits().maximum_text_bytes {
+        return Err("the turn's receipt is too large to record".to_owned());
+    }
+    let policy_revision = snapshot(&state)
+        .map(|saved| saved.source_revision.as_str().to_owned())
+        .map_err(|_| "fight snapshot unavailable")?;
+    let (action_name, reason) = match &action {
+        Some(action) => enemy_action_description(action),
+        None => ("policy", "hold released"),
+    };
+    super::super::actor::record_enemy_turn(
+        npc,
+        &super::hex(operation.as_bytes()),
+        &super::hex(current.basis().run.as_bytes()),
+        current.basis().revision.sequence(),
+        &policy_revision,
+        action_name,
+        reason,
+        &act.label(),
+    );
+    Ok(StagedNpcTurn {
+        state,
+        draws,
+        receipt: encoded,
+        before: format!("{npc} waiting for its turn"),
+        after: format!("{npc}: {}", act.label()),
+    })
 }
 
 #[cfg(test)]

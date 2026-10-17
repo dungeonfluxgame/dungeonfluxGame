@@ -2447,16 +2447,7 @@ fn sample_face(sides: u32) -> Result<u32, RepositoryError> {
     {
         return Err(RepositoryError::InvalidCandidate);
     }
-    for _ in 0..16 {
-        let mut bytes = [0_u8; 1];
-        model::fill_os_entropy(&mut bytes).map_err(|_| RepositoryError::Unavailable)?;
-        let [byte] = bytes;
-        let bucket = 256 - (256 % sides);
-        if u32::from(byte) < bucket {
-            return Ok(u32::from(byte) % sides + 1);
-        }
-    }
-    Err(RepositoryError::Unavailable)
+    super::dice::draw(sides)
 }
 fn draw(
     operation: OperationId,

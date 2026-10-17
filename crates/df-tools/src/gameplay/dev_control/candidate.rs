@@ -39,6 +39,10 @@ pub(crate) enum Change {
     HitPoints { member: MemberId, value: i64 },
     /// Set the narrative (provider) budget, validated against the pack cap.
     Budget { value: u64, cap: u64 },
+    /// One NPC fight turn already resolved by the rules: its state, draws and receipt.
+    NpcTurn {
+        turn: Box<super::super::journey::tactical::StagedNpcTurn>,
+    },
 }
 
 /// Builds the candidate for one dev commit. `inventory`/`limits` are the
@@ -57,21 +61,40 @@ pub(crate) fn build(
 ) -> Result<Built, String> {
     let mut state = match change {
         Change::Restore { saved, .. } => restore_state(current, saved)?,
+        Change::NpcTurn { turn } => turn.state.clone(),
         _ => current.state().clone(),
     };
     let (before, after) = match change {
         Change::Restore { what, .. } => (describe_revision(current), format!("restored {what}")),
         Change::HitPoints { member, value } => apply_hit_points(&mut state, *member, *value)?,
         Change::Budget { value, cap } => apply_budget(&mut state, *value, *cap)?,
+        Change::NpcTurn { turn } => (turn.before.clone(), turn.after.clone()),
     };
-    let decision = AcceptedDecision {
-        operation,
-        revision: next,
-        facts: Vec::new(),
-        draws: Vec::new(),
-        effects: Vec::new(),
-        source_policy: policy,
-        semantic_output: Some(note),
+    let decision = match change {
+        Change::NpcTurn { turn } => {
+            // A fight turn is a thread decision: its receipt carries the combat outcomes the
+            // view reads, and its draws are the ones the rules consumed.
+            state.draws.extend(turn.draws.iter().cloned());
+            AcceptedDecision {
+                operation,
+                revision: next,
+                facts: Vec::new(),
+                draws: turn.draws.iter().map(|draw| draw.ordinal).collect(),
+                effects: Vec::new(),
+                source_policy: super::super::model::label(super::super::journey::THREAD_POLICY)
+                    .map_err(|_| "thread policy label unavailable".to_owned())?,
+                semantic_output: Some(turn.receipt.clone()),
+            }
+        }
+        _ => AcceptedDecision {
+            operation,
+            revision: next,
+            facts: Vec::new(),
+            draws: Vec::new(),
+            effects: Vec::new(),
+            source_policy: policy,
+            semantic_output: Some(note),
+        },
     };
     state.decisions.push(decision);
     let basis = Basis {

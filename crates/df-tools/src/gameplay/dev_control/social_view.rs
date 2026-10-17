@@ -11,11 +11,12 @@ use df_protocol::common as rpc;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
-use super::{Outcome, Shared, authorized, bad_request, failed, write_unavailable};
+use super::{Outcome, Shared, authorized, bad_request, failed};
 use crate::gameplay::{
+    adventure::dossier::{Attitude, Dossier},
     beat_script_runtime, journey,
     pack::Scene,
-    social::{EmotionalState, SocialLedger},
+    social::{EmotionalState, SocialError, SocialLedger},
 };
 use df_types::MemberId;
 
@@ -123,16 +124,149 @@ pub(super) async fn read(
     Ok((StatusCode::OK, Json(document)))
 }
 
-/// `POST /dev/social/edit`: standing is not changed by this surface.
-pub(super) async fn unsupported_edit(
+/// The body of `POST /dev/social/edit`: one NPC's standing with one hero, set by `attitude` or
+/// `trust`.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EditBody {
+    npc: String,
+    hero: String,
+    op: String,
+    value: String,
+}
+
+fn attitude_of(text: &str) -> Option<Attitude> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "friendly" => Some(Attitude::Friendly),
+        "indifferent" => Some(Attitude::Indifferent),
+        "hostile" => Some(Attitude::Hostile),
+        _ => None,
+    }
+}
+
+fn standing_label(attitude: Attitude, trust: i8) -> String {
+    format!("{} trust {trust}", attitude.label())
+}
+
+fn dossier_for<'a>(
+    social: &'a SocialLedger,
+    scene: &Scene,
+    requested: &str,
+) -> Result<&'a Dossier, (StatusCode, Json<Value>)> {
+    let id = super::reads::feelings_identity(scene, requested);
+    let (role_label, person_id) = id
+        .split_once(':')
+        .ok_or_else(|| bad_request(format!("NPC {requested:?} has no social profile here")))?;
+    let role = role_of(role_label).ok_or_else(|| bad_request("NPC role unknown"))?;
+    social
+        .dossier_of(role, person_id)
+        .ok_or_else(|| bad_request("NPC profile not found"))
+}
+
+fn member_of(
+    game: &df_model::checkpoint::GameState,
+    hero: &str,
+) -> Result<MemberId, (StatusCode, Json<Value>)> {
+    for character in &game.characters {
+        let name =
+            journey::name(game, character.entity).map_err(|_| failed("hero name unavailable"))?;
+        if name.eq_ignore_ascii_case(hero) {
+            return Ok(character.owner);
+        }
+    }
+    Err(bad_request(format!("unknown hero {hero:?}")))
+}
+
+/// `POST /dev/social/edit {"npc", "hero", "op": "attitude"|"trust", "value"}`: sets one hero's
+/// standing with one NPC. A value the dossier cannot hold is refused and changes nothing. An
+/// applied edit is saved with the ledger, audited, and marks the run edited like an override.
+pub(super) async fn edit(
     State(state): State<Arc<Shared>>,
     headers: HeaderMap,
+    Json(body): Json<EditBody>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    write_unavailable(
-        "social",
-        "attitude, grievance and never-forgives edits need mutators on the social ledger that this surface does not add; read them with dev social",
-    )
+    let (attitude, trust) = match body.op.as_str() {
+        "attitude" => (
+            Some(
+                attitude_of(&body.value)
+                    .ok_or_else(|| bad_request("attitude is friendly, indifferent or hostile"))?,
+            ),
+            None,
+        ),
+        "trust" => (
+            None,
+            Some(
+                body.value
+                    .trim()
+                    .parse::<i8>()
+                    .map_err(|_| bad_request("trust is a whole number"))?,
+            ),
+        ),
+        _ => return Err(bad_request("social edit takes attitude or trust")),
+    };
+    let checkpoint = state.service.updates.borrow().clone();
+    let scene = beat_script_runtime::scene(checkpoint.state())
+        .map_err(|_| failed("current scene unavailable"))?;
+    let dossier = dossier_for(&state.social, &scene, &body.npc)?;
+    let member = member_of(checkpoint.state(), &body.hero)?;
+    let before = state.social.standing(member, dossier);
+    let after = match state
+        .social
+        .dev_set_standing(member, dossier, attitude, trust)
+    {
+        Ok(after) => after,
+        Err(SocialError::Invalid(reason)) => {
+            crate::gameplay::actor::record_audit_line(
+                "gameplay.dev.social_edit",
+                format!(
+                    "DEV-SOCIAL edit status=refused npc={:?} reason={reason:?}",
+                    body.npc
+                ),
+            );
+            return Ok((
+                StatusCode::OK,
+                Json(json!({"status": "refused", "reason": reason, "edited": false})),
+            ));
+        }
+        Err(_) => return Err(failed("social standing could not be changed")),
+    };
+    let ledger = state.social.clone();
+    match tokio::task::spawn_blocking(move || ledger.save()).await {
+        Ok(Ok(())) => {}
+        _ => {
+            return Err(failed(
+                "standing changed but the social ledger could not be saved",
+            ));
+        }
+    }
+    let before_label = standing_label(before.attitude, before.trust);
+    let after_label = standing_label(after.attitude, after.trust);
+    crate::gameplay::actor::record_audit_line(
+        "gameplay.dev.social_edit",
+        format!(
+            "DEV-SOCIAL edit status=edited npc={:?} hero={:?} before={before_label:?} after={after_label:?}",
+            body.npc, body.hero
+        ),
+    );
+    state.overrides.lock().await.push(json!({
+        "kind": "social",
+        "target": body.npc,
+        "hero": body.hero,
+        "before": before_label,
+        "after": after_label,
+    }));
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "edited",
+            "npc": body.npc,
+            "hero": body.hero,
+            "before": before_label,
+            "after": after_label,
+            "edited": true,
+        })),
+    ))
 }
 
 #[cfg(test)]

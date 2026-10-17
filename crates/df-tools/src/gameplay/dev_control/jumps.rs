@@ -25,7 +25,7 @@ use super::{Outcome, Shared, authorized, bad_request, display_view, failed};
 use crate::gameplay::dev_control::{commands, history};
 
 /// The current revision as a plain pair, read from the display view.
-async fn current_revision(
+pub(super) async fn current_revision(
     state: &Shared,
 ) -> Result<
     (history::Revision, df_protocol::common::SessionRevision),
@@ -41,7 +41,7 @@ async fn current_revision(
 }
 
 /// Drops a redo stack forked by playing on, reporting what went.
-fn take_stale_notices(state: &Shared, current: history::Revision) -> Vec<String> {
+pub(super) fn take_stale_notices(state: &Shared, current: history::Revision) -> Vec<String> {
     let Ok(mut guarded) = state.history.lock() else {
         return vec!["history lock poisoned".to_owned()];
     };
@@ -57,7 +57,7 @@ fn take_stale_notices(state: &Shared, current: history::Revision) -> Vec<String>
 }
 
 /// Sends one dev order to the owner and maps its answer without rewording.
-async fn owner_jump(
+pub(super) async fn owner_jump(
     state: &Shared,
     credential: [u8; 32],
     job: commands::DevJob,
@@ -117,7 +117,7 @@ fn map_dev_status(status: tonic::Status) -> (axum::http::StatusCode, Json<Value>
 }
 
 /// The first joined seat's credential scopes table-level jumps.
-fn table_credential(
+pub(super) fn table_credential(
     seats: &super::Seats,
 ) -> Result<[u8; 32], (axum::http::StatusCode, Json<Value>)> {
     seats
@@ -211,7 +211,7 @@ pub(super) async fn restore_named(
 
 /// The owner's current moment, for the pre-jump redo entry: the past
 /// ring's newest entry, since the publication hook records every commit.
-fn pre_jump_moment(state: &Shared) -> Vec<history::SavedMoment> {
+pub(super) fn pre_jump_moment(state: &Shared) -> Vec<history::SavedMoment> {
     state
         .history
         .lock()

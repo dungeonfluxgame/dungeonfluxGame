@@ -23,7 +23,7 @@ use super::{
     actor,
     adventure::{dossier::Effect, scene_model::SceneModel},
     approach_model::{ApproachModel, JevUnavailable},
-    beat_script_runtime, hero_identity, journey, model, pack, pack_contents,
+    beat_script_runtime, hero_identity, journey, pack, pack_contents,
     social::{Appraisal, Approach, EmotionLevel, EmotionReaction, SocialLedger},
     storyteller::{CallProfile, Expression, Slot, Storyteller},
     table_log::TableLog,
@@ -938,16 +938,10 @@ pub(super) fn skill_roll(
     })
 }
 
-/// One d20 face from the operating system's random source, rejection-sampled so every face has
-/// the same chance (the same mapping as the other checks).
+/// One d20 face through the shared die helper (a queued dev face, else the operating system's
+/// random source, rejection-sampled so every face has the same chance).
 pub(super) fn draw_die() -> Result<u8, RepositoryError> {
-    for _ in 0..16 {
-        let [byte] = model::random::<1>()?;
-        if byte < 240 {
-            return Ok(byte % 20 + 1);
-        }
-    }
-    Err(RepositoryError::Unavailable)
+    u8::try_from(super::dice::draw(20)?).map_err(|_| RepositoryError::Unavailable)
 }
 
 fn skill_label(skill: &str) -> &'static str {

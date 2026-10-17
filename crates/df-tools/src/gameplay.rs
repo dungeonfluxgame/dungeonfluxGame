@@ -17,6 +17,7 @@ mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
 mod dialogue;
+mod dice;
 mod display_effects;
 mod freeform_action;
 #[cfg(test)]

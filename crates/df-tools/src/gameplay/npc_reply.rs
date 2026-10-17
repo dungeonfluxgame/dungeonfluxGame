@@ -268,16 +268,10 @@ impl InfluenceCheckInput {
     }
 }
 
-/// One d20 face from the operating system's random source, rejection-sampled so every face has
-/// the same chance (the same mapping as the model's draw).
+/// One d20 face through the shared die helper (a queued dev face, else the operating system's
+/// random source, rejection-sampled so every face has the same chance).
 fn draw_d20() -> Result<u8, RepositoryError> {
-    for _ in 0..16 {
-        let [byte] = super::model::random::<1>()?;
-        if byte < 240 {
-            return Ok(byte % 20 + 1);
-        }
-    }
-    Err(RepositoryError::Unavailable)
+    u8::try_from(super::dice::draw(20)?).map_err(|_| RepositoryError::Unavailable)
 }
 
 /// What the server found for one hesitant Influence request, before the reply is written.

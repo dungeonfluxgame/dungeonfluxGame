@@ -2349,6 +2349,12 @@ impl Actor {
                 value: *value,
                 cap: *cap,
             },
+            commands::DevJob::NpcTurn { npc, act } => candidate::Change::NpcTurn {
+                turn: Box::new(
+                    super::journey::tactical::npc_turn(&current, npc, act, operation)
+                        .map_err(tonic::Status::failed_precondition)?,
+                ),
+            },
         };
         let inventory = ReferenceInventory {
             rules: &order.inventory.rules,

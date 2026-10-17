@@ -35,6 +35,7 @@ mod audit_log;
 pub(super) mod candidate;
 pub(crate) mod commands;
 pub(super) mod config;
+mod dice;
 pub(super) mod direct;
 pub(super) mod directions;
 mod art;
@@ -48,6 +49,7 @@ mod lore;
 mod memory;
 mod music;
 mod notebook;
+pub(super) mod npc;
 mod parse;
 mod reads;
 mod social_view;
@@ -219,13 +221,19 @@ pub(super) fn setup(
         .route("/dev/lore/edit", post(lore::unsupported_edit))
         .route("/dev/lore/delete", post(lore::unsupported_delete))
         .route("/dev/social", get(social_view::read))
-        .route("/dev/social/edit", post(social_view::unsupported_edit))
+        .route("/dev/social/edit", post(social_view::edit))
+        .route("/dev/npc/say", post(npc::say))
+        .route("/dev/npc/act", post(npc::act))
+        .route("/dev/npc/hold", post(npc::hold))
         .route("/dev/fight", get(fight::read))
         .route("/dev/fight/edit", post(fight::unsupported_edit))
         .route("/dev/decisions", get(audit_log::decisions))
         .route("/dev/audit", get(audit_log::audit))
         .route("/dev/fx", get(fx::read))
         .route("/dev/fx/edit", post(fx::edit))
+        .route("/dev/dice", get(dice::read))
+        .route("/dev/dice/next", post(dice::next))
+        .route("/dev/dice/clear", post(dice::clear))
         .route("/dev/art", get(art::list))
         .route("/dev/art/edit", post(art::edit))
         .route("/dev/music", get(music::read))

@@ -539,17 +539,7 @@ pub(super) fn fill_os_entropy(bytes: &mut [u8]) -> std::io::Result<()> {
     getrandom::getrandom(bytes).map_err(|error| std::io::Error::other(format!("{error:?}")))
 }
 fn draw_d20() -> Result<u8, RepositoryError> {
-    // Reject the final incomplete bucket; modulo of all 256 byte values is biased.
-    for _ in 0..16 {
-        let [byte] = random::<1>()?;
-        if let Some(face) = d20_face(byte) {
-            return Ok(face);
-        }
-    }
-    Err(RepositoryError::Unavailable)
-}
-fn d20_face(byte: u8) -> Option<u8> {
-    (byte < 240).then_some(byte % 20 + 1)
+    u8::try_from(super::dice::draw(20)?).map_err(|_| RepositoryError::Unavailable)
 }
 pub(super) struct HarborHandler {
     pins: CheckpointPins,
@@ -956,25 +946,6 @@ pub(super) fn staged_transition(
 mod tests {
     use super::*;
     use df_types::OperationId;
-
-    #[test]
-    fn every_d20_face_has_twelve_equally_likely_byte_inputs() {
-        for face in 1..=20 {
-            assert_eq!(
-                (0..=u8::MAX)
-                    .filter(|byte| d20_face(*byte) == Some(face))
-                    .count(),
-                12
-            );
-        }
-        assert_eq!(d20_face(0), Some(1));
-        assert_eq!(
-            (0..=u8::MAX)
-                .filter(|byte| d20_face(*byte).is_none())
-                .count(),
-            16
-        );
-    }
 
     fn staged(die: u32, sides: u32) -> Result<Checkpoint, RepositoryError> {
         let current = initial()?;
