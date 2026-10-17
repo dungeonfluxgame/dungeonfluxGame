@@ -3311,6 +3311,9 @@ mod tests {
             json!({"reply": "I SAW it. I wasn’t hurt. Nobody sent me."}),
         )]);
         let (voice, cache) = voice(&endpoint, "harbor-personal-authority");
+        // With no authored answer the model reply would answer; with the model off nothing is
+        // spoken in place of a canned non-answer.
+        let silent = NpcVoice::silent();
         for words in [
             "Are you hurt?",
             "Have you made this delivery before?",
@@ -3319,13 +3322,13 @@ mod tests {
             "How do you know the seal was broken before port?",
         ] {
             let context = harbor_question("courier", words, false);
-            let exchange = voice
+            let exchange = silent
                 .converse_report(context, &TableLog::new())
                 .await
                 .unwrap();
-            assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
-            assert_eq!(exchange.text, "I can't give you a clear answer to that.");
-            assert_eq!(exchange.fallback, None);
+            assert_eq!(exchange.outcome, ExchangeOutcome::Unavailable, "{words}");
+            assert!(exchange.text.is_empty(), "{words}");
+            assert_eq!(exchange.fallback, Some(FallbackReason::ModelOff), "{words}");
             assert!(!exchange.from_model);
         }
         let context = harbor_question("courier", "Who are you and what happened?", false);
@@ -3352,14 +3355,13 @@ mod tests {
         for (identity_reply, expected) in [
             (
                 source.speakers[0].identity_reply.clone(),
-                "You can call me the courier. My name can wait.",
+                Some("You can call me the courier. My name can wait."),
             ),
-            (Some("I'm Mara.".to_owned()), "I'm Mara."),
-            (None, "I can't give you a clear answer to that."),
-            (
-                Some("My name is Vell.".to_owned()),
-                "I can't give you a clear answer to that.",
-            ),
+            (Some("I'm Mara.".to_owned()), Some("I'm Mara.")),
+            // No authored identity answer: the model reply would answer. With the model off,
+            // nothing is spoken in place of a canned non-answer.
+            (None, None),
+            (Some("My name is Vell.".to_owned()), None),
         ] {
             let mut pack = source.clone();
             pack.speakers[0].identity_reply = identity_reply;
@@ -3372,6 +3374,12 @@ mod tests {
                 .converse_report(context, &log)
                 .await
                 .unwrap();
+            let Some(expected) = expected else {
+                assert_eq!(exchange.outcome, ExchangeOutcome::Unavailable);
+                assert!(exchange.text.is_empty());
+                assert_eq!(exchange.fallback, Some(FallbackReason::ModelOff));
+                continue;
+            };
             assert_eq!(exchange.outcome, ExchangeOutcome::Spoken);
             assert_eq!(exchange.text, expected);
             assert!(!exchange.from_model);
@@ -3647,6 +3655,8 @@ mod tests {
         let endpoint = FakeEndpoint::start(vec![
             Reply::Output(json!({"reply":"Give me that packet."})),
             Reply::Output(json!({"reply":"Keep it safe, friend."})),
+            Reply::Output(json!({"reply":"Give me that packet."})),
+            Reply::Output(json!({"reply":"Keep it safe, friend."})),
         ]);
         let (voice, cache) = voice(&endpoint, "routing-distinct-public-actors");
         let mut told = view("", "Courier");
@@ -3669,7 +3679,8 @@ mod tests {
         ];
         let cast = scene.clone();
         let log = TableLog::new();
-        for (words, from_model) in [("who sent you?", false), ("Speak to me.", true)] {
+        // A question with no authored answer ("who sent you?") is answered by the model too.
+        for words in ["who sent you?", "Speak to me."] {
             for (id, name) in [("bandit", "Bandit"), ("courier", "Courier")] {
                 let context = NpcReplyContext::from_view_target(
                     &told,
@@ -3683,9 +3694,6 @@ mod tests {
                 let line = log.lines().last().unwrap().clone();
                 assert_eq!(line.actor_id, id);
                 assert_eq!(line.speaker, name);
-                if !from_model {
-                    assert_eq!(line.text, "I can't give you a clear answer to that.");
-                }
                 let display = rpc::DisplayGameplayView {
                     scene: Some(cast.clone()),
                     journey: Some(rpc::JourneyView {
@@ -3698,9 +3706,8 @@ mod tests {
                 assert_eq!(voices.last().unwrap().actor_id(), Some(id));
                 assert_eq!(voices.last().unwrap().speaker(), Some(name));
             }
-            assert_eq!(endpoint.connections(), if from_model { 2 } else { 0 });
         }
-        assert_eq!(endpoint.connections(), 2);
+        assert_eq!(endpoint.connections(), 4);
         let bodies = endpoint.bodies();
         assert!(
             bodies[0]["input"]

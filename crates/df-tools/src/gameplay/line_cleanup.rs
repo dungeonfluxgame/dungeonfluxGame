@@ -25,8 +25,10 @@ use super::{
     storyteller::{CallProfile, Expression, Slot, Storyteller},
 };
 
-/// The bubble never waits longer than this for the model.
-pub(super) const CLEANUP_DEADLINE: Duration = Duration::from_millis(1_500);
+/// The bubble never waits longer than this for the model. Measured gpt-6-luna at effort none:
+/// p50 about 1.47 s and p90 about 2.7 s, so the former 1.5 s cut off about half the calls. 3 s lets
+/// nearly all valid cleanups land while still bounding how long the hero's line is held.
+pub(super) const CLEANUP_DEADLINE: Duration = Duration::from_millis(3_000);
 /// The model's small dedicated output budget for one line, reasoning included.
 pub(super) const CLEANUP_OUTPUT_TOKENS: u32 = 160;
 /// The longest display line. Keep this aligned with the table log's 420-character line budget so

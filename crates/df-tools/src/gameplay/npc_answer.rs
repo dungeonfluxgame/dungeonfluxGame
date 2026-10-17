@@ -245,7 +245,9 @@ fn ordinary_part(
 
 /// The authored answer for the hero's question parts. Jev's per-part focus names each part's
 /// question subject when it read the line; the keyword subject decides only without Jev. The
-/// reply's `subject` is the answer subject for parts that ask no question subject.
+/// reply's `subject` is the answer subject for parts that ask no question subject. `None` means
+/// the model reply answers: a question part has no authored answer, a price question sits in a
+/// merchant's trade scope, or nothing authored answered at all. Withheld parts stay withheld.
 pub(super) fn prepare(
     context: &NpcReplyContext,
     approach: Approach,
@@ -282,18 +284,18 @@ pub(super) fn prepare(
                 withheld = true;
                 continue;
             }
-            Some(question) => (if question == QuestionSubject::Identity {
-                identity(context)
-            } else {
-                authored(context, question)
-            })
-            .map(|answer| vec![answer])
-            .unwrap_or_else(|| {
-                vec![(
-                    "I can't give you a clear answer to that.".to_owned(),
-                    String::new(),
-                )]
-            }),
+            // A price or trade question in a merchant's trade scope is answered by the model with
+            // the trade facts; no authored answer may speak for what a good costs.
+            Some(QuestionSubject::Payment) if context.merchant_trade_scope => return None,
+            Some(question) => {
+                let found = if question == QuestionSubject::Identity {
+                    identity(context)
+                } else {
+                    authored(context, question)
+                };
+                // A missing authored answer is not an answer: the model reply runs instead.
+                vec![found?]
+            }
             None => ordinary_part(context, part, reading.focus.is_some().then_some(subject)),
         };
         for (text, key) in answer {
@@ -311,8 +313,9 @@ pub(super) fn prepare(
             }
         }
     }
+    // Nothing authored answered and nothing was withheld: the model reply answers, not a canned line.
     if lines.is_empty() && !withheld {
-        lines.push("I can't give you a clear answer to that.".to_owned());
+        return None;
     }
     Some(Answer {
         text: lines.join(" "),
@@ -341,5 +344,53 @@ mod tests {
         ] {
             assert_eq!(keyword_subject(statement), None);
         }
+    }
+
+    const PRICE_LINE: &str = "Good day, Marek. What are you asking for the traveler's clothes?";
+
+    /// A context for the line whose dossier has no authored question or reward answers.
+    fn context_without_authored_answers(words: &str) -> NpcReplyContext {
+        use crate::gameplay::{
+            npc_dossier_tests::{adventure, member, story, view},
+            pack::SceneKey,
+            social::SocialLedger,
+        };
+        let generated = adventure(1);
+        let ledger = SocialLedger::open(generated.dossiers.clone(), "answer-price", None).unwrap();
+        let mut context = NpcReplyContext::for_cast(
+            &view(&generated, SceneKey::Opening, "Brannoch"),
+            member(1),
+            words,
+            &story(&generated),
+            &ledger,
+            "Opening",
+        )
+        .unwrap();
+        let turn = context.turn.as_mut().unwrap();
+        turn.dossier.question_answers.clear();
+        turn.dossier.subject_answers.remove(&AnswerSubject::Reward);
+        context
+    }
+
+    #[test]
+    fn a_price_question_without_an_authored_answer_goes_to_the_model_not_a_canned_line() {
+        let reading =
+            AskReading::from_focus(vec![npc_facts::Focus::SmallTalk, npc_facts::Focus::Payment]);
+        let plain = context_without_authored_answers(PRICE_LINE);
+        assert!(prepare(&plain, Approach::Bargain, &reading, AnswerSubject::Other).is_none());
+        let mut trade = context_without_authored_answers(PRICE_LINE);
+        trade.merchant_trade_scope = true;
+        assert!(prepare(&trade, Approach::Bargain, &reading, AnswerSubject::Other).is_none());
+    }
+
+    #[test]
+    fn a_withheld_price_question_in_a_merchant_trade_keeps_its_private_refusal() {
+        let reading =
+            AskReading::from_focus(vec![npc_facts::Focus::SmallTalk, npc_facts::Focus::Payment]);
+        let mut trade = context_without_authored_answers(PRICE_LINE);
+        trade.merchant_trade_scope = true;
+        trade.withheld_subjects.push(QuestionSubject::Payment);
+        let answer = prepare(&trade, Approach::Bargain, &reading, AnswerSubject::Other);
+        assert!(answer.is_some_and(|answer| answer.withheld));
     }
 }
