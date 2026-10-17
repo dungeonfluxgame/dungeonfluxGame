@@ -2472,7 +2472,10 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
             && live_screens::asset_url(&shown.scene_asset).is_none()
             && !crate::presentation::scene_art_admitted(&shown.scene_asset)
         {
-            status(&client.borrow(), "The scene art is unavailable; showing the stage.");
+            status(
+                &client.borrow(),
+                "The scene art is unavailable; showing the stage.",
+            );
         }
         surface.set_attribute("data-destination", &shown.destination.to_string())?;
         live_combat::release(client)?;
@@ -2512,7 +2515,10 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
     // The base scene art never refuses the view: a role token, live path or reviewed photo the
     // delivery cannot fetch leaves its fallback stage, and only a deleted painting is reported.
     if !crate::presentation::scene_art_admitted(&scene.scene_asset) {
-        status(&client.borrow(), "The scene art is unavailable; showing the stage.");
+        status(
+            &client.borrow(),
+            "The scene art is unavailable; showing the stage.",
+        );
     }
     let (delivery, scope, revision) = {
         let mut state = client.borrow_mut();
