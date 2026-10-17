@@ -3521,7 +3521,19 @@ mod scene_art_admission {
             art_contract::NEUTRAL,
         ] {
             assert_eq!(asset_url(token), None);
-            assert_eq!(place_picture(art_contract::Role::LobbyArt, token, "", ""), None);
+            assert_eq!(
+                place_picture(art_contract::Role::LobbyArt, token, "", ""),
+                None
+            );
         }
+    }
+
+    /// The display walks every element it draws, SVG icons included. `className` is an
+    /// SVGAnimatedString on SVG, which the string binding cannot take: it aborted the TV client
+    /// in a panic loop. The client reads the `class` attribute instead.
+    #[test]
+    fn the_client_never_reads_class_name_from_an_element_it_walks() {
+        let source = include_str!("gameplay_browser.rs");
+        assert!(!source.contains(".class_name()"));
     }
 }

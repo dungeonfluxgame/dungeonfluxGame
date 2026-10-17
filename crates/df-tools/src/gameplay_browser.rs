@@ -2342,7 +2342,10 @@ fn scroll_keys(root: &Element) -> Vec<(String, usize, Element)> {
         let Ok(element) = node.dyn_into::<Element>() else {
             continue;
         };
-        let key = format!("{}.{}", element.tag_name(), element.class_name());
+        // The `class` attribute, never `className`: on an SVG element `className` is an
+        // SVGAnimatedString, which the string binding cannot take and which aborted the client.
+        let classes = element.get_attribute("class").unwrap_or_default();
+        let key = format!("{}.{classes}", element.tag_name());
         let count = counts.entry(key.clone()).or_insert(0);
         keyed.push((key, *count, element));
         *count += 1;
