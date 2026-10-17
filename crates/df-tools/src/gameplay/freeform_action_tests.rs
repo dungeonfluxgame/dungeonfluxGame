@@ -1185,3 +1185,40 @@ fn the_fact_bundle_carries_the_heroes_own_pronouns_when_the_hero_is_the_target()
     assert_eq!(facts["hero_pronouns"]["reflexive"], "herself");
     assert_eq!(fallback_line(&resolution), "Sigrun reacts out loud.");
 }
+
+#[test]
+fn a_present_merchants_stock_is_listed_as_portable_things_and_an_absent_merchants_is_not() {
+    let model: SceneModel = serde_json::from_slice(include_bytes!(
+        "../../../../content/merchant-shop/scene-model.json"
+    ))
+    .expect("the authored merchant shop model deserializes");
+    let marek = PersonFact {
+        id: "merchant".to_owned(),
+        name: "Marek".to_owned(),
+        role: rpc::SceneRole::Contact,
+        passive_perception: 11,
+    };
+    let mut situation = shop();
+    situation.people = vec![marek];
+    situation
+        .things
+        .extend(present_stock(&model, &situation.people));
+    let options = situation.options();
+    let cloak = options
+        .iter()
+        .find(|target| target.id == "item-warm-cloak-wool")
+        .expect("the present merchant's warm wool cloak is a listed target");
+    assert_eq!(cloak.kind, TargetKind::Thing);
+    assert_eq!(cloak.name, "warm wool cloak");
+    let thing = situation
+        .thing("item-warm-cloak-wool")
+        .expect("the stock is a thing in the situation");
+    assert!(thing.portable);
+    assert!(!thing.held_by_hero);
+    assert!(thing.holder_name.is_none());
+    assert_eq!(thing.owner_id.as_deref(), Some("merchant"));
+
+    // The shop's other people are present but Marek is not, so none of his stock is listed.
+    let without_merchant = shop().people;
+    assert!(present_stock(&model, &without_merchant).is_empty());
+}

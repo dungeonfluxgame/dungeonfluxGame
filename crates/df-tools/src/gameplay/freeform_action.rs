@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use super::{
     actor,
-    adventure::dossier::Effect,
+    adventure::{dossier::Effect, scene_model::SceneModel},
     approach_model::{ApproachModel, JevUnavailable},
     beat_script_runtime, hero_identity, journey, model, pack,
     social::{Appraisal, Approach, EmotionLevel, EmotionReaction, SocialLedger},
@@ -119,7 +119,7 @@ const ACT_KINDS: [(ActKind, &str, &str); 25] = [
     (
         ActKind::Sense,
         "sense",
-        "Uses a sense other than searching for clues: hears, smells, tastes or touches something, or looks at the hero's own appearance or reflection, with the hero as the target.",
+        "Uses a sense other than searching for clues: hears, smells, tastes or touches something, or looks at the hero's own appearance or reflection, with the hero as the target. Includes leaning or bending close to smell, listen, taste or look at something, because the purpose of the movement decides the act.",
     ),
     (
         ActKind::Manipulate,
@@ -229,7 +229,7 @@ const ACT_KINDS: [(ActKind, &str, &str); 25] = [
     (
         ActKind::Lean,
         "lean",
-        "Sits on, leans on or rests against a scene thing, without moving it or taking it. A position, not a move.",
+        "Sits on, leans on or rests against a scene thing, without moving it or taking it. Only a resting position on a thing; leaning in to smell, hear or look at something is sense.",
     ),
     (
         ActKind::Express,
@@ -529,6 +529,7 @@ impl Situation {
                     owner_id: thing.owner_id.clone(),
                 });
             }
+            things.extend(present_stock(scene_model, &people));
         }
         // Starting gear and packs are the hero's own inventory, held and portable. Gold pieces are
         // the purse, not a thing.
@@ -636,6 +637,32 @@ fn name_of(people: &[PersonFact], id: &str) -> String {
         .iter()
         .find(|person| person.id == id)
         .map_or_else(|| id.to_owned(), |person| person.name.clone())
+}
+
+/// The merchant stock the hero can look at, touch or take: each offer of a seller who is present
+/// in the scene, as a loose portable thing owned by that seller. An offer is stock only while its
+/// item is not already a thing, the same rule the merchant trade terms use, so nothing is listed
+/// twice. Taking or wearing one without buying is an offence to its owner through the usual rules.
+fn present_stock(scene_model: &SceneModel, people: &[PersonFact]) -> Vec<ThingFact> {
+    scene_model
+        .offers
+        .iter()
+        .filter(|offer| people.iter().any(|person| person.id == offer.seller_id))
+        .filter(|offer| scene_model.offer_available(&offer.canonical_item_id()))
+        .map(|offer| ThingFact {
+            id: offer.canonical_item_id(),
+            name: offer.name.clone(),
+            detail: format!(
+                "{}. It is for sale from {}.",
+                offer.description.trim_end_matches('.'),
+                name_of(people, &offer.seller_id)
+            ),
+            portable: true,
+            held_by_hero: false,
+            holder_name: None,
+            owner_id: Some(offer.seller_id.clone()),
+        })
+        .collect()
 }
 
 /// The starting pack for this hero's build: the archer kit when the build chose the dexterous
@@ -1952,7 +1979,7 @@ pub(super) async fn narrate(
         style: NARRATION_STYLE,
         profile: CallProfile {
             output_tokens: Some(220),
-            deadline: Some(Duration::from_secs(4)),
+            deadline: Some(Duration::from_secs(8)),
             guidance: NARRATION_GUIDANCE,
             ..Default::default()
         },
