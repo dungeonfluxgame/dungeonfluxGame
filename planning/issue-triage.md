@@ -1333,3 +1333,36 @@ the live display. A purchase must record payment and actual held stock together;
 successful prose alone does not satisfy that check. The baseline evidence is
 `outputs/npc-hostility-playtest-20261016/baseline-observations.md` in the testing
 chat; subsequent acceptance will record its exact candidate source and build.
+
+### Merchant and multiplayer playtest — 2026-10-16 (rooms FURABO, VENOFU)
+
+Observed live with the TV display and two player phones (Brakka, Sigrun) on builds
+`merchant-limits-49b6c3eb` and `video-593c7e00-c1a` (source `4375a3ad`), plus server
+logs, `dev ledger` and the table log. Server price bounds held in every case (floor,
+buyback ceiling, sold out, selling another hero's item, rule-override injection).
+Status reflects source commits; every fix still needs a live retest on a fresh build.
+
+| ID | Priority | Reproduction and observed result | Status |
+| --- | --- | --- | --- |
+| MPX-01 | 1 | Accepting any merchant quote ("Fair enough, Marek. Two gold it is") was refused: `REQUEST invalid action_kind=1 choices=4` because `journey_input` capped every action at 3 choices; phone said "The native owner refused this". | Fixed in source (scene interactions bound 4, fights 3), commit pending |
+| MPX-02 | 1 | Phone rejected a valid reply whenever the turn committed state ("does not match this dialogue scope") and kept the draft, gluing it onto the next line. | Fixed `ad5fee70` |
+| MPX-03 | 1 | Phones hide the other hero's speech and the NPC replies to them; players cannot converse on their phones (the TV shows all lines). | In progress |
+| MPX-04 | 1 | Haggling never produced a counteroffer: Marek ignored stated figures and asked "what are you proposing"; the model had no floor price or hero amount. | Fixed `4375a3ad`, `fe771e05` (article "a" was parsed as a second amount) |
+| MPX-05 | 1 | A Hesitant or Unwilling NPC answers with canned lines ("I need a moment...", "I will not help you with that.") and no Influence check is ever offered; haggling, threats and blackmail dead-end. | In progress |
+| MPX-06 | 2 | "I hand the traveler's clothes to Sigrun." was judged `sell_to_merchant`, the recipient resolved as an absent NPC and the turn failed silently. | In progress |
+| MPX-07 | 2 | A transient authority outage (`UNAVAILABLE site=authority reason=UnresolvedCommit`, seats marked away after websocket idle) dropped a hero's line with `STORY input status=failed` and no message on the phone. | Open |
+| MPX-08 | 2 | Every line-cleanup model call failed (`reasoning.effort=minimal` rejected by gpt-6); the local fallback capitalised ordinary nouns ("Fine Cloth", "this Shop") because the place name was split into word-names. | Effort fixed (pending commit); scene-name split in progress |
+| MPX-09 | 2 | Display plate drifts painterly: each plate edit starts from the previous edit's output, compounding artefacts; fresh plates stay photographic. | In progress |
+| MPX-10 | 2 | TV typing "..." bubbles accumulate per typed line and never retire (dropped intent runs emitted no Done). | Fixed in source, commit pending |
+| MPX-11 | 2 | The quote bookkeeping row replaced Marek's spoken bubble on the TV and printed the internal id ("merchant offers..."). | Name fixed `d1cb7ef7`; bubble needs a TableKind for trade rows (open) |
+| MPX-12 | 2 | Sold-out stock: Marek quoted "two gold" for clothes he no longer had. | Fixed `4375a3ad` (verified live: "I'm out of traveler's clothes") |
+| MPX-13 | 3 | Narrator purchase line used the item description: "Marek hands over A practical set of traveler's clothes in sturdy wool and linen for Brakka". | In progress |
+| MPX-14 | 3 | After blackmail (reaction uneasy, wary much) the table noted "Marek seems fond of Brakka." | In progress |
+| MPX-15 | 3 | TV caption flashed the opening narration while a reply was pending; pending marker outlived the answer. | Fixed `00d33cb5` |
+| MPX-16 | 3 | Other player's phone shows "The offer or scope changed. Your text remains editable." with an empty draft when someone else acts; Marek's greeting appears twice in the feed. | In progress |
+| MPX-17 | 3 | Merchant reply classification runs for non-merchant NPC replies (Corin), wasting a Jev call per turn. | Open |
+| MPX-18 | 3 | A hero's theft of the counter label failed silently on the pre-`747e841c` build. | Retest after rebuild |
+| MPX-19 | 3 | A provider failure logs only `failure_category=provider_failure`, without status detail. | Open (shared provider code) |
+| MPX-20 | 3 | The imagery cache path is built from the source root, ignoring `DUNGEONFLUX_ARTIFACT_ROOT`, so a run from another root regenerates every image at cost. | Open |
+| MPX-21 | 3 | Cosmetic: "Fighter Â· level 1" mojibake on the hero sheet; the required portrait picker is an unlabelled "Choose..." select; the "Updating scene..." chip stays after the plate is ready. | Open |
+| MPX-22 | 3 | `HELP_ATTACK` existed in the protocol and rules but had no df-tools offer, wire mapping or dev action. | Wired in source, commit pending |
