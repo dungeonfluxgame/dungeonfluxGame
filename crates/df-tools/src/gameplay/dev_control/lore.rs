@@ -122,9 +122,18 @@ pub(super) struct AddFact {
 
 /// Proposes one fact through the reply validator and reports the outcome. Nothing is saved here:
 /// the caller saves and marks the run edited only when the status is `added`.
-fn propose(lore: &LocalLore, scene: &str, fact: &AddFact, names: &Names<'_>) -> Value {
+async fn propose(
+    lore: &LocalLore,
+    model: &crate::gameplay::approach_model::ApproachModel,
+    scene: &str,
+    fact: &AddFact,
+    names: &Names<'_>,
+) -> Value {
     let text = format!("{}|{}|{}", fact.kind, fact.name, fact.content);
-    match lore.propose(scene, &text, DEV_SPEAKER, names) {
+    match lore
+        .propose_judged(model, scene, &text, DEV_SPEAKER, names)
+        .await
+    {
         Ok(Some(established)) => json!({
             "status": "added",
             "scene": scene,
@@ -160,7 +169,8 @@ pub(super) async fn add(
         heroes: &heroes,
         game_state: &known,
     };
-    let document = propose(&state.lore, &scene, &body, &names);
+    let (_, approach_model) = state.service.npc_voice.hero_identity_models();
+    let document = propose(&state.lore, approach_model, &scene, &body, &names).await;
     if document["status"] != "added" {
         return Ok((StatusCode::OK, Json(document)));
     }
@@ -208,6 +218,10 @@ pub(super) async fn unsupported_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gameplay::{
+        approach_model::tests::{answer, model},
+        storyteller::tests::FakeEndpoint,
+    };
 
     fn fact(kind: &str, name: &str, content: &str) -> AddFact {
         AddFact {
@@ -218,9 +232,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dev_add_is_validated_like_a_reply_fact_and_refusals_change_nothing() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn dev_add_is_validated_like_a_reply_fact_and_refusals_change_nothing() {
         let lore = LocalLore::in_memory();
+        let endpoint = FakeEndpoint::start(vec![answer("o1"), answer("o1"), answer("o2")]);
+        let model = model(&endpoint);
         let heroes = vec!["Brynn".to_owned()];
         let known = vec!["Marek".to_owned(), "Mareks Cloth Shop".to_owned()];
         let names = Names {
@@ -230,6 +246,7 @@ mod tests {
 
         let added = propose(
             &lore,
+            &model,
             "scene-harbor",
             &fact(
                 "place",
@@ -237,7 +254,8 @@ mod tests {
                 "The salt quay runs along the harbour wall.",
             ),
             &names,
-        );
+        )
+        .await;
         assert_eq!(added["status"], "added");
         assert_eq!(added["edited"], true);
         assert_eq!(added["fact"]["established_by"], DEV_SPEAKER);
@@ -248,32 +266,39 @@ mod tests {
 
         let taken = propose(
             &lore,
+            &model,
             "scene-harbor",
             &fact("custom", "salt quay", "Gulls wheel over the harbour wall."),
             &names,
-        );
+        )
+        .await;
         assert_eq!(taken["status"], "refused");
         assert_eq!(taken["reason"], "name_taken");
         assert_eq!(taken["edited"], false);
 
         let names_hero = propose(
             &lore,
+            &model,
             "scene-harbor",
             &fact("person", "Brynn", "Brynn keeps the stall by the wall."),
             &names,
-        );
+        )
+        .await;
         assert_eq!(names_hero["reason"], "names_hero");
 
         let piped = propose(
             &lore,
+            &model,
             "scene-harbor",
             &fact("custom", "Bells", "Bells ring | twice daily."),
             &names,
-        );
+        )
+        .await;
         assert_eq!(piped["reason"], "malformed");
 
         let claims_coin = propose(
             &lore,
+            &model,
             "scene-harbor",
             &fact(
                 "rumour",
@@ -281,7 +306,8 @@ mod tests {
                 "They say the lane pays out two gold each morning.",
             ),
             &names,
-        );
+        )
+        .await;
         assert_eq!(claims_coin["reason"], "claims_coin_items_or_rules");
 
         let after = lore.development_facts(Some("scene-harbor"));

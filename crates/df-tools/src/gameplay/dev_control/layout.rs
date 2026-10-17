@@ -735,6 +735,13 @@ mod tests {
             )
             .await
             .unwrap();
+        let configured = Transform {
+            translate_y: Some(crate::layout_contract::Distance {
+                value: 24.0,
+                unit: crate::layout_contract::Unit::Px,
+            }),
+            ..Default::default()
+        };
         let hidden_revision = state
             .set_visibility(&VisibilityRequest {
                 id: "dm-overlay".into(),
@@ -742,7 +749,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let mut hidden = report(hidden_revision, 2, "dm-overlay", None);
+        let mut hidden = report(hidden_revision, 2, "dm-overlay", Some(configured.clone()));
         hidden.elements[0].visibility = contract::ElementVisibility::Hidden;
         admit(&state, 1, &hidden).await.unwrap();
         let snapshot = state.snapshot(Some("dm-overlay")).await.unwrap();
@@ -758,10 +765,14 @@ mod tests {
             })
             .await
             .unwrap();
-        let shown = report(shown_revision, 3, "dm-overlay", None);
+        let shown = report(shown_revision, 3, "dm-overlay", Some(configured));
         admit(&state, 1, &shown).await.unwrap();
         let snapshot = state.snapshot(Some("dm-overlay")).await.unwrap();
         assert_eq!(snapshot["visibility"], serde_json::json!({}));
+        assert_eq!(
+            snapshot["overrides"]["dm-overlay"]["translate_y"]["value"],
+            24.0
+        );
         assert_eq!(snapshot["status"], "applied");
     }
     #[tokio::test]
