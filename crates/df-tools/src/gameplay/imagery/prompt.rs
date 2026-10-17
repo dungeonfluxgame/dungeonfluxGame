@@ -20,11 +20,14 @@ use super::super::{
 
 const MAXIMUM_FACT_CHARACTERS: usize = 80;
 
-pub(in crate::gameplay) const FILM_LOOK: &str = "Documentary color photograph of a practical historical film set: real adult performers, simple \
-    sewn wool and linen costumes, worn real props. A candid unposed moment captured by a real \
-    camera and prime lens under natural practical light; skin pores, uneven woven fabric, natural \
-    depth of field, restrained color and fine film grain. No glamour, HDR, heroic posing, ornate \
-    fantasy key art, CGI, 3D render, painting or illustration.";
+// The owner's direction (2026-10-17): it must read like living in a D&D world, shot like a
+// realistic live-action TV drama ("photographic cinema"), never like an illustration.
+pub(in crate::gameplay) const FILM_LOOK: &str = "A still frame from a live-action fantasy TV drama set in a lived-in Dungeons & \
+    Dragons world. Documentary color photograph: real adult performers in practical costume on a \
+    real dressed location, worn real props, captured by a real camera and prime lens under \
+    natural practical light; skin pores, uneven woven fabric, natural depth of field, fine film \
+    grain. No glamour, HDR, heroic posing, fantasy key art, CGI, 3D render, painting or \
+    illustration.";
 const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
 const NO_REAL_PEOPLE: &str = "Fictional identities; no recognizable real person or celebrity.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";

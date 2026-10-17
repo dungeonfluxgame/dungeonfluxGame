@@ -70,7 +70,7 @@ pub(crate) const MODEL: &str = df_providers::KLING_O1_IMAGE_TO_VIDEO;
 /// The look of a landing ambience loop: a documentary photograph of a place, with no cast. The
 /// shared `FILM_LOOK` is written for people (costumes, skin pores) and invites them into an empty
 /// room, so a loop of a place does not use it.
-const AMBIENCE_LOOK: &str = "Documentary photograph of a place, shot on a real camera with a prime lens in natural practical light, believable textures of weathered wood, stone, water and cloth, natural depth of field, fine film grain. No people and no creatures anywhere in the frame; no painting, illustration, concept art, cgi or game art.";
+const AMBIENCE_LOOK: &str = "A quiet establishing shot from a live-action fantasy television drama set in a lived-in Dungeons & Dragons world. Documentary photograph of a place, shot on a real camera with a prime lens in natural practical light, believable textures of weathered wood, stone, water and cloth, natural depth of field, fine film grain. No people and no creatures anywhere in the frame; no painting, illustration, concept art, cgi or game art.";
 /// The gentle-ambience wording of the home loop, in one place: a locked-off camera and only small
 /// ambient motion. The still is both the first and the last frame, which is what makes it loop.
 const HOME_MOTION: &str = "Locked-off camera: the frame does not move, zoom or drift. Only small ambient motion: lamplight and candle flicker, drifting smoke or dust, cloth and banners stirring, water shimmer. Nothing enters or leaves the frame, and no new objects, text or logos appear. The last frame matches the first so the motion loops seamlessly, the composition exactly as in the reference image.";

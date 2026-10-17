@@ -12,12 +12,13 @@ use serde_json::{Value, json};
 /// The look of a place photographed on its own. The performers' film-set look asks for a staged
 /// set, and an "architectural" shot comes back evenly lit and clean like a render; a place reads
 /// as a photograph only with available light, real wear and the camera's own imperfections.
-const PLACE_LOOK: &str = "Candid documentary color photograph of a real, lived-in historic interior, taken \
-    on location with a handheld full-frame camera and a 35mm lens using only the light already in \
-    the room: uneven falloff into darker corners, real dust and wear, scuffed boards, irregular \
-    hand-made objects, slight sensor grain and natural lens softness toward the edges. An \
-    unretouched photograph of a real place, not an architectural or real-estate shot and not a \
-    staged set; never a 3D render, CGI, game art, matte painting, illustration or painting.";
+const PLACE_LOOK: &str = "An establishing shot from a live-action fantasy television drama set in a lived-in \
+    Dungeons & Dragons world: a real dressed location, filmed handheld on a digital cinema camera \
+    with a 35mm lens using only the light already in the place: uneven falloff into darker \
+    corners, real dust and wear, scuffed boards, irregular hand-made objects, slight sensor grain \
+    and natural lens softness toward the edges. A photographic frame of a real place, as if you \
+    stood in it; not an architectural or real-estate shot, never a 3D render, CGI, game art, matte \
+    painting, illustration or painting.";
 
 fn assembled(
     rating: ContentRating,
@@ -185,11 +186,12 @@ mod tests {
     use crate::gameplay::hero_identity::Identity;
 
     #[test]
-    fn a_room_is_asked_for_as_a_candid_location_photograph_never_a_set_or_a_render() {
+    fn a_room_is_asked_for_as_a_tv_drama_location_frame_never_a_set_or_a_render() {
         // The room prompt carries the place look, not the performers' film-set look.
-        assert!(PLACE_LOOK.contains("handheld full-frame camera"));
+        assert!(PLACE_LOOK.contains("live-action fantasy television drama"));
+        assert!(PLACE_LOOK.contains("Dungeons & Dragons world"));
         assert!(PLACE_LOOK.contains("not an architectural or real-estate shot"));
-        assert!(PLACE_LOOK.contains("never a 3D render, CGI, game art, matte painting"));
+        assert!(PLACE_LOOK.contains("never a 3D render, CGI, game art, matte"));
         assert!(!PLACE_LOOK.contains("film set"));
     }
 
