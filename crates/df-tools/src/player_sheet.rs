@@ -1,4 +1,26 @@
 use df_protocol::common as rpc;
+use serde::Deserialize;
+
+const SRD_CATALOG: &str = include_str!("../../../content/hero-tables/catalog-srd.json");
+
+#[derive(Deserialize)]
+struct Catalog {
+    items: Vec<CatalogItem>,
+}
+
+#[derive(Deserialize)]
+struct CatalogItem {
+    #[serde(default)]
+    kit_item: Option<String>,
+    #[serde(default)]
+    contents: Vec<PackContent>,
+}
+
+#[derive(Deserialize)]
+struct PackContent {
+    item: String,
+    quantity: u8,
+}
 
 /// Player-facing wording for the accepted character facts. The stored sheet stays unchanged.
 pub(crate) fn player_sheet_view(sheet: &rpc::CharacterSheet) -> rpc::CharacterSheet {
@@ -48,7 +70,15 @@ fn player_sheet_fact_value(label: &str, value: &str) -> Option<String> {
             let Some(amount) = coins.strip_suffix(" GP") else {
                 return Some(value.to_owned());
             };
-            if matches!(equipment, "Fighter A + Soldier A" | "Fighter B + Soldier B") {
+            let equipment = if equipment.starts_with("Chain mail, greatsword, flail, 8 javelins") {
+                append_dungeoneer_pack_contents(equipment)
+            } else {
+                equipment.to_owned()
+            };
+            if matches!(
+                equipment.as_str(),
+                "Fighter A + Soldier A" | "Fighter B + Soldier B"
+            ) {
                 Some(format!("{amount} gp"))
             } else {
                 Some(format!("{equipment} · {amount} gp"))
@@ -69,6 +99,33 @@ fn player_sheet_fact_value(label: &str, value: &str) -> Option<String> {
         _ if value.starts_with("Dropped") => Some("(dropped)".to_owned()),
         _ => Some(value.to_owned()),
     }
+}
+
+fn append_dungeoneer_pack_contents(equipment: &str) -> String {
+    let Ok(catalog) = serde_json::from_str::<Catalog>(SRD_CATALOG) else {
+        return equipment.to_owned();
+    };
+    let Some(pack) = catalog
+        .items
+        .into_iter()
+        .find(|item| item.kit_item.as_deref() == Some("dungeoneer-pack"))
+    else {
+        return equipment.to_owned();
+    };
+
+    let contents = pack
+        .contents
+        .into_iter()
+        .map(|content| match content.item.as_str() {
+            "oil" => format!("{} flasks of oil", content.quantity),
+            "torch" => format!("{} torches", content.quantity),
+            _ if content.quantity == 1 => content.item.replace('-', " "),
+            _ => format!("{} {}", content.quantity, content.item.replace('-', " ")),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!("{equipment}; Dungeoneer's Pack: {contents}")
 }
 
 /// Converts stored ids such as `dwarvish` to a readable label without changing title case.
@@ -134,6 +191,28 @@ mod tests {
             ]
         );
         assert_eq!(sheet.facts[0].value, "insight");
+    }
+
+    #[test]
+    fn player_sheet_view_shows_srd_dungeoneer_pack_contents() {
+        let sheet = rpc::CharacterSheet {
+            facts: vec![fact(
+                "Starting equipment",
+                "Chain mail, greatsword, flail, 8 javelins Â· 18 GP",
+            )],
+            ..Default::default()
+        };
+
+        let view = player_sheet_view(&sheet);
+
+        assert_eq!(
+            view.facts[0].value,
+            "Chain mail, greatsword, flail, 8 javelins; Dungeoneer's Pack: backpack, caltrops, crowbar, 2 flasks of oil, 10 rations, rope, tinderbox, 10 torches, waterskin · 18 gp"
+        );
+        assert_eq!(
+            sheet.facts[0].value,
+            "Chain mail, greatsword, flail, 8 javelins Â· 18 GP"
+        );
     }
 
     /// SRD 5.2.1 pp. 47, 83-84: show the Soldier and Fighter's stated proficiencies by name.
