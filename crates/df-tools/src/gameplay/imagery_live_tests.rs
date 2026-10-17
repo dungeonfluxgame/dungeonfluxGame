@@ -280,3 +280,152 @@ fn live_candidates() {
         }
     }
 }
+
+/// One FLUX Kontext call for a plate prompt, through the provider the game uses. Each frame is one
+/// provider call (no hub retry), so the operator's budget is exact.
+async fn flux_frame(
+    provider: &df_providers::NativeFalImageProvider,
+    prompt: &AssembledPrompt,
+    references: &[ReferenceImage],
+) -> Vec<u8> {
+    let provider_references: Vec<df_providers::ReferenceImage<'_>> = references
+        .iter()
+        .map(|reference| df_providers::ReferenceImage {
+            format: reference.format,
+            bytes: &reference.bytes,
+        })
+        .collect();
+    let edit = df_providers::ImageEdit {
+        model: ImageEditModel::Gpt25Flare,
+        prompt: prompt.as_str(),
+        references: &provider_references,
+        width: 2560,
+        height: 1440,
+        quality: ImageQuality::Medium,
+        background: ImageBackground::Opaque,
+        output: ImageFormat::Jpeg,
+        moderation: ImageModeration::Low,
+    };
+    edit.validate().expect("the FLUX request is valid");
+    let generated = provider
+        .edit(&edit, Duration::from_secs(300))
+        .await
+        .expect("the FLUX plate call succeeds");
+    assert_eq!(generated.format, ImageFormat::Jpeg);
+    generated.bytes
+}
+
+/// Operator-run proof (spends three FLUX calls): a fresh merchant plate, then two refreshes that
+/// change the shot, the focus and the pose. `DF_FAL_KEY` is read by the launcher from `.env`.
+#[tokio::test]
+#[ignore = "spends money against the real FLUX provider; run once by the operator"]
+async fn flux_plate_sequence_keeps_the_merchant_cast_and_changes_the_shot() {
+    let key = std::env::var("DF_FAL_KEY").expect("DF_FAL_KEY");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = repo.join("artifacts/tmp/plate-identity");
+    std::fs::create_dir_all(&out).expect("the proof directory");
+    let provider = df_providers::NativeFalImageProvider::new(
+        df_providers::FalImageConfig::live(),
+        &key,
+        Duration::from_secs(120),
+    )
+    .expect("the FLUX provider");
+
+    let model: super::super::adventure::scene_model::SceneModel = serde_json::from_slice(
+        include_bytes!("../../../../content/merchant-shop/scene-model.json"),
+    )
+    .expect("the merchant shop scene model");
+    let facts = model.picture_state().expect("the scene picture state");
+    let mut people: Vec<_> = model
+        .people
+        .iter()
+        .filter(|person| ["merchant", "shop-soldier"].contains(&person.id.as_str()))
+        .collect();
+    people.sort_by(|left, right| left.id.cmp(&right.id));
+    assert_eq!(people.len(), 2, "the merchant and Jessa");
+    assert_eq!(people[0].name, "Marek", "the seed's merchant is Marek");
+    assert_eq!(people[1].name, "Jessa", "the seed's bystander is Jessa");
+    let sheet: Vec<FluxPerson> = people
+        .iter()
+        .map(|person| FluxPerson {
+            name: person.name.clone(),
+            appearance: Some(person.description.clone()),
+        })
+        .collect();
+
+    let photo = |relative: &str, format: ImageFormat| {
+        let bytes = std::fs::read(repo.join(relative)).expect("a reference photograph");
+        ReferenceImage::new(format, Bytes::from(bytes))
+    };
+    let room = photo("artifacts/tmp/play-r6/room.jpg", ImageFormat::Jpeg);
+    let marek = photo("artifacts/tmp/play-r6/marek.jpg", ImageFormat::Jpeg);
+    let jessa = photo(
+        "assets/ui/generated/sprite-shop-soldier-documentary-photo.png",
+        ImageFormat::Png,
+    );
+    let (sheet_image, legend) = cast_sheet(vec![
+        CastIdentity {
+            id: "npc:merchant".to_owned(),
+            figure: marek.clone(),
+        },
+        CastIdentity {
+            id: "npc:shop-soldier".to_owned(),
+            figure: jessa.clone(),
+        },
+    ])
+    .expect("the identity sheet");
+    assert!(legend.starts_with("slot 1 = npc:merchant"));
+    let place = PlaceFacts::new("Marek's Cloth Shop", "").expect("the shop name passes vetting");
+
+    // Frame 1 is the proof; frames 2 and 3 change the camera, the focus and the pose.
+    let frames = [
+        (
+            "proof.jpg",
+            super::super::shot::Camera::DialogueMedium,
+            &sheet[0],
+            &marek,
+        ),
+        (
+            "refresh-2.jpg",
+            super::super::shot::Camera::SpeakerClose,
+            &sheet[1],
+            &jessa,
+        ),
+        (
+            "refresh-3.jpg",
+            super::super::shot::Camera::WideEstablishing,
+            &sheet[0],
+            &marek,
+        ),
+    ];
+    // `DF_PLATE_ONLY` names one frame to render again, so a retry spends one call.
+    for (name, camera, speaker, portrait) in frames {
+        if std::env::var("DF_PLATE_ONLY").is_ok_and(|only| only != name) {
+            continue;
+        }
+        let cast = FluxCast {
+            sheet: sheet.clone(),
+            speaker: Some(speaker.clone()),
+            portrait: true,
+        };
+        let prompt = flux_scene_plate(
+            ContentRating::Mature,
+            camera,
+            Some(&place),
+            &cast,
+            &facts,
+            None,
+        )
+        .expect("the FLUX plate prompt");
+        std::fs::write(out.join(format!("{name}.prompt.txt")), prompt.as_str())
+            .expect("the prompt is kept beside the image");
+        let references = [room.clone(), sheet_image.clone(), portrait.clone()];
+        let bytes = flux_frame(&provider, &prompt, &references).await;
+        std::fs::write(out.join(name), &bytes).expect("the frame is saved");
+        println!(
+            "PLATE_FRAME {name} bytes={} chars={}",
+            bytes.len(),
+            prompt.character_count()
+        );
+    }
+}

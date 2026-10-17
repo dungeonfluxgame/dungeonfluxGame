@@ -24,7 +24,8 @@ pub(super) struct Book {
     last_shown: Option<Duration>,
     pub(super) shown: Option<(ImageKey, Option<PlatePlacement>)>,
     pub(super) baked_revision: Option<u64>,
-    ready: Option<(ImageKey, u64, Option<String>)>,
+    /// The finished image, its revision, its story actor and whether it was composed afresh.
+    ready: Option<(ImageKey, u64, Option<String>, bool)>,
     pub(super) items: BTreeMap<String, Item>,
     pub(super) latest_items: BTreeMap<String, String>,
     last_story_actor: Option<String>,
@@ -259,6 +260,8 @@ pub(super) enum Done {
         state: String,
         revision: u64,
         story_actor: Option<String>,
+        /// Composed afresh rather than edited from the plate on screen (FLUX story beats).
+        fresh: bool,
         result: Result<ImageKey, ImageFailure>,
     },
     Item {
@@ -807,7 +810,9 @@ impl Shared {
             .state_images
             .last_shown
             .is_none_or(|last| now.saturating_sub(last) >= BAKE_INTERVAL);
-        if can_show && let Some((key, revision, story_actor)) = book.state_images.ready.take() {
+        if can_show
+            && let Some((key, revision, story_actor, fresh)) = book.state_images.ready.take()
+        {
             let layout = book.image_layouts.get(key.as_str()).cloned();
             let observed = book.state_images.observed.clone();
             focus_progress(
@@ -821,7 +826,7 @@ impl Shared {
             );
             book.edit = Edit::Idle;
             book.state_images.shown = Some((key, layout));
-            book.state_images.carried_edit = true;
+            book.state_images.carried_edit = !fresh;
             book.state_images.baked_revision = Some(revision);
             book.state_images.last_shown = Some(now);
             if let Some(actor) = story_actor {
@@ -979,6 +984,26 @@ impl Shared {
         }
     }
 
+    /// A story beat's camera move on the FLUX route. An edit of the plate on screen keeps its
+    /// framing and poses, so the beat's plate is composed afresh with the beat's camera.
+    async fn story_fresh_request(
+        &self,
+        pending: &Pending,
+        identities: Option<&IdentitySnapshot>,
+    ) -> Result<ImageRequest, ImageFailure> {
+        let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
+        let camera = story_camera(pending, identity).ok_or(ImageFailure::InvalidRequest)?;
+        let mut spec = identity
+            .scene
+            .stage(&identity.heroes)
+            .map_err(|_| ImageFailure::InvalidRequest)?;
+        spec.camera = camera;
+        let (request, _) = self
+            .photographic_request(&identity.scene, &spec, &identity.heroes, None, None)
+            .await?;
+        Ok(request)
+    }
+
     pub(super) async fn state_image_request(
         &self,
         pending: &Pending,
@@ -1034,7 +1059,7 @@ impl Shared {
             None => {}
         }
         let prompt = {
-            let (sheet, legend) = self
+            let (sheet, legend, _) = self
                 .identity_sheet(&identity.scene, &identity.heroes)
                 .await?;
             let sheet_number = references.len() + 1;
@@ -1083,19 +1108,27 @@ impl Shared {
                 base,
                 identities,
             } => {
+                // A FLUX story beat is composed afresh (see `story_fresh_request`), not edited.
+                let fresh = self.inner.imagery.flux_prompts()
+                    && pending.focus.is_none()
+                    && pending.story.is_some();
                 let result = async {
-                    let Lookup::Image { bytes, format } =
-                        self.inner.imagery.image(base.as_str()).await
-                    else {
-                        return Err(ImageFailure::InvalidRequest);
-                    };
-                    let request = self
-                        .state_image_request(
+                    let request = if fresh {
+                        self.story_fresh_request(&pending, identities.as_deref())
+                            .await?
+                    } else {
+                        let Lookup::Image { bytes, format } =
+                            self.inner.imagery.image(base.as_str()).await
+                        else {
+                            return Err(ImageFailure::InvalidRequest);
+                        };
+                        self.state_image_request(
                             &pending,
                             ReferenceImage::new(format, bytes),
                             identities.as_deref(),
                         )
-                        .await?;
+                        .await?
+                    };
                     if let Some(focus) = pending.focus.as_ref() {
                         let key = self.inner.imagery.key_for(&request);
                         focus_progress(&mut locked(&self.book).state_images, &pending.state,
@@ -1169,6 +1202,7 @@ impl Shared {
                     state: pending.state,
                     revision: pending.revision,
                     story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
+                    fresh,
                     result,
                 }
             }
@@ -1226,6 +1260,7 @@ impl Shared {
                 state,
                 revision,
                 story_actor,
+                fresh,
                 result,
             } => {
                 // A late bake is never published over a more recent composition.
@@ -1248,7 +1283,8 @@ impl Shared {
                                         now.saturating_sub(last) < BAKE_INTERVAL
                                     })
                                 {
-                                    book.state_images.ready = Some((key, revision, story_actor));
+                                    book.state_images.ready =
+                                        Some((key, revision, story_actor, fresh));
                                 } else {
                                     let layout = book.image_layouts.get(key.as_str()).cloned();
                                     focus_progress(
@@ -1262,7 +1298,7 @@ impl Shared {
                                     );
                                     book.edit = Edit::Idle;
                                     book.state_images.shown = Some((key, layout));
-                                    book.state_images.carried_edit = true;
+                                    book.state_images.carried_edit = !fresh;
                                     book.state_images.baked_revision = Some(revision);
                                     book.state_images.last_shown = Some(now);
                                     if let Some(actor) = story_actor {

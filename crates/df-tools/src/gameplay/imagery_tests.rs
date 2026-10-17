@@ -169,6 +169,67 @@ fn merchant_seed_full_cast_plate_preserves_every_identity_in_final_assembly() {
 }
 
 #[test]
+fn a_merchant_flux_plate_names_each_person_in_reference_order_before_the_action() {
+    let model: super::super::adventure::scene_model::SceneModel = serde_json::from_slice(
+        include_bytes!("../../../../content/merchant-shop/scene-model.json"),
+    )
+    .expect("the merchant shop scene model");
+    let facts = model.picture_state().expect("the scene picture state");
+    // The sheet lays its cells out in ID order; Marek and Jessa are the photographed cast.
+    let mut people: Vec<_> = model
+        .people
+        .iter()
+        .filter(|person| ["merchant", "shop-soldier"].contains(&person.id.as_str()))
+        .collect();
+    people.sort_by(|left, right| left.id.cmp(&right.id));
+    let sheet: Vec<FluxPerson> = people
+        .iter()
+        .map(|person| FluxPerson {
+            name: person.name.clone(),
+            appearance: Some(person.description.clone()),
+        })
+        .collect();
+    assert_eq!(
+        sheet.len(),
+        2,
+        "the merchant and Jessa are both on the sheet"
+    );
+    assert_eq!(sheet[1].name, "Jessa");
+    let cast = FluxCast {
+        sheet: sheet.clone(),
+        speaker: Some(sheet[1].clone()),
+        portrait: true,
+    };
+    let place = PlaceFacts::new("Marek's Cloth Shop", "").expect("the shop name passes vetting");
+    let prompt = flux_scene_plate(
+        ContentRating::Mature,
+        super::super::shot::Camera::DialogueMedium,
+        Some(&place),
+        &cast,
+        &facts,
+        None,
+    )
+    .expect("the merchant FLUX plate prompt");
+    let text = prompt.as_str();
+    assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+    let action = text
+        .find("Only the listed people")
+        .expect("the action follows the people");
+    let first_part = &text[..action];
+    let mut last = 0;
+    for (cell, person) in sheet.iter().enumerate() {
+        let line = format!("Image 2, cell {}: {}", cell + 1, person.name);
+        let at = first_part
+            .find(&line)
+            .unwrap_or_else(|| panic!("{line} names the person before the action"));
+        assert!(at >= last, "cell {} is out of reference order", cell + 1);
+        last = at;
+    }
+    assert!(first_part.contains("Image 3 is a close portrait of Jessa"));
+    assert!(first_part.starts_with("Medium shot on a 50mm lens at eye level on Jessa"));
+}
+
+#[test]
 fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration() {
     let location = place();
     let generated = adventure(41);

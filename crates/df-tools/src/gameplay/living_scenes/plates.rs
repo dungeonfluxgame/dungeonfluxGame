@@ -33,9 +33,9 @@ use super::{
     super::{
         beat_script::{self, Beat, BeatKind, BeatScript, BeatTransition, BeatTrigger},
         imagery::{
-            CastIdentity, ImageFailure, ImageKey, ImageKind, ImageRequest, Lookup, OutputSpec,
-            PlaceFacts, PlateReferences, ReferenceImage, cast_sheet, hero_locator_phrase,
-            plate_moment, scene_plate,
+            CastIdentity, FluxCast, FluxPerson, ImageFailure, ImageKey, ImageKind, ImageRequest,
+            Lookup, OutputSpec, PlaceFacts, PlateReferences, ReferenceImage, cast_sheet,
+            flux_scene_plate, hero_locator_phrase, plate_moment, scene_plate,
         },
         pack::{self, Age, Gender, SceneKey},
         scene_mood::Face,
@@ -92,6 +92,35 @@ struct IdentityReference {
     name: String,
     sprite: String,
     portrait: String,
+}
+
+/// A hero on the identity sheet. The party's hero names are in the order of the party seats, the
+/// same order the heroes are passed in, so the name at a seat's index is that seat's hero.
+fn hero_person(scene: &PlateScene, index: usize) -> FluxPerson {
+    FluxPerson {
+        name: scene
+            .hero_names
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| "a party hero".to_owned()),
+        appearance: None,
+    }
+}
+
+/// A non-hero on the identity sheet, with the one-line appearance the scene record gives them.
+fn flux_person(scene: &PlateScene, canonical_id: &str, name: &str) -> FluxPerson {
+    let appearance = scene.snapshot.as_ref().and_then(|snapshot| {
+        snapshot
+            .model
+            .people
+            .iter()
+            .find(|person| person.id == canonical_id)
+            .map(|person| person.description.clone())
+    });
+    FluxPerson {
+        name: name.to_owned(),
+        appearance,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2539,17 +2568,21 @@ impl Shared {
         &self,
         scene: &PlateScene,
         heroes: &[u8],
-    ) -> Result<(ReferenceImage, String), ImageFailure> {
+    ) -> Result<(ReferenceImage, String, Vec<FluxPerson>), ImageFailure> {
         let mut wanted = scene.identity_cast.clone();
         let mut cast = Vec::new();
-        for art in heroes {
+        // Each cell's canonical ID with the person it shows; cells are laid out in ID order.
+        let mut cells: Vec<(String, FluxPerson)> = Vec::new();
+        for (index, art) in heroes.iter().enumerate() {
             if let Some((id, figure)) = self.canonical_hero_identity(scene, *art).await? {
+                cells.push((id.clone(), hero_person(scene, index)));
                 cast.push(CastIdentity { id, figure });
             } else {
                 let (figure, _) = self.speaker_art(&format!("sprite-hero-{art}")).await;
                 let Some(figure) = figure else {
                     return Err(ImageFailure::InvalidRequest);
                 };
+                cells.push((format!("hero:{art}"), hero_person(scene, index)));
                 cast.push(CastIdentity {
                     id: format!("hero:{art}"),
                     figure,
@@ -2560,7 +2593,7 @@ impl Shared {
             id,
             sprite,
             portrait,
-            name: _,
+            name,
         } in wanted.drain(..)
         {
             let canonical_id = id.strip_prefix("npc:").unwrap_or(&id);
@@ -2590,8 +2623,12 @@ impl Shared {
                 );
                 return Err(ImageFailure::InvalidRequest);
             };
+            cells.push((id.clone(), flux_person(scene, canonical_id, &name)));
             cast.push(CastIdentity { id, figure });
         }
+        // The same ID order cast_sheet lays its cells out in.
+        cells.sort_by(|left, right| left.0.cmp(&right.0));
+        let sheet_people: Vec<FluxPerson> = cells.into_iter().map(|(_, person)| person).collect();
         let sources: Vec<serde_json::Value> = cast.iter().map(|identity| serde_json::json!({"cast_id": identity.id, "source_sha256": identity.figure.sha256})).collect();
         let result = tokio::task::spawn_blocking(move || cast_sheet(cast))
             .await
@@ -2617,17 +2654,21 @@ impl Shared {
                 ("reference.status", "complete_cast".to_owned()),
             ],
         );
-        Ok(result)
+        Ok((result.0, result.1, sheet_people))
     }
 
+    /// A plate composed from the room photograph, the identity sheet and the speaker's portrait.
+    /// `override_face` sets the speaker's expression (a face edit composed afresh); it is only read
+    /// on the FLUX route.
     async fn photographic_request(
         &self,
         scene: &PlateScene,
         spec: &ShotSpec,
         heroes: &[u8],
         direction: Option<&str>,
+        override_face: Option<Face>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
-        let (sheet, legend) = self.identity_sheet(scene, heroes).await?;
+        let (sheet, legend, people) = self.identity_sheet(scene, heroes).await?;
         let edit_harbor = scene.exterior
             && scene.place_id == "salt-quay"
             && scene.asset.contains(art_contract::HARBOR_PHOTO);
@@ -2669,7 +2710,56 @@ impl Shared {
             None => (None, None),
         };
         let locator_face = face.clone().or_else(|| figure.clone());
+        let has_portrait = face.is_some() || figure.is_some();
         references.extend(face.or(figure));
+        if self.inner.imagery.flux_prompts() && !edit_harbor && !style_only {
+            // FLUX: the references are place (1), identity sheet (2) and the speaker's portrait (3),
+            // and the prompt names each of them in that order before the action.
+            let speaker = scene.speaker.as_ref().map(|speaker| {
+                let name = scene
+                    .identity_cast
+                    .iter()
+                    .find(|identity| {
+                        identity.id.strip_prefix("npc:").unwrap_or(&identity.id) == speaker.id
+                    })
+                    .map_or_else(|| speaker.id.clone(), |identity| identity.name.clone());
+                flux_person(scene, &speaker.id, &name)
+            });
+            let cast = FluxCast {
+                sheet: people,
+                speaker,
+                portrait: has_portrait,
+            };
+            let facts = match &scene.snapshot {
+                Some(snapshot) => snapshot
+                    .model
+                    .picture_state()
+                    .map_err(|_| ImageFailure::InvalidRequest)?,
+                None => String::new(),
+            };
+            let prompt = flux_scene_plate(
+                self.inner.rating,
+                spec.camera,
+                scene.place.as_ref(),
+                &cast,
+                &facts,
+                override_face.map(|face| (face.expression, face.tier)),
+            )
+            .map_err(|_| ImageFailure::InvalidRequest)?;
+            let prompt = match direction {
+                Some(direction) => prompt.with_development_direction(direction),
+                None => prompt,
+            };
+            return Ok((
+                ImageRequest {
+                    kind: ImageKind::ScenePlate,
+                    references,
+                    prompt,
+                    output: OutputSpec::PLATE,
+                },
+                locator_face,
+            ));
+        }
         let prompt = if edit_harbor {
             super::super::imagery::harbor_photo_edit(
                 self.inner.rating,
@@ -2737,7 +2827,7 @@ impl Shared {
         _faces: &[(u8, ImageKey)],
         direction: Option<&str>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
-        self.photographic_request(scene, spec, heroes, direction)
+        self.photographic_request(scene, spec, heroes, direction, None)
             .await
     }
 
@@ -3151,6 +3241,26 @@ impl Shared {
             .await;
     }
 
+    /// A plate composed afresh from the room, the identity sheet and the speaker's portrait, with
+    /// the speaker's `face`, instead of an edit of the plate on screen. On the FLUX route a
+    /// Kontext edit keeps its input, so an expression edit would leave the frame unchanged.
+    async fn fresh_plate(
+        &self,
+        scene: &PlateScene,
+        spec: &ShotSpec,
+        heroes: &[u8],
+        override_face: Option<Face>,
+    ) -> Result<ImageKey, ImageFailure> {
+        let direction = locked(&self.book).direct.keep.clone();
+        let (request, _) = self
+            .photographic_request(scene, spec, heroes, direction.as_deref(), override_face)
+            .await?;
+        self.inner
+            .imagery
+            .generate(&format!("plate:{}", scene.place_id), request)
+            .await
+    }
+
     async fn render_edit(
         &self,
         scene: &PlateScene,
@@ -3158,6 +3268,12 @@ impl Shared {
         face: Face,
         heroes: &[u8],
     ) -> Result<ImageKey, ImageFailure> {
+        if self.inner.imagery.flux_prompts() {
+            let spec = scene
+                .stage(heroes)
+                .map_err(|_| ImageFailure::InvalidRequest)?;
+            return self.fresh_plate(scene, &spec, heroes, Some(face)).await;
+        }
         let Lookup::Image { bytes, format } = self.inner.imagery.image(base.as_str()).await else {
             return Err(ImageFailure::InvalidRequest);
         };
@@ -3176,7 +3292,7 @@ impl Shared {
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
         let prompt = {
-            let (sheet, legend) = self.identity_sheet(scene, heroes).await?;
+            let (sheet, legend, _) = self.identity_sheet(scene, heroes).await?;
             references.push(sheet);
             prompt.with_cast_sheet(references.len(), &legend)
         };
@@ -3300,7 +3416,8 @@ impl Shared {
                     match result {
                         Ok(key) => {
                             book.edit = Edit::Ready { face, key };
-                            book.state_images.carried_edit = true;
+                            // On the FLUX route a face is composed afresh, so it carries no edit.
+                            book.state_images.carried_edit = !self.inner.imagery.flux_prompts();
                             if let Some(speaker_id) = speaker_id {
                                 self.inner.note_plate_face_shown(&speaker_id, face);
                             }

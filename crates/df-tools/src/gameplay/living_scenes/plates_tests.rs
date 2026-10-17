@@ -350,10 +350,10 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
         .await
         .unwrap();
     let performer = inner.canonical_npc_reference("keeper").await.unwrap();
-    let (sheet, _) = shared.identity_sheet(&plate, &[]).await.unwrap();
+    let (sheet, _, _) = shared.identity_sheet(&plate, &[]).await.unwrap();
     let spec = plate.stage(&[]).unwrap();
     let (request, _) = shared
-        .photographic_request(&plate, &spec, &[], None)
+        .photographic_request(&plate, &spec, &[], None, None)
         .await
         .unwrap();
     assert_eq!(request.references[0].sha256, room.sha256);
@@ -1061,6 +1061,7 @@ async fn authored_story_coalesces_latest_reply_and_refreshes_the_base_before_a_s
             state: pending.state,
             revision: pending.revision,
             story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
+            fresh: false,
             result: Ok(key('b')),
         },
         Duration::from_secs(5),
@@ -1158,6 +1159,7 @@ async fn a_state_edit_after_an_edit_starts_from_the_fresh_plate_not_the_edited_s
             state: pending.state,
             revision: pending.revision,
             story_actor: None,
+            fresh: false,
             result: Ok(key('b')),
         },
         Duration::from_secs(6),
@@ -1540,6 +1542,7 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             state: pending.state,
             revision: pending.revision,
             story_actor: completed_actor,
+            fresh: false,
             result: Ok(key('b')),
         },
         Duration::from_secs(5),
@@ -1570,6 +1573,7 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             state: pending.state,
             revision: pending.revision,
             story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
+            fresh: false,
             result: Err(ImageFailure::InvalidRequest),
         },
         Duration::from_secs(36),
@@ -1608,6 +1612,7 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             state: pending.state,
             revision: pending.revision,
             story_actor: pending.story.as_deref().map(StoryBeat::actor_key),
+            fresh: false,
             result: Ok(key('d')),
         },
         Duration::from_secs(67),
@@ -2113,6 +2118,7 @@ async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_
                 .unwrap(),
             revision: 2,
             story_actor: None,
+            fresh: false,
             result: Ok(key('b')),
         },
         Duration::from_secs(19),
@@ -2140,6 +2146,7 @@ async fn settled_edits_are_shown_at_least_ten_seconds_apart_even_when_decode_is_
                 .unwrap(),
             revision: 3,
             story_actor: None,
+            fresh: false,
             result: Ok(key('c')),
         },
         Duration::from_secs(21),
@@ -2212,6 +2219,7 @@ async fn settled_changes_edit_once_keep_the_old_plate_and_drop_an_outdated_compl
         state: obsolete,
         revision: 2,
         story_actor: None,
+        fresh: false,
         result: Ok(key('b')),
     });
     assert_eq!(locked(&shared.book).shown().unwrap().0, base);

@@ -84,7 +84,10 @@ pub(super) use cast_sheet::{CastIdentity, cast_sheet};
 use party_sheet::SheetError;
 pub(super) use party_sheet::{party_sheet, vision_picture};
 pub(super) use photo_edit::harbor_photo_edit;
-pub(super) use plate_prompt::{PlateReferences, hero_locator_phrase, plate_moment, scene_plate};
+pub(super) use plate_prompt::{
+    FLUX_MAXIMUM_PROMPT_CHARACTERS, FluxCast, FluxPerson, PlateReferences, flux_scene_plate,
+    hero_locator_phrase, plate_moment, scene_plate,
+};
 #[allow(
     unused_imports,
     reason = "T02 stage rendering must pass each checked hero identity into these prompts"
@@ -670,6 +673,16 @@ impl Imagery {
 
     pub(super) fn is_on(&self) -> bool {
         matches!(self.inner.mode, Mode::On { .. })
+    }
+
+    /// Whether the active route is FLUX. FLUX reads the people and the shot first, and a
+    /// Kontext edit keeps its input, so plates on that route are composed afresh when the shot or
+    /// a face changes; the OpenAI route keeps the layout and the edit chain it was built for.
+    pub(super) fn flux_prompts(&self) -> bool {
+        match &self.inner.mode {
+            Mode::On { engine, .. } => matches!(engine.provider, ImageRoute::Flux(_)),
+            Mode::Off(_) => false,
+        }
     }
 
     #[cfg(test)]

@@ -479,3 +479,64 @@ fn the_speakers_figure_and_face_both_lead_the_references_and_the_place_moves_up(
         assert!(text.contains(needle), "{needle}");
     }
 }
+
+#[test]
+fn a_flux_plate_names_its_people_in_order_and_trims_long_text_to_the_limit() {
+    let long = "a long one-line description of a person in a worn costume, ".repeat(12);
+    let cast = FluxCast {
+        sheet: vec![
+            FluxPerson {
+                name: "Marek".into(),
+                appearance: Some(long.clone()),
+            },
+            FluxPerson {
+                name: "Jessa".into(),
+                appearance: Some(long.clone()),
+            },
+            FluxPerson {
+                name: "Corin".into(),
+                appearance: None,
+            },
+        ],
+        speaker: Some(FluxPerson {
+            name: "Jessa".into(),
+            appearance: None,
+        }),
+        portrait: true,
+    };
+    let facts = "{\"id\": \"shop\", \"item\": \"blue linen\"}, ".repeat(300);
+    let prompt = flux_scene_plate(
+        ContentRating::Restrained,
+        Camera::SpeakerClose,
+        Some(&place()),
+        &cast,
+        &facts,
+        None,
+    )
+    .expect("the FLUX plate prompt");
+    let text = prompt.as_str();
+    assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+    assert!(text.starts_with("Close shot on a 75mm lens at eye level on Jessa, the speaker"));
+    let order = [
+        "Image 1 is the place photograph",
+        "Image 2, cell 1: Marek,",
+        "Image 2, cell 2: Jessa,",
+        "Image 2, cell 3: Corin \u{2014}",
+        "Image 3 is a close portrait of Jessa",
+        "The place is The Heron Shrine.",
+        "Only the listed people and things exist.",
+        "The scene as it is now (JSON):",
+    ];
+    let positions: Vec<usize> = order
+        .iter()
+        .map(|needle| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("missing {needle}"))
+        })
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+    assert!(
+        !text.contains(&long),
+        "the appearance is cut to its opening"
+    );
+}

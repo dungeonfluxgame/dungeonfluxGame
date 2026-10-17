@@ -541,6 +541,168 @@ fn finish(parts: Vec<Part>) -> Result<AssembledPrompt, PlatePromptRefusal> {
     Ok(prompt)
 }
 
+/// FLUX reads only about 512 tokens of text, so a FLUX plate names its shot and its people first
+/// and trims the scene facts to what is left under this many characters.
+pub(in crate::gameplay) const FLUX_MAXIMUM_PROMPT_CHARACTERS: usize = 1800;
+const FLUX_FACTS: &str = "The scene as it is now (JSON):";
+/// Facts shorter than this are left out rather than cut to a stub.
+const FLUX_MINIMUM_FACTS: usize = 40;
+const FLUX_APPEARANCE_CHARACTERS: usize = 110;
+const FLUX_PLACE_IMAGE: &str = "Image 1 is the place photograph: keep its architecture, props and palette, seen from the new camera position.";
+const FLUX_SHEET_IMAGE: &str = "Image 2 is a reference collage of identity photographs, one numbered cell per person: use it only to read each face and costume. The photograph you make is one single full-frame picture, with no collage, grid, panels, numbers or inset frames.";
+const FLUX_KEEP_FACE: &str = "keep this exact face, hair and clothing.";
+const FLUX_ACTION: &str =
+    "Only the listed people and things exist. The people face the speaker, not the camera.";
+const FLUX_FACE_SHOWS: &str = "The speaker's face shows";
+const FLUX_LOOK: &str = "A still from a live-action fantasy TV drama: documentary colour photograph, real adult performers in practical costume on a real dressed location, natural practical light, natural depth of field, fine film grain. Not an illustration, painting, CGI or glamour. No text, letters, logos or signs.";
+
+/// One person a plate names: the name the scene record gives and, when the record has one, a
+/// one-line appearance and what they are doing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct FluxPerson {
+    pub(in crate::gameplay) name: String,
+    pub(in crate::gameplay) appearance: Option<String>,
+}
+
+/// The people a FLUX plate names, in the order their images are sent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct FluxCast {
+    /// The identity sheet's cells, numbered from 1 in the order the sheet lays them out.
+    pub(in crate::gameplay) sheet: Vec<FluxPerson>,
+    /// The speaker, who the shot is on.
+    pub(in crate::gameplay) speaker: Option<FluxPerson>,
+    /// Whether the speaker's close portrait is the next image after the sheet.
+    pub(in crate::gameplay) portrait: bool,
+}
+
+fn flux_shot_phrase(camera: Camera) -> &'static str {
+    match camera {
+        Camera::WideEstablishing => {
+            "Wide establishing shot on a 28mm lens from among the party, the whole place legible"
+        }
+        Camera::DialogueMedium => "Medium shot on a 50mm lens at eye level",
+        Camera::SpeakerClose => "Close shot on a 75mm lens at eye level",
+        Camera::OverShoulderLeft => "Over-the-shoulder shot on a 50mm lens from the party's left",
+        Camera::OverShoulderRight => "Over-the-shoulder shot on a 50mm lens from the party's right",
+        Camera::DutchOverShoulderLeft => {
+            "Over-the-shoulder shot from the party's left, a restrained three-degree Dutch angle"
+        }
+        Camera::DutchOverShoulderRight => {
+            "Over-the-shoulder shot from the party's right, a restrained three-degree Dutch angle"
+        }
+    }
+}
+
+/// The recorded appearance, cut at a word boundary, with its own name taken out of the front so
+/// the line does not say the name twice.
+fn flux_appearance(person: &FluxPerson) -> Option<String> {
+    let text = person.appearance.as_deref()?.trim().trim_end_matches('.');
+    if text.is_empty() {
+        return None;
+    }
+    let short: String = text.chars().take(FLUX_APPEARANCE_CHARACTERS).collect();
+    let cut = if short.chars().count() < text.chars().count() {
+        match short.rfind(' ') {
+            Some(space) if space > FLUX_APPEARANCE_CHARACTERS / 2 => &short[..space],
+            _ => short.as_str(),
+        }
+    } else {
+        short.as_str()
+    };
+    Some(cut.to_owned())
+}
+
+fn flux_identity_line(cell: usize, person: &FluxPerson) -> String {
+    match flux_appearance(person) {
+        Some(text) if text.starts_with(&person.name) => {
+            format!("Image 2, cell {cell}: {text} \u{2014} {FLUX_KEEP_FACE}")
+        }
+        Some(text) => format!(
+            "Image 2, cell {cell}: {}, {text} \u{2014} {FLUX_KEEP_FACE}",
+            person.name
+        ),
+        None => format!(
+            "Image 2, cell {cell}: {} \u{2014} {FLUX_KEEP_FACE}",
+            person.name
+        ),
+    }
+}
+
+/// The prompt for a FLUX plate: the shot first, then each reference image with the person it
+/// shows, then the place, the action, a short look clause and as many of the scene facts as fit.
+/// Every person a reference shows is named before the action, in reference order: the place is
+/// image 1, the identity sheet image 2, the speaker's portrait image 3.
+pub(in crate::gameplay) fn flux_scene_plate(
+    rating: ContentRating,
+    camera: Camera,
+    place: Option<&PlaceFacts>,
+    cast: &FluxCast,
+    facts: &str,
+    face: Option<(FaceExpression, HealthTier)>,
+) -> Result<AssembledPrompt, PlatePromptRefusal> {
+    let shot = flux_shot_phrase(camera);
+    let mut parts = vec![Part::Fact(match &cast.speaker {
+        Some(speaker) => format!(
+            "{shot} on {}, the speaker, in the lit mid-ground.",
+            speaker.name
+        ),
+        None => format!("{shot}."),
+    })];
+    parts.push(Part::Fixed(FLUX_PLACE_IMAGE));
+    if !cast.sheet.is_empty() {
+        parts.push(Part::Fixed(FLUX_SHEET_IMAGE));
+    }
+    for (index, person) in cast.sheet.iter().enumerate() {
+        parts.push(Part::Fact(flux_identity_line(index + 1, person)));
+    }
+    if let (true, Some(speaker)) = (cast.portrait, &cast.speaker) {
+        parts.push(Part::Fact(format!(
+            "Image 3 is a close portrait of {}: {FLUX_KEEP_FACE}",
+            speaker.name
+        )));
+    }
+    if let Some(place) = place {
+        parts.push(Part::Fact(format!(
+            "The place is {}.",
+            place.name.as_str().trim_end_matches('.')
+        )));
+    }
+    parts.push(Part::Fixed(FLUX_ACTION));
+    if let Some((expression, tier)) = face {
+        parts.push(Part::Fixed(FLUX_FACE_SHOWS));
+        parts.push(Part::Fixed(match health_face_phrase(tier) {
+            Some(phrase) => phrase,
+            None => expression_phrase(expression, rating),
+        }));
+        if let Some(look) = health_look_phrase(tier, rating) {
+            parts.push(Part::Fixed(look));
+        }
+    }
+    parts.push(Part::Fixed(FLUX_LOOK));
+    parts.push(Part::Fixed(rating_stance(rating)));
+    flux_finish(parts, facts)
+}
+
+/// Appends as many characters of `facts` as the FLUX limit leaves, then checks the whole prompt.
+fn flux_finish(mut parts: Vec<Part>, facts: &str) -> Result<AssembledPrompt, PlatePromptRefusal> {
+    let used = AssembledPrompt::from_parts(parts.clone()).character_count();
+    if used > FLUX_MAXIMUM_PROMPT_CHARACTERS {
+        return Err(PlatePromptRefusal::TooLong);
+    }
+    // The facts join the prompt after one space, then the label, then one space.
+    let room =
+        FLUX_MAXIMUM_PROMPT_CHARACTERS.saturating_sub(used + 1 + FLUX_FACTS.chars().count() + 1);
+    if !facts.is_empty() && room >= FLUX_MINIMUM_FACTS {
+        let trimmed: String = facts.chars().take(room).collect();
+        parts.push(Part::Fact(format!("{FLUX_FACTS} {trimmed}")));
+    }
+    let prompt = AssembledPrompt::from_parts(parts);
+    if prompt.character_count() > FLUX_MAXIMUM_PROMPT_CHARACTERS {
+        return Err(PlatePromptRefusal::TooLong);
+    }
+    Ok(prompt)
+}
+
 /// The prompt that edits an existing plate: the previous plate is image 1, the speaker's art (when
 /// there is one) image 2, and only the speaker's face and look change.
 pub(in crate::gameplay) fn plate_moment(
