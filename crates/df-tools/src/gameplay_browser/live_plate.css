@@ -69,7 +69,7 @@
 /* the place picture alone, sharp and lit, pushed in slowly and only slightly (a large push-in
    magnifies the photograph until it goes soft) (restarted for each scene by
    data-shot-tick); it keeps moving under the plate, so the cut to the plate has no jump */
-.tv-stage[data-shot=establishing]>.tv-art{filter:brightness(.92) saturate(1) blur(0);transition:filter .6s ease}
+.tv-stage[data-shot=establishing]>.tv-art{filter:none;transition:filter .6s ease}
 .tv-stage:is([data-shot=establishing],[data-shot=plate])[data-shot-tick=a]>.tv-art{animation:df-establish-a 70s cubic-bezier(.2,.5,.3,1) forwards}
 .tv-stage:is([data-shot=establishing],[data-shot=plate])[data-shot-tick=b]>.tv-art{animation:df-establish-b 70s cubic-bezier(.2,.5,.3,1) forwards}
 @keyframes df-establish-a{from{transform:scale(1)}to{transform:scale(1.04)}}
@@ -181,3 +181,13 @@
 @media (prefers-reduced-motion:reduce){.tv-check-result[data-check-managed]{animation:df-check-card-in .25s ease-out backwards;transition:opacity .35s ease-in-out}}
 
 .tv-fig-bubbles[data-anchor-fallback=named-check-panel] .tv-check-result{width:100%}
+
+/* Photographic cinema (owner, 2026-10-17): the TV shows the camera's own frame. No grade,
+   grain, dust, firelight, vignette or rotating drift is laid over a scene photograph or its
+   loop; any of them made a real photograph read as a painting. This file is joined after the
+   stage, motion and home sheets, so these rules win over their treatments. */
+.tv-stage[data-shot=plate] .tv-plate-img,.tv-stage[data-shot=plate] .tv-plate-video .tv-loop-clip{filter:none;animation:none;transform:none}
+.tv-plate-dust,.tv-plate-vignette{display:none}
+.tv-scene-set{filter:none!important}
+.tv-scene-set::before,.tv-scene-set::after{display:none}
+.tv-stage[data-tv-mode=lobby] .tv-atmosphere::after{display:none}
