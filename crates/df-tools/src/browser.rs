@@ -1151,6 +1151,11 @@ pub(super) async fn wait_for_cancellation(
 #[cfg_attr(not(feature = "public-scene-delivery-fixture"), wasm_bindgen(start))]
 #[cfg_attr(feature = "public-scene-delivery-fixture", wasm_bindgen)]
 pub fn start() -> Result<(), JsValue> {
+    // A wasm panic otherwise reaches the console only as "unreachable", with no message or
+    // location; this logs both once, before the abort, so a client panic can be diagnosed.
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(&JsValue::from_str(&format!("client panic: {info}")));
+    }));
     if web_sys::window().is_some_and(|window| {
         window
             .location()
