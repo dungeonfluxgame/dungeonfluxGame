@@ -1122,6 +1122,7 @@ pub(super) fn action_label(
             rpc::GameplayActionKind::DeclineReaction => "Decline opportunity attack",
             rpc::GameplayActionKind::Stand => "Stand up",
             rpc::GameplayActionKind::PickUpWeapon => "Pick up weapon",
+            rpc::GameplayActionKind::HelpAttack => "Help an ally attack",
             _ => return Err(RepositoryError::InvalidCandidate),
         }
         .to_owned());

@@ -88,6 +88,7 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "merchant-quote-closure",
     "stabilise-kit",
     "stabilise-medicine",
+    "help-attack",
     rewards::PAID,
     "room",
     "join-room",

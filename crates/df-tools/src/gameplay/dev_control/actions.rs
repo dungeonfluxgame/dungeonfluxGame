@@ -1059,6 +1059,8 @@ fn default_action_choices(
         parse::PlayAction::StabiliseWithHealersKit | parse::PlayAction::StabiliseMedicine
     ) {
         target_option(body, &group.options)?
+    } else if action == parse::PlayAction::HelpAttack {
+        help_attack_option(body, &group.options)?
     } else {
         return Err(bad_request(format!(
             "this action needs a selection; options: {}",
@@ -1082,6 +1084,46 @@ fn target_option(
         .ok_or_else(|| bad_request("stabilisation needs {\"target\": \"<hero>\"}"))?;
     let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
     unique_label_match(&labels, options, target)
+}
+
+/// Picks the offered Help (Attack) pair whose label names both the ally and the foe.
+/// Zero or several matching pairs are refused rather than guessed.
+fn help_attack_option(
+    body: &Value,
+    options: &[rpc::JourneyOption],
+) -> Result<String, (axum::http::StatusCode, Json<Value>)> {
+    let usage = || bad_request("help-attack needs {\"ally\": \"<hero>\", \"target\": \"<foe>\"}");
+    let ally = body.get("ally").and_then(Value::as_str).ok_or_else(usage)?;
+    let target = body
+        .get("target")
+        .and_then(Value::as_str)
+        .ok_or_else(usage)?;
+    let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
+    let matches: Vec<usize> = labels
+        .iter()
+        .enumerate()
+        .filter(|(_, label)| parse::names_match(label, ally) && parse::names_match(label, target))
+        .map(|(index, _)| index)
+        .collect();
+    match matches.as_slice() {
+        [index] => Ok(options[*index].option_id.clone()),
+        [] => Err((
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "status": "unavailable",
+                "reason": format!("no offered help names both {ally:?} and {target:?}"),
+                "options": labels,
+            })),
+        )),
+        _ => Err((
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "status": "ambiguous",
+                "reason": format!("{ally:?} and {target:?} match several help offers; be specific"),
+                "options": matches.iter().map(|index| labels[*index]).collect::<Vec<_>>(),
+            })),
+        )),
+    }
 }
 
 fn unique_label_match(
@@ -1340,6 +1382,34 @@ mod offer_tests {
             offers[0].action_kind,
             rpc::GameplayActionKind::EndTurn as i32
         );
+    }
+
+    fn help_option(id: &str, label: &str) -> rpc::JourneyOption {
+        rpc::JourneyOption {
+            option_id: id.to_owned(),
+            label: label.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn help_attack_names_pick_the_one_offered_ally_and_foe_pair() {
+        let options = [
+            help_option("2-5", "Help Brynn attack Goblin"),
+            help_option("3-5", "Help Neris attack Goblin"),
+            help_option("2-6", "Help Brynn attack Wolf"),
+        ];
+        let pick = |body: Value| help_attack_option(&body, &options).map_err(|(_, json)| json.0);
+        assert_eq!(
+            pick(json!({"ally": "Neris", "target": "Goblin"})).expect("one pair matches"),
+            "3-5"
+        );
+        // Ambiguous or unoffered pairs are refused, never guessed.
+        let ambiguous = pick(json!({"ally": "Brynn", "target": "o"})).expect_err("two pairs match");
+        assert_eq!(ambiguous["status"], "ambiguous");
+        let absent = pick(json!({"ally": "Neris", "target": "Wolf"})).expect_err("no such pair");
+        assert_eq!(absent["status"], "unavailable");
+        assert!(pick(json!({"ally": "Brynn"})).is_err());
     }
 
     #[test]

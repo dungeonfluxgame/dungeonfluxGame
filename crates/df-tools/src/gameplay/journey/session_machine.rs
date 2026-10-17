@@ -182,6 +182,7 @@ pub(super) fn events_for_kind(kind: rpc::GameplayActionKind) -> &'static [Event]
         | K::SecondWind
         | K::StabiliseWithHealersKit
         | K::StabiliseMedicine
+        | K::HelpAttack
         | K::Move
         | K::Dash
         | K::Dodge

@@ -197,6 +197,7 @@ fn print_help() {
          create <seat> <name>         --choice group=id (repeatable), --identity <JSON>, --identity-choice group=id\n\
          preview <seat>              --appearance <text> --backstory <text>; review returned identity JSON\n\
          act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id>\n\
+                                      help-attack: --ally <hero> --target <foe> (SRD 2024 Help, Attack)\n\
          say <hero> <text>            speak one line; [--context question|social|plan|meta|joke]\n\
          direct plate <text>          re-render the current scene picture; [--keep] [--wait]\n\
          direct clear                 clear held directions and return to the ordinary plate\n\
@@ -228,7 +229,7 @@ fn print_help() {
          \n\
          actions: begin ask escort defend move attack second-wind end-turn dash dodge\n\
                   disengage stand pick-up short-rest inn resolve search new-adventure\n\
-                  opportunity-attack decline-reaction stabilise-kit stabilise-medicine table-setting\n\
+                  opportunity-attack decline-reaction stabilise-kit stabilise-medicine help-attack table-setting\n\
          choose any offer: act <hero> <label-or-id>, or act <hero> choose --option <label-or-id>\n\
          table-setting: --choice-hints-hidden true|false\n\
          every choice group: --choice group=id (repeatable) or --choices <JSON>\n\
@@ -311,6 +312,7 @@ async fn dispatch(
             for (key, value) in [
                 ("cell", "--cell"),
                 ("target", "--target"),
+                ("ally", "--ally"),
                 ("weapon", "--weapon"),
                 ("option", "--option"),
                 ("input_id", "--input-id"),

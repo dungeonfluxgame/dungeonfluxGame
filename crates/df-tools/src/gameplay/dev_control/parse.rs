@@ -57,6 +57,7 @@ pub(super) enum PlayAction {
     SecondWind,
     StabiliseWithHealersKit,
     StabiliseMedicine,
+    HelpAttack,
     EndTurn,
     OpportunityAttack,
     DeclineReaction,
@@ -88,6 +89,7 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "second-wind" => PlayAction::SecondWind,
         "stabilise-kit" | "stabilise-with-healers-kit" => PlayAction::StabiliseWithHealersKit,
         "stabilise-medicine" => PlayAction::StabiliseMedicine,
+        "help-attack" => PlayAction::HelpAttack,
         "end-turn" => PlayAction::EndTurn,
         "opportunity-attack" => PlayAction::OpportunityAttack,
         "decline-reaction" => PlayAction::DeclineReaction,
@@ -121,6 +123,7 @@ impl PlayAction {
             Self::SecondWind => rpc::GameplayActionKind::SecondWind,
             Self::StabiliseWithHealersKit => rpc::GameplayActionKind::StabiliseWithHealersKit,
             Self::StabiliseMedicine => rpc::GameplayActionKind::StabiliseMedicine,
+            Self::HelpAttack => rpc::GameplayActionKind::HelpAttack,
             Self::EndTurn => rpc::GameplayActionKind::EndTurn,
             Self::OpportunityAttack => rpc::GameplayActionKind::OpportunityAttack,
             Self::DeclineReaction => rpc::GameplayActionKind::DeclineReaction,
@@ -148,6 +151,7 @@ impl PlayAction {
                 | Self::OpportunityAttack
                 | Self::StabiliseWithHealersKit
                 | Self::StabiliseMedicine
+                | Self::HelpAttack
                 | Self::PickUpWeapon
                 | Self::Search
                 | Self::Choose
@@ -240,6 +244,10 @@ mod tests {
         let medicine = parse_action("stabilise-medicine").unwrap();
         assert_eq!(medicine.kind(), rpc::GameplayActionKind::StabiliseMedicine);
         assert!(medicine.needs_option());
+        // SRD 2024 Help (Attack): the ally and the foe are both chosen from the offered pairs.
+        let help = parse_action("help-attack").unwrap();
+        assert_eq!(help.kind(), rpc::GameplayActionKind::HelpAttack);
+        assert!(help.needs_option());
         assert!(parse_action("do something brave").is_err());
         assert!(parse_action("").is_err());
     }

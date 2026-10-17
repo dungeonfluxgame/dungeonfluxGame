@@ -1479,6 +1479,7 @@ pub(in crate::gameplay) fn combat_action(kind: rpc::GameplayActionKind) -> bool 
             | rpc::GameplayActionKind::SecondWind
             | rpc::GameplayActionKind::StabiliseWithHealersKit
             | rpc::GameplayActionKind::StabiliseMedicine
+            | rpc::GameplayActionKind::HelpAttack
             | rpc::GameplayActionKind::EndTurn
             | rpc::GameplayActionKind::OpportunityAttack
             | rpc::GameplayActionKind::DeclineReaction
@@ -1653,6 +1654,39 @@ fn options(
                     candidates.push((target_id.to_string(), action, label));
                 }
             }
+            // SRD 2024 Help (Attack): an ally attacks a hostile creature within 5 feet of the
+            // helper. Pairs are enumerated here and kept only when the rules resolve them.
+            K::HelpAttack => {
+                let side = combatant.side();
+                for ally in battle
+                    .combatants()
+                    .iter()
+                    .filter(|ally| ally.side() == side && ally.id() != actor)
+                {
+                    for target in battle
+                        .combatants()
+                        .iter()
+                        .filter(|target| target.side() != side)
+                    {
+                        let (ally_id, target_id) = (ally.id(), target.id());
+                        let label = format!(
+                            "Help {} attack {}",
+                            name(state, canonical(state, ally_id)?)?,
+                            name(state, canonical(state, target_id)?)?
+                        );
+                        candidates.push((
+                            format!("{ally_id}-{target_id}"),
+                            Action::Help {
+                                purpose: tactical_rules::HelpPurpose::Attack {
+                                    ally: ally_id,
+                                    target: target_id,
+                                },
+                            },
+                            label,
+                        ));
+                    }
+                }
+            }
             K::PickUpWeapon => {
                 for held in &combatant.spec().weapons {
                     candidates.push((
@@ -1792,6 +1826,7 @@ pub(in crate::gameplay) fn groups(
             | rpc::GameplayActionKind::GreatswordAttack
             | rpc::GameplayActionKind::StabiliseWithHealersKit
             | rpc::GameplayActionKind::StabiliseMedicine
+            | rpc::GameplayActionKind::HelpAttack
             | rpc::GameplayActionKind::OpportunityAttack
             | rpc::GameplayActionKind::PickUpWeapon
     ) {
@@ -1810,10 +1845,10 @@ pub(in crate::gameplay) fn groups(
     let offers_savage = offers_variant(|weapon| weapon.savage_attacker);
     let mut groups = vec![rpc::JourneyGroup {
         group_id: "tactical-choice".to_owned(),
-        label: if kind == rpc::GameplayActionKind::Move {
-            "Reachable cell"
-        } else {
-            "Weapon and target"
+        label: match kind {
+            rpc::GameplayActionKind::Move => "Reachable cell",
+            rpc::GameplayActionKind::HelpAttack => "Ally and target",
+            _ => "Weapon and target",
         }
         .to_owned(),
         options: Vec::new(),
@@ -1970,6 +2005,7 @@ pub(super) fn offered(
         (K::GreatswordAttack, "Attack"),
         (K::StabiliseWithHealersKit, "Stabilize with Healer's Kit"),
         (K::StabiliseMedicine, "Stabilize with Wisdom (Medicine)"),
+        (K::HelpAttack, "Help an ally attack"),
         (K::Dash, "Dash"),
         (K::Dodge, "Dodge"),
         (K::Disengage, "Disengage"),
@@ -4210,6 +4246,266 @@ pub(super) mod tests {
             );
         });
     }
+    /// The member who controls the given hero actor.
+    fn member_of(current: &Checkpoint, helper: u32) -> MemberId {
+        [MEMBERS[0], MEMBERS[1]]
+            .into_iter()
+            .map(|bytes| MemberId::from_bytes(&bytes).unwrap())
+            .find(|member| {
+                player_entity(*member, current)
+                    .and_then(|entity| actor_id(current.state(), entity))
+                    .is_ok_and(|actor| actor == helper)
+            })
+            .expect("a member controls the active hero")
+    }
+
+    /// The active hero makes an ordinary offered Move to a cell within 5 feet of its nearest
+    /// foe, so Help (Attack) has a real foe in reach. Returns the resulting checkpoint, the
+    /// helper and that foe.
+    fn help_fixture() -> (Checkpoint, u32, u32) {
+        use rpc::GameplayActionKind as K;
+        let current = fight(true);
+        let battle = read(current.state()).unwrap();
+        let helper = battle.active_actor().expect("a combatant acts first");
+        let helper_cell = battle.actor(helper).unwrap().cell();
+        let (foe, foe_cell) = battle
+            .combatants()
+            .iter()
+            .filter(|actor| actor.side() != Side::Heroes)
+            .map(|actor| (actor.id(), actor.cell()))
+            .min_by_key(|(_, cell)| cell.distance(helper_cell))
+            .expect("a foe fights the heroes");
+        let (option, _) = options(current.state(), helper, K::Move)
+            .unwrap()
+            .into_iter()
+            .find_map(|(id, action, _)| match action {
+                Action::Move(path) => path
+                    .last()
+                    .is_some_and(|cell| cell.distance(foe_cell) <= 5)
+                    .then_some((id, path)),
+                _ => None,
+            })
+            .expect("a reachable cell lies within 5 feet of the nearest foe");
+        let member = member_of(&current, helper);
+        let request = request(&current, 8, K::Move, Some(&option));
+        let moved = submit(&current, member, &request, &mut |sides| Ok(sides.min(3)));
+        (moved, helper, foe)
+    }
+
+    #[test]
+    fn help_attack_offers_every_ally_with_every_foe_in_reach_of_the_helper_srd_2024_help() {
+        // SRD 2024 Help (Attack): the helper must be within 5 feet of the foe; the ally is any
+        // other living hero. The offered pairs are exactly what the rules resolve.
+        with_live(|| {
+            use rpc::GameplayActionKind as K;
+            let (current, helper_id, _) = help_fixture();
+            let battle = read(current.state()).unwrap();
+            let helper = battle.actor(helper_id).unwrap();
+            assert_eq!(helper.side(), Side::Heroes);
+            let allies = battle
+                .combatants()
+                .iter()
+                .filter(|actor| actor.side() == Side::Heroes && actor.id() != helper_id)
+                .map(|actor| actor.id())
+                .collect::<Vec<_>>();
+            let reachable = battle
+                .combatants()
+                .iter()
+                .filter(|actor| {
+                    actor.side() != Side::Heroes && actor.cell().distance(helper.cell()) <= 5
+                })
+                .map(|actor| actor.id())
+                .collect::<Vec<_>>();
+            assert!(
+                !allies.is_empty() && !reachable.is_empty(),
+                "the fixture needs an ally and a foe within 5 feet of the helper"
+            );
+            let offers = options(current.state(), helper_id, K::HelpAttack).unwrap();
+            let mut pairs = offers
+                .iter()
+                .map(|(_, action, label)| {
+                    assert!(label.starts_with("Help ") && label.contains(" attack "));
+                    match action {
+                        Action::Help {
+                            purpose: tactical_rules::HelpPurpose::Attack { ally, target },
+                        } => (*ally, *target),
+                        _ => panic!("help offers carry only Help (Attack) actions"),
+                    }
+                })
+                .collect::<Vec<_>>();
+            pairs.sort_unstable();
+            let mut expected = allies
+                .iter()
+                .flat_map(|ally| reachable.iter().map(move |target| (*ally, *target)))
+                .collect::<Vec<_>>();
+            expected.sort_unstable();
+            assert!(!expected.is_empty());
+            assert_eq!(pairs, expected);
+
+            let member = [MEMBERS[0], MEMBERS[1]]
+                .into_iter()
+                .map(|bytes| MemberId::from_bytes(&bytes).unwrap())
+                .find(|member| {
+                    player_entity(*member, &current)
+                        .and_then(|entity| actor_id(current.state(), entity))
+                        .is_ok_and(|actor| actor == helper_id)
+                })
+                .expect("a member controls the active hero");
+            assert!(
+                offered(&current, member)
+                    .unwrap()
+                    .iter()
+                    .any(|(kind, _)| *kind == K::HelpAttack),
+                "the active hero is offered Help (Attack)"
+            );
+            let choice_groups = groups(&current, member, K::HelpAttack).unwrap();
+            assert_eq!(choice_groups.len(), 1);
+            assert_eq!(choice_groups[0].group_id, "tactical-choice");
+            assert_eq!(choice_groups[0].options.len(), expected.len());
+        });
+    }
+
+    #[test]
+    fn submitted_help_attack_gives_the_ally_advantage_and_refuses_pairs_the_rules_do_not_allow() {
+        // SRD 2024 Help (Attack): the ally's next attack on the foe has advantage.
+        with_live(|| {
+            use rpc::GameplayActionKind as K;
+            let (current, helper_id, foe_id) = help_fixture();
+            let battle = read(current.state()).unwrap();
+            let ally_id = battle
+                .combatants()
+                .iter()
+                .find(|actor| actor.side() == Side::Heroes && actor.id() != helper_id)
+                .unwrap()
+                .id();
+            let member = [MEMBERS[0], MEMBERS[1]]
+                .into_iter()
+                .map(|bytes| MemberId::from_bytes(&bytes).unwrap())
+                .find(|member| {
+                    player_entity(*member, &current)
+                        .and_then(|entity| actor_id(current.state(), entity))
+                        .is_ok_and(|actor| actor == helper_id)
+                })
+                .expect("a member controls the active hero");
+
+            for (refusal, option) in [
+                (
+                    "the helper as its own ally",
+                    format!("{helper_id}-{foe_id}"),
+                ),
+                ("a hero as the foe", format!("{ally_id}-{ally_id}")),
+                ("a creature not in this fight", format!("{ally_id}-999999")),
+            ] {
+                let request = request(&current, 8, K::HelpAttack, Some(&option));
+                assert!(
+                    wire::tactical_selection_rejected(
+                        &current,
+                        member,
+                        K::HelpAttack,
+                        &request.action_choices
+                    )
+                    .unwrap(),
+                    "{refusal} must be refused by the rules"
+                );
+                let input = wire::journey_input(&request, member, &current).unwrap();
+                assert!(
+                    stage_with_supplier(&current, &input, &mut |_| {
+                        panic!("a refused help draws no dice")
+                    })
+                    .is_err(),
+                    "{refusal} must not stage"
+                );
+            }
+
+            // The fixture's Move already used operation 8; a reused operation collides on ids.
+            let option = format!("{ally_id}-{foe_id}");
+            let request = request(&current, 9, K::HelpAttack, Some(&option));
+            assert!(
+                !wire::tactical_selection_rejected(
+                    &current,
+                    member,
+                    K::HelpAttack,
+                    &request.action_choices
+                )
+                .unwrap()
+            );
+            let input = wire::journey_input(&request, member, &current).unwrap();
+            let staged = stage_with_supplier(&current, &input, &mut |_| {
+                panic!("Help (Attack) draws no dice")
+            });
+            let helped = staged.unwrap();
+            let after = read(helped.state()).unwrap();
+            assert!(after.actor(helper_id).unwrap().budget().action_used);
+            let ally = after.actor(ally_id).unwrap();
+            // The ally attacks with a weapon it actually holds (unarmed when it holds none).
+            let held = ally
+                .spec()
+                .weapons
+                .first()
+                .copied()
+                .unwrap_or(Weapon::UnarmedStrike);
+            let (advantage, _) = after
+                .attack_reasons(ally_id, foe_id, weapon(ally, held))
+                .unwrap();
+            assert!(advantage.contains(&tactical_rules::AttackReason::Help));
+        });
+    }
+
+    #[test]
+    fn scene_quote_acceptance_submits_four_choices_while_fight_actions_keep_three() {
+        // dialogue.rs sends a merchant quote acceptance as target, option, payment and quote id;
+        // a fight action keeps the three-choice bound.
+        with_live(|| {
+            use rpc::GameplayActionKind as K;
+            let story = opening_story();
+            let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let scene_submit = |choices: &[(&str, &str)]| {
+                let mut submit = request(&story, 8, K::ExamineHarborSeal, None);
+                submit.offer_id = super::super::living_scene::offer_id(&story);
+                submit.action_choices = choices
+                    .iter()
+                    .map(|(group, option)| rpc::JourneyChoice {
+                        group_id: (*group).into(),
+                        option_id: (*option).into(),
+                    })
+                    .collect();
+                submit
+            };
+            let quote = [
+                ("scene-target", "marek-quote"),
+                ("scene-option", "trade"),
+                ("scene-payment", "200"),
+                ("scene-quote-id", "quote-1"),
+            ];
+            assert!(wire::journey_input(&scene_submit(&quote), member, &story).is_ok());
+            let one_over = [
+                quote[0],
+                quote[1],
+                quote[2],
+                quote[3],
+                ("scene-recipient", "brakka"),
+            ];
+            assert!(wire::journey_input(&scene_submit(&one_over), member, &story).is_err());
+
+            let fight_current = fight(true);
+            let mut fight_submit = request(&fight_current, 8, K::GreatswordAttack, None);
+            fight_submit.action_choices = (0..4)
+                .map(|index| rpc::JourneyChoice {
+                    group_id: format!("choice-{index}"),
+                    option_id: "yes".into(),
+                })
+                .collect();
+            assert!(
+                wire::journey_input(
+                    &fight_submit,
+                    MemberId::from_bytes(&MEMBERS[0]).unwrap(),
+                    &fight_current
+                )
+                .is_err()
+            );
+        });
+    }
+
     #[test]
     fn stored_games_without_a_healer_kit_use_field_load_ten_for_a_carrier_srd_521_p97() {
         // A Healer's Kit has ten uses (SRD 5.2.1 p97); Fighter B + Soldier B carries none.
