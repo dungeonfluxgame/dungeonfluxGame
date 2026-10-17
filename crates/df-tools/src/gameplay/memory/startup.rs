@@ -114,11 +114,10 @@ pub(in crate::gameplay) async fn start(
             reason.unwrap_or_else(|| "no embedder".to_owned())
         ),
     };
-    let short_run: String = memory.run.chars().take(12).collect();
     Started {
         line: format!(
-            "MEMORY on run={short_run} backend=postgres search={search} spend=recorded_not_capped events={} backlog={}",
-            counts.total, counts.backlog
+            "MEMORY on run={} backend=postgres search={search} spend=recorded_not_capped events={} backlog={}",
+            memory.run, counts.total, counts.backlog
         ),
         memory: Some(memory),
     }
