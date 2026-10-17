@@ -47,6 +47,19 @@ use super::{
     table_log::{RollRow, TableLog},
 };
 
+const SPEAKER_DECISION_GUIDANCE: &str = concat!(
+    "Decide what is yours to decide within your role, dossier, and the current scene: you may ",
+    "answer service questions within your role, decide whether to accept actions you control, ",
+    "including whether to buy something, and quote only prices established in the current facts. ",
+    "Do not turn a missing prepared answer into professed ",
+    "ignorance when the choice is yours. Recognize ownership and current holders from the scene ",
+    "facts, but do not invent stock, prices, or coin transfers, or claim a purchase or paid service ",
+    "has been completed. Do not reveal unsupported private knowledge. If a local service needs a ",
+    "plausible detail that is not already established, propose it only in ",
+    "local_fact under local_fact_rules; it becomes canon only if accepted, and it must not ",
+    "contradict local_canon or the scene."
+);
+
 #[path = "npc_answer.rs"]
 mod answer;
 #[path = "local_lore.rs"]
@@ -2815,11 +2828,13 @@ impl NpcVoice {
             return Err(FallbackReason::ModelOff);
         }
         let slots = reply_slots(turn);
+        let mut facts = context.facts.clone();
+        facts["speaker_decision_guidance"] = json!(SPEAKER_DECISION_GUIDANCE);
         let values = self
             .storyteller
             .express(&Expression {
                 purpose: "npc_reply",
-                facts: &context.facts,
+                facts: &facts,
                 slots: &slots,
                 style: npc_dossier::STYLE,
                 profile: npc_dossier::profile(rating),
@@ -2874,11 +2889,13 @@ impl NpcVoice {
             .map(str::to_owned)
             .collect();
         let slots = [Slot::new("reply", REPLY_CHARACTERS).withholding(forbidden)];
+        let mut facts = context.facts.clone();
+        facts["speaker_decision_guidance"] = json!(SPEAKER_DECISION_GUIDANCE);
         let values = self
             .storyteller
             .express(&Expression {
                 purpose: "npc_reply",
-                facts: &context.facts,
+                facts: &facts,
                 slots: &slots,
                 style: STYLE,
                 profile: CallProfile::short_reply(rating),
@@ -4547,6 +4564,34 @@ mod tests {
         let sent = endpoint.bodies()[0].to_string();
         assert!(sent.contains("payment_from_hero"));
         assert!(sent.contains("amount_cp"));
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_reply_lets_the_npc_decide_within_their_own_authority() {
+        let words = "Would you buy my crowbar?";
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
+            "reply": "No, I sell cloth and do not buy tools."
+        }))]);
+        let jev = FakeEndpoint::start(jev_legacy_line(&[(words, "o1")]));
+        let (voice, cache) = voice(&endpoint, "voice-decision-authority");
+        let voice = voice.with_approach_model(model(&jev));
+        let mut context = question(words);
+        context.facts["npc"]["role"] = json!("cloth seller");
+
+        let answer = voice.reply_in_public(context, &TableLog::new()).await;
+
+        assert_eq!(
+            answer.as_deref(),
+            Some("No, I sell cloth and do not buy tools.")
+        );
+        let bodies = endpoint.bodies();
+        let prompt = bodies[0]["input"].as_str().unwrap();
+        assert!(prompt.contains("speaker_decision_guidance"));
+        assert!(prompt.contains("Do not turn a missing prepared answer into professed ignorance"));
+        assert!(prompt.contains("do not invent stock, prices, or coin transfers"));
+        assert!(prompt.contains("claim a purchase or paid service has been completed"));
+        assert!(prompt.contains("propose it only in local_fact under local_fact_rules"));
         std::fs::remove_dir_all(cache).unwrap();
     }
 
