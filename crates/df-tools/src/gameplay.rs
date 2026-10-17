@@ -1590,7 +1590,9 @@ async fn serve_run(
     // The story memory: what the Dungeon Master remembers of this run, so the story stays
     // consistent (planning/story-memory.md). It is a help, never a gate: any failure turns it off.
     let memory_line = if interactive {
-        let run = hex(receiver.borrow().basis().run.as_bytes());
+        // Keyed by the game's own database, which is unique per game and kept when it resumes;
+        // the session basis carries a fixed placeholder run id, which every game would share.
+        let run = database.get_dbname().unwrap_or_default().to_owned();
         let sources = memory::backfill::Sources {
             lore: local_lore.clone(),
             social: social.clone(),
