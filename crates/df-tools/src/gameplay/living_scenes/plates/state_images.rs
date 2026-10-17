@@ -538,16 +538,19 @@ impl Shared {
                     .map(|seat| self.inner.canonical_hero_status(*seat)),
             );
         }
-        if self.inner.references.photographic_only() || pending.focus.is_some() {
-            match state_speaker(pending, identity) {
-                Ok(Some(speaker)) => {
-                    statuses.push(self.inner.canonical_npc_status(
-                        speaker.id.strip_prefix("npc:").unwrap_or(&speaker.id),
-                    ))
+        match state_speaker(pending, identity) {
+            Ok(Some(speaker)) => {
+                let id = speaker.id.strip_prefix("npc:").unwrap_or(&speaker.id);
+                let mut status = self.inner.canonical_npc_status(id);
+                // A speaker nobody has made a photograph of yet is asked for now, once (the art
+                // contract's on-demand rule), and the edit waits for it.
+                if status == ReferenceStatus::Missing && self.inner.request_cast_photograph(id) {
+                    status = ReferenceStatus::Pending;
                 }
-                Ok(None) => {}
-                Err(failure) => return ReferenceStatus::Failed(failure),
+                statuses.push(status);
             }
+            Ok(None) => {}
+            Err(failure) => return ReferenceStatus::Failed(failure),
         }
         for status in statuses {
             match status {
@@ -834,46 +837,44 @@ impl Shared {
         // Only a story beat's edit leaves the scene's state out of its prompt; every other edit
         // carries the canonical current scene.
         let lacks_scene_state = !is_focus && pending.story.is_some();
-        if is_focus || self.inner.references.photographic_only() {
-            use super::super::canonical::ReferenceStatus;
-            let status = identities
-                .as_ref()
-                .map_or(ReferenceStatus::Missing, |identity| {
-                    self.state_reference_status(pending, identity)
-                });
-            match status {
-                ReferenceStatus::Missing | ReferenceStatus::Pending => {
-                    refresh_decision(
-                        &mut book,
-                        if is_focus { "narrative_focus" } else { "state" },
-                        "awaiting_canonical_references",
-                    );
-                    return;
-                }
-                ReferenceStatus::Failed(failure) => {
-                    if let Some(pending) = book.state_images.pending.take() {
-                        if is_focus {
-                            focus_progress(
-                                &mut book.state_images,
-                                &pending.state,
-                                pending.revision,
-                                Stage::Failed,
-                                None,
-                                now,
-                                Some(failure.label()),
-                            );
-                        }
-                    }
-                    refresh_decision(
-                        &mut book,
-                        if is_focus { "narrative_focus" } else { "state" },
-                        "canonical_reference_failed",
-                    );
-                    self.wake();
-                    return;
-                }
-                ReferenceStatus::Ready => {}
+        use super::super::canonical::ReferenceStatus;
+        let status = identities
+            .as_ref()
+            .map_or(ReferenceStatus::Missing, |identity| {
+                self.state_reference_status(pending, identity)
+            });
+        match status {
+            ReferenceStatus::Missing | ReferenceStatus::Pending => {
+                refresh_decision(
+                    &mut book,
+                    if is_focus { "narrative_focus" } else { "state" },
+                    "awaiting_canonical_references",
+                );
+                return;
             }
+            ReferenceStatus::Failed(failure) => {
+                if let Some(pending) = book.state_images.pending.take() {
+                    if is_focus {
+                        focus_progress(
+                            &mut book.state_images,
+                            &pending.state,
+                            pending.revision,
+                            Stage::Failed,
+                            None,
+                            now,
+                            Some(failure.label()),
+                        );
+                    }
+                }
+                refresh_decision(
+                    &mut book,
+                    if is_focus { "narrative_focus" } else { "state" },
+                    "canonical_reference_failed",
+                );
+                self.wake();
+                return;
+            }
+            ReferenceStatus::Ready => {}
         }
         let interval = if pending.story.is_some() && pending.focus.is_none() {
             self.inner.timing.interval.max(BAKE_INTERVAL)
@@ -1020,23 +1021,19 @@ impl Shared {
                 )?,
             }
         };
-        let photo_anchored = self.inner.references.photographic_only() || pending.focus.is_some();
         let mut references = vec![base];
-        if photo_anchored {
-            let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
-            match identity.scene.room_revision.as_deref() {
-                Some(revision) => references.push(
-                    self.inner
-                        .canonical_room_reference_at(&identity.scene.place_id, revision)
-                        .await
-                        .ok_or(ImageFailure::Interrupted)?,
-                ),
-                None if pending.focus.is_some() => return Err(ImageFailure::InvalidRequest),
-                None => {}
-            }
+        let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
+        match identity.scene.room_revision.as_deref() {
+            Some(revision) => references.push(
+                self.inner
+                    .canonical_room_reference_at(&identity.scene.place_id, revision)
+                    .await
+                    .ok_or(ImageFailure::Interrupted)?,
+            ),
+            None if pending.focus.is_some() => return Err(ImageFailure::InvalidRequest),
+            None => {}
         }
-        let prompt = if photo_anchored {
-            let identity = identities.ok_or(ImageFailure::InvalidRequest)?;
+        let prompt = {
             let (sheet, legend) = self
                 .identity_sheet(&identity.scene, &identity.heroes)
                 .await?;
@@ -1064,8 +1061,6 @@ impl Shared {
                 prompt =
                     prompt.with_canonical_speaker_reference(number, &speaker.id, &speaker.name);
             }
-            prompt
-        } else {
             prompt
         };
         if prompt.character_count() > df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS {
@@ -1122,7 +1117,8 @@ impl Shared {
                             &[("image.key", key.as_str().to_owned())],
                         );
                     }
-                    let key = self.inner.imagery.render(request).await?;
+                    let subject = format!("plate:{}", identities.as_deref().map_or("", |identity| identity.scene.place_id.as_str()));
+                    let key = self.inner.imagery.generate(&subject, request).await?;
                     if pending.focus.is_none()
                         && let Some(identity) = identities.as_deref()
                         && let Some(story) = pending.story.as_deref()
@@ -1193,12 +1189,15 @@ impl Shared {
                     let prompt = item_picture(self.inner.rating, &thing, detail.as_deref())?;
                     self.inner
                         .imagery
-                        .render(ImageRequest {
-                            kind: ImageKind::ArtifactCloseUp,
-                            references,
-                            prompt,
-                            output: OutputSpec::CLOSE_UP,
-                        })
+                        .generate(
+                            &format!("item:{id}"),
+                            ImageRequest {
+                                kind: ImageKind::ArtifactCloseUp,
+                                references,
+                                prompt,
+                                output: OutputSpec::CLOSE_UP,
+                            },
+                        )
                         .await
                 }
                 .await;

@@ -382,14 +382,14 @@
       "narration": "The courier listens as you lay out a calm plan. His shoulders ease; he will follow your lead.",
       "speaker": "Courier",
       "dialogue": "If you help me reach the inn, I'll tell Vell what I saw aboard that ship. But he won't let us leave.",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "cast": [
         {
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"
@@ -398,8 +398,8 @@
           "id": "bandit",
           "name": "Bandit",
           "role": "antagonist",
-          "sprite": "assets/ui/generated/sprite-bandit",
-          "portrait": "assets/ui/generated/portrait-bandit",
+          "sprite": "assets/ui/generated/sprite-bandit-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-bandit-documentary-photo",
           "voice": "sneering and rough",
           "gender": "he",
           "age": "adult"

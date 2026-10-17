@@ -2,6 +2,8 @@
 //! These are local presentation inputs, not an approved RPC schema or game state.
 mod scene;
 
+pub mod art_contract;
+
 pub mod battle;
 
 #[cfg(target_arch = "wasm32")]

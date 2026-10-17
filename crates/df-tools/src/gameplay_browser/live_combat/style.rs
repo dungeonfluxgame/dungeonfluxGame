@@ -8,17 +8,17 @@
 //! that are installed later in the document.
 
 use super::super::live_tv::GENERATED;
+use df_render::art_contract;
 
-/// The single place that turns a generated-art stem into its served URL.
-pub(super) fn generated_asset_url(stem: &str) -> String {
-    let photographic = crate::stage_art::photographic_stem(stem);
-    photographic.map_or_else(
-        || format!("{GENERATED}/{stem}"),
-        |asset| format!("{GENERATED}/{asset}"),
-    )
+/// The single place that turns a generated-art stem into its served URL, by the art contract:
+/// chrome, or the reviewed photograph the stem names or an identity key answers. A painted stem,
+/// a role token or a key with no photograph has no URL and its slot is `none` (the readable CSS
+/// fallback under it stands).
+pub(super) fn generated_asset_url(stem: &str) -> Option<String> {
+    art_contract::fetch_target(stem).map(|target| format!("{GENERATED}/{target}"))
 }
 
-/// Combat painting for both roles; the server serves it from the concept-art route.
+/// The reviewed harbor photograph behind both roles' combat, aftermath and rest screens.
 pub(super) const COMBAT_ART_URL: &str =
     "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
 
@@ -39,7 +39,7 @@ pub(super) const ART_SLOTS: [(&str, &str); 19] = [
     ("--asset-portrait-hero-1", "portrait-hero-1"), // 1:1
     ("--asset-portrait-hero-2", "portrait-hero-2"),
     ("--asset-portrait-bandit", "portrait-bandit"),
-    ("--asset-scene-courier-road", "scene-courier-road"), // 16:9
+    ("--asset-scene-harbor", art_contract::HARBOR_PHOTO), // 16:9
     ("--asset-portrait-hero-1-full", "portrait-hero-1-full"), // 2:3
     ("--asset-portrait-hero-2-full", "portrait-hero-2-full"),
     ("--asset-portrait-bandit-full", "portrait-bandit-full"),
@@ -48,7 +48,10 @@ pub(super) const ART_SLOTS: [(&str, &str); 19] = [
 pub(super) fn stylesheet() -> String {
     let mut variables = String::new();
     for (property, stem) in ART_SLOTS {
-        variables.push_str(&format!("{property}:url('{}');", generated_asset_url(stem)));
+        match generated_asset_url(stem) {
+            Some(url) => variables.push_str(&format!("{property}:url('{url}');")),
+            None => variables.push_str(&format!("{property}:none;")),
+        }
     }
     let mut portraits = String::new();
     for stem in [
@@ -68,12 +71,12 @@ pub(super) fn stylesheet() -> String {
         "ant-mastiff",
         "ant-scout",
     ] {
-        let url = generated_asset_url(&format!("portrait-{stem}"));
-        let crop = if url.contains("-documentary-photo") {
-            "background-size:240% auto;background-position:50% 0;"
-        } else {
-            ""
+        // A creature with no reviewed photograph has no rule: its portrait circle keeps the
+        // neutral fill until the server's live canonical photograph replaces it.
+        let Some(url) = generated_asset_url(&format!("portrait-{stem}")) else {
+            continue;
         };
+        let crop = "background-size:240% auto;background-position:50% 0;";
         portraits.push_str(&format!("@S .combat-actor[data-portrait={stem}] .combat-initiative-value::before,@S .aftermath-member[data-portrait={stem}] .aftermath-portrait::before,.live-portrait[data-portrait={stem}]::before{{background-image:url('{url}');{crop}}}@S[data-role=display] .live-keyart[data-portrait={stem}]{{background-image:url('{url}')}}"));
     }
     format!(":root{{{variables}}}\n{COMMON}\n{PLAYER}\n{DISPLAY}\n{REST}\n{SHEET}\n{portraits}")
@@ -311,8 +314,8 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 
 /// Aftermath and short-rest screens: the courier road painting over the combat painting.
 const REST: &str = r#"
-@S[data-screen=aftermath] .df-aftermath{background:linear-gradient(180deg,#05080a70 0,transparent 22%,transparent 40%,#05080ac4 66%,#05080af2),var(--asset-scene-courier-road) center 38%/cover,url('@COMBAT_ART') center 38%/cover,#0b0f0c}
-@S[data-screen=rest] .df-campfire{--camp-art:var(--asset-scene-courier-road),url('@COMBAT_ART') !important;min-height:0;border-radius:0;border:0}
+@S[data-screen=aftermath] .df-aftermath{background:linear-gradient(180deg,#05080a70 0,transparent 22%,transparent 40%,#05080ac4 66%,#05080af2),var(--asset-scene-harbor) center 38%/cover,url('@COMBAT_ART') center 38%/cover,#0b0f0c}
+@S[data-screen=rest] .df-campfire{--camp-art:var(--asset-scene-harbor),url('@COMBAT_ART') !important;min-height:0;border-radius:0;border:0}
 @S[data-role=player][data-screen=rest] .df-campfire{padding:20px 16px}
 @S[data-role=player][data-screen=rest] .df-campfire .camp-location{font-size:13px;letter-spacing:.3em}
 @S[data-role=player][data-screen=rest] .df-campfire{display:flex;flex-direction:column}

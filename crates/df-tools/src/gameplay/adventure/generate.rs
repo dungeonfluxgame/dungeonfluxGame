@@ -925,8 +925,17 @@ pub(crate) fn generate_with_prose(
                     .flat_map(|model| model.people.iter())
                     .filter(|person| person.is_background)
                     .map(|person| {
+                        // The shop's reviewed photographs where one exists for the role; any
+                        // other background person is the canonical-photo role, made on demand.
                         let stem = person.role.replace(' ', "-");
-                        let portrait = format!("assets/ui/generated/portrait-shop-{stem}");
+                        let reviewed = format!(
+                            "portrait-shop-{stem}{}",
+                            df_render::art_contract::REVIEWED_SUFFIX
+                        );
+                        let portrait = df_render::art_contract::reviewed_photo(&reviewed).map_or(
+                            df_render::art_contract::CANONICAL_PHOTO.to_owned(),
+                            |photo| format!("assets/ui/generated/{photo}"),
+                        );
                         super::listener::cast_member(
                             CastRole::Bystander,
                             &person.id,

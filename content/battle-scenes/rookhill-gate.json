@@ -7,13 +7,13 @@
   },
   "surface": "stone",
   "ground": {
-    "stem": "ground-rookhill-gate",
+    "stem": "neutral",
     "size_m": 24.0,
     "centre": [0.0, 0.0],
     "falloff_m": 4.6
   },
   "backdrop": {
-    "stem": "scene-rookhill-gate-arrival",
+    "stem": "live-room-photo",
     "distance_m": 9.8,
     "width_m": 34.0,
     "base_m": -6.4,
@@ -81,7 +81,7 @@
           "cells": [[0, 0]],
           "blocks_movement": true,
           "cover": "total",
-          "sprite": "prop-stone-pillar",
+          "sprite": "neutral",
           "height_m": 2.2
         },
         {
@@ -90,7 +90,7 @@
           "cells": [[9, 0]],
           "blocks_movement": true,
           "cover": "total",
-          "sprite": "prop-stone-pillar",
+          "sprite": "neutral",
           "height_m": 2.2
         }
       ],
@@ -110,7 +110,7 @@
           "cells": [[0, 3], [1, 3], [2, 3]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-fence",
+          "sprite": "neutral",
           "height_m": 1.0
         },
         {
@@ -119,7 +119,7 @@
           "cells": [[7, 3], [8, 3], [9, 3]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-fence",
+          "sprite": "neutral",
           "height_m": 1.0
         },
         {
@@ -128,7 +128,7 @@
           "cells": [[3, 3]],
           "blocks_movement": true,
           "cover": "total",
-          "sprite": "prop-stone-pillar",
+          "sprite": "neutral",
           "height_m": 2.2
         },
         {
@@ -137,7 +137,7 @@
           "cells": [[6, 3]],
           "blocks_movement": true,
           "cover": "total",
-          "sprite": "prop-stone-pillar",
+          "sprite": "neutral",
           "height_m": 2.2
         }
       ],
@@ -157,7 +157,7 @@
           "cells": [[1, 1]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -166,7 +166,7 @@
           "cells": [[8, 1]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -175,7 +175,7 @@
           "cells": [[3, 2]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -184,7 +184,7 @@
           "cells": [[6, 2]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -193,7 +193,7 @@
           "cells": [[1, 3]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -202,7 +202,7 @@
           "cells": [[4, 4]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -211,7 +211,7 @@
           "cells": [[6, 4]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -220,7 +220,7 @@
           "cells": [[1, 5]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -229,7 +229,7 @@
           "cells": [[8, 5]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-gravestone",
+          "sprite": "neutral",
           "height_m": 1.2
         },
         {
@@ -238,7 +238,7 @@
           "cells": [[8, 3]],
           "blocks_movement": true,
           "cover": "total",
-          "sprite": "prop-stone-pillar",
+          "sprite": "neutral",
           "height_m": 2.2
         },
         {
@@ -247,7 +247,7 @@
           "cells": [[0, 7]],
           "blocks_movement": true,
           "cover": "total",
-          "sprite": "prop-stone-pillar",
+          "sprite": "neutral",
           "height_m": 2.2
         },
         {
@@ -256,7 +256,7 @@
           "cells": [[9, 7]],
           "blocks_movement": true,
           "cover": "total",
-          "sprite": "prop-stone-pillar",
+          "sprite": "neutral",
           "height_m": 2.2
         }
       ],

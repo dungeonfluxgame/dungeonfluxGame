@@ -9,8 +9,8 @@
 //!
 //! Like the voice lines, only registered keys are served: a key the server never registered is
 //! a 404. Results live in an on-disk cache keyed the same way, so a request never costs twice,
-//! not even across runs. Spend is charged to a per-run budget before each provider call and is
-//! never refunded; at most two calls fly at once; identical requests share one flight. Every
+//! not even across runs. There is no spend cap: every provider call is recorded in the hub's
+//! spend ledger (a call that was sent is never refunded); at most two calls fly at once; identical requests share one flight. Every
 //! failure is typed and means "keep showing what is on screen": nothing in the game waits for
 //! an image, and a provider refusal is a failure, never retried with another wording or another
 //! model. Generated images are never written under `assets/` and never committed; each is
@@ -26,7 +26,8 @@ mod prompt;
 mod references;
 mod scene_prompt;
 pub(super) use canonical_prompt::{
-    canonical_character, canonical_npc, canonical_room, canonical_room_content,
+    canonical_cast_member, canonical_character, canonical_npc, canonical_room,
+    canonical_room_content,
 };
 pub(super) use scene_prompt::{graph_edit, item_picture, model_plate, state_edit, story_beat_edit};
 
@@ -99,7 +100,6 @@ const ROUTE: &str = "/gameplay/imagery";
 const MANIFEST_NAME: &str = "imagery.jsonl";
 /// Most recent registered keys kept; older ones can no longer be requested.
 const MAXIMUM_REGISTERED: usize = 512;
-const MAXIMUM_FAILED: usize = 256;
 const MAXIMUM_IMAGE_BYTES: u64 = 6 * 1024 * 1024;
 pub(super) const MAXIMUM_IN_FLIGHT: usize = 2;
 const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -220,8 +220,6 @@ impl ImageKey {
 pub(super) enum ImageFailure {
     /// Imagery is off.
     Off,
-    /// The per-run budget cannot pay for another call.
-    BudgetExhausted,
     /// The request failed local validation; nothing was charged or sent.
     InvalidRequest,
     DeadlineExceeded,
@@ -239,7 +237,6 @@ impl ImageFailure {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Off => "off",
-            Self::BudgetExhausted => "budget_exhausted",
             Self::InvalidRequest => "invalid_request",
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::Refused => "refused",
@@ -249,7 +246,24 @@ impl ImageFailure {
         }
     }
 
-    /// A failure that the same request would repeat, so it is remembered and never paid for twice.
+    /// The failure a hub failure label names (a failure the hub remembered is served without
+    /// running the request again, so the original is gone and only its label remains).
+    fn from_label(label: &str) -> Option<Self> {
+        [
+            Self::Off,
+            Self::InvalidRequest,
+            Self::DeadlineExceeded,
+            Self::Refused,
+            Self::Provider,
+            Self::BadOutput,
+            Self::Interrupted,
+        ]
+        .into_iter()
+        .find(|failure| failure.label() == label)
+    }
+
+    /// A failure that the same request would repeat: the hub remembers it as failed (until it is
+    /// invalidated or regenerated) and it is never paid for twice.
     fn is_permanent(self) -> bool {
         matches!(self, Self::Refused | Self::BadOutput | Self::InvalidRequest)
     }
@@ -279,7 +293,6 @@ struct Registered {
 struct Registry {
     order: VecDeque<String>,
     by_key: HashMap<String, Registered>,
-    failed: HashMap<String, ImageFailure>,
 }
 
 impl Registry {
@@ -294,19 +307,18 @@ impl Registry {
         self.order.push_back(key.0.clone());
         self.by_key.insert(key.0.clone(), registered);
     }
-
-    fn remember_failure(&mut self, key: &ImageKey, failure: ImageFailure) {
-        if self.failed.len() >= MAXIMUM_FAILED {
-            self.failed.clear();
-        }
-        self.failed.insert(key.0.clone(), failure);
-    }
 }
 
-struct Budget {
-    remaining: u32,
-    exhausted: bool,
-}
+/// Image calls are recorded in the hub's spend ledger (`Unit::ImageCall`); nothing caps them.
+const IMAGE_UNIT: super::resources::Unit = super::resources::Unit::ImageCall;
+
+/// The resource kinds an image request can be.
+const IMAGE_KINDS: [super::resources::ResourceKind; 4] = [
+    super::resources::ResourceKind::Depiction,
+    super::resources::ResourceKind::ScenePlate,
+    super::resources::ResourceKind::PlateEdit,
+    super::resources::ResourceKind::ItemCloseUp,
+];
 
 /// Counters for tests; they contain no content.
 #[cfg(test)]
@@ -317,7 +329,6 @@ pub(super) struct Stats {
     pub(super) cache_hits: u32,
     /// Cost of the calls that reported usage, in millionths of a US dollar.
     pub(super) micro_dollars: u64,
-    pub(super) budget_remaining: u32,
 }
 
 struct Engine {
@@ -328,7 +339,7 @@ struct Engine {
     deadline: Duration,
     cache_dir: PathBuf,
     manifest: Option<PathBuf>,
-    budget: Mutex<Budget>,
+    ledger: Arc<super::resources::SpendLedger>,
     calls: AtomicU32,
     cache_hits: AtomicU32,
     micro_dollars: AtomicU64,
@@ -350,6 +361,8 @@ enum Mode {
 struct Inner {
     registry: Mutex<Registry>,
     mode: Mode,
+    /// The resource generation hub: the one place a generated image is asked for and remembered.
+    hub: super::resources::Hub,
 }
 
 /// Registry of renderable results plus, when enabled, the cached provider calls.
@@ -389,6 +402,7 @@ impl Imagery {
             inner: Arc::new(Inner {
                 registry: Mutex::new(Registry::default()),
                 mode: Mode::Off(reason),
+                hub: super::resources::Hub::new(),
             }),
         }
     }
@@ -526,9 +540,8 @@ impl Imagery {
     ) -> Result<Self, io::Error> {
         std::fs::create_dir_all(&configuration.cache_dir)?;
         let summary = format!(
-            "IMAGERY on model={} budget={} images interval={}s rating={} quality={}",
+            "IMAGERY on model={} interval={}s rating={} quality={}",
             configuration.model.model_id(),
-            configuration.budget,
             configuration.interval.as_secs(),
             configuration.rating.label(),
             match configuration.quality {
@@ -538,6 +551,7 @@ impl Imagery {
             },
         );
         let manifest = manifest_directory.map(|directory| directory.join(MANIFEST_NAME));
+        let hub = super::resources::Hub::new();
         let engine = Engine {
             provider,
             model: configuration.model,
@@ -546,10 +560,7 @@ impl Imagery {
             deadline: configuration.deadline,
             cache_dir: configuration.cache_dir,
             manifest,
-            budget: Mutex::new(Budget {
-                remaining: configuration.budget,
-                exhausted: false,
-            }),
+            ledger: Arc::clone(hub.ledger()),
             calls: AtomicU32::new(0),
             cache_hits: AtomicU32::new(0),
             micro_dollars: AtomicU64::new(0),
@@ -559,13 +570,29 @@ impl Imagery {
         };
         let mut registry = Registry::default();
         engine.register_from_manifest(&mut registry);
+        let engine = Arc::new(engine);
+        // The hub's bounds for the image kinds: a request may wait for a free provider slot and
+        // then runs under the provider's own deadline, so the hub never fires before it.
+        let wait = engine.deadline * (MAXIMUM_IN_FLIGHT as u32 + 1) + Duration::from_secs(10);
+        for kind in IMAGE_KINDS {
+            hub.set_limits(
+                kind,
+                super::resources::Limits {
+                    timeout: wait,
+                    attempts: 2,
+                },
+            );
+            let checked = Arc::clone(&engine);
+            hub.set_validator(
+                kind,
+                Arc::new(move |generated| checked.cached_now(&generated.handle)),
+            );
+        }
         Ok(Self {
             inner: Arc::new(Inner {
                 registry: Mutex::new(registry),
-                mode: Mode::On {
-                    engine: Arc::new(engine),
-                    summary,
-                },
+                mode: Mode::On { engine, summary },
+                hub,
             }),
         })
     }
@@ -590,7 +617,6 @@ impl Imagery {
                 calls: engine.calls.load(Ordering::SeqCst),
                 cache_hits: engine.cache_hits.load(Ordering::SeqCst),
                 micro_dollars: engine.micro_dollars.load(Ordering::SeqCst),
-                budget_remaining: locked(&engine.budget).remaining,
             },
         }
     }
@@ -608,9 +634,91 @@ impl Imagery {
         request_key(request, model, quality, rating)
     }
 
+    /// The resource generation hub that owns every generated image's request, state and audit.
+    pub(super) fn hub(&self) -> &super::resources::Hub {
+        &self.inner.hub
+    }
+
+    /// The one way to get an image made: describes the request as a typed resource, runs it
+    /// through the hub (state, timeout, request cap, `RESOURCE` audit lines) and returns the key
+    /// to load it by. `subject` names what the picture is about (`character:ant-wolf`,
+    /// `place:salt-quay`, `plate:<scene>`, `item:<id>`). Every consumer calls this; the render
+    /// below is the hub's own generator and is private to this module.
+    pub(super) async fn generate(
+        &self,
+        subject: &str,
+        request: ImageRequest,
+    ) -> Result<ImageKey, ImageFailure> {
+        use super::resources::{
+            DepictionSpec, ItemCloseUpSpec, PlateEditSpec, PlateSpec,
+        };
+        use df_render::art_contract::Neutral;
+        let key = self.key_for(&request);
+        let key = key.as_str();
+        match request.kind {
+            ImageKind::ScenePlate => {
+                self.run(PlateSpec::new(subject, key, Neutral::Nothing), request)
+                    .await
+            }
+            ImageKind::ScenePlateEdit => {
+                self.run(PlateEditSpec::new(subject, key, Neutral::Nothing), request)
+                    .await
+            }
+            ImageKind::ArtifactCloseUp => {
+                self.run(ItemCloseUpSpec::new(subject, key, Neutral::Block), request)
+                    .await
+            }
+            ImageKind::CanonicalCharacter | ImageKind::CastExpression => {
+                self.run(
+                    DepictionSpec::new(subject, key, Neutral::Silhouette),
+                    request,
+                )
+                .await
+            }
+            ImageKind::CanonicalRoom | ImageKind::SceneRefresh => {
+                self.run(DepictionSpec::new(subject, key, Neutral::Nothing), request)
+                    .await
+            }
+        }
+    }
+
+    async fn run<S: super::resources::ResourceSpec>(
+        &self,
+        spec: S,
+        request: ImageRequest,
+    ) -> Result<ImageKey, ImageFailure> {
+        use super::resources::{Generated, Generation, ResourceFailure};
+        let key = self.key_for(&request);
+        let original = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&original);
+        let imagery = self.clone();
+        let generation: Generation = Box::pin(async move {
+            match imagery.render(request).await {
+                Ok(key) => Ok(Generated::new(key.as_str())),
+                Err(failure) => {
+                    *locked(&slot) = Some(failure);
+                    Err(if failure.is_permanent() {
+                        ResourceFailure::Permanent(failure.label())
+                    } else {
+                        ResourceFailure::Transient(failure.label())
+                    })
+                }
+            }
+        });
+        match self.hub().render(&spec, generation).await {
+            Ok(_) => Ok(key),
+            Err(ResourceFailure::TimedOut) => Err(ImageFailure::DeadlineExceeded),
+            Err(failure) => Err(locked(&original)
+                .take()
+                .or_else(|| ImageFailure::from_label(failure.label()))
+                .unwrap_or(ImageFailure::Interrupted)),
+        }
+    }
+
     /// Renders `request`, or finds its cached result, and returns the key to load it by. The
-    /// key is registered before any work so the route can serve it as soon as it exists.
-    pub(super) async fn render(&self, request: ImageRequest) -> Result<ImageKey, ImageFailure> {
+    /// key is registered before any work so the route can serve it as soon as it exists. Only the
+    /// hub (through `generate`) calls this.
+    async fn render(&self, request: ImageRequest) -> Result<ImageKey, ImageFailure> {
         let started = std::time::Instant::now();
         let key = self.key_for(&request);
         let kind = request.kind;
@@ -626,25 +734,8 @@ impl Imagery {
             return Err(ImageFailure::Off);
         };
         let format = request.output.format();
-        let failed = {
-            let mut registry = locked(&self.inner.registry);
-            if let Some(failure) = registry.failed.get(key.as_str()) {
-                Some(*failure)
-            } else {
-                registry.register(&key, Registered { format });
-                None
-            }
-        };
-        if let Some(failure) = failed {
-            record_image_result(kind, &key, started.elapsed(), Err(&failure));
-            return Err(failure);
-        }
+        locked(&self.inner.registry).register(&key, Registered { format });
         let outcome = engine.image(&key, request).await;
-        if let Err(failure) = outcome
-            && failure.is_permanent()
-        {
-            locked(&self.inner.registry).remember_failure(&key, failure);
-        }
         let result = outcome.map(|()| key.clone());
         record_image_result(
             kind,
@@ -683,13 +774,6 @@ impl Imagery {
         Some(key)
     }
 
-    /// Provider calls the budget can still pay for.
-    pub(super) fn budget_remaining(&self) -> u32 {
-        match &self.inner.mode {
-            Mode::Off(_) => 0,
-            Mode::On { engine, .. } => locked(&engine.budget).remaining,
-        }
-    }
 }
 
 impl Engine {
@@ -815,7 +899,7 @@ impl Engine {
             .acquire()
             .await
             .map_err(|_| ImageFailure::Interrupted)?;
-        self.charge()?;
+        self.charge();
         let started = std::time::Instant::now();
         let generated = self
             .provider
@@ -842,24 +926,25 @@ impl Engine {
 
     /// Spend is committed before the call and kept whatever the outcome: a call whose result is
     /// unknown may still have been billed.
-    fn charge(&self) -> Result<(), ImageFailure> {
-        let mut budget = locked(&self.budget);
-        if budget.remaining == 0 {
-            if !budget.exhausted {
-                budget.exhausted = true;
-                println!(
-                    "IMAGERY budget exhausted after {} calls ({} cache hits, about ${:.2}); no \
-                     further images will be generated",
-                    self.calls.load(Ordering::SeqCst),
-                    self.cache_hits.load(Ordering::SeqCst),
-                    self.micro_dollars.load(Ordering::SeqCst) as f64 / 1_000_000.0,
-                );
-            }
-            return Err(ImageFailure::BudgetExhausted);
-        }
-        budget.remaining -= 1;
+    fn charge(&self) {
+        self.ledger.reserve(IMAGE_UNIT, 1).commit(1);
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+    }
+
+    /// Whether an image of `key` is on disk in any format, without waiting: the hub's
+    /// freshness check of a ready entry.
+    fn cached_now(&self, key: &str) -> bool {
+        let Some(key) = ImageKey::parse(key) else {
+            return false;
+        };
+        [ImageFormat::Webp, ImageFormat::Png, ImageFormat::Jpeg]
+            .into_iter()
+            .any(|format| {
+                std::fs::symlink_metadata(self.cache_dir.join(Self::file_name(&key, format)))
+                    .is_ok_and(|metadata| {
+                        metadata.is_file() && (1..=MAXIMUM_IMAGE_BYTES).contains(&metadata.len())
+                    })
+            })
     }
 
     /// The format an image of `format` is cached in, if it is cached.

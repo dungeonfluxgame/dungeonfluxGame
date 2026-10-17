@@ -204,12 +204,12 @@ the default, asks for `moderation: low` and removes the softening clauses; `rest
   So no candidate makes "no censorship" unconditional; the provider's policy is the real floor.
 
 Settings (all validated at startup; the startup line is
-`IMAGERY on model=<id> budget=<n> images interval=<s>s ...` or `IMAGERY off (<reason>)`):
-`DF_GAMEPLAY_IMAGERY` on/off, `_MODEL`, `_QUALITY` low/medium/high, `_BUDGET` (calls per server
-run, default 40, charged before each call and never refunded), `_INTERVAL_SECONDS` (default 30,
+`IMAGERY on model=<id> interval=<s>s ...` or `IMAGERY off (<reason>)`):
+`DF_GAMEPLAY_IMAGERY` on/off, `_MODEL`, `_QUALITY` low/medium/high, `_INTERVAL_SECONDS` (default 30,
 minimum 20), `_DEADLINE_SECONDS` (default 45), `_CACHE`, plus the shared
-`DF_GAMEPLAY_CONTENT_RATING`. Expected cost of a 30-minute session at the defaults is at most
-40 calls, about 0.85 USD, and typically 15 to 25 calls (a repeated character and expression
+`DF_GAMEPLAY_CONTENT_RATING`. There is no spend cap of any kind (owner decision 2026-10-17): the
+`DF_GAMEPLAY_IMAGERY_BUDGET` setting is gone and every call is only recorded in the hub spend
+ledger. Measured cost of a 30-minute session at the old defaults was typically 15 to 25 calls (a repeated character and expression
 pair, and a repeated backdrop request, come from the cache for nothing), about 0.3 to 0.5 USD.
 
 ### Scene plates (PLAY-V09)
@@ -257,8 +257,7 @@ hit). Combat and the lobby never get one.
   is ready, and if it fails, the scene looks as it always did. The plate has a slow push-in,
   dust and a breathing vignette; an edit swaps in with a focus pull.
 - Setting: `DF_GAMEPLAY_PLATES` `on` (default) or `off`; plates also need imagery on (the
-  `OPENAI_API_KEY` present). The shared `DF_GAMEPLAY_IMAGERY_BUDGET` still bounds calls per run
-  (default 40: a run that wants every plate sets it higher).
+  `OPENAI_API_KEY` present). Nothing caps the number of plates.
 ## PLAY-H01: health-tier character art (2026-10-12)
 
 One tier definition (`df-tools/src/health_tier.rs`: Healthy over 75%, Hurt over 50%, Bloodied over
@@ -362,3 +361,66 @@ Acceptance is seen on a running game, not in tests alone: in a conversation scen
 the people present are visible as figures that breathe and turn toward whoever speaks, the camera
 moves to the speaker, a hero who says "I lean on the bar" is at the bar within two seconds and in
 the next baked frame, and every face shows the feeling the emotional model holds.
+
+## Art contract and the resource hub (2026-10-17)
+
+The game's look is documentary photography. Painted or illustrated art never reaches a screen (TV
+display, phones, battle map) or an image-generation request. Two modules own this, and nothing else
+decides what a picture is or how one is made.
+
+**The art contract** (`crates/df-render/src/art_contract.rs`, std-only, shared by server and
+WebAssembly clients). A *depiction* is a picture of a person, creature, place, ground or prop
+(stems starting `portrait-`, `figure-`, `sprite-`, `scene-`, `ground-`, `prop-`); everything else
+(icons, frames, dividers, dice, ribbons, status icons, wordmark, sound) is chrome and allowed as it
+is. A depiction has exactly two sources: live generated photographic imagery served by key under
+`/gameplay/imagery/<key>`, or a reviewed `-documentary-photo` library asset
+(`art_contract::REVIEWED_PHOTOS`, listed in `assets/ui/generated/documentary-photo-v2.assets.json`).
+Content (packs, battle scenes, cast entries, the adventure art manifest) may name a reviewed
+photograph, a role token (`live-room-photo`, `live-canonical-photo`, `neutral`) or a live path,
+nothing else (`check_content_reference`). Identity keys such as `portrait-hero-2` or
+`portrait-ant-wolf` name a subject, never a file; `identity_photo` maps one to its reviewed
+photograph when it has one. The server's static route (`is_servable_stem`), the generation
+reference loader (`ReferenceStore::load`, which resolves through `plan` and reads no other file),
+content validation (pack, cast entries, battle scenes, the art manifest) and the browser renderer
+(`fetch_target`) all refuse a painted stem. The painted files are deleted.
+
+One resolver, `art_contract::plan(role, request)`, gives every role the same fallback order:
+
+1. A live image already generated and cached for this subject.
+2. A reviewed `-documentary-photo` asset.
+3. Request the live generation now. Until it is ready, show the neutral chrome fallback
+   (silhouette, initial, plain floor or block); never painted art.
+4. If generation fails, keep the neutral fallback and record it in the audit log.
+
+| Role | Live source | Neutral |
+| --- | --- | --- |
+| battle backdrop | room photograph, then scene plate | dark stage |
+| battle ground | room photograph | plain floor colour |
+| battle prop | room photograph | neutral block |
+| creature or NPC token, hero portrait | canonical character photograph | silhouette or initial |
+| lobby art | room photograph, then scene plate | none |
+| stage place (TV) | scene plate, then room photograph | none |
+| generation reference | none | the neutral photographic carrier |
+
+Generation is on demand: the first time a view needs a depiction that has no reviewed photograph,
+the *server* requests it through the canonical character path (people, creatures) or the canonical
+room and scene plate path (places), once per subject, bounded by the imagery worker's concurrency
+(there is no spend cap), cached by key like every live image, and written to the `ART`, `RESOURCE` and
+`IMAGERY` audit lines. Nothing is generated ahead of time, no library is pre-generated, and neither
+a test nor a client render loop ever requests one. Grounds and props are drawn as a plain floor or
+neutral block; the place's room photograph is their live source, so no separate ground or prop image
+is generated.
+
+**The resource hub** (`crates/df-tools/src/gameplay/resources.rs`) is the one place the program
+asks for a generated resource and the one place that remembers what was asked, what is in flight,
+what is ready, what failed and what it cost. A typed `ResourceSpec` per kind (`Depiction`,
+`ScenePlate`, `PlateEdit`, `ItemCloseUp`; `MusicSet`, `VoiceLine`, `VideoClip` reserved) derives a
+`ResourceKey` from the kind, a per-kind `CONTRACT_VERSION` and the canonical spec, so a changed spec
+or version is a new key and a stale value cannot be served. Consumers call `Hub::get_or_request`
+(queue a generation) or `Hub::render` (run one now); the hub owns the registry, the one-in-flight
+rule, the per-kind timeout and attempt limit, the failure memory (permanent failures stay failed,
+with the reason, until invalidated), the freshness check of a ready entry, the shared `SpendLedger`
+(reserve, commit, refund-if-not-sent, reconcile, per unit; it records spend and never refuses) and
+the dev-tool hooks. The image bytes
+stay in the imagery cache, which an entry's handle points at; `Imagery::generate` is the only way
+an image is made, and `Imagery::render` is private to the hub's generator.

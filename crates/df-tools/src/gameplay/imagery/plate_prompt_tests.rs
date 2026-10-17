@@ -26,11 +26,11 @@ const KINDS: [&str; 11] = [
 ];
 const SPEAKERS: [Option<&str>; 6] = [
     None,
-    Some("assets/ui/generated/sprite-patron-herbwife"),
-    Some("assets/ui/generated/sprite-patron-innkeeper"),
-    Some("assets/ui/generated/sprite-contact-watch-sergeant"),
-    Some("assets/ui/generated/sprite-contact-tinker"),
-    Some("assets/ui/generated/sprite-patron-bell-ringer"),
+    Some("assets/ui/generated/sprite-patron-merchant-documentary-photo"),
+    Some("assets/ui/generated/sprite-shop-adventurer-documentary-photo"),
+    Some("assets/ui/generated/sprite-shop-soldier-documentary-photo"),
+    Some("assets/ui/generated/sprite-courier-documentary-photo"),
+    Some("assets/ui/generated/sprite-bandit-documentary-photo"),
 ];
 const PARTIES: [&[u8]; 4] = [&[], &[2], &[1, 3], &[1, 2, 3]];
 const OTHERS: [&str; 1] = ["assets/ui/generated/sprite-ant-guard"];

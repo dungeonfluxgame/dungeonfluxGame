@@ -19,6 +19,7 @@ use std::{
 };
 
 use df_protocol::common as rpc;
+use df_render::art_contract::{self, Role};
 use tokio::{sync::watch, task::JoinSet, time::Instant};
 
 use crate::health_tier::{Vitals, tier_of};
@@ -46,11 +47,12 @@ use super::{
 };
 
 use super::shot::scene_graph::{ActorInput, SceneGraph, SceneGraphInput};
+use super::{actor, resources};
 
 /// The authored cut-out of the party's hero at this position; the health variants are made from
 /// it.
 fn hero_art(index: usize) -> String {
-    format!("assets/ui/generated/sprite-hero-{}-photo", index + 1)
+    format!("assets/ui/generated/sprite-hero-{}-documentary-photo", index + 1)
 }
 
 /// The cut-out the battlefield dresses the hero at this party position in (the dwarf fighter, the
@@ -59,7 +61,7 @@ fn hero_art(index: usize) -> String {
 /// shows.
 fn battle_hero_art(index: usize) -> String {
     let art = [1, 3, 2][index % 3];
-    format!("assets/ui/generated/sprite-hero-{art}-photo")
+    format!("assets/ui/generated/sprite-hero-{art}-documentary-photo")
 }
 
 /// What a hero's health variants are made from on each screen, and which are cached.
@@ -844,7 +846,6 @@ struct State {
     /// Faces that failed in this scene are not asked for again.
     failed_faces: BTreeSet<(String, Face)>,
     last_revision: Option<(u64, u64)>,
-    budget_exhausted: bool,
     /// PLAY-V09: the scene's plate is on screen and covers the cut-outs and the backdrop.
     plate_covers: bool,
     /// PLAY-V09: the face the mood last asked for on each character, for the plate director.
@@ -1329,7 +1330,7 @@ impl Inner {
     }
 
     fn apply(&self, stage: Option<&Stage>, message: &mut rpc::ViewMessage) {
-        let state = locked(&self.state);
+        let mut state = locked(&self.state);
         match message.audience.as_mut() {
             Some(rpc::view_message::Audience::Display(display)) => {
                 let Some(stage) = stage else {
@@ -1364,10 +1365,13 @@ impl Inner {
                                 .then(|| state.sprites.get(&actor.id))
                                 .flatten()
                         });
-                        if let Some(overlay) = overlay
-                            && overlay.source_sprite == actor.sprite
-                        {
-                            actor.live_sprite = overlay.key.path();
+                        let overlay_path = overlay
+                            .filter(|overlay| overlay.source_sprite == actor.sprite)
+                            .map(|overlay| overlay.key.path());
+                        if let Some(path) = overlay_path {
+                            actor.live_sprite = path;
+                        } else {
+                            Self::live_photograph(&mut state, actor);
                         }
                     }
                 }
@@ -1378,6 +1382,36 @@ impl Inner {
                 apply_hero_faces(&state, player.journey.as_mut());
             }
             None => {}
+        }
+    }
+
+    /// The art contract for a cast member's picture, steps one and three: a live canonical
+    /// photograph already made for this person is the cut-out the display shows; one that a
+    /// reviewed photograph already answers is left to the library; otherwise it is requested now,
+    /// once (the request is idempotent per subject), and the display keeps its neutral fallback
+    /// until it is ready. This is the only place a view first needing a depiction asks for it.
+    fn live_photograph(state: &mut State, actor: &mut rpc::SceneActor) {
+        let id = actor.id.strip_prefix("npc:").unwrap_or(&actor.id);
+        let subject = art_contract::Subject::character(id);
+        let reviewed = art_contract::plan(Role::CharacterToken, &actor.sprite).reviewed;
+        if reviewed.is_some() || !actor.live_sprite.is_empty() {
+            let source = if reviewed.is_some() { "reviewed" } else { "live" };
+            state.canonical.note_resolved(&subject, source);
+            return;
+        }
+        if let Some(key) = state.canonical.npc(id) {
+            actor.live_sprite = key.path();
+            state.canonical.note_resolved(&subject, "live");
+            return;
+        }
+        state.canonical.note_resolved(&subject, "neutral");
+        let member = state
+            .facts
+            .as_ref()
+            .and_then(|facts| facts.members.iter().find(|member| member.id == id))
+            .cloned();
+        if let Some(member) = member {
+            state.canonical.admit_cast(&member);
         }
     }
 
@@ -1523,28 +1557,30 @@ impl Inner {
         }
     }
 
+    /// The art contract's on-demand request for a cast member the current stage knows and no
+    /// reviewed photograph answers. Idempotent per subject (a person already admitted or
+    /// requested is left alone); returns whether the person is known to this stage.
+    fn request_cast_photograph(&self, id: &str) -> bool {
+        let mut state = locked(&self.state);
+        let member = state
+            .facts
+            .as_ref()
+            .and_then(|facts| facts.members.iter().find(|member| member.id == id))
+            .cloned();
+        member.is_some_and(|member| {
+            state.canonical.admit_cast(&member);
+            true
+        })
+    }
+
+    /// A reference for an image request: a reviewed photograph only (the art contract). A painted
+    /// or unreviewed stem is an invalid request and nothing is read.
     async fn load(&self, name: String) -> Result<ReferenceImage, ImageFailure> {
         let references = self.references.clone();
         tokio::task::spawn_blocking(move || references.load(&name))
             .await
             .map_err(|_| ImageFailure::Interrupted)?
             .map_err(|_| ImageFailure::InvalidRequest)
-    }
-
-    async fn load_photographic(&self, name: String) -> Result<ReferenceImage, ImageFailure> {
-        let references = self.references.clone();
-        tokio::task::spawn_blocking(move || references.load_photographic(&name))
-            .await
-            .map_err(|_| ImageFailure::Interrupted)?
-            .map_err(|_| ImageFailure::InvalidRequest)
-    }
-
-    async fn load_plate_reference(&self, name: String) -> Result<ReferenceImage, ImageFailure> {
-        if self.references.photographic_only() {
-            self.load_photographic(name).await
-        } else {
-            self.load(name).await
-        }
     }
 
     async fn neutral_photographic_reference(&self) -> Result<ReferenceImage, ImageFailure> {
@@ -1566,12 +1602,10 @@ impl Inner {
         }
         let sheet = party_sheet(&figures).map_err(|_| ImageFailure::InvalidRequest)?;
         self.imagery
-            .render(scene_graph::hero_cutout_request(
-                self.rating,
-                sheet,
-                index,
-                party.len(),
-            )?)
+            .generate(
+                &format!("character:hero-seat-{index}"),
+                scene_graph::hero_cutout_request(self.rating, sheet, index, party.len())?,
+            )
             .await
     }
 
@@ -1582,19 +1616,11 @@ impl Inner {
     async fn load_figure(&self, sprite: &str) -> Result<ReferenceImage, ImageFailure> {
         let stem = sprite.rsplit('/').next().unwrap_or(sprite);
         if let Some(name) = stem.strip_prefix("sprite-")
-            && let Ok(figure) = if self.references.photographic_only() {
-                self.load_photographic(format!("figure-{name}")).await
-            } else {
-                self.load(format!("figure-{name}")).await
-            }
+            && let Ok(figure) = self.load(format!("figure-{name}")).await
         {
             return Ok(figure);
         }
-        if self.references.photographic_only() {
-            self.load_photographic(sprite.to_owned()).await
-        } else {
-            self.load(sprite.to_owned()).await
-        }
+        self.load(sprite.to_owned()).await
     }
 
     async fn render_expression(
@@ -1616,12 +1642,15 @@ impl Inner {
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
         self.imagery
-            .render(ImageRequest {
-                kind: ImageKind::CastExpression,
-                references: vec![sprite],
-                prompt,
-                output: OutputSpec::CUTOUT,
-            })
+            .generate(
+                &format!("character:{}", member.id),
+                ImageRequest {
+                    kind: ImageKind::CastExpression,
+                    references: vec![sprite],
+                    prompt,
+                    output: OutputSpec::CUTOUT,
+                },
+            )
             .await
     }
 
@@ -1656,8 +1685,9 @@ impl Inner {
         facts: CharacterFacts,
         tier: HealthTier,
     ) -> Result<ImageKey, ImageFailure> {
+        let subject = format!("character:health:{}:{tier:?}", &sprite.sha256[..12]);
         self.imagery
-            .render(self.health_request(sprite, facts, tier)?)
+            .generate(&subject, self.health_request(sprite, facts, tier)?)
             .await
     }
 
@@ -1678,14 +1708,17 @@ impl Inner {
         scene_asset: &str,
         look: Look,
     ) -> Result<ImageKey, ImageFailure> {
-        let backdrop = self.load_plate_reference(scene_asset.to_owned()).await?;
+        let backdrop = self.load(scene_asset.to_owned()).await?;
         self.imagery
-            .render(ImageRequest {
-                kind: ImageKind::SceneRefresh,
-                references: vec![backdrop],
-                prompt: scene_refresh(self.rating, place, look),
-                output: OutputSpec::BACKDROP,
-            })
+            .generate(
+                &format!("place:refresh:{scene_asset}"),
+                ImageRequest {
+                    kind: ImageKind::SceneRefresh,
+                    references: vec![backdrop],
+                    prompt: scene_refresh(self.rating, place, look),
+                    output: OutputSpec::BACKDROP,
+                },
+            )
             .await
     }
 
@@ -1724,21 +1757,14 @@ impl Inner {
                         drop(state);
                         self.wake.send_modify(|count| *count += 1);
                     }
-                    Err(failure) => {
+                    Err(_) => {
                         state.failed_hero_cutouts.insert(name);
-                        if failure == ImageFailure::BudgetExhausted {
-                            state.budget_exhausted = true;
-                        }
                     }
                 }
             }
             Done::Warm { id, tier, result } => {
                 match result {
                     Ok(key) => state.book.learn(&id, tier, key),
-                    Err(ImageFailure::BudgetExhausted) => {
-                        state.book.release(&id, tier);
-                        state.budget_exhausted = true;
-                    }
                     Err(_) => state.book.fail(&id, tier),
                 }
                 let changed = refresh_health(&mut state);
@@ -1786,11 +1812,8 @@ impl Inner {
                             self.wake.send_modify(|count| *count += 1);
                         }
                     }
-                    Err(failure) => {
+                    Err(_) => {
                         state.failed_faces.insert((npc_id, face));
-                        if failure == ImageFailure::BudgetExhausted {
-                            state.budget_exhausted = true;
-                        }
                     }
                 }
             }
@@ -1814,7 +1837,6 @@ impl Inner {
                         });
                     }
                     Ok(_) => {}
-                    Err(ImageFailure::BudgetExhausted) => state.budget_exhausted = true,
                     Err(_) => {}
                 }
             }
@@ -1913,7 +1935,6 @@ impl Inner {
                 if state.hero_cutouts.contains_key(&hero.name)
                     || state.hero_cutouts_in_flight.contains(&hero.name)
                     || state.failed_hero_cutouts.contains(&hero.name)
-                    || state.budget_exhausted
                 {
                     continue;
                 }
@@ -1954,7 +1975,6 @@ impl Inner {
                 };
                 if state.expression_in_flight.contains(id)
                     || state.failed_faces.contains(&(id.clone(), *face))
-                    || state.budget_exhausted
                 {
                     continue;
                 }
@@ -1984,7 +2004,6 @@ impl Inner {
         } else if let Some(place) = &facts.place
             && !state.refresh_in_flight
             && state.ready_backdrop.is_none()
-            && !state.budget_exhausted
             && !state.plate_covers
         {
             let worth = verdict.scene_worth_rendering;
@@ -2043,7 +2062,8 @@ impl Inner {
                 });
             }
         }
-        if stage.in_combat || state.budget_exhausted {
+        // Nothing is warmed in a fight, and nothing is asked of a provider that is off.
+        if stage.in_combat || !self.imagery.is_on() {
             return jobs;
         }
         // What the party and the cast look like right now comes before background warming.
@@ -2076,9 +2096,7 @@ impl Inner {
             }
         }
         if let Some((index, tier)) =
-            state
-                .book
-                .next_warm(&characters, self.imagery.budget_remaining(), false)
+            state.book.next_warm(&characters, false)
             && let Some(character) = characters.get(index)
         {
             state.book.start_warming(&character.id, tier);
@@ -2106,7 +2124,6 @@ impl State {
             expression_in_flight: BTreeSet::new(),
             failed_faces: BTreeSet::new(),
             last_revision: None,
-            budget_exhausted: false,
             plate_covers: false,
             plate_wants: BTreeMap::new(),
             book: Book::default(),
@@ -2152,6 +2169,135 @@ fn image_completion_line(
         "IMAGERY {outcome} kind={kind} id={key} ms={} status={status} boundary=scene-owner",
         elapsed.as_millis()
     )
+}
+
+/// The dev tools' view of the on-demand depictions: what a subject resolves to, what is in
+/// flight, cached or failed, and how to clear or regenerate one. Every call writes its `ART`
+/// audit line through the shared audit path.
+impl LivingScenes {
+    /// The resource hub that owns every generated image's request, state and audit.
+    pub(super) fn resource_hub(&self) -> Option<resources::Hub> {
+        self.inner
+            .as_ref()
+            .map(|inner| inner.imagery.hub().clone())
+    }
+
+    /// Resolves a subject's depiction for a role: the source kind (`live`, `reviewed` or
+    /// `neutral`), the asset or live path, the generation status and the last error.
+    pub(super) fn describe_depiction(
+        &self,
+        role: Role,
+        request: &str,
+        subject: &art_contract::Subject,
+    ) -> Option<resources::DepictionReport> {
+        let inner = self.inner.as_ref()?;
+        let plan = art_contract::plan(role, request);
+        let (live, status) = match subject.kind {
+            art_contract::SubjectKind::Character => (
+                locked(&inner.state).canonical.npc(&subject.id),
+                inner.canonical_npc_status(&subject.id),
+            ),
+            art_contract::SubjectKind::Place => (
+                inner.canonical_room_key(&subject.id),
+                inner.canonical_room_status(&subject.id),
+            ),
+        };
+        use canonical::ReferenceStatus;
+        let (status, last_error) = match status {
+            ReferenceStatus::Missing => ("none", String::new()),
+            ReferenceStatus::Pending => ("pending", String::new()),
+            ReferenceStatus::Ready => ("ready", String::new()),
+            ReferenceStatus::Failed(failure) => ("failed", failure.label().to_owned()),
+        };
+        let (source, asset) = match (&live, plan.reviewed) {
+            (Some(key), _) => ("live", key.path()),
+            (None, Some(photo)) => (
+                "reviewed",
+                format!("{}/{photo}", art_contract::GENERATED_ROUTE),
+            ),
+            (None, None) => ("neutral", String::new()),
+        };
+        let report = resources::DepictionReport {
+            subject: subject.key(),
+            role,
+            source,
+            asset,
+            status,
+            last_error,
+        };
+        actor::record_audit_line(
+            "gameplay.art",
+            format!(
+                "ART resolve subject={} role={role:?} source={} status={} asset={} error={}",
+                report.subject, report.source, report.status, report.asset, report.last_error
+            ),
+        );
+        Some(report)
+    }
+
+    /// Every generated resource the hub knows, optionally of one kind: in flight, cached and
+    /// failed.
+    pub(super) fn list_resources(
+        &self,
+        kind: Option<resources::ResourceKind>,
+    ) -> Vec<resources::ResourceRow> {
+        self.resource_hub()
+            .map(|hub| hub.list(kind))
+            .unwrap_or_default()
+    }
+
+    /// Clears a subject's cached or failed depiction so it is made again on the next need
+    /// (hub entries and the canonical admission together). Returns how many were cleared.
+    pub(super) fn clear_depiction(&self, subject: &art_contract::Subject) -> usize {
+        let Some(inner) = self.inner.as_ref() else {
+            return 0;
+        };
+        let cleared = inner
+            .imagery
+            .hub()
+            .invalidate(resources::Invalidate::Subject(&subject.key()));
+        let canonical = subject.kind == art_contract::SubjectKind::Character
+            && locked(&inner.state).canonical.clear_npc(&subject.id);
+        actor::record_audit_line(
+            "gameplay.art",
+            format!(
+                "ART clear subject={} entries={cleared} canonical={canonical}",
+                subject.key()
+            ),
+        );
+        cleared + usize::from(canonical)
+    }
+
+    /// Requests a subject's depiction again now (bounded and idempotent: nothing is requested
+    /// while one is already queued or in flight). Returns whether a request was admitted.
+    pub(super) fn regenerate_depiction(&self, subject: &art_contract::Subject) -> bool {
+        let Some(inner) = self.inner.as_ref() else {
+            return false;
+        };
+        if subject.kind != art_contract::SubjectKind::Character {
+            return false;
+        }
+        self.clear_depiction(subject);
+        let mut state = locked(&inner.state);
+        let member = state
+            .facts
+            .as_ref()
+            .and_then(|facts| facts.members.iter().find(|member| member.id == subject.id))
+            .cloned();
+        let admitted = member.is_some_and(|member| {
+            state.canonical.admit_cast(&member);
+            true
+        });
+        actor::record_audit_line(
+            "gameplay.art",
+            format!(
+                "ART request subject={} role={:?} source=live admitted={admitted}",
+                subject.key(),
+                Role::CharacterToken
+            ),
+        );
+        admitted
+    }
 }
 
 #[cfg(test)]

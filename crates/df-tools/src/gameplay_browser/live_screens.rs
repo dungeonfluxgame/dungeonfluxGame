@@ -9,9 +9,13 @@ use super::live_lobby::{LobbyMember, LobbyModel, LobbyOfferModel, LobbyScreen};
 use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
 use df_observe::presentation::VisualSource;
+use df_render::art_contract;
 use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
 use std::collections::BTreeMap;
 
+/// The reviewed harbor photograph's stem, the art of every fixed harbor phase.
+const HARBOR_PHOTO_STEM: &str = art_contract::HARBOR_PHOTO;
+const HARBOR_CANDID_STEM: &str = "scene-salt-quay-candid-documentary-photo";
 const HARBOR_ESTABLISHING: &str = "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
 const HARBOR_WHARF: &str = "/assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
 const HARBOR_DIALOGUE: &str = "/assets/ui/generated/scene-salt-quay-candid-documentary-photo";
@@ -129,26 +133,13 @@ fn join_host(url: &str) -> String {
 
 fn is_fixed_harbor_dialogue(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> bool {
     phase == rpc::JourneyPhase::Dialogue
-        && [
-            "scene-whisper-in-the-rain",
-            "scene-wharf-arrival",
-            "scene-salt-quay-arrival",
-        ]
-        .iter()
-        .any(|stem| scene.scene_asset.contains(stem))
+        && scene.scene_asset.contains(art_contract::HARBOR_PHOTO)
 }
 
 fn is_fixed_harbor_art(scene: &rpc::GameplayScene) -> bool {
-    [
-        "mara-harbor-v4.png",
-        "scene-lobby-harbor",
-        "scene-wharf-arrival",
-        "scene-whisper-in-the-rain",
-        "scene-salt-quay-arrival",
-        "scene-salt-quay-candid",
-    ]
-    .iter()
-    .any(|stem| scene.scene_asset.contains(stem))
+    ["mara-harbor-v4.png", art_contract::HARBOR_PHOTO, HARBOR_CANDID_STEM]
+        .iter()
+        .any(|stem| scene.scene_asset.contains(stem))
 }
 
 fn fallback_art(
@@ -162,22 +153,23 @@ fn fallback_art(
         return ("", "");
     }
     if phase == rpc::JourneyPhase::Room {
-        return ("scene-lobby-harbor", HARBOR_ESTABLISHING);
+        return (HARBOR_PHOTO_STEM, HARBOR_ESTABLISHING);
     }
     if scene.destination == rpc::HarborDestination::HarborInn as i32 {
-        return ("scene-harbor-inn", HARBOR_INN);
+        // No reviewed inn photograph exists: the live room photograph is the picture.
+        return ("", HARBOR_INN);
     }
     match phase {
-        rpc::JourneyPhase::Opening => ("scene-wharf-arrival", HARBOR_WHARF),
+        rpc::JourneyPhase::Opening => (HARBOR_PHOTO_STEM, HARBOR_WHARF),
         rpc::JourneyPhase::Dialogue => (
-            "scene-whisper-in-the-rain",
+            HARBOR_PHOTO_STEM,
             if is_fixed_harbor_dialogue(phase, scene) {
                 HARBOR_DIALOGUE
             } else {
                 HARBOR_WHARF
             },
         ),
-        _ => ("scene-courier-road", HARBOR_WHARF),
+        _ => (HARBOR_PHOTO_STEM, HARBOR_WHARF),
     }
 }
 
@@ -283,12 +275,10 @@ fn art(
     (painting, fallback, source)
 }
 
+/// Lobby art by the art contract: the live room photograph, else the reviewed photograph the
+/// scene names (the harbor's reviewed photograph for the harbor pack), else nothing.
 fn lobby_art_source(scene_asset: &str, live_backdrop: &str) -> Option<String> {
-    if scene_asset.contains("scene-lobby-harbor") {
-        Some(HARBOR_ESTABLISHING.to_owned())
-    } else {
-        crate::presentation::imagery_url(live_backdrop).or_else(|| asset_url(scene_asset))
-    }
+    crate::presentation::place_picture(art_contract::Role::LobbyArt, scene_asset, live_backdrop, "")
 }
 
 fn validated_join_scene_asset(scene_asset: Option<&str>) -> Option<String> {
@@ -353,7 +343,8 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
         // player projection below and are still submitted through the same path.
         choices: Vec::new(),
         choice_hints_hidden: true,
-        family: crate::presentation::scene_family(&input.scene.scene_asset),
+        family: crate::presentation::scene_family(input.scene),
+        floor: crate::stage_depth::staging_of(input.scene.floor.as_ref()),
         scene_key: input.scene.title.clone(),
         visual_scene_id: format!("{}|{}", input.scene.title, input.scene.scene_asset),
         home: input.journey.home.clone(),
@@ -565,10 +556,9 @@ fn exploration_model(
     } else {
         input.clue.to_owned()
     };
-    let art_scene = match fallback_art(input.phase, input.scene).0 {
-        "scene-harbor-inn" => ConceptScene::HarborInn,
-        "scene-wharf-arrival" => ConceptScene::WharfArrival,
-        "scene-whisper-in-the-rain" => ConceptScene::WhisperInTheRain,
+    let art_scene = match input.phase {
+        rpc::JourneyPhase::Opening => ConceptScene::WharfArrival,
+        rpc::JourneyPhase::Dialogue => ConceptScene::WhisperInTheRain,
         _ => ConceptScene::CourierRoad,
     };
     let scene_speech = exploration_speech(input.journey, input.scene);
@@ -1640,29 +1630,37 @@ mod tests {
     }
 
     #[test]
-    fn lobby_art_uses_the_server_scene_asset_when_it_is_a_local_asset_path() {
+    fn lobby_art_is_the_live_room_photograph_or_a_reviewed_photograph_never_painted_art() {
         let live_backdrop = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let harbor = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
         assert_eq!(
-            lobby_art_source("assets/ui/generated/scene-place-guardhouse", ""),
-            Some("/assets/ui/generated/scene-place-guardhouse".to_owned())
+            lobby_art_source(harbor, ""),
+            Some("/assets/ui/generated/scene-salt-quay-arrival-documentary-photo".to_owned())
         );
         assert_eq!(
-            lobby_art_source("assets/ui/generated/scene-place-guardhouse", &live_backdrop),
+            lobby_art_source(harbor, &live_backdrop),
             Some(live_backdrop.clone())
         );
+        // A painted stem and the room-photo role token have no library picture: the lobby shows
+        // the live room photograph once the server has made it, and nothing before.
+        for painted in [
+            "assets/ui/generated/scene-place-guardhouse",
+            "assets/ui/generated/scene-lobby-harbor.webp",
+            "live-room-photo",
+        ] {
+            assert_eq!(lobby_art_source(painted, ""), None, "{painted}");
+            assert_eq!(
+                lobby_art_source(painted, &live_backdrop),
+                Some(live_backdrop.clone()),
+                "{painted}"
+            );
+        }
         assert_eq!(
             lobby_art_source(
                 "https://example.com/scene.webp",
                 "https://example.com/live.webp"
             ),
             None
-        );
-        assert_eq!(
-            lobby_art_source(
-                "assets/ui/generated/scene-lobby-harbor.webp",
-                &live_backdrop
-            ),
-            Some("/assets/ui/generated/scene-salt-quay-arrival-documentary-photo".to_owned())
         );
     }
 
@@ -1671,7 +1669,7 @@ mod tests {
         let live_backdrop = format!("/gameplay/imagery/{}", "a".repeat(64));
         let scene = rpc::GameplayScene {
             destination: rpc::HarborDestination::HarborInn as i32,
-            scene_asset: "assets/ui/generated/scene-inn".to_owned(),
+            scene_asset: "live-room-photo".to_owned(),
             live_backdrop: live_backdrop.clone(),
             ..Default::default()
         };
@@ -1680,7 +1678,7 @@ mod tests {
         assert!(painting.starts_with(&live_backdrop));
 
         let photographic = rpc::GameplayScene {
-            scene_asset: "assets/ui/generated/scene-wharf-arrival".to_owned(),
+            scene_asset: "assets/ui/generated/scene-salt-quay-arrival-documentary-photo".to_owned(),
             ..Default::default()
         };
         let (painting, _, source) = art(rpc::JourneyPhase::Dialogue, &photographic);
@@ -1689,7 +1687,7 @@ mod tests {
 
         let inn = rpc::GameplayScene {
             destination: rpc::HarborDestination::HarborInn as i32,
-            scene_asset: "assets/ui/generated/scene-inn".to_owned(),
+            scene_asset: "live-room-photo".to_owned(),
             ..Default::default()
         };
         assert_eq!(
@@ -1699,9 +1697,9 @@ mod tests {
     }
 
     #[test]
-    fn authored_shop_uses_its_own_asset_and_a_dark_pending_surface_in_every_early_phase() {
+    fn authored_shop_has_a_dark_pending_surface_until_its_live_room_photograph_is_ready() {
         let mut scene = rpc::GameplayScene {
-            scene_asset: "assets/ui/generated/scene-mareks-cloth-shop".into(),
+            scene_asset: "live-room-photo".into(),
             ..Default::default()
         };
         for phase in [
@@ -1710,7 +1708,7 @@ mod tests {
             rpc::JourneyPhase::Dialogue,
         ] {
             let (asset, fallback, source) = art(phase, &scene);
-            assert_eq!(asset, "/assets/ui/generated/scene-mareks-cloth-shop");
+            assert!(asset.is_empty(), "no painted stand-in: {asset}");
             assert!(fallback.is_empty());
             assert_eq!(source, VisualSource::SceneArtwork);
         }
@@ -1743,8 +1741,14 @@ mod tests {
     #[test]
     fn join_art_uses_only_a_well_formed_local_scene_asset() {
         assert_eq!(
+            validated_join_scene_asset(Some(
+                "assets/ui/generated/scene-salt-quay-arrival-documentary-photo"
+            )),
+            Some("/assets/ui/generated/scene-salt-quay-arrival-documentary-photo".to_owned())
+        );
+        assert_eq!(
             validated_join_scene_asset(Some("assets/ui/generated/scene-place-guardhouse")),
-            Some("/assets/ui/generated/scene-place-guardhouse".to_owned())
+            None
         );
         assert_eq!(validated_join_scene_asset(None), None);
         assert_eq!(validated_join_scene_asset(Some("")), None);

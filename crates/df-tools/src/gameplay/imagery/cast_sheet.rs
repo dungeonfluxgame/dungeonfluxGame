@@ -162,7 +162,7 @@ mod tests {
     fn reviewed_harbor_photographs_supply_every_hero_and_npc_identity() {
         let directory =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated");
-        let store = super::super::ReferenceStore::photographic(directory);
+        let store = super::super::ReferenceStore::new(directory);
         let mut cast = Vec::new();
         for (id, source) in [
             ("hero:1", "figure-hero-1"),
@@ -173,7 +173,7 @@ mod tests {
         ] {
             cast.push(CastIdentity {
                 id: id.to_owned(),
-                figure: store.load_photographic(source).unwrap(),
+                figure: store.load(source).unwrap(),
             });
         }
         let (sheet, legend) = cast_sheet(cast).unwrap();

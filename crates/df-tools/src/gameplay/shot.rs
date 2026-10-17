@@ -408,7 +408,7 @@ pub(in crate::gameplay) struct ShotSpec {
 /// The speaker of the scene, from the cast.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::gameplay) struct SpeakerInput<'a> {
-    /// The cut-out's asset stem, such as `sprite-patron-herbwife`.
+    /// The cut-out's asset stem, such as `sprite-shop-soldier-documentary-photo`.
     pub(in crate::gameplay) sprite: &'a str,
     pub(in crate::gameplay) gender: Option<Gender>,
     pub(in crate::gameplay) age: Option<Age>,

@@ -3815,7 +3815,7 @@ mod tests {
                 cells: (1..6).map(|col| Cell::new(col, 3)).collect(),
                 blocks_movement: true,
                 cover: Cover::Half,
-                sprite: "prop-crates".to_owned(),
+                sprite: "neutral".to_owned(),
                 height_m: 1.1,
             }],
             difficult: vec![],

@@ -7,6 +7,7 @@ use std::{
 
 use bytes::Bytes;
 use df_providers::ImageFormat;
+use df_render::art_contract;
 use sha2::{Digest, Sha256};
 
 /// A reference is never larger than this; the provider adapter refuses bigger ones too.
@@ -39,38 +40,27 @@ impl ReferenceImage {
 pub(in crate::gameplay) enum ReferenceError {
     /// The name is not a plain generated-art file name.
     Name,
+    /// The name is a depiction the art contract does not allow as a reference: a painted stem, a
+    /// role token or an identity key with no reviewed photograph. Nothing is read.
+    NotPhotographic,
     Missing,
     /// A symbolic link, a directory, an empty file or one over the size limit.
     Unusable,
 }
 
-/// The generated-art directory the server already serves under `/assets/ui/generated/`.
+/// The reviewed photographs of the generated-art directory (see `df_render::art_contract`).
+/// This is the only way a reference reaches an image-generation request, so no painted file can:
+/// `load` resolves its argument through the contract and never opens any other file.
 #[derive(Clone, Debug)]
 pub(in crate::gameplay) struct ReferenceStore {
     directory: PathBuf,
-    photographic_only: bool,
 }
 
 impl ReferenceStore {
     pub(in crate::gameplay) fn new(generated_directory: PathBuf) -> Self {
         Self {
             directory: generated_directory,
-            photographic_only: false,
         }
-    }
-
-    /// Creates a store for scene plate references. Base generated art was authored as painted
-    /// concept art, so it must never be sent to a photographic plate request. Re-rendered live
-    /// variants use the same stem with a `-documentary-photo` suffix, after visual review.
-    pub(in crate::gameplay) fn photographic(generated_directory: PathBuf) -> Self {
-        Self {
-            directory: generated_directory,
-            photographic_only: true,
-        }
-    }
-
-    pub(in crate::gameplay) fn photographic_only(&self) -> bool {
-        self.photographic_only
     }
 
     /// Returns the checked-in empty photographic carrier used only to satisfy the image edit
@@ -79,50 +69,27 @@ impl ReferenceStore {
     pub(in crate::gameplay) fn neutral_photographic(
         &self,
     ) -> Result<ReferenceImage, ReferenceError> {
-        if !self.photographic_only {
-            return Err(ReferenceError::Missing);
-        }
         let path = self
             .directory
             .parent()
             .ok_or(ReferenceError::Missing)?
             .join("scenes")
-            .join("neutral-photographic-carrier.png");
+            .join(format!("{}.png", art_contract::NEUTRAL_CARRIER));
         let bytes = read_file(&path)?;
         Ok(ReferenceImage::new(ImageFormat::Png, bytes))
     }
 
-    /// Reads the generated art named by `path`: a served path such as
-    /// `/assets/ui/generated/scene-place-inn-taproom.webp`, or a bare stem such as
-    /// `sprite-patron-merchant` (read as `.webp`, then `.png`). Only the last path segment is
+    /// Reads the reviewed photograph that answers `path`: a reviewed stem
+    /// (`sprite-courier-documentary-photo`), an identity key that has one (`portrait-hero-1`) or
+    /// a base stem whose `-documentary-photo` form is reviewed. Only the last path segment is
     /// used, and it must be lowercase letters, digits, `-` and `_` with an optional `.webp` or
-    /// `.png`.
+    /// `.png`. Anything else that names a depiction is `NotPhotographic`.
     pub(in crate::gameplay) fn load(&self, path: &str) -> Result<ReferenceImage, ReferenceError> {
-        self.load_named(path, &[])
-    }
-
-    /// Reads only a generated photographic variant. The base stem is deliberately not a
-    /// fallback: its existing bytes may be painterly and would contaminate the plate.
-    pub(in crate::gameplay) fn load_photographic(
-        &self,
-        path: &str,
-    ) -> Result<ReferenceImage, ReferenceError> {
-        // A generated photographic variant may be emitted as PNG even when the source asset
-        // was named with a `.webp` extension. Preserve the stem while allowing either provider
-        // container for the variant.
-        let stem = match path.rsplit_once('.') {
-            Some((stem, "webp" | "png")) => stem,
-            _ => path,
-        };
-        self.load_named(stem, &["-documentary-photo"])
-    }
-
-    fn load_named(&self, path: &str, suffixes: &[&str]) -> Result<ReferenceImage, ReferenceError> {
         let name = path.rsplit('/').next().unwrap_or_default();
-        let (stem, extension) = match name.rsplit_once('.') {
-            Some((stem, extension @ ("webp" | "png"))) => (stem, Some(extension)),
+        let stem = match name.rsplit_once('.') {
+            Some((stem, "webp" | "png")) => stem,
             Some(_) => return Err(ReferenceError::Name),
-            None => (name, None),
+            None => name,
         };
         if stem.is_empty()
             || stem.len() > 96
@@ -132,30 +99,14 @@ impl ReferenceStore {
         {
             return Err(ReferenceError::Name);
         }
-        let extensions: &[&str] = match extension {
-            Some("png") => &["png"],
-            Some(_) => &["webp"],
-            None => &["webp", "png"],
-        };
-        let suffixes = suffixes
-            .iter()
-            .copied()
-            .chain(suffixes.is_empty().then_some(""));
-        for suffix in suffixes {
-            for extension in extensions {
-                let file = self.directory.join(format!("{stem}{suffix}.{extension}"));
-                match read_file(&file) {
-                    Ok(bytes) => {
-                        let format = if *extension == "png" {
-                            ImageFormat::Png
-                        } else {
-                            ImageFormat::Webp
-                        };
-                        return Ok(ReferenceImage::new(format, bytes));
-                    }
-                    Err(ReferenceError::Missing) => {}
-                    Err(error) => return Err(error),
-                }
+        let photo = art_contract::plan(art_contract::Role::GenerationReference, stem)
+            .reviewed
+            .ok_or(ReferenceError::NotPhotographic)?;
+        for (extension, format) in [("webp", ImageFormat::Webp), ("png", ImageFormat::Png)] {
+            match read_file(&self.directory.join(format!("{photo}.{extension}"))) {
+                Ok(bytes) => return Ok(ReferenceImage::new(format, bytes)),
+                Err(ReferenceError::Missing) => {}
+                Err(error) => return Err(error),
             }
         }
         Err(ReferenceError::Missing)
@@ -182,56 +133,86 @@ fn read_file(path: &Path) -> Result<Bytes, ReferenceError> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn photographic_references_do_not_fall_back_to_the_painted_base_stem() {
-        let directory = std::env::temp_dir().join(format!(
-            "dungeonflux-photo-reference-{}",
-            std::process::id()
-        ));
+    fn directory(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("dungeonflux-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("temporary reference directory");
-        std::fs::write(directory.join("scene-place-test.webp"), b"painted base")
-            .expect("painted base fixture");
-        let store = ReferenceStore::photographic(directory.clone());
-        assert!(matches!(
-            store.load_photographic("scene-place-test"),
-            Err(ReferenceError::Missing)
-        ));
+        directory
+    }
+
+    #[test]
+    fn the_loader_cannot_return_painted_bytes_even_when_the_file_is_on_disk() {
+        let directory = directory("photo-reference");
+        for painted in [
+            "scene-place-test.webp",
+            "scene-salt-quay-arrival-photo.webp",
+            "portrait-ant-wolf.webp",
+            "sprite-patron-bell-ringer.png",
+            "figure-hero-1-photo.png",
+            "ground-salt-quay.webp",
+            "prop-crates.webp",
+        ] {
+            std::fs::write(directory.join(painted), b"painted").expect("painted fixture");
+        }
+        let store = ReferenceStore::new(directory.clone());
+        for name in [
+            "scene-place-test",
+            "scene-salt-quay-arrival-photo",
+            "portrait-ant-wolf",
+            "sprite-patron-bell-ringer",
+            "figure-hero-1-photo",
+            "ground-salt-quay.webp",
+            "assets/ui/generated/prop-crates",
+            "live-room-photo",
+        ] {
+            assert_eq!(
+                store.load(name).err(),
+                Some(ReferenceError::NotPhotographic),
+                "{name}"
+            );
+        }
+        std::fs::remove_dir_all(directory).expect("remove temporary reference directory");
+    }
+
+    #[test]
+    fn the_loader_reads_reviewed_photographs_by_stem_identity_key_or_base_stem() {
+        let directory = directory("reviewed-reference");
         std::fs::write(
-            directory.join("scene-place-test-photo.webp"),
-            b"unreviewed CGI",
+            directory.join("figure-hero-1-documentary-photo.webp"),
+            b"hero webp",
         )
-        .expect("older nominal photo fixture");
-        assert!(matches!(
-            store.load_photographic("scene-place-test"),
-            Err(ReferenceError::Missing)
-        ));
+        .expect("reviewed webp fixture");
         std::fs::write(
-            directory.join("scene-place-test-documentary-photo.webp"),
-            b"live photo",
+            directory.join("sprite-courier-documentary-photo.png"),
+            b"courier png",
         )
-        .expect("photographic variant fixture");
-        let photo = store
-            .load_photographic("scene-place-test")
-            .expect("photographic variant");
-        assert_eq!(&photo.bytes[..], b"live photo");
-        std::fs::remove_file(directory.join("scene-place-test-documentary-photo.webp"))
-            .expect("remove webp fixture");
-        std::fs::write(
-            directory.join("scene-place-test-documentary-photo.png"),
-            b"live png",
-        )
-        .expect("photographic png fixture");
-        let photo = store
-            .load_photographic("scene-place-test.webp")
-            .expect("photographic png variant");
-        assert_eq!(&photo.bytes[..], b"live png");
+        .expect("reviewed png fixture");
+        let store = ReferenceStore::new(directory.clone());
+        let read = |name: &str| store.load(name).map(|image| image.bytes.to_vec());
+        assert_eq!(
+            read("figure-hero-1-documentary-photo"),
+            Ok(b"hero webp".to_vec())
+        );
+        assert_eq!(read("portrait-hero-1"), Ok(b"hero webp".to_vec()));
+        assert_eq!(
+            read("/assets/ui/generated/figure-hero-1.webp"),
+            Ok(b"hero webp".to_vec())
+        );
+        assert_eq!(read("sprite-courier"), Ok(b"courier png".to_vec()));
+        assert_eq!(
+            read("sprite-courier-documentary-photo.webp"),
+            Ok(b"courier png".to_vec())
+        );
+        assert_eq!(read("sprite-bandit"), Err(ReferenceError::Missing));
+        assert_eq!(read("../secret"), Err(ReferenceError::NotPhotographic));
+        assert_eq!(read("Figure-Hero-1"), Err(ReferenceError::Name));
         std::fs::remove_dir_all(directory).expect("remove temporary reference directory");
     }
 
     #[test]
     fn neutral_photographic_carrier_is_provider_sized_and_nonempty() {
         let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated");
-        let carrier = ReferenceStore::photographic(directory)
+        let carrier = ReferenceStore::new(directory)
             .neutral_photographic()
             .expect("checked-in neutral photographic carrier");
         assert_eq!(carrier.format, ImageFormat::Png);

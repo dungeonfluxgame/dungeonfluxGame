@@ -9,7 +9,7 @@
     "base_m": -6.4,
     "distance_m": 9.4,
     "height_m": 19.125,
-    "stem": "scene-pinewood-trail-arrival",
+    "stem": "live-room-photo",
     "width_m": 34.0
   },
   "cameras": {
@@ -607,7 +607,7 @@
     ],
     "falloff_m": 3.8,
     "size_m": 24.0,
-    "stem": "ground-pinewood-trail"
+    "stem": "neutral"
   },
   "layouts": [
     {

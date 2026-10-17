@@ -181,7 +181,7 @@ async fn canonical_plate_and_locator_use_generated_speaker_bytes_after_readiness
     let timing = Timing::from_interval(Duration::from_secs(30));
     let inner = Arc::new(Inner {
         imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::photographic(
+        references: super::super::ReferenceStore::new(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
         ),
         social: SocialLedger::none(),
@@ -243,8 +243,8 @@ async fn canonical_plate_and_locator_use_generated_speaker_bytes_after_readiness
         .npc_art(
             &plate,
             "keeper",
-            "sprite-patron-bell-ringer",
-            "portrait-patron-bell-ringer",
+            "sprite-shop-adventurer-documentary-photo",
+            "portrait-shop-adventurer-documentary-photo",
         )
         .await
         .unwrap();
@@ -258,7 +258,7 @@ async fn canonical_plate_and_locator_use_generated_speaker_bytes_after_readiness
         canonical.sha256,
         inner
             .references
-            .load_photographic("sprite-patron-bell-ringer")
+            .load("sprite-shop-adventurer-documentary-photo")
             .unwrap()
             .sha256
     );
@@ -278,7 +278,7 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
     let timing = Timing::from_interval(Duration::from_secs(30));
     let inner = Arc::new(Inner {
         imagery: fixture.imagery.clone(),
-        references: super::super::ReferenceStore::photographic(
+        references: super::super::ReferenceStore::new(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
         ),
         social: SocialLedger::none(),
@@ -360,7 +360,11 @@ async fn generated_canonical_room_and_performer_bytes_reach_the_real_photographi
     assert_eq!(request.references[1].sha256, sheet.sha256);
     assert_eq!(request.references[2].sha256, performer.sha256);
     assert!(!request.prompt.as_str().contains("PRIVATE_DO_NOT_SHARE"));
-    fixture.imagery.render(request).await.unwrap();
+    fixture
+        .imagery
+        .generate("plate:test", request)
+        .await
+        .unwrap();
     assert_eq!(
         fixture.calls(),
         3,
@@ -395,7 +399,7 @@ fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
         cast: vec![member(
             "keeper",
             "Kestrel",
-            "sprite-patron-bell-ringer",
+            "sprite-shop-adventurer-documentary-photo",
             pack::CastRole::Patron,
         )],
         narration_rested: None,
@@ -403,7 +407,7 @@ fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
         dialogue: speaker
             .map(|_| "Will you carry the word?".to_owned())
             .unwrap_or_default(),
-        asset: "assets/ui/generated/scene-place-bell-chamber.webp".to_owned(),
+        asset: "live-room-photo".to_owned(),
         setting: Some(SceneSetting {
             place_id: "place-bell-chamber".to_owned(),
             name: "The Bell Chamber".to_owned(),
@@ -421,7 +425,7 @@ fn scene(key: SceneKey, title: &str, speaker: Option<&str>) -> pack::Scene {
 #[test]
 fn canonical_lookup_uses_exact_authored_scene_variant() {
     const TITLE: &str = "Marek’s Cloth Shop";
-    const ASSET: &str = "assets/ui/generated/scene-mareks-cloth-shop";
+    const ASSET: &str = "live-room-photo";
     let load_shop = || {
         pack::load_from_bytes(
             include_bytes!("../../../../../content/merchant-shop/pack.json"),
@@ -527,7 +531,7 @@ async fn displayed_shop_opening_queues_its_plate_when_room_shares_title_and_art(
             .current
             .as_ref()
             .map(|current| current.scene_key.as_str()),
-        Some("opening|Marek’s Cloth Shop|assets/ui/generated/scene-mareks-cloth-shop")
+        Some("opening|Marek’s Cloth Shop|live-room-photo")
     );
 }
 
@@ -639,7 +643,7 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
     let shared = Arc::new(Shared {
         inner: Arc::new(Inner {
             imagery: fixture.imagery.clone(),
-            references: super::super::ReferenceStore::photographic(
+            references: super::super::ReferenceStore::new(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
             ),
             social: SocialLedger::none(),
@@ -845,7 +849,7 @@ async fn committed_stock_dialogue_reframes_actual_goods_with_room_and_cast_refer
         shared
             .inner
             .references
-            .load_photographic("sprite-patron-merchant")
+            .load("sprite-patron-merchant")
             .unwrap()
             .sha256
     );
@@ -1183,8 +1187,7 @@ async fn a_state_edit_after_an_edit_starts_from_the_fresh_plate_not_the_edited_s
 /// Finishes the speaker's face edit `angry` with the image `edited`.
 fn show_face_edit(shared: &Shared, angry: Face, edited: ImageKey) {
     shared.finish(Done::Edit {
-        scene_key: "opening|Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp"
-            .to_owned(),
+        scene_key: "opening|Word Before Dawn|live-room-photo".to_owned(),
         speaker_id: Some("keeper".to_owned()),
         face: angry,
         elapsed: Duration::from_secs(15),
@@ -1365,7 +1368,11 @@ async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_
         .fresh_request(&scene, &scene.stage(&[]).unwrap(), &[], &[], None)
         .await
         .unwrap();
-    let base = fixture.imagery.render(request).await.unwrap();
+    let base = fixture
+        .imagery
+        .generate("plate:test", request)
+        .await
+        .unwrap();
     locked(&shared.book).insert(
         id,
         Entry::Ready {
@@ -1802,7 +1809,11 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         .iter()
         .map(|reference| reference.sha256.clone())
         .collect();
-    let base = fixture.imagery.render(request).await.unwrap();
+    let base = fixture
+        .imagery
+        .generate("plate:test", request)
+        .await
+        .unwrap();
     locked(&shared.book).insert(
         id,
         Entry::Ready {
@@ -1885,7 +1896,14 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
         .fresh_request(&scene, &spec, &[1], &[], None)
         .await
         .unwrap();
-    assert_eq!(fixture.imagery.render(request).await.unwrap(), base);
+    assert_eq!(
+        fixture
+            .imagery
+            .generate("plate:test", request)
+            .await
+            .unwrap(),
+        base
+    );
     assert_eq!(fixture.calls(), calls, "undirected cache is retained");
 }
 
@@ -3198,8 +3216,7 @@ async fn a_lasting_face_edits_the_current_plate_and_the_neutral_face_returns_to_
         },
     );
     shared.finish(Done::Edit {
-        scene_key: "opening|Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp"
-            .to_owned(),
+        scene_key: "opening|Word Before Dawn|live-room-photo".to_owned(),
         speaker_id: Some("keeper".to_owned()),
         face: angry,
         elapsed: Duration::from_secs(15),
@@ -3253,8 +3270,7 @@ async fn an_edit_that_lands_in_another_scene_is_ignored() {
     let other = scene(SceneKey::DialogueSeal, "Hard Questions", Some("Kestrel"));
     observe(&shared, &other, &[], &[1]);
     shared.finish(Done::Edit {
-        scene_key: "opening|Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp"
-            .to_owned(),
+        scene_key: "opening|Word Before Dawn|live-room-photo".to_owned(),
         speaker_id: Some("keeper".to_owned()),
         face: angry,
         elapsed: Duration::from_secs(15),
@@ -3355,7 +3371,11 @@ async fn three_lobby_rosters_request_one_opening_plate_for_the_confirmed_party()
         .fresh_request(&scene, &spec, heroes, faces, None)
         .await
         .unwrap();
-    fixture.imagery.render(request).await.unwrap();
+    fixture
+        .imagery
+        .generate("plate:test", request)
+        .await
+        .unwrap();
     assert_eq!(
         fixture.calls(),
         1,
@@ -3394,7 +3414,7 @@ async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_referen
     current.cast.push(member(
         "antagonist",
         "The Antagonist",
-        "sprite-ant-giant-rat",
+        "sprite-shop-soldier-documentary-photo",
         pack::CastRole::Antagonist,
     ));
     let Some(scene) = PlateScene::of(&current) else {
@@ -3406,10 +3426,15 @@ async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_referen
         .await
         .expect("reference shaping should succeed");
 
-    assert_eq!(request.references.len(), 4);
+    // The identities travel as one sheet, so the request stays within the provider's limit.
+    assert!(
+        request.references.len() <= 4,
+        "{}",
+        request.references.len()
+    );
     fixture
         .imagery
-        .render(request)
+        .generate("plate:test", request)
         .await
         .expect("provider-free fixture should accept the shaped request");
 }
@@ -3417,13 +3442,11 @@ async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_referen
 #[tokio::test]
 async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references() {
     let timing = Timing::from_interval(Duration::from_secs(30));
-    let references = super::super::ReferenceStore::photographic(
+    let references = super::super::ReferenceStore::new(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
     );
-    let base = references
-        .load_photographic("scene-salt-quay-candid")
-        .unwrap();
-    let courier = references.load_photographic("sprite-courier").unwrap();
+    let base = references.load("scene-salt-quay-candid").unwrap();
+    let courier = references.load("sprite-courier").unwrap();
     let inner = Arc::new(Inner {
         imagery: Imagery::disabled(ImageryOff::Qualification),
         references,

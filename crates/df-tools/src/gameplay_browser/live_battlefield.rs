@@ -1301,6 +1301,7 @@ pub(super) fn start_preview(document: &Document) -> Result<(), JsValue> {
 
 use super::live_combat::LiveView;
 use crate::presentation::GridCell;
+use df_render::art_contract::{self, Role};
 use df_render::battle::{CombatFeed, CombatSnapshot, FeedMode, Member, Outcome, RollCard};
 use std::collections::VecDeque;
 
@@ -1428,34 +1429,13 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The stem part of an asset path: `/assets/ui/generated/portrait-ant-guard.webp` -> `portrait-ant-guard`.
-fn stem_of(path: &str) -> Option<&str> {
-    let name = path.rsplit('/').next()?;
-    let stem = name.split('.').next()?;
-    (!stem.is_empty()
-        && stem
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
-    .then_some(stem)
-}
-
-/// `portrait-ant-x`, `sprite-ant-x` and `figure-ant-x` all name the same creature `ant-x`.
-fn creature_of(stem: &str) -> &str {
-    let base = ["portrait-", "sprite-", "figure-"]
-        .iter()
-        .find_map(|prefix| stem.strip_prefix(prefix))
-        .unwrap_or(stem);
-    base.strip_suffix("-full").unwrap_or(base)
-}
-
-fn enemy_height_m(creature: &str) -> f32 {
-    match creature {
-        c if c.contains("goblin") || c.contains("kobold") => 1.0,
-        c if c.contains("giant-rat") => 0.55,
-        c if c.contains("weasel") => 0.6,
-        c if c.contains("wolf") => 0.9,
-        c if c.contains("mastiff") => 0.85,
-        _ => 1.75,
+/// The figure's standing height from its SRD size, which the server sends with the combatant;
+/// no creature name is read.
+fn enemy_height_m(size: rpc::CreatureSize) -> f32 {
+    match size {
+        rpc::CreatureSize::Small => 1.0,
+        rpc::CreatureSize::Large => 2.6,
+        rpc::CreatureSize::Medium | rpc::CreatureSize::Unspecified => 1.75,
     }
 }
 
@@ -1474,12 +1454,17 @@ fn scene_choice(view: &LiveView<'_>) -> battle::SceneChoice {
     )
 }
 
-/// The fight's own painting, used as the backdrop behind the battlefield (the confrontation
-/// setting's art), when it names a story scene picture the display already serves.
+/// The picture behind the battlefield, by the art contract's backdrop order: the place's live
+/// room photograph, the current scene plate, then a reviewed photograph the scene names. `None`
+/// keeps the battle scene file's own backdrop (itself a role token or a reviewed photograph) and
+/// the dark stage. The display never asks for a picture to be made; the server does.
 fn backdrop_stem(view: &LiveView<'_>) -> Option<String> {
-    stem_of(&view.scene.scene_asset)
-        .filter(|stem| stem.starts_with("scene-"))
-        .map(str::to_owned)
+    crate::presentation::place_picture(
+        Role::BattleBackdrop,
+        &view.scene.scene_asset,
+        &view.scene.live_backdrop,
+        &view.scene.live_plate,
+    )
 }
 
 /// Legacy/preview layout fallback; mounted tactical fights use the server layout_id.
@@ -1552,9 +1537,6 @@ fn reaction_prompt(mover: &str, reactor: &str, seconds_remaining: Option<u32>) -
 fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
     let combat = view.journey.combat.as_ref()?;
     let party = view.journey.party.len();
-    let creature = stem_of(&view.scene.speaker_portrait)
-        .map(creature_of)
-        .unwrap_or("bandit");
     let id_of = |index: usize, member: &rpc::PartyMemberView| {
         if member.participant_id.is_empty() {
             format!("participant-{index}")
@@ -1581,14 +1563,19 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
             } else if hero {
                 format!("portrait-hero-{hero_art}")
             } else {
-                format!("portrait-{creature}")
+                // The preview path has no authoritative portrait: the creature id the server
+                // sent names the family, the bandit when it sent none.
+                let creature = Some(member.creature_id.as_str())
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or("bandit");
+                format!("portrait-ant-{creature}")
             };
             let figure = if authoritative {
                 portrait.replacen("portrait-", "figure-", 1)
             } else if hero {
                 format!("figure-hero-{hero_art}")
             } else {
-                format!("figure-{creature}")
+                portrait.replacen("portrait-", "figure-", 1)
             };
             Member {
                 id: id_of(index, member),
@@ -1599,7 +1586,7 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 height_m: if hero {
                     1.35
                 } else {
-                    enemy_height_m(creature_of(&portrait))
+                    enemy_height_m(member.size())
                 },
                 attack: if authoritative {
                     if member.attack_style == 2 {

@@ -1,6 +1,7 @@
 //! Battle scene descriptions as data: `content/battle-scenes/<location-id>.json`.
 //!
-//! Each file names the colour-grade theme, the ground and backdrop art stems, the grid, the six
+//! Each file names the colour-grade theme, the ground and backdrop art (a reviewed photograph or an
+//! art-contract role token such as `live-room-photo` or `neutral`, never a painted file), the grid, the six
 //! named cameras and, optionally, a Gaussian splat scene. The files are embedded in the WebAssembly
 //! build with `include_str!` rather than fetched: they are a few hundred bytes each, a missing or
 //! malformed file then fails the native tests instead of a player's fight, and the display has
@@ -10,6 +11,8 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+
+use crate::art_contract::{ContentArtError, check_content_reference};
 
 use super::{
     camera::{CameraPose, PoseError, ShotName},
@@ -54,6 +57,9 @@ pub enum SceneFileError {
     NeedsSchemaTwo(&'static str),
     Layout(LayoutError),
     Occupancy(OccupancyError),
+    /// A painted depiction stem or an identity key where the art contract allows only a reviewed
+    /// photograph or a role token. Names the field.
+    Art(&'static str, ContentArtError),
 }
 
 #[derive(Deserialize)]
@@ -421,6 +427,10 @@ fn stem_ok(stem: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+fn check_contract(field: &'static str, stem: &str) -> Result<(), SceneFileError> {
+    check_content_reference(stem).map_err(|error| SceneFileError::Art(field, error))
+}
+
 fn positive(value: f32, maximum: f32) -> bool {
     value.is_finite() && value > 0.0 && value <= maximum
 }
@@ -453,6 +463,8 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
     if !stem_ok(&file.ground.stem) || !stem_ok(&file.backdrop.stem) {
         return Err(SceneFileError::Identifier("art stem"));
     }
+    check_contract("ground", &file.ground.stem)?;
+    check_contract("backdrop", &file.backdrop.stem)?;
     if !positive(file.ground.size_m, 200.0)
         || !(0.0..=100.0).contains(&file.ground.falloff_m)
         || file.ground.centre.iter().any(|value| !value.is_finite())
@@ -648,6 +660,7 @@ fn convert_layouts(files: Vec<FileLayout>, grid: &Grid) -> Result<Vec<Layout>, S
             if !stem_ok(&obstacle.id) || !stem_ok(&obstacle.kind) || !stem_ok(&obstacle.sprite) {
                 return Err(SceneFileError::Layout(LayoutError::Identifier(obstacle.id)));
             }
+            check_contract("obstacle sprite", &obstacle.sprite)?;
             let cover = Cover::from_key(&obstacle.cover).ok_or_else(|| {
                 SceneFileError::Layout(LayoutError::Identifier(obstacle.cover.clone()))
             })?;
@@ -897,7 +910,8 @@ mod tests {
             assert_eq!(scene.location_id, id);
             assert_eq!(scene.cameras.len(), 6);
             assert!(scene.grid.walkable_cells().count() >= 12, "{id}");
-            assert!(scene.ground.stem.starts_with("ground-"));
+            // The art contract: a ground is never a painted file.
+            assert_eq!(scene.ground.stem, "neutral", "{id}");
         }
         assert_eq!(embedded_ids().count(), 18);
     }
@@ -933,7 +947,7 @@ mod tests {
         let missing = resolve_scene("");
         assert_eq!(missing.scene_id, DEFAULT_SCENE_ID);
         assert_eq!(missing.fallback_reason.as_deref(), Some("fallback:none"));
-        // The fight's painting is not a location: a story art stem does not select a scene.
+        // The fight's picture is not a location: a story art stem does not select a scene.
         let painting = resolve_scene("scene-dest-orrery-library-forecourt");
         assert!(painting.fallback_reason.is_some());
     }
@@ -1008,6 +1022,33 @@ mod tests {
             rejects(|v| v["ground"]["stem"] = "../secret".into()),
             SceneFileError::Identifier("art stem")
         );
+    }
+
+    #[test]
+    fn painted_art_stems_are_rejected_at_load_and_tokens_and_reviewed_photographs_load() {
+        assert_eq!(
+            rejects(|v| v["ground"]["stem"] = "ground-salt-quay".into()),
+            SceneFileError::Art("ground", ContentArtError::Painted)
+        );
+        assert_eq!(
+            rejects(|v| v["backdrop"]["stem"] = "scene-courier-road".into()),
+            SceneFileError::Art("backdrop", ContentArtError::Painted)
+        );
+        assert_eq!(
+            rejects(|v| v["layouts"][0]["obstacles"][0]["sprite"] = "prop-crates".into()),
+            SceneFileError::Art("obstacle sprite", ContentArtError::Painted)
+        );
+        assert_eq!(
+            rejects(|v| v["backdrop"]["stem"] = "portrait-hero-1".into()),
+            SceneFileError::Art("backdrop", ContentArtError::IdentityKey)
+        );
+        let salt_quay = load_embedded("salt-quay").unwrap().unwrap();
+        assert_eq!(
+            salt_quay.backdrop.stem,
+            "scene-salt-quay-arrival-documentary-photo"
+        );
+        let harbor = load_embedded("harbor-journey").unwrap().unwrap();
+        assert_eq!(harbor.backdrop.stem, crate::art_contract::ROOM_PHOTO);
     }
 
     #[test]
@@ -1547,7 +1588,7 @@ mod tests {
         assert!(matches!(
             rejects(|v| v["layouts"][0]["obstacles"] = serde_json::json!([{
                 "id": "wall", "kind": "crate", "cells": wall, "blocks_movement": true,
-                "cover": "half", "sprite": "prop-crates", "height_m": 1.0
+                "cover": "half", "sprite": "neutral", "height_m": 1.0
             }])),
             SceneFileError::Layout(LayoutError::Unreachable(..))
         ));

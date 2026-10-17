@@ -262,7 +262,13 @@ pub(super) fn crest(crest: &Element, portrait: &str, live: Option<&str>) -> Resu
             crest.set_attribute("data-crop", "face")
         }
         None => {
-            if portrait.contains("-documentary-photo") {
+            // Every picture the contract allows is a photograph of a person or creature: the
+            // crest crops to the head.
+            if matches!(
+                df_render::art_contract::classify(portrait),
+                df_render::art_contract::Reference::Reviewed(_)
+                    | df_render::art_contract::Reference::Live(_)
+            ) {
                 crest.set_attribute("data-crop", "face")?;
             } else {
                 crest.remove_attribute("data-crop")?;

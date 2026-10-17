@@ -1,6 +1,7 @@
 //! Listener-safety data the generator derives from the rolled facts: the phrases that give the
 //! private clue away, and who each speaking character is. The pack carries both so that an
 //! in-character reply never has to guess them from prose.
+use df_render::art_contract;
 use super::super::pack::{Age, CastRole, Gender, SceneCastMember, SpeakerProfile};
 use super::schema::{Antagonist, Destination, Secret};
 use std::collections::BTreeMap;
@@ -31,8 +32,12 @@ pub(super) fn secret_terms(
     terms
 }
 
-/// The cut-out figure for a portrait: `portrait-` becomes `sprite-` in the asset stem.
+/// The cut-out figure for a portrait: `portrait-` becomes `sprite-` in the asset stem. A role
+/// token (the character has no reviewed photograph) is its own cut-out.
 pub(super) fn sprite_of(portrait: &str) -> String {
+    if art_contract::Token::parse(portrait).is_some() {
+        return portrait.to_owned();
+    }
     match portrait.rsplit_once("/portrait-") {
         Some((directory, stem)) => format!("{directory}/sprite-{stem}"),
         None => String::new(),

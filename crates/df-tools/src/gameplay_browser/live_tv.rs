@@ -87,6 +87,8 @@ pub(super) struct TvModel {
     /// The table's setting: the chip row is hidden and the narrator box takes its room.
     pub(super) choice_hints_hidden: bool,
     pub(super) family: SceneFamily,
+    /// The floor and light of the place, as the server declared them.
+    pub(super) floor: crate::stage_depth::Staging,
     /// Names the scene for the figures: a non-player character stays until it changes.
     pub(super) scene_key: String,
     /// Stable scene id shared with the server's content-free plate timeline.
@@ -3006,7 +3008,7 @@ impl TvStage {
             self.figures.update(
                 &[],
                 &model.scene_key,
-                &model.art,
+                model.floor,
                 model.family,
                 StageMode::Scene,
             )?;
@@ -3014,7 +3016,7 @@ impl TvStage {
             self.figures.update(
                 &model.cast,
                 &model.scene_key,
-                &model.art,
+                model.floor,
                 model.family,
                 StageMode::Scene,
             )?;

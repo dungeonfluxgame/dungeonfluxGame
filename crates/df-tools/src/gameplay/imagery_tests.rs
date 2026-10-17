@@ -376,9 +376,9 @@ fn hero_image_prompts_refuse_species_outside_the_admitted_build_catalog() {
 }
 
 #[tokio::test]
-async fn item_image_cache_precedes_the_existing_run_budget() {
+async fn item_image_cache_precedes_the_provider_call() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (imagery, _) = imagery(&fake, "K03-item-cache-budget", 1);
+    let (imagery, _) = imagery(&fake, "K03-item-cache-budget");
     let generated = adventure(40);
     let thing = &generated.settings.meeting.model.as_ref().unwrap().things[0];
     let request = || ImageRequest {
@@ -398,11 +398,9 @@ async fn item_image_cache_precedes_the_existing_run_budget() {
         prompt: item_picture(ContentRating::Mature, &changed, None).unwrap(),
         output: spec(false),
     };
-    assert_eq!(
-        imagery.render(changed).await,
-        Err(ImageFailure::BudgetExhausted)
-    );
-    assert_eq!(fake.calls(), 1);
+    // A changed item is a new request and is made; nothing caps the number of requests.
+    assert_ne!(imagery.render(changed).await.unwrap(), first);
+    assert_eq!(fake.calls(), 2);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -737,7 +735,6 @@ fn imagery_in(
     fake: &FakeOpenAi,
     cache: &Path,
     manifest: Option<&Path>,
-    budget: u32,
     deadline: Duration,
     rating: ContentRating,
 ) -> Imagery {
@@ -752,7 +749,6 @@ fn imagery_in(
             credential: ImageryCredential::for_test("test-credential"),
             model: ImageEditModel::Gpt25Flare,
             quality: ImageQuality::Medium,
-            budget,
             interval: Duration::from_secs(30),
             deadline,
             cache_dir: cache.to_path_buf(),
@@ -764,14 +760,13 @@ fn imagery_in(
     .unwrap()
 }
 
-fn imagery(fake: &FakeOpenAi, name: &str, budget: u32) -> (Imagery, PathBuf) {
+fn imagery(fake: &FakeOpenAi, name: &str) -> (Imagery, PathBuf) {
     let dir = directory(name);
     (
         imagery_in(
             fake,
             &dir.join("cache"),
             Some(&dir),
-            budget,
             Duration::from_secs(5),
             ContentRating::Mature,
         ),
@@ -791,7 +786,6 @@ impl DirectionFixture {
             &fake,
             cache,
             None,
-            20,
             Duration::from_secs(5),
             ContentRating::Restrained,
         );
@@ -803,7 +797,6 @@ impl DirectionFixture {
             &fake,
             cache,
             None,
-            20,
             Duration::from_secs(5),
             ContentRating::Restrained,
         );
@@ -826,7 +819,7 @@ impl DirectionFixture {
 #[tokio::test]
 async fn development_direction_changes_the_key_and_preserves_the_undirected_cache() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (imagery, _) = imagery(&fake, "dev-direct-key", 3);
+    let (imagery, _) = imagery(&fake, "dev-direct-key");
     let baseline = refresh(Mood::Calm);
     let original_prompt = baseline.prompt.as_str().to_owned();
     let original = imagery.render(baseline).await.unwrap();
@@ -841,7 +834,6 @@ async fn development_direction_changes_the_key_and_preserves_the_undirected_cach
     assert!(sent["prompt"].ends_with("Brakka unsheathes his sword"));
     assert_eq!(imagery.render(refresh(Mood::Calm)).await.unwrap(), original);
     assert_eq!(fake.calls(), 2);
-    assert_eq!(imagery.budget_remaining(), 1);
 }
 
 /// Owns a bounded local fake for the operator's full server/CLI smoke transcript. No live calls.
@@ -933,7 +925,7 @@ async fn get(router: &mut Router, key: &str, etag: Option<&str>) -> (StatusCode,
 #[tokio::test]
 async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "cache", 5);
+    let (service, dir) = imagery(&fake, "cache");
     let key = service.render(refresh(Mood::Menacing)).await.unwrap();
     assert_eq!(fake.calls(), 1);
     assert_eq!(service.stats().calls, 1);
@@ -948,7 +940,6 @@ async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
     );
     assert_eq!(service.stats().calls, 1);
     assert_eq!(service.stats().cache_hits, 1);
-    assert_eq!(service.stats().budget_remaining, 4);
 
     // A restarted server finds the cached image: the key is served before any request, and the
     // same request costs nothing.
@@ -956,7 +947,6 @@ async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
         &fake,
         &dir.join("cache"),
         Some(&dir),
-        5,
         Duration::from_secs(5),
         ContentRating::Mature,
     );
@@ -973,13 +963,12 @@ async fn a_cache_hit_costs_nothing_and_survives_a_restart() {
     );
     assert_eq!(fake.calls(), 1);
     assert_eq!(restarted.stats().calls, 0);
-    assert_eq!(restarted.stats().budget_remaining, 5);
 }
 
 #[tokio::test]
 async fn an_oversized_cached_image_is_replaced_before_its_key_is_served() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "oversized-cache", 5);
+    let (service, dir) = imagery(&fake, "oversized-cache");
     let request = refresh(Mood::Calm);
     let key = service.key_for(&request);
     let path = dir.join("cache").join(format!("{}.jpg", key.as_str()));
@@ -996,10 +985,9 @@ async fn an_oversized_cached_image_is_replaced_before_its_key_is_served() {
 #[tokio::test]
 async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "peek", 5);
+    let (service, dir) = imagery(&fake, "peek");
     assert_eq!(service.peek(&expression(Expression::Angry)).await, None);
     assert_eq!(fake.calls(), 0);
-    assert_eq!(service.budget_remaining(), 5);
     let key = service.render(expression(Expression::Angry)).await.unwrap();
     assert_eq!(
         service.peek(&expression(Expression::Angry)).await,
@@ -1011,7 +999,6 @@ async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
         "another request is not cached"
     );
     assert_eq!(fake.calls(), 1);
-    assert_eq!(service.budget_remaining(), 4);
     // A cut-out cached by an earlier build as a PNG is still found by its WebP request.
     let png = dir.join("cache").join(format!("{}.webp", key.as_str()));
     let legacy = png.with_extension("png");
@@ -1022,7 +1009,7 @@ async fn a_peek_finds_cached_images_and_never_calls_the_provider_or_spends() {
 #[tokio::test]
 async fn the_provider_receives_the_references_the_prompt_and_the_content_rating() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "fields", 5);
+    let (service, _dir) = imagery(&fake, "fields");
     service.render(expression(Expression::Angry)).await.unwrap();
     let (fields, images) = fake.last_fields();
     assert_eq!(images, 1);
@@ -1042,7 +1029,6 @@ async fn the_provider_receives_the_references_the_prompt_and_the_content_rating(
         &fake,
         &dir.join("cache"),
         None,
-        5,
         Duration::from_secs(5),
         ContentRating::Restrained,
     );
@@ -1054,9 +1040,9 @@ async fn the_provider_receives_the_references_the_prompt_and_the_content_rating(
 }
 
 #[tokio::test]
-async fn the_budget_is_charged_before_the_call_and_never_refunded() {
+async fn a_call_is_recorded_in_the_ledger_before_the_provider_answers_and_never_refunded() {
     let fake = FakeOpenAi::start(Duration::from_millis(400), Reply::Failure);
-    let (service, _dir) = imagery(&fake, "budget", 2);
+    let (service, _dir) = imagery(&fake, "ledger");
     let running = {
         let service = service.clone();
         tokio::spawn(async move { service.render(refresh(Mood::Warm)).await })
@@ -1065,41 +1051,39 @@ async fn the_budget_is_charged_before_the_call_and_never_refunded() {
     assert_eq!(
         service.stats().calls,
         1,
-        "charged while the provider is still working"
+        "recorded while the provider is still working"
     );
-    assert_eq!(service.stats().budget_remaining, 1);
     assert_eq!(running.await.unwrap(), Err(ImageFailure::Provider));
-    assert_eq!(
-        service.stats().budget_remaining,
-        1,
-        "a failed call is not refunded"
-    );
-
+    let spent = |service: &Imagery| {
+        service
+            .hub()
+            .ledger()
+            .snapshot(crate::gameplay::resources::Unit::ImageCall)
+            .committed
+    };
+    assert_eq!(spent(&service), 1, "a failed call is not refunded");
     assert_eq!(
         service.render(refresh(Mood::Tense)).await,
         Err(ImageFailure::Provider)
     );
-    assert_eq!(service.stats().budget_remaining, 0);
+    assert_eq!(spent(&service), 2);
 }
 
 #[tokio::test]
-async fn an_exhausted_budget_is_a_typed_failure_and_calls_nothing() {
+async fn no_number_of_calls_is_refused_there_is_no_spend_cap() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "exhausted", 1);
-    service.render(refresh(Mood::Warm)).await.unwrap();
-    assert_eq!(
-        service.render(refresh(Mood::Grim)).await,
-        Err(ImageFailure::BudgetExhausted)
-    );
-    assert_eq!(fake.calls(), 1);
-    // The cached request still costs nothing once the budget is spent.
-    assert!(service.render(refresh(Mood::Warm)).await.is_ok());
+    let (service, _dir) = imagery(&fake, "uncapped");
+    for mood in [Mood::Warm, Mood::Grim, Mood::Tense, Mood::Calm, Mood::Menacing, Mood::Brutal] {
+        service.render(refresh(mood)).await.unwrap();
+    }
+    assert_eq!(fake.calls(), 6);
+    assert_eq!(service.stats().calls, 6);
 }
 
 #[tokio::test]
 async fn identical_requests_in_flight_share_one_call() {
     let fake = FakeOpenAi::start(Duration::from_millis(300), Reply::Image);
-    let (service, _dir) = imagery(&fake, "flight", 5);
+    let (service, _dir) = imagery(&fake, "flight");
     let (first, second, third) = tokio::join!(
         service.render(refresh(Mood::Seductive)),
         service.render(refresh(Mood::Seductive)),
@@ -1114,7 +1098,7 @@ async fn identical_requests_in_flight_share_one_call() {
 #[tokio::test]
 async fn at_most_two_calls_are_in_flight_at_once() {
     let fake = FakeOpenAi::start(Duration::from_millis(250), Reply::Image);
-    let (service, _dir) = imagery(&fake, "limit", 10);
+    let (service, _dir) = imagery(&fake, "limit");
     let moods = [
         Mood::Calm,
         Mood::Warm,
@@ -1136,7 +1120,6 @@ async fn a_slow_provider_is_a_deadline_failure() {
         &fake,
         &dir.join("cache"),
         None,
-        5,
         Duration::from_millis(300),
         ContentRating::Mature,
     );
@@ -1151,18 +1134,31 @@ async fn a_slow_provider_is_a_deadline_failure() {
 async fn a_provider_refusal_is_a_failure_never_retried_or_reworded() {
     for reply in [Reply::Moderation, Reply::NoImage] {
         let fake = FakeOpenAi::start(Duration::ZERO, reply);
-        let (service, _dir) = imagery(&fake, "refusal", 5);
+        let (service, _dir) = imagery(&fake, "refusal");
         let request = || refresh(Mood::Brutal);
         assert_eq!(
-            service.render(request()).await,
+            service.generate("place:refused", request()).await,
             Err(ImageFailure::Refused),
             "{reply:?}"
         );
         assert_eq!(fake.calls(), 1);
-        // Asking again repeats the refusal without another call or another wording.
-        assert_eq!(service.render(request()).await, Err(ImageFailure::Refused));
+        // Asking again repeats the refusal without another call or another wording: the hub
+        // remembers the permanent failure with its reason.
+        assert_eq!(
+            service.generate("place:refused", request()).await,
+            Err(ImageFailure::Refused)
+        );
         assert_eq!(fake.calls(), 1);
         assert_eq!(service.stats().calls, 1);
+        // Invalidation is the one way to forget it: the next ask is a new, paid request.
+        service
+            .hub()
+            .invalidate(crate::gameplay::resources::Invalidate::Subject("place:refused"));
+        assert_eq!(
+            service.generate("place:refused", request()).await,
+            Err(ImageFailure::Refused)
+        );
+        assert_eq!(fake.calls(), 2);
     }
 }
 
@@ -1177,7 +1173,7 @@ async fn invalid_oversize_wrong_sized_and_opaque_output_is_refused() {
         (Reply::OpaqueForTransparent, true),
     ] {
         let fake = FakeOpenAi::start(Duration::ZERO, reply);
-        let (service, dir) = imagery(&fake, "output", 5);
+        let (service, dir) = imagery(&fake, "output");
         let request = if transparent {
             expression(Expression::Afraid)
         } else {
@@ -1208,12 +1204,12 @@ async fn an_off_service_registers_and_renders_nothing() {
 }
 
 #[tokio::test]
-async fn the_startup_line_names_the_model_budget_and_interval_and_no_credential() {
+async fn the_startup_line_names_the_model_and_interval_and_no_credential() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "line", 40);
+    let (service, _dir) = imagery(&fake, "line");
     let line = service.startup_line();
     assert!(
-        line.starts_with("IMAGERY on model=gpt-image-2.5-flare budget=40 images interval=30s"),
+        line.starts_with("IMAGERY on model=gpt-image-2.5-flare interval=30s"),
         "{line}"
     );
     assert!(!line.contains("test-credential"));
@@ -1222,7 +1218,7 @@ async fn the_startup_line_names_the_model_budget_and_interval_and_no_credential(
 #[tokio::test]
 async fn the_manifest_records_provenance_beside_the_run_and_never_under_assets() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, dir) = imagery(&fake, "manifest", 5);
+    let (service, dir) = imagery(&fake, "manifest");
     let request = expression(Expression::Contemptuous);
     let reference = request.references[0].sha256.clone();
     let prompt = request.prompt.as_str().to_owned();
@@ -1357,7 +1353,7 @@ fn request_diagnostics_count_prompt_and_reference_sizes_without_content() {
 #[tokio::test]
 async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_with_an_etag() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "route", 5);
+    let (service, _dir) = imagery(&fake, "route");
     let mut router = router(service.clone());
     assert_eq!(
         get(&mut router, &"a".repeat(64), None).await.0,
@@ -1374,7 +1370,7 @@ async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_wit
 
     // Registered by a request whose call failed: known to the server, no image yet.
     let failing = FakeOpenAi::start(Duration::ZERO, Reply::Failure);
-    let (pending, _dir) = imagery(&failing, "route-pending", 5);
+    let (pending, _dir) = imagery(&failing, "route-pending");
     let request = refresh(Mood::Warm);
     let pending_key = pending.key_for(&request);
     assert_eq!(pending.render(request).await, Err(ImageFailure::Provider));
@@ -1406,7 +1402,7 @@ async fn an_unregistered_key_is_404_a_pending_one_503_and_a_ready_one_served_wit
 #[tokio::test]
 async fn a_transparent_result_is_served_as_a_webp_with_alpha() {
     let fake = FakeOpenAi::start(Duration::ZERO, Reply::Image);
-    let (service, _dir) = imagery(&fake, "webp", 5);
+    let (service, _dir) = imagery(&fake, "webp");
     let key = service
         .render(expression(Expression::Smiling))
         .await
@@ -1431,7 +1427,6 @@ async fn an_artifact_close_up_is_requested_from_the_backdrop_and_a_vetted_subjec
         &fake,
         &dir.join("cache"),
         None,
-        5,
         Duration::from_secs(5),
         ContentRating::Mature,
     );
@@ -1914,7 +1909,6 @@ mod settings {
             mode: Err(NotPresent),
             model: Err(NotPresent),
             quality: Err(NotPresent),
-            budget: Err(NotPresent),
             interval_seconds: Err(NotPresent),
             deadline_seconds: Err(NotPresent),
             cache: Err(NotPresent),
@@ -1931,7 +1925,6 @@ mod settings {
             panic!("a credential turns imagery on");
         };
         assert_eq!(configuration.model.model_id(), "gpt-image-2.5-flare");
-        assert_eq!(configuration.budget, 40);
         assert_eq!(configuration.interval, Duration::from_secs(30));
         assert_eq!(configuration.deadline, Duration::from_secs(45));
         assert_eq!(configuration.quality, ImageQuality::Medium);
@@ -1982,9 +1975,6 @@ mod settings {
         });
         add("DF_GAMEPLAY_IMAGERY_QUALITY", |i| {
             i.quality = Ok("ultra".to_owned())
-        });
-        add("DF_GAMEPLAY_IMAGERY_BUDGET", |i| {
-            i.budget = Ok("many".to_owned())
         });
         add("DF_GAMEPLAY_IMAGERY_INTERVAL_SECONDS", |i| {
             i.interval_seconds = Ok("19".to_owned());

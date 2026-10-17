@@ -3,6 +3,7 @@
 //! anything; every input is a field the server already put in the audience's own view, so
 //! the browser can animate and voice a change without owning any rule.
 use df_protocol::common as rpc;
+use df_render::art_contract;
 
 /// Longest text a compact table line shows, in characters.
 const LINE_LIMIT: usize = 90;
@@ -474,12 +475,9 @@ impl SceneFamily {
     }
 }
 
-pub(crate) fn scene_family(scene_asset: &str) -> SceneFamily {
-    const INDOOR: [&str; 9] = [
-        "inn", "tavern", "interior", "hall", "cellar", "crypt", "temple", "shop", "library",
-    ];
-    let name = scene_asset.to_ascii_lowercase();
-    if INDOOR.iter().any(|word| name.contains(word)) {
+/// Whether the scene is indoors, as the server declared it from the place's setting.
+pub(crate) fn scene_family(scene: &rpc::GameplayScene) -> SceneFamily {
+    if scene.interior {
         SceneFamily::Interior
     } else {
         SceneFamily::Exterior
@@ -519,18 +517,46 @@ pub(crate) struct StageActor {
 }
 
 /// A local served asset path, or `None` for anything else. Only these reach CSS or `src`.
+/// A generated-art path goes through the art contract: only chrome and the reviewed photograph
+/// that answers it are served, so a painted stem, a role token or an identity key with no
+/// photograph answers `None` and the caller's neutral fallback stands.
 pub(crate) fn asset_url(path: &str) -> Option<String> {
     let path = path.trim_start_matches('/');
-    (path.starts_with("assets/")
+    let local = path.starts_with("assets/")
         && path
             .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'.' | b'_')))
-    .then(|| {
-        let photographic = path
-            .strip_prefix("assets/ui/generated/")
-            .and_then(crate::stage_art::photographic_stem);
-        photographic.map_or_else(|| format!("/{path}"), |stem| format!("{GENERATED}/{stem}"))
-    })
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'.' | b'_'));
+    if !local {
+        return None;
+    }
+    match path.strip_prefix("assets/ui/generated/") {
+        // Sound and dice live in subdirectories; they are chrome and keep their own paths.
+        Some(generated) if !generated.contains('/') => {
+            art_contract::fetch_target(generated).map(|target| format!("{GENERATED}/{target}"))
+        }
+        _ => Some(format!("/{path}")),
+    }
+}
+
+/// The picture of a place for a role, by the art contract's order: the live image already made
+/// for it (the room photograph or the scene plate, per the role), then a reviewed photograph the
+/// scene's art names. `None` means nothing is ready: the role's neutral stands and the server,
+/// not the display, asks for the live image to be made.
+pub(crate) fn place_picture(
+    role: art_contract::Role,
+    scene_asset: &str,
+    live_backdrop: &str,
+    live_plate: &str,
+) -> Option<String> {
+    let plan = art_contract::plan(role, scene_asset);
+    plan.live
+        .iter()
+        .find_map(|source| match source {
+            art_contract::LiveSource::RoomPhoto => imagery_url(live_backdrop),
+            art_contract::LiveSource::ScenePlate => imagery_url(live_plate),
+            art_contract::LiveSource::CanonicalCharacter => None,
+        })
+        .or_else(|| plan.reviewed.map(|photo| format!("{GENERATED}/{photo}")))
 }
 
 // PLAY-L01: a server-generated image path: `/gameplay/imagery/` and a 64-digit lowercase
@@ -3273,8 +3299,10 @@ mod tests {
         assert_eq!(cast[0].sprite, "/assets/ui/generated/sprite-hero-1");
         assert_eq!(cast[1].slot, ActorSlot::Npc(0));
         assert_eq!(cast[1].name, "Fenn");
-        assert_eq!(cast[1].sprite, "/assets/ui/generated/sprite-patron");
-        assert_eq!(cast[1].portrait, "/assets/ui/generated/portrait-patron");
+        // A painted stem resolves to nothing under the art contract: the stage then shows the
+        // live photograph the server made, or nothing.
+        assert_eq!(cast[1].sprite, "");
+        assert_eq!(cast[1].portrait, "");
         assert!(cast[1].speaking);
         assert_eq!(cast[2].slot, ActorSlot::Npc(1));
         assert!(!cast[2].speaking);
@@ -3409,13 +3437,20 @@ mod tests {
         assert_eq!(SceneFamily::Interior.name(), "interior");
         assert_eq!(SceneFamily::Exterior.name(), "exterior");
 
-        assert_eq!(
-            scene_family("/assets/ui/generated/scene-harbor-inn"),
-            SceneFamily::Interior
-        );
-        assert_eq!(
-            scene_family("/assets/ui/generated/scene-courier-road"),
-            SceneFamily::Exterior
-        );
+        // The server declares it; a name, an art reference or a place never decides it.
+        let shop = rpc::GameplayScene {
+            scene_asset: "live-room-photo".to_owned(),
+            place: "The Quay".to_owned(),
+            interior: true,
+            ..Default::default()
+        };
+        assert_eq!(scene_family(&shop), SceneFamily::Interior);
+        let quay = rpc::GameplayScene {
+            scene_asset: "live-room-photo".to_owned(),
+            place: "Marek’s Cloth Shop".to_owned(),
+            interior: false,
+            ..Default::default()
+        };
+        assert_eq!(scene_family(&quay), SceneFamily::Exterior);
     }
 }

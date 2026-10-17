@@ -408,7 +408,7 @@ pub(crate) fn validates(scene: &SceneSetting, asset: &str) -> bool {
                 a.art_key == scene.art_key
                     && a.kind == "scene"
                     && a.depicts.contains(&scene.kind)
-                    && asset == format!("assets/ui/generated/{}", a.file_stem)
+                    && asset == a.asset()
             })
         })
 }

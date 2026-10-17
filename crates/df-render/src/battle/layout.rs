@@ -39,7 +39,8 @@ pub struct Obstacle {
     pub cells: Vec<Cell>,
     pub blocks_movement: bool,
     pub cover: Cover,
-    /// Prop art stem under `assets/ui/generated/`.
+    /// Prop art: a reviewed photograph stem under `assets/ui/generated/`, `neutral` (a neutral
+    /// block), `none` or `scan`. Never a painted file (the art contract).
     pub sprite: String,
     pub height_m: f32,
 }
@@ -171,7 +172,7 @@ mod tests {
             cells: cells.iter().map(|(c, r)| Cell::new(*c, *r)).collect(),
             blocks_movement: true,
             cover: Cover::Half,
-            sprite: "prop-crates".to_owned(),
+            sprite: "neutral".to_owned(),
             height_m: 1.1,
         }
     }
@@ -357,15 +358,9 @@ mod tests {
                 ..layout()
             })
             .collect();
-        let first = choose(&layouts, "scene-salt-quay-arrival|a|b")
-            .unwrap()
-            .id
-            .clone();
+        let first = choose(&layouts, "salt-quay|a|b").unwrap().id.clone();
         for _ in 0..5 {
-            assert_eq!(
-                choose(&layouts, "scene-salt-quay-arrival|a|b").unwrap().id,
-                first
-            );
+            assert_eq!(choose(&layouts, "salt-quay|a|b").unwrap().id, first);
         }
         let picked: BTreeSet<String> = (0..60)
             .map(|index| {

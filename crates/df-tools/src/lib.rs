@@ -58,7 +58,6 @@ pub(crate) mod health_tier;
 mod health_cues;
 #[cfg(any(target_arch = "wasm32", test))]
 mod player_sheet;
-mod stage_art;
 #[cfg(any(target_arch = "wasm32", test))]
 mod stage_conductor;
 #[cfg(any(target_arch = "wasm32", test))]

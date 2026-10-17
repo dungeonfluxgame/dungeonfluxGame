@@ -108,6 +108,72 @@
       "same_bytes_as": "figure-hero-3-documentary-photo.webp",
       "sha256": "860c6991942a171c4af56f5b01e1e482607a3d7ed717a4a91f1fd9c88df9c804",
       "bytes": 263656
+    },
+    {
+      "file": "portrait-patron-merchant-documentary-photo.png",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "sha256": "de418478c1c5ce4e8d77af4e86c67f25fc01274ee54ec7466f60297428a36fac",
+      "bytes": 2160720,
+      "alpha_preserved": true,
+      "note": "Reviewed merchant-shop cast photograph; PNG kept as generated."
+    },
+    {
+      "file": "portrait-shop-adventurer-documentary-photo.png",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "sha256": "c59c2ddda808afb9e3df21f8920af614d75524da49ad2c122d9b024d321dcf34",
+      "bytes": 2175731,
+      "alpha_preserved": true,
+      "note": "Reviewed merchant-shop cast photograph; PNG kept as generated."
+    },
+    {
+      "file": "portrait-shop-soldier-documentary-photo.png",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "sha256": "87ae3b1546c2d5690fa70456eed7924ec9c02003a22f2f6964bf610fe9eb17fd",
+      "bytes": 2080535,
+      "alpha_preserved": true,
+      "note": "Reviewed merchant-shop cast photograph; PNG kept as generated."
+    },
+    {
+      "file": "sprite-patron-merchant-documentary-photo.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "7684cb4a9a841fc9ce9a0738843bc6a4db808aca68f4782e91096386202de62e",
+      "bytes": 1882281,
+      "alpha_preserved": true,
+      "note": "Reviewed merchant-shop cast photograph; PNG kept as generated."
+    },
+    {
+      "file": "sprite-shop-adventurer-documentary-photo.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "e488941d6cbdc145b8eefc332df0fbc884aea75fc2e9e1e46bd67d0e1ca1ba43",
+      "bytes": 2001013,
+      "alpha_preserved": true,
+      "note": "Reviewed merchant-shop cast photograph; PNG kept as generated."
+    },
+    {
+      "file": "sprite-shop-soldier-documentary-photo.png",
+      "dimensions": [
+        1024,
+        1536
+      ],
+      "sha256": "7f6b0f7b41e4ec3c602a65e97e56601e987afa25dfa8a1677aa6ca9c1d63cb68",
+      "bytes": 1869902,
+      "alpha_preserved": true,
+      "note": "Reviewed merchant-shop cast photograph; PNG kept as generated."
     }
   ]
 }

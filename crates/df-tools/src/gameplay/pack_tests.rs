@@ -183,7 +183,7 @@ fn shipped_harbor_scenes_have_manifest_pinned_staging_facts() {
                     setting.kind,
                     super::adventure::setting::SettingKind::NetLoft
                 );
-                assert_eq!(scene.asset, "assets/ui/generated/scene-salt-quay-interior");
+                assert_eq!(scene.asset, "live-room-photo");
             }
             SceneKey::Room
             | SceneKey::Opening
@@ -194,7 +194,10 @@ fn shipped_harbor_scenes_have_manifest_pinned_staging_facts() {
             | SceneKey::Defeat => {
                 assert_eq!(setting.place_id, "salt-quay");
                 assert_eq!(setting.kind, super::adventure::setting::SettingKind::Quay);
-                assert_eq!(scene.asset, "assets/ui/generated/scene-salt-quay-arrival");
+                assert_eq!(
+                    scene.asset,
+                    "assets/ui/generated/scene-salt-quay-arrival-documentary-photo"
+                );
             }
         }
     }
@@ -1564,7 +1567,10 @@ fn shipped_pack_puts_its_characters_on_stage_and_unknown_sprites_are_just_string
     assert!(cast(SceneKey::Room).is_empty());
     assert!(cast(SceneKey::Defeat).is_empty());
     let sprite = &loaded.pack.scenes[1].cast[0].sprite;
-    assert_eq!(sprite, "assets/ui/generated/sprite-courier");
+    assert_eq!(
+        sprite,
+        "assets/ui/generated/sprite-courier-documentary-photo"
+    );
     // A sprite the client has never heard of is not a loader failure.
     let pack = set(
         &shipped_pack(),

@@ -64,9 +64,6 @@ impl Plates {
         if !self.shared.inner.imagery.is_on() {
             return Err("imagery is off");
         }
-        if self.shared.inner.imagery.budget_remaining() == 0 {
-            return Err("image budget is spent");
-        }
         let mut book = locked(&self.shared.book);
         let current = book.current.as_ref().ok_or("no current scene")?;
         if current.in_combat {
@@ -204,7 +201,11 @@ impl Shared {
         let _ = reply.send(Ok(value));
         let result = async {
             self.wait_for_roll(&scene_key, generation).await?;
-            let rendered = self.inner.imagery.render(request).await?;
+            let rendered = self
+                .inner
+                .imagery
+                .generate(&format!("plate:{scene_key}"), request)
+                .await?;
             self.wait_for_roll(&scene_key, generation).await?;
             let placement = match &spec.speaker {
                 Some(speaker) => {

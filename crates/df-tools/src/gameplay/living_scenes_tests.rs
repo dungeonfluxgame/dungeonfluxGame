@@ -36,12 +36,12 @@ fn image_completion_reports_elapsed_milliseconds_for_ready_and_failed_images_wit
     assert!(!ready.contains("prompt="));
 }
 
-const SCENE: &str = "The Heron Shrine|assets/ui/generated/scene-place-temple-sanctuary.webp";
+const SCENE: &str = "The Heron Shrine|live-room-photo";
 
 fn stage(revision: u64) -> Stage {
     Stage {
         scene_key: SCENE.to_owned(),
-        scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
+        scene_asset: "live-room-photo".to_owned(),
         revision: Some((1, revision)),
         in_combat: false,
         in_roll: false,
@@ -356,7 +356,7 @@ fn a_finished_backdrop_waits_for_a_quiet_moment_and_then_wakes_the_watchers() {
 // ---------------------------------------------------------------------------------------------
 // Health faces.
 
-const HERO_ONE_ART: &str = "assets/ui/generated/sprite-hero-1";
+const HERO_ONE_ART: &str = "assets/ui/generated/sprite-hero-1-documentary-photo";
 
 fn hurt_stage(revision: u64, in_combat: bool, hero_hp: u32, foe_hp: u32) -> Stage {
     Stage {
@@ -509,7 +509,7 @@ fn opening_scene_requests_each_hero_cutout_once_and_caches_successes() {
         "cast": [],
         "speaker": "",
         "dialogue": "",
-        "asset": "assets/ui/generated/scene-place-temple-sanctuary.webp",
+        "asset": "live-room-photo",
         "setting": {
             "place_id": "temple",
             "name": "The Heron Shrine",
@@ -690,17 +690,21 @@ fn the_second_hero_gets_variants_of_the_art_the_battlefield_dresses_the_seat_in(
     // The exploration stage shows hero two as `sprite-hero-2`, the fight as the archer
     // `sprite-hero-3`: both are looked for, and a fight shows the variant of the fight's art.
     let labels = job_labels(&inner.evaluate_at(seconds(60)));
-    assert!(labels.contains(&"peek assets/ui/generated/sprite-hero-2".to_owned()));
-    assert!(labels.contains(&"peek assets/ui/generated/sprite-hero-3".to_owned()));
+    assert!(
+        labels.contains(&"peek assets/ui/generated/sprite-hero-2-documentary-photo".to_owned())
+    );
+    assert!(
+        labels.contains(&"peek assets/ui/generated/sprite-hero-3-documentary-photo".to_owned())
+    );
     learn(
         &inner,
-        "assets/ui/generated/sprite-hero-2",
+        "assets/ui/generated/sprite-hero-2-documentary-photo",
         HealthTier::Bloodied,
         'c',
     );
     learn(
         &inner,
-        "assets/ui/generated/sprite-hero-3",
+        "assets/ui/generated/sprite-hero-3-documentary-photo",
         HealthTier::Bloodied,
         'd',
     );
@@ -756,7 +760,7 @@ fn a_neutral_face_reverts_to_the_authored_cutout_for_free() {
 }
 
 #[test]
-fn a_failed_face_is_not_asked_for_again_and_a_spent_budget_ends_requests() {
+fn a_failed_face_is_not_asked_for_again() {
     let dossier = dossier();
     let (inner, ledger) = director(&dossier);
     insult(&ledger, &dossier);
@@ -769,17 +773,6 @@ fn a_failed_face_is_not_asked_for_again_and_a_spent_budget_ends_requests() {
         result: Err(ImageFailure::Refused),
     });
     assert!(face_jobs(&inner.evaluate_at(seconds(12))).is_empty());
-    inner.finish(Done::Refresh {
-        look: refresh_jobs(&jobs)[0].0,
-        reason: RefreshReason::Change,
-        scene_key: SCENE.to_owned(),
-        result: Err(ImageFailure::BudgetExhausted),
-    });
-    flirt(&ledger, &dossier);
-    assert!(
-        inner.evaluate_at(seconds(100)).is_empty(),
-        "no further requests once the budget is spent"
-    );
 }
 
 #[test]
@@ -821,13 +814,13 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
         audience: Some(rpc::view_message::Audience::Display(
             rpc::DisplayGameplayView {
                 narration: "The shrine is quiet.".to_owned(),
-                scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
+                scene_asset: "live-room-photo".to_owned(),
                 scene: Some(rpc::GameplayScene {
                     destination: 0,
                     source_scene_key: String::new(),
                     source_scene_variant: String::new(),
                     title: "The Heron Shrine".to_owned(),
-                    scene_asset: "assets/ui/generated/scene-place-temple-sanctuary.webp".to_owned(),
+                    scene_asset: "live-room-photo".to_owned(),
                     speaker_portrait: "/assets/ui/generated/portrait-patron-merchant".to_owned(),
                     cast: vec![rpc::SceneActor {
                         id: "merchant".to_owned(),
@@ -851,6 +844,8 @@ fn display_message(in_combat: bool) -> rpc::ViewMessage {
                     scene_contents_json: String::new(),
                     item: None,
                     hand_items: Vec::new(),
+                    interior: false,
+                    floor: None,
                 }),
                 journey: Some(rpc::JourneyView {
                     phase: if in_combat {
@@ -1021,9 +1016,12 @@ async fn an_expression_is_made_from_the_art_the_stage_shows_for_that_character()
     let directory = std::env::temp_dir().join(format!("df-living-art-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     for name in [
+        "sprite-hero-1-documentary-photo.webp",
+        "figure-hero-1-documentary-photo.webp",
+        "sprite-shop-soldier-documentary-photo.webp",
+        // A painted file on disk is never read.
         "sprite-ant-bandit.webp",
         "figure-ant-bandit.webp",
-        "sprite-patron-innkeeper.webp",
     ] {
         std::fs::write(directory.join(name), name.as_bytes()).unwrap();
     }
@@ -1039,24 +1037,34 @@ async fn an_expression_is_made_from_the_art_the_stage_shows_for_that_character()
         wake: watch::channel(0).0,
         origin: Instant::now(),
     });
-    // An antagonist has a full-body twin and the stage shows it wherever feet are on screen.
+    // A hero has a full-body twin and the stage shows it wherever feet are on screen.
     let figure = inner
-        .load_figure("assets/ui/generated/sprite-ant-bandit")
+        .load_figure("assets/ui/generated/sprite-hero-1-documentary-photo")
         .await
         .unwrap();
-    assert_eq!(&figure.bytes[..], b"figure-ant-bandit.webp");
-    // A patron has only the knees-up cut-out.
+    assert_eq!(&figure.bytes[..], b"figure-hero-1-documentary-photo.webp");
+    // A shop character has only the knees-up cut-out.
     let cutout = inner
-        .load_figure("assets/ui/generated/sprite-patron-innkeeper")
+        .load_figure("assets/ui/generated/sprite-shop-soldier-documentary-photo")
         .await
         .unwrap();
-    assert_eq!(&cutout.bytes[..], b"sprite-patron-innkeeper.webp");
-    assert!(
-        inner
-            .load_figure("assets/ui/generated/sprite-patron-missing")
-            .await
-            .is_err()
+    assert_eq!(
+        &cutout.bytes[..],
+        b"sprite-shop-soldier-documentary-photo.webp"
     );
+    // A painted stem and a reviewed photograph that is absent from the directory both fail.
+    for refused in [
+        "sprite-ant-bandit",
+        "sprite-shop-adventurer-documentary-photo",
+    ] {
+        assert!(
+            inner
+                .load_figure(&format!("assets/ui/generated/{refused}"))
+                .await
+                .is_err(),
+            "{refused}"
+        );
+    }
 }
 
 #[test]

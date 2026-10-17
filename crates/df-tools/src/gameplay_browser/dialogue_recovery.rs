@@ -93,13 +93,26 @@ fn split_action_response(response: &str) -> (&str, &str) {
     })
 }
 
-fn portrait_url(speaker: &str) -> &'static str {
-    match speaker {
-        "Courier" => "/assets/ui/generated/sprite-courier-documentary-photo",
-        "Bandit" => "/assets/ui/generated/sprite-bandit-documentary-photo",
-        "Vell" => "/assets/concept-art/vell-avatar.webp",
-        _ => "/assets/concept-art/dm-avatar.webp",
-    }
+/// The stand-in portrait (the narrator's interface avatar) for a speaker the server sent no
+/// picture for. No speaker is recognised by name.
+const NEUTRAL_PORTRAIT: &str = "/assets/concept-art/dm-avatar.webp";
+
+/// The picture the server sent for a cast member: the live image already made for them, else
+/// the portrait or cut-out the art contract serves.
+fn actor_portrait(actor: &rpc::SceneActor) -> Option<String> {
+    crate::presentation::imagery_url(&actor.live_sprite)
+        .or_else(|| super::live_screens::asset_url(&actor.portrait))
+        .or_else(|| super::live_screens::asset_url(&actor.sprite))
+}
+
+/// A speaker's portrait from what the server sent: their cast entry, else the scene's speaker
+/// portrait, else the neutral stand-in.
+fn portrait_url(scene: Option<&rpc::GameplayScene>, speaker: &str) -> String {
+    scene
+        .and_then(|scene| scene.cast.iter().find(|actor| actor.name == speaker))
+        .and_then(actor_portrait)
+        .or_else(|| scene_portrait_url(scene))
+        .unwrap_or_else(|| NEUTRAL_PORTRAIT.to_owned())
 }
 
 fn current_speaker(client: &Client) -> String {
@@ -140,7 +153,7 @@ fn reply_attribution(
     // A table notice (a saved note, a whisper that cannot be kept private) names no speaker; it
     // is the narrator's, never the NPC in focus.
     if kind == rpc::DialogueDisposition::Meta && canonical_speaker.is_empty() {
-        return ("Narrator".to_owned(), portrait_url("Narrator").to_owned());
+        return ("Narrator".to_owned(), NEUTRAL_PORTRAIT.to_owned());
     }
     if !actor_id.is_empty() && !canonical_speaker.is_empty() {
         let portrait = scene
@@ -150,8 +163,8 @@ fn reply_attribution(
                     .iter()
                     .find(|actor| actor.id == actor_id && actor.name == canonical_speaker)
             })
-            .and_then(|actor| super::live_screens::asset_url(&actor.portrait))
-            .unwrap_or_else(|| portrait_url(canonical_speaker).to_owned());
+            .and_then(actor_portrait)
+            .unwrap_or_else(|| portrait_url(scene, canonical_speaker));
         return (canonical_speaker.to_owned(), portrait);
     }
 
@@ -186,7 +199,7 @@ fn scene_portrait_url(scene: Option<&rpc::GameplayScene>) -> Option<String> {
 }
 
 fn speaker_portrait_url(scene: Option<&rpc::GameplayScene>, speaker: &str) -> String {
-    scene_portrait_url(scene).unwrap_or_else(|| portrait_url(speaker).to_owned())
+    scene_portrait_url(scene).unwrap_or_else(|| portrait_url(scene, speaker))
 }
 
 fn composer_available(journey: Option<&rpc::JourneyView>) -> bool {
@@ -577,7 +590,7 @@ fn thinking_row(
     let bubble = node(document, &thread, "div", "npc-bubble npc-thinking", "")?;
     bubble.set_attribute("data-thinking", "")?;
     let portrait = node(document, &bubble, "img", "npc-bubble-portrait", "")?;
-    portrait.set_attribute("src", portrait_url(&speaker))?;
+    portrait.set_attribute("src", &portrait_url(current_scene(&state), &speaker))?;
     portrait.set_attribute("alt", "")?;
     let body = node(document, &bubble, "div", "npc-bubble-body", "")?;
     let name = if speaker.is_empty() {
@@ -988,7 +1001,7 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                             you: input.text.clone(),
                             disposition: Some(disposition.to_owned()),
                             speaker: "Narrator".to_owned(),
-                            portrait: portrait_url("Narrator").to_owned(),
+                            portrait: NEUTRAL_PORTRAIT.to_owned(),
                             reply: result.to_owned(),
                         });
                         if let Some(editor) = &state.dialogue.editor {
@@ -1269,16 +1282,30 @@ mod tests {
     #[test]
     fn reply_portrait_prefers_the_current_scene_and_keeps_named_fallback() {
         let scene = super::rpc::GameplayScene {
-            speaker_portrait: "assets/ui/generated/patron.webp".to_owned(),
+            speaker_portrait: "assets/ui/generated/sprite-patron-merchant-documentary-photo"
+                .to_owned(),
             ..Default::default()
         };
 
         assert_eq!(
             speaker_portrait_url(Some(&scene), "Unlisted patron"),
-            "/assets/ui/generated/patron.webp"
+            "/assets/ui/generated/sprite-patron-merchant-documentary-photo"
         );
+        // No speaker is recognised by name: with nothing sent, the neutral stand-in shows.
         assert_eq!(
             speaker_portrait_url(None, "Courier"),
+            super::NEUTRAL_PORTRAIT
+        );
+        let with_cast = super::rpc::GameplayScene {
+            cast: vec![super::rpc::SceneActor {
+                name: "Courier".to_owned(),
+                portrait: "assets/ui/generated/sprite-courier-documentary-photo".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            speaker_portrait_url(Some(&with_cast), "Courier"),
             "/assets/ui/generated/sprite-courier-documentary-photo"
         );
     }

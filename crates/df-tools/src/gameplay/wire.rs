@@ -1461,6 +1461,8 @@ pub(super) fn project_journey(
             scene_contents_json: String::new(),
             item: None,
             hand_items: Vec::new(),
+            interior: false,
+            floor: None,
         }
     };
     scene.cast = scene_cast(&authored);
@@ -1478,6 +1480,10 @@ pub(super) fn project_journey(
         .as_ref()
         .map(|setting| setting.name.clone())
         .unwrap_or_default();
+    // The place's declared indoors flag and stage floor; the display never reads art names.
+    let (interior, floor) = super::staging::declared(authored.setting.as_ref());
+    scene.interior = interior;
+    scene.floor = Some(floor);
     // The confrontation setting's id is the adventure's location, which keys the battlefield.
     scene.location_id = authored
         .setting

@@ -7,6 +7,7 @@ use crate::gameplay::{
     imagery::{self, HeroVisualIdentity, Lookup},
 };
 use df_model::checkpoint::{Checkpoint, EntityId};
+use df_render::art_contract;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -33,6 +34,9 @@ enum Source {
         model: SceneModel,
         place: String,
     },
+    /// A cast member with no authored description and no reviewed photograph (a creature, a
+    /// patron or a foe the adventure names), made on demand by the art contract's rule.
+    Cast(Member),
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +59,8 @@ enum Status {
 struct Entry {
     work: Work,
     status: Status,
+    /// When the generation was handed to the worker, for the `ART` audit timings.
+    started: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -65,6 +71,11 @@ pub(super) struct References {
     selected_rooms: BTreeMap<String, Target>,
     current_room: Option<Target>,
     current_npcs: BTreeSet<String>,
+    /// How many times each person's picture was cleared for regeneration; part of the binding, so
+    /// a cleared picture is a new request and a new image.
+    regen: BTreeMap<String, u32>,
+    /// The `ART resolve` lines already written, so a view that is rebuilt often logs once.
+    art_logged: BTreeSet<String>,
 }
 
 pub(super) struct WorkerLifetime(pub(super) Arc<Inner>);
@@ -73,7 +84,7 @@ impl Drop for WorkerLifetime {
     fn drop(&mut self) {
         for entry in locked(&self.0.state).canonical.entries.values_mut() {
             if matches!(entry.status, Status::Queued | Status::Generating) {
-                diagnostic(&entry.work, "cancelled", None);
+                diagnostic(&entry.work, "cancelled", None, None);
                 entry.status = Status::Failed(ImageFailure::Interrupted);
             }
         }
@@ -115,12 +126,13 @@ impl References {
             binding,
             source,
         };
-        diagnostic(&work, "queued", None);
+        diagnostic(&work, "queued", None, None);
         self.entries.insert(
             target,
             Entry {
                 work,
                 status: Status::Queued,
+                started: None,
             },
         );
     }
@@ -156,7 +168,8 @@ impl References {
             .filter_map(|(_, target)| {
                 let entry = self.entries.get_mut(&target)?;
                 entry.status = Status::Generating;
-                diagnostic(&entry.work, "requested", None);
+                entry.started = Some(Instant::now());
+                diagnostic(&entry.work, "requested", None, None);
                 Some(Job::Canonical(entry.work.clone()))
             })
             .collect()
@@ -167,6 +180,64 @@ impl References {
             Status::Ready(key) => Some(key.clone()),
             _ => None,
         }
+    }
+
+    /// The art contract's on-demand request for a cast member whose picture is first needed in a
+    /// view. Idempotent per subject: a person already admitted (from a scene model, with an
+    /// authored description) or already requested is left alone, so at most one request is ever
+    /// in flight for a subject key. Server only; no test or client render loop calls this.
+    pub(super) fn admit_cast(&mut self, member: &Member) {
+        let target = Target::Npc(member.id.clone());
+        if self.scope.is_empty() || self.entries.contains_key(&target) {
+            return;
+        }
+        let revision = digest(
+            serde_json::json!({
+                "id": member.id,
+                "name": member.name,
+                "role": format!("{:?}", member.role),
+                "life_stage": format!("{:?}", member.life_stage),
+                "regen": self.regen.get(&member.id),
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        self.select(target, Source::Cast(member.clone()), &revision);
+    }
+
+    /// Writes one `ART resolve` line per subject and source: what a view first found for it.
+    pub(super) fn note_resolved(&mut self, subject: &art_contract::Subject, source: &str) {
+        if self
+            .art_logged
+            .insert(format!("{}|{source}", subject.key()))
+        {
+            super::super::actor::record_audit_line(
+                "gameplay.art",
+                format!(
+                    "ART resolve subject={} role={:?} source={source}",
+                    subject.key(),
+                    art_contract::Role::CharacterToken
+                ),
+            );
+        }
+    }
+
+    /// Drops a finished picture (ready or failed) so the next view needing it asks again, and
+    /// makes the next request a new binding so the image is made anew rather than read back from
+    /// the cache. A picture still being made is left alone. Returns whether one was dropped.
+    pub(super) fn clear_npc(&mut self, id: &str) -> bool {
+        let target = Target::Npc(id.to_owned());
+        let finished = self
+            .entries
+            .get(&target)
+            .is_some_and(|entry| matches!(entry.status, Status::Ready(_) | Status::Failed(_)));
+        if finished {
+            self.entries.remove(&target);
+            *self.regen.entry(id.to_owned()).or_default() += 1;
+            self.art_logged
+                .retain(|line| !line.starts_with(&format!("character:{id}|")));
+        }
+        finished
     }
 
     pub(super) fn hero(&self, entity: EntityId) -> Option<ImageKey> {
@@ -313,17 +384,13 @@ mod tests {
             identity_figure_photo.as_deref(),
             Some("sprite-patron-merchant")
         );
-        let store = ReferenceStore::photographic(
+        let store = ReferenceStore::new(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
         );
+        assert!(store.load(identity_photo.as_deref().unwrap()).is_ok());
         assert!(
             store
-                .load_photographic(identity_photo.as_deref().unwrap())
-                .is_ok()
-        );
-        assert!(
-            store
-                .load_photographic(identity_figure_photo.as_deref().unwrap())
+                .load(identity_figure_photo.as_deref().unwrap())
                 .is_ok()
         );
 
@@ -342,7 +409,7 @@ mod tests {
         state.canonical = canonical;
         Inner {
             imagery,
-            references: ReferenceStore::photographic(
+            references: ReferenceStore::new(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
             ),
             social: SocialLedger::none(),
@@ -543,7 +610,6 @@ mod tests {
         for failure in [
             ImageFailure::Provider,
             ImageFailure::Refused,
-            ImageFailure::BudgetExhausted,
             ImageFailure::Interrupted,
         ] {
             let mut canonical = references("terminal-admission-run");
@@ -596,13 +662,67 @@ mod tests {
     }
 }
 
-fn diagnostic(work: &Work, status: &str, key: Option<&ImageKey>) {
+/// The art contract's subject of a canonical target: what the `IMAGERY` audit lines name.
+fn subject(target: &Target) -> art_contract::Subject {
+    match target {
+        Target::Hero(entity) => {
+            art_contract::Subject::character(format!("hero:{}", digest(entity.as_bytes())))
+        }
+        Target::Npc(id) => art_contract::Subject::character(id.clone()),
+        Target::Room { place, .. } => art_contract::Subject::place(place.clone()),
+    }
+}
+
+fn diagnostic(work: &Work, status: &str, key: Option<&ImageKey>, elapsed: Option<Duration>) {
     let target = match &work.target {
         Target::Hero(entity) => format!("hero:{}", digest(entity.as_bytes())),
         Target::Npc(id) => format!("npc:{id}"),
         Target::Room { place, revision } => format!("room:{place}:{revision}"),
     };
     let key = key.map_or("", ImageKey::as_str);
+    // The on-demand generation is observable in the same IMAGERY audit lines as every other
+    // image: one line per state change of the subject, and a failure names the neutral fallback
+    // the display keeps.
+    let kind = match &work.target {
+        Target::Room { .. } => ImageKind::CanonicalRoom.label(),
+        Target::Hero(_) | Target::Npc(_) => ImageKind::CanonicalCharacter.label(),
+    };
+    let fallback = match status {
+        "queued" | "requested" | "ready" | "stale_discarded" => "",
+        _ => " fallback=neutral",
+    };
+    // The art contract's audit line: subject, role, source and timing of each step.
+    let (event, role) = (
+        match status {
+            "requested" => Some("request"),
+            "ready" => Some("ready"),
+            "queued" | "stale_discarded" => None,
+            _ => Some("failed"),
+        },
+        match &work.target {
+            Target::Hero(_) => art_contract::Role::HeroPortrait,
+            Target::Npc(_) => art_contract::Role::CharacterToken,
+            Target::Room { .. } => art_contract::Role::StagePlace,
+        },
+    );
+    if let Some(event) = event {
+        super::super::actor::record_audit_line(
+            "gameplay.art",
+            format!(
+                "ART {event} subject={} role={role:?} source=live ms={} status={status} id={key}",
+                subject(&work.target).key(),
+                elapsed.map_or(0, |elapsed| elapsed.as_millis()),
+            ),
+        );
+    }
+    super::super::actor::record_audit_line(
+        "gameplay.imagery_demand",
+        format!(
+            "IMAGERY demand kind={kind} subject={} status={status} id={key} binding={}{fallback}",
+            subject(&work.target).key(),
+            work.binding
+        ),
+    );
     super::super::actor::record_audit_diagnostic(
         "gameplay.canonical_reference",
         format!(
@@ -749,20 +869,17 @@ impl Inner {
             Source::Hero {
                 visual_dossier: Some(dossier),
                 ..
-            } => references.push(
-                self.load_photographic(dossier.figure_reference.to_owned())
-                    .await?,
-            ),
+            } => references.push(self.load(dossier.figure_reference.to_owned()).await?),
             Source::Npc {
                 identity_photo,
                 identity_figure_photo,
                 ..
             } => {
                 if let Some(photo) = identity_photo {
-                    references.push(self.load_photographic(photo.clone()).await?);
+                    references.push(self.load(photo.clone()).await?);
                 }
                 if let Some(photo) = identity_figure_photo {
-                    references.push(self.load_photographic(photo.clone()).await?);
+                    references.push(self.load(photo.clone()).await?);
                 }
             }
             _ => {}
@@ -815,14 +932,29 @@ impl Inner {
                 imagery::canonical_room(self.rating, model, place, &work.binding)?,
                 OutputSpec::BACKDROP,
             ),
+            Source::Cast(member) => (
+                ImageKind::CanonicalCharacter,
+                imagery::canonical_cast_member(
+                    self.rating,
+                    &member.id,
+                    &member.name,
+                    member.role,
+                    member.life_stage,
+                    &work.binding,
+                )?,
+                OutputSpec::CUTOUT,
+            ),
         };
         self.imagery
-            .render(ImageRequest {
-                kind,
-                references,
-                prompt,
-                output,
-            })
+            .generate(
+                &subject(&work.target).key(),
+                ImageRequest {
+                    kind,
+                    references,
+                    prompt,
+                    output,
+                },
+            )
             .await
     }
 
@@ -834,7 +966,7 @@ impl Inner {
             .get_mut(&work.target)
             .filter(|entry| entry.work.binding == work.binding)
         else {
-            diagnostic(&work, "stale_discarded", result.as_ref().ok());
+            diagnostic(&work, "stale_discarded", result.as_ref().ok(), None);
             return;
         };
         diagnostic(
@@ -843,6 +975,7 @@ impl Inner {
                 .as_ref()
                 .map_or_else(|failure| failure.label(), |_| "ready"),
             result.as_ref().ok(),
+            entry.started.map(|started| started.elapsed()),
         );
         entry.status = match result {
             Ok(key) => Status::Ready(key),
@@ -1053,12 +1186,17 @@ impl References {
                 ),
                 _ => (None, None),
             };
+            // One reviewed photograph that serves as both portrait and figure is a single
+            // reference, not two copies of the same image.
+            let identity_photo =
+                identity_photo.filter(|photo| Some(photo) != identity_figure_photo.as_ref());
             let revision = digest(
                 serde_json::json!({
                     "id": person.id,
                     "name": person.name,
                     "role": person.role,
                     "description": person.description,
+                    "regen": self.regen.get(&person.id),
                     "identity_photo": identity_photo,
                     "identity_figure_photo": identity_figure_photo,
                 })

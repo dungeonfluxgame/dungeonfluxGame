@@ -1,6 +1,7 @@
 use super::{
     super::startup_configuration::ContentRating, GenerateError, mature_overlay::Overlay, schema::*,
 };
+use df_render::art_contract;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
@@ -67,12 +68,24 @@ pub(super) fn parse<T: DeserializeOwned>(file: &str, bytes: &[u8]) -> Result<T, 
 pub(crate) struct Art {
     pub(crate) art_key: String,
     pub(crate) kind: String,
+    /// A reviewed `-documentary-photo` stem, or an art-contract role token (`live-room-photo`,
+    /// `live-canonical-photo`): the manifest never names a painted file.
     pub(crate) file_stem: String,
     pub(crate) aspect: String,
     pub(crate) used_by: String,
-    pub(crate) prompt: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) depicts: Vec<super::setting::SettingKind>,
+}
+impl Art {
+    /// The asset string a pack carries for this art: a role token stands bare; a reviewed
+    /// photograph is its served path.
+    pub(crate) fn asset(&self) -> String {
+        if art_contract::Token::parse(&self.file_stem).is_some() {
+            self.file_stem.clone()
+        } else {
+            format!("assets/ui/generated/{}", self.file_stem)
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -300,7 +313,6 @@ impl Tables {
         )?;
         let mut art = BTreeMap::new();
         let mut depicts = BTreeMap::new();
-        let mut stems = BTreeSet::new();
         for entry in art_entries {
             if entry.kind == "scene" && entry.depicts.is_empty() {
                 return Err(invalid(
@@ -314,18 +326,13 @@ impl Tables {
                 .file_stem
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                || !stems.insert(entry.file_stem.clone())
-                || art
-                    .insert(
-                        entry.art_key,
-                        format!("assets/ui/generated/{}", entry.file_stem),
-                    )
-                    .is_some()
+                || art_contract::check_content_reference(&entry.file_stem).is_err()
+                || art.insert(entry.art_key.clone(), entry.asset()).is_some()
             {
                 return Err(invalid(
                     "art-manifest.json",
                     "file_stem",
-                    "invalid or duplicate art identity",
+                    "invalid, painted or duplicate art identity",
                 ));
             }
         }

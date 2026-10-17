@@ -11,6 +11,7 @@ use super::{
     record::{self, AdventureRecord, ModelExpression, RecordError},
 };
 use df_persistence::local_demo_scope::{self, AdventureStartup, DemoAdventure};
+use df_render::art_contract;
 use std::{
     fmt,
     future::Future,
@@ -413,14 +414,15 @@ fn painting_present(asset_root: &Path, asset: &str) -> bool {
     })
 }
 /// Called at native composition with the actual served UI art directory, on fresh and resumed runs.
-/// The required harbor painting is the final fallback when even the location painting is absent.
+/// A reviewed photograph the scene names that is not in the directory is replaced, for
+/// presentation only, by the art contract's room-photo role: the place's live room photograph,
+/// made on demand, with the neutral stage until it is ready. No painting stands in for it.
 pub(crate) fn substitute_missing_art(
     loaded: &mut LoadedPack,
-    record: &AdventureRecord,
+    _record: &AdventureRecord,
     asset_root: &Path,
 ) -> Vec<ArtSubstitution> {
-    // A new freeplay location remains pending when its own reference is absent. An unrelated
-    // harbor painting would misrepresent the authored room and poison subsequent plate context.
+    // A new freeplay location remains pending when its own reference is absent.
     if loaded
         .pack
         .beat_script
@@ -429,28 +431,7 @@ pub(crate) fn substitute_missing_art(
     {
         return Vec::new();
     }
-    let general = match &record.settings {
-        Some(settings) => Some((
-            settings.confrontation.art_key.clone(),
-            format!(
-                "assets/ui/generated/scene-{}",
-                settings.confrontation.art_key.trim_start_matches("loc-")
-            ),
-        )),
-        None => loaded
-            .pack
-            .scenes
-            .iter()
-            .find(|s| s.key == super::super::pack::SceneKey::Room)
-            .map(|s| (s.asset.clone(), s.asset.clone())),
-    };
-    let (fallback_key, fallback_asset) = match general {
-        Some((key, asset)) if painting_present(asset_root, &asset) => (key, asset),
-        _ => (
-            "harbor-general".into(),
-            "assets/ui/scenes/mara-harbor-v4.png".into(),
-        ),
-    };
+    let fallback = art_contract::ROOM_PHOTO;
     let mut substitutions = Vec::new();
     for scene in &mut loaded.pack.scenes {
         if scene.asset.starts_with("assets/ui/generated/")
@@ -461,15 +442,15 @@ pub(crate) fn substitute_missing_art(
                 .as_ref()
                 .map(|s| s.art_key.clone())
                 .unwrap_or_else(|| scene.asset.clone());
-            scene.asset = fallback_asset.clone();
-            println!("ADVENTURE art missing {art_key} -> {fallback_key}");
+            scene.asset = fallback.to_owned();
+            println!("ADVENTURE art missing {art_key} -> {fallback}");
             substitutions.push(ArtSubstitution {
                 art_key,
-                fallback: fallback_key.clone(),
+                fallback: fallback.to_owned(),
             });
         }
     }
-    // A painting is presentation, not a new authored outcome. Keep script source
+    // A picture is presentation, not a new authored outcome. Keep script source
     // scenes/receipts immutable when asset availability changes across a resume.
     loaded.script_scene_assets.clear();
     if let Some(script) = &loaded.pack.beat_script {
@@ -484,11 +465,11 @@ pub(crate) fn substitute_missing_art(
                     .unwrap_or_else(|| scene.asset.clone());
                 loaded
                     .script_scene_assets
-                    .insert(id.clone(), fallback_asset.clone());
-                println!("ADVENTURE art missing {art_key} -> {fallback_key}");
+                    .insert(id.clone(), fallback.to_owned());
+                println!("ADVENTURE art missing {art_key} -> {fallback}");
                 substitutions.push(ArtSubstitution {
                     art_key,
-                    fallback: fallback_key.clone(),
+                    fallback: fallback.to_owned(),
                 });
             }
         }

@@ -736,6 +736,15 @@ impl Renderer {
         if self.cache.borrow().contains_key(stem) {
             return;
         }
+        // The art contract: only a live image, chrome or a reviewed photograph is ever fetched.
+        // A role token, an identity key or a painted stem has no file; it stays failed and the
+        // caller draws its neutral fallback (plain floor, neutral block, no picture).
+        let Some(target) = crate::art_contract::fetch_target(stem).map(str::to_owned) else {
+            self.cache
+                .borrow_mut()
+                .insert(stem.to_owned(), Slot::Failed);
+            return;
+        };
         self.cache
             .borrow_mut()
             .insert(stem.to_owned(), Slot::Loading);
@@ -743,7 +752,7 @@ impl Renderer {
         let cache = self.cache.clone();
         let stem = stem.to_owned();
         wasm_bindgen_futures::spawn_local(async move {
-            let url = art_url(&stem);
+            let url = art_url(&target);
             let slot = match textures::load_image(&core, &url, premultiplied, repeat).await {
                 Ok(mut texture) => {
                     if premultiplied {

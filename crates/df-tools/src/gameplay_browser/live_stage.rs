@@ -30,12 +30,12 @@ use crate::health_cues::Blow;
 use crate::{
     plate_layout::{self, PlateFrame, Rect},
     presentation::{ActorSlot, MAX_NPCS, PlateGeometry, SceneFamily, StageActor},
-    stage_art,
     stage_conductor::IntentKind,
     stage_depth,
     stage_machines::{ActorState, LineState},
 };
 use df_observe::presentation::{ComponentPhase, PresentationComponent};
+use df_render::art_contract;
 use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
@@ -391,32 +391,25 @@ pub(super) struct Figures {
     document: Document,
 }
 
+/// The library pictures that can stand for a cast member, best first, under the art contract:
+/// only a reviewed photograph (or the one an identity key names) is ever a candidate. A live
+/// image already cached for the subject is tried before these by the caller; a character with
+/// neither is not drawn (`data-art="none"`) and the server requests the live photograph.
 fn art_candidates(sprite: &str, portrait: &str, full_body: bool) -> Vec<(&'static str, String)> {
-    let mut candidates = Vec::new();
-    let sprite_stem = stage_art::stem_of(sprite);
-    if full_body && let Some(stem) = stage_depth::full_body_stem(sprite_stem) {
-        let stem = stage_art::photographic_stem(&stem).unwrap_or(stem.as_str());
-        candidates.push(("figure", format!("{GENERATED}/{stem}")));
-    }
-    if !sprite.is_empty() {
-        if let Some(stem) = stage_art::photographic_stem(sprite_stem) {
-            candidates.push(("sprite", format!("{GENERATED}/{stem}")));
-        } else {
-            candidates.push(("sprite", sprite.to_owned()));
+    let mut candidates: Vec<(&'static str, String)> = Vec::new();
+    let mut push = |kind: &'static str, reference: &str| {
+        if let Some(target) = art_contract::fetch_target(reference) {
+            let url = format!("{GENERATED}/{target}");
+            if !candidates.iter().any(|(_, known)| *known == url) {
+                candidates.push((kind, url));
+            }
         }
+    };
+    if full_body && let Some(photo) = art_contract::figure_photo(sprite) {
+        push("figure", photo);
     }
-    // Once a known photo sibling exists, do not append painted portrait/card fallbacks that can
-    // reintroduce the old illustrated asset after a load error.
-    if stage_art::photographic_stem(sprite_stem).is_some() {
-        return candidates;
-    }
-    let stem = stage_art::stem_of(portrait);
-    if stem.starts_with("portrait-") {
-        candidates.push(("portrait", format!("{GENERATED}/{stem}-full")));
-    }
-    if !portrait.is_empty() {
-        candidates.push(("card", portrait.to_owned()));
-    }
+    push("sprite", sprite);
+    push("card", portrait);
     candidates
 }
 
@@ -641,7 +634,7 @@ impl Figures {
         &self,
         cast: &[StageActor],
         scene: &str,
-        scene_asset: &str,
+        staging: stage_depth::Staging,
         family: SceneFamily,
         mode: StageMode,
     ) -> Result<(), JsValue> {
@@ -661,7 +654,6 @@ impl Figures {
         if let Some(parent) = self.root.parent_element() {
             parent.set_attribute("data-arrange", arrange)?;
         }
-        let staging = stage_depth::staging_for(scene_asset);
         self.root.set_attribute(
             "style",
             &format!(
@@ -3222,14 +3214,26 @@ mod tests {
     }
 
     #[test]
-    fn photographic_sprite_candidates_do_not_reintroduce_painted_portraits() {
+    fn cast_candidates_are_reviewed_photographs_and_a_painted_stem_has_none() {
         let candidates = art_candidates(
             "/assets/ui/generated/sprite-courier",
             "/assets/ui/generated/portrait-courier",
             true,
         );
         assert!(!candidates.is_empty());
-        assert!(candidates.iter().all(|(_, path)| path.contains("photo")));
+        assert!(
+            candidates
+                .iter()
+                .all(|(_, path)| path.contains("-documentary-photo"))
+        );
+        for painted in ["sprite-patron-bell-ringer", "sprite-ant-wolf", "live-canonical-photo"] {
+            let candidates = art_candidates(
+                &format!("/assets/ui/generated/{painted}"),
+                "/assets/ui/generated/portrait-patron-bell-ringer",
+                true,
+            );
+            assert!(candidates.is_empty(), "{painted}: {candidates:?}");
+        }
     }
 
     #[test]

@@ -230,19 +230,28 @@ fn pip(document: &Document, parent: &Element, status: Status) -> Result<(), JsVa
     Ok(())
 }
 
-/// Asset stems are lowercase words and dashes; anything else is not turned into a CSS url.
-fn portrait_style(stem: Option<&str>) -> String {
-    match stem {
-        Some(stem)
-            if !stem.is_empty()
-                && stem.bytes().all(|byte| {
-                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                }) =>
-        {
-            format!("background-image:url({GENERATED}/{stem})")
-        }
-        _ => String::new(),
+/// The picture URL for a token's portrait under the art contract: a live image, or the reviewed
+/// photograph that answers the identity key. A painted stem, a role token or an unknown key has no
+/// picture (the token shows its initial). Asset stems are lowercase words and dashes; anything else
+/// is not turned into a CSS url.
+fn portrait_url(stem: Option<&str>) -> Option<String> {
+    let stem = stem.filter(|stem| !stem.is_empty())?;
+    let safe = |text: &str| {
+        text.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_/".contains(&byte)
+        })
+    };
+    if stem.starts_with(crate::art_contract::LIVE_IMAGERY_PREFIX) {
+        return safe(stem).then(|| stem.to_owned());
     }
+    if !safe(stem) {
+        return None;
+    }
+    crate::art_contract::library_url(crate::art_contract::Role::CharacterToken, stem)
+}
+
+fn portrait_style(stem: Option<&str>) -> String {
+    portrait_url(stem).map_or_else(String::new, |url| format!("background-image:url({url})"))
 }
 
 impl Hud {
@@ -426,7 +435,7 @@ impl Hud {
                 chip.set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
                 if figure.downed {
                     element(&self.document, &chip, "span", "bf-chip-initial", "↓")?;
-                } else if figure.portrait.is_none() {
+                } else if portrait_url(figure.portrait.as_deref()).is_none() {
                     element(
                         &self.document,
                         &chip,
@@ -474,7 +483,7 @@ impl Hud {
                     plate.portrait.remove_attribute("data-crop")?;
                 }
             }
-            let glyph = if figure.portrait.is_some() {
+            let glyph = if portrait_url(figure.portrait.as_deref()).is_some() {
                 String::new()
             } else {
                 initial(&figure.name)

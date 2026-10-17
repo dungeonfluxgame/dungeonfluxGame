@@ -18,6 +18,7 @@ use super::{
     live_tv, live_tv::TvStage, node, recovery_needs, recovery_prompt, replay,
 };
 use df_protocol::common as rpc;
+use df_render::art_contract;
 use df_types::{RecoveryEpoch, SessionRevision};
 use df_ui::{CampfireSurface, CombatPhaseSurface, EncounterAftermathSurface};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
@@ -457,8 +458,8 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
         present_stage(client, view, screen)?;
     }
     let mut assets = String::new();
-    if let Some(url) = live_screens::asset_url(&view.scene.scene_asset) {
-        assets.push_str(&format!("--asset-scene-courier-road:url({url});"));
+    if let Some(url) = combat_picture(view) {
+        assets.push_str(&format!("--asset-scene-harbor:url({url});"));
     }
     if let Some(url) = live_screens::asset_url(&view.scene.speaker_portrait)
         && screen == Screen::Combat
@@ -473,7 +474,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     }
     client.borrow_mut().combat.scene_image = None;
     if screen == Screen::Combat
-        && let Some(url) = live_screens::asset_url(&view.scene.scene_asset)
+        && let Some(url) = combat_picture(view)
         && let Some(image) = host.query_selector(".combat-art")?
     {
         client.borrow_mut().combat.scene_image = Some(live_screens::ServerImage::install(
@@ -507,6 +508,18 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) -> Resu
     Ok(true)
 }
 
+/// The picture behind a fight, by the art contract's backdrop order (the place's live room
+/// photograph, the scene plate, a reviewed photograph); `None` keeps the reviewed harbor photograph
+/// the stylesheet carries.
+fn combat_picture(view: &LiveView<'_>) -> Option<String> {
+    crate::presentation::place_picture(
+        art_contract::Role::BattleBackdrop,
+        &view.scene.scene_asset,
+        &view.scene.live_backdrop,
+        &view.scene.live_plate,
+    )
+}
+
 /// The display's composited stage behind the combat or aftermath screen: the painting and the
 /// characters standing in it. The screen's own elements sit above and carry the text.
 fn present_stage(
@@ -522,14 +535,13 @@ fn present_stage(
     // The shared display is read-only. Action affordances stay on player devices,
     // including when this combat/aftermath path updates the persistent TV stage.
     stage.set_choices(&[], true)?;
-    let art = live_screens::asset_url(&view.scene.scene_asset)
-        .unwrap_or_else(|| style::COMBAT_ART_URL.to_owned());
+    let art = combat_picture(view).unwrap_or_else(|| style::COMBAT_ART_URL.to_owned());
     stage.set_art(&live_tv::image_layers(&art, style::COMBAT_ART_URL))?;
     stage.figures().update(
         &cast,
         &view.scene.title,
-        &view.scene.scene_asset,
-        crate::presentation::scene_family(&view.scene.scene_asset),
+        crate::stage_depth::staging_of(view.scene.floor.as_ref()),
+        crate::presentation::scene_family(view.scene),
         if screen == Screen::Combat {
             live_stage::StageMode::Combat
         } else {

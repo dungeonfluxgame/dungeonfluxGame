@@ -46,6 +46,7 @@ use super::{
 #[cfg(test)]
 pub(crate) use generate::opening_dressing;
 pub(crate) use generate::{generate, generate_with_prose};
+use df_render::art_contract;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 pub(crate) use tables::{Tables, TablesError};
@@ -180,11 +181,13 @@ impl From<scene_model::SceneModelError> for GenerateError {
         Self::SceneModel(error)
     }
 }
-/// Manifest-pinned generated route paths; never accepts arbitrary stems or filesystem paths.
+/// Manifest-pinned generated art references: a reviewed photograph's served path or a bare art
+/// contract role token. Never accepts arbitrary stems or filesystem paths.
 pub(crate) fn generated_asset(path: &str) -> bool {
     generated_stems()
         .iter()
         .any(|stem| path == format!("assets/ui/generated/{stem}"))
+        || art_contract::Token::parse(path).is_some()
 }
 pub(crate) fn generated_stems() -> &'static [String] {
     static STEMS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
@@ -194,6 +197,10 @@ pub(crate) fn generated_stems() -> &'static [String] {
             "../../../../../content/adventure-tables/art-manifest.json"
         ))
         .expect("compiled art manifest");
-        art.into_iter().map(|entry| entry.file_stem).collect()
+        // Role tokens name no file and are never routed.
+        art.into_iter()
+            .map(|entry| entry.file_stem)
+            .filter(|stem| art_contract::Token::parse(stem).is_none())
+            .collect()
     })
 }

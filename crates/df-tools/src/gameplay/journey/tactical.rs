@@ -2821,6 +2821,18 @@ pub(in crate::gameplay) fn project_member(
         };
         format!("portrait-ant-{source}")
     };
+    // The compiled stat block and its SRD size, so the display never infers either from art.
+    view.creature_id = actor
+        .spec()
+        .kind
+        .srd_id()
+        .map(str::to_owned)
+        .unwrap_or_default();
+    view.size = match actor.spec().size {
+        tactical_rules::Size::Small => rpc::CreatureSize::Small,
+        tactical_rules::Size::Medium => rpc::CreatureSize::Medium,
+        tactical_rules::Size::Large => rpc::CreatureSize::Large,
+    } as i32;
     view.voice_set = if actor.side() == Side::Heroes {
         if matches!(portrait.as_str(), "portrait-hero-2" | "portrait-hero-3") {
             "hero-female"
@@ -5419,7 +5431,7 @@ pub(super) mod tests {
                 art_key: "loc-salt-quay-arrival".into(),
                 model: None,
             });
-            scene.asset = "assets/ui/generated/scene-salt-quay-arrival".into();
+            scene.asset = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo".into();
         }
         let mut script: super::super::super::beat_script::BeatScript = serde_json::from_slice(
             include_bytes!("../fixtures/third-approach-beat-script.json"),
@@ -5433,7 +5445,7 @@ pub(super) mod tests {
                 .unwrap()
                 .setting
                 .clone();
-            scene.asset = "assets/ui/generated/scene-salt-quay-arrival".into();
+            scene.asset = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo".into();
         }
         let mut scene = content
             .scenes
@@ -5450,7 +5462,7 @@ pub(super) mod tests {
             art_key: "loc-pinewood-trail-arrival".into(),
             model: None,
         });
-        scene.asset = "assets/ui/generated/scene-pinewood-trail-arrival".into();
+        scene.asset = "live-room-photo".into();
         script.scenes.insert("forest-fight".into(), scene);
         script
             .beats

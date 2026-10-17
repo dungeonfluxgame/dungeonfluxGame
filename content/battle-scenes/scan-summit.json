@@ -7,13 +7,13 @@
   },
   "surface": "dirt",
   "ground": {
-    "stem": "ground-windward-pass",
+    "stem": "neutral",
     "size_m": 24.0,
     "centre": [0.0, 0.0],
     "falloff_m": 3.8
   },
   "backdrop": {
-    "stem": "scene-windward-pass-arrival",
+    "stem": "live-room-photo",
     "distance_m": 9.4,
     "width_m": 34.0,
     "base_m": -6.4,

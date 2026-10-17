@@ -930,7 +930,7 @@ fn old_record_without_any_settings_loads_through_typed_legacy_path() {
 }
 
 #[test]
-fn startup_substitutes_missing_paintings_without_changing_stored_documents() {
+fn startup_replaces_a_missing_reviewed_photograph_with_the_room_photo_role_and_never_a_painting() {
     let generated = generate(
         &tables(),
         42,
@@ -944,39 +944,38 @@ fn startup_substitutes_missing_paintings_without_changing_stored_documents() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/play-g5/missing-art");
     std::fs::create_dir_all(directory.join("generated")).unwrap();
-    let general = generated
-        .pack
-        .scenes
-        .iter()
-        .find(|s| s.key == super::super::pack::SceneKey::Room)
-        .unwrap()
-        .asset
-        .strip_prefix("assets/ui/generated/")
-        .unwrap();
-    let general_file = directory.join("generated").join(format!("{general}.png"));
-    std::fs::write(&general_file, b"fixture painting").unwrap();
+    // Generated art is role tokens except the harbor's reviewed photograph: name that on every
+    // base scene so the substitution has something to replace.
+    let harbor = format!(
+        "assets/ui/generated/{}",
+        df_render::art_contract::HARBOR_PHOTO
+    );
+    for scene in &mut loaded.pack.scenes {
+        scene.asset = harbor.clone();
+    }
+    let scenes = loaded.pack.scenes.len();
     let substitutions = startup::substitute_missing_art(&mut loaded, &record, &directory);
-    // Five base scenes and the eight closing-scene variants of a fight chapter.
-    assert_eq!(substitutions.len(), 13);
+    assert_eq!(substitutions.len(), scenes);
     assert!(
         loaded
             .pack
             .scenes
             .iter()
-            .all(|s| s.asset == format!("assets/ui/generated/{general}"))
+            .all(|s| s.asset == df_render::art_contract::ROOM_PHOTO),
+        "a missing photograph is the room-photo role, never a painting"
     );
     assert_eq!(documents.pack, original_pack);
     assert!(loaded.pack.scenes.iter().all(|s| s.setting.is_some()));
-    std::fs::remove_file(general_file).unwrap();
-    let substitutions = startup::substitute_missing_art(&mut loaded, &record, &directory);
-    assert_eq!(substitutions.len(), 16);
-    assert!(
-        loaded
-            .pack
-            .scenes
-            .iter()
-            .all(|s| s.asset == "assets/ui/scenes/mara-harbor-v4.png")
-    );
+    // With the photograph present nothing is replaced.
+    let present = directory
+        .join("generated")
+        .join(format!("{}.webp", df_render::art_contract::HARBOR_PHOTO));
+    std::fs::write(&present, b"fixture photograph").unwrap();
+    for scene in &mut loaded.pack.scenes {
+        scene.asset = harbor.clone();
+    }
+    assert!(startup::substitute_missing_art(&mut loaded, &record, &directory).is_empty());
+    assert!(loaded.pack.scenes.iter().all(|s| s.asset == harbor));
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -1160,12 +1159,19 @@ fn every_scene_has_its_cast_and_the_speaker_is_the_one_marked_speaking() {
             .iter()
             .map(|scene| {
                 for actor in &scene.cast {
+                    // A reviewed photograph's sprite follows its portrait stem; a character with
+                    // none is the canonical-photo role token on both.
                     assert_eq!(
                         actor.sprite,
                         actor.portrait.replace("/portrait-", "/sprite-"),
                         "sprite stem follows the portrait stem"
                     );
-                    assert!(actor.portrait.contains("/portrait-"));
+                    assert!(
+                        actor.portrait.contains("/portrait-")
+                            || actor.portrait == df_render::art_contract::CANONICAL_PHOTO,
+                        "{}",
+                        actor.portrait
+                    );
                 }
                 (
                     scene.key,

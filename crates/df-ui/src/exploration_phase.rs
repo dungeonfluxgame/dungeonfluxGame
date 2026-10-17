@@ -18,8 +18,8 @@ impl ExplorationPortrait {
             Self::Vell => "assets/concept-art/vell-avatar.webp",
             Self::Narrator => "assets/concept-art/dm-avatar.webp",
             // Generated art is served extensionless; an absent file hides the portrait.
-            Self::Courier => "assets/ui/generated/portrait-courier",
-            Self::Bandit => "assets/ui/generated/portrait-bandit",
+            Self::Courier => "assets/ui/generated/sprite-courier-documentary-photo",
+            Self::Bandit => "assets/ui/generated/sprite-bandit-documentary-photo",
         }
     }
 }

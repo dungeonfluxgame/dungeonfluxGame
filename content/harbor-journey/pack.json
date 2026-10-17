@@ -203,7 +203,7 @@
       "narration": "A rain-soaked harbor waits beyond the lanterns. Share the room with your companions, then bring your heroes into the story.",
       "speaker": "",
       "dialogue": "",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
         "place_id": "salt-quay",
         "name": "the Lantern Wharf",
@@ -219,7 +219,7 @@
       "narration": "You reach the Lantern Wharf as a frightened courier slips from the shadows. Behind him, a boot scrapes across the boards.",
       "speaker": "Courier",
       "dialogue": "Please. I can't deliver this alone. The seal was broken before the ship reached port.",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
         "place_id": "salt-quay",
         "name": "the Lantern Wharf",
@@ -233,8 +233,8 @@
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"
@@ -247,7 +247,7 @@
       "narration": "The courier presses the packet against his coat. A dockside enforcer approaches, one hand on a scimitar.",
       "speaker": "Courier",
       "dialogue": "The crest belongs to a ship that never appears on the ledger. I think someone aboard followed me.",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
         "place_id": "salt-quay",
         "name": "the Lantern Wharf",
@@ -261,8 +261,8 @@
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"
@@ -271,8 +271,8 @@
           "id": "bandit",
           "name": "Bandit",
           "role": "antagonist",
-          "sprite": "assets/ui/generated/sprite-bandit",
-          "portrait": "assets/ui/generated/portrait-bandit",
+          "sprite": "assets/ui/generated/sprite-bandit-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-bandit-documentary-photo",
           "voice": "sneering and rough",
           "gender": "he",
           "age": "adult"
@@ -285,7 +285,7 @@
       "narration": "The courier steadies himself behind you. The approaching enforcer draws a scimitar and demands the packet.",
       "speaker": "Courier",
       "dialogue": "If you help me reach the inn, I'll tell Vell what I saw aboard that ship. But he won't let us leave.",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
         "place_id": "salt-quay",
         "name": "the Lantern Wharf",
@@ -299,8 +299,8 @@
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"
@@ -309,8 +309,8 @@
           "id": "bandit",
           "name": "Bandit",
           "role": "antagonist",
-          "sprite": "assets/ui/generated/sprite-bandit",
-          "portrait": "assets/ui/generated/portrait-bandit",
+          "sprite": "assets/ui/generated/sprite-bandit-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-bandit-documentary-photo",
           "voice": "sneering and rough",
           "gender": "he",
           "age": "adult"
@@ -324,7 +324,7 @@
       "rules_note": "Combat uses the server-selected grid layout, source movement, range, cover and optional opportunity reactions. Heroes at 0 HP follow dying and death-save rules; enemies may die.",
       "speaker": "Bandit",
       "dialogue": "Hand over the packet. Last warning.",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
         "place_id": "salt-quay",
         "name": "the Lantern Wharf",
@@ -338,8 +338,8 @@
           "id": "bandit",
           "name": "Bandit",
           "role": "antagonist",
-          "sprite": "assets/ui/generated/sprite-bandit",
-          "portrait": "assets/ui/generated/portrait-bandit",
+          "sprite": "assets/ui/generated/sprite-bandit-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-bandit-documentary-photo",
           "voice": "sneering and rough",
           "gender": "he",
           "age": "adult"
@@ -352,7 +352,7 @@
       "narration": "Warm lamplight frames the next chapter with your party and the courier. The sealed packet remains unresolved.",
       "speaker": "Courier",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
-      "asset": "assets/ui/generated/scene-salt-quay-interior",
+      "asset": "live-room-photo",
       "setting": {
         "place_id": "harbor-inn",
         "name": "the Harbor Inn",
@@ -366,8 +366,8 @@
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"
@@ -382,7 +382,7 @@
       "narration_rested": "The opposition was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. The original victory and the courier's unresolved journey remain.",
       "speaker": "Courier",
       "dialogue": "You stood your ground. Come on. There's a light waiting for us at the inn.",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
         "place_id": "salt-quay",
         "name": "the Lantern Wharf",
@@ -396,8 +396,8 @@
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"
@@ -412,7 +412,7 @@
       "narration_rested": "The party was defeated. An uninterrupted hour has passed without Hit Point Dice or healing. Eligible heroes recover one Second Wind use; dead or stable 0-HP heroes are not automatically revived. That rest does not change the original defeat: the Bandit took the packet and left.",
       "speaker": "",
       "dialogue": "",
-      "asset": "assets/ui/generated/scene-salt-quay-arrival",
+      "asset": "assets/ui/generated/scene-salt-quay-arrival-documentary-photo",
       "setting": {
         "place_id": "salt-quay",
         "name": "the Lantern Wharf",

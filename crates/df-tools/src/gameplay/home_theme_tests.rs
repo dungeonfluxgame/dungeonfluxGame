@@ -40,16 +40,16 @@ fn every_location_arrival_painting_gets_a_theme_from_its_pixels() {
         themed += 1;
     }
     assert!(
-        themed >= 8,
-        "the eight arrival paintings are all themed, found {themed}"
+        themed >= 2,
+        "both reviewed scene photographs are themed, found {themed}"
     );
 }
 
 #[test]
 fn a_theme_is_the_same_cold_warm_and_in_any_order_of_paintings() {
     // Arrange: two real paintings, measured in two orders with fresh caches.
-    let farm = "assets/ui/generated/scene-thistledown-farm-arrival.webp";
-    let reedmoor = "assets/ui/generated/scene-reedmoor-boardwalk-arrival.webp";
+    let farm = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo.webp";
+    let reedmoor = "assets/ui/generated/scene-salt-quay-candid-documentary-photo.webp";
     let root = asset_root();
     let kind = Some(SettingKind::Farmyard);
     // Act: a cold cache measures the farm, then the same cache answers it again from memory.
@@ -78,7 +78,7 @@ fn a_theme_is_the_same_cold_warm_and_in_any_order_of_paintings() {
 
 #[test]
 fn a_real_painting_theme_is_repeatable_from_the_content_hash_cache() {
-    let painting = "assets/ui/generated/scene-salt-quay-arrival.webp";
+    let painting = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo.webp";
     let first = theme_for(&asset_root(), painting, None).expect("the quay is themed");
     let second = theme_for(&asset_root(), painting, None).expect("the cached quay is themed");
     assert_eq!(first, second);
@@ -139,7 +139,7 @@ fn a_file_that_is_not_an_image_is_refused_by_name_as_undecodable() {
 
 #[test]
 fn without_an_installed_asset_root_the_lobby_view_is_the_documented_fallback() {
-    let view = lobby_view("assets/ui/generated/scene-salt-quay-arrival.webp", None);
+    let view = lobby_view("assets/ui/generated/scene-salt-quay-arrival-documentary-photo.webp", None);
     assert!(view.fallback, "a lobby with no installed theme says so");
     assert!(view.atmosphere.is_empty());
     let mood = view.mood.expect("the neutral mood is always sent");
@@ -171,30 +171,14 @@ fn the_lobby_theme_survives_the_generated_protocol_encoding() {
     assert_eq!(decoded.home, Some(view));
 }
 
+/// Every library picture of a place: the reviewed scene photographs (the art contract allows no
+/// painted one).
 fn arrival_paintings() -> Vec<String> {
-    let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/adventure-tables/art-manifest.json"),
-    )
-    .expect("the art manifest is readable");
-    let entries: Vec<serde_json::Value> =
-        serde_json::from_str(&text).expect("the art manifest is JSON");
-    let mut paintings: Vec<String> = entries
+    let mut paintings: Vec<String> = df_render::art_contract::REVIEWED_PHOTOS
         .iter()
-        .filter_map(|entry| {
-            let key = entry["art_key"].as_str()?;
-            // A location's home painting is its arrival, or its forecourt where the adventure
-            // meets in the open (the library's lobby shows the forecourt).
-            let home = key.ends_with("-arrival") || key.ends_with("-forecourt");
-            (key.starts_with("loc-") && home).then(|| {
-                format!(
-                    "assets/ui/generated/{}.webp",
-                    entry["file_stem"].as_str().unwrap_or_default()
-                )
-            })
-        })
+        .filter(|stem| stem.starts_with("scene-"))
+        .map(|stem| format!("assets/ui/generated/{stem}.webp"))
         .collect();
     paintings.sort();
-    paintings.dedup();
     paintings
 }

@@ -7,13 +7,13 @@
   },
   "surface": "dirt",
   "ground": {
-    "stem": "ground-pinewood-trail",
+    "stem": "neutral",
     "size_m": 24.0,
     "centre": [0.0, 0.0],
     "falloff_m": 3.8
   },
   "backdrop": {
-    "stem": "scene-pinewood-trail-arrival",
+    "stem": "live-room-photo",
     "distance_m": 9.4,
     "width_m": 34.0,
     "base_m": -6.4,
@@ -81,7 +81,7 @@
           "cells": [[0, 0]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-tree-stump",
+          "sprite": "neutral",
           "height_m": 0.7
         },
         {
@@ -90,7 +90,7 @@
           "cells": [[10, 7]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-tree-stump",
+          "sprite": "neutral",
           "height_m": 0.7
         }
       ],
@@ -110,7 +110,7 @@
           "cells": [[2, 3], [3, 3]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-fallen-log",
+          "sprite": "neutral",
           "height_m": 0.8
         },
         {
@@ -119,7 +119,7 @@
           "cells": [[8, 3], [9, 3]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-fallen-log",
+          "sprite": "neutral",
           "height_m": 0.8
         },
         {
@@ -128,7 +128,7 @@
           "cells": [[0, 3], [1, 3]],
           "blocks_movement": true,
           "cover": "three-quarters",
-          "sprite": "prop-boulder",
+          "sprite": "neutral",
           "height_m": 1.5
         },
         {
@@ -137,7 +137,7 @@
           "cells": [[10, 3], [11, 3]],
           "blocks_movement": true,
           "cover": "three-quarters",
-          "sprite": "prop-boulder",
+          "sprite": "neutral",
           "height_m": 1.5
         }
       ],
@@ -157,7 +157,7 @@
           "cells": [[2, 4], [3, 4]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-fallen-log",
+          "sprite": "neutral",
           "height_m": 0.8
         },
         {
@@ -166,7 +166,7 @@
           "cells": [[1, 2]],
           "blocks_movement": true,
           "cover": "three-quarters",
-          "sprite": "prop-boulder",
+          "sprite": "neutral",
           "height_m": 1.5
         },
         {
@@ -175,7 +175,7 @@
           "cells": [[7, 2]],
           "blocks_movement": true,
           "cover": "three-quarters",
-          "sprite": "prop-boulder",
+          "sprite": "neutral",
           "height_m": 1.5
         },
         {
@@ -184,7 +184,7 @@
           "cells": [[11, 3]],
           "blocks_movement": true,
           "cover": "three-quarters",
-          "sprite": "prop-boulder",
+          "sprite": "neutral",
           "height_m": 1.5
         },
         {
@@ -193,7 +193,7 @@
           "cells": [[10, 5]],
           "blocks_movement": true,
           "cover": "three-quarters",
-          "sprite": "prop-boulder",
+          "sprite": "neutral",
           "height_m": 1.5
         },
         {
@@ -202,7 +202,7 @@
           "cells": [[1, 0]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-tree-stump",
+          "sprite": "neutral",
           "height_m": 0.7
         },
         {
@@ -211,7 +211,7 @@
           "cells": [[10, 1]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-tree-stump",
+          "sprite": "neutral",
           "height_m": 0.7
         },
         {
@@ -220,7 +220,7 @@
           "cells": [[5, 3]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-tree-stump",
+          "sprite": "neutral",
           "height_m": 0.7
         },
         {
@@ -229,7 +229,7 @@
           "cells": [[8, 4]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-tree-stump",
+          "sprite": "neutral",
           "height_m": 0.7
         },
         {
@@ -238,7 +238,7 @@
           "cells": [[1, 7]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-tree-stump",
+          "sprite": "neutral",
           "height_m": 0.7
         }
       ],

@@ -24,6 +24,7 @@ use std::{
 };
 
 use df_protocol::common as rpc;
+use df_render::art_contract;
 use futures::{StreamExt, stream::FuturesUnordered};
 use sha2::Digest;
 use tokio::{sync::mpsc, task::JoinSet};
@@ -34,7 +35,7 @@ use super::{
         imagery::{
             CastIdentity, ImageFailure, ImageKey, ImageKind, ImageRequest, Lookup, OutputSpec,
             PlaceFacts, PlateReferences, ReferenceImage, cast_sheet, hero_locator_phrase,
-            party_sheet, plate_moment, scene_plate,
+            plate_moment, scene_plate,
         },
         pack::{self, Age, Gender, SceneKey},
         scene_mood::Face,
@@ -55,10 +56,6 @@ const MAXIMUM_ENTRIES: usize = 32;
 const QUEUE_CAPACITY: usize = 16;
 /// The most successor scenes whose plates are requested ahead of time.
 const MAXIMUM_SUCCESSORS: usize = 6;
-/// The image edit adapter accepts at most four reference images. Keep the party, speaker and
-/// place references first; additional cast figures are useful context but are already named in
-/// the prompt and must not make a valid plate request fail locally.
-const MAXIMUM_PLATE_REFERENCES: usize = 4;
 /// A plate for a scene that may come next waits this long before it is made, so the plate of the
 /// scene on screen is always the first to reach the image service (the service runs two calls at
 /// a time and serves them in the order they arrive).
@@ -2435,7 +2432,7 @@ impl Shared {
         let Some(name) = stem.strip_prefix("sprite-") else {
             return (
                 self.inner
-                    .load_plate_reference(sprite.to_owned())
+                    .load(sprite.to_owned())
                     .await
                     .ok(),
                 None,
@@ -2447,14 +2444,14 @@ impl Shared {
             format!("figure-{name}"),
             stem.to_owned(),
         ] {
-            if let Ok(art) = self.inner.load_plate_reference(candidate).await {
+            if let Ok(art) = self.inner.load(candidate).await {
                 figure = Some(art);
                 break;
             }
         }
         let face = self
             .inner
-            .load_plate_reference(format!("portrait-{name}"))
+            .load(format!("portrait-{name}"))
             .await
             .ok();
         (figure, face)
@@ -2483,12 +2480,19 @@ impl Shared {
                 Err(ImageFailure::InvalidRequest)
             }
             super::canonical::ReferenceStatus::Missing => {
-                let (figure, face) = self.speaker_art(sprite).await;
-                if figure.is_some() || portrait.is_empty() {
-                    return Ok((figure, face));
+                let (mut figure, mut face) = self.speaker_art(sprite).await;
+                if figure.is_none() && !portrait.is_empty() {
+                    let (portrait_figure, portrait_face) = self.speaker_art(portrait).await;
+                    figure = portrait_figure;
+                    face = portrait_face.or(face);
                 }
-                let (portrait_figure, portrait_face) = self.speaker_art(portrait).await;
-                Ok((portrait_figure.or(figure), portrait_face.or(face)))
+                // No reviewed photograph answers this person: the art contract's on-demand rule
+                // asks the server for their canonical photograph now, once, and the plate waits
+                // for it instead of failing or standing in a painted archetype.
+                if figure.is_none() && self.inner.request_cast_photograph(id) {
+                    return Err(ImageFailure::Interrupted);
+                }
+                Ok((figure, face))
             }
         }
     }
@@ -2626,7 +2630,7 @@ impl Shared {
         let (sheet, legend) = self.identity_sheet(scene, heroes).await?;
         let edit_harbor = scene.exterior
             && scene.place_id == "salt-quay"
-            && scene.asset.contains("scene-salt-quay-arrival");
+            && scene.asset.contains(art_contract::HARBOR_PHOTO);
         let base = if edit_harbor {
             "scene-salt-quay-candid".to_owned()
         } else {
@@ -2645,13 +2649,13 @@ impl Shared {
             None if scene.room_revision.is_some() => {
                 return Err(ImageFailure::Interrupted);
             }
-            None => self.inner.load_plate_reference(base).await,
+            None => self.inner.load(base).await,
         };
         let (place, style_only) = match place {
             Ok(place) => (place, false),
             Err(_) if !edit_harbor => (
                 self.inner
-                    .load_plate_reference("scene-salt-quay-arrival".to_owned())
+                    .load(art_contract::HARBOR_PHOTO.to_owned())
                     .await?,
                 true,
             ),
@@ -2730,186 +2734,11 @@ impl Shared {
         scene: &PlateScene,
         spec: &ShotSpec,
         heroes: &[u8],
-        faces: &[(u8, ImageKey)],
+        _faces: &[(u8, ImageKey)],
         direction: Option<&str>,
     ) -> Result<(ImageRequest, Option<ReferenceImage>), ImageFailure> {
-        if self.inner.references.photographic_only() {
-            return self
-                .photographic_request(scene, spec, heroes, direction)
-                .await;
-        }
-        let mut references = Vec::new();
-        let edit_documentary_photo = self.inner.references.photographic_only()
-            && scene.exterior
-            && scene.place_id == "salt-quay"
-            && scene.asset.contains("scene-salt-quay-arrival");
-        if edit_documentary_photo {
-            references.push(
-                self.inner
-                    .load_plate_reference("scene-salt-quay-candid".to_owned())
-                    .await?,
-            );
-        }
-        let mut has_party_sheet = false;
-        let mut sorted = heroes.to_vec();
-        sorted.sort_unstable();
-        if !sorted.is_empty() {
-            let mut figures = Vec::with_capacity(sorted.len());
-            for art in &sorted {
-                if let Some((_, figure)) = self.canonical_hero_identity(scene, *art).await? {
-                    figures.push(figure);
-                    continue;
-                }
-                if self.inner.references.photographic_only() {
-                    let Ok(figure) = self
-                        .inner
-                        .load_plate_reference(format!("figure-hero-{art}"))
-                        .await
-                    else {
-                        figures.clear();
-                        break;
-                    };
-                    figures.push(figure);
-                    continue;
-                }
-                // A hurt hero stands in the plate as the cut-out stage shows them: their health
-                // variant, taken only from what is already made and cached.
-                let variant = match faces.iter().find(|(known, _)| known == art) {
-                    Some((_, key)) => match self.inner.imagery.image(key.as_str()).await {
-                        Lookup::Image { bytes, format } => Some(ReferenceImage::new(format, bytes)),
-                        Lookup::Unregistered | Lookup::NotReady => None,
-                    },
-                    None => None,
-                };
-                figures.push(match variant {
-                    Some(variant) => variant,
-                    None => self.inner.load(format!("figure-hero-{art}")).await?,
-                });
-            }
-            if figures.len() == sorted.len() {
-                let sheet = tokio::task::spawn_blocking(move || party_sheet(&figures))
-                    .await
-                    .map_err(|_| ImageFailure::Interrupted)?
-                    .map_err(|_| ImageFailure::InvalidRequest)?;
-                references.push(sheet);
-                has_party_sheet = true;
-            }
-        }
-        // The cast's art leads: the full-length figure and a close portrait of the face. Both
-        // go into every plate that shows the speaker, because a figure alone let the same person
-        // drift between two scenes' plates.
-        let (figure, face) = match &scene.speaker {
-            Some(speaker) => self.speaker_identity_art(scene, speaker).await?,
-            None => (None, None),
-        };
-        let has_speaker_art = figure.is_some();
-        let has_speaker_face = has_speaker_art && face.is_some();
-        let locator_face = face.clone().or_else(|| figure.clone());
-        references.extend(figure);
-        if has_speaker_face {
-            references.extend(face);
-        }
-        let place = if edit_documentary_photo {
-            None
-        } else {
-            self.inner
-                .load_plate_reference(scene.asset.clone())
-                .await
-                .ok()
-        };
-        let has_place = place.is_some();
-        references.extend(place);
-        // A reviewed location photograph anchors the medium even when this scene has no
-        // photographic place art. It supplies no scene facts; the prompt makes that explicit.
-        let photographic_style_reference =
-            !edit_documentary_photo && !has_place && self.inner.references.photographic_only();
-        if photographic_style_reference {
-            references.push(
-                self.inner
-                    .load_plate_reference("scene-salt-quay-arrival".to_owned())
-                    .await?,
-            );
-        }
-        // Keep the remaining cast figures only while the provider's reference limit allows them.
-        // They are also named in the prompt, so dropping the lowest-priority art preserves the
-        // request's scene facts while keeping the party, speaker and place references intact.
-        for actor in scene
-            .others
-            .iter()
-            .take(MAXIMUM_PLATE_REFERENCES.saturating_sub(references.len()))
-        {
-            let (figure, _) = self
-                .npc_art(scene, &actor.id, &actor.sprite, &actor.portrait)
-                .await?;
-            references.extend(figure);
-        }
-        // The image edit adapter requires at least one reference even when the scene has no
-        // generated photographic identity art yet. Use the checked-in neutral photo as a carrier
-        // so the request reaches the provider; the prompt explicitly tells it to rebuild the
-        // entire plate from the written scene direction.
-        let mut neutral_reference = false;
-        if references.is_empty() && self.inner.references.photographic_only() {
-            references.push(self.inner.neutral_photographic_reference().await?);
-            neutral_reference = true;
-        }
-        let prompt = if edit_documentary_photo {
-            super::super::imagery::harbor_photo_edit(
-                self.inner.rating,
-                spec,
-                scene.snapshot.as_ref().map(|snapshot| &snapshot.model),
-                &scene.hero_names,
-            )?
-        } else if let Some(snapshot) = &scene.snapshot {
-            super::super::imagery::model_plate(
-                self.inner.rating,
-                &snapshot.model,
-                &scene.place_id,
-                &scene.hero_names,
-            )?
-        } else {
-            scene_plate(
-                self.inner.rating,
-                spec,
-                scene.place.as_ref(),
-                PlateReferences {
-                    party_sheet: has_party_sheet,
-                    speaker: has_speaker_art,
-                    speaker_face: has_speaker_face,
-                    place: has_place,
-                },
-            )
-            .map_err(|_| ImageFailure::InvalidRequest)?
-        };
-        let prompt = if neutral_reference {
-            prompt.with_neutral_reference()
-        } else if photographic_style_reference {
-            prompt.with_photographic_style_reference()
-        } else {
-            prompt
-        };
-        let prompt = if let Some(speaker) = &scene.speaker {
-            let identity = scene.identity_cast.iter().find(|identity| {
-                identity.id.strip_prefix("npc:").unwrap_or(&identity.id) == speaker.id
-            });
-            identity.map_or(prompt.clone(), |identity| {
-                prompt.with_focus_actor(&speaker.id, &identity.name)
-            })
-        } else {
-            prompt
-        };
-        let prompt = match direction {
-            Some(direction) => prompt.with_development_direction(direction),
-            None => prompt,
-        };
-        Ok((
-            ImageRequest {
-                kind: ImageKind::ScenePlate,
-                references,
-                prompt,
-                output: OutputSpec::PLATE,
-            },
-            locator_face,
-        ))
+        self.photographic_request(scene, spec, heroes, direction)
+            .await
     }
 
     async fn render_fresh(
@@ -2941,7 +2770,11 @@ impl Shared {
                 None,
                 started.elapsed().as_millis(),
             );
-            let key = self.inner.imagery.render(request).await?;
+            let key = self
+                .inner
+                .imagery
+                .generate(&format!("plate:{}", scene.place_id), request)
+                .await?;
             let Some(speaker) = &spec.speaker else {
                 return Ok((key, None, None));
             };
@@ -3342,12 +3175,10 @@ impl Shared {
             has_speaker_art,
         )
         .map_err(|_| ImageFailure::InvalidRequest)?;
-        let prompt = if self.inner.references.photographic_only() {
+        let prompt = {
             let (sheet, legend) = self.identity_sheet(scene, heroes).await?;
             references.push(sheet);
             prompt.with_cast_sheet(references.len(), &legend)
-        } else {
-            prompt
         };
         let direction = locked(&self.book).direct.keep.clone();
         let prompt = match direction {
@@ -3356,12 +3187,15 @@ impl Shared {
         };
         self.inner
             .imagery
-            .render(ImageRequest {
-                kind: ImageKind::ScenePlateEdit,
-                references,
-                prompt,
-                output: OutputSpec::PLATE,
-            })
+            .generate(
+                &format!("plate:{}", scene.place_id),
+                ImageRequest {
+                    kind: ImageKind::ScenePlateEdit,
+                    references,
+                    prompt,
+                    output: OutputSpec::PLATE,
+                },
+            )
             .await
     }
 

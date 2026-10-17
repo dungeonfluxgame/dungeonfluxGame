@@ -206,14 +206,14 @@
       "narration": "Warm light falls across the eastern quay. The contact greets your party beside a table of charts.",
       "speaker": "Courier",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
-      "asset": "assets/ui/generated/scene-salt-quay-interior",
+      "asset": "live-room-photo",
       "cast": [
         {
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"
@@ -234,14 +234,14 @@
       "narration": "The western lodge smells of cedar and woodsmoke. The contact sets another kettle on the hearth.",
       "speaker": "Courier",
       "dialogue": "We'll keep the packet close. Its journey isn't over.",
-      "asset": "assets/ui/generated/scene-salt-quay-interior",
+      "asset": "live-room-photo",
       "cast": [
         {
           "id": "courier",
           "name": "Courier",
           "role": "patron",
-          "sprite": "assets/ui/generated/sprite-courier",
-          "portrait": "assets/ui/generated/portrait-courier",
+          "sprite": "assets/ui/generated/sprite-courier-documentary-photo",
+          "portrait": "assets/ui/generated/sprite-courier-documentary-photo",
           "voice": "hurried and anxious",
           "gender": "he",
           "age": "young"

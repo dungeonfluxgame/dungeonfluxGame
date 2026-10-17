@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use super::*;
 
 const SPEAKER_STEMS: [&str; 8] = [
-    "assets/ui/generated/sprite-patron-herbwife",
-    "assets/ui/generated/sprite-patron-innkeeper",
-    "assets/ui/generated/sprite-contact-watch-sergeant",
+    "assets/ui/generated/sprite-patron-merchant-documentary-photo",
+    "assets/ui/generated/sprite-shop-adventurer-documentary-photo",
+    "assets/ui/generated/sprite-shop-soldier-documentary-photo",
     "assets/ui/generated/sprite-ant-guard",
-    "assets/ui/generated/sprite-patron-bell-ringer",
-    "assets/ui/generated/sprite-contact-tinker",
+    "assets/ui/generated/sprite-bandit-documentary-photo",
+    "assets/ui/generated/sprite-courier-documentary-photo",
     "assets/ui/generated/sprite-patron-merchant",
     "assets/ui/generated/sprite-unknown-newcomer",
 ];

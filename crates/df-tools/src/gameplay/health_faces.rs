@@ -7,8 +7,7 @@
 //!
 //! * **Pre-warming** asks for the variants of every hero and every named cast member in the
 //!   background, lowest tier distance first (Bloodied, then Critical, then Hurt, then Down), one
-//!   at a time, only while budget beyond [`PREWARM_RESERVE`] calls remains and never during a
-//!   fight.
+//!   at a time, and never during a fight. Nothing caps how many are made.
 //! * **In a fight nothing is requested.** A character shows the nearest variant already cached:
 //!   an uncached tier keeps the closest cached one (ties go to the less severe) and the bar and
 //!   motion cues carry the rest. Combat never waits on generation.
@@ -30,9 +29,6 @@ pub(super) const PREWARM_ORDER: [HealthTier; 4] = [
 
 /// How many times a variant is tried before it is given up for this run.
 pub(super) const MAXIMUM_ATTEMPTS: u8 = 2;
-
-/// Image-service calls kept back for mood art; pre-warming stops when no more than this remain.
-pub(super) const PREWARM_RESERVE: u32 = 10;
 
 /// One character whose art has health variants: a hero of the party or a named member of the
 /// scene's cast.
@@ -65,11 +61,6 @@ impl Book {
     pub(super) fn fail(&mut self, id: &str, tier: HealthTier) {
         self.in_flight.remove(&(id.to_owned(), tier));
         *self.failed.entry((id.to_owned(), tier)).or_default() += 1;
-    }
-
-    /// Gives up an attempt without remembering it as a failure (the budget ran out).
-    pub(super) fn release(&mut self, id: &str, tier: HealthTier) {
-        self.in_flight.remove(&(id.to_owned(), tier));
     }
 
     /// Whether this variant is neither known, out of attempts nor already being made.
@@ -121,16 +112,15 @@ impl Book {
     }
 
     /// The next variant to warm, or `None`: never in a fight, never while one is in flight,
-    /// never when the budget has only the reserve left. Characters are taken in the given order
+    /// never in a fight. Characters are taken in the given order
     /// (heroes first), tiers in [`PREWARM_ORDER`], one tier across all characters before the
     /// next.
     pub(super) fn next_warm(
         &self,
         characters: &[Character],
-        budget_remaining: u32,
         in_combat: bool,
     ) -> Option<(usize, HealthTier)> {
-        if in_combat || self.is_warming() || budget_remaining <= PREWARM_RESERVE {
+        if in_combat || self.is_warming() {
             return None;
         }
         // Variants never tried come first; one that failed (the provider sometimes declines or
@@ -186,7 +176,7 @@ mod tests {
         let mut book = Book::default();
         let characters = cast();
         let mut order = Vec::new();
-        while let Some((index, tier)) = book.next_warm(&characters, 40, false) {
+        while let Some((index, tier)) = book.next_warm(&characters, false) {
             order.push((characters[index].id.clone(), tier.label()));
             book.learn(&characters[index].id, tier, key('a'));
         }
@@ -205,28 +195,21 @@ mod tests {
     }
 
     #[test]
-    fn warming_never_happens_in_a_fight_or_while_one_is_in_flight_or_inside_the_reserve() {
+    fn warming_never_happens_in_a_fight_or_while_one_is_in_flight() {
         let characters = cast();
         let mut book = Book::default();
         assert!(
-            book.next_warm(&characters, 40, true).is_none(),
+            book.next_warm(&characters, true).is_none(),
             "combat never requests"
         );
-        assert!(
-            book.next_warm(&characters, PREWARM_RESERVE, false)
-                .is_none()
-        );
-        assert!(
-            book.next_warm(&characters, PREWARM_RESERVE + 1, false)
-                .is_some()
-        );
+        assert!(book.next_warm(&characters, false).is_some());
         book.start_warming("hero-1", HealthTier::Bloodied);
         assert!(
-            book.next_warm(&characters, 40, false).is_none(),
+            book.next_warm(&characters, false).is_none(),
             "one at a time"
         );
         book.learn("hero-1", HealthTier::Bloodied, key('b'));
-        assert!(book.next_warm(&characters, 40, false).is_some());
+        assert!(book.next_warm(&characters, false).is_some());
     }
 
     #[test]
@@ -238,20 +221,20 @@ mod tests {
         book.fail("hero-1", HealthTier::Critical);
         // The untried tiers come before the failed one.
         assert_eq!(
-            book.next_warm(&characters, 40, false),
+            book.next_warm(&characters, false),
             Some((0, HealthTier::Hurt))
         );
         book.learn("hero-1", HealthTier::Hurt, key('d'));
         book.learn("hero-1", HealthTier::Down, key('c'));
         // Then the failed one gets its second try, and after that no more.
         assert_eq!(
-            book.next_warm(&characters, 40, false),
+            book.next_warm(&characters, false),
             Some((0, HealthTier::Critical))
         );
         assert!(book.is_open("hero-1", HealthTier::Critical));
         book.start_warming("hero-1", HealthTier::Critical);
         book.fail("hero-1", HealthTier::Critical);
-        assert_eq!(book.next_warm(&characters, 40, false), None);
+        assert_eq!(book.next_warm(&characters, false), None);
         assert!(!book.is_open("hero-1", HealthTier::Critical));
     }
 

@@ -911,14 +911,20 @@ fn scripted_arrival_receipts_resume_across_painting_availability_flips_and_rejec
             "../../artifacts/tmp/play-e1/painting-flip-{}-{variant}",
             std::process::id()
         ));
-        let stem = source_asset.strip_prefix("assets/ui/generated/").unwrap();
-        let painting = root.join("generated").join(format!("{stem}.png"));
-        std::fs::create_dir_all(painting.parent().unwrap()).unwrap();
+        // Generated art is a role token except a reviewed photograph; only a photograph can
+        // flip with its availability, a token never does.
+        let painting = source_asset
+            .strip_prefix("assets/ui/generated/")
+            .map(|stem| root.join("generated").join(format!("{stem}.png")));
+        std::fs::create_dir_all(root.join("generated")).unwrap();
+        let flips = painting.is_some();
         for first_available in [false, true] {
-            if first_available {
-                std::fs::write(&painting, b"owned synthetic painting presence").unwrap();
-            } else if painting.exists() {
-                std::fs::remove_file(&painting).unwrap();
+            if let Some(painting) = &painting {
+                if first_available {
+                    std::fs::write(painting, b"owned synthetic painting presence").unwrap();
+                } else if painting.exists() {
+                    std::fs::remove_file(painting).unwrap();
+                }
             }
             let mut presented = original.clone();
             let substitutions =
@@ -926,7 +932,7 @@ fn scripted_arrival_receipts_resume_across_painting_availability_flips_and_rejec
             assert_eq!(presented.pack.beat_script, original.pack.beat_script);
             assert_eq!(presented.pack_revision, original.pack_revision);
             assert_eq!(presented.tuning_revision, original.tuning_revision);
-            assert!(!substitutions.is_empty());
+            assert_eq!(!substitutions.is_empty(), flips && !first_available);
             let current: Checkpoint = pack::with_test_pack(presented, || {
                 let original_pins =
                     pack::with_test_pack(original.clone(), || model::pins().unwrap());
@@ -949,16 +955,18 @@ fn scripted_arrival_receipts_resume_across_painting_availability_flips_and_rejec
                     source_asset
                 );
                 let projected = super::super::beat_script_runtime::scene(current.state()).unwrap();
-                assert_eq!(projected.asset == source_asset, first_available);
+                assert_eq!(projected.asset == source_asset, !flips || first_available);
                 current
             });
             let bytes =
                 df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&current, codec)
                     .unwrap();
-            if first_available {
-                std::fs::remove_file(&painting).unwrap();
-            } else {
-                std::fs::write(&painting, b"owned synthetic painting presence").unwrap();
+            if let Some(painting) = &painting {
+                if first_available {
+                    std::fs::remove_file(painting).unwrap();
+                } else {
+                    std::fs::write(painting, b"owned synthetic painting presence").unwrap();
+                }
             }
             let mut resumed = original.clone();
             super::startup::substitute_missing_art(&mut resumed, &record, &root);
@@ -981,7 +989,7 @@ fn scripted_arrival_receipts_resume_across_painting_availability_flips_and_rejec
                     bytes
                 );
                 let scene = super::super::beat_script_runtime::scene(recovered.state()).unwrap();
-                assert_eq!(scene.asset == source_asset, !first_available);
+                assert_eq!(scene.asset == source_asset, !flips || !first_available);
                 let view = super::super::wire::journey_view(
                     &recovered,
                     df_persistence::local_demo_scope::LocalDemoRole::Player,

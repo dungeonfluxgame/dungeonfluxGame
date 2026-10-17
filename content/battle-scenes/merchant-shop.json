@@ -7,13 +7,13 @@
   },
   "surface": "wood",
   "ground": {
-    "stem": "ground-lamplit-market",
+    "stem": "neutral",
     "size_m": 12.0,
     "centre": [0.0, 0.0],
     "falloff_m": 3.0
   },
   "backdrop": {
-    "stem": "scene-place-cloth-shop",
+    "stem": "live-room-photo",
     "distance_m": 9.0,
     "width_m": 34.0,
     "base_m": -6.4,
@@ -45,7 +45,7 @@
           "cells": [[1, 1], [2, 1], [3, 1]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-market-stall",
+          "sprite": "neutral",
           "height_m": 1.1
         },
         {
@@ -54,7 +54,7 @@
           "cells": [[6, 0], [7, 0]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-fence",
+          "sprite": "neutral",
           "height_m": 1.8
         },
         {
@@ -63,7 +63,7 @@
           "cells": [[5, 3]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-crates",
+          "sprite": "neutral",
           "height_m": 0.9
         },
         {
@@ -72,7 +72,7 @@
           "cells": [[7, 5]],
           "blocks_movement": false,
           "cover": "none",
-          "sprite": "prop-fence",
+          "sprite": "neutral",
           "height_m": 2.2
         }
       ],
@@ -92,7 +92,7 @@
           "cells": [[2, 2], [3, 2], [4, 2], [5, 2]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-fence",
+          "sprite": "neutral",
           "height_m": 1.8
         },
         {
@@ -101,7 +101,7 @@
           "cells": [[0, 0], [1, 0]],
           "blocks_movement": true,
           "cover": "half",
-          "sprite": "prop-market-stall",
+          "sprite": "neutral",
           "height_m": 1.1
         },
         {
@@ -110,7 +110,7 @@
           "cells": [[7, 5]],
           "blocks_movement": false,
           "cover": "none",
-          "sprite": "prop-fence",
+          "sprite": "neutral",
           "height_m": 2.2
         }
       ],
