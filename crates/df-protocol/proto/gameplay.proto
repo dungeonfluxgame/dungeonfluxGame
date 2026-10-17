@@ -23,7 +23,7 @@ message AbilityCheckResult { uint32 die = 1; sint32 ability_modifier = 2; uint32
 message DecisionReceipt { OperationId operation_id = 1; SessionRevision revision = 2; SessionId session_id = 3; RunId run_id = 4; bool replayed = 5; oneof outcome { AcceptedAction accepted = 6; Rejection rejected = 7; } }
 message WatchViewRequest { SessionId session_id = 1; RunId run_id = 2; ClientBindingId client_binding_id = 3; SessionRevision after_revision = 4; }
 message PlayerGameplayView { string offer_id = 1; string narration = 2; AbilityCheckResult check = 3; string private_clue = 4; bool action_available = 5; repeated GameplayActionOffer offers = 6; GameplayScene scene = 7; JourneyView journey = 8; }
-message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; string layout_json = 9; uint64 layout_revision = 10; }
+message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; string layout_json = 9; uint64 layout_revision = 10; PlaceMusicPlan place_music = 11; }
 message ViewMessage { SessionRevision revision = 1; oneof audience { PlayerGameplayView player = 2; DisplayGameplayView display = 3; } }
 message OperationObservation { RejectionCode code = 1; }
 message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decision = 1; OperationObservation operation_observation = 2; } }
@@ -32,7 +32,9 @@ enum HarborDestination { HARBOR_DESTINATION_UNSPECIFIED = 0; LOADING_PIER = 1; L
 // live_backdrop (display only): a server-generated re-render of this scene's painting, `/gameplay/imagery/<key>`; empty when none. Presentation only.
 // source_scene_key is the exact public pack::SceneKey label; empty means no authoritative source identity is available.
 // source_scene_variant is the exact public BeatScript scene map key; empty identifies a compiled base scene.
-message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; string live_plate = 20; PlateLayout plate_layout = 21; PlateState plate_state = 22; HomeVideoState scene_video_state = 23; string scene_video_path = 24; string scene_contents_json = 25; SceneItemCard item = 26; bool plate_update_pending = 27; repeated SceneItemCard hand_items = 28; string source_scene_key = 29; string source_scene_variant = 30; }
+message GameplayScene { HarborDestination destination = 1; string title = 2; string scene_asset = 3; string speaker_portrait = 4; repeated SceneActor cast = 5; string rules_note = 6; string place = 7; string location_id = 8; string live_backdrop = 9; string live_plate = 20; PlateLayout plate_layout = 21; PlateState plate_state = 22; HomeVideoState scene_video_state = 23; string scene_video_path = 24; string scene_contents_json = 25; SceneItemCard item = 26; bool plate_update_pending = 27; repeated SceneItemCard hand_items = 28; string source_scene_key = 29; string source_scene_variant = 30; bool interior = 31; StageFloor floor = 32; }
+// Declared by the server from the place's setting (never guessed from art names): whether the scene is indoors, and where the floor, light and reflection of the place sit for the stage's figures. Absent floor means the default staging. Presentation only.
+message StageFloor { uint32 feet_mid = 1; uint32 feet_far = 2; bool key_from_left = 3; bool wet = 4; }
 // Audience-filtered object card. A failed picture keeps its detail available immediately.
 message SceneItemCard {
   string thing_id = 1;
@@ -93,7 +95,9 @@ message JourneyGroup { string group_id = 1; string label = 2; repeated JourneyOp
 message CharacterCreationOffer { string description = 1; repeated JourneyGroup groups = 2; string source_revision = 3; repeated JourneyGroup identity_groups = 4; HeroIdentity default_identity = 5; }
 message CharacterSheet { string name = 1; repeated SheetFact facts = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; uint32 armor_class = 5; string source_revision = 6; HeroIdentity identity = 7; repeated SceneItemCard owned_items = 8; }
 message SheetFact { string label = 1; string value = 2; }
-message PartyMemberView { string name = 1; bool character_ready = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; bool active_turn = 5; bool unconscious = 6; bytes participant_id = 7; GridCell cell = 8; uint32 side = 9; repeated string conditions = 10; uint32 attack_style = 11; string voice_set = 12; string portrait = 13; }
+message PartyMemberView { string name = 1; bool character_ready = 2; uint32 hit_points = 3; uint32 maximum_hit_points = 4; bool active_turn = 5; bool unconscious = 6; bytes participant_id = 7; GridCell cell = 8; uint32 side = 9; repeated string conditions = 10; uint32 attack_style = 11; string voice_set = 12; string portrait = 13; string creature_id = 14; CreatureSize size = 15; }
+// The SRD 5.2.1 stat block of a combatant, sent by the server so the display never infers either from art names. creature_id is the compiled SRD creature id ("wolf"); empty for a hero.
+enum CreatureSize { CREATURE_SIZE_UNSPECIFIED = 0; SMALL = 1; MEDIUM = 2; LARGE = 3; }
 // PLAY-R01: every outcome says what happened and proves it was legal. kind ATTACK or OPPORTUNITY_ATTACK carries
 // distance_ft (grid distance in feet, 5 per square), attack_style (1 melee, 2 ranged), roll_mode (-1 Disadvantage, 0 normal,
 // 1 Advantage), faces (every d20 rolled), reasons (labels of what gave Advantage or Disadvantage) and cover. kind MOVE carries
@@ -151,6 +155,13 @@ message DialogueResponse { OperationId input_id = 1; DialogueDisposition disposi
 // Public presentation only. Sequence is monotonic within the native owner lifetime; reset on authenticated watch reconnect.
 enum TempoPhase { TEMPO_PHASE_UNSPECIFIED = 0; TEMPO_PHASE_CALM = 1; TEMPO_PHASE_BUILD = 2; TEMPO_PHASE_ANTICIPATION = 3; TEMPO_PHASE_PEAK = 4; TEMPO_PHASE_RELEASE = 5; }
 message TempoCue { uint32 intensity_permille = 1; TempoPhase phase = 2; uint64 sequence = 3; uint32 hold_millis = 4; }
+
+// The place's own score, decided by the server and shown on the display only. FALLBACK plays the
+// shared score (plus the chosen ambience bed, if any); READY names the place's generated layers in
+// track order bed, motif, tension, combat. bpm, loop_samples and sample_rate say the layers share
+// the shared score's timebase; a client that cannot match it keeps the fallback.
+enum PlaceMusicState { PLACE_MUSIC_STATE_UNSPECIFIED = 0; PLACE_MUSIC_STATE_FALLBACK = 1; PLACE_MUSIC_STATE_READY = 2; }
+message PlaceMusicPlan { string spec_label = 1; string setting_family = 2; PlaceMusicState state = 3; string spec_key = 4; repeated string layer_paths = 5; string ambience_path = 6; string fallback_note = 7; uint32 bpm = 8; uint32 loop_samples = 9; uint32 sample_rate = 10; }
 
 // Tactical public presentation: side 1 heroes/2 enemies, attack_style 1 melee/2 ranged.
 // Resource details below are projected only to their owning player; never to display.

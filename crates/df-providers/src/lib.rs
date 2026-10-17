@@ -31,6 +31,7 @@ pub use reconciliation::{reconcile_speech_attempt, reconcile_stt_attempt};
 pub use registry::registered_speech_provider;
 #[cfg(not(target_arch = "wasm32"))]
 pub use speech_adapter::{
+    ELEVEN_STT_LANGUAGE, ELEVEN_STT_MODEL, ELEVEN_TTS_LANGUAGE, ELEVEN_TTS_MODEL,
     ElevenSpeechBasis, ElevenSpeechRequest, ElevenSttBasis, ElevenSttRequest, EncodedSpeechAudio,
     NativeSpeechObservation, NativeSpeechProvider, PreparedSpeechResponse, PreparedSttResponse,
     SpeechAdapterError, SpeechAdapterReason, SpeechInputFormat, SpeechOutputFormat,
@@ -39,7 +40,7 @@ pub use speech_adapter::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_http::{NativeHttpLimits, NativeHttpRefusal};
+pub use native_http::{NativeHttpLimits, NativeHttpRefusal, ProviderLimits};
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_text_provider;
 #[cfg(not(target_arch = "wasm32"))]
@@ -83,10 +84,10 @@ mod media_container;
 mod native_media_fetch;
 #[cfg(not(target_arch = "wasm32"))]
 pub use fal_media::{
-    EncodedFalMedia, FalCancellationObservation, FalImageBasis, FalImageJob, FalImageProfile,
-    FalImageRequest, FalImageSemantics, FalLoopFrames, FalMediaCompletion, FalMediaConfig,
-    FalMediaError, FalMediaFamily, FalMediaJob, FalMediaReason, FalReferenceFrame, FalSoundBasis,
-    FalSoundJob, FalSoundProfile, FalSoundRequest, FalSoundSemantics, FalVideoBasis,
+    EncodedFalMedia, FalCancellationObservation, FalHttpFacts, FalImageBasis, FalImageJob,
+    FalImageProfile, FalImageRequest, FalImageSemantics, FalLoopFrames, FalMediaCompletion,
+    FalMediaConfig, FalMediaError, FalMediaFamily, FalMediaJob, FalMediaReason, FalReferenceFrame,
+    FalSoundBasis, FalSoundJob, FalSoundProfile, FalSoundRequest, FalSoundSemantics, FalVideoBasis,
     FalVideoCompletionEvent, FalVideoJob, FalVideoProfile, FalVideoRequest, FalVideoSemantics,
     KLING_O1_IMAGE_TO_VIDEO, NativeFalMediaProvider, PreparedFalMediaResponse,
 };
@@ -103,10 +104,26 @@ pub use head_locate::{
     HeadBox, HeadLocateConfig, HeadLocateError, LocateTarget, LocatedHead, NativeHeadLocator,
 };
 #[cfg(not(target_arch = "wasm32"))]
+mod embeddings;
+#[cfg(not(target_arch = "wasm32"))]
+pub use embeddings::{
+    EMBEDDING_DIMENSIONS, EMBEDDING_MAXIMUM_INPUT_CHARACTERS, EMBEDDING_MAXIMUM_INPUTS,
+    EMBEDDING_MODEL_SMALL, EmbeddingBatch, EmbeddingConfig, EmbeddingError,
+    NativeEmbeddingProvider,
+};
+#[cfg(not(target_arch = "wasm32"))]
 mod image_edit;
 #[cfg(not(target_arch = "wasm32"))]
 pub use image_edit::{
     GeneratedImage, ImageBackground, ImageEdit, ImageEditConfig, ImageEditError, ImageEditModel,
     ImageFormat, ImageModeration, ImageQuality, ImageUsage, NativeImageEditProvider,
     ReferenceImage,
+};
+#[cfg(not(target_arch = "wasm32"))]
+mod eleven_music;
+#[cfg(not(target_arch = "wasm32"))]
+pub use eleven_music::{
+    AMBIENCE_MAXIMUM_SECONDS, ElevenMusicConfig, ElevenMusicError, GeneratedAudio,
+    MUSIC_MAXIMUM_LENGTH_MILLIS, MUSIC_MAXIMUM_PROMPT_CHARACTERS, MUSIC_MINIMUM_LENGTH_MILLIS,
+    NativeElevenMusicProvider,
 };

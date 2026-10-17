@@ -17,9 +17,9 @@ mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
 mod dialogue;
+mod freeform_action;
 #[cfg(test)]
 mod dialogue_tests;
-mod freeform_action;
 // DEVCTL-001: development-only agent control surface (off by default).
 mod dev_control;
 mod fight_lines;
@@ -40,6 +40,7 @@ mod join_link;
 mod journey;
 mod line_cleanup;
 mod living_scenes;
+mod memory;
 mod model;
 mod music_assets;
 mod narrative_focus;
@@ -62,6 +63,7 @@ mod npc_talk_live_tests;
 mod npc_talk_rules;
 mod npc_target;
 mod pack;
+mod place_music;
 #[cfg(test)]
 mod pack_tests;
 #[path = "gameplay_browser/presentation_ingress.rs"]
@@ -71,6 +73,8 @@ mod qualification;
 #[cfg(test)]
 mod recovery_qualification;
 mod refusal_detail;
+mod resource_adapters;
+mod resources;
 mod rest_qualification;
 mod restart_qualification;
 mod room;
@@ -83,6 +87,7 @@ mod social;
 mod speech_input;
 mod speech_text;
 mod splat_assets;
+mod staging;
 mod startup_configuration;
 #[cfg(test)]
 mod startup_contract;
@@ -201,6 +206,7 @@ impl Service {
         self.living.apply(&mut message);
         // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
         home_video::apply(&mut message);
+        place_music::apply(&mut message);
         self.layout
             .attach(&mut message)
             .await
@@ -808,10 +814,9 @@ async fn serve_run(
             &std::env::current_dir()?,
         )?;
         match &mode {
-            startup_configuration::StorytellerMode::On(settings) => println!(
-                "STORYTELLER on model={} budget={}",
-                settings.model, settings.token_budget
-            ),
+            startup_configuration::StorytellerMode::On(settings) => {
+                println!("STORYTELLER on model={}", settings.model);
+            }
             startup_configuration::StorytellerMode::Off(reason) => {
                 println!("STORYTELLER off ({reason})");
             }
@@ -1558,7 +1563,7 @@ async fn serve_run(
     )?;
     let living = living_scenes::LivingScenes::start(
         imagery.clone(),
-        imagery::ReferenceStore::photographic(std::path::Path::new(&asset_root).join("generated")),
+        imagery::ReferenceStore::new(std::path::Path::new(&asset_root).join("generated")),
         social.clone(),
         rating,
         living_scenes::Timing::from_interval(living_interval),
@@ -1575,6 +1580,74 @@ async fn serve_run(
         std::path::Path::new(&asset_root),
         living.clone(),
     )?;
+    // The voice, the video, the text and the transcription run on the one generation hub the
+    // imagery owns, so every kind's state, failures and spend are listed in one place.
+    let resource_kit = resource_adapters::Kit::over(imagery.hub().clone());
+    voice.attach_kit(&resource_kit);
+    speech.attach_kit(&resource_kit);
+    storyteller.attach_kit(&resource_kit);
+    home_video::attach_kit(&resource_kit)?;
+    // The story memory: what the Dungeon Master remembers of this run, so the story stays
+    // consistent (planning/story-memory.md). It is a help, never a gate: any failure turns it off.
+    let memory_line = if interactive {
+        let run = hex(receiver.borrow().basis().run.as_bytes());
+        let sources = memory::backfill::Sources {
+            lore: local_lore.clone(),
+            social: social.clone(),
+            dossiers: generated_adventure
+                .as_ref()
+                .map(|prepared| prepared.record.dossiers.clone())
+                .unwrap_or_default(),
+            updates: receiver.clone(),
+        };
+        Some(
+            memory::startup::start(
+                &database,
+                &run,
+                resource_kit.hub(),
+                &table_log,
+                Some(sources),
+                Some(storyteller.clone()),
+                &tokio::runtime::Handle::current(),
+            )
+            .await
+            .line,
+        )
+    } else {
+        None
+    };
+    // Place music: the server's per-place spec and plan, with each place's set generated on
+    // demand as a resource of the generation hub (the one the imagery owns). Generation needs
+    // ELEVENLABS_API_KEY and ffmpeg; without them places keep the shared score and their beds.
+    let (music_line, music_routes) = if interactive {
+        let jev = approach_model::ApproachModel::configured(
+            startup_configuration::approach_settings(
+                std::env::var("DF_JEV_API_KEY"),
+                std::env::var("DF_JEV_BASE_URL"),
+            )?,
+        );
+        let adapter = place_music::HubMusic::start(
+            place_music::MusicInputs::from_environment(),
+            &std::env::current_dir()?,
+            imagery.hub().clone(),
+        )?;
+        let runtime = tokio::runtime::Handle::current();
+        let wake = living.clone();
+        adapter.start_worker(&runtime, {
+            let wake = wake.clone();
+            move || wake.signal_art()
+        });
+        let routes = adapter.router();
+        let hub: Arc<dyn place_music::MusicHub> = adapter.clone();
+        let music = place_music::PlaceMusic::new(jev, Some(hub), runtime, move || {
+            wake.signal_art()
+        });
+        let line = format!("{}\n{}", adapter.startup_line(), music.startup_line());
+        place_music::install(music);
+        (Some(line), routes)
+    } else {
+        (None, Router::new())
+    };
     let tempo = if std::env::args().nth(4).is_some() {
         None
     } else {
@@ -1821,6 +1894,7 @@ async fn serve_run(
         .merge(splat_assets::router(&splat_directory)?)
         .merge(voice::router(voice.clone()))
         .merge(imagery::router(imagery.clone()))
+        .merge(music_routes)
         .merge(home_video::router())
         .merge(speech_input::router(
             speech.clone(),
@@ -1901,6 +1975,12 @@ async fn serve_run(
         let origin = &settings.allowed_origins[0];
         println!("{}", voice.startup_line());
         println!("{}", imagery.startup_line());
+        if let Some(line) = &memory_line {
+            println!("{line}");
+        }
+        if let Some(line) = &music_line {
+            println!("{line}");
+        }
         println!("{home_video_line}");
         println!("{}", speech.startup_line());
         // PLAY-Q01: the join link and its QR code, from the public base address when one is set.

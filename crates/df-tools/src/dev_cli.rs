@@ -224,6 +224,14 @@ fn print_help() {
          audit [--type <KIND>] [--last <n>]  recent audit lines (IMAGERY, SCENE-FIGHT, ...)\n\
          decisions [--kind <kind>] [--last <n>]  Jev classifications; neutral marks the rules fallback\n\
          music                        the current music plan; music regenerate|clear <place> unsupported\n\
+         memory [status]              story memory: counts by kind, embedding backlog and model, spend, queue\n\
+         memory search <query> [--entity <id>] [--kind <kind>] [--audience public|party|member:<hero>] [--limit <n>]  the recall path the generators use\n\
+         memory entity <id> [refresh] [--audience <a>] [--superseded true]  every event naming it, and its dossier\n\
+         memory event <id>            one event with its supersession links (any audience)\n\
+         memory supersede <id> --by <id>  mark an event superseded by another (nothing is deleted)\n\
+         memory reindex               write the rebuildable sources again and fill in vectors\n\
+         memory delete-run-index [all]  drop rebuildable events (all: every event and recall record)\n\
+         memory erase <hero>          erase one hero's own words and what was derived from them\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
          script <file>                run one dev command per line, stop at first failure\n\
@@ -414,6 +422,7 @@ async fn dispatch(
         "fight" => fight(client, positional).await,
         "economy" => economy(client, positional, options).await,
         "music" => music(client, positional).await,
+        "memory" => memory(client, positional, options).await,
         "scene-changes" => {
             let last = flag("--last")
                 .or_else(|| positional.get(1).cloned())
@@ -677,6 +686,76 @@ async fn lore(
             _ => client.print_error("lore delete needs <scene> <name>"),
         },
         Some(_) => client.print_error("lore takes no word to read, or add|edit|delete"),
+    }
+}
+
+/// `dev memory ...`: the story memory of the run.
+async fn memory(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    let mut path = String::new();
+    let mut add = |name: &str, value: Option<String>| {
+        if let Some(value) = value {
+            path.push(if path.contains('?') { '&' } else { '?' });
+            path.push_str(name);
+            path.push('=');
+            path.push_str(&url_escape(&value));
+        }
+    };
+    match positional.get(1).map(String::as_str) {
+        None | Some("status") => get(client, "/dev/memory").await,
+        Some("search") => {
+            let query = rest_text(positional, 2);
+            if query.trim().is_empty() {
+                return client.print_error("memory search needs a query");
+            }
+            add("q", Some(query));
+            add("entity", option_value(options, "--entity"));
+            add("kind", option_value(options, "--kind"));
+            add("audience", option_value(options, "--audience"));
+            add("limit", option_value(options, "--limit"));
+            get(client, &format!("/dev/memory/search{path}")).await
+        }
+        Some("entity") => {
+            let Some(id) = positional.get(2) else {
+                return client.print_error("memory entity needs an entity id");
+            };
+            add("id", Some(id.clone()));
+            add("audience", option_value(options, "--audience"));
+            add("superseded", option_value(options, "--superseded"));
+            if positional.get(3).map(String::as_str) == Some("refresh") {
+                add("refresh", Some("true".to_owned()));
+            }
+            get(client, &format!("/dev/memory/entity{path}")).await
+        }
+        Some("event") => match positional.get(2) {
+            Some(id) => get(client, &format!("/dev/memory/event?id={}", url_escape(id))).await,
+            None => client.print_error("memory event needs an event id"),
+        },
+        Some("supersede") => {
+            let old = positional.get(2).and_then(|id| id.parse::<i64>().ok());
+            let by = option_value(options, "--by").and_then(|id| id.parse::<i64>().ok());
+            match (old, by) {
+                (Some(old), Some(by)) => {
+                    post(client, "/dev/memory/supersede", &json!({"old": old, "by": by})).await
+                }
+                _ => client.print_error("memory supersede needs <id> --by <id>"),
+            }
+        }
+        Some("reindex") => post(client, "/dev/memory/reindex", &json!({})).await,
+        Some("delete-run-index") => {
+            let all = positional.get(2).map(String::as_str) == Some("all");
+            post(client, "/dev/memory/delete-run-index", &json!({"all": all})).await
+        }
+        Some("erase") => match positional.get(2) {
+            Some(hero) => post(client, "/dev/memory/erase", &json!({"hero": hero})).await,
+            None => client.print_error("memory erase needs a hero name"),
+        },
+        Some(_) => client.print_error(
+            "memory takes status, search, entity, event, supersede, reindex, delete-run-index or erase",
+        ),
     }
 }
 

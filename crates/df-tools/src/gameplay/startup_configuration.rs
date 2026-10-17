@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+use df_render::art_contract;
+
 const QUALIFICATION_PORT: u16 = 63309;
 const MAXIMUM_SESSION_SECONDS: u64 = 365 * 24 * 60 * 60;
 
@@ -253,7 +255,6 @@ pub(super) fn session_settings(inputs: SessionInputs) -> Result<SessionSettings,
 pub(super) struct VoiceInputs {
     pub(super) credential: Result<String, VarError>,
     pub(super) mode: Result<String, VarError>,
-    pub(super) character_budget: Result<String, VarError>,
     pub(super) cache_dir: Result<String, VarError>,
     pub(super) narrator_voice: Result<String, VarError>,
     pub(super) npc_voice: Result<String, VarError>,
@@ -265,7 +266,6 @@ impl VoiceInputs {
         Self {
             credential: std::env::var("ELEVENLABS_API_KEY"),
             mode: std::env::var("DF_GAMEPLAY_VOICE"),
-            character_budget: std::env::var("DF_GAMEPLAY_VOICE_CHAR_BUDGET"),
             cache_dir: std::env::var("DF_GAMEPLAY_VOICE_CACHE"),
             narrator_voice: std::env::var("DF_GAMEPLAY_VOICE_NARRATOR"),
             npc_voice: std::env::var("DF_GAMEPLAY_VOICE_NPC"),
@@ -278,8 +278,6 @@ impl VoiceInputs {
 /// are cast from the voice roster instead of one shared NPC voice.
 pub(super) const DEFAULT_NARRATOR_VOICE: &str = "JBFqnCBsd6RMkjVDRZzb";
 const DEFAULT_VOICE_CASTING: &str = "content/voice-casting.json";
-const DEFAULT_VOICE_CHARACTER_BUDGET: u32 = MAXIMUM_VOICE_CHARACTER_BUDGET;
-const MAXIMUM_VOICE_CHARACTER_BUDGET: u32 = 1_000_000;
 const DEFAULT_VOICE_CACHE: &str = "artifacts/tmp/play/voice-cache";
 
 /// The ElevenLabs credential. It is only readable through [`VoiceCredential::expose`]
@@ -323,7 +321,6 @@ impl VoiceOff {
 #[derive(Debug)]
 pub(super) struct VoiceConfiguration {
     pub(super) credential: VoiceCredential,
-    pub(super) character_budget: u32,
     pub(super) cache_dir: std::path::PathBuf,
     pub(super) narrator_voice: String,
     /// When set, every NPC line uses this one voice instead of the cast roster voices.
@@ -345,14 +342,6 @@ pub(super) fn voice_settings(inputs: VoiceInputs) -> Result<VoiceSettings, io::E
         None | Some("" | "on") => false,
         Some("off") => true,
         Some(_) => return Err(refused("DF_GAMEPLAY_VOICE")),
-    };
-    let character_budget = match optional(inputs.character_budget)?.filter(|v| !v.is_empty()) {
-        Some(value) => value
-            .parse::<u32>()
-            .ok()
-            .filter(|budget| *budget <= MAXIMUM_VOICE_CHARACTER_BUDGET)
-            .ok_or_else(|| refused("DF_GAMEPLAY_VOICE_CHAR_BUDGET"))?,
-        None => DEFAULT_VOICE_CHARACTER_BUDGET,
     };
     let cache_dir = optional(inputs.cache_dir)?
         .filter(|value| !value.is_empty())
@@ -377,7 +366,6 @@ pub(super) fn voice_settings(inputs: VoiceInputs) -> Result<VoiceSettings, io::E
     };
     Ok(VoiceSettings::On(VoiceConfiguration {
         credential: VoiceCredential(credential),
-        character_budget,
         cache_dir: cache_dir.into(),
         narrator_voice,
         npc_voice_override,
@@ -569,9 +557,12 @@ pub(super) fn load_assets(web_root: &Path, asset_root: &Path) -> Result<StartupA
     })
 }
 
-/// Fixed names of the optional generated interface art. A file is looked up as
+/// Fixed names of the generated interface chrome. A file is looked up as
 /// `assets/ui/generated/<stem>.<webp|png|jpg>` and served at `/assets/ui/generated/<stem>`
-/// (no extension), so the artwork format can change without touching the browser client.
+/// (no extension), so the artwork format can change without touching the browser client. Only
+/// chrome is listed here: depictions are the reviewed photographs of
+/// [`art_contract::REVIEWED_PHOTOS`] and live imagery, and `load_extra_assets` refuses any other
+/// depiction stem whatever a list or a manifest says.
 const GENERATED_STEMS: &[&str] = &[
     "wordmark",
     "panel-frame",
@@ -588,32 +579,6 @@ const GENERATED_STEMS: &[&str] = &[
     "icon-compass",
     "icon-bag",
     "icon-book",
-    "portrait-hero-1",
-    "portrait-hero-2",
-    "portrait-hero-3",
-    "portrait-bandit",
-    "portrait-courier",
-    "scene-lobby-harbor",
-    "scene-wharf-arrival",
-    "scene-whisper-in-the-rain",
-    "scene-courier-road",
-    "scene-harbor-inn",
-    "scene-salt-quay-arrival-documentary-photo",
-    "scene-salt-quay-candid-documentary-photo",
-    "figure-hero-1-documentary-photo",
-    "figure-hero-2-documentary-photo",
-    "figure-hero-3-documentary-photo",
-    "sprite-courier-documentary-photo",
-    "sprite-bandit-documentary-photo",
-    "sprite-hero-1-documentary-photo",
-    "sprite-hero-2-documentary-photo",
-    "sprite-hero-3-documentary-photo",
-    "portrait-patron-merchant-documentary-photo",
-    "portrait-shop-adventurer-documentary-photo",
-    "portrait-shop-soldier-documentary-photo",
-    "sprite-patron-merchant-documentary-photo",
-    "sprite-shop-adventurer-documentary-photo",
-    "sprite-shop-soldier-documentary-photo",
     "icon-attack",
     "icon-second-wind",
     "icon-end-turn",
@@ -627,56 +592,10 @@ const GENERATED_STEMS: &[&str] = &[
     "icon-menu",
     "icon-dice",
     "icon-players",
-    "portrait-hero-1-full",
-    "portrait-hero-2-full",
-    "portrait-hero-3-full",
-    "portrait-bandit-full",
-    "portrait-courier-full",
 ];
-/// Art for the 3D battlefield: one painted top-down ground per generated location, and the
-/// full-body cut-out figures. A missing file is simply not served and the display falls back.
+/// Status icons for the 3D battlefield's HUD. A missing file is simply not served and the display
+/// falls back to a labelled chip.
 const BATTLEFIELD_STEMS: &[&str] = &[
-    "ground-salt-quay",
-    "ground-pinewood-trail",
-    "ground-windward-pass",
-    "ground-lamplit-market",
-    "ground-rookhill-gate",
-    "ground-reedmoor-boardwalk",
-    "ground-thistledown-farm",
-    "ground-orrery-library",
-    "figure-hero-1",
-    "figure-hero-2",
-    "figure-hero-3",
-    "figure-hero-1-documentary-photo",
-    "figure-hero-2-documentary-photo",
-    "figure-hero-3-documentary-photo",
-    "sprite-courier-documentary-photo",
-    "sprite-bandit-documentary-photo",
-    "sprite-hero-1-documentary-photo",
-    "sprite-hero-2-documentary-photo",
-    "sprite-hero-3-documentary-photo",
-    "portrait-patron-merchant-documentary-photo",
-    "portrait-shop-adventurer-documentary-photo",
-    "portrait-shop-soldier-documentary-photo",
-    "sprite-patron-merchant-documentary-photo",
-    "sprite-shop-adventurer-documentary-photo",
-    "sprite-shop-soldier-documentary-photo",
-    "prop-crates",
-    "prop-barrels",
-    "prop-rope-nets",
-    "prop-boulder",
-    "prop-fallen-log",
-    "prop-tree-stump",
-    "prop-gravestone",
-    "prop-stone-pillar",
-    "prop-cart",
-    "prop-hay-bales",
-    "prop-well",
-    "prop-market-stall",
-    "prop-bookshelf",
-    "prop-brazier",
-    "prop-fence",
-    "prop-snow-rocks",
     "status-blinded",
     "status-charmed",
     "status-deafened",
@@ -704,19 +623,6 @@ const BATTLEFIELD_STEMS: &[&str] = &[
     "status-marked",
     "status-dying",
     "status-cover",
-    "figure-bandit",
-    "figure-ant-bandit",
-    "figure-ant-cultist",
-    "figure-ant-giant-rat",
-    "figure-ant-giant-weasel",
-    "figure-ant-goblin-warrior",
-    "figure-ant-guard",
-    "figure-ant-kobold-warrior",
-    "figure-ant-mastiff",
-    "figure-ant-scout",
-    "figure-ant-skeleton",
-    "figure-ant-wolf",
-    "figure-ant-zombie",
 ];
 /// Fixed names of the display's sound effects, looked up as
 /// `assets/ui/generated/sfx/<name>.mp3` and served at `/assets/ui/generated/sfx/<name>`.
@@ -796,33 +702,22 @@ pub(super) fn load_extra_assets(
     let mut loaded = Vec::new();
     let mut total = 0usize;
     let mut candidates = Vec::new();
+    // The art contract at the route: chrome and the reviewed photographs only. A painted
+    // depiction stem is refused here even when it is listed, named by the adventure manifest or
+    // present on disk.
     let named: Vec<&str> = GENERATED_STEMS
         .iter()
         .chain(BATTLEFIELD_STEMS)
         .copied()
+        .chain(art_contract::REVIEWED_PHOTOS)
         .chain(
             super::adventure::generated_stems()
                 .iter()
                 .map(String::as_str),
         )
+        .filter(|stem| art_contract::is_servable_stem(stem))
         .collect();
-    // Every portrait may have a transparent cut-out twin, named by the one shared rule.
-    let sprites: Vec<String> = named
-        .iter()
-        .filter_map(|stem| crate::stage_art::sprite_stem(stem))
-        .collect();
-    // The 2:3 portrait is the display's fallback when a cut-out is absent.
-    let fulls: Vec<String> = named
-        .iter()
-        .filter(|stem| stem.starts_with("portrait-") && !stem.ends_with("-full"))
-        .map(|stem| format!("{stem}-full"))
-        .collect();
-    let stems = named
-        .iter()
-        .copied()
-        .chain(sprites.iter().map(String::as_str))
-        .chain(fulls.iter().map(String::as_str));
-    for stem in stems {
+    for stem in named {
         for (extension, mime) in GENERATED_EXTENSIONS {
             candidates.push((
                 asset_root
@@ -1161,8 +1056,6 @@ pub(super) fn battle_grid(input: Result<String, VarError>) -> Result<bool, io::E
 }
 
 const DEFAULT_TEXT_MODEL: &str = "gpt-6-luna";
-const DEFAULT_TEXT_TOKEN_BUDGET: u64 = MAXIMUM_TEXT_TOKEN_BUDGET;
-const MAXIMUM_TEXT_TOKEN_BUDGET: u64 = 100_000_000;
 const DEFAULT_TEXT_DEADLINE_SECONDS: u64 = MAXIMUM_TEXT_DEADLINE_SECONDS;
 const MAXIMUM_TEXT_DEADLINE_SECONDS: u64 = 60;
 const DEFAULT_TEXT_CACHE: &str = "artifacts/tmp/play/text-cache";
@@ -1172,7 +1065,6 @@ pub(super) struct StorytellerInputs {
     pub(super) credential: Result<String, VarError>,
     pub(super) mode: Result<String, VarError>,
     pub(super) model: Result<String, VarError>,
-    pub(super) token_budget: Result<String, VarError>,
     pub(super) cache: Result<String, VarError>,
     pub(super) deadline_seconds: Result<String, VarError>,
 }
@@ -1205,7 +1097,6 @@ impl StorytellerInputs {
             credential: std::env::var("OPENAI_API_KEY"),
             mode: std::env::var("DF_GAMEPLAY_STORYTELLER"),
             model: std::env::var("DF_GAMEPLAY_TEXT_MODEL"),
-            token_budget: std::env::var("DF_GAMEPLAY_TEXT_TOKEN_BUDGET"),
             cache: std::env::var("DF_GAMEPLAY_TEXT_CACHE"),
             deadline_seconds: std::env::var("DF_GAMEPLAY_TEXT_DEADLINE_SECONDS"),
         }
@@ -1216,8 +1107,6 @@ impl StorytellerInputs {
 pub(super) struct StorytellerSettings {
     pub(super) credential: String,
     pub(super) model: String,
-    /// Total tokens the server may spend on text generation during one run.
-    pub(super) token_budget: u64,
     pub(super) cache_directory: std::path::PathBuf,
     /// Covers every attempt of one expression, including the single retry.
     pub(super) deadline: Duration,
@@ -1268,14 +1157,6 @@ pub(super) fn storyteller_mode(
     {
         return Err(refused("DF_GAMEPLAY_TEXT_MODEL"));
     }
-    let token_budget = match optional(inputs.token_budget)? {
-        Some(value) => value
-            .parse::<u64>()
-            .ok()
-            .filter(|tokens| (1..=MAXIMUM_TEXT_TOKEN_BUDGET).contains(tokens))
-            .ok_or_else(|| refused("DF_GAMEPLAY_TEXT_TOKEN_BUDGET"))?,
-        None => DEFAULT_TEXT_TOKEN_BUDGET,
-    };
     let deadline_seconds = match optional(inputs.deadline_seconds)? {
         Some(value) => value
             .parse::<u64>()
@@ -1292,7 +1173,6 @@ pub(super) fn storyteller_mode(
     Ok(StorytellerMode::On(StorytellerSettings {
         credential,
         model,
-        token_budget,
         cache_directory: if cache.is_absolute() {
             cache
         } else {
@@ -1310,7 +1190,6 @@ pub(super) struct ImageryInputs {
     pub(super) mode: Result<String, VarError>,
     pub(super) model: Result<String, VarError>,
     pub(super) quality: Result<String, VarError>,
-    pub(super) budget: Result<String, VarError>,
     pub(super) interval_seconds: Result<String, VarError>,
     pub(super) deadline_seconds: Result<String, VarError>,
     pub(super) cache: Result<String, VarError>,
@@ -1323,7 +1202,6 @@ impl ImageryInputs {
             mode: std::env::var("DF_GAMEPLAY_IMAGERY"),
             model: std::env::var("DF_GAMEPLAY_IMAGERY_MODEL"),
             quality: std::env::var("DF_GAMEPLAY_IMAGERY_QUALITY"),
-            budget: std::env::var("DF_GAMEPLAY_IMAGERY_BUDGET"),
             interval_seconds: std::env::var("DF_GAMEPLAY_IMAGERY_INTERVAL_SECONDS"),
             deadline_seconds: std::env::var("DF_GAMEPLAY_IMAGERY_DEADLINE_SECONDS"),
             cache: std::env::var("DF_GAMEPLAY_IMAGERY_CACHE"),
@@ -1331,8 +1209,6 @@ impl ImageryInputs {
     }
 }
 
-const DEFAULT_IMAGERY_BUDGET: u32 = MAXIMUM_IMAGERY_BUDGET;
-const MAXIMUM_IMAGERY_BUDGET: u32 = 10_000;
 /// Scene refreshes are at least this far apart: a repaint every few seconds would cost more
 /// than it adds and would never settle.
 pub(super) const MINIMUM_IMAGERY_INTERVAL_SECONDS: u64 = 20;
@@ -1385,8 +1261,6 @@ pub(super) struct ImageryConfiguration {
     pub(super) credential: ImageryCredential,
     pub(super) model: df_providers::ImageEditModel,
     pub(super) quality: df_providers::ImageQuality,
-    /// Provider calls (images) per server run, charged before each call.
-    pub(super) budget: u32,
     /// The least time between two scene refreshes.
     pub(super) interval: Duration,
     /// How long one provider call may take.
@@ -1443,14 +1317,6 @@ pub(super) fn imagery_settings(
         Some("high") => df_providers::ImageQuality::High,
         Some(_) => return Err(refused("DF_GAMEPLAY_IMAGERY_QUALITY")),
     };
-    let budget = match optional(inputs.budget)?.filter(|value| !value.is_empty()) {
-        Some(value) => value
-            .parse::<u32>()
-            .ok()
-            .filter(|budget| *budget <= MAXIMUM_IMAGERY_BUDGET)
-            .ok_or_else(|| refused("DF_GAMEPLAY_IMAGERY_BUDGET"))?,
-        None => DEFAULT_IMAGERY_BUDGET,
-    };
     let interval = bounded_seconds(
         inputs.interval_seconds,
         DEFAULT_IMAGERY_INTERVAL_SECONDS,
@@ -1482,7 +1348,6 @@ pub(super) fn imagery_settings(
         credential: ImageryCredential(credential),
         model,
         quality,
-        budget,
         interval: Duration::from_secs(interval),
         deadline: Duration::from_secs(deadline),
         cache_dir: if cache.is_absolute() {
@@ -1521,15 +1386,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extra_assets_serve_listed_sound_effects_and_sprite_twins_only() {
+    fn extra_assets_serve_chrome_sound_and_reviewed_photographs_and_refuse_painted_depictions() {
         let root = std::env::temp_dir().join(format!("df-extra-assets-{}", std::process::id()));
         let generated = root.join("generated");
         std::fs::create_dir_all(generated.join("sfx")).unwrap();
         std::fs::write(generated.join("sfx/hit.mp3"), b"hit").unwrap();
         std::fs::write(generated.join("sfx/unlisted.mp3"), b"no").unwrap();
-        std::fs::write(generated.join("sprite-hero-1.png"), b"sprite").unwrap();
-        std::fs::write(generated.join("sprite-unknown.png"), b"no").unwrap();
-        std::fs::write(generated.join("portrait-courier-full.png"), b"full").unwrap();
+        std::fs::write(generated.join("icon-sword.webp"), b"chrome").unwrap();
+        std::fs::write(
+            generated.join("sprite-hero-1-documentary-photo.png"),
+            b"reviewed photograph",
+        )
+        .unwrap();
+        // Painted depictions are refused even when the file is on disk, listed by name in an
+        // older allowlist or present under a rejected `-photo` alias.
+        for painted in [
+            "sprite-hero-1.png",
+            "sprite-unknown.png",
+            "portrait-courier-full.png",
+            "portrait-hero-1.webp",
+            "scene-salt-quay-arrival.webp",
+            "ground-salt-quay.webp",
+            "prop-crates.webp",
+            "figure-hero-1-photo.webp",
+        ] {
+            std::fs::write(generated.join(painted), b"painted").unwrap();
+        }
         let loaded = load_extra_assets(&root).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         let served: Vec<(&str, &str)> = loaded
@@ -1539,8 +1421,11 @@ mod tests {
         assert_eq!(
             served,
             [
-                ("/assets/ui/generated/portrait-courier-full", "image/png"),
-                ("/assets/ui/generated/sprite-hero-1", "image/png"),
+                ("/assets/ui/generated/icon-sword", "image/webp"),
+                (
+                    "/assets/ui/generated/sprite-hero-1-documentary-photo",
+                    "image/png"
+                ),
                 ("/assets/ui/generated/sfx/hit", "audio/mpeg"),
             ]
         );
@@ -1613,14 +1498,13 @@ mod tests {
         }
     }
 
-    fn storyteller_inputs(values: [Option<&str>; 6]) -> StorytellerInputs {
-        let [credential, mode, model, budget, cache, deadline] =
+    fn storyteller_inputs(values: [Option<&str>; 5]) -> StorytellerInputs {
+        let [credential, mode, model, cache, deadline] =
             values.map(|value| value.map(str::to_owned).ok_or(VarError::NotPresent));
         StorytellerInputs {
             credential,
             mode,
             model,
-            token_budget: budget,
             cache,
             deadline_seconds: deadline,
         }
@@ -1629,13 +1513,13 @@ mod tests {
     #[test]
     fn storyteller_is_off_without_a_credential_or_when_switched_off() {
         let current = Path::new("/work");
-        let missing = storyteller_mode(storyteller_inputs([None; 6]), current).unwrap();
+        let missing = storyteller_mode(storyteller_inputs([None; 5]), current).unwrap();
         assert!(matches!(
             missing,
             StorytellerMode::Off("OPENAI_API_KEY not set")
         ));
         let empty = storyteller_mode(
-            storyteller_inputs([Some(""), None, None, None, None, None]),
+            storyteller_inputs([Some(""), None, None, None, None]),
             current,
         )
         .unwrap();
@@ -1645,7 +1529,7 @@ mod tests {
         ));
         for mode in ["off", " OFF "] {
             let off = storyteller_mode(
-                storyteller_inputs([Some("sk-test"), Some(mode), None, None, None, None]),
+                storyteller_inputs([Some("sk-test"), Some(mode), None, None, None]),
                 current,
             )
             .unwrap();
@@ -1660,15 +1544,14 @@ mod tests {
     fn storyteller_defaults_and_overrides_are_applied() {
         let current = Path::new("/work");
         let StorytellerMode::On(defaults) = storyteller_mode(
-            storyteller_inputs([Some("sk-test"), None, None, None, None, None]),
+            storyteller_inputs([Some("sk-test"), None, None, None, None]),
             current,
         )
         .unwrap() else {
             panic!("storyteller should be on");
         };
         assert_eq!(defaults.model, "gpt-6-luna");
-        // No default spend or time limit (owner, 2026-10-15): the defaults are the maximums.
-        assert_eq!(defaults.token_budget, MAXIMUM_TEXT_TOKEN_BUDGET);
+        // No spend limit exists (owner, 2026-10-17); the time limit defaults to its maximum.
         assert_eq!(
             defaults.deadline,
             Duration::from_secs(MAXIMUM_TEXT_DEADLINE_SECONDS)
@@ -1682,7 +1565,6 @@ mod tests {
                 Some("sk-test"),
                 Some("on"),
                 Some("other-model"),
-                Some("20000"),
                 Some("/tmp/cache"),
                 Some("5"),
             ]),
@@ -1692,7 +1574,6 @@ mod tests {
             panic!("storyteller should be on");
         };
         assert_eq!(custom.model, "other-model");
-        assert_eq!(custom.token_budget, 20_000);
         assert_eq!(custom.deadline, Duration::from_secs(5));
         assert_eq!(custom.cache_directory, Path::new("/tmp/cache"));
         assert!(!format!("{custom:?}").contains("sk-test"));
@@ -1701,13 +1582,11 @@ mod tests {
     #[test]
     fn invalid_storyteller_values_are_refused_without_echoing_them() {
         let current = Path::new("/work");
-        let cases: [[Option<&str>; 6]; 6] = [
-            [Some("sk-test"), None, Some("bad model!"), None, None, None],
-            [Some("sk-test"), None, None, Some("0"), None, None],
-            [Some("sk-test"), None, None, Some("many"), None, None],
-            [Some("sk-test"), None, None, None, Some(""), None],
-            [Some("sk-test"), None, None, None, None, Some("0")],
-            [Some("sk-test"), None, None, None, None, Some("61")],
+        let cases: [[Option<&str>; 5]; 4] = [
+            [Some("sk-test"), None, Some("bad model!"), None, None],
+            [Some("sk-test"), None, None, Some(""), None],
+            [Some("sk-test"), None, None, None, Some("0")],
+            [Some("sk-test"), None, None, None, Some("61")],
         ];
         for case in cases {
             let error = storyteller_mode(storyteller_inputs(case), current)

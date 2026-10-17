@@ -43,6 +43,7 @@ pub(crate) mod history;
 mod jumps;
 pub(super) mod layout;
 mod lore;
+mod memory;
 mod music;
 mod notebook;
 mod parse;
@@ -223,6 +224,14 @@ pub(super) fn setup(
         .route("/dev/audit", get(audit_log::audit))
         .route("/dev/music", get(music::read))
         .route("/dev/music/edit", post(music::unsupported_edit))
+        .route("/dev/memory", get(memory::status))
+        .route("/dev/memory/search", get(memory::search))
+        .route("/dev/memory/entity", get(memory::entity))
+        .route("/dev/memory/event", get(memory::event))
+        .route("/dev/memory/supersede", post(memory::supersede))
+        .route("/dev/memory/reindex", post(memory::reindex))
+        .route("/dev/memory/delete-run-index", post(memory::delete_run_index))
+        .route("/dev/memory/erase", post(memory::erase))
         .route("/dev/layout", get(layout::list))
         .route(
             "/dev/layout/transform",

@@ -869,3 +869,33 @@ field dungeonflux.public.v1.DisplayGameplayView 8 encounter_xp type=13 label=1 p
 field dungeonflux.public.v1.DisplayGameplayView 9 layout_json type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DisplayGameplayView 10 layout_revision type=4 label=1 presence=false target=- oneof=-
 oneof dungeonflux.public.v1.DisplayGameplayView _encounter_xp
+field dungeonflux.public.v1.DisplayGameplayView 11 place_music type=11 label=1 presence=false target=.dungeonflux.public.v1.PlaceMusicPlan oneof=-
+enum dungeonflux.public.v1.PlaceMusicState
+enum-value dungeonflux.public.v1.PlaceMusicState 0 PLACE_MUSIC_STATE_UNSPECIFIED
+enum-value dungeonflux.public.v1.PlaceMusicState 1 PLACE_MUSIC_STATE_FALLBACK
+enum-value dungeonflux.public.v1.PlaceMusicState 2 PLACE_MUSIC_STATE_READY
+message dungeonflux.public.v1.PlaceMusicPlan
+field dungeonflux.public.v1.PlaceMusicPlan 1 spec_label type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 2 setting_family type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 3 state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlaceMusicState oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 4 spec_key type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 5 layer_paths type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 6 ambience_path type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 7 fallback_note type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 8 bpm type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 9 loop_samples type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 10 sample_rate type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 31 interior type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 32 floor type=11 label=1 presence=false target=.dungeonflux.public.v1.StageFloor oneof=-
+message dungeonflux.public.v1.StageFloor
+field dungeonflux.public.v1.StageFloor 1 feet_mid type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StageFloor 2 feet_far type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StageFloor 3 key_from_left type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StageFloor 4 wet type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PartyMemberView 14 creature_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PartyMemberView 15 size type=14 label=1 presence=false target=.dungeonflux.public.v1.CreatureSize oneof=-
+enum dungeonflux.public.v1.CreatureSize
+enum-value dungeonflux.public.v1.CreatureSize 0 CREATURE_SIZE_UNSPECIFIED
+enum-value dungeonflux.public.v1.CreatureSize 1 SMALL
+enum-value dungeonflux.public.v1.CreatureSize 2 MEDIUM
+enum-value dungeonflux.public.v1.CreatureSize 3 LARGE

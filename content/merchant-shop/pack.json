@@ -190,7 +190,7 @@
       "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
-      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "asset": "live-room-photo",
       "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
@@ -242,7 +242,7 @@
       "narration": "You are inside Marek’s cloth shop. Afternoon light falls through the front window onto bolts of wool and linen. Marek folds a length of blue cloth behind the counter. Corin, a weathered adventurer, tests a jacket seam near the racks; Jessa, an off-duty soldier, compares two warm cloaks beside him. The door to the market street stands ajar.",
       "speaker": "Marek",
       "dialogue": "Welcome. Have a look around; let me know if you want to try anything on.",
-      "asset": "assets/ui/generated/scene-mareks-cloth-shop",
+      "asset": "live-room-photo",
       "speaker_portrait": "assets/ui/generated/portrait-patron-merchant-documentary-photo",
       "setting": {
         "place_id": "place-mareks-cloth-shop",
@@ -287,6 +287,20 @@
           "age": "adult"
         }
       ]
+    }
+  ],
+  "music": [
+    {
+      "place_id": "place-mareks-cloth-shop",
+      "mood": "relaxed",
+      "energy": "low",
+      "setting": "market",
+      "time_of_day": "day",
+      "space": "interior",
+      "palette": "light-acoustic",
+      "instruments": "lute, recorder, soft hand percussion and gentle strings",
+      "ambience": "A calm afternoon cloth shop: quiet market street noise through an open door, wooden floor creaks, the soft rustle of cloth being folded",
+      "fallback_bed": "market"
     }
   ],
   "speakers": [

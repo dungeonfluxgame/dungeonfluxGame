@@ -750,7 +750,28 @@ fn record_refusal(action_kind: i32, reason: &str, status: &str) {
     span.finish_unmeasured(status);
 }
 
+/// Every audit line written during a test run, so a test can check that a subsystem wrote its line.
+#[cfg(test)]
+static AUDIT_TAP: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The audit lines written so far in this test run that contain `needle`.
+#[cfg(test)]
+pub(super) fn audit_lines_containing(needle: &str) -> Vec<String> {
+    AUDIT_TAP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|line| line.contains(needle))
+        .cloned()
+        .collect()
+}
+
 pub(super) fn record_audit_line(event: &'static str, line: String) {
+    #[cfg(test)]
+    AUDIT_TAP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(line.clone());
     super::dev_control::timeline::record(event, &line);
     println!("{line}");
     let context = OperationContext {

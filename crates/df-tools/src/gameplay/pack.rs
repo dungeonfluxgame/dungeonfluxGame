@@ -11,6 +11,7 @@
 //!
 //! The SHA-256 values are development revisions of the exact file bytes. They are not a published
 //! content-pack version or a rights-backed identity (decision record D01).
+use df_render::art_contract;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
@@ -663,6 +664,10 @@ pub(super) struct PackFile {
     /// Who each speaking character is, by the name a scene shows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) speakers: Vec<SpeakerProfile>,
+    /// The music each place asks for, by place id. A place with no block gets its music chosen
+    /// from the closed labels by Jev (see `place_music`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) music: Vec<super::place_music::PackMusic>,
 }
 impl PackFile {
     pub(super) fn is_freeplay(&self) -> bool {
@@ -1843,7 +1848,34 @@ fn validate_pack(pack: &PackFile) -> Result<(), PackError> {
         }
     }
     validate_scenes(&pack.scenes, pack.is_freeplay())?;
-    validate_speaking_notes(pack)
+    validate_speaking_notes(pack)?;
+    validate_music(pack)
+}
+
+fn validate_music(pack: &PackFile) -> Result<(), PackError> {
+    const FILE: SourceFile = SourceFile::Pack;
+    range(FILE, "music", length(pack.music.len()), 0, 64)?;
+    for (index, block) in pack.music.iter().enumerate() {
+        text(
+            FILE,
+            &format!("music[{index}].place_id"),
+            &block.place_id,
+            1,
+            96,
+        )?;
+        block.spec().map_err(|_| {
+            malformed(
+                FILE,
+                &format!("music[{index}]"),
+                "closed music labels and bounded free text",
+            )
+        })?;
+    }
+    require_unique(
+        FILE,
+        |index| format!("music[{index}].place_id"),
+        pack.music.iter().map(|block| block.place_id.as_str()),
+    )
 }
 
 fn validate_speaking_notes(pack: &PackFile) -> Result<(), PackError> {
@@ -2135,9 +2167,19 @@ fn validate_offer_labels(labels: &OfferLabels, freeplay: bool) -> Result<(), Pac
     Ok(())
 }
 
-/// Generated art uses the same compile-time manifest as the route allowlist.
+/// A scene's art: a served legacy scene asset, or generated art under the art contract (a
+/// reviewed photograph's served path or a bare role token). A painted depiction stem never
+/// validates, whatever the manifest says.
 fn served_asset(path: &str) -> bool {
-    SERVED_SCENE_ASSETS.contains(&path) || super::adventure::generated_asset(path)
+    SERVED_SCENE_ASSETS.contains(&path)
+        || (super::adventure::generated_asset(path)
+            && art_contract::check_content_reference(path).is_ok())
+}
+
+/// A cast member's sprite or portrait: empty, a reviewed photograph's stem or path, a role token
+/// or a live path. The art contract refuses painted depiction stems and identity keys here.
+fn cast_art(path: &str) -> bool {
+    art_contract::check_content_reference(path).is_ok()
 }
 
 fn validate_scenes(scenes: &[Scene], freeplay: bool) -> Result<(), PackError> {
@@ -2224,6 +2266,15 @@ fn validate_scenes(scenes: &[Scene], freeplay: bool) -> Result<(), PackError> {
             text(FILE, &format!("{member}.name"), &actor.name, 1, 48)?;
             text(FILE, &format!("{member}.sprite"), &actor.sprite, 0, 128)?;
             text(FILE, &format!("{member}.portrait"), &actor.portrait, 0, 128)?;
+            for (field, value) in [("sprite", &actor.sprite), ("portrait", &actor.portrait)] {
+                if !cast_art(value) {
+                    return Err(PackError::Malformed {
+                        file: FILE,
+                        path: format!("{member}.{field}"),
+                        expected: "a reviewed -documentary-photo stem or an art-contract role token, never painted art",
+                    });
+                }
+            }
             text(FILE, &format!("{member}.voice"), &actor.voice, 0, 96)?;
             if let Some(stat_block) = &actor.stat_block
                 && !scene_stat_block_known(stat_block)
