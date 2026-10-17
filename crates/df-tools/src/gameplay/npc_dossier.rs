@@ -777,9 +777,21 @@ pub(super) struct Turn {
     pub(super) release: Option<Release>,
 }
 
+/// The keys a merchant trade context adds to the reply facts after they were first selected. A
+/// reselection must keep them, or a question Jev reads a focus for loses the stock and prices.
+const TRADE_CONTEXT_KEYS: [&str; 6] = [
+    "merchant_facts",
+    "available_trades",
+    "live_quote",
+    "negotiation_rules",
+    "bulk_ask",
+    "recent_committed_purchase",
+];
+
 impl Turn {
     /// Selects the reply facts again with `reading`. Scene facts already on `previous` carry
-    /// over; the lines, the offered keys and whether an answer exists are rebuilt.
+    /// over, and so does the merchant trade context; the lines, the offered keys and whether an
+    /// answer exists are rebuilt.
     pub(super) fn reselect(
         &mut self,
         reading: &AskReading,
@@ -797,6 +809,11 @@ impl Turn {
         self.offered = offered;
         if let Some(now) = previous.get("now") {
             facts["now"] = now.clone();
+        }
+        for key in TRADE_CONTEXT_KEYS {
+            if let Some(value) = previous.get(key) {
+                facts[key] = value.clone();
+            }
         }
         if let (Some(old), Some(new)) = (previous["npc"].as_object(), facts["npc"].as_object_mut())
         {

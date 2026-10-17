@@ -8,6 +8,9 @@ use df_types::MemberId;
 use serde_json::{Value, json};
 
 use super::approach_model::tests::model;
+use super::journey::merchant_bargaining::{
+    HeroLine, HeroTradeIntent, TradeDirection, TradeFocus, TradeTerms, reply_context,
+};
 use super::{
     adventure::{
         ForcedEntries, GenerateOptions, GeneratedAdventure, Tables,
@@ -3951,4 +3954,52 @@ async fn a_lie_to_an_npc_that_never_forgives_this_hero_is_refused_without_a_dece
     assert!(!facts.contains("deception_check"), "{facts}");
     assert!(!facts.contains("\"skill\":\"Deception\""), "{facts}");
     std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[test]
+fn a_question_with_a_jev_focus_keeps_the_merchant_stock_and_the_listed_price() {
+    // Arrange: the merchant's trade context for a price question, as the dialogue path attaches
+    // it to the facts before the reply is read.
+    let (adventure, ledger) = confiding_patron(Attitude::Indifferent);
+    let words = "How much for the warm wool cloak?";
+    let mut ask = context(&adventure, &ledger, SceneKey::Opening, words);
+    let cloak = TradeTerms {
+        direction: TradeDirection::HeroBuys,
+        item_id: "item-warm-cloak-wool".into(),
+        item_name: "warm wool cloak".into(),
+        aliases: vec!["wool cloak".into()],
+        offer_id: Some("warm-cloak-wool".into()),
+        seller_id: "merchant".into(),
+        buyer_id: "sigrun".into(),
+        minimum_price_cp: 150,
+        maximum_price_cp: 300,
+        available: true,
+        stock_units: 1,
+        stock_revision: 1,
+        purse_revision: 1,
+        counterparty_name: "Marek".into(),
+        party_hero_names: vec!["Sigrun".into()],
+    };
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("ask_price").unwrap(),
+        words,
+    };
+    let no_focus = TradeFocus {
+        tendered_item_id: None,
+        picked_item_id: None,
+    };
+    ask.facts = reply_context(&[cloak], "sigrun", "merchant", line, no_focus, &ask.facts).unwrap();
+    // Act: Jev reads a focus for the question, so the facts are selected again.
+    let reading = question_reading(vec![Focus::Place]);
+    let turn = ask.turn.as_mut().unwrap();
+    ask.facts = turn.reselect(&reading, &ask.facts);
+    // Assert: the stock and the listed price of the asked offer survive the reselection.
+    let trades = ask.facts["available_trades"].as_array().unwrap();
+    let entry = trades
+        .iter()
+        .find(|entry| entry["item"] == "warm wool cloak")
+        .unwrap();
+    assert_eq!(entry["listed_price_cp"], 300, "{entry}");
+    assert_eq!(entry["lowest_price_cp"], 150, "{entry}");
+    assert!(ask.facts["negotiation_rules"].is_array(), "{}", ask.facts);
 }
