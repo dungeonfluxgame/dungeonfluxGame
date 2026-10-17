@@ -391,11 +391,13 @@ fn learn(inner: &Inner, art: &str, tier: HealthTier, byte: char) {
 }
 
 #[test]
-fn a_fight_only_looks_in_the_cache_and_never_asks_the_provider() {
+fn a_fight_only_looks_in_the_cache_and_asks_for_the_tier_each_character_is_at() {
     let dossier = dossier();
     let (inner, _ledger) = director(&dossier);
+    let scene_facts = facts(&dossier);
     // Both are badly hurt, and nothing is cached.
-    inner.observe_at(hurt_stage(2, true, 4, 2), seconds(20));
+    let fight = hurt_stage(2, true, 4, 2);
+    inner.observe_at(fight.clone(), seconds(20));
     let jobs = inner.evaluate_at(seconds(60));
     let labels = job_labels(&jobs);
     assert_eq!(
@@ -405,9 +407,16 @@ fn a_fight_only_looks_in_the_cache_and_never_asks_the_provider() {
             "peek sprite-patron-merchant".to_owned()
         ]
     );
-    // Later passes in the fight do nothing at all, whatever the tiers do.
-    inner.observe_at(hurt_stage(3, true, 1, 0), seconds(70));
-    assert!(inner.evaluate_at(seconds(90)).is_empty());
+    // The hero is at Bloodied and the foe at Critical: those are the only variants made.
+    let mut book = Book::default();
+    let characters = characters_of(&fight, &scene_facts);
+    assert_eq!(
+        job_labels(&warm_jobs(&mut book, &fight, &scene_facts, &characters)),
+        [
+            format!("warm {HERO_ONE_ART} bloodied"),
+            "warm sprite-patron-merchant critical".to_owned(),
+        ]
+    );
     let mut message = display_message(true);
     inner.apply(stage_of(&message).as_ref(), &mut message);
     let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
@@ -415,6 +424,38 @@ fn a_fight_only_looks_in_the_cache_and_never_asks_the_provider() {
     };
     assert!(display.journey.as_ref().unwrap().live_faces.is_empty());
     assert_eq!(display.scene.as_ref().unwrap().cast[0].live_sprite, "");
+}
+
+#[test]
+fn a_fresh_scene_of_full_health_characters_requests_no_health_faces() {
+    let dossier = dossier();
+    let scene_facts = facts(&dossier);
+    // Both at full health, nothing cached: the scene makes no health face at all.
+    let fresh = hurt_stage(2, false, 13, 13);
+    let characters = characters_of(&fresh, &scene_facts);
+    let mut book = Book::default();
+    assert!(warm_jobs(&mut book, &fresh, &scene_facts, &characters).is_empty());
+}
+
+#[test]
+fn a_character_asks_for_the_tier_it_reaches_and_no_other() {
+    let dossier = dossier();
+    let scene_facts = facts(&dossier);
+    let mut book = Book::default();
+    // Eight of thirteen is Hurt; the foe at full health asks for nothing.
+    let hurt = hurt_stage(2, false, 8, 13);
+    let characters = characters_of(&hurt, &scene_facts);
+    assert_eq!(
+        job_labels(&warm_jobs(&mut book, &hurt, &scene_facts, &characters)),
+        [format!("warm {HERO_ONE_ART} hurt")]
+    );
+    // Three of thirteen is Critical: the hero asks for Critical, and nothing else is new.
+    let worse = hurt_stage(3, false, 3, 13);
+    let characters = characters_of(&worse, &scene_facts);
+    assert_eq!(
+        job_labels(&warm_jobs(&mut book, &worse, &scene_facts, &characters)),
+        [format!("warm {HERO_ONE_ART} critical")]
+    );
 }
 
 #[test]
@@ -651,7 +692,7 @@ fn bloodied_or_worse_outranks_a_mood_face_and_hurt_only_fills_in_where_there_is_
 }
 
 #[test]
-fn the_foes_of_the_adventures_fights_are_warmed_too_after_the_party_and_the_stage() {
+fn the_foes_of_the_adventures_fights_are_looked_for_after_the_party_and_the_stage() {
     let dossier = dossier();
     let mut scene_facts = facts(&dossier);
     let foe = |sprite: &str| Member {

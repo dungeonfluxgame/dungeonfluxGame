@@ -30,7 +30,7 @@ mod plates;
 
 use super::{
     adventure::{dossier::Attitude, setting::SettingKind},
-    health_faces::{Book, Character, PREWARM_ORDER},
+    health_faces::{Book, Character, GENERATED_TIERS},
     imagery::{
         CharacterFacts, CharacterRole, ImageFailure, ImageKey, ImageKind, ImageRequest, Imagery,
         LifeStage, OutputSpec, PlaceFacts, ReferenceImage, ReferenceStore, cast_expression,
@@ -233,8 +233,8 @@ struct SceneFacts {
     tone: SceneTone,
     beat: Beat,
     members: Vec<Member>,
-    /// Named cast of the adventure's fights that is not on this stage, so a fight's foes have
-    /// their health variants ready before the fight starts.
+    /// Named cast of the adventure's fights that is not on this stage. Looked for in the cache
+    /// only, so a foe who joins shows a variant already made; never made ahead of time.
     fights: Vec<Member>,
 }
 
@@ -881,8 +881,8 @@ enum Job {
         look: Look,
         reason: RefreshReason,
     },
-    /// Makes one health variant: the only job that can spend on health art, and never started in
-    /// a fight.
+    /// Makes one health variant: the only job that can spend on health art, started only for a
+    /// character who is at that tier in the view now.
     Warm {
         character: Character,
         tier: HealthTier,
@@ -1030,6 +1030,46 @@ fn member_tier(stage: &Stage, member: &Member) -> HealthTier {
         .find(|(name, _)| *name == member.name)
         .and_then(|(_, vitals)| tier_of(*vitals))
         .unwrap_or(HealthTier::Healthy)
+}
+
+/// The health variants to make now: one for each hero and cast member who is hurt in this view,
+/// at the tier they are at, unless the cache knows it, it is being made or it was tried twice.
+/// Making is on demand and never ahead of time, so a fresh scene of healthy characters makes
+/// nothing. Pure apart from the book, which records what is being made.
+fn warm_jobs(
+    book: &mut Book,
+    stage: &Stage,
+    facts: &SceneFacts,
+    characters: &[Character],
+) -> Vec<Job> {
+    let heroes = stage.heroes.iter().flat_map(|hero| {
+        let tier = tier_of(hero.vitals);
+        [hero_art(hero.index), battle_hero_art(hero.index)]
+            .into_iter()
+            .filter_map(move |art| Some((art, tier?)))
+    });
+    let cast = facts
+        .members
+        .iter()
+        .filter(|member| stage.cast.iter().any(|cast| cast.id == member.id))
+        .map(|member| (member.sprite.clone(), member_tier(stage, member)));
+    let hurt: Vec<(String, HealthTier)> = heroes
+        .chain(cast)
+        .filter(|(_, tier)| *tier != HealthTier::Healthy)
+        .collect();
+    let mut jobs = Vec::new();
+    for (art, tier) in hurt {
+        if book.is_open(&art, tier)
+            && let Some(character) = characters.iter().find(|character| character.id == art)
+        {
+            book.start_warming(&art, tier);
+            jobs.push(Job::Warm {
+                character: character.clone(),
+                tier,
+            });
+        }
+    }
+    jobs
 }
 
 /// Recomputes which health variant every hero and cast member shows from the view's hit points
@@ -1514,7 +1554,7 @@ impl Inner {
                 tasks.spawn(async move {
                     let mut found = Vec::new();
                     if let Ok(sprite) = inner.load_figure(&character.art).await {
-                        for tier in PREWARM_ORDER {
+                        for tier in GENERATED_TIERS {
                             if let Some(key) = inner
                                 .peek_health(sprite.clone(), character.facts, tier)
                                 .await
@@ -2041,8 +2081,10 @@ impl Inner {
 }
 
 impl Inner {
-    /// The health variants to look for or make now. Looking is always allowed; making is never
-    /// done in a fight, so combat shows only what is already cached.
+    /// The health variants to look for or make now. Looking is always allowed. Making is on
+    /// demand: a variant is asked for only when a character is at its tier in this view, once,
+    /// in a fight or out of one, and never ahead of time. A character shows the nearest cached
+    /// variant meanwhile.
     fn health_jobs(&self, state: &mut State, stage: &Stage, facts: &SceneFacts) -> Vec<Job> {
         let characters = characters_of(stage, facts);
         let mut jobs = Vec::new();
@@ -2054,49 +2096,11 @@ impl Inner {
                 });
             }
         }
-        // Nothing is warmed in a fight, and nothing is asked of a provider that is off.
-        if stage.in_combat || !self.imagery.is_on() {
+        // Nothing is asked of a provider that is off.
+        if !self.imagery.is_on() {
             return jobs;
         }
-        // What the party and the cast look like right now comes before background warming.
-        let now_needed = stage
-            .heroes
-            .iter()
-            .flat_map(|hero| {
-                let tier = tier_of(hero.vitals);
-                [hero_art(hero.index), battle_hero_art(hero.index)]
-                    .into_iter()
-                    .filter_map(move |art| Some((art, tier?)))
-            })
-            .chain(
-                facts
-                    .members
-                    .iter()
-                    .filter(|member| stage.cast.iter().any(|cast| cast.id == member.id))
-                    .map(|member| (member.sprite.clone(), member_tier(stage, member))),
-            )
-            .filter(|(_, tier)| *tier != HealthTier::Healthy);
-        for (art, tier) in now_needed {
-            if state.book.is_open(&art, tier)
-                && let Some(character) = characters.iter().find(|character| character.id == art)
-            {
-                state.book.start_warming(&art, tier);
-                jobs.push(Job::Warm {
-                    character: character.clone(),
-                    tier,
-                });
-            }
-        }
-        if let Some((index, tier)) =
-            state.book.next_warm(&characters, false)
-            && let Some(character) = characters.get(index)
-        {
-            state.book.start_warming(&character.id, tier);
-            jobs.push(Job::Warm {
-                character: character.clone(),
-                tier,
-            });
-        }
+        jobs.extend(warm_jobs(&mut state.book, stage, facts, &characters));
         jobs
     }
 }

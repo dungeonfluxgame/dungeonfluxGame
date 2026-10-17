@@ -1,16 +1,19 @@
 //! Health-appropriate art for the characters of a run: which variants exist, which one a
-//! character shows now, and which one to ask the image service for next.
+//! character shows now, and when to ask the image service for one.
 //!
 //! A character's art has one variant per tier below Healthy (Healthy is the authored art, which
 //! is always available and free). Variants are cached forever per source art and tier, so a run
-//! pays for them once ever: this module only decides order and permission.
+//! pays for them once ever: this module only decides when a variant is asked for and what shows.
 //!
-//! * **Pre-warming** asks for the variants of every hero and every named cast member in the
-//!   background, lowest tier distance first (Bloodied, then Critical, then Hurt, then Down), one
-//!   at a time, and never during a fight. Nothing caps how many are made.
-//! * **In a fight nothing is requested.** A character shows the nearest variant already cached:
-//!   an uncached tier keeps the closest cached one (ties go to the less severe) and the bar and
-//!   motion cues carry the rest. Combat never waits on generation.
+//! * **On demand.** A variant is asked for only when a character is at that tier in a view: the
+//!   first time a hero or a cast member reaches the tier, in a fight or out of one. Nothing is
+//!   made ahead of time, and a character at full health asks for nothing.
+//! * **Looked for, never made.** When a character first joins a view its cache is looked through
+//!   once, so a variant made earlier shows at once.
+//! * **Fallback while it is made.** A character shows the nearest variant already cached: an
+//!   uncached tier keeps the closest cached one (ties go to the less severe), and the authored
+//!   art when none is closer. The bar and motion cues carry the rest. Combat never waits on
+//!   generation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,8 +22,8 @@ use super::{
     scene_mood::HealthTier,
 };
 
-/// The order variants are warmed in: the tiers a fight is most likely to reach first.
-pub(super) const PREWARM_ORDER: [HealthTier; 4] = [
+/// The tiers below Healthy that a character can have a variant for, from least to most severe.
+pub(super) const GENERATED_TIERS: [HealthTier; 4] = [
     HealthTier::Bloodied,
     HealthTier::Critical,
     HealthTier::Hurt,
@@ -83,10 +86,6 @@ impl Book {
         !self.peeked.contains(id)
     }
 
-    pub(super) fn is_warming(&self) -> bool {
-        !self.in_flight.is_empty()
-    }
-
     pub(super) fn start_warming(&mut self, id: &str, tier: HealthTier) {
         self.in_flight.insert((id.to_owned(), tier));
     }
@@ -110,132 +109,41 @@ impl Book {
             .min_by_key(|(tier, _)| (wanted.distance(*tier), tier.severity()))
             .filter(|(tier, _)| wanted.distance(*tier) < authored_distance)
     }
-
-    /// The next variant to warm, or `None`: never in a fight, never while one is in flight,
-    /// never in a fight. Characters are taken in the given order
-    /// (heroes first), tiers in [`PREWARM_ORDER`], one tier across all characters before the
-    /// next.
-    pub(super) fn next_warm(
-        &self,
-        characters: &[Character],
-        in_combat: bool,
-    ) -> Option<(usize, HealthTier)> {
-        if in_combat || self.is_warming() {
-            return None;
-        }
-        // Variants never tried come first; one that failed (the provider sometimes declines or
-        // fails a request that passes a minute later) is retried only when nothing else is
-        // left to warm, and only once.
-        (0..MAXIMUM_ATTEMPTS).find_map(|tried| {
-            PREWARM_ORDER.into_iter().find_map(|tier| {
-                characters
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, character)| {
-                        let key = (character.id.clone(), tier);
-                        (!self.known.contains_key(&key) && self.attempts(&key) == tried)
-                            .then_some((index, tier))
-                    })
-            })
-        })
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::imagery::{CharacterRole, LifeStage},
-        *,
-    };
+    use super::*;
 
     fn key(byte: char) -> ImageKey {
         ImageKey::parse(&byte.to_string().repeat(64)).unwrap()
     }
 
-    fn character(id: &str) -> Character {
-        Character {
-            id: id.to_owned(),
-            art: format!("assets/ui/generated/sprite-{id}"),
-            facts: CharacterFacts {
-                role: CharacterRole::Contact,
-                life_stage: LifeStage::Adult,
-            },
-        }
-    }
-
-    fn cast() -> Vec<Character> {
-        vec![
-            character("hero-1"),
-            character("hero-2"),
-            character("innkeeper"),
-        ]
-    }
-
     #[test]
-    fn warming_goes_bloodied_critical_hurt_down_one_tier_across_everyone_first() {
+    fn a_variant_is_asked_for_once_at_a_time_and_at_most_twice_until_it_is_known() {
         let mut book = Book::default();
-        let characters = cast();
-        let mut order = Vec::new();
-        while let Some((index, tier)) = book.next_warm(&characters, false) {
-            order.push((characters[index].id.clone(), tier.label()));
-            book.learn(&characters[index].id, tier, key('a'));
-        }
-        let tiers: Vec<&str> = order.iter().map(|(_, tier)| *tier).collect();
-        assert_eq!(
-            tiers,
-            [
-                "bloodied", "bloodied", "bloodied", "critical", "critical", "critical", "hurt",
-                "hurt", "hurt", "down", "down", "down"
-            ]
-        );
-        // Heroes before the cast within a tier.
-        assert_eq!(order[0].0, "hero-1");
-        assert_eq!(order[2].0, "innkeeper");
-        assert_eq!(order.len(), 12);
-    }
-
-    #[test]
-    fn warming_never_happens_in_a_fight_or_while_one_is_in_flight() {
-        let characters = cast();
-        let mut book = Book::default();
-        assert!(
-            book.next_warm(&characters, true).is_none(),
-            "combat never requests"
-        );
-        assert!(book.next_warm(&characters, false).is_some());
-        book.start_warming("hero-1", HealthTier::Bloodied);
-        assert!(
-            book.next_warm(&characters, false).is_none(),
-            "one at a time"
-        );
-        book.learn("hero-1", HealthTier::Bloodied, key('b'));
-        assert!(book.next_warm(&characters, false).is_some());
-    }
-
-    #[test]
-    fn a_failed_variant_is_retried_once_after_everything_else_and_a_known_one_is_skipped() {
-        let characters = vec![character("hero-1")];
-        let mut book = Book::default();
-        book.learn("hero-1", HealthTier::Bloodied, key('a'));
-        book.start_warming("hero-1", HealthTier::Critical);
-        book.fail("hero-1", HealthTier::Critical);
-        // The untried tiers come before the failed one.
-        assert_eq!(
-            book.next_warm(&characters, false),
-            Some((0, HealthTier::Hurt))
-        );
-        book.learn("hero-1", HealthTier::Hurt, key('d'));
-        book.learn("hero-1", HealthTier::Down, key('c'));
-        // Then the failed one gets its second try, and after that no more.
-        assert_eq!(
-            book.next_warm(&characters, false),
-            Some((0, HealthTier::Critical))
-        );
         assert!(book.is_open("hero-1", HealthTier::Critical));
         book.start_warming("hero-1", HealthTier::Critical);
+        assert!(
+            !book.is_open("hero-1", HealthTier::Critical),
+            "one in flight at a time"
+        );
         book.fail("hero-1", HealthTier::Critical);
-        assert_eq!(book.next_warm(&characters, false), None);
-        assert!(!book.is_open("hero-1", HealthTier::Critical));
+        assert!(
+            book.is_open("hero-1", HealthTier::Critical),
+            "a failure is tried once more"
+        );
+        book.start_warming("hero-1", HealthTier::Critical);
+        book.fail("hero-1", HealthTier::Critical);
+        assert!(
+            !book.is_open("hero-1", HealthTier::Critical),
+            "given up after two attempts"
+        );
+        book.learn("hero-1", HealthTier::Hurt, key('d'));
+        assert!(
+            !book.is_open("hero-1", HealthTier::Hurt),
+            "a known variant is never asked for again"
+        );
     }
 
     #[test]
