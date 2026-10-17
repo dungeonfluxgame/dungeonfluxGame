@@ -97,22 +97,90 @@ fn split_action_response(response: &str) -> (&str, &str) {
 /// picture for. No speaker is recognised by name.
 const NEUTRAL_PORTRAIT: &str = "/assets/concept-art/dm-avatar.webp";
 
-/// The picture the server sent for a cast member: the live image already made for them, else
-/// the portrait or cut-out the art contract serves.
-fn actor_portrait(actor: &rpc::SceneActor) -> Option<String> {
-    crate::presentation::imagery_url(&actor.live_sprite)
-        .or_else(|| super::live_screens::asset_url(&actor.portrait))
-        .or_else(|| super::live_screens::asset_url(&actor.sprite))
-}
-
-/// A speaker's portrait from what the server sent: their cast entry, else the scene's speaker
-/// portrait, else the neutral stand-in.
-fn portrait_url(scene: Option<&rpc::GameplayScene>, speaker: &str) -> String {
-    scene
-        .and_then(|scene| scene.cast.iter().find(|actor| actor.name == speaker))
-        .and_then(actor_portrait)
+/// A speaker's portrait by actor id: their cast entry, else the scene's speaker portrait,
+/// else the neutral stand-in. Names never resolve a portrait: two actors may share one.
+fn portrait_for_actor_id(
+    journey: Option<&rpc::JourneyView>,
+    scene: Option<&rpc::GameplayScene>,
+    actor_id: &str,
+) -> String {
+    journey
+        .zip(scene)
+        .and_then(|(journey, scene)| {
+            let cast = crate::presentation::cast_of(journey, scene);
+            crate::presentation::caption_picture(
+                &cast,
+                crate::presentation::CaptionSpeaker::Npc(actor_id),
+            )
+        })
         .or_else(|| scene_portrait_url(scene))
         .unwrap_or_else(|| NEUTRAL_PORTRAIT.to_owned())
+}
+
+/// The portrait of the actor the server marks as speaking, through the shared stage cast.
+/// This is the same resolver the TV subtitle uses (`StageActor::picture` by actor id/slot).
+fn speaking_portrait(
+    journey: Option<&rpc::JourneyView>,
+    scene: Option<&rpc::GameplayScene>,
+) -> String {
+    let (Some(journey), Some(scene)) = (journey, scene) else {
+        return scene_portrait_url(scene).unwrap_or_else(|| NEUTRAL_PORTRAIT.to_owned());
+    };
+    let cast = crate::presentation::cast_of(journey, scene);
+    crate::presentation::caption_picture(
+        &cast,
+        crate::presentation::scene_speech_speaker(journey, &cast, None),
+    )
+    .or_else(|| scene_portrait_url(Some(scene)))
+    .unwrap_or_else(|| NEUTRAL_PORTRAIT.to_owned())
+}
+
+/// Whether an answered line clears the draft. Only a line the table took clears it; a
+/// refusal that sent nothing (a rejected, clarifying or narrated refusal such as the
+/// group-address refusal) keeps the player's words so they can be edited and resent.
+/// Group lines are sent verbatim: the client never gates who a line addresses.
+fn clears_draft(kind: rpc::DialogueDisposition) -> bool {
+    matches!(
+        kind,
+        rpc::DialogueDisposition::Action
+            | rpc::DialogueDisposition::Question
+            | rpc::DialogueDisposition::Social
+            | rpc::DialogueDisposition::PlanOnly
+            | rpc::DialogueDisposition::Joke
+    )
+}
+
+/// The addressee shown on the composer chip: the speaker the server selected to reply,
+/// else no single person. A previous responder or scene focus may not be who the next
+/// line names.
+fn addressee_chip(replying: &str) -> String {
+    let replying = replying.trim();
+    if !replying.is_empty() {
+        return replying.to_owned();
+    }
+    "anyone here".to_owned()
+}
+
+/// Whether Enter in the composer sends: a plain Enter on a fine-pointer (desktop)
+/// keyboard, never Shift+Enter, never mid-composition, never on a touch keyboard.
+fn enter_should_send(key: &str, shift: bool, composing: bool, fine_pointer: bool) -> bool {
+    key == "Enter" && !shift && !composing && fine_pointer
+}
+
+fn fine_pointer() -> bool {
+    // `matchMedia` through reflection: the enabled web-sys features have no typed
+    // binding for it. Any failure keeps the touch behaviour (Enter does not send).
+    let query = (|| -> Result<JsValue, JsValue> {
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
+        let function = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("matchMedia"))?
+            .dyn_into::<js_sys::Function>()?;
+        function.call1(window.as_ref(), &JsValue::from_str("(pointer: fine)"))
+    })();
+    query
+        .and_then(|query| js_sys::Reflect::get(&query, &JsValue::from_str("matches")))
+        .ok()
+        .and_then(|matches| matches.as_bool())
+        .unwrap_or(false)
 }
 
 fn current_speaker(client: &Client) -> String {
@@ -131,6 +199,17 @@ fn current_speaker(client: &Client) -> String {
     }
 }
 
+fn current_journey(client: &Client) -> Option<&rpc::JourneyView> {
+    client
+        .views
+        .as_ref()
+        .and_then(|views| views.current())
+        .and_then(|view| match view.audience.as_ref()? {
+            rpc::view_message::Audience::Player(player) => player.journey.as_ref(),
+            rpc::view_message::Audience::Display(display) => display.journey.as_ref(),
+        })
+}
+
 fn current_scene(client: &Client) -> Option<&rpc::GameplayScene> {
     client
         .views
@@ -145,6 +224,7 @@ fn current_scene(client: &Client) -> Option<&rpc::GameplayScene> {
 fn reply_attribution(
     reply: &rpc::DialogueResponse,
     kind: rpc::DialogueDisposition,
+    journey: Option<&rpc::JourneyView>,
     scene: Option<&rpc::GameplayScene>,
     selected_speaker: &str,
 ) -> (String, String) {
@@ -156,15 +236,7 @@ fn reply_attribution(
         return ("Narrator".to_owned(), NEUTRAL_PORTRAIT.to_owned());
     }
     if !actor_id.is_empty() && !canonical_speaker.is_empty() {
-        let portrait = scene
-            .and_then(|scene| {
-                scene
-                    .cast
-                    .iter()
-                    .find(|actor| actor.id == actor_id && actor.name == canonical_speaker)
-            })
-            .and_then(actor_portrait)
-            .unwrap_or_else(|| portrait_url(scene, canonical_speaker));
+        let portrait = portrait_for_actor_id(journey, scene, actor_id);
         return (canonical_speaker.to_owned(), portrait);
     }
 
@@ -189,7 +261,9 @@ fn reply_status(kind: rpc::DialogueDisposition, reply_text: &str, speaker: &str)
             format!("You say to {speaker}.")
         }
         rpc::DialogueDisposition::Clarify => "Please rephrase that.".to_owned(),
-        rpc::DialogueDisposition::Rejected => "That line could not be taken.".to_owned(),
+        rpc::DialogueDisposition::Rejected => {
+            "That line could not be taken. Your draft is still here.".to_owned()
+        }
         _ => "You say that to the table.".to_owned(),
     }
 }
@@ -198,8 +272,92 @@ fn scene_portrait_url(scene: Option<&rpc::GameplayScene>) -> Option<String> {
     scene.and_then(|scene| super::live_screens::asset_url(&scene.speaker_portrait))
 }
 
-fn speaker_portrait_url(scene: Option<&rpc::GameplayScene>, speaker: &str) -> String {
-    scene_portrait_url(scene).unwrap_or_else(|| portrait_url(scene, speaker))
+fn speaker_portrait_url(scene: Option<&rpc::GameplayScene>, _speaker: &str) -> String {
+    // No portrait is resolved by speaker name; the scene's own speaker portrait or the
+    // neutral stand-in is all a nameless (legacy) answer may show.
+    scene_portrait_url(scene).unwrap_or_else(|| NEUTRAL_PORTRAIT.to_owned())
+}
+
+/// How this player's own hero is down, from the view the server already sent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum DownedState {
+    Unconscious,
+    Stable,
+    DeathSaves { successes: u32, failures: u32 },
+}
+
+impl DownedState {
+    pub(super) fn label(&self, name: &str) -> String {
+        let name = if name.is_empty() { "Your hero" } else { name };
+        match self {
+            Self::Unconscious => format!("{name} is unconscious and cannot act."),
+            Self::Stable => {
+                format!("{name} is down but stable, and cannot act until healed or rested.")
+            }
+            Self::DeathSaves {
+                successes,
+                failures,
+            } => {
+                format!("{name} is down. Death saves: {successes} successes, {failures} failures.")
+            }
+        }
+    }
+
+    pub(super) fn disabled_reason(&self) -> &'static str {
+        match self {
+            Self::Unconscious => "You are unconscious and cannot act.",
+            Self::Stable => "You are down but stable and cannot act.",
+            Self::DeathSaves { .. } => "You are down and cannot act.",
+        }
+    }
+}
+
+/// The downed state of the player's own hero, or `None` while they can act. A hero at
+/// 0 hit points, one the party/combat view marks unconscious, or one with death saves
+/// still standing is down; a dead hero is handled by the dead-hero path instead.
+pub(super) fn downed_state(journey: &rpc::JourneyView) -> Option<DownedState> {
+    let own = journey.own_character.as_ref()?;
+    if super::is_dead_hero(journey) {
+        return None;
+    }
+    if let Some(save) = journey
+        .combat
+        .as_ref()
+        .and_then(|combat| {
+            combat
+                .death_saves
+                .iter()
+                .find(|save| !save.dead && save.name == own.name)
+        })
+        .filter(|save| {
+            save.stable || save.successes > 0 || save.failures > 0 || own.hit_points == 0
+        })
+    {
+        return Some(if save.stable {
+            DownedState::Stable
+        } else {
+            DownedState::DeathSaves {
+                successes: save.successes,
+                failures: save.failures,
+            }
+        });
+    }
+    let in_party = journey
+        .party
+        .iter()
+        .chain(
+            journey
+                .combat
+                .as_ref()
+                .map_or(&[][..], |combat| &combat.participants[..])
+                .iter(),
+        )
+        .any(|member| member.name == own.name && (member.unconscious || member.hit_points == 0));
+    let sheet_down = own.hit_points == 0
+        || own.facts.iter().any(|fact| {
+            fact.label == "Condition" && fact.value.eq_ignore_ascii_case("Unconscious")
+        });
+    (in_party || sheet_down).then_some(DownedState::Unconscious)
 }
 
 fn composer_available(journey: Option<&rpc::JourneyView>) -> bool {
@@ -208,6 +366,7 @@ fn composer_available(journey: Option<&rpc::JourneyView>) -> bool {
             && journey.creation.is_none()
             && journey.own_character.is_some()
             && !super::is_dead_hero(journey)
+            && downed_state(journey).is_none()
     })
 }
 
@@ -366,6 +525,17 @@ pub(super) fn mount(
     if let Some(previous) = parent.query_selector(".dialogue-recovery")? {
         previous.remove();
     }
+    // A player who has sent a line, or still holds a draft, keeps the panel open: the
+    // redraw after sending must not collapse it (or the voice control inside it).
+    {
+        let state = client.borrow();
+        let engaged = state.dialogue.awaiting.is_some()
+            || state.dialogue.exchange.is_some()
+            || !composer_draft(&state.dialogue).trim().is_empty();
+        if engaged && parent.tag_name() == "DETAILS" {
+            parent.set_attribute("open", "")?;
+        }
+    }
     let panel = node(&document, parent, "section", "dialogue-recovery", "")?;
     node(&document, &panel, "h3", "", "Say what you mean")?;
     node(
@@ -373,8 +543,26 @@ pub(super) fn mount(
         &panel,
         "p",
         "scope",
-        "Speak to someone in the scene, ask about what you see, or describe what your hero does.",
+        "Say what your hero wants to say or do; the table decides how it is handled.",
     )?;
+    {
+        let state = client.borrow();
+        let replying = state
+            .views
+            .as_ref()
+            .and_then(|views| views.current())
+            .and_then(crate::presentation::replying_speaker)
+            .unwrap_or_default();
+        let addressee = addressee_chip(&replying);
+        let chip = node(
+            &document,
+            &panel,
+            "p",
+            "dialogue-addressee",
+            &format!("Speaking to: {addressee}"),
+        )?;
+        chip.set_attribute("data-addressee", &addressee)?;
+    }
     let revision = client.borrow().revision;
     {
         let state = client.borrow();
@@ -590,7 +778,10 @@ fn thinking_row(
     let bubble = node(document, &thread, "div", "npc-bubble npc-thinking", "")?;
     bubble.set_attribute("data-thinking", "")?;
     let portrait = node(document, &bubble, "img", "npc-bubble-portrait", "")?;
-    portrait.set_attribute("src", &portrait_url(current_scene(&state), &speaker))?;
+    portrait.set_attribute(
+        "src",
+        &speaking_portrait(current_journey(&state), current_scene(&state)),
+    )?;
     portrait.set_attribute("alt", "")?;
     let body = node(document, &bubble, "div", "npc-bubble-body", "")?;
     let name = if speaker.is_empty() {
@@ -679,6 +870,25 @@ fn listen_for_intent(
             message.set_text_content(Some(""));
         }
         Some(draft_intent(client))
+    })?;
+    attach(editor.as_ref(), "keydown", |client, event| {
+        // Desktop: Enter sends, Shift+Enter keeps its newline. Touch keyboards keep
+        // the current behaviour (Enter inserts a newline; only "Say it" sends).
+        let sends = event
+            .dyn_ref::<web_sys::KeyboardEvent>()
+            .is_some_and(|key| {
+                enter_should_send(
+                    &key.key(),
+                    key.shift_key(),
+                    key.is_composing(),
+                    fine_pointer(),
+                )
+            });
+        if sends {
+            event.prevent_default();
+            super::talk_control::send(client.clone());
+        }
+        None
     })?;
     attach(editor.as_ref(), "blur", |client, event| {
         // Moving to the panel's own buttons (the send button) is not leaving the box.
@@ -1035,6 +1245,7 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                                 let (speaker, portrait) = reply_attribution(
                                     &reply,
                                     kind,
+                                    current_journey(&state),
                                     current_scene(&state),
                                     &selected_speaker,
                                 );
@@ -1049,13 +1260,13 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                                         portrait,
                                         reply: reply.npc_reply.clone(),
                                     });
-                                    if let Some(editor) = &state.dialogue.editor {
-                                        editor.set_value("");
-                                    }
                                 } else {
                                     state.dialogue.exchange = None;
                                 }
-                                if let Some(editor) = &state.dialogue.editor {
+                                // A refusal that sent nothing keeps the draft for editing.
+                                if clears_draft(kind)
+                                    && let Some(editor) = &state.dialogue.editor
+                                {
                                     editor.set_value("");
                                 }
                                 reply_status(kind, &reply.npc_reply, &speaker)
@@ -1185,7 +1396,8 @@ mod tests {
     }
 
     use super::{
-        composer_available, reply_attribution, reply_status, scope_change_notice,
+        addressee_chip, clears_draft, composer_available, downed_state, enter_should_send,
+        portrait_for_actor_id, reply_attribution, reply_status, scope_change_notice,
         scope_changed_notice, speaker_portrait_url, split_action_response,
     };
 
@@ -1299,16 +1511,150 @@ mod tests {
         );
         let with_cast = super::rpc::GameplayScene {
             cast: vec![super::rpc::SceneActor {
+                id: "courier".to_owned(),
                 name: "Courier".to_owned(),
                 portrait: "assets/ui/generated/sprite-courier-documentary-photo".to_owned(),
                 ..Default::default()
             }],
             ..Default::default()
         };
+        // Portraits resolve by actor id, never by name.
         assert_eq!(
-            speaker_portrait_url(Some(&with_cast), "Courier"),
+            portrait_for_actor_id(
+                Some(&super::rpc::JourneyView::default()),
+                Some(&with_cast),
+                "courier"
+            ),
             "/assets/ui/generated/sprite-courier-documentary-photo"
         );
+        assert_eq!(
+            speaker_portrait_url(Some(&with_cast), "Courier"),
+            super::NEUTRAL_PORTRAIT
+        );
+    }
+
+    #[test]
+    fn a_refusal_keeps_the_draft_and_an_accepted_line_clears_it() {
+        use super::rpc::DialogueDisposition as Kind;
+        // The group-address refusal is a narrated (Meta) refusal; rejected and
+        // clarifying answers likewise sent nothing to the table.
+        assert!(!clears_draft(Kind::Meta));
+        assert!(!clears_draft(Kind::Rejected));
+        assert!(!clears_draft(Kind::Clarify));
+        assert!(!clears_draft(Kind::Unspecified));
+        assert!(clears_draft(Kind::Social));
+        assert!(clears_draft(Kind::Question));
+        assert!(clears_draft(Kind::PlanOnly));
+        assert!(clears_draft(Kind::Action));
+    }
+
+    #[test]
+    fn the_addressee_chip_follows_the_server_selected_speaker_not_the_scene_focus() {
+        assert_eq!(addressee_chip(""), "anyone here");
+        assert_eq!(addressee_chip("Corin"), "Corin");
+    }
+
+    #[test]
+    fn enter_sends_only_for_a_plain_desktop_enter() {
+        assert!(enter_should_send("Enter", false, false, true));
+        assert!(!enter_should_send("Enter", true, false, true));
+        assert!(!enter_should_send("Enter", false, true, true));
+        assert!(!enter_should_send("Enter", false, false, false));
+        assert!(!enter_should_send("a", false, false, true));
+    }
+
+    #[test]
+    fn portrait_by_actor_id_distinguishes_actors_who_share_a_name() {
+        let scene = super::rpc::GameplayScene {
+            cast: vec![
+                super::rpc::SceneActor {
+                    id: "first".to_owned(),
+                    name: "Juno".to_owned(),
+                    portrait: "/assets/concept-art/vell-avatar.webp".to_owned(),
+                    ..Default::default()
+                },
+                super::rpc::SceneActor {
+                    id: "second".to_owned(),
+                    name: "Juno".to_owned(),
+                    portrait: "/assets/concept-art/dm-avatar.webp".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let journey = super::rpc::JourneyView::default();
+        assert_eq!(
+            portrait_for_actor_id(Some(&journey), Some(&scene), "second"),
+            "/assets/concept-art/dm-avatar.webp"
+        );
+        let reply = super::rpc::DialogueResponse {
+            npc_actor_id: "second".to_owned(),
+            npc_speaker: "Juno".to_owned(),
+            ..Default::default()
+        };
+        let (speaker, portrait) = reply_attribution(
+            &reply,
+            super::rpc::DialogueDisposition::Social,
+            Some(&journey),
+            Some(&scene),
+            "Marek",
+        );
+        assert_eq!(speaker, "Juno");
+        assert_eq!(portrait, "/assets/concept-art/dm-avatar.webp");
+    }
+
+    #[test]
+    fn a_downed_hero_loses_the_composer_and_reports_their_state() {
+        let mut journey = super::rpc::JourneyView {
+            own_character: Some(super::rpc::CharacterSheet {
+                name: "Brakka".to_owned(),
+                hit_points: 8,
+                maximum_hit_points: 12,
+                ..Default::default()
+            }),
+            party: vec![super::rpc::PartyMemberView {
+                name: "Brakka".to_owned(),
+                hit_points: 8,
+                maximum_hit_points: 12,
+                character_ready: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(downed_state(&journey), None);
+        assert!(composer_available(Some(&journey)));
+
+        journey.own_character.as_mut().unwrap().hit_points = 0;
+        journey.party[0].hit_points = 0;
+        journey.party[0].unconscious = true;
+        assert_eq!(
+            downed_state(&journey),
+            Some(super::DownedState::Unconscious)
+        );
+        assert!(!composer_available(Some(&journey)));
+        assert_eq!(
+            super::DownedState::Unconscious.label("Brakka"),
+            "Brakka is unconscious and cannot act."
+        );
+
+        journey.combat = Some(super::rpc::CombatView {
+            death_saves: vec![super::rpc::DeathSaveState {
+                name: "Brakka".to_owned(),
+                successes: 2,
+                failures: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert_eq!(
+            downed_state(&journey),
+            Some(super::DownedState::DeathSaves {
+                successes: 2,
+                failures: 1
+            })
+        );
+        journey.combat.as_mut().unwrap().death_saves[0].stable = true;
+        assert_eq!(downed_state(&journey), Some(super::DownedState::Stable));
     }
 
     #[test]
@@ -1340,6 +1686,7 @@ mod tests {
         let (speaker, portrait) = reply_attribution(
             &reply,
             super::rpc::DialogueDisposition::Social,
+            Some(&super::rpc::JourneyView::default()),
             Some(&scene),
             "Marek",
         );
@@ -1362,6 +1709,7 @@ mod tests {
         let (speaker, portrait) = reply_attribution(
             &super::rpc::DialogueResponse::default(),
             super::rpc::DialogueDisposition::Social,
+            Some(&super::rpc::JourneyView::default()),
             Some(&scene),
             "Marek",
         );
@@ -1384,6 +1732,7 @@ mod tests {
         let (speaker, portrait) = reply_attribution(
             &notice,
             super::rpc::DialogueDisposition::Meta,
+            Some(&super::rpc::JourneyView::default()),
             Some(&scene),
             "Marek",
         );

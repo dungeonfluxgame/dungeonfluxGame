@@ -155,7 +155,9 @@ main .client.display{background:transparent}
 /* Keep both sheet navigation and the active text action above the phone's tab bar. */
 .client.player .live-sheet-panel{box-sizing:border-box;max-height:100%;padding-bottom:20px}
 .client.player .live-notebook-sheet .live-sheet-panel{height:100%;max-height:100%}
-.client.player .dialogue-controls{position:sticky;bottom:calc(80px + env(safe-area-inset-bottom));z-index:10;padding:8px 0;background:#080d11}
+.client.player .dialogue-controls{position:sticky;bottom:calc(80px + env(safe-area-inset-bottom));z-index:10;padding:8px 0;background:transparent}
+.client.player .dialogue-addressee{display:inline-flex;margin:6px 0 0;padding:4px 10px;border:1px solid #c9bca088;border-radius:999px;color:var(--df-film-ivory,#f1eee6);font:13px/1.3 system-ui,sans-serif}
+.client.player .live-downed{margin:12px 0;padding:14px;border:1px solid #a1473f;border-radius:8px;background:#2a1210;color:#f3e2bd;font:17px/1.45 var(--serif)}
 .client.player .dialogue-controls [data-dialogue=submit]{width:100%;min-height:48px;font-size:17px}
 .client.player .dialogue-recovery[data-typed] [data-dialogue=submit]{background:#443a25;border:1px solid #c9bca0;color:#fff6df;font-weight:600}
 .client.player .dialogue-recovery[data-typed] .talk-hold{min-height:44px;padding:8px 12px;background:#0a0e12;border-color:#555c61;font-size:15px}

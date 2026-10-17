@@ -10,7 +10,7 @@ use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
 use df_observe::presentation::VisualSource;
 use df_render::art_contract;
-use df_ui::{ConceptScene, ExplorationPortrait, JoinStage};
+use df_ui::{ConceptScene, JoinStage};
 use std::collections::BTreeMap;
 
 /// The reviewed harbor photograph's stem, the art of every fixed harbor phase.
@@ -529,6 +529,7 @@ fn exploration_model(
     let (_, members) = party_members(input.journey);
     let unconfirmed = !client.busy && !client.last_confirmed && client.last_request.is_some();
     let ended = input.journey.adventure_ended;
+    let downed = super::dialogue_recovery::downed_state(input.journey);
     let choices: Vec<ExplorationChoiceModel> = {
         input
             .offers
@@ -538,7 +539,10 @@ fn exploration_model(
                 id: offer.offer_id.clone(),
                 label: phone_choice_label(&offer.label, &input.journey.table_choices),
                 icon: choice_icon(offer.action_kind),
-                disabled_reason: choice_disabled_reason(client.busy, unconfirmed),
+                disabled_reason: downed
+                    .as_ref()
+                    .map(|state| state.disabled_reason())
+                    .or_else(|| choice_disabled_reason(client.busy, unconfirmed)),
             })
             .collect()
     };
@@ -559,6 +563,7 @@ fn exploration_model(
         _ => ConceptScene::CourierRoad,
     };
     let scene_speech = exploration_speech(input.journey, input.scene);
+    let speaker_sequence = scene_speech.as_ref().and_then(|(sequence, _, _)| *sequence);
     let speaker =
         if ended { None } else { scene_speech }.map(|(_, name, line)| ExplorationSpeaker {
             name: if name.is_empty() {
@@ -568,12 +573,9 @@ fn exploration_model(
             },
             context: input.scene.title.clone(),
             line: line.to_owned(),
-            portrait: match name {
-                "Courier" => Some(ExplorationPortrait::Courier),
-                "Bandit" => Some(ExplorationPortrait::Bandit),
-                "Vell" => Some(ExplorationPortrait::Vell),
-                _ => None,
-            },
+            // No portrait is chosen by speaker name; the served picture below is
+            // resolved by actor id through the shared stage cast.
+            portrait: None,
         });
     // PLAY-V09: a ready scene plate is the scene picture at the top of the player page, cropped to
     // keep the speaker in view; the authored painting stays the fallback behind it.
@@ -582,7 +584,8 @@ fn exploration_model(
         plate_focus: plate.layout.map(|layout| layout.head_x),
         scene_asset: crate::presentation::story_scene_picture(input.scene),
         scene_alt: authored_scene_alt(input.scene, art_scene),
-        portrait_asset: asset_url(&input.scene.speaker_portrait),
+        portrait_asset: speaker_portrait(input.journey, input.scene, speaker_sequence)
+            .or_else(|| asset_url(&input.scene.speaker_portrait)),
         has_whisper: show_clue,
         rules_note: input.scene.rules_note.clone(),
         binding,
@@ -620,6 +623,21 @@ fn exploration_model(
         choices,
         pending: client.busy.then_some("Waiting for the game server…"),
     })
+}
+
+/// The speaking actor's served picture, by actor id through the shared stage cast —
+/// the same `StageActor::picture` resolution the TV subtitle uses. A speaker the cast
+/// does not carry by id answers `None`, never a picture picked by their name.
+fn speaker_portrait(
+    journey: &rpc::JourneyView,
+    scene: &rpc::GameplayScene,
+    sequence: Option<u64>,
+) -> Option<String> {
+    let cast = crate::presentation::cast_of(journey, scene);
+    crate::presentation::caption_picture(
+        &cast,
+        crate::presentation::scene_speech_speaker(journey, &cast, sequence),
+    )
 }
 
 fn exploration_speech<'a>(
@@ -706,6 +724,9 @@ fn ensure_say_more(document: &Document, dock: &Element) -> Result<Element, JsVal
         return Ok(existing);
     }
     let details = node(document, dock, "details", "say-more", "")?;
+    // Voice and typing start visible, not hidden behind this row; the player may
+    // still fold it away, and a redraw keeps their choice (see dialogue mount).
+    details.set_attribute("open", "")?;
     let summary = node(document, &details, "summary", "", "")?;
     let icon = node(document, &summary, "img", "say-more-icon", "")?;
     icon.set_attribute("src", &format!("{}/icon-talk", live_tv::GENERATED))?;
@@ -716,6 +737,68 @@ fn ensure_say_more(document: &Document, dock: &Element) -> Result<Element, JsVal
 
 fn should_show_dialogue_composer(adventure_ended: bool) -> bool {
     !adventure_ended
+}
+
+/// The scene-action row, kept across views: the same container (and, through
+/// `action_button`, the same buttons) is updated in place so a tap landing during
+/// a redraw still lands. Wrappers for offers the view no longer carries are removed.
+fn ensure_scene_actions(document: &Document, dock: &Element) -> Result<Element, JsValue> {
+    match dock.query_selector(".scene-actions")? {
+        Some(existing) => Ok(existing),
+        None => node(document, dock, "div", "scene-actions", ""),
+    }
+}
+
+fn prune_scene_actions(
+    actions: &Element,
+    offers: &[rpc::GameplayActionOffer],
+) -> Result<(), JsValue> {
+    let kept: Vec<String> = offers.iter().map(super::action_identity).collect();
+    let wrappers = actions.query_selector_all(":scope > .offered-action")?;
+    for index in 0..wrappers.length() {
+        if let Some(wrapper) = wrappers
+            .item(index)
+            .and_then(|item| item.dyn_into::<Element>().ok())
+            && !wrapper
+                .get_attribute("data-action-identity")
+                .is_some_and(|identity| kept.contains(&identity))
+        {
+            wrapper.remove();
+        }
+    }
+    Ok(())
+}
+
+/// The downed banner for this player's own hero, updated in place from the view.
+fn render_downed_notice(
+    document: &Document,
+    dock: &Element,
+    journey: &rpc::JourneyView,
+) -> Result<(), JsValue> {
+    let downed = super::dialogue_recovery::downed_state(journey);
+    let existing = dock.query_selector(".live-downed")?;
+    let Some(state) = downed else {
+        if let Some(existing) = existing {
+            existing.remove();
+        }
+        return Ok(());
+    };
+    let name = journey
+        .own_character
+        .as_ref()
+        .map_or("", |own| own.name.as_str());
+    let notice = match existing {
+        Some(existing) => existing,
+        None => {
+            let notice = node(document, dock, "section", "live-downed", "")?;
+            notice.set_attribute("role", "status")?;
+            notice.set_attribute("aria-live", "polite")?;
+            notice
+        }
+    };
+    notice.set_text_content(Some(&state.label(name)));
+    dock.append_child(&notice)?;
+    Ok(())
 }
 
 /// Recovery controls: the toast when something needs attention, the menu items for the rest.
@@ -789,22 +872,33 @@ pub(super) fn render(
     if lobby {
         dock.set_text_content(None);
     } else {
-        if should_show_dialogue_composer(input.journey.adventure_ended) {
+        let downed = super::dialogue_recovery::downed_state(input.journey);
+        if should_show_dialogue_composer(input.journey.adventure_ended) && downed.is_none() {
             let say = ensure_say_more(&document, &dock)?;
             dialogue_recovery::mount(client, &say, input.offers)?;
         } else if let Some(say) = dock.query_selector("details.say-more")? {
             say.remove();
         }
-        if let Some(previous) = dock.query_selector(".scene-actions")? {
-            previous.remove();
-        }
+        render_downed_notice(&document, &dock, input.journey)?;
         if let Some(own) = input.journey.own_character.as_ref() {
             let token = live_combat::sheet::portrait_token(&input.journey.party, own);
             live_combat::sheet::mount_inline(client, &dock, own, token)?;
         }
-        let actions = node(&document, &dock, "div", "scene-actions", "")?;
-        for offer in input.offers.iter().filter(|offer| !is_simple_offer(offer)) {
-            action_button(client, &actions, offer.clone())?;
+        let actions = ensure_scene_actions(&document, &dock)?;
+        if downed.is_some() {
+            // A downed hero sees the banner above, not live action buttons.
+            actions.set_text_content(None);
+        } else {
+            let current: Vec<rpc::GameplayActionOffer> = input
+                .offers
+                .iter()
+                .filter(|offer| !is_simple_offer(offer))
+                .cloned()
+                .collect();
+            for offer in &current {
+                action_button(client, &actions, offer.clone())?;
+            }
+            prune_scene_actions(&actions, &current)?;
         }
         render_item_card(&document, &dock, input.scene.item.as_ref(), false)?;
         render_hand_items(&document, &dock, &input.scene.hand_items, false)?;
@@ -1308,8 +1402,9 @@ mod tests {
     use super::super::rpc;
     use super::{
         SceneInput, VisualSource, art, art_source, authored_scene_alt, choice_disabled_reason,
-        end_card_contact_ready, exploration_speech, is_new_private_clue, lobby_art_source,
-        phone_choice_label, should_show_dialogue_composer, tv_model, validated_join_scene_asset,
+        end_card_contact_ready, ensure_scene_actions, exploration_speech, is_new_private_clue,
+        lobby_art_source, phone_choice_label, should_show_dialogue_composer, speaker_portrait,
+        tv_model, validated_join_scene_asset,
     };
 
     #[test]
@@ -1371,6 +1466,93 @@ mod tests {
                 "Marek",
                 "Marek shows Brakka the remaining wool coats."
             ))
+        );
+    }
+
+    #[test]
+    fn speaker_portrait_resolves_by_actor_id_not_by_name() {
+        // A later speaker who is none of the old name-mapped portraits still shows
+        // their served picture, because the cast carries them by actor id.
+        let journey = rpc::JourneyView {
+            speaker: "Second Messenger".into(),
+            table_log: vec![rpc::TableLine {
+                sequence: 4,
+                role: rpc::TableRole::Npc as i32,
+                kind: rpc::TableKind::Speech as i32,
+                speaker: "Second Messenger".into(),
+                actor_id: "messenger-2".into(),
+                text: "The quay is closed.".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let scene = rpc::GameplayScene {
+            cast: vec![rpc::SceneActor {
+                id: "messenger-2".into(),
+                name: "Second Messenger".into(),
+                portrait: "/assets/concept-art/vell-avatar.webp".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            speaker_portrait(&journey, &scene, Some(4)),
+            Some("/assets/concept-art/vell-avatar.webp".to_owned())
+        );
+        // An actor id the cast does not carry answers nothing, never a name match.
+        assert_eq!(speaker_portrait(&journey, &scene, Some(99)), None);
+    }
+
+    #[test]
+    fn scene_actions_container_is_kept_across_views() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let dock = document.create_element("div").unwrap();
+        let first = ensure_scene_actions(&document, &dock).unwrap();
+        let second = ensure_scene_actions(&document, &dock).unwrap();
+        assert!(first.is_same_node(Some(second.as_ref())));
+        assert_eq!(
+            dock.query_selector_all(".scene-actions").unwrap().length(),
+            1
+        );
+    }
+
+    #[test]
+    fn scene_action_button_is_kept_when_the_same_action_offer_refreshes() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("main").unwrap();
+        let client = super::super::new_client(&document, root, "player").unwrap();
+        let actions = document.create_element("div").unwrap();
+        let first = rpc::GameplayActionOffer {
+            offer_id: "first-view".into(),
+            label: "Look around".into(),
+            action_kind: 5,
+            ..Default::default()
+        };
+        super::super::action_button(&client, &actions, first).unwrap();
+        let first_button = actions
+            .query_selector(".offered-action > button.offered")
+            .unwrap()
+            .unwrap();
+
+        let refreshed = rpc::GameplayActionOffer {
+            offer_id: "next-view".into(),
+            label: "Look around".into(),
+            action_kind: 5,
+            ..Default::default()
+        };
+        super::super::action_button(&client, &actions, refreshed).unwrap();
+        let refreshed_button = actions
+            .query_selector(".offered-action > button.offered")
+            .unwrap()
+            .unwrap();
+
+        assert!(first_button.is_same_node(Some(refreshed_button.as_ref())));
+        assert_eq!(
+            actions
+                .query_selector_all(".offered-action > button.offered")
+                .unwrap()
+                .length(),
+            1
         );
     }
 
