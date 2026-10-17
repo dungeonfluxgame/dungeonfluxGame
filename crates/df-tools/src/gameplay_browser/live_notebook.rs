@@ -181,7 +181,10 @@ pub(super) fn render(
             // Empty the box first: sending redraws the notebook, and the redraw carries the
             // box's text over as a draft, so clearing afterwards cleared a box already replaced.
             let _clear = set_input_value(&editor, "");
-            dialogue_recovery::submit_notebook_command(client, format!("note: {text}"));
+            if !dialogue_recovery::submit_notebook_command(client, format!("note: {text}")) {
+                // Nothing was sent, so the note goes back in the box for another try.
+                let _restore = set_input_value(&editor, &text);
+            }
         }
     })?;
     if let Some(latest) = notebook.entries.iter().map(|entry| entry.order).max() {

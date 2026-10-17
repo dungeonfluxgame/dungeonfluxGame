@@ -35,7 +35,9 @@ use std::{
 };
 
 const SEEN_MEMORY: usize = 64;
-const LOG_LINES: usize = 3;
+/// The phone's feed keeps every line the server's public table log holds (the server's ring is 24
+/// lines), so the room's conversation reads the same on every phone.
+const LOG_LINES: usize = 24;
 /// The land cue when no clip plays (a clip rest lands on its own manifest time).
 const DICE_LAND: Duration = Duration::from_millis(900);
 const ROLL_RESULT: Duration = Duration::from_millis(1_050);
@@ -267,6 +269,26 @@ fn remember(seen: &mut VecDeque<u64>, sequence: u64) -> bool {
         seen.pop_front();
     }
     seen.push_back(sequence);
+    true
+}
+
+/// Adds a line to the phone's feed in server order and reports whether the feed changed. The
+/// scene's authored line and the server's copy of the same words are one line: the server's copy
+/// replaces the authored one, and a repeat of an authored line is dropped. Two lines the server
+/// logged are never merged, so a line said twice is shown twice.
+fn merge_feed_line(log: &mut VecDeque<TableLine>, line: &TableLine) -> bool {
+    if let Some(position) = log.iter().position(|shown| {
+        (shown.scripted || line.scripted) && presentation::same_utterance(shown, line)
+    }) {
+        if line.scripted {
+            return false;
+        }
+        log.remove(position);
+    }
+    // The server may number an action before the lines that followed it and deliver it after
+    // them: the feed keeps the server's order.
+    let position = log.partition_point(|shown| shown.sequence < line.sequence);
+    log.insert(position, line.clone());
     true
 }
 
@@ -2322,6 +2344,8 @@ pub(super) fn on_player_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue
         if motion.generation != generation {
             motion.generation = generation;
             motion.seen.clear();
+            // The server's log restarts with the new connection; the old feed would mis-order it.
+            motion.log.clear();
         }
     });
     let key = format!("{}|{}", journey.phase, scene.title);
@@ -2350,16 +2374,12 @@ pub(super) fn on_player_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue
         let transitions = presentation::transitions(motion.previous.as_ref(), &snapshot);
         motion.previous = Some(snapshot.clone());
         for line in &lines {
-            if remember(&mut motion.seen, line.sequence) && !hidden {
-                if motion.log.len() >= LOG_LINES {
+            // The feed records every line the view carries, even while the tab is hidden: a line
+            // seen only while hidden would otherwise never reach this phone's feed.
+            if remember(&mut motion.seen, line.sequence) && merge_feed_line(&mut motion.log, line) {
+                while motion.log.len() > LOG_LINES {
                     motion.log.pop_front();
                 }
-                // The server may number an action before the lines that followed it and
-                // deliver it after them: the log keeps the server's order.
-                let position = motion
-                    .log
-                    .partition_point(|shown| shown.sequence < line.sequence);
-                motion.log.insert(position, line.clone());
             }
         }
         if transitions.new_roll && !hidden {
@@ -2421,6 +2441,8 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
     strip.set_class_name("table-log");
     strip.set_attribute("role", "log")?;
     strip.set_attribute("aria-label", "What has happened at the table")?;
+    // The whole room's log can run long on a phone: the strip scrolls, and opens on the newest line.
+    strip.set_attribute("style", "max-height:40vh;overflow-y:auto")?;
     for line in &log {
         let row = node(&document, &strip, "p", "table-line", "")?;
         row.set_attribute(
@@ -2457,6 +2479,7 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
         node(&document, &row, "span", "table-text", &line.short_text())?;
     }
     parent.insert_before(&strip, Some(&anchor))?;
+    strip.set_scroll_top(strip.scroll_height());
     Ok(())
 }
 
@@ -2464,13 +2487,66 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
 mod tests {
     use super::{
         CheckVoiceLine, Detail, check_roll_script_line, check_voice_script_line, fight_line_stage,
-        fight_scripts, fresh_outcomes, merge_battlefield_beat_log, narration_line,
+        fight_scripts, fresh_outcomes, merge_battlefield_beat_log, merge_feed_line, narration_line,
         restore_pending_move_origin, take_pending_voice, timing_clip_state,
     };
     use crate::stage_conductor::{ClipOp, ClipSignal, Command, Conductor, ViewPlan};
     use crate::stage_machines::LineState;
     use crate::voice_line::VoiceLine;
     use std::collections::HashMap;
+
+    fn feed_line(
+        sequence: u64,
+        role: crate::presentation::TableRole,
+        text: &str,
+    ) -> crate::presentation::TableLine {
+        crate::presentation::TableLine {
+            actor_id: String::new(),
+            sequence,
+            speaker: "Marek".to_owned(),
+            role,
+            kind: crate::presentation::TableKind::Speech,
+            text: text.to_owned(),
+            scripted: false,
+        }
+    }
+
+    /// Wasm-only: the phone feed is compiled for the browser target. Arrange a scene greeting, the
+    /// server's copy of it, two identical replies and a hero line; act by merging them in arrival
+    /// order; assert the feed holds each line once, in server order.
+    #[test]
+    fn the_phone_feed_shows_the_greeting_once_and_every_logged_line_in_order() {
+        use crate::presentation::TableRole;
+        let mut log = std::collections::VecDeque::new();
+        let mut greeting = feed_line(900, TableRole::Npc, "Welcome.");
+        greeting.scripted = true;
+        assert!(merge_feed_line(&mut log, &greeting));
+        let mut redrawn = greeting.clone();
+        redrawn.sequence = 901;
+        assert!(
+            !merge_feed_line(&mut log, &redrawn),
+            "the same authored words are not shown twice"
+        );
+        assert!(merge_feed_line(
+            &mut log,
+            &feed_line(5, TableRole::Npc, "Welcome.")
+        ));
+        assert!(merge_feed_line(
+            &mut log,
+            &feed_line(6, TableRole::Hero(0), "What do you sell?")
+        ));
+        assert!(merge_feed_line(
+            &mut log,
+            &feed_line(7, TableRole::Npc, "Yes.")
+        ));
+        assert!(merge_feed_line(
+            &mut log,
+            &feed_line(8, TableRole::Npc, "Yes.")
+        ));
+        let sequences: Vec<u64> = log.iter().map(|line| line.sequence).collect();
+        assert_eq!(sequences, [5, 6, 7, 8]);
+        assert!(log.iter().all(|line| !line.scripted));
+    }
 
     fn check_pair(sequence: u64) -> (CheckVoiceLine, super::super::live_stage::CheckDisplay) {
         let finding = format!("Finding for check {sequence}.");

@@ -72,6 +72,21 @@ fn scope_change_notice(draft: &str) -> Option<&'static str> {
     (!draft.trim().is_empty()).then_some("Your draft is still here. Review it before sending.")
 }
 
+/// The text the player has in the composer right now. A scope notice speaks of that text only.
+fn composer_draft(dialogue: &DialogueRecovery) -> String {
+    dialogue
+        .editor
+        .as_ref()
+        .map(HtmlTextAreaElement::value)
+        .unwrap_or_default()
+}
+
+/// The notice for a request refused because the offer or scope moved on. It appears only while the
+/// player has a draft that the change could affect: another player's turn is not the player's change.
+fn scope_changed_notice(draft: &str) -> Option<&'static str> {
+    (!draft.trim().is_empty()).then_some("The offer or scope changed. Your text remains editable.")
+}
+
 fn split_action_response(response: &str) -> (&str, &str) {
     response.find(". ").map_or((response, ""), |period| {
         (&response[..=period], &response[period + 2..])
@@ -391,6 +406,7 @@ pub(super) fn mount(
     {
         let mut state = client.borrow_mut();
         let revision = state.revision;
+        let draft = composer_draft(&state.dialogue);
         let recovery = &mut state.dialogue;
         if recovery.confirmation.is_none()
             && recovery.ticket.as_ref().is_some_and(|(input, _)| {
@@ -398,10 +414,15 @@ pub(super) fn mount(
                     || !current.iter().any(|offer| offer.offer_id == input.offer_id)
             })
         {
+            // A revision moved by another player drops the stale ticket, but the notice is only
+            // for a player whose own text is still waiting in the composer.
             recovery.ticket = None;
-            recovery.message =
+            recovery.message = if draft.trim().is_empty() {
+                String::new()
+            } else {
                 "The offer changed. Your text remains editable; request current clarification."
-                    .to_owned();
+                    .to_owned()
+            };
         }
         recovery.offers = current;
     }
@@ -694,7 +715,8 @@ pub(super) fn submit(client: Rc<RefCell<Client>>) {
     }
 }
 
-pub(super) fn submit_notebook_command(client: Rc<RefCell<Client>>, command: String) {
+/// Sends a notebook command. Returns false when nothing was sent, so the caller keeps its text.
+pub(super) fn submit_notebook_command(client: Rc<RefCell<Client>>, command: String) -> bool {
     let prepared = (|| -> Result<_, String> {
         let state = client.borrow();
         if state.role != "player" {
@@ -721,8 +743,17 @@ pub(super) fn submit_notebook_command(client: Rc<RefCell<Client>>, command: Stri
         })
     })();
     match prepared {
-        Ok(request) => dispatch(client, Call::Raw(request)),
-        Err(message) => show(&client, &message),
+        Ok(request) => match try_dispatch(client.clone(), Call::Raw(request)) {
+            Ok(()) => true,
+            Err(message) => {
+                show(&client, &message);
+                false
+            }
+        },
+        Err(message) => {
+            show(&client, &message);
+            false
+        }
     }
 }
 
@@ -807,6 +838,13 @@ fn show(client: &Rc<RefCell<Client>>, message: &str) {
 }
 
 fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
+    if let Err(message) = try_dispatch(client.clone(), call) {
+        show(&client, &message);
+    }
+}
+
+/// Starts the call. A refusal names why nothing was sent, so the caller keeps its draft.
+fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
     let prepared = (|| -> Result<_, String> {
         let mut state = client.borrow_mut();
         if state.busy {
@@ -845,13 +883,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
         state.dialogue.message = "Waiting for the native dialogue owner…".to_owned();
         Ok((channel, credential, generation, instance, registration))
     })();
-    let (mut channel, credential, generation, instance, registration) = match prepared {
-        Ok(value) => value,
-        Err(message) => {
-            show(&client, &message);
-            return;
-        }
-    };
+    let (mut channel, credential, generation, instance, registration) = prepared?;
     let weak = Rc::downgrade(&client);
     let _ = redraw_current(&client);
     wasm_bindgen_futures::spawn_local(async move {
@@ -1027,17 +1059,19 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
                     } else {
                         match error.code() {
                             tonic::Code::FailedPrecondition => {
-                                "The offer or scope changed. Your text remains editable."
+                                scope_changed_notice(&composer_draft(&state.dialogue))
+                                    .unwrap_or_default()
+                                    .to_owned()
                             }
                             tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
-                                "Dialogue authorization is unavailable. Reconnect."
+                                "Dialogue authorization is unavailable. Reconnect.".to_owned()
                             }
                             tonic::Code::InvalidArgument | tonic::Code::ResourceExhausted => {
                                 "The native owner refused this input. Edit the bounded draft."
+                                    .to_owned()
                             }
-                            _ => "Dialogue is unavailable. Your draft remains editable.",
+                            _ => "Dialogue is unavailable. Your draft remains editable.".to_owned(),
                         }
-                        .to_owned()
                     }
                 }
                 Err(_) => {
@@ -1054,6 +1088,7 @@ fn dispatch(client: Rc<RefCell<Client>>, call: Call) {
             );
         }
     });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1108,13 +1143,44 @@ mod tests {
 
     use super::{
         composer_available, reply_attribution, reply_status, scope_change_notice,
-        speaker_portrait_url, split_action_response,
+        scope_changed_notice, speaker_portrait_url, split_action_response,
     };
 
     #[test]
     fn scope_change_notice_is_absent_for_an_empty_draft() {
         assert_eq!(scope_change_notice(""), None);
         assert_eq!(scope_change_notice(" \t\n"), None);
+    }
+
+    /// Wasm-only: another player's turn moves the scope while this player's composer is empty.
+    /// Arrange an empty composer; act by reading its draft as the refusal handler does; assert no
+    /// notice. Then type a draft and assert the notice names it.
+    #[test]
+    fn a_scope_change_stays_silent_while_this_players_composer_is_empty() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let client = new_client(&document, root.clone(), "player").unwrap();
+        let editor = node(&document, &root, "textarea", "dialogue-draft", "")
+            .unwrap()
+            .dyn_into::<HtmlTextAreaElement>()
+            .unwrap();
+        client.borrow_mut().dialogue.set_test_editor(editor.clone());
+        assert_eq!(
+            scope_changed_notice(&composer_draft(&client.borrow().dialogue)),
+            None
+        );
+        editor.set_value("I look behind the counter.");
+        assert_eq!(
+            scope_changed_notice(&composer_draft(&client.borrow().dialogue)),
+            Some("The offer or scope changed. Your text remains editable.")
+        );
+    }
+
+    #[test]
+    fn scope_changed_notice_is_absent_for_a_blank_draft() {
+        assert_eq!(scope_changed_notice(""), None);
+        assert_eq!(scope_changed_notice(" \t\n"), None);
     }
 
     #[test]

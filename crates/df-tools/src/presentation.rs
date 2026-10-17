@@ -1057,8 +1057,9 @@ pub(crate) fn newest_scene_speech(journey: &rpc::JourneyView) -> Option<(u64, &s
 }
 
 /// The table lines of one audience view, oldest first: the scene's own speaker line, then the
-/// server's public table log. A player view omits the scripted line and newest scene-speaker reply
-/// already shown on its story card; display views retain the complete feed.
+/// server's public table log. A player view omits the newest scene-speaker reply its story card
+/// shows, and shows the scene's authored line only once even when the log repeats it; every other
+/// public line appears in server order. Display views retain the complete feed.
 ///
 /// SERVER FEED SWITCH POINT: this is the one place the feed is read; consumers in
 /// `live_motion` depend only on this signature. A log line whose role or kind the server left
@@ -1076,7 +1077,8 @@ pub(crate) fn table_lines(view: &rpc::ViewMessage) -> Vec<TableLine> {
     let Some(journey) = journey else {
         return Vec::new();
     };
-    let player_card = matches!(&view.audience, Some(rpc::view_message::Audience::Player(_)))
+    let player_audience = matches!(&view.audience, Some(rpc::view_message::Audience::Player(_)));
+    let player_card = player_audience
         && !journey.adventure_ended
         && match rpc::JourneyPhase::try_from(journey.phase) {
             Ok(
@@ -1090,66 +1092,36 @@ pub(crate) fn table_lines(view: &rpc::ViewMessage) -> Vec<TableLine> {
             }
             _ => false,
         };
+    // The story card already shows the scene speaker's newest reply, so the phone leaves that one
+    // line out of the feed. Every other public line, from any hero or NPC, stays in server order.
     let newest_reply = if player_card {
         newest_scene_speech(journey)
     } else {
         None
     };
-    let scene_start = player_card
-        .then(|| {
-            journey.table_log.iter().rev().find(|line| {
-                rpc::TableRole::try_from(line.role) == Ok(rpc::TableRole::Hero)
-                    && rpc::TableKind::try_from(line.kind) == Ok(rpc::TableKind::Action)
-            })
-        })
-        .flatten();
-    let fight_ending = scene_start
-        .filter(|_| {
-            journey
-                .combat
-                .as_ref()
-                .is_some_and(|combat| combat.finished)
-        })
-        .and_then(|start| {
-            journey.table_log.iter().rev().find(|line| {
-                line.sequence < start.sequence
-                    && rpc::TableRole::try_from(line.role)
-                        .is_ok_and(|role| role != rpc::TableRole::Unspecified)
-                    && rpc::TableKind::try_from(line.kind)
-                        .is_ok_and(|kind| kind != rpc::TableKind::Unspecified)
-            })
-        });
+    let logged: Vec<TableLine> = logged_lines(journey)
+        .filter(|line| !newest_reply.is_some_and(|(sequence, _, _)| line.sequence == sequence))
+        .collect();
+    // A phone shows the same words once: when the server's log carries the scene's line, the
+    // server's copy is the line. The display keeps its authored line as before.
     let authored_line = if player_card {
         None
     } else {
         scene_line(journey, scene)
-    };
-    let mut lines: Vec<_> = authored_line
-        .into_iter()
-        .chain(logged_lines(journey).filter(|line| {
-            (!player_card
-                || scene_start.is_none_or(|start| {
-                    line.sequence >= start.sequence
-                        || fight_ending.is_some_and(|ending| line.sequence == ending.sequence)
-                }))
-                && !newest_reply.is_some_and(|(sequence, _, _)| line.sequence == sequence)
-        }))
-        .collect();
-    if let Some(ending) = fight_ending
-        && let Some(line) = lines
-            .iter_mut()
-            .find(|line| line.sequence == ending.sequence)
-    {
-        line.speaker.clear();
-        line.role = TableRole::Narrator;
-        line.kind = TableKind::Action;
-        line.text = if is_victory(journey) {
-            "The fight is won.".to_owned()
-        } else {
-            "The party fell.".to_owned()
-        };
     }
-    lines
+    .filter(|authored| {
+        !(player_audience && logged.iter().any(|line| same_utterance(line, authored)))
+    });
+    authored_line.into_iter().chain(logged).collect()
+}
+
+/// Whether two lines are the same words by the same speaker, role and kind. The scene's authored
+/// line and the server's copy of it have different sequences, so the words identify them.
+pub(crate) fn same_utterance(left: &TableLine, right: &TableLine) -> bool {
+    left.role == right.role
+        && left.kind == right.kind
+        && left.speaker == right.speaker
+        && left.text == right.text
 }
 
 fn logged_lines(journey: &rpc::JourneyView) -> impl Iterator<Item = TableLine> + '_ {
@@ -2893,7 +2865,7 @@ mod tests {
     }
 
     #[test]
-    fn player_story_log_starts_at_the_action_that_opened_the_scene() {
+    fn player_feed_keeps_every_public_line_across_a_finished_fight() {
         let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
         shown.combat.as_mut().unwrap().finished = true;
         shown.combat.as_mut().unwrap().participants = vec![rpc::PartyMemberView {
@@ -2947,10 +2919,17 @@ mod tests {
         };
 
         let lines = table_lines(&player);
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0].text, "The fight is won.");
-        assert_eq!(lines[1].text, "leads on to the bothy");
-        assert_eq!(lines[2].text, "Welcome, friends.");
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "swings at the weasel",
+                "Brakka strikes the weasel",
+                "leads on to the bothy",
+                "Welcome, friends.",
+            ],
+            "a finished fight stays in the phone feed, in server order"
+        );
 
         let mut fighting = journey(rpc::JourneyPhase::Combat, false, vec![]);
         fighting.table_log = fight_lines.clone();
@@ -2981,7 +2960,10 @@ mod tests {
             )),
             ..Default::default()
         };
-        assert_eq!(table_lines(&player_after_defeat)[0].text, "The party fell.");
+        assert_eq!(
+            table_lines(&player_after_defeat)[0].text,
+            "swings at the weasel"
+        );
     }
 
     #[test]
@@ -3027,6 +3009,179 @@ mod tests {
             ..Default::default()
         };
         assert!(table_lines(&player).is_empty());
+    }
+
+    fn phone(journey: rpc::JourneyView) -> rpc::ViewMessage {
+        rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(journey),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_phone_feed_shows_every_hero_and_npc_line_in_order_on_each_phone() {
+        // Arrange: Sigrun and Brakka talk to Jessa and to each other in one dialogue scene.
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Jessa".to_owned();
+        shown.table_log = vec![
+            server_line(
+                29,
+                "Sigrun",
+                rpc::TableRole::Hero,
+                1,
+                rpc::TableKind::Speech,
+                "Jessa, you seem to know Marek.",
+            ),
+            server_line(
+                30,
+                "Jessa",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "Marek and I drink at the same tavern.",
+            ),
+            server_line(
+                31,
+                "Sigrun",
+                rpc::TableRole::Hero,
+                1,
+                rpc::TableKind::Speech,
+                "Would you put in a good word?",
+            ),
+            server_line(
+                32,
+                "Jessa",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "I am off duty this afternoon.",
+            ),
+            server_line(
+                33,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Speech,
+                "Sigrun, should we head to the market?",
+            ),
+            server_line(
+                34,
+                "Sigrun",
+                rpc::TableRole::Hero,
+                1,
+                rpc::TableKind::Speech,
+                "Brakka, yes.",
+            ),
+        ];
+        // Act: both phones read the same accepted log.
+        let brakka_phone = table_lines(&phone(shown.clone()));
+        let sigrun_phone = table_lines(&phone(shown));
+        // Assert: each phone carries all six lines, the other hero's included, in server order.
+        let sequences: Vec<u64> = brakka_phone.iter().map(|line| line.sequence).collect();
+        assert_eq!(sequences, [29, 30, 31, 32, 33, 34]);
+        assert_eq!(brakka_phone, sigrun_phone);
+        assert_eq!(brakka_phone[1].role, TableRole::Npc);
+        assert_eq!(brakka_phone[4].role, TableRole::Hero(0));
+    }
+
+    #[test]
+    fn a_repeated_words_line_is_shown_each_time_it_is_said() {
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Marek".to_owned();
+        shown.table_log = vec![
+            server_line(
+                5,
+                "Marek",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "Yes.",
+            ),
+            server_line(
+                6,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Speech,
+                "Good.",
+            ),
+            server_line(
+                7,
+                "Marek",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "Yes.",
+            ),
+        ];
+        let lines = table_lines(&phone(shown));
+        let sequences: Vec<u64> = lines.iter().map(|line| line.sequence).collect();
+        assert_eq!(
+            sequences,
+            [5, 6],
+            "the newest reply is on the story card, not the feed"
+        );
+    }
+
+    #[test]
+    fn the_scene_greeting_is_shown_once_when_the_server_log_repeats_it() {
+        const GREETING: &str =
+            "Welcome. Have a look around; let me know if you want to try anything on.";
+        // Arrange: the story card's authored greeting is also the server's logged line.
+        let mut shown = journey(rpc::JourneyPhase::Combat, false, vec![]);
+        shown.speaker = "Marek".to_owned();
+        shown.dialogue = GREETING.to_owned();
+        shown.table_log = vec![
+            server_line(
+                5,
+                "Marek",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                GREETING,
+            ),
+            server_line(
+                6,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Speech,
+                "What do you sell?",
+            ),
+        ];
+        // Act and assert: a phone without a story card shows the greeting once, as the server's line.
+        let lines = table_lines(&phone(shown.clone()));
+        let sequences: Vec<u64> = lines.iter().map(|line| line.sequence).collect();
+        assert_eq!(sequences, [5, 6]);
+        assert!(!lines[0].scripted);
+        // The display keeps its authored line as before.
+        assert_eq!(table_lines(&view(shown)).len(), 3);
+    }
+
+    #[test]
+    fn the_scene_greeting_is_not_shown_twice_on_a_story_card_phone() {
+        const GREETING: &str =
+            "Welcome. Have a look around; let me know if you want to try anything on.";
+        let mut shown = journey(rpc::JourneyPhase::Dialogue, false, vec![]);
+        shown.speaker = "Marek".to_owned();
+        shown.dialogue = GREETING.to_owned();
+        shown.table_log = vec![server_line(
+            5,
+            "Marek",
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Speech,
+            GREETING,
+        )];
+        assert!(
+            table_lines(&phone(shown)).is_empty(),
+            "the story card already shows this newest reply"
+        );
     }
 
     fn actor(id: &str, name: &str, speaking: bool) -> rpc::SceneActor {
