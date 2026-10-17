@@ -1449,7 +1449,7 @@ async fn live_addressee_probe_absent_discourse_and_background() {
 #[test]
 fn no_const_or_static_english_phrase_table_decides_meaning() {
     // Each entry is (file, item). Only closed Jev label catalogs and structural ids may be listed.
-    const ALLOWED: [(&str, &str); 13] = [
+    const ALLOWED: [(&str, &str); 14] = [
         // Jev's closed intent labels, each with the criterion text Jev reads.
         ("approach_model.rs", "INTENTS"),
         // Jev's closed attempt-skill labels, each with its criterion text.
@@ -1476,6 +1476,8 @@ fn no_const_or_static_english_phrase_table_decides_meaning() {
         ("freeform_action.rs", "DIFFICULTIES"),
         // Jev's closed strike-means labels; the chosen label maps back to its means.
         ("freeform_action.rs", "STRIKE_MEANS"),
+        // Jev's closed service labels; the chosen label maps back to a listed ledger service.
+        ("dialogue.rs", "SERVICE_CHOICES"),
     ];
     let sources = [
         ("approach_model.rs", include_str!("approach_model.rs")),
