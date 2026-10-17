@@ -285,9 +285,24 @@ fn merge_feed_line(log: &mut VecDeque<TableLine>, line: &TableLine) -> bool {
         }
         log.remove(position);
     }
-    // The server may number an action before the lines that followed it and deliver it after
-    // them: the feed keeps the server's order.
-    let position = log.partition_point(|shown| shown.sequence < line.sequence);
+    // The authored scene line carries a hash, not a server sequence, so it opens the feed: it goes
+    // before the first server line whatever its number. Server lines keep their order after it.
+    let server_start = log
+        .iter()
+        .position(|shown| !shown.scripted)
+        .unwrap_or(log.len());
+    let position = if line.scripted {
+        server_start
+    } else {
+        // The server may number an action before the lines that followed it and deliver it after
+        // them: the feed keeps the server's order.
+        server_start
+            + log
+                .iter()
+                .skip(server_start)
+                .take_while(|shown| shown.sequence < line.sequence)
+                .count()
+    };
     log.insert(position, line.clone());
     true
 }
@@ -2546,6 +2561,40 @@ mod tests {
         let sequences: Vec<u64> = log.iter().map(|line| line.sequence).collect();
         assert_eq!(sequences, [5, 6, 7, 8]);
         assert!(log.iter().all(|line| !line.scripted));
+    }
+
+    /// The authored greeting opens the feed even though its hash-like sequence is larger than every
+    /// server sequence, and server lines that arrive out of order still sort among themselves.
+    #[test]
+    fn the_authored_greeting_precedes_every_server_line_in_the_feed() {
+        use crate::presentation::TableRole;
+        let mut log = std::collections::VecDeque::new();
+        assert!(merge_feed_line(
+            &mut log,
+            &feed_line(6, TableRole::Hero(0), "I'll buy them back.")
+        ));
+        let mut greeting = feed_line(u64::MAX - 7, TableRole::Npc, "Welcome.");
+        greeting.scripted = true;
+        assert!(merge_feed_line(&mut log, &greeting));
+        assert!(merge_feed_line(
+            &mut log,
+            &feed_line(5, TableRole::Npc, "What do you sell?")
+        ));
+        assert!(merge_feed_line(
+            &mut log,
+            &feed_line(7, TableRole::Npc, "Yes.")
+        ));
+        let texts: Vec<&str> = log.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Welcome.",
+                "What do you sell?",
+                "I'll buy them back.",
+                "Yes."
+            ]
+        );
+        assert!(log[0].scripted);
     }
 
     fn check_pair(sequence: u64) -> (CheckVoiceLine, super::super::live_stage::CheckDisplay) {

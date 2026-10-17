@@ -23,7 +23,7 @@
         "options": [
           {
             "id": "fighter-1",
-            "label": "Fighter Â· level 1",
+            "label": "Fighter · level 1",
             "description": "Choose a Fighting Style, call on Second Wind, and master three weapons."
           }
         ]
@@ -42,7 +42,7 @@
       {
         "id": "array",
         "label": "Ability scores",
-        "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} Â· Soldier +{bonus_str}STR/+{bonus_con}CON",
+        "description_template": "STR{0} DEX{1} CON{2} INT{3} WIS{4} CHA{5} · Soldier +{bonus_str}STR/+{bonus_con}CON",
         "options": [
           {
             "id": "stalwart",

@@ -184,7 +184,7 @@ impl WebSocketIo {
             read_wakeup: None,
             metrics,
         };
-        const CONNECTION_TIMEOUT_MS: u32 = 10_000;
+        const CONNECTION_TIMEOUT_MS: u32 = 5_000;
         let wait_for_open = poll_fn(|context| {
             let mut state = io.state.borrow_mut();
             if state.failed || state.closed {

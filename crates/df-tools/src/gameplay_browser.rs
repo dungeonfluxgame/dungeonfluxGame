@@ -98,6 +98,14 @@ struct Client {
     /// Times the page has confirmed an unconfirmed choice by itself since it was sent.
     auto_confirms: u8,
     feedback_generation: u64,
+    /// The page's listener for returning to the front (see [`attach_visibility`]).
+    visibility: Option<VisibilityWatch>,
+}
+
+/// The document listener that reconnects when a hidden page comes back to the front.
+struct VisibilityWatch {
+    document: Document,
+    callback: Closure<dyn FnMut(web_sys::Event)>,
 }
 
 #[derive(Default)]
@@ -119,6 +127,12 @@ impl Drop for Client {
             connection.close();
         }
         clear_callbacks(self);
+        if let Some(watch) = self.visibility.take() {
+            let _removed = watch.document.remove_event_listener_with_callback(
+                "visibilitychange",
+                watch.callback.as_ref().unchecked_ref(),
+            );
+        }
         if let Some(scene) = self.scene_delivery.take() {
             let _cleanup = scene.dispose();
         }
@@ -868,6 +882,42 @@ fn schedule_join_retry(client: &Rc<RefCell<Client>>, preparing: bool) {
         }
     });
 }
+/// Listens for the page returning to the front. A page that was hidden has most likely lost its
+/// socket while it slept, so it reconnects at once instead of waiting out a retry backoff.
+fn attach_visibility(document: &Document, client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
+    let hidden_since: Rc<std::cell::Cell<Option<f64>>> = Rc::new(std::cell::Cell::new(None));
+    let weak = Rc::downgrade(client);
+    let callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
+        let Some(client) = weak.upgrade() else {
+            return;
+        };
+        let document_hidden = client.borrow().document.hidden();
+        if document_hidden {
+            hidden_since.set(Some(js_sys::Date::now()));
+        } else if hidden_since.take().is_some() {
+            reconnect_now(&client);
+        }
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    document
+        .add_event_listener_with_callback("visibilitychange", callback.as_ref().unchecked_ref())?;
+    client.borrow_mut().visibility = Some(VisibilityWatch {
+        document: document.clone(),
+        callback,
+    });
+    Ok(())
+}
+
+/// Starts the game connection now, without waiting out a backoff. A retry already scheduled is
+/// cancelled by the connect itself.
+fn reconnect_now(client: &Rc<RefCell<Client>>) {
+    // A page without a saved seat is on the join screen; returning to it must not redraw that.
+    if client.borrow().credential.is_empty() {
+        return;
+    }
+    client.borrow_mut().reconnect.attempt = 0;
+    connect(client.clone());
+}
+
 fn connect(client: Rc<RefCell<Client>>) {
     if client.borrow().credential.is_empty() {
         let _ = render_join(&client);
@@ -2218,13 +2268,83 @@ fn render(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), Js
         }
         _ => None,
     };
+    // A redraw rebuilds the page; it must not move the reader's place (feed, composer, sheet).
+    let root = client.borrow().root.clone();
+    let place = ScrollPlace::remember(&root);
     render_view(client, view)?;
     if let Some((json, revision)) = display_layout {
         layout::apply(client, &json, revision)?;
     }
     phone_controls::bind(client)?;
     presentation_timing::paint(client);
+    place.restore(&root);
     Ok(())
+}
+
+/// Where the page and each scrolled element were before a redraw. An element is matched after
+/// the redraw by its tag, class and its position among elements with that tag and class.
+struct ScrollPlace {
+    page: (f64, f64),
+    elements: Vec<(String, usize, i32)>,
+}
+
+impl ScrollPlace {
+    fn remember(root: &Element) -> Self {
+        let page = web_sys::window()
+            .map(|window| {
+                (
+                    window.scroll_x().unwrap_or(0.0),
+                    window.scroll_y().unwrap_or(0.0),
+                )
+            })
+            .unwrap_or((0.0, 0.0));
+        let mut elements = Vec::new();
+        for (key, index, element) in scroll_keys(root) {
+            let top = element.scroll_top();
+            if top > 0 {
+                elements.push((key, index, top));
+            }
+        }
+        Self { page, elements }
+    }
+
+    fn restore(&self, root: &Element) {
+        for (key, index, element) in scroll_keys(root) {
+            if let Some((_, _, top)) = self
+                .elements
+                .iter()
+                .find(|(saved, saved_index, _)| *saved == key && *saved_index == index)
+            {
+                element.set_scroll_top(*top);
+            }
+        }
+        if let Some(window) = web_sys::window() {
+            window.scroll_to_with_x_and_y(self.page.0, self.page.1);
+        }
+    }
+}
+
+/// Every element under `root` with its key (tag and class), its index among the elements sharing
+/// that key, and the element itself.
+fn scroll_keys(root: &Element) -> Vec<(String, usize, Element)> {
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut keyed = Vec::new();
+    let Ok(all) = root.query_selector_all("*") else {
+        return keyed;
+    };
+    for position in 0..all.length() {
+        let Some(node) = all.item(position) else {
+            continue;
+        };
+        let Ok(element) = node.dyn_into::<Element>() else {
+            continue;
+        };
+        let key = format!("{}.{}", element.tag_name(), element.class_name());
+        let count = counts.entry(key.clone()).or_insert(0);
+        keyed.push((key, *count, element));
+        *count += 1;
+    }
+    keyed
 }
 
 fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(), JsValue> {
@@ -2653,6 +2773,7 @@ fn new_client(
         preparing_adventure: false,
         auto_confirms: 0,
         feedback_generation: 0,
+        visibility: None,
     }));
     live_chrome::mount(&client)?;
     Ok(client)
@@ -2717,6 +2838,7 @@ pub(super) fn start() -> Result<(), JsValue> {
             continue;
         };
         let client = new_client(&document, root, role)?;
+        attach_visibility(&document, &client)?;
         CLIENTS.with(|clients| clients.borrow_mut().push(client.clone()));
         if role == "player" {
             resume_or_join(&client)?;

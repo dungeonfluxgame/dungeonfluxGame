@@ -229,6 +229,10 @@ impl DialogueRecovery {
 
     pub(super) fn retire_transport(&mut self) {
         self.talk.interrupt_now(Interruption::ConnectionLost);
+        // Disable Say it at once, before any redraw, so a press cannot land on a dead channel.
+        if let Some(button) = &self.send_button {
+            let _disabled = button.set_attribute("disabled", "");
+        }
         if let Some((_, abort)) = self.active.take() {
             abort.abort();
         }
@@ -277,7 +281,9 @@ enum Call {
 }
 
 pub(super) fn submit_disabled(client: &Client) -> bool {
+    // While the game connection is down the line cannot reach the table, so Say it waits.
     client.busy
+        || client.connection.is_none()
         || client.dialogue.channel.is_none()
         || client.dialogue.confirmation.is_some()
         || client.dialogue.talk.is_busy()
@@ -425,6 +431,17 @@ pub(super) fn mount(
             };
         }
         recovery.offers = current;
+    }
+    if client.borrow().connection.is_none() {
+        // The feed above is the last one received; the draft below is kept until the table is back.
+        let notice = node(
+            &document,
+            &panel,
+            "p",
+            "dialogue-reconnecting",
+            "Reconnecting to the table. Your words stay in the box; Say it works again when you are back.",
+        )?;
+        notice.set_attribute("role", "status")?;
     }
     let controls = node(&document, &panel, "div", "dialogue-controls", "")?;
     let raw = mount_send(client, &controls)?;
@@ -880,7 +897,7 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
             old.abort();
         }
         state.busy = true;
-        state.dialogue.message = "Waiting for the native dialogue owner…".to_owned();
+        state.dialogue.message = "Sending…".to_owned();
         Ok((channel, credential, generation, instance, registration))
     })();
     let (mut channel, credential, generation, instance, registration) = prepared?;

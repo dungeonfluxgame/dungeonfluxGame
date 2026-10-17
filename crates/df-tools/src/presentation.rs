@@ -3164,6 +3164,47 @@ mod tests {
     }
 
     #[test]
+    fn the_authored_greeting_comes_before_the_server_lines_when_the_log_lacks_it() {
+        const GREETING: &str =
+            "Welcome. Have a look around; let me know if you want to try anything on.";
+        // The server's log has moved on: the buyback follow-up is newer than the scene's greeting
+        // and the log does not repeat the greeting.
+        let mut shown = journey(rpc::JourneyPhase::Combat, false, vec![]);
+        shown.speaker = "Marek".to_owned();
+        shown.dialogue = GREETING.to_owned();
+        shown.table_log = vec![
+            server_line(
+                8,
+                "Brakka",
+                rpc::TableRole::Hero,
+                0,
+                rpc::TableKind::Speech,
+                "Buy these back for 1 gold?",
+            ),
+            server_line(
+                9,
+                "Marek",
+                rpc::TableRole::Npc,
+                0,
+                rpc::TableKind::Speech,
+                "Let me look at them.",
+            ),
+        ];
+        let lines = table_lines(&view(shown));
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                GREETING,
+                "Buy these back for 1 gold?",
+                "Let me look at them."
+            ],
+            "the authored greeting opens the feed, before the first server line"
+        );
+        assert!(lines[0].scripted);
+    }
+
+    #[test]
     fn the_scene_greeting_is_not_shown_twice_on_a_story_card_phone() {
         const GREETING: &str =
             "Welcome. Have a look around; let me know if you want to try anything on.";
