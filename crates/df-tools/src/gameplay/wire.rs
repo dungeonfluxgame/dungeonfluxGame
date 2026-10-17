@@ -77,6 +77,7 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
         "second-wind" => rpc::GameplayActionKind::SecondWind,
         "stabilise-kit" => rpc::GameplayActionKind::StabiliseWithHealersKit,
         "stabilise-medicine" => rpc::GameplayActionKind::StabiliseMedicine,
+        "help-attack" => rpc::GameplayActionKind::HelpAttack,
         "end-turn" => rpc::GameplayActionKind::EndTurn,
         "move" => rpc::GameplayActionKind::Move,
         "dash" => rpc::GameplayActionKind::Dash,
@@ -105,6 +106,7 @@ pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str
         rpc::GameplayActionKind::SecondWind => "second-wind",
         rpc::GameplayActionKind::StabiliseWithHealersKit => "stabilise-kit",
         rpc::GameplayActionKind::StabiliseMedicine => "stabilise-medicine",
+        rpc::GameplayActionKind::HelpAttack => "help-attack",
         rpc::GameplayActionKind::EndTurn => "end-turn",
         rpc::GameplayActionKind::Move => "move",
         rpc::GameplayActionKind::Dash => "dash",
@@ -131,6 +133,20 @@ pub(super) fn unrelated_payload(
         || (kind != rpc::GameplayActionKind::GreatswordAttack
             && (request.savage_attacker || request.graze))
 }
+/// Most action choices one submit may carry. A fight action carries its tactical choice and at
+/// most the two attack variants (weapon mastery, Savage Attacker).
+const FIGHT_CHOICE_BOUND: usize = 3;
+/// Most action choices a scene interaction may carry. dialogue.rs sends scene-target and
+/// scene-option, then at most two of scene-payment, scene-recipient, scene-amount and
+/// scene-quote-id (a trade sends payment and quote id; a buy sends payment and recipient).
+const SCENE_INTERACTION_CHOICE_BOUND: usize = 4;
+fn choice_bound(scene_offer: bool) -> usize {
+    if scene_offer {
+        SCENE_INTERACTION_CHOICE_BOUND
+    } else {
+        FIGHT_CHOICE_BOUND
+    }
+}
 pub(super) fn journey_input(
     request: &rpc::SubmitActionRequest,
     member: df_types::MemberId,
@@ -149,15 +165,13 @@ pub(super) fn journey_input(
     if request.offer_id.len() > 96 {
         return Err(tonic::Status::invalid_argument("offer exceeds bound"));
     }
-    // A fight action carries at most its choice from the list and the two attack variants
-    // (weapon mastery, Savage Attacker).
     let interaction_offer = kind == rpc::GameplayActionKind::ExamineHarborSeal
         && request.offer_id == super::journey::living_scene::offer_id(current);
     let observation_offer = kind == rpc::GameplayActionKind::ExamineHarborSeal
         && (interaction_offer
             || super::beat_script_runtime::is_observation_offer(current, &request.offer_id)
                 .map_err(|_| invalid())?);
-    if request.action_choices.len() > 3
+    if request.action_choices.len() > choice_bound(interaction_offer || observation_offer)
         || (!super::journey::tactical::present(current.state())
             && !observation_offer
             && kind != rpc::GameplayActionKind::ShortRest
@@ -1617,6 +1631,25 @@ mod perception_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scene_interaction_may_carry_four_choices_and_a_fight_action_three() {
+        // A quote acceptance sends target, option, payment and quote id.
+        assert_eq!(choice_bound(true), 4);
+        assert_eq!(choice_bound(false), 3);
+    }
+
+    #[test]
+    fn help_attack_maps_both_ways_between_its_wire_kind_and_entry() {
+        assert_eq!(
+            action_kind("help-attack"),
+            Some(rpc::GameplayActionKind::HelpAttack)
+        );
+        assert_eq!(
+            action_entry(rpc::GameplayActionKind::HelpAttack),
+            Some("help-attack")
+        );
+    }
 
     #[test]
     fn rested_scene_keeps_story_and_rules_in_their_own_fields() {
