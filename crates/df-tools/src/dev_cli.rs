@@ -224,6 +224,7 @@ fn print_help() {
          audit [--type <KIND>] [--last <n>]  recent audit lines (IMAGERY, SCENE-FIGHT, ...)\n\
          decisions [--kind <kind>] [--last <n>]  Jev classifications; neutral marks the rules fallback\n\
          art [list <prefix>]          generated depictions on the hub; art regenerate|clear character:<id>|place:<id>\n\
+         fx [<effect> on|off]         the TV's screen-space effects: blur drift scrim grain vignette firelight dust grade\n\
          music                        the current music plan; music regenerate|clear <place> unsupported\n\
          memory [status]              story memory: counts by kind, embedding backlog and model, spend, queue\n\
          memory search <query> [--entity <id>] [--kind <kind>] [--audience public|party|member:<hero>] [--limit <n>]  the recall path the generators use\n\
@@ -423,6 +424,7 @@ async fn dispatch(
         "fight" => fight(client, positional).await,
         "economy" => economy(client, positional, options).await,
         "art" => art(client, positional).await,
+        "fx" => fx(client, positional).await,
         "music" => music(client, positional).await,
         "memory" => memory(client, positional, options).await,
         "scene-changes" => {
@@ -845,6 +847,23 @@ async fn economy(
     match economy_body(positional, options) {
         Ok(body) => post(client, "/dev/economy/edit", &body).await,
         Err(message) => client.print_error(message),
+    }
+}
+
+async fn fx(client: &Client, positional: &[String]) -> CommandResult {
+    match (positional.get(1), positional.get(2).map(String::as_str)) {
+        (None, None) => get(client, "/dev/fx").await,
+        (Some(effect), Some(state @ ("on" | "off"))) => {
+            post(
+                client,
+                "/dev/fx/edit",
+                &json!({"effect": effect, "on": state == "on"}),
+            )
+            .await
+        }
+        _ => client.print_error(
+            "fx takes nothing to list, or <effect> on|off (blur, drift, scrim, grain, vignette, firelight, dust, grade)",
+        ),
     }
 }
 

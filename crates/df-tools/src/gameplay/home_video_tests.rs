@@ -620,6 +620,7 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
                 layout_json: String::new(),
                 layout_revision: 0,
                 place_music: None,
+                effects_off: Vec::new(),
                 journey: Some(rpc::JourneyView {
                     phase: rpc::JourneyPhase::Room as i32,
                     ..Default::default()

@@ -66,14 +66,13 @@
 .tv-stage[data-battle-state]:not([data-battle-state=absent]) .tv-plate,.tv-stage[data-arrange=combat] .tv-plate{display:none}
 
 /* ---------- PLAY-V12: every story scene opens on an establishing shot ---------- */
-/* the place picture alone, sharp and lit, pushed in slowly and only slightly (a large push-in
-   magnifies the photograph until it goes soft) (restarted for each scene by
+/* the place picture alone, sharp and lit, pushed in slowly (restarted for each scene by
    data-shot-tick); it keeps moving under the plate, so the cut to the plate has no jump */
-.tv-stage[data-shot=establishing]>.tv-art{filter:none;transition:filter .6s ease}
+.tv-stage[data-shot=establishing]>.tv-art{filter:brightness(.92) saturate(1) blur(0);transition:filter .6s ease}
 .tv-stage:is([data-shot=establishing],[data-shot=plate])[data-shot-tick=a]>.tv-art{animation:df-establish-a 70s cubic-bezier(.2,.5,.3,1) forwards}
 .tv-stage:is([data-shot=establishing],[data-shot=plate])[data-shot-tick=b]>.tv-art{animation:df-establish-b 70s cubic-bezier(.2,.5,.3,1) forwards}
-@keyframes df-establish-a{from{transform:scale(1)}to{transform:scale(1.04)}}
-@keyframes df-establish-b{from{transform:scale(1)}to{transform:scale(1.04)}}
+@keyframes df-establish-a{from{transform:scale(1.02)}to{transform:scale(1.13)}}
+@keyframes df-establish-b{from{transform:scale(1.02)}to{transform:scale(1.13)}}
 /* the cut: the plate comes in from a blur over the establishing shot */
 .tv-stage:not([data-shot=plate]) .tv-plate:not([data-pull=focus]) .tv-plate-frame{filter:blur(24px);transition:none}
 /* the title card of the place: the adventure and where this is, while the narrator speaks */
@@ -182,12 +181,17 @@
 
 .tv-fig-bubbles[data-anchor-fallback=named-check-panel] .tv-check-result{width:100%}
 
-/* Photographic cinema (owner, 2026-10-17): the TV keeps the camera's frame sharp and steady.
-   The owner keeps the gentle colour grade and the screen-space dust; the breathing vignette, the
-   firelight glows, the SVG grain and the rotating 1.07-1.1x drift are gone, since together they
-   made a real photograph read as a painting. This file is joined after the stage, motion and
-   home sheets, so these rules win over their treatments. */
-.tv-stage[data-shot=plate] .tv-plate-img,.tv-stage[data-shot=plate] .tv-plate-video .tv-loop-clip{animation:none;transform:none}
-.tv-plate-vignette{display:none}
-.tv-scene-set::after{display:none}
-.tv-stage[data-tv-mode=lobby] .tv-atmosphere::after{display:none}
+/* Screen-space effect toggles (owner, 2026-10-17): every effect is on by default; the server's
+   display view names the ones switched off (`dev fx <effect> off`), and the TV stage carries
+   `data-fx-<effect>="off"` for each. This file is joined after the stage, motion and home sheets,
+   so these rules win over the effects they switch off. */
+.tv-stage[data-fx-blur=off]:not([data-tv-mode=lobby])>.tv-art{filter:brightness(.56) saturate(.85)}
+.tv-stage[data-fx-blur=off][data-shot=establishing]>.tv-art{filter:brightness(.92) saturate(1)}
+.tv-stage[data-fx-drift=off] .tv-art,.tv-stage[data-fx-drift=off]>.tv-art,.tv-stage[data-fx-drift=off][data-shot=plate] .tv-plate-img{animation:none;transform:none}
+.tv-stage[data-fx-scrim=off][data-tv-mode=scene]>.tv-scrim{background:radial-gradient(ellipse at 50% 45%,transparent 62%,#02040a59 135%),linear-gradient(0deg,#03060ecc 0%,#03060e80 16%,#03060e00 34%),linear-gradient(180deg,#03060e66 0%,#03060e00 14%)}
+.tv-stage[data-fx-grain=off] .tv-scene-set::after,.tv-stage[data-fx-grain=off][data-tv-mode=lobby] .tv-atmosphere::after{display:none}
+.tv-stage[data-fx-vignette=off] .tv-plate-vignette{background:none;animation:none}
+.tv-stage[data-fx-firelight=off] .tv-plate-vignette::before,.tv-stage[data-fx-firelight=off] .tv-plate-vignette::after{display:none}
+.tv-stage[data-fx-dust=off] .tv-plate-dust{display:none}
+.tv-stage[data-fx-grade=off] .tv-scene-set,.tv-stage[data-fx-grade=off][data-shot=plate] .tv-plate-img,.tv-stage[data-fx-grade=off][data-shot=plate] .tv-plate-video .tv-loop-clip{filter:none}
+.tv-stage[data-fx-grade=off] .tv-scene-set::before{display:none}

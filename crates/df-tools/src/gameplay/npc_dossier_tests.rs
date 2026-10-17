@@ -1405,6 +1405,7 @@ fn the_heros_own_view_lists_each_present_npcs_attitude_and_the_display_gets_none
                 layout_json: String::new(),
                 layout_revision: 0,
                 place_music: None,
+                effects_off: Vec::new(),
             },
         )),
     };

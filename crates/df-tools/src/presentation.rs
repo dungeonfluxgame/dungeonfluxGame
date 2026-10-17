@@ -559,6 +559,20 @@ pub(crate) fn place_picture(
         .or_else(|| plan.reviewed.map(|photo| format!("{GENERATED}/{photo}")))
 }
 
+/// The TV's screen-space effects a display view can switch off (`DisplayGameplayView.effects_off`,
+/// set with `dev fx`); each maps to `data-fx-<effect>="off"` on the stage. The server's list in
+/// `gameplay/display_effects.rs` must name the same effects.
+pub(crate) const SCREEN_EFFECTS: [&str; 8] = [
+    "blur",
+    "drift",
+    "scrim",
+    "grain",
+    "vignette",
+    "firelight",
+    "dust",
+    "grade",
+];
+
 /// Whether the scene art a view names is a reference the art contract knows: nothing, a role
 /// token, a live image path, a reviewed photograph, an identity key, chrome, or a served local
 /// asset (the reviewed harbour plate and the concept art among them). It answers whether the

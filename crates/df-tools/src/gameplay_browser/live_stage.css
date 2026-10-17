@@ -5,12 +5,9 @@
    `data-chips` and `data-stage`. Everything is positioned from `--u`, one hundredth of the
    width of the largest 16:9 rectangle that fits, so a television and a monitor look alike. */
 
-/* ---------- the place photograph behind the cast: sharp and only lightly dimmed ---------- */
-/* Never blurred or desaturated: a softened, darkened photograph reads as a painting (owner, 2026-10-17). */
-.tv-stage:not([data-tv-mode=lobby])>.tv-art{filter:brightness(.82)}
-/* A light vignette and a dark strip only behind the subtitles: a heavy scrim crushed the
-   photograph's own light and made it read as a dark painting. */
-.tv-stage[data-tv-mode=scene]>.tv-scrim{background:radial-gradient(ellipse at 50% 45%,transparent 62%,#02040a59 135%),linear-gradient(0deg,#03060ecc 0%,#03060e80 16%,#03060e00 34%),linear-gradient(180deg,#03060e66 0%,#03060e00 14%)}
+/* ---------- a dark, soft backdrop so the cast stands out ---------- */
+.tv-stage:not([data-tv-mode=lobby])>.tv-art{filter:brightness(.56) saturate(.85) blur(3px)}
+.tv-stage[data-tv-mode=scene]>.tv-scrim{background:radial-gradient(ellipse at 50% 42%,transparent 38%,#02040ae0 125%),linear-gradient(0deg,#03060ef5 0%,#03060edb 24%,#03060e00 52%),linear-gradient(180deg,#03060eb3 0%,#03060e00 24%)}
 .tv-final-panel{min-height:calc(var(--u)*19.4)}
 .tv-speaker{display:none!important}
 

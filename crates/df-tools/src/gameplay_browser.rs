@@ -2102,6 +2102,20 @@ fn receive_view(
     {
         let _fetch_only_helps = tv.preload_plate(&url);
     }
+    // The screen-space effects the server switched off (`dev fx`), read from every display view,
+    // even one of an equal revision, so a toggle shows within the next view.
+    if let Some(rpc::view_message::Audience::Display(display)) = &view.audience
+        && let Some(tv) = client.borrow().live.tv.as_ref()
+    {
+        for effect in crate::presentation::SCREEN_EFFECTS {
+            let attribute = format!("data-fx-{effect}");
+            if display.effects_off.iter().any(|off| off == effect) {
+                tv.root().set_attribute(&attribute, "off")?;
+            } else {
+                tv.root().remove_attribute(&attribute)?;
+            }
+        }
+    }
     let acceptance = {
         let mut state = client.borrow_mut();
         let views = state

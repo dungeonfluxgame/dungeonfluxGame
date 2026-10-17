@@ -7,7 +7,7 @@
 /* ---------- ambient life on the painting ---------- */
 .tv-art{will-change:transform;animation:df-drift 70s ease-in-out infinite alternate}
 .tv-art-previous{opacity:0;animation:none;will-change:auto}
-@keyframes df-drift{from{transform:scale(1.01)}to{transform:scale(1.035) translate3d(-.6%,-.4%,0)}}
+@keyframes df-drift{from{transform:scale(1.02)}to{transform:scale(1.07) translate3d(-1.2%,-.8%,0)}}
 .tv-stage[data-art-swap=a] .tv-art-previous{animation:df-art-out-a .8s ease both}
 .tv-stage[data-art-swap=a] .tv-art{animation:df-art-in-a .8s ease backwards,df-drift 70s ease-in-out infinite alternate}
 @keyframes df-art-out-a{from{opacity:1;transform:scale(1.04)}to{opacity:0;transform:scale(1.1)}}

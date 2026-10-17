@@ -29,9 +29,9 @@ pub const FLUX_ULTRA: &str = "fal-ai/flux-pro/v1.1-ultra";
 pub const FLUX_KONTEXT_MULTI: &str = "fal-ai/flux-pro/kontext/max/multi";
 /// Background removal for transparent cut-outs.
 pub const BACKGROUND_REMOVAL: &str = "fal-ai/birefnet/v2";
-const MAXIMUM_REQUEST_BYTES: usize = 24 * 1024 * 1024;
-const MAXIMUM_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
-const MAXIMUM_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+const MAXIMUM_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAXIMUM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAXIMUM_IMAGE_BYTES: usize = 11 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// The aspect ratios FLUX accepts, as (name, width / height).
 const ASPECT_RATIOS: [(&str, f64); 9] = [
@@ -437,6 +437,18 @@ fn facts(format: ImageFormat, bytes: &[u8]) -> Result<(u32, u32, bool), ImageEdi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_live_provider_starts_within_the_transport_limits() {
+        assert!(
+            NativeFalImageProvider::new(
+                FalImageConfig::live(),
+                "key:secret",
+                Duration::from_secs(60)
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn sizes_map_to_the_nearest_flux_aspect_ratio() {

@@ -17,6 +17,7 @@ mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
 mod dialogue;
+mod display_effects;
 mod freeform_action;
 #[cfg(test)]
 mod dialogue_tests;
@@ -63,6 +64,7 @@ mod npc_talk_live_tests;
 mod npc_talk_rules;
 mod npc_target;
 mod pack;
+mod plate_segments;
 mod place_music;
 #[cfg(test)]
 mod pack_tests;
@@ -207,6 +209,7 @@ impl Service {
         // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
         home_video::apply(&mut message);
         place_music::apply(&mut message);
+        display_effects::apply(&mut message);
         self.layout
             .attach(&mut message)
             .await

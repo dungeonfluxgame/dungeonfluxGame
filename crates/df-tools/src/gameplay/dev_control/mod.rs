@@ -40,6 +40,7 @@ pub(super) mod directions;
 mod art;
 mod economy;
 mod fight;
+mod fx;
 pub(crate) mod history;
 mod jumps;
 pub(super) mod layout;
@@ -223,6 +224,8 @@ pub(super) fn setup(
         .route("/dev/fight/edit", post(fight::unsupported_edit))
         .route("/dev/decisions", get(audit_log::decisions))
         .route("/dev/audit", get(audit_log::audit))
+        .route("/dev/fx", get(fx::read))
+        .route("/dev/fx/edit", post(fx::edit))
         .route("/dev/art", get(art::list))
         .route("/dev/art/edit", post(art::edit))
         .route("/dev/music", get(music::read))
