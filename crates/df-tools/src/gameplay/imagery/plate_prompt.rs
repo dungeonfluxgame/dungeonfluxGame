@@ -405,6 +405,7 @@ fn scene_plate_with(
     }
     let mut parts = vec![
         Part::Fixed(FILM_LOOK),
+        Part::Fixed(PERIOD_CLOTHING),
         Part::Fixed(REFERENCE_STYLE),
         Part::Fixed(camera_phrase(spec.camera)),
         Part::Fixed(FOCAL_CONTEXT),
@@ -549,14 +550,16 @@ pub(in crate::gameplay) const FLUX_MAXIMUM_PROMPT_CHARACTERS: usize = 1800;
 const FLUX_FACTS: &str = "The scene as it is now (JSON):";
 /// Facts shorter than this are left out rather than cut to a stub.
 const FLUX_MINIMUM_FACTS: usize = 40;
-const FLUX_APPEARANCE_CHARACTERS: usize = 110;
+const FLUX_APPEARANCE_CHARACTERS: usize = 180;
+const PERIOD_CLOTHING: &str =
+    "Pre-industrial fantasy world: period clothing, no modern dress, no suits, no modern objects.";
 const FLUX_PLACE_IMAGE: &str = "Image 1 is the place photograph: keep its architecture, props and palette, seen from the new camera position.";
-const FLUX_SHEET_IMAGE: &str = "Image 2 is a reference collage of identity photographs, one numbered cell per person: use it only to read each face and costume. The photograph you make is one single full-frame picture, with no collage, grid, panels, numbers or inset frames.";
+const FLUX_SHEET_IMAGE: &str = "Image 2 is an identity photo sheet, one numbered cell per person. Match faces and costumes only; render one full-frame photograph, never its grid, panels or labels.";
 const FLUX_KEEP_FACE: &str = "keep this exact face, hair and clothing.";
 const FLUX_ACTION: &str =
     "Only the listed people and things exist. The people face the speaker, not the camera.";
 const FLUX_FACE_SHOWS: &str = "The speaker's face shows";
-const FLUX_LOOK: &str = "A still from a live-action fantasy TV drama: documentary colour photograph, real adult performers in practical costume on a real dressed location, natural practical light, natural depth of field, fine film grain. Not an illustration, painting, CGI or glamour. No text, letters, logos or signs.";
+const FLUX_LOOK: &str = "Photographic still from a live-action fantasy TV drama, real adult performers in practical costume on a dressed location, natural practical light, depth of field and fine film grain. No illustration, painting, CGI, glamour or text.";
 
 /// One person a plate names: the name the scene record gives and, when the record has one, a
 /// one-line appearance and what they are doing.
@@ -602,16 +605,17 @@ fn flux_appearance(person: &FluxPerson) -> Option<String> {
     if text.is_empty() {
         return None;
     }
-    let short: String = text.chars().take(FLUX_APPEARANCE_CHARACTERS).collect();
-    let cut = if short.chars().count() < text.chars().count() {
-        match short.rfind(' ') {
-            Some(space) if space > FLUX_APPEARANCE_CHARACTERS / 2 => &short[..space],
-            _ => short.as_str(),
-        }
-    } else {
-        short.as_str()
-    };
-    Some(cut.to_owned())
+    if text.chars().count() <= FLUX_APPEARANCE_CHARACTERS {
+        return Some(format!("{text}."));
+    }
+
+    let bounded: String = text.chars().take(FLUX_APPEARANCE_CHARACTERS).collect();
+    let boundary = [". ", "; ", ", "]
+        .into_iter()
+        .filter_map(|separator| bounded.rfind(separator).map(|index| index + 1))
+        .max()?;
+    let complete_clause = bounded[..boundary].trim_end_matches([',', ';', '.']).trim();
+    (!complete_clause.is_empty()).then(|| format!("{complete_clause}."))
 }
 
 fn flux_identity_line(cell: usize, person: &FluxPerson) -> String {
@@ -643,13 +647,16 @@ pub(in crate::gameplay) fn flux_scene_plate(
     face: Option<(FaceExpression, HealthTier)>,
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
     let shot = flux_shot_phrase(camera);
-    let mut parts = vec![Part::Fact(match &cast.speaker {
-        Some(speaker) => format!(
-            "{shot} on {}, the speaker, in the lit mid-ground.",
-            speaker.name
-        ),
-        None => format!("{shot}."),
-    })];
+    let mut parts = vec![
+        Part::Fact(match &cast.speaker {
+            Some(speaker) => format!(
+                "{shot} on {}, the speaker, in the lit mid-ground.",
+                speaker.name
+            ),
+            None => format!("{shot}."),
+        }),
+        Part::Fixed(PERIOD_CLOTHING),
+    ];
     parts.push(Part::Fixed(FLUX_PLACE_IMAGE));
     if !cast.sheet.is_empty() {
         parts.push(Part::Fixed(FLUX_SHEET_IMAGE));
@@ -671,11 +678,11 @@ pub(in crate::gameplay) fn flux_scene_plate(
     }
     parts.push(Part::Fixed(FLUX_ACTION));
     if let Some((expression, tier)) = face {
-        parts.push(Part::Fixed(FLUX_FACE_SHOWS));
-        parts.push(Part::Fixed(match health_face_phrase(tier) {
+        let appearance = match health_face_phrase(tier) {
             Some(phrase) => phrase,
             None => expression_phrase(expression, rating),
-        }));
+        };
+        parts.push(Part::Fact(format!("{FLUX_FACE_SHOWS} {appearance}.")));
         if let Some(look) = health_look_phrase(tier, rating) {
             parts.push(Part::Fixed(look));
         }
@@ -749,6 +756,7 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
     use super::super::shot::{TimeOfDay as Time, vocabulary_lights};
     let mut phrases = vec![
         FILM_LOOK,
+        PERIOD_CLOTHING,
         REFERENCE_STYLE,
         camera_phrase(Camera::WideEstablishing),
         camera_phrase(Camera::DialogueMedium),

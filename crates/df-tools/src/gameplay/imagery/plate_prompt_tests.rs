@@ -541,3 +541,68 @@ fn a_flux_plate_names_its_people_in_order_and_trims_long_text_to_the_limit() {
         "the appearance is cut to its opening"
     );
 }
+
+#[test]
+fn a_lean_flux_plate_keeps_complete_cast_identities_and_preindustrial_setting() {
+    let cast = FluxCast {
+        sheet: vec![
+            FluxPerson {
+                name: "Brakka".into(),
+                appearance: Some("Brakka wears a travel cloak.".into()),
+            },
+            FluxPerson {
+                name: "Sigrun".into(),
+                appearance: Some("Sigrun wears a tunic.".into()),
+            },
+            FluxPerson {
+                name: "Marek".into(),
+                appearance: Some("Marek, a short, round middle-aged man with a neatly trimmed beard, wears a rich velvet cap and a measuring ribbon around his neck as he folds blue linen behind the counter.".into()),
+            },
+            FluxPerson {
+                name: "Corin".into(),
+                appearance: Some("Corin examines a jacket seam.".into()),
+            },
+            FluxPerson {
+                name: "Jessa".into(),
+                appearance: Some("Jessa compares warm cloaks.".into()),
+            },
+        ],
+        speaker: Some(FluxPerson {
+            name: "Corin".into(),
+            appearance: None,
+        }),
+        portrait: true,
+    };
+    let facts = "{\"people\":[\"Marek\",\"Jessa\"]}, ".repeat(120);
+    let prompt = flux_scene_plate(
+        ContentRating::Mature,
+        Camera::WideEstablishing,
+        Some(&place()),
+        &cast,
+        &facts,
+        Some((FaceExpression::Neutral, HealthTier::Healthy)),
+    )
+    .expect("the lean FLUX plate prompt");
+    let text = prompt.as_str();
+
+    assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+    assert!(text.starts_with("Wide establishing shot on a 28mm lens"));
+    assert!(text.contains(
+        "Pre-industrial fantasy world: period clothing, no modern dress, no suits, no modern objects."
+    ));
+    for (cell, name) in ["Brakka", "Sigrun", "Marek", "Corin", "Jessa"]
+        .into_iter()
+        .enumerate()
+    {
+        assert!(text.contains(&format!("Image 2, cell {}: {name}", cell + 1)));
+    }
+    assert!(text.contains("The place is The Heron Shrine."));
+    assert!(text.contains(
+        "Marek, a short, round middle-aged man with a neatly trimmed beard, wears a rich velvet cap and a measuring ribbon around his neck as he folds blue linen behind the counter."
+    ));
+    assert!(
+        text.contains(
+            "The speaker's face shows a calm, neutral expression. Photographic still from"
+        )
+    );
+}
