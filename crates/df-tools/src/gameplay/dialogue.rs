@@ -666,6 +666,9 @@ fn addresses_party_hero(words: &str, party: &[String]) -> bool {
 pub(super) const NAME_NOT_HERE_NARRATION: &str = "Nobody here goes by that name.";
 pub(super) const DESCRIPTION_NOT_HERE_NARRATION: &str = "Nobody here matches that description.";
 pub(super) const NAME_ONE_PERSON_NARRATION: &str = "Name just one person here to address.";
+/// The table has no party-only channel yet, so a private aside is never posted where the TV
+/// and the other phones would show it; only the speaker sees this.
+pub(super) const PRIVATE_ASIDE_UNAVAILABLE_NARRATION: &str = "Whispers can't be kept private yet. Say it aloud to the table, or write it in the party notes.";
 pub(super) const NOTE_ACCEPTED_NARRATION: &str = "Noted in the party notes.";
 pub(super) const CLUE_SHARED_NARRATION: &str = "Shared with the party.";
 pub(super) const CLUE_NOT_SHAREABLE_NARRATION: &str = "That clue cannot be shared.";
@@ -1493,6 +1496,15 @@ impl Service {
                 AddresseeRoute::Npc(selected) => target = selected,
                 // Hero speech is the same table line a vocative addresses to a hero: it has no
                 // NPC reply.
+                // A whisper must not reach the shared table (and so the TV) until a party-only
+                // channel exists (MPX-35); the speaker alone is told.
+                AddresseeRoute::Hero {
+                    private_aside: true,
+                    ..
+                } => {
+                    return Ok(self
+                        .narrated_addressee_reply(&request, PRIVATE_ASIDE_UNAVAILABLE_NARRATION));
+                }
                 AddresseeRoute::Hero { .. } => {
                     request.context = rpc::DialogueContext::PlanOnly as i32;
                 }
