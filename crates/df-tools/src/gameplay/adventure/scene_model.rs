@@ -13,6 +13,16 @@ const MAXIMUM_CHANGES: usize = 64;
 /// Finite stock offers one scene model may list; matches the live projection bound.
 const MAXIMUM_OFFERS: usize = 12;
 const CURRENT_INVENTORY_VERSION: u8 = 1;
+/// House rule for a pickpocket haul: one tenth of the purse, never more than 1,000 CP (10 GP).
+/// SRD 5.2.1 sets no theft amount; 10 GP is about ten days of Modest lifestyle, a real but bounded
+/// gain that leaves a merchant's purse plausible across a long scene.
+const PICKPOCKET_HAUL_FRACTION_DIVISOR: u32 = 10;
+pub(crate) const PICKPOCKET_HAUL_CAP_CP: u32 = 1_000;
+
+/// The copper a successful pickpocket takes from `purse_cp`; zero when nothing is worth lifting.
+pub(crate) fn pickpocket_haul_cp(purse_cp: u32) -> u32 {
+    (purse_cp / PICKPOCKET_HAUL_FRACTION_DIVISOR).min(PICKPOCKET_HAUL_CAP_CP)
+}
 
 /// Detached presentation copies published by the session owner after loading or committing state.
 /// These copies never resolve an action or replace the durable scene-change ledger.
@@ -86,6 +96,10 @@ pub(crate) struct SceneModel {
     pub(crate) things: Vec<SceneThing>,
     pub(crate) ways_out: Vec<SceneWayOut>,
     pub(crate) offers: Vec<SceneOffer>,
+    /// Paid labour a person in the scene performs for a hero. A service sells work, never a
+    /// thing, so buying one creates no item and changes no custody.
+    #[serde(default)]
+    pub(crate) services: Vec<SceneService>,
     /// Failed, noticed theft attempts found by replaying the journal. Not serialized: they are
     /// server-side projection data for the social layer and never part of a client payload.
     #[serde(skip)]
@@ -279,6 +293,20 @@ impl SceneOffer {
     }
 }
 
+/// Paid work a person in the scene performs for a hero. `price_cp` is an authored house price
+/// where the SRD lists none (mending 50 CP, an alteration 100 CP, directions 10 CP); a request
+/// for the same service by the same hero in the same place is performed once.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SceneService {
+    pub(crate) id: String,
+    pub(crate) provider_id: String,
+    pub(crate) name: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) description: String,
+    pub(crate) price_cp: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SceneTargetKind {
     Person,
@@ -335,6 +363,22 @@ fn valid_steal_adjudication(
     item_id: &str,
     expected_success: bool,
 ) -> bool {
+    valid_sleight_adjudication(
+        adjudication,
+        actor_id,
+        &format!("target-thing-{item_id}"),
+        expected_success,
+    )
+}
+
+/// A Sleight of Hand receipt for `target` (`target-thing-…` or `target-purse-…`): the actor, the
+/// operation shape, the source revision, and the d20 result all match.
+fn valid_sleight_adjudication(
+    adjudication: &SceneStealAdjudication,
+    actor_id: &str,
+    target: &str,
+    expected_success: bool,
+) -> bool {
     adjudication.actor_id == actor_id
         && adjudication.operation_id.len() == 32
         && adjudication
@@ -344,7 +388,7 @@ fn valid_steal_adjudication(
         && adjudication.source_revision.starts_with("srd521-p6:")
         && adjudication
             .source_revision
-            .ends_with(&format!(":sleight-of-hand:target-thing-{item_id}"))
+            .ends_with(&format!(":sleight-of-hand:{target}"))
         && df_rules::ability_check::resolve(df_rules::ability_check::AbilityCheckInput {
             die: adjudication.die,
             ability_modifier: adjudication.ability_modifier,
@@ -427,6 +471,79 @@ pub(crate) enum SceneChangeKind {
         hero_id: String,
         attitude: StartingAttitude,
     },
+    /// Coin a hero gives an NPC (a tip, a bribe, a gift). The entity is the NPC; the hero's debit
+    /// is the journal payment, so this change credits exactly the same copper to the NPC purse.
+    CoinReceived {
+        payer_id: String,
+        amount_cp: u32,
+    },
+    /// A successful pickpocket of an NPC's purse. The entity is the victim; `amount_cp` must equal
+    /// the replayed haul for that purse, and the receipt is the Sleight of Hand check.
+    CoinLifted {
+        amount_cp: u32,
+        adjudication: SceneStealAdjudication,
+    },
+    /// A successful planting: the hero's item goes into `holder_id`'s possession. The owner is
+    /// unchanged. The entity is the item.
+    Planted {
+        holder_id: String,
+        adjudication: SceneStealAdjudication,
+    },
+    /// A failed planting. Custody does not change; `noticed_by_id` names the person who saw it.
+    PlantAttempt {
+        holder_id: String,
+        adjudication: SceneStealAdjudication,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        noticed_by_id: Option<String>,
+    },
+    /// A paid service performed for `customer_id`. The entity is the service; the provider
+    /// is credited `price_cp`, which must match the authored price.
+    ServiceRendered {
+        provider_id: String,
+        customer_id: String,
+        price_cp: u32,
+    },
+    /// An NPC hands a held item to the coercing hero after a successful check. The entity is the
+    /// item; ownership is unchanged. The receipt names the NPC who held it.
+    CoercedHandover {
+        adjudication: SceneCoercionAdjudication,
+    },
+    /// An NPC pays coin to the coercing hero after a successful check. The entity is the NPC.
+    CoercedCoin {
+        amount_cp: u32,
+        adjudication: SceneCoercionAdjudication,
+    },
+    /// A coerced demand the check did not win. Nothing changes hands; the receipt is kept.
+    CoercionRefused {
+        adjudication: SceneCoercionAdjudication,
+    },
+}
+
+/// Which 2024 skill a hero used to coerce an NPC: Intimidation (an Influence check) or
+/// Deception (a lie the NPC must believe against its passive Insight).
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CoercionSkill {
+    Intimidation,
+    Deception,
+}
+
+/// Auditable check receipt for a coerced demand. Replay recomputes the outcome from the stored
+/// faces, the hero's sheet, the NPC's attitude and the rule DC; the stored `succeeded` must agree.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SceneCoercionAdjudication {
+    pub(crate) operation_id: String,
+    pub(crate) source_revision: String,
+    pub(crate) actor_id: String,
+    pub(crate) npc_id: String,
+    pub(crate) skill: CoercionSkill,
+    pub(crate) faces: Vec<u8>,
+    pub(crate) ability_modifier: i8,
+    pub(crate) proficiency_bonus: u8,
+    pub(crate) difficulty_class: u8,
+    pub(crate) attitude: StartingAttitude,
+    pub(crate) succeeded: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -507,6 +624,50 @@ impl SceneModel {
                 let offer = self.offer(item_id)?;
                 (offer.name.clone(), Some(offer.seller_id.clone()))
             };
+        Some(self.observed_difficulty(item_name, owner_id, scene_key))
+    }
+
+    /// Sleight of Hand against one NPC's purse (SRD 5.2.1 p. 22): the NPC is the owner and the first
+    /// observer considered, so the same rule as an item the NPC owns.
+    pub(crate) fn purse_difficulty(
+        &self,
+        person_id: &str,
+        scene_key: SceneKey,
+    ) -> Option<SceneStealDifficulty> {
+        let person = self
+            .people
+            .iter()
+            .find(|person| person.id == person_id && person.role != "hero")?;
+        Some(self.observed_difficulty(
+            format!("{}'s purse", person.name),
+            Some(person.id.clone()),
+            scene_key,
+        ))
+    }
+
+    /// Sleight of Hand to slip one held item into a non-hero person's belongings unnoticed. The
+    /// recipient is the one who must not notice, so they are the first observer considered.
+    pub(crate) fn plant_difficulty(
+        &self,
+        item_id: &str,
+        recipient_id: &str,
+        scene_key: SceneKey,
+    ) -> Option<SceneStealDifficulty> {
+        let thing = self.things.iter().find(|thing| thing.id == item_id)?;
+        self.people
+            .iter()
+            .find(|person| person.id == recipient_id && person.role != "hero")?;
+        Some(self.observed_difficulty(thing.name.clone(), Some(recipient_id.to_owned()), scene_key))
+    }
+
+    /// The DC is the highest passive Perception among `owner_id` (considered first) and every
+    /// other non-hero person on this stage. A tie keeps the owner. Nobody present leaves DC 10.
+    fn observed_difficulty(
+        &self,
+        item_name: String,
+        owner_id: Option<String>,
+        scene_key: SceneKey,
+    ) -> SceneStealDifficulty {
         // Only people on this scene's stage observe, so the authored full model and the
         // scene-filtered projection give the same DC for the same action.
         let scene = scene_key_label(scene_key);
@@ -530,12 +691,12 @@ impl SceneModel {
                 observer = Some(person);
             }
         }
-        Some(SceneStealDifficulty {
+        SceneStealDifficulty {
             item_name,
             owner_id,
             difficulty_class: observer.map_or(10, |person| person.passive_perception),
             observer_id: observer.map(|person| person.id.clone()),
-        })
+        }
     }
 
     /// Applies one accepted change to a replayed model, in the order the journal recorded it.
@@ -791,6 +952,7 @@ impl SceneModel {
             things,
             ways_out,
             offers,
+            services: Vec::new(),
             witnessed_thefts: Vec::new(),
         };
         model.validate_structure()?;
@@ -936,11 +1098,34 @@ impl SceneModel {
                 return Err(SceneModelError::InvalidBounds);
             }
         }
+        for service in &self.services {
+            if !ids.insert(service.id.clone()) {
+                return Err(SceneModelError::DuplicateId);
+            }
+            if !valid_text(&service.id, 96)
+                || !valid_text(&service.provider_id, 96)
+                || !valid_text(&service.name, 64)
+                || !valid_text(&service.description, 120)
+                || service.price_cp == 0
+                || service.aliases.is_empty()
+                || service.aliases.len() > 6
+                || service.aliases.iter().any(|alias| !valid_text(alias, 64))
+            {
+                return Err(SceneModelError::InvalidBounds);
+            }
+        }
         let person_ids = self
             .people
             .iter()
             .map(|person| person.id.clone())
             .collect::<BTreeSet<_>>();
+        if self
+            .services
+            .iter()
+            .any(|service| !person_ids.contains(service.provider_id.as_str()))
+        {
+            return Err(SceneModelError::UnknownPerson);
+        }
         if self
             .things
             .iter()
@@ -1138,6 +1323,16 @@ impl SceneModel {
         }
     }
 
+    /// The service a line names by alias. Services never take custody, so they are resolved apart
+    /// from the item and person targets, and a caller decides when a service can be the target.
+    pub(crate) fn service_for_line(&self, line: &str) -> Option<&SceneService> {
+        let line = normalize(line);
+        if line.is_empty() {
+            return None;
+        }
+        best_match(&self.services, &line, |service| &service.aliases)
+    }
+
     pub(crate) fn resolve_target(&self, line: &str) -> Option<ResolvedTarget> {
         let line = normalize(line);
         if line.is_empty() {
@@ -1209,7 +1404,48 @@ impl SceneModel {
         })
     }
 
+    /// A paid service credits its provider exactly the authored price. The hero's debit is the
+    /// journal payment, and the customer must be a person on this stage.
+    fn apply_service(
+        &mut self,
+        service: &SceneService,
+        change: &SceneChange,
+    ) -> Result<(), SceneModelError> {
+        let SceneChangeKind::ServiceRendered {
+            provider_id,
+            customer_id,
+            price_cp,
+        } = &change.kind
+        else {
+            return Err(SceneModelError::UnknownEntity);
+        };
+        if *price_cp != service.price_cp
+            || provider_id != &service.provider_id
+            || !self.people.iter().any(|person| person.id == *customer_id)
+        {
+            return Err(SceneModelError::Contradiction);
+        }
+        let provider = self
+            .people
+            .iter_mut()
+            .find(|person| person.id == service.provider_id)
+            .ok_or(SceneModelError::UnknownPerson)?;
+        provider.coin_cp = provider
+            .coin_cp
+            .checked_add(*price_cp)
+            .ok_or(SceneModelError::InvalidBounds)?;
+        Ok(())
+    }
+
     fn apply(&mut self, change: &SceneChange) -> Result<(), SceneModelError> {
+        if let Some(service) = self
+            .services
+            .iter()
+            .find(|service| service.id == change.entity_id)
+            .cloned()
+        {
+            return self.apply_service(&service, change);
+        }
         let person_ids = self
             .people
             .iter()
@@ -1325,6 +1561,66 @@ impl SceneModel {
                     }
                 }
                 SceneChangeKind::PersonMoved { .. } | SceneChangeKind::AttitudeChanged { .. } => {
+                    return Err(SceneModelError::UnknownEntity);
+                }
+                SceneChangeKind::Planted {
+                    holder_id,
+                    adjudication,
+                } => {
+                    let actor = adjudication.actor_id.as_str();
+                    if !thing.portable
+                        || thing.in_use
+                        || thing.holder_id.as_deref() != Some(actor)
+                        || holder_id == actor
+                        || !person_ids.contains(holder_id.as_str())
+                        || !valid_steal_adjudication(adjudication, actor, &thing.id, true)
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    // Planting moves custody to the NPC and leaves the owner exactly as it was.
+                    thing.holder_id = Some(holder_id.clone());
+                    thing.in_scene = true;
+                    thing.position = format!("held by {holder_id}");
+                }
+                SceneChangeKind::PlantAttempt {
+                    holder_id,
+                    adjudication,
+                    ..
+                } => {
+                    let actor = adjudication.actor_id.as_str();
+                    if thing.holder_id.as_deref() != Some(actor)
+                        || !person_ids.contains(holder_id.as_str())
+                        || !valid_steal_adjudication(adjudication, actor, &thing.id, false)
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                }
+                SceneChangeKind::CoercedHandover { adjudication } => {
+                    let npc = adjudication.npc_id.as_str();
+                    if !thing.portable
+                        || thing.in_use
+                        || thing.holder_id.as_deref() != Some(npc)
+                        || !adjudication.succeeded
+                        || !person_ids.contains(adjudication.actor_id.as_str())
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    // A handover changes custody only: the owner stays the same.
+                    thing.holder_id = Some(adjudication.actor_id.clone());
+                    thing.in_scene = true;
+                    thing.position = format!("held by {}", adjudication.actor_id);
+                }
+                SceneChangeKind::CoercionRefused { adjudication } => {
+                    if thing.holder_id.as_deref() != Some(adjudication.npc_id.as_str())
+                        || adjudication.succeeded
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                }
+                SceneChangeKind::CoinReceived { .. }
+                | SceneChangeKind::CoinLifted { .. }
+                | SceneChangeKind::ServiceRendered { .. }
+                | SceneChangeKind::CoercedCoin { .. } => {
                     return Err(SceneModelError::UnknownEntity);
                 }
             }
@@ -1480,6 +1776,65 @@ impl SceneModel {
                 SceneChangeKind::PersonMoved { position } => person.position = position.clone(),
                 SceneChangeKind::AttitudeChanged { hero_id, attitude } => {
                     person.attitudes.insert(hero_id.clone(), *attitude);
+                }
+                SceneChangeKind::CoinReceived { amount_cp, .. } => {
+                    person.coin_cp = person
+                        .coin_cp
+                        .checked_add(*amount_cp)
+                        .ok_or(SceneModelError::InvalidBounds)?;
+                }
+                SceneChangeKind::CoinLifted {
+                    amount_cp,
+                    adjudication,
+                } => {
+                    // The haul is the replayed rule for this purse, so a larger amount in a
+                    // receipt cannot move coin, and a failed check cannot move any.
+                    let target = format!("target-purse-{}", person.id);
+                    if person.role == "hero"
+                        || *amount_cp == 0
+                        || pickpocket_haul_cp(person.coin_cp) != *amount_cp
+                        || !valid_sleight_adjudication(
+                            adjudication,
+                            &adjudication.actor_id,
+                            &target,
+                            true,
+                        )
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    person.coin_cp = person
+                        .coin_cp
+                        .checked_sub(*amount_cp)
+                        .ok_or(SceneModelError::Contradiction)?;
+                }
+                SceneChangeKind::StealAttempt {
+                    actor_id,
+                    adjudication: Some(adjudication),
+                    ..
+                } => {
+                    let target = format!("target-purse-{}", person.id);
+                    if person.role == "hero"
+                        || !valid_sleight_adjudication(adjudication, actor_id, &target, false)
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                }
+                SceneChangeKind::CoercedCoin {
+                    amount_cp,
+                    adjudication,
+                } => {
+                    if adjudication.npc_id != person.id
+                        || !adjudication.succeeded
+                        || person.coin_cp < *amount_cp
+                    {
+                        return Err(SceneModelError::Contradiction);
+                    }
+                    person.coin_cp -= *amount_cp;
+                }
+                SceneChangeKind::CoercionRefused { adjudication } => {
+                    if adjudication.npc_id != person.id || adjudication.succeeded {
+                        return Err(SceneModelError::Contradiction);
+                    }
                 }
                 _ => return Err(SceneModelError::UnknownEntity),
             }

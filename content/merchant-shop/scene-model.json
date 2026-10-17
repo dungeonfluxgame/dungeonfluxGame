@@ -407,5 +407,58 @@
       "description": "A set of fine clothes in dyed wool and silk-blend cloth.",
       "cost_cp": 1500
     }
+  ],
+  "services": [
+    {
+      "id": "service-mending",
+      "provider_id": "merchant",
+      "name": "mending",
+      "aliases": [
+        "mending",
+        "mend",
+        "repair",
+        "darning"
+      ],
+      "description": "Mending a small tear or a torn seam while the hero waits.",
+      "price_cp": 50
+    },
+    {
+      "id": "service-alteration",
+      "provider_id": "merchant",
+      "name": "alteration",
+      "aliases": [
+        "alteration",
+        "alterations",
+        "take in",
+        "let out",
+        "altering"
+      ],
+      "description": "Taking in or letting out a garment, such as the sleeves of a coat.",
+      "price_cp": 100
+    },
+    {
+      "id": "service-directions",
+      "provider_id": "shop-soldier",
+      "name": "directions through the market",
+      "aliases": [
+        "directions",
+        "the way out",
+        "the market"
+      ],
+      "description": "Walking the hero through the market streets to the way out.",
+      "price_cp": 10
+    },
+    {
+      "id": "service-advice",
+      "provider_id": "shop-adventurer",
+      "name": "advice on the roads",
+      "aliases": [
+        "advice",
+        "tips on the roads",
+        "road advice"
+      ],
+      "description": "Telling the hero which roads are safe and which are not.",
+      "price_cp": 20
+    }
   ]
 }

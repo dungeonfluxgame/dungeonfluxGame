@@ -1399,4 +1399,65 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn a_paid_service_is_quoted_performed_once_and_never_charged_twice() {
+        let generated = generate(44, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) =
+            super::super::record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let who = journey::player_entity(native::first(), &opening).unwrap();
+            let hero = journey::name(opening.state(), who).unwrap();
+            let initial = journey::living_scene::balance_cp(opening.state(), who).unwrap();
+            let scene = runtime::scene(opening.state()).unwrap();
+            let place = scene.setting.as_ref().unwrap().place_id.clone();
+            let model = scene
+                .setting
+                .as_ref()
+                .unwrap()
+                .model
+                .as_ref()
+                .unwrap()
+                .for_scene(scene.key);
+            let mending = |state: &Checkpoint| {
+                journey::living_scene::service_quotes(
+                    state.state(),
+                    &model,
+                    &place,
+                    "merchant",
+                    &hero,
+                )
+                .unwrap()
+                .into_iter()
+                .find(|quote| quote.name == "mending")
+                .unwrap()
+            };
+            let quoted = mending(&opening);
+            assert_eq!((quoted.price_cp, quoted.done), (50, false));
+            let paid = interaction(&opening, 6, "service-mending", "buy");
+            assert_eq!(
+                journey::living_scene::balance_cp(paid.state(), who).unwrap(),
+                initial - 50
+            );
+            assert!(
+                journey::living_scene::last_line(paid.state())
+                    .unwrap()
+                    .unwrap()
+                    .contains("Marek does mending for")
+            );
+            assert!(mending(&paid).done);
+            let again = interaction(&paid, 7, "service-mending", "buy");
+            assert_eq!(
+                journey::living_scene::balance_cp(again.state(), who).unwrap(),
+                initial - 50
+            );
+            assert!(
+                journey::living_scene::last_line(again.state())
+                    .unwrap()
+                    .unwrap()
+                    .contains("has already done")
+            );
+        });
+    }
 }

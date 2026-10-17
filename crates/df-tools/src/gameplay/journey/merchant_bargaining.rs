@@ -291,6 +291,9 @@ pub(in crate::gameplay) struct HeroTradeIntent {
     pub(in crate::gameplay) refers_to_active_item: bool,
     pub(in crate::gameplay) bargains: bool,
     pub(in crate::gameplay) judgement: TradeJudgement,
+    /// Coin the hero handed this NPC in the same turn as a gift, tip or bribe. Only the committed
+    /// gift's speech follow-up sets it; it is a fact for the reply and never a trade.
+    pub(in crate::gameplay) coin_gift_cp: Option<u32>,
 }
 
 impl HeroTradeIntent {
@@ -302,6 +305,15 @@ impl HeroTradeIntent {
             refers_to_active_item: false,
             bargains: false,
             judgement: TradeJudgement::NotRequested,
+            coin_gift_cp: None,
+        }
+    }
+
+    /// A speech follow-up to a committed coin gift: the reply knows the copper just handed over.
+    pub(in crate::gameplay) const fn coin_gift(cp: u32) -> Self {
+        Self {
+            coin_gift_cp: Some(cp),
+            ..Self::not_requested()
         }
     }
 
@@ -318,6 +330,7 @@ impl HeroTradeIntent {
             refers_to_active_item: meaning.is_trade(),
             bargains: meaning.negotiates(),
             judgement: TradeJudgement::Jev,
+            coin_gift_cp: None,
         })
     }
 }
@@ -1566,6 +1579,27 @@ fn reply_context_with_quote(
     }))
 }
 
+/// The services this merchant performs for the hero here, as reply facts. Each names its exact price
+/// and whether this hero already has it, so a reply quotes it and never sells one request twice.
+pub(in crate::gameplay) fn service_facts(quotes: &[super::living_scene::ServiceQuote]) -> Value {
+    json!({
+        "services": quotes
+            .iter()
+            .map(|quote| json!({
+                "service": quote.name,
+                "description": quote.description,
+                "price_cp": quote.price_cp,
+                "done": quote.done,
+            }))
+            .collect::<Vec<_>>(),
+        "services_rules": [
+            "When the hero asks what a listed service costs, quote it by name at its exact price_cp, and name no other price for it.",
+            "A listed service is performed only when the hero pays its exact price_cp. A service marked done is already performed for this hero and is never charged again.",
+            "Performing a service is narrated in character; no coin moves because of your words alone.",
+        ],
+    })
+}
+
 fn valid_terms(terms: &TradeTerms) -> bool {
     !terms.seller_id.trim().is_empty()
         && !terms.buyer_id.trim().is_empty()
@@ -1624,6 +1658,7 @@ pub(in crate::gameplay) fn rules_hero_intent(
             refers_to_active_item,
             bargains,
             judgement,
+            coin_gift_cp: None,
         };
     }
     if !is_trade_dialogue_request(words) {
@@ -1633,6 +1668,7 @@ pub(in crate::gameplay) fn rules_hero_intent(
             refers_to_active_item,
             bargains,
             judgement,
+            coin_gift_cp: None,
         };
     }
     let sells = is_selling_request(words);
@@ -1668,6 +1704,7 @@ pub(in crate::gameplay) fn rules_hero_intent(
         refers_to_active_item,
         bargains,
         judgement,
+        coin_gift_cp: None,
     }
 }
 

@@ -2341,6 +2341,82 @@ impl SocialLedger {
             }
         }
     }
+
+    /// Records a coerced demand the NPC was pressed with: a threat (Intimidation) or a lie it had to
+    /// believe (Deception). The wrong is a lasting grievance against that hero only. A demand the NPC
+    /// met turns it Hostile toward that hero; a refused demand keeps the grievance and lowers its
+    /// standing one level, as any wrong does. Returns the level shift when the standing changed.
+    pub(super) fn record_scene_threat(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+        hero_line: &str,
+        complied: bool,
+    ) -> Option<Shift> {
+        let words = hero_line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(GRIEVANCE_CHARACTERS)
+            .collect();
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        let from = relationship.attitude;
+        relationship.record_grievance(
+            Grievance {
+                act: GrievanceAct::Threat,
+                words,
+            },
+            complied,
+        );
+        if complied {
+            relationship.attitude = Attitude::Hostile;
+        }
+        (from != relationship.attitude).then_some(Shift::Level {
+            from,
+            to: relationship.attitude,
+        })
+    }
+
+    /// Records a planting this NPC noticed: the hero's wrong is kept as a grievance and lowers the
+    /// standing one level, as a noticed wrong does. The hero's line is condensed and bounded.
+    pub(super) fn record_noticed_plant(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+        hero_line: &str,
+    ) -> Option<Shift> {
+        let words = hero_line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(GRIEVANCE_CHARACTERS)
+            .collect();
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        let from = relationship.attitude;
+        relationship.record_grievance(
+            Grievance {
+                act: GrievanceAct::Wrong,
+                words,
+            },
+            false,
+        );
+        (from != relationship.attitude).then_some(Shift::Level {
+            from,
+            to: relationship.attitude,
+        })
+    }
 }
 
 /// The wire code of an attitude: 1 Hostile, 2 Indifferent, 3 Friendly (0 is unknown).

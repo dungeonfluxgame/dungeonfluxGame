@@ -413,6 +413,7 @@ mod tests {
     fn room() -> SceneNow {
         SceneNow {
             model: SceneModel {
+                services: Vec::new(),
                 witnessed_thefts: Vec::new(),
                 inventory_version: 1,
                 time_of_day: "day".to_owned(),

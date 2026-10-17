@@ -1921,3 +1921,22 @@ fn a_purchase_of_a_sold_out_item_gets_a_plain_sold_out_refusal_naming_no_price()
         "the refusal names no price: {refusal}"
     );
 }
+
+#[test]
+fn merchant_reply_facts_quote_each_service_at_its_exact_price() {
+    let quotes = vec![crate::gameplay::journey::living_scene::ServiceQuote {
+        name: "mending".into(),
+        description: "Mending a small tear.".into(),
+        price_cp: 50,
+        done: false,
+    }];
+    let facts = crate::gameplay::journey::merchant_bargaining::service_facts(&quotes);
+    assert_eq!(facts["services"][0]["service"], "mending");
+    assert_eq!(facts["services"][0]["price_cp"], 50);
+    assert_eq!(facts["services"][0]["done"], false);
+    assert!(
+        facts["services_rules"]
+            .to_string()
+            .contains("exact price_cp")
+    );
+}

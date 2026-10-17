@@ -575,8 +575,11 @@ fn hypothetical_negative_and_questioned_interactions_do_not_execute() {
             .1,
         "open"
     );
-    assert_eq!(living_scene::gift_amount("I give Ilsa 5 GP."), Some(5));
-    assert_eq!(living_scene::gift_amount("I give Ilsa 5 GP or 10 GP"), None);
+    assert_eq!(living_scene::coin_amount_cp("I give Ilsa 5 GP."), Some(500));
+    assert_eq!(
+        living_scene::coin_amount_cp("I give Ilsa 5 GP or 10 GP"),
+        None
+    );
 }
 
 #[test]
@@ -947,7 +950,7 @@ fn first_player_projection_contains_committed_room_state_without_a_display_obser
 
 #[test]
 fn interaction_labels_are_a_closed_set_that_names_existing_kinds() {
-    assert_eq!(living_scene::InteractionMeaning::CHOICES.len(), 13);
+    assert_eq!(living_scene::InteractionMeaning::CHOICES.len(), 14);
     for (label, _) in living_scene::InteractionMeaning::CHOICES {
         assert!(
             living_scene::InteractionMeaning::from_label(label).is_some(),
@@ -1246,6 +1249,433 @@ fn taking_an_owned_item_openly_requires_the_check() {
                 .unwrap()
                 .holder_id,
             None
+        );
+    });
+}
+
+/// Stages one scene action with the server's dice given in order. Every scene check uses one d20.
+fn act(
+    current: &Checkpoint,
+    member: MemberId,
+    op: u8,
+    choices: &[(&str, &str)],
+    faces: &[u32],
+) -> Result<Checkpoint, RepositoryError> {
+    let mut faces = faces
+        .iter()
+        .copied()
+        .collect::<std::collections::VecDeque<u32>>();
+    let choices = choices
+        .iter()
+        .map(|(key, value)| (model::label(key).unwrap(), model::label(value).unwrap()))
+        .collect();
+    stage_with_supplier(
+        current,
+        &input(current, member, op, "script-choice", choices),
+        &mut |sides| {
+            assert_eq!(sides, 20, "a scene check uses one d20");
+            faces.pop_front().ok_or(RepositoryError::InvalidCandidate)
+        },
+    )
+}
+
+/// The copper a party hero holds, from the same ledger a purchase or theft reads.
+fn hero_cp(current: &Checkpoint, hero: &str) -> u64 {
+    let who = current
+        .state()
+        .characters
+        .iter()
+        .find(|character| {
+            name(current.state(), character.entity).is_ok_and(|candidate| candidate == hero)
+        })
+        .expect("a party hero of this name")
+        .entity;
+    living_scene::balance_cp(current.state(), who).unwrap()
+}
+
+fn scene_snapshot(current: &Checkpoint) -> crate::gameplay::adventure::scene_model::SceneNow {
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+    living_scene::snapshot(current.state(), &scene)
+        .unwrap()
+        .unwrap()
+}
+
+/// The copper in an NPC's purse as the current scene projects it.
+fn npc_cp(current: &Checkpoint, npc: &str) -> u64 {
+    let snapshot = scene_snapshot(current);
+    u64::from(
+        snapshot
+            .model
+            .people
+            .iter()
+            .find(|person| person.id == npc)
+            .expect("a person in the scene")
+            .coin_cp,
+    )
+}
+
+fn first_npc(current: &Checkpoint) -> String {
+    scene_snapshot(current)
+        .model
+        .people
+        .iter()
+        .find(|person| person.role != "hero")
+        .expect("the room has an NPC")
+        .id
+        .clone()
+}
+
+/// A portable scene item nobody holds.
+fn portable_thing(current: &Checkpoint) -> String {
+    scene_snapshot(current)
+        .model
+        .things
+        .iter()
+        .find(|thing| {
+            thing.portable && !thing.in_use && thing.in_scene && thing.holder_id.is_none()
+        })
+        .expect("the room has a portable object nobody holds")
+        .id
+        .clone()
+}
+
+/// The hero takes a portable item: openly when nobody else owns it, and by a theft (one d20 that
+/// wins) when another person owns it.
+fn take_thing(current: &Checkpoint, member: MemberId, op: u8, thing: &str) -> Checkpoint {
+    match thing_in(current, thing).owner_id {
+        Some(owner) if owner != "Brynn" => {
+            interact_with_roll(current, member, op, thing, "steal", Some(20))
+        }
+        _ => interact(current, member, op, thing, "take"),
+    }
+}
+
+fn thing_in(
+    current: &Checkpoint,
+    thing_id: &str,
+) -> crate::gameplay::adventure::scene_model::SceneThing {
+    scene_snapshot(current)
+        .model
+        .things
+        .into_iter()
+        .find(|thing| thing.id == thing_id)
+        .expect("the thing is in the scene")
+}
+
+fn last_offence(current: &Checkpoint) -> Option<living_scene::SceneOffence> {
+    let operation = current.state().decisions.last().unwrap().operation;
+    living_scene::offence(current.state(), operation).unwrap()
+}
+
+#[test]
+fn hero_to_hero_coin_moves_the_exact_copper_between_purses() {
+    taproom(|| {
+        let (current, member) = opened();
+        let (brynn, vale) = (hero_cp(&current, "Brynn"), hero_cp(&current, "Vale"));
+        let paid = act(
+            &current,
+            member,
+            30,
+            &[
+                ("scene-target", "Vale"),
+                ("scene-option", "gift"),
+                ("scene-payment", "20"),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(hero_cp(&paid, "Brynn"), brynn - 20);
+        assert_eq!(hero_cp(&paid, "Vale"), vale + 20);
+        assert!(
+            living_scene::last_line(paid.state())
+                .unwrap()
+                .unwrap()
+                .contains("Brynn hands Vale two silver pieces.")
+        );
+    });
+}
+
+#[test]
+fn a_tip_to_an_npc_credits_its_purse_the_exact_copper() {
+    taproom(|| {
+        let (current, member) = opened();
+        let npc = first_npc(&current);
+        let (hero_before, purse_before) = (hero_cp(&current, "Brynn"), npc_cp(&current, &npc));
+        let tipped = act(
+            &current,
+            member,
+            31,
+            &[
+                ("scene-target", &npc),
+                ("scene-option", "gift"),
+                ("scene-payment", "50"),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(hero_cp(&tipped, "Brynn"), hero_before - 50);
+        assert_eq!(npc_cp(&tipped, &npc), purse_before + 50);
+        // Conservation: the copper the hero gave is exactly the copper the NPC gained.
+        assert_eq!(
+            hero_cp(&tipped, "Brynn") + npc_cp(&tipped, &npc),
+            hero_before + purse_before
+        );
+    });
+}
+
+#[test]
+fn an_overdraw_of_coin_transfers_nothing() {
+    taproom(|| {
+        let (current, member) = opened();
+        let npc = first_npc(&current);
+        let (hero_before, purse_before) = (hero_cp(&current, "Brynn"), npc_cp(&current, &npc));
+        let refused = act(
+            &current,
+            member,
+            32,
+            &[
+                ("scene-target", &npc),
+                ("scene-option", "gift"),
+                ("scene-payment", "100000000"),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(hero_cp(&refused, "Brynn"), hero_before);
+        assert_eq!(npc_cp(&refused, &npc), purse_before);
+        assert!(
+            living_scene::last_line(refused.state())
+                .unwrap()
+                .unwrap()
+                .contains("do not have")
+        );
+    });
+}
+
+#[test]
+fn a_pickpocket_success_moves_the_bounded_amount_and_a_failure_is_noticed() {
+    taproom(|| {
+        let (current, member) = opened();
+        let npc = first_npc(&current);
+        let (hero_before, purse_before) = (hero_cp(&current, "Brynn"), npc_cp(&current, &npc));
+        // One tenth of the purse, never more than the cap (scene_model::pickpocket_haul_cp).
+        let haul = (purse_before / 10).min(1_000);
+        let lifted = act(
+            &current,
+            member,
+            33,
+            &[("scene-target", &npc), ("scene-option", "steal")],
+            &[20],
+        )
+        .unwrap();
+        assert_eq!(npc_cp(&lifted, &npc), purse_before - haul);
+        assert_eq!(hero_cp(&lifted, "Brynn"), hero_before + haul);
+        assert!(
+            living_scene::last_line(lifted.state())
+                .unwrap()
+                .unwrap()
+                .contains("lifts")
+        );
+        let missed = act(
+            &current,
+            member,
+            34,
+            &[("scene-target", &npc), ("scene-option", "steal")],
+            &[1],
+        )
+        .unwrap();
+        assert_eq!(npc_cp(&missed, &npc), purse_before);
+        assert_eq!(hero_cp(&missed, "Brynn"), hero_before);
+        let failure = living_scene::last_line(missed.state()).unwrap().unwrap();
+        assert!(failure.contains("fails to steal"));
+        // The owner is on stage, so the owner sets the DC and notices the failed attempt.
+        assert!(failure.contains("notices"), "{failure}");
+    });
+}
+
+#[test]
+fn planting_moves_custody_without_changing_the_owner() {
+    taproom(|| {
+        let (current, member) = opened();
+        let thing = portable_thing(&current);
+        let taken = take_thing(&current, member, 35, &thing);
+        let npc = first_npc(&taken);
+        let owner_before = thing_in(&taken, &thing).owner_id;
+        let planted = act(
+            &taken,
+            member,
+            36,
+            &[
+                ("scene-target", &thing),
+                ("scene-option", "plant"),
+                ("scene-recipient", &npc),
+            ],
+            &[20],
+        )
+        .unwrap();
+        let after = thing_in(&planted, &thing);
+        assert_eq!(after.holder_id.as_deref(), Some(npc.as_str()));
+        assert_eq!(after.owner_id, owner_before);
+        assert!(
+            living_scene::last_line(planted.state())
+                .unwrap()
+                .unwrap()
+                .contains("slips")
+        );
+    });
+}
+
+/// Brynn takes an unowned item and plants it on the NPC, so the NPC holds it for a demand.
+fn npc_holding_item(
+    current: &Checkpoint,
+    member: MemberId,
+    op: u8,
+) -> (Checkpoint, String, String) {
+    let thing = portable_thing(current);
+    let taken = take_thing(current, member, op, &thing);
+    let npc = first_npc(&taken);
+    let planted = act(
+        &taken,
+        member,
+        op + 1,
+        &[
+            ("scene-target", &thing),
+            ("scene-option", "plant"),
+            ("scene-recipient", &npc),
+        ],
+        &[20],
+    )
+    .unwrap();
+    (planted, thing, npc)
+}
+
+#[test]
+fn a_successful_intimidation_demand_hands_over_the_item_and_records_the_offence() {
+    taproom(|| {
+        let (current, member) = opened();
+        let (planted, thing, npc) = npc_holding_item(&current, member, 37);
+        let demanded = act(
+            &planted,
+            member,
+            39,
+            &[("scene-target", &thing), ("scene-option", "intimidate")],
+            &[20],
+        )
+        .unwrap();
+        assert_eq!(
+            thing_in(&demanded, &thing).holder_id.as_deref(),
+            Some("Brynn")
+        );
+        assert_eq!(
+            last_offence(&demanded),
+            Some(living_scene::SceneOffence::Coerced {
+                npc_id: npc,
+                complied: true,
+            })
+        );
+    });
+}
+
+#[test]
+fn a_failed_intimidation_demand_refuses_the_item_and_records_the_offence() {
+    taproom(|| {
+        let (current, member) = opened();
+        let (planted, thing, npc) = npc_holding_item(&current, member, 40);
+        let refused = act(
+            &planted,
+            member,
+            42,
+            &[("scene-target", &thing), ("scene-option", "intimidate")],
+            &[1],
+        )
+        .unwrap();
+        assert_eq!(
+            thing_in(&refused, &thing).holder_id.as_deref(),
+            Some(npc.as_str())
+        );
+        assert_eq!(
+            last_offence(&refused),
+            Some(living_scene::SceneOffence::Coerced {
+                npc_id: npc,
+                complied: false,
+            })
+        );
+    });
+}
+
+#[test]
+fn a_forged_coerced_handover_receipt_is_rejected_on_replay() {
+    taproom(|| {
+        let (current, member) = opened();
+        let (planted, thing, _npc) = npc_holding_item(&current, member, 43);
+        let refused = act(
+            &planted,
+            member,
+            45,
+            &[("scene-target", &thing), ("scene-option", "intimidate")],
+            &[1],
+        )
+        .unwrap();
+        let scene = crate::gameplay::beat_script_runtime::scene(refused.state()).unwrap();
+        assert!(
+            living_scene::snapshot(refused.state(), &scene)
+                .unwrap()
+                .is_some()
+        );
+        // Rewrite the refused demand as a handover that the same die does not win.
+        let mut forged = refused.state().clone();
+        let index = forged.decisions.len() - 1;
+        let text = forged.decisions[index]
+            .semantic_output
+            .clone()
+            .expect("the refusal is journaled");
+        let text = text
+            .replacen("\"coercion_refused\"", "\"coerced_handover\"", 1)
+            .replacen("\"succeeded\":false", "\"succeeded\":true", 1);
+        forged.decisions[index].semantic_output = Some(text);
+        assert!(living_scene::snapshot(&forged, &scene).is_err());
+    });
+}
+
+#[test]
+fn buying_for_another_hero_sets_owner_and_holder_and_the_buyer_pays() {
+    taproom(|| {
+        let (current, member) = opened();
+        let scene = crate::gameplay::beat_script_runtime::scene(current.state()).unwrap();
+        let offer = scene
+            .setting
+            .as_ref()
+            .unwrap()
+            .model
+            .as_ref()
+            .unwrap()
+            .offers
+            .first()
+            .unwrap()
+            .clone();
+        let (brynn, vale) = (hero_cp(&current, "Brynn"), hero_cp(&current, "Vale"));
+        let seller_before = npc_cp(&current, &offer.seller_id);
+        let bought = act(
+            &current,
+            member,
+            50,
+            &[
+                ("scene-target", &offer.id),
+                ("scene-option", "buy"),
+                ("scene-recipient", "Vale"),
+            ],
+            &[],
+        )
+        .unwrap();
+        let thing = thing_in(&bought, &offer.canonical_item_id());
+        assert_eq!(thing.owner_id.as_deref(), Some("Vale"));
+        assert_eq!(thing.holder_id.as_deref(), Some("Vale"));
+        // Brynn pays the merchant; Vale is neither charged nor credited.
+        assert_eq!(hero_cp(&bought, "Brynn"), brynn - u64::from(offer.cost_cp));
+        assert_eq!(hero_cp(&bought, "Vale"), vale);
+        assert_eq!(
+            npc_cp(&bought, &offer.seller_id),
+            seller_before + u64::from(offer.cost_cp)
         );
     });
 }

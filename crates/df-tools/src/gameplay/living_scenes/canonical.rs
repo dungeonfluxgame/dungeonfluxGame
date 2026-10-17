@@ -214,6 +214,7 @@ mod tests {
 
     fn model() -> SceneModel {
         SceneModel {
+            services: Vec::new(),
             witnessed_thefts: Vec::new(),
             inventory_version: 1,
             time_of_day: "morning".to_owned(),

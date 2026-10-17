@@ -641,6 +641,15 @@ pub(super) struct NpcReplyContext {
 }
 
 impl NpcReplyContext {
+    /// Records the coin the hero handed this NPC in the same turn. The fact reaches every reply path;
+    /// it grants nothing, so the NPC still answers, declines, or refuses as its attitude allows.
+    pub(super) fn with_payment(&mut self, amount_cp: u32) {
+        self.facts["payment_from_hero"] = json!({
+            "amount_cp": amount_cp,
+            "meaning": "The hero just handed you this coin as a gift, tip, or bribe for information or a favour. Payment never makes you answer, act, or grant anything: you still answer, decline, or refuse as your attitude and willingness allow. Name no price and promise nothing the server does not allow.",
+        });
+    }
+
     /// Whether the speaker holds a private clue this hero may be told.
     fn private_matter_exists(&self) -> bool {
         self.turn
@@ -4243,6 +4252,21 @@ mod tests {
             1,
             "the repeats were served from the cache"
         );
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_payment_for_information_reaches_the_reply_facts() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({"reply": "Quiet now."}))]);
+        let (voice, cache) = voice(&endpoint, "voice-payment");
+        let mut context = question("Who else buys from you?");
+        context.with_payment(10);
+
+        voice.reply(context).await;
+
+        let sent = endpoint.bodies()[0].to_string();
+        assert!(sent.contains("payment_from_hero"));
+        assert!(sent.contains("amount_cp"));
         std::fs::remove_dir_all(cache).unwrap();
     }
 }
