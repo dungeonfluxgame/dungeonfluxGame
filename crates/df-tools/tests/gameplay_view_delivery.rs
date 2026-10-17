@@ -13,6 +13,13 @@ mod plate_layout;
 #[allow(dead_code)]
 #[path = "../src/presentation.rs"]
 mod presentation;
+// The presentation module names the photographic stage stems and resolves voice-line speakers.
+#[allow(dead_code)]
+#[path = "../src/stage_art.rs"]
+mod stage_art;
+#[allow(dead_code)]
+#[path = "../src/voice_line.rs"]
+mod voice_line;
 
 use df_client::{
     cache::CacheScope, connection::RpcConnection, connection_views::ConnectionViewAcceptance,
