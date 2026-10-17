@@ -12,8 +12,8 @@ use super::{
     adventure::{
         ForcedEntries, GenerateOptions, GeneratedAdventure, Tables,
         dossier::{
-            Attitude, Dossier, Effect, EmotionalProfile, NpcRole, ResolvedFlavor, Topic,
-            mentions_term,
+            Attitude, Dossier, Effect, EmotionalProfile, Forgiveness, NpcRole, ResolvedFlavor,
+            Topic, mentions_term,
         },
         generate,
     },
@@ -24,7 +24,10 @@ use super::{
     npc_facts,
     npc_reply::{InfluenceCheckInput, NpcReplyContext, NpcVoice, StoryFacts},
     pack::SceneKey,
-    social::{Approach, Conversation, SocialLedger, Standing, classify_keywords},
+    social::{
+        Appraisal, Approach, Conversation, EmotionLevel, EmotionReaction, SocialLedger, Standing,
+        classify_keywords,
+    },
     startup_configuration::{ContentRating, TestRating, content_rating},
     storyteller::{
         CallProfile, Expression, Slot, age_group, build_prompt, check_request,
@@ -3255,6 +3258,18 @@ async fn a_willing_bargain_is_answered_without_a_check_or_a_refusal() {
     std::fs::remove_dir_all(cache).unwrap();
 }
 
+/// Jev's answers to a lie in the two-part line the lie tests send: the approach (a lie), the
+/// subject, one focus per question part, then the appraisal.
+fn lie_answers(appraisal: &str) -> Vec<Reply> {
+    vec![
+        answer("o6"),
+        answer("o1"),
+        answer("o1"),
+        answer("o1"),
+        answer(appraisal),
+    ]
+}
+
 /// The hero's sheet for a Deception check: Charisma +2 and Proficiency +2, with the given face.
 fn lying_hero(face: u8) -> InfluenceCheckInput {
     InfluenceCheckInput {
@@ -3297,7 +3312,8 @@ async fn a_local_question_without_canon_establishes_one_fact_and_the_same_questi
         first_facts.contains("\"may_establish_local_fact\":true"),
         "{first_facts}"
     );
-    assert!(first_facts.contains("\"local_canon\":[]"), "{first_facts}");
+    assert!(first_facts.contains("\"facts\":[]"), "{first_facts}");
+    assert!(first_facts.contains("Quoted world data"), "{first_facts}");
 
     let second = context(&adventure, &ledger, SceneKey::Opening, question);
     let exchange = voice.converse_in_character(second, &log).await.unwrap();
@@ -3374,5 +3390,86 @@ async fn a_lie_the_hero_fails_is_seen_through_and_recorded_as_a_grievance_for_th
     assert!(facts.contains("see through the hero's claim"), "{facts}");
     assert!(!ledger.grievance_lines(member(1), &dossier).is_empty());
     assert!(ledger.grievance_lines(member(2), &dossier).is_empty());
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_lie_to_an_unwilling_npc_is_refused_without_a_deception_check() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let decision = FakeEndpoint::start(lie_answers("o30"));
+    let replies = FakeEndpoint::start(vec![reply(
+        "I will not be taken in by that, whatever you claim.",
+        "deception",
+    )]);
+    let (voice, cache) = voice(&replies, "lie-unwilling");
+    let voice = voice.with_approach_model(model(&decision));
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "I'm a tax inspector from the city. Show me your ledgers.",
+    );
+    // The hero would succeed on the check, so only the refusal keeps it from being made.
+    ask.influence_check = Some(lying_hero(12));
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert_eq!(exchange.approach, Approach::Deception);
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    assert_eq!(replies.connections(), 1);
+    let facts = request_facts(&replies, 0);
+    assert!(facts.contains("\"kind\":\"unwilling\""), "{facts}");
+    assert!(!facts.contains("deception_check"), "{facts}");
+    assert!(!facts.contains("\"skill\":\"Deception\""), "{facts}");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_lie_to_an_npc_that_never_forgives_this_hero_is_refused_without_a_deception_check() {
+    let (mut adventure, _) = confiding_patron(Attitude::Friendly);
+    let mut profile = adventure.dossiers[0].emotional_profile();
+    profile.forgiveness = Forgiveness::Unforgiving;
+    adventure.dossiers[0].emotional_profile = Some(profile);
+    let dossier = adventure.dossiers[0].clone();
+    let ledger = SocialLedger::open(adventure.dossiers.clone(), "0x01", None).unwrap();
+    // The grudge from an earlier offense this hero gave; the NPC keeps it.
+    ledger.apply_appraisal(
+        member(1),
+        &dossier,
+        "Opening",
+        Appraisal {
+            reaction: EmotionReaction::NeverForgive,
+            strength: EmotionLevel::Much,
+            willingness: None,
+            effect: Effect::Cool,
+        },
+    );
+    let decision = FakeEndpoint::start(lie_answers("o1"));
+    let replies = FakeEndpoint::start(vec![reply("Leave my ledgers alone.", "deception")]);
+    let (voice, cache) = voice(&replies, "lie-never-forgives");
+    let voice = voice.with_approach_model(model(&decision));
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "I'm a tax inspector from the city. Show me your ledgers.",
+    );
+    ask.influence_check = Some(lying_hero(12));
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert_eq!(exchange.approach, Approach::Deception);
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    assert_eq!(replies.connections(), 1);
+    let facts = request_facts(&replies, 0);
+    assert!(facts.contains("\"kind\":\"unwilling\""), "{facts}");
+    assert!(!facts.contains("deception_check"), "{facts}");
+    assert!(!facts.contains("\"skill\":\"Deception\""), "{facts}");
     std::fs::remove_dir_all(cache).unwrap();
 }
