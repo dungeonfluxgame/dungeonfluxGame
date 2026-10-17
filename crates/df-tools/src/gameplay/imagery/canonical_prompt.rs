@@ -9,7 +9,26 @@ use crate::gameplay::{
 };
 use serde_json::{Value, json};
 
+/// The look of a place photographed on its own. The performers' film-set look asks for a staged
+/// set, and an "architectural" shot comes back evenly lit and clean like a render; a place reads
+/// as a photograph only with available light, real wear and the camera's own imperfections.
+const PLACE_LOOK: &str = "Candid documentary color photograph of a real, lived-in historic interior, taken \
+    on location with a handheld full-frame camera and a 35mm lens using only the light already in \
+    the room: uneven falloff into darker corners, real dust and wear, scuffed boards, irregular \
+    hand-made objects, slight sensor grain and natural lens softness toward the edges. An \
+    unretouched photograph of a real place, not an architectural or real-estate shot and not a \
+    staged set; never a 3D render, CGI, game art, matte painting, illustration or painting.";
+
 fn assembled(
+    rating: ContentRating,
+    text: String,
+    binding: &str,
+) -> Result<AssembledPrompt, ImageFailure> {
+    assembled_with(FILM_LOOK, rating, text, binding)
+}
+
+fn assembled_with(
+    look: &'static str,
     rating: ContentRating,
     text: String,
     binding: &str,
@@ -19,7 +38,7 @@ fn assembled(
         ContentRating::Restrained => "No gore, nudity or sexual content.",
     };
     let prompt = AssembledPrompt::from_parts(vec![
-        Part::Fixed(FILM_LOOK),
+        Part::Fixed(look),
         Part::Fact(text),
         Part::Fixed(rating),
     ])
@@ -148,10 +167,11 @@ pub(in crate::gameplay) fn canonical_room(
     binding: &str,
 ) -> Result<AssembledPrompt, ImageFailure> {
     let (layout, goods) = canonical_room_content(model)?;
-    assembled(
+    assembled_with(
+        PLACE_LOOK,
         rating,
         format!(
-            "Empty-room architectural reference photograph of canonical place {place}. Wide establishing view showing the exact authored spatial arrangement, fixed goods, objects and usable ways out in this JSON: {}. Authored goods displayed for sale (JSON): {}. No people, faces, silhouettes or text. Never infer hidden facts. Preserve this room's geometry and materials for every later scene photograph.",
+            "Reference photograph of canonical place {place}, empty of people. Wide establishing view showing the exact authored spatial arrangement, fixed goods, objects and usable ways out in this JSON: {}. Authored goods displayed for sale (JSON): {}. No people, faces, silhouettes or text. Never infer hidden facts. Preserve this room's geometry and materials for every later scene photograph.",
             layout,
             json!(goods)
         ),
@@ -163,6 +183,15 @@ pub(in crate::gameplay) fn canonical_room(
 mod tests {
     use super::*;
     use crate::gameplay::hero_identity::Identity;
+
+    #[test]
+    fn a_room_is_asked_for_as_a_candid_location_photograph_never_a_set_or_a_render() {
+        // The room prompt carries the place look, not the performers' film-set look.
+        assert!(PLACE_LOOK.contains("handheld full-frame camera"));
+        assert!(PLACE_LOOK.contains("not an architectural or real-estate shot"));
+        assert!(PLACE_LOOK.contains("never a 3D render, CGI, game art, matte painting"));
+        assert!(!PLACE_LOOK.contains("film set"));
+    }
 
     #[test]
     fn accepted_hero_uses_actual_species_and_gear_without_private_backstory() {
