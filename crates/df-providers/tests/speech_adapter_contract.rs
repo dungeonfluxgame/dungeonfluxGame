@@ -70,6 +70,7 @@ fn stt_binding() -> RequestBinding<ElevenSttBasis> {
                 locale: LocaleTag::parse("en-US").unwrap(),
                 audio_format: SpeechInputFormat::PcmS16Le16Mono,
                 transcript_profile: SpeechTranscriptProfile::FinalWords,
+                keyterms: vec!["Marek".to_owned(), "Captain Rook".to_owned()],
             },
         },
         mode: ExecutionMode::Live,
@@ -345,15 +346,37 @@ async fn scribe_registered_route_sends_exact_multipart_and_preserves_verbatim_fi
     ] {
         assert!(body.contains(&format!("name=\"{name}\"\r\n\r\n{value}\r\n")));
     }
+    assert!(body.contains("name=\"keyterms\"\r\n\r\n[\"Marek\",\"Captain Rook\"]\r\n"));
     assert!(seen.body.windows(pcm.len()).any(|w| w == pcm));
-    for absent in [
-        "source_url",
-        "transcript_edit",
-        "keyterms",
-        "webhook_metadata",
-    ] {
+    for absent in ["source_url", "transcript_edit", "webhook_metadata"] {
         assert!(!body.contains(absent));
     }
+}
+
+#[tokio::test]
+async fn scribe_refuses_unbounded_keyterms_before_opening_a_provider_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut binding = stt_binding();
+    binding.semantic_basis.semantic.keyterms = vec!["Marek".to_owned(); 33];
+    let request = stt_request(&binding, &vec![0; 3200]);
+    let error = provider(CandidateRouteId::ElevenScribeV2Stt, address, limits())
+        .transcribe(&request, owner(&binding), future::pending())
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.reason(), SpeechAdapterReason::InvalidInput);
+    assert!(listener.accept().is_err());
+
+    binding.semantic_basis.semantic.keyterms = vec!["M".repeat(50)];
+    let request = stt_request(&binding, &vec![0; 3200]);
+    let error = provider(CandidateRouteId::ElevenScribeV2Stt, address, limits())
+        .transcribe(&request, owner(&binding), future::pending())
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason(), SpeechAdapterReason::InvalidInput);
+    assert!(listener.accept().is_err());
 }
 
 #[tokio::test]

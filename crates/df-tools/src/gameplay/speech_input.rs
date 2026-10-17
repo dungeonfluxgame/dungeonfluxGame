@@ -73,6 +73,8 @@ const PROVIDER_DEADLINE: Duration = Duration::from_secs(12);
 const IDENTITY_DEADLINE: Duration = Duration::from_secs(5);
 /// An upload cannot occupy a player's speech slot indefinitely before reaching the provider.
 const BODY_READ_DEADLINE: Duration = Duration::from_secs(15);
+const REFUSAL_BODY_LIMIT: usize = 64 * 1024;
+const REFUSAL_BODY_DEADLINE: Duration = Duration::from_secs(1);
 /// A line is no longer than the dialogue path accepts.
 const MAXIMUM_TRANSCRIPT_BYTES: usize = 4096;
 /// A transcript JSON of a fifteen second clip is far smaller; this bounds a hostile answer.
@@ -456,6 +458,7 @@ impl RequestIds {
                     locale: LocaleTag::parse("en-US").map_err(failed)?,
                     audio_format: SpeechInputFormat::PcmS16Le16Mono,
                     transcript_profile: SpeechTranscriptProfile::FinalWords,
+                    keyterms: Vec::new(),
                 },
             },
             mode: ExecutionMode::Live,
@@ -716,6 +719,7 @@ impl RouteState {
         );
         let mut received = 0;
         let mut cancelled = false;
+        let mut close_connection = false;
         let mut provider_elapsed_ms = None;
         let mut audio_ms = None;
         let result = self
@@ -725,6 +729,7 @@ impl RouteState {
                 span,
                 &mut received,
                 &mut cancelled,
+                &mut close_connection,
                 resource_id.as_deref(),
                 &mut provider_elapsed_ms,
                 &mut audio_ms,
@@ -785,7 +790,13 @@ impl RouteState {
             Some(request_started.elapsed().as_millis()),
             outcome.status(),
         );
-        response(outcome, result.unwrap_or_default())
+        let mut reply = response(outcome, result.unwrap_or_default());
+        if close_connection {
+            reply
+                .headers_mut()
+                .insert(header::CONNECTION, HeaderValue::from_static("close"));
+        }
+        reply
     }
 
     async fn process(
@@ -795,12 +806,13 @@ impl RouteState {
         span: &mut OperationSpan,
         received: &mut usize,
         cancelled: &mut bool,
+        close_connection: &mut bool,
         resource_id: Option<&str>,
         provider_elapsed_ms: &mut Option<u128>,
         audio_ms: &mut Option<u128>,
     ) -> Result<String, SpeechOutcome> {
         if !origin_known(headers, &self.allowed_origins) {
-            discard_body(body).await;
+            discard_refused_body(headers, body, close_connection).await;
             return Err(SpeechOutcome::Refused);
         }
         if matches!(*self.input.mode, Mode::Off(_)) {
@@ -822,7 +834,7 @@ impl RouteState {
         let mut admission = match self.input.admit(member, upload_id) {
             Ok(admission) => admission,
             Err(outcome) => {
-                discard_body(body).await;
+                discard_refused_body(headers, body, close_connection).await;
                 return Err(outcome);
             }
         };
@@ -897,12 +909,32 @@ impl RouteState {
     }
 }
 
-async fn discard_body(body: Body) {
-    let _ = tokio::time::timeout(
-        BODY_READ_DEADLINE,
-        axum::body::to_bytes(body, MAXIMUM_CLIP_BYTES),
+async fn discard_refused_body(headers: &HeaderMap, body: Body, close_connection: &mut bool) {
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    let chunked_without_length = declared.is_none()
+        && headers
+            .get(header::TRANSFER_ENCODING)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(',')
+                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+            });
+    if declared.is_some_and(|length| length > REFUSAL_BODY_LIMIT) || chunked_without_length {
+        *close_connection = true;
+        return;
+    }
+    let drained = tokio::time::timeout(
+        REFUSAL_BODY_DEADLINE,
+        axum::body::to_bytes(body, REFUSAL_BODY_LIMIT),
     )
     .await;
+    if !matches!(drained, Ok(Ok(_))) {
+        *close_connection = true;
+    }
 }
 
 /// Emits a terminal audit outcome if the upload future is dropped after queue admission.
@@ -1630,6 +1662,161 @@ mod tests {
         let reply = Service::call(&mut app, request).await.unwrap();
         assert_eq!(reply.status(), StatusCode::FORBIDDEN);
         assert!(consumed.load(Ordering::Acquire));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_foreign_origin_large_declared_body_is_not_read_and_closes_the_connection() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let consumed = Arc::new(AtomicBool::new(false));
+        let mut request = Upload::from(1, Vec::new()).request();
+        request.headers_mut().insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://evil.example"),
+        );
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from_static("65537"));
+        let body_consumed = consumed.clone();
+        *request.body_mut() = Body::from_stream(futures::stream::once(async move {
+            body_consumed.store(true, Ordering::Release);
+            Ok::<_, io::Error>(axum::body::Bytes::from_static(b"untrusted"))
+        }));
+
+        let reply = Service::call(&mut app, request).await.unwrap();
+        assert_eq!(reply.status(), StatusCode::FORBIDDEN);
+        assert_eq!(reply.headers()[header::CONNECTION], "close");
+        assert!(!consumed.load(Ordering::Acquire));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_foreign_origin_chunked_body_without_a_length_is_not_read() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let consumed = Arc::new(AtomicBool::new(false));
+        let mut request = Upload::from(1, Vec::new()).request();
+        request.headers_mut().insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://evil.example"),
+        );
+        request.headers_mut().remove(header::CONTENT_LENGTH);
+        request.headers_mut().insert(
+            header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
+        let body_consumed = consumed.clone();
+        *request.body_mut() = Body::from_stream(futures::stream::once(async move {
+            body_consumed.store(true, Ordering::Release);
+            Ok::<_, io::Error>(axum::body::Bytes::from_static(b"untrusted"))
+        }));
+
+        let reply = Service::call(&mut app, request).await.unwrap();
+        assert_eq!(reply.status(), StatusCode::FORBIDDEN);
+        assert_eq!(reply.headers()[header::CONNECTION], "close");
+        assert!(!consumed.load(Ordering::Acquire));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_stalled_small_refusal_drain_closes_after_one_second() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let mut request = Upload::from(1, Vec::new()).request();
+        request.headers_mut().insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://evil.example"),
+        );
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from_static("1"));
+        *request.body_mut() = Body::from_stream(futures::stream::pending::<
+            Result<axum::body::Bytes, io::Error>,
+        >());
+
+        let reply = tokio::time::timeout(
+            REFUSAL_BODY_DEADLINE + Duration::from_millis(500),
+            Service::call(&mut app, request),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(reply.status(), StatusCode::FORBIDDEN);
+        assert_eq!(reply.headers()[header::CONNECTION], "close");
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_busy_player_small_body_is_drained_before_the_refusal() {
+        let fake = FakeScribe::start(Duration::from_millis(500), Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut first_app = app(&input);
+        let first =
+            tokio::spawn(async move { send(&mut first_app, Upload::from(1, clip(1_000))).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fake.calls() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let mut app = app(&input);
+        let consumed = Arc::new(AtomicBool::new(false));
+        let mut request = Upload::from(1, Vec::new()).request();
+        request
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from_static("10"));
+        let body_consumed = consumed.clone();
+        *request.body_mut() = Body::from_stream(futures::stream::once(async move {
+            body_consumed.store(true, Ordering::Release);
+            Ok::<_, io::Error>(axum::body::Bytes::from_static(b"small clip"))
+        }));
+
+        let reply = Service::call(&mut app, request).await.unwrap();
+        assert_eq!(reply.headers()[OUTCOME_HEADER], "busy");
+        assert!(consumed.load(Ordering::Acquire));
+        assert_eq!(first.await.unwrap().0, SpeechOutcome::Heard);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_connected_upload_handler_records_client_aborted() {
+        let fake = FakeScribe::start(Duration::ZERO, Answer::Words);
+        let input = input_with(&fake, PROVIDER_DEADLINE);
+        let mut app = app(&input);
+        let id = 0xAB07_u128;
+        let resource = speech_resource_id(id.to_be_bytes());
+        let resource_key = hex(&TRANSCRIPTION.digest(&resource));
+        let mut upload = Upload::from(1, Vec::new())
+            .with_upload_id(&format!("{id:032x}"))
+            .request();
+        let body_read_started = Arc::new(AtomicBool::new(false));
+        let body_read_signal = body_read_started.clone();
+        *upload.body_mut() = Body::from_stream(futures::stream::poll_fn(move |_| {
+            body_read_signal.store(true, Ordering::Release);
+            std::task::Poll::<Option<Result<axum::body::Bytes, io::Error>>>::Pending
+        }));
+        let upload_task = tokio::spawn(async move { Service::call(&mut app, upload).await });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !body_read_started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        upload_task.abort();
+        let _ = upload_task.await;
+
+        let lines = crate::gameplay::actor::audit_lines_containing(&resource_key[..32]);
+        assert!(
+            lines.iter().any(|line| line.contains("client_aborted")),
+            "{lines:?}"
+        );
         assert_eq!(fake.calls(), 0);
     }
 

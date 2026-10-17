@@ -161,6 +161,7 @@ fn six_request_families_keep_typed_semantics_inside_the_existing_checked_envelop
             locale: locale.clone(),
             audio_format: String::from("pcm-s16le"),
             transcript_profile: String::from("final-only"),
+            keyterms: vec![String::from("Marek")],
         },
     );
     let _stt_request = df_provider_api::SttRequest::new(
@@ -190,6 +191,15 @@ fn six_request_families_keep_typed_semantics_inside_the_existing_checked_envelop
             .locale
             .as_str(),
         "en-us"
+    );
+    assert_eq!(
+        _stt_request
+            .checked()
+            .binding()
+            .semantic_basis
+            .semantic
+            .keyterms,
+        ["Marek"]
     );
 
     let tts = binding(

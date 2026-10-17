@@ -39,6 +39,8 @@ pub const ELEVEN_TTS_LANGUAGE: &str = "en";
 pub const ELEVEN_STT_MODEL: &str = "scribe_v2";
 /// The language every transcription request is sent with (`language_code`).
 pub const ELEVEN_STT_LANGUAGE: &str = "en";
+const MAXIMUM_STT_KEYTERMS: usize = 32;
+const MAXIMUM_STT_KEYTERM_CHARACTERS: usize = 49;
 const MAX_PCM_BYTES: usize = 1_920_000;
 const MAX_TRANSCRIPT_BYTES: usize = 65_536;
 const MAX_WORDS: usize = 4096;
@@ -535,6 +537,7 @@ impl NativeSpeechProvider {
             return Err(error(SpeechAdapterReason::InvalidProfile));
         }
         english_locale(&semantic.locale)?;
+        validate_keyterms(&semantic.keyterms)?;
         let bytes = checked.payload();
         if bytes.len() < 3200 || bytes.len() > MAX_PCM_BYTES || !bytes.len().is_multiple_of(2) {
             return Err(error(SpeechAdapterReason::InvalidInput));
@@ -550,6 +553,7 @@ impl NativeSpeechProvider {
         let body = multipart(
             bytes,
             binding.identity,
+            &semantic.keyterms,
             self.http.limits().maximum_request_bytes,
         )?;
         let mapped = HttpRequest::elevenlabs_native(
@@ -780,6 +784,7 @@ impl Write for BoundedBody {
 fn multipart(
     payload: &[u8],
     identity: RequestIdentity,
+    keyterms: &[String],
     limit: usize,
 ) -> Result<(String, Vec<u8>), SpeechAdapterError> {
     let mut operation = String::new();
@@ -820,6 +825,17 @@ fn multipart(
         )
         .map_err(append_error)?;
     }
+    if !keyterms.is_empty() {
+        let serialized = serde_json::to_string(keyterms)
+            .map_err(|_| error(SpeechAdapterReason::InvalidInput))?;
+        body.write_all(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"keyterms\"\r\n\r\n{serialized}\r\n"
+            )
+            .as_bytes(),
+        )
+        .map_err(append_error)?;
+    }
     body.write_all(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.pcm\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes()).map_err(append_error)?;
     body.write_all(payload).map_err(append_error)?;
     body.write_all(format!("\r\n--{boundary}--\r\n").as_bytes())
@@ -828,6 +844,23 @@ fn multipart(
         format!("multipart/form-data; boundary={boundary}"),
         body.bytes,
     ))
+}
+
+fn validate_keyterms(keyterms: &[String]) -> Result<(), SpeechAdapterError> {
+    if keyterms.len() > MAXIMUM_STT_KEYTERMS
+        || keyterms.iter().any(|term| {
+            term.trim().is_empty()
+                || term.chars().count() > MAXIMUM_STT_KEYTERM_CHARACTERS
+                || term.split_whitespace().count() > 5
+                || term.chars().any(|character| {
+                    character.is_control()
+                        || matches!(character, '<' | '>' | '{' | '}' | '[' | ']' | '\\')
+                })
+        })
+    {
+        return Err(error(SpeechAdapterReason::InvalidInput));
+    }
+    Ok(())
 }
 
 fn decode_json(bytes: &[u8]) -> Result<Value, SpeechAdapterReason> {

@@ -80,6 +80,8 @@ pub struct SttSemantics<AudioFormat, TranscriptProfile> {
     pub locale: LocaleTag,
     pub audio_format: AudioFormat,
     pub transcript_profile: TranscriptProfile,
+    /// Bounded caller-provided names and terms used to bias speech recognition.
+    pub keyterms: Vec<String>,
 }
 
 /// Speech synthesis text, voice, encoded output, PCM and timebase profiles.
