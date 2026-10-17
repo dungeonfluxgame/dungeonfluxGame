@@ -656,7 +656,7 @@ fn context(
 }
 
 fn reply(text: &str, approach: &str) -> Reply {
-    Reply::Output(json!({"reply": text, "approach": approach}))
+    Reply::Output(json!({"reply": text, "approach": approach, "local_fact": "none"}))
 }
 
 fn facts_of_request(prompt: &str) -> String {
@@ -3252,5 +3252,127 @@ async fn a_willing_bargain_is_answered_without_a_check_or_a_refusal() {
     let facts = request_facts(&replies, 0);
     assert!(!facts.contains("influence_check"), "{facts}");
     assert!(!facts.contains("\"refusal\""), "{facts}");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+/// The hero's sheet for a Deception check: Charisma +2 and Proficiency +2, with the given face.
+fn lying_hero(face: u8) -> InfluenceCheckInput {
+    InfluenceCheckInput {
+        persuasion: (2, 2),
+        deception: (2, 2),
+        intimidation: (2, 0),
+        performance: (0, 0),
+        faces: [face, 20],
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_local_question_without_canon_establishes_one_fact_and_the_same_question_gets_it_from_canon()
+ {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let decision = FakeEndpoint::start({
+        let mut script = jev_answers("o1", "o1");
+        script.extend(jev_answers("o1", "o1"));
+        script
+    });
+    let established = "The Lantern Inn stands two streets east of the square.";
+    let replies = FakeEndpoint::start(vec![
+        Reply::Output(json!({
+            "reply": established,
+            "approach": "question",
+            "local_fact": "place|The Lantern Inn|The Lantern Inn stands two streets east of the square.",
+        })),
+        reply("Head past the well and look for the red sign.", "question"),
+    ]);
+    let (voice, cache) = voice(&replies, "local-canon");
+    let voice = voice.with_approach_model(model(&decision));
+    let log = TableLog::new();
+    let question = "Where is the nearest inn?";
+
+    let first = context(&adventure, &ledger, SceneKey::Opening, question);
+    let exchange = voice.converse_in_character(first, &log).await.unwrap();
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    let first_facts = request_facts(&replies, 0);
+    assert!(
+        first_facts.contains("\"may_establish_local_fact\":true"),
+        "{first_facts}"
+    );
+    assert!(first_facts.contains("\"local_canon\":[]"), "{first_facts}");
+
+    let second = context(&adventure, &ledger, SceneKey::Opening, question);
+    let exchange = voice.converse_in_character(second, &log).await.unwrap();
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    let second_facts = request_facts(&replies, 1);
+    assert!(second_facts.contains("The Lantern Inn"), "{second_facts}");
+    assert!(second_facts.contains(established), "{second_facts}");
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_lie_that_the_hero_gets_away_with_is_believed_and_moves_no_coin() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let decision = FakeEndpoint::start(jev_answers("o6", "o1"));
+    let replies = FakeEndpoint::start(vec![reply(
+        "Very well, the ledgers are in the back.",
+        "deception",
+    )]);
+    let (voice, cache) = voice(&replies, "lie-believed");
+    let voice = voice.with_approach_model(model(&decision));
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "I'm a tax inspector from the city. Show me your ledgers.",
+    );
+    // Charisma +2 and Proficiency +2 on a 12: 16 against a passive Insight of 10.
+    ask.influence_check = Some(lying_hero(12));
+
+    let exchange = voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    assert_eq!(exchange.approach, Approach::Deception);
+    assert!(exchange.from_model, "{:?}", exchange.fallback);
+    let facts = request_facts(&replies, 0);
+    assert!(facts.contains("\"skill\":\"Deception\""), "{facts}");
+    assert!(facts.contains("\"difficulty_class\":10"), "{facts}");
+    assert!(facts.contains("\"total\":16"), "{facts}");
+    assert!(facts.contains("\"outcome\":\"success\""), "{facts}");
+    assert!(facts.contains("moves no coin"), "{facts}");
+    assert!(!facts.contains("\"influence_check\""), "{facts}");
+    let dossier = adventure.dossiers[0].clone();
+    assert!(ledger.grievance_lines(member(1), &dossier).is_empty());
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_lie_the_hero_fails_is_seen_through_and_recorded_as_a_grievance_for_that_hero_only() {
+    let (adventure, ledger) = confiding_patron(Attitude::Friendly);
+    let dossier = adventure.dossiers[0].clone();
+    let decision = FakeEndpoint::start(jev_answers("o6", "o1"));
+    let replies = FakeEndpoint::start(vec![reply("That does not sound right to me.", "deception")]);
+    let (voice, cache) = voice(&replies, "lie-seen-through");
+    let voice = voice.with_approach_model(model(&decision));
+    let mut ask = context(
+        &adventure,
+        &ledger,
+        SceneKey::Opening,
+        "I'm a tax inspector from the city. Show me your ledgers.",
+    );
+    // A 3 with Charisma +2 and Proficiency +2 is 7 against a passive Insight of 10.
+    ask.influence_check = Some(lying_hero(3));
+
+    voice
+        .converse_in_character(ask, &TableLog::new())
+        .await
+        .unwrap();
+
+    let facts = request_facts(&replies, 0);
+    assert!(facts.contains("\"outcome\":\"failure\""), "{facts}");
+    assert!(facts.contains("\"total\":7"), "{facts}");
+    assert!(facts.contains("see through the hero's claim"), "{facts}");
+    assert!(!ledger.grievance_lines(member(1), &dossier).is_empty());
+    assert!(ledger.grievance_lines(member(2), &dossier).is_empty());
     std::fs::remove_dir_all(cache).unwrap();
 }

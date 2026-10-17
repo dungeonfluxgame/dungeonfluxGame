@@ -17,9 +17,9 @@ mod courier_ai;
 mod courier_npc_qualification;
 mod courier_process_qualification;
 mod dialogue;
-mod freeform_action;
 #[cfg(test)]
 mod dialogue_tests;
+mod freeform_action;
 // DEVCTL-001: development-only agent control surface (off by default).
 mod dev_control;
 mod fight_lines;
@@ -1415,6 +1415,24 @@ async fn serve_run(
         }
         _ => social::SocialLedger::none(),
     };
+    // NPC local canon (places, people, rumours they establish) persists beside the social ledger.
+    let local_lore = match &generated_adventure {
+        Some(prepared) => match npc_reply::local_lore::LocalLore::open(
+            &prepared.record.seed,
+            Some(prepared.directory.clone()),
+        ) {
+            Ok(lore) => Arc::new(lore),
+            Err(error) => {
+                return startup_failure_after_admission(
+                    io::Error::other(error.to_string()),
+                    close_admitted_startup(&mut repository, &mut issuer, "local lore"),
+                )
+                .await
+                .map_err(Into::into);
+            }
+        },
+        None => Arc::new(npc_reply::local_lore::LocalLore::in_memory()),
+    };
     let notebook = match &generated_adventure {
         Some(prepared) => match notebook::NotebookLedger::open(
             &prepared.record.seed,
@@ -1690,7 +1708,9 @@ async fn serve_run(
         streams: Arc::new(Semaphore::new(settings.max_watch_streams)),
         voice: voice.clone(),
         npc_voice: Arc::new(
-            npc_reply::NpcVoice::new(storyteller).with_approach_model(approach_model),
+            npc_reply::NpcVoice::new(storyteller)
+                .with_approach_model(approach_model)
+                .with_local_lore(local_lore),
         ),
         // DEVCTL-001: cloned, not moved: the control surface takes one below.
         table_log: table_log.clone(),

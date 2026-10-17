@@ -417,7 +417,7 @@ async fn a_fake_model_can_admit_ignorance_without_a_stock_line_replacing_it() {
     let (adventure, ledger) = room();
     let words = "Who is that masked pilgrim?";
     let endpoint = FakeEndpoint::start(vec![Reply::Output(
-        json!({"reply": "I don't know the masked pilgrim.", "approach": "question"}),
+        json!({"reply": "I don't know the masked pilgrim.", "approach": "question", "local_fact": "none"}),
     )]);
     let cache = cache_directory("q02-room-ignorance");
     let voice = NpcVoice::new(Arc::new(teller(

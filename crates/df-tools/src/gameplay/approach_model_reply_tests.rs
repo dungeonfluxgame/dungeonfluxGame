@@ -13,7 +13,8 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
         let decision = FakeEndpoint::start(vec![answer("o7"), answer("o9")]);
         let reply = FakeEndpoint::start(vec![Reply::Output(json!({
             "reply": "Keep your voice down. Dangerous people are listening.",
-            "approach": "bribe"
+            "approach": "bribe",
+            "local_fact": "none"
         }))]);
         let (voice, cache) = voice(&reply, &format!("jev-threat-{case}"));
         let voice = voice.with_approach_model(model(&decision));
@@ -77,7 +78,8 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
 async fn a_reply_models_label_cannot_override_a_keyless_keyword_reading() {
     let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
         "reply": "Keep your voice down. Dangerous people are listening.",
-        "approach": "intimidation"
+        "approach": "intimidation",
+        "local_fact": "none"
     }))]);
     let (voice, cache) = voice(&endpoint, "jev-off-reply-label");
     let adventure = crate::gameplay::npc_dossier_tests::adventure(1);

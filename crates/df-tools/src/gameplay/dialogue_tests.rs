@@ -641,13 +641,17 @@ async fn owned_npc_event_e01_commits_the_spoken_loan_through_dialogue_and_replay
     let contaminated_reply = "brass key is a brass key wrapped in blue cloth.";
     let storyteller_endpoint = FakeEndpoint::start(vec![
         Reply::Output(json!({"clean": first_ask})),
-        Reply::Output(json!({"reply": first_reply, "approach": "question"})),
+        Reply::Output(json!({"reply": first_reply, "approach": "question", "local_fact": "none"})),
         Reply::Output(json!({"clean": second_ask})),
-        Reply::Output(json!({"reply": second_reply, "approach": "question"})),
+        Reply::Output(json!({"reply": second_reply, "approach": "question", "local_fact": "none"})),
         Reply::Output(json!({"clean": wrong_item_ask})),
-        Reply::Output(json!({"reply": wrong_item_reply, "approach": "question"})),
+        Reply::Output(
+            json!({"reply": wrong_item_reply, "approach": "question", "local_fact": "none"}),
+        ),
         Reply::Output(json!({"clean": contaminated_ask})),
-        Reply::Output(json!({"reply": contaminated_reply, "approach": "question"})),
+        Reply::Output(
+            json!({"reply": contaminated_reply, "approach": "question", "local_fact": "none"}),
+        ),
     ]);
     let classify_jev = Arc::new(move |body: &Value| {
         let state = &body["state"];
