@@ -263,6 +263,7 @@ fn print_help() {
                   disengage stand pick-up short-rest inn resolve search new-adventure\n\
                   opportunity-attack decline-reaction stabilise-kit stabilise-medicine help-attack table-setting\n\
          choose any offer: act <hero> <label-or-id>, or act <hero> choose --option <label-or-id>\n\
+         reaction answer: act <hero> reaction take [--weapon <name>] | decline\n\
          table-setting: --choice-hints-hidden true|false\n\
          every choice group: --choice group=id (repeatable) or --choices <JSON>\n\
          one JSON document per command on stdout; errors are JSON on stderr.",
@@ -337,10 +338,10 @@ async fn dispatch(
                 && (flag("--input-id").is_none() || flag("--confirmation-token").is_none()) {
                 return client.print_error("confirm needs --input-id and --confirmation-token from say");
             }
-            let mut body = json!({
-                "hero": positional.get(1).cloned().unwrap_or_default(),
-                "action": positional.get(2).cloned().unwrap_or_default(),
-            });
+            let mut body = match act_body(&positional, &options) {
+                Ok(body) => body,
+                Err(message) => return client.print_error(message),
+            };
             for (key, value) in [
                 ("cell", "--cell"),
                 ("target", "--target"),
@@ -518,6 +519,40 @@ async fn dispatch(
         "describe" => get(client, "/dev/describe").await,
         other => client.print_error(format!("unknown dev command {other:?}; see dev --help")),
     }
+}
+
+fn act_body(positional: &[String], options: &[(String, String)]) -> Result<Value, String> {
+    let flag = |name: &str| {
+        options
+            .iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    let hero = positional.get(1).cloned().unwrap_or_default();
+    let reaction_answer = positional
+        .get(2)
+        .is_some_and(|action| action.eq_ignore_ascii_case("reaction"));
+    let action = if reaction_answer {
+        match positional.get(3) {
+            Some(choice) if choice.eq_ignore_ascii_case("take") => "opportunity-attack".to_owned(),
+            Some(choice) if choice.eq_ignore_ascii_case("decline") => "decline-reaction".to_owned(),
+            _ => return Err("act <hero> reaction needs take or decline".to_owned()),
+        }
+    } else {
+        positional.get(2).cloned().unwrap_or_default()
+    };
+    let mut body = json!({"hero": hero, "action": action});
+    if reaction_answer
+        && positional
+            .get(3)
+            .is_some_and(|choice| choice.eq_ignore_ascii_case("take"))
+        && flag("--option").is_none()
+        && let Some(weapon) = flag("--weapon")
+    {
+        body["option"] = Value::String(weapon);
+    }
+    Ok(body)
 }
 
 fn selection_flags(body: &mut Value, options: &[(String, String)]) -> Result<(), String> {
@@ -1290,6 +1325,29 @@ mod selection_flag_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod act_reaction_tests {
+    use super::*;
+
+    #[test]
+    fn reaction_answers_use_the_existing_player_action_kinds_and_weapon_option() {
+        let take = act_body(
+            &split_words("act Brakka reaction take"),
+            &[("--weapon".to_owned(), "greatsword".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(take["hero"], "Brakka");
+        assert_eq!(take["action"], "opportunity-attack");
+        assert_eq!(take["option"], "greatsword");
+
+        let decline = act_body(&split_words("act Brakka reaction decline"), &[]).unwrap();
+        assert_eq!(decline["hero"], "Brakka");
+        assert_eq!(decline["action"], "decline-reaction");
+        assert!(decline.get("option").is_none());
+        assert!(act_body(&split_words("act Brakka reaction"), &[]).is_err());
     }
 }
 
