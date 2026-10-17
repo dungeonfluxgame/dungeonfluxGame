@@ -44,7 +44,7 @@ const INTENTS: [(&str, &str); 14] = [
     ("hero-speech", "The hero speaks to another hero."),
     (
         "examine",
-        "The hero looks with the eyes at, or searches for clues in, a place, a person or a scene thing. Not the hero's own gear, and not a sense other than sight.",
+        "The hero looks with the eyes at, or searches for clues in, a place, a person or a scene thing. Not the hero's own gear, not looking at oneself or one's reflection, and not a sense other than sight.",
     ),
     (
         "watch-person",
@@ -71,7 +71,7 @@ const INTENTS: [(&str, &str); 14] = [
     ),
     (
         "physical-transfer",
-        "The hero explicitly gives or hands over a present item to another character now. Showing an item without giving it is freeform-act. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
+        "The hero explicitly gives or hands over a present item into another character's hands now. Showing an item without giving it is freeform-act. Throwing, tossing or dropping an item toward a character is freeform-act, never a hand-over. Do not choose this for questions, plans, hypotheticals, negated actions, quoted speech, or future threats.",
     ),
     (
         "physical-trade",
@@ -79,7 +79,7 @@ const INTENTS: [(&str, &str); 14] = [
     ),
     (
         "freeform-act",
-        "The hero performs a physical, sensory or expressive act that is not an attack with a weapon, taking, giving, trading, or a search for clues. Covers: using a sense other than sight, such as listening, smelling, tasting or touching, and checking or counting the hero's own gear, coin or weapon; looking at oneself; moving, arranging, pushing, sitting or leaning on things; walking, climbing, jumping or moving within or out of the scene; ducking out of sight or hiding oneself; hiding an item on oneself; wearing or trying on clothing; drawing or sheathing a weapon; showing an item to someone without giving it; writing a note and leaving it in the scene; throwing, breaking, lighting or putting out; eating or drinking; praying, singing, dancing, juggling or playing; resting or waiting; casting a non-attack spell; friendly contact such as a hug or handshake; rough contact such as a shove, grab, trip, or unarmed punch or kick.",
+        "The hero performs a physical, sensory or expressive act that is not an attack with a weapon, taking, giving, trading, or a search for clues. Covers: using a sense other than sight, such as listening, smelling, tasting or touching, and checking or counting the hero's own gear, coin or weapon; looking at oneself or one's reflection; moving, arranging or pushing things; sitting or leaning on a thing without moving it; walking, climbing, jumping or moving within or out of the scene; ducking out of sight or hiding oneself; hiding an item on oneself; wearing or trying on clothing; drawing or sheathing a weapon; showing an item to someone without giving it; writing a note and leaving it in the scene; throwing or tossing a thing, even at a person; dropping or setting down a thing the hero holds; breaking, lighting or putting out; opening or closing a door or lid; eating or drinking; laughing, cheering, groaning or otherwise reacting aloud or with the face; praying, singing, dancing, juggling or playing; resting or waiting; casting a non-attack spell; friendly contact such as a hug or handshake; rough contact such as a shove, grab, trip, or unarmed punch or kick.",
     ),
 ];
 

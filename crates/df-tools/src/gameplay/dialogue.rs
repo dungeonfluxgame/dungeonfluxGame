@@ -1682,16 +1682,19 @@ impl Service {
             && reading.intent != super::approach_model::LineIntent::PartyNote;
         // Jev reads the line as a scene interaction once; a physical line and a plain interaction
         // both use that reading, so the keyword rules run only if Jev gave no label.
-        // Jev's freeform-act reading is never a scene interaction: the adjudicator owns it.
+        // Jev's freeform-act reading is the adjudicator's, except for a scene door or lid that the
+        // scene model opens or closes: that keeps the scene interaction, as it always did.
         let freeform =
             scene_turn && reading.intent == super::approach_model::LineIntent::FreeformAct;
-        let scene_interaction = if scene_turn && !freeform {
+        let scene_interaction = if scene_turn {
             self.judge_scene_interaction(&request.text, &party_scene, &available_things)
                 .await
         } else {
             None
         };
-        if freeform {
+        let scene_interaction = scene_interaction
+            .filter(|(_, option)| !freeform || freeform_action::keeps_scene_interaction(option));
+        if freeform && scene_interaction.is_none() {
             return self
                 .freeform_action_call(credential, &request, &scene)
                 .await;
@@ -2489,7 +2492,10 @@ impl Service {
                     input_id: request.input_id.clone(),
                     disposition: rpc::DialogueDisposition::Action as i32,
                     revision: receipt.revision,
-                    npc_reply: format!("You attack {}.", action.target),
+                    npc_reply: format!(
+                        "You attack {}.",
+                        super::investigation::the_phrase(&action.target)
+                    ),
                     ..Default::default()
                 },
                 None,
@@ -2581,7 +2587,10 @@ impl Service {
                     input_id: request.input_id.clone(),
                     disposition: rpc::DialogueDisposition::Action as i32,
                     revision: receipt.revision,
-                    npc_reply: format!("You attack {}.", action.target),
+                    npc_reply: format!(
+                        "You attack {}.",
+                        super::investigation::the_phrase(&action.target)
+                    ),
                     ..Default::default()
                 },
                 None,

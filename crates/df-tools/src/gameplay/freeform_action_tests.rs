@@ -24,6 +24,8 @@ fn shop() -> Situation {
             strength_modifier: 3,
             proficiency_bonus: 2,
             known_spells: Vec::new(),
+            pronouns: None,
+            appearance: None,
         },
         things: vec![
             thing_fact(
@@ -204,7 +206,7 @@ fn a_fighter_cannot_cast_light() {
     );
     assert_eq!(
         fallback_line(&resolution),
-        "Marek doesn't know how to cast Light."
+        "Marek doesn't know the Light spell."
     );
 }
 
@@ -567,7 +569,7 @@ fn a_note_left_in_the_scene_is_noticed_without_a_ledger_consequence() {
     );
     assert_eq!(resolution.notices, vec!["Corin".to_owned()]);
     assert!(resolution.consequences.is_empty());
-    assert!(fallback_line(&resolution).ends_with("Corin notice it."));
+    assert!(fallback_line(&resolution).ends_with("Corin notices it."));
 }
 
 #[test]
@@ -676,7 +678,7 @@ async fn a_storyteller_narration_that_validates_is_used_and_names_the_hero() {
     let resolution = run(
         &shop(),
         &plan(
-            ActKind::Manipulate,
+            ActKind::Lean,
             Some(target(&shop(), "counter")),
             Difficulty::None,
         ),
@@ -697,7 +699,7 @@ async fn with_the_storyteller_off_the_deterministic_sentence_is_used() {
     let resolution = run(
         &shop(),
         &plan(
-            ActKind::Manipulate,
+            ActKind::Lean,
             Some(target(&shop(), "counter")),
             Difficulty::None,
         ),
@@ -710,5 +712,424 @@ async fn with_the_storyteller_off_the_deterministic_sentence_is_used() {
         "I sit on the edge of the counter.",
     )
     .await;
-    assert_eq!(line, "Marek moves the counter.");
+    assert_eq!(line, "Marek sits or leans on the counter.");
+}
+
+/// The live probe's street: Sigrun (she/her) with her own look on the sheet, Marek (who owns the
+/// folded label), Corin and Brakka present, and carts and a gull outside the shop door.
+fn market_street() -> Situation {
+    let mut situation = shop();
+    situation.hero = HeroSheet {
+        name: "Sigrun".to_owned(),
+        strength_modifier: 1,
+        proficiency_bonus: 2,
+        known_spells: Vec::new(),
+        pronouns: Some(Pronouns {
+            subject: "she",
+            object: "her",
+            possessive: "her",
+            reflexive: "herself",
+        }),
+        appearance: Some(
+            "An adult dwarf, middle aged adult, broad build, pale skin, braided auburn hair, hazel eyes, chainmail pauldron."
+                .to_owned(),
+        ),
+    };
+    situation.things = vec![
+        thing_fact(
+            "counter",
+            "counter",
+            "A long pine counter, scarred by use.",
+            false,
+            false,
+        ),
+        ThingFact {
+            owner_id: Some("marek".to_owned()),
+            ..thing_fact(
+                "label",
+                "label",
+                "A folded paper label with Marek's mark.",
+                true,
+                false,
+            )
+        },
+    ];
+    situation.people = ["marek", "corin", "brakka"]
+        .into_iter()
+        .map(|id| PersonFact {
+            id: id.to_owned(),
+            name: id[..1].to_uppercase() + &id[1..],
+            role: rpc::SceneRole::Contact,
+            passive_perception: 12,
+        })
+        .collect();
+    situation.other_heroes = Vec::new();
+    situation.place =
+        "Carts rattle past on the market street, and a gull calls over the shop door.".to_owned();
+    situation
+}
+
+/// Marks a listed thing as carried by the hero.
+fn hold(situation: &mut Situation, id: &str) {
+    let thing = situation
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == id)
+        .expect("a listed thing");
+    thing.held_by_hero = true;
+    thing.holder_name = None;
+}
+
+#[test]
+fn a_door_opened_or_closed_from_a_freeform_reading_keeps_the_scene_interaction() {
+    assert!(keeps_scene_interaction("open"));
+    assert!(keeps_scene_interaction("close"));
+    for option in ["give", "take", "drop", "examine", "none"] {
+        assert!(!keeps_scene_interaction(option), "{option}");
+    }
+}
+
+#[test]
+fn sitting_on_the_edge_of_the_counter_is_a_position_that_moves_nothing_and_offends_nobody() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Lean,
+            Some(target(&situation, "counter")),
+            Difficulty::None,
+        ),
+        "I sit on the edge of the counter.",
+        12,
+    );
+    assert_eq!(resolution.act, Some(ActKind::Lean));
+    assert!(resolution.consequences.is_empty());
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun sits or leans on the counter."
+    );
+}
+
+#[test]
+fn laughing_at_brakkas_joke_is_an_expressive_reaction_and_never_a_sense_answer() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Express,
+            Some(target(&situation, "brakka")),
+            Difficulty::None,
+        ),
+        "I laugh at Brakka's joke.",
+        12,
+    );
+    assert_eq!(resolution.act, Some(ActKind::Express));
+    assert!(performance(&resolution).check.is_none());
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun reacts to Brakka out loud."
+    );
+}
+
+#[test]
+fn dropping_a_label_sigrun_does_not_hold_is_refused_in_the_world() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Drop,
+            Some(target(&situation, "label")),
+            Difficulty::None,
+        ),
+        "I drop the folded label on the floor.",
+        12,
+    );
+    assert_eq!(
+        resolution.verdict,
+        Verdict::Refused(Refusal::NotHeld { holder: None })
+    );
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun isn't holding the label."
+    );
+}
+
+#[test]
+fn dropping_a_label_sigrun_holds_sets_it_down() {
+    let mut situation = market_street();
+    hold(&mut situation, "label");
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Drop,
+            Some(target(&situation, "label")),
+            Difficulty::None,
+        ),
+        "I drop the label.",
+        12,
+    );
+    assert!(performance(&resolution).succeeded);
+    assert!(fallback_line(&resolution).starts_with("Sigrun sets the label down."));
+}
+
+#[test]
+fn throwing_a_held_label_at_corin_is_a_freeform_throw_not_a_hand_over() {
+    let mut situation = market_street();
+    hold(&mut situation, "label");
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Throw,
+            Some(target(&situation, "label")),
+            Difficulty::Easy,
+        ),
+        "I throw the folded label at Corin.",
+        12,
+    );
+    assert_eq!(resolution.act, Some(ActKind::Throw));
+    assert!(performance(&resolution).succeeded);
+    assert!(fallback_line(&resolution).starts_with("Sigrun throws the label."));
+}
+
+#[test]
+fn every_refusal_is_an_in_world_sentence_with_no_machine_wording() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Throw,
+            Some(target(&situation, "counter")),
+            Difficulty::None,
+        ),
+        "I throw the counter.",
+        12,
+    );
+    let refusals = [
+        Refusal::MissingTarget,
+        Refusal::Fixed,
+        Refusal::NotHeld { holder: None },
+        Refusal::NotHeld {
+            holder: Some("Corin".to_owned()),
+        },
+        Refusal::NoItem,
+        Refusal::NoRecipient,
+        Refusal::UnknownSpell {
+            spell: "Light".to_owned(),
+        },
+        Refusal::NoSpell,
+    ];
+    for refusal in refusals {
+        let line = refused_line("Sigrun", &resolution, &refusal);
+        assert!(line.ends_with('.'), "{line}");
+        for machine in [
+            "Refusal",
+            "MissingTarget",
+            "UnknownSpell",
+            "NotHeld",
+            "{",
+            "refused",
+            "target",
+            "is refused",
+        ] {
+            assert!(!line.contains(machine), "{machine} in {line}");
+        }
+    }
+}
+
+#[test]
+fn writing_a_note_on_the_counter_just_happens_and_everyone_present_notices_it() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Write,
+            Some(target(&situation, "counter")),
+            Difficulty::None,
+        ),
+        "I write a note thanking Marek and leave it on the counter.",
+        12,
+    );
+    assert!(matches!(resolution.verdict, Verdict::Performed(_)));
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun writes a note and leaves it on the counter. Marek, Corin and Brakka notice it."
+    );
+}
+
+#[test]
+fn a_note_with_no_named_thing_is_left_in_the_room_without_any_target_needed() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(ActKind::Write, None, Difficulty::None),
+        "I write a note thanking Marek.",
+        12,
+    );
+    assert!(matches!(resolution.verdict, Verdict::Performed(_)));
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun writes a note and leaves it in the room. Marek, Corin and Brakka notice it."
+    );
+}
+
+#[test]
+fn a_refused_spell_reaches_the_storyteller_as_the_in_world_sentence() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(ActKind::Cast, None, Difficulty::None),
+        "I cast Light at the candle.",
+        12,
+    );
+    let facts = narration_facts(&resolution, "I cast Light at the candle.");
+    assert_eq!(facts["outcome"], "refused");
+    assert_eq!(facts["refusal"], "Sigrun doesn't know the Light spell.");
+}
+
+#[test]
+fn listening_to_the_street_outside_gives_the_rooms_own_sounds_even_when_the_check_would_fail() {
+    let situation = market_street();
+    let plan = FreeformPlan {
+        sense: Some(Sense::Sound),
+        ..plan(
+            ActKind::Sense,
+            Some(target(&situation, "place")),
+            Difficulty::Hard,
+        )
+    };
+    // Die 2 + 3 = 5 misses DC 20, yet the room's own sounds are heard: a check gates only hidden
+    // detail about a thing.
+    let resolution = run(
+        &situation,
+        &plan,
+        "I stop and listen to the street outside.",
+        2,
+    );
+    assert!(performance(&resolution).check.is_none());
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun listens to the room. Carts rattle past on the market street, and a gull calls over the shop door."
+    );
+}
+
+#[test]
+fn looking_at_herself_in_the_fitting_mirror_describes_her_own_appearance_from_the_sheet() {
+    let situation = market_street();
+    let appearance = situation
+        .hero
+        .appearance
+        .clone()
+        .expect("the sheet records an appearance");
+    let plan = FreeformPlan {
+        sense: Some(Sense::Sight),
+        ..plan(
+            ActKind::Sense,
+            Some(target(&situation, "Sigrun")),
+            Difficulty::Easy,
+        )
+    };
+    // Die 1 would fail any check: a look at oneself needs none.
+    let resolution = run(
+        &situation,
+        &plan,
+        "I look at myself in the fitting mirror.",
+        1,
+    );
+    assert!(performance(&resolution).check.is_none());
+    assert_eq!(
+        fallback_line(&resolution),
+        format!("Sigrun looks at herself. {appearance}")
+    );
+    assert_eq!(
+        narration_facts(&resolution, "I look at myself in the fitting mirror.")["revealed"],
+        appearance.as_str()
+    );
+}
+
+#[test]
+fn a_look_at_oneself_that_finds_nothing_uses_the_sheets_reflexive_never_themself() {
+    let mut situation = market_street();
+    situation.hero.appearance = None;
+    situation.hero.pronouns = Some(Pronouns {
+        subject: "they",
+        object: "them",
+        possessive: "their",
+        reflexive: "themselves",
+    });
+    let plan = FreeformPlan {
+        sense: Some(Sense::Sight),
+        ..plan(
+            ActKind::Sense,
+            Some(target(&situation, "Sigrun")),
+            Difficulty::None,
+        )
+    };
+    let resolution = run(&situation, &plan, "I look at myself.", 12);
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun looks at themselves, but nothing more stands out."
+    );
+}
+
+#[test]
+fn a_hero_whose_sheet_records_no_pronouns_is_named_and_never_given_themself() {
+    let mut situation = market_street();
+    situation.hero.appearance = None;
+    situation.hero.pronouns = None;
+    let plan = FreeformPlan {
+        sense: Some(Sense::Sight),
+        ..plan(
+            ActKind::Sense,
+            Some(target(&situation, "Sigrun")),
+            Difficulty::None,
+        )
+    };
+    let resolution = run(&situation, &plan, "I look at myself.", 12);
+    let line = fallback_line(&resolution);
+    assert_eq!(line, "Sigrun looks at Sigrun, but nothing more stands out.");
+    assert!(!line.contains("themself"));
+}
+
+#[test]
+fn walking_up_to_the_counter_says_where_sigrun_is_now_and_what_is_there() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Move,
+            Some(target(&situation, "counter")),
+            Difficulty::None,
+        ),
+        "I walk up to the counter.",
+        12,
+    );
+    assert_eq!(
+        fallback_line(&resolution),
+        "Sigrun walks up to the counter."
+    );
+    let facts = narration_facts(&resolution, "I walk up to the counter.");
+    assert_eq!(facts["destination"]["name"], "counter");
+    assert_eq!(
+        facts["destination"]["scene_fact"],
+        "A long pine counter, scarred by use."
+    );
+}
+
+#[test]
+fn the_fact_bundle_carries_the_heroes_own_pronouns_when_the_hero_is_the_target() {
+    let situation = market_street();
+    let resolution = run(
+        &situation,
+        &plan(
+            ActKind::Express,
+            Some(target(&situation, "Sigrun")),
+            Difficulty::None,
+        ),
+        "I laugh at myself.",
+        12,
+    );
+    let facts = narration_facts(&resolution, "I laugh at myself.");
+    assert_eq!(facts["hero_pronouns"]["subject"], "she");
+    assert_eq!(facts["hero_pronouns"]["reflexive"], "herself");
+    assert_eq!(fallback_line(&resolution), "Sigrun reacts out loud.");
 }
