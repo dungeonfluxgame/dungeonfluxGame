@@ -779,6 +779,198 @@ async fn exact_addressee_answers_only_when_jev_cannot_decide() {
     assert_eq!(timed_out.source, "deterministic");
 }
 
+fn hero(id: &str, private_aside: bool) -> super::super::npc_target::HeroAddressee {
+    super::super::npc_target::HeroAddressee {
+        id: id.into(),
+        private_aside,
+    }
+}
+
+fn party_heroes() -> Vec<super::super::npc_target::PartyHero> {
+    vec![
+        super::super::npc_target::PartyHero {
+            id: "sigrun-member".into(),
+            name: "Sigrun".into(),
+        },
+        super::super::npc_target::PartyHero {
+            id: "brakka-member".into(),
+            name: "Brakka".into(),
+        },
+    ]
+}
+
+// Option order with two present NPCs and two party heroes: ABSENT o1, AMBIGUOUS o2,
+// NO EXPLICIT ADDRESSEE o3, Courier o4, Bandit o5, Sigrun open o6, Sigrun private o7,
+// Brakka open o8, Brakka private o9.
+#[tokio::test(flavor = "current_thread")]
+async fn jev_picking_a_party_hero_option_yields_that_hero_as_an_open_addressee() {
+    use super::super::npc_target::Target;
+    let endpoint = FakeEndpoint::start(vec![answer("o6")]);
+    let decision = model(&endpoint)
+        .resolve_addressee_with_party(
+            "Sigrun, should we head to the market after this?",
+            &routing_cast(),
+            &party_heroes(),
+            "Courier",
+        )
+        .await;
+
+    assert_eq!(decision.target, Target::Absent);
+    assert_eq!(decision.hero, Some(hero("sigrun-member", false)));
+    assert_eq!(decision.source, "jev");
+    assert_eq!(decision.reason, "selected_hero");
+    let sent = &endpoint.bodies()[0];
+    assert_eq!(sent["state"]["party_heroes"][0]["id"], "sigrun-member");
+    assert_eq!(sent["state"]["party_heroes"][0]["name"], "Sigrun");
+    assert_eq!(sent["state"]["party_heroes"][1]["name"], "Brakka");
+    let body = sent.to_string();
+    assert!(body.contains("HERO OPEN addressee: party hero ID=sigrun-member public name=Sigrun"));
+    assert!(body.contains("HERO PRIVATE ASIDE addressee: party hero ID=brakka-member"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jev_private_aside_label_sets_the_flag_while_the_addressee_stays_the_hero() {
+    use super::super::npc_target::Target;
+    let endpoint = FakeEndpoint::start(vec![answer("o7"), answer("o8")]);
+    let model = model(&endpoint);
+    let whisper = model
+        .resolve_addressee_with_party(
+            "I lean over and whisper to Sigrun so Marek can't hear: I think he overcharged me.",
+            &routing_cast(),
+            &party_heroes(),
+            "Courier",
+        )
+        .await;
+    let open = model
+        .resolve_addressee_with_party(
+            "Brakka, did you see the price he quoted?",
+            &routing_cast(),
+            &party_heroes(),
+            "Courier",
+        )
+        .await;
+
+    assert_eq!(whisper.target, Target::Absent);
+    assert_eq!(whisper.hero, Some(hero("sigrun-member", true)));
+    assert_eq!(whisper.source, "jev");
+    assert_eq!(open.target, Target::Absent);
+    assert_eq!(open.hero, Some(hero("brakka-member", false)));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn npc_and_absent_choices_are_unchanged_when_party_heroes_are_present() {
+    use super::super::npc_target::Target;
+    let endpoint = FakeEndpoint::start(vec![answer("o4"), answer("o5"), answer("o1")]);
+    let model = model(&endpoint);
+    let courier = model
+        .resolve_addressee_with_party(
+            "Courier, who is following you?",
+            &routing_cast(),
+            &party_heroes(),
+            "Courier",
+        )
+        .await;
+    let bandit = model
+        .resolve_addressee_with_party(
+            "To the man standing behind the courier: who sent you?",
+            &routing_cast(),
+            &party_heroes(),
+            "Courier",
+        )
+        .await;
+    let absent = model
+        .resolve_addressee_with_party(
+            "Harbourmaster, who owns the crest on this packet?",
+            &routing_cast(),
+            &party_heroes(),
+            "Courier",
+        )
+        .await;
+
+    assert_eq!(courier.target, Target::Actor("courier".into()));
+    assert_eq!(bandit.target, Target::Actor("bandit".into()));
+    assert!(courier.hero.is_none() && bandit.hero.is_none());
+    assert_eq!(courier.reason, "selected");
+    assert_eq!(absent.target, Target::Absent);
+    assert_eq!(absent.reason, "absent");
+    assert!(absent.hero.is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn without_party_heroes_jev_gets_no_hero_options_and_absent_stays_absent() {
+    use super::super::npc_target::Target;
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    let decision = model(&endpoint)
+        .resolve_addressee(
+            "Sigrun, should we head to the market?",
+            &routing_cast(),
+            "Courier",
+        )
+        .await;
+
+    assert_eq!(decision.target, Target::Absent);
+    assert_eq!(decision.reason, "absent");
+    assert_eq!(endpoint.bodies()[0]["state"]["party_heroes"], json!([]));
+    assert!(!endpoint.bodies()[0].to_string().contains("HERO OPEN"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hero_fallback_without_jev_uses_exact_name_matching_and_never_sets_a_private_aside() {
+    use super::super::npc_target::Target;
+    let cast = routing_cast();
+    let party = party_heroes();
+    let vocative = ApproachModel::default()
+        .resolve_addressee_with_party(
+            "Sigrun, should we head to the market after this?",
+            &cast,
+            &party,
+            "Courier",
+        )
+        .await;
+    let recipient = ApproachModel::default()
+        .resolve_addressee_with_party(
+            "I hand the traveler's clothes to Sigrun.",
+            &cast,
+            &party,
+            "Courier",
+        )
+        .await;
+    let whisper = ApproachModel::default()
+        .resolve_addressee_with_party(
+            "I lean over and whisper to Sigrun so Marek can't hear: I think he overcharged me.",
+            &cast,
+            &party,
+            "Courier",
+        )
+        .await;
+
+    for decision in [&vocative, &recipient, &whisper] {
+        assert_eq!(decision.target, Target::Absent);
+        assert_eq!(decision.hero, Some(hero("sigrun-member", false)));
+        assert_eq!(decision.source, "deterministic");
+        assert_eq!(decision.reason, "provider_off");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hero_fallback_after_jev_failure_or_unknown_option_keeps_the_exact_hero_match() {
+    use super::super::npc_target::Target;
+    let words = "I hand the traveler's clothes to Sigrun.";
+    let failed = model(&FakeEndpoint::start(vec![Reply::Status(503, json!({}))]))
+        .resolve_addressee_with_party(words, &routing_cast(), &party_heroes(), "Courier")
+        .await;
+    let unknown = model(&FakeEndpoint::start(vec![answer("o10")]))
+        .resolve_addressee_with_party(words, &routing_cast(), &party_heroes(), "Courier")
+        .await;
+
+    for decision in [&failed, &unknown] {
+        assert_eq!(decision.target, Target::Absent);
+        assert_eq!(decision.hero, Some(hero("sigrun-member", false)));
+        assert_eq!(decision.source, "deterministic");
+        assert_eq!(decision.reason, "provider_failure");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn jev_physical_intent_stands_when_no_keyword_matches() {
     let endpoint = FakeEndpoint::start(vec![answer("o10")]);
