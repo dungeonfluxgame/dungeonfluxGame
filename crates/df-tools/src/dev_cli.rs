@@ -192,8 +192,8 @@ fn print_help() {
          usage: df-transport-fixture dev [--server <url> --token-file <path>] [--pretty] [--timeout <s>] <command> [args]\n\
          \n\
          health                       server liveness and current revision\n\
-         join <seat>                  join the room as seat 1 or 2\n\
-         reclaim <seat>               take an away hero back on this control seat\n\
+         join <seat>                  join the room as seat 1 or 2; a refusal says why\n\
+         reclaim <seat>               take back the away hero of a seat, including one a phone joined (silent 30 s)\n\
          create <seat> <name>         --choice group=id (repeatable), --identity <JSON>, --identity-choice group=id\n\
          preview <seat>              --appearance <text> --backstory <text>; review returned identity JSON\n\
          act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id>\n\

@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
-use super::{Outcome, Shared, authorized, bad_request, failed, owner_submit_action, seat_view};
+use super::{
+    Outcome, Seats, Shared, authorized, bad_request, failed, owner_submit_action, seat_view,
+};
 use crate::gameplay::dev_control::parse;
 
 /// `POST /dev/join {"seat": "1"}`: joins the room as that seat through the
@@ -51,16 +53,61 @@ pub(super) async fn join_seat(
         Some(rpc::join_room_response::Outcome::Joined(joined)) => {
             store_join(&state, index, *joined).await
         }
-        Some(rpc::join_room_response::Outcome::Refused(refused)) => Ok((
-            axum::http::StatusCode::OK,
-            Json(json!({"status": "refused", "code": super::rejection_name(refused.code)})),
-        )),
+        Some(rpc::join_room_response::Outcome::Refused(refused)) => {
+            let joined_here = state.seats.lock().await.seats[index].member.is_some();
+            Ok((
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "status": "refused",
+                    "code": super::rejection_name(refused.code),
+                    "reason": join_refusal_reason(refused.code, index, joined_here),
+                })),
+            ))
+        }
         None => Err(failed("empty join answer")),
+    }
+}
+
+/// Says in plain words why the room refused a join to this seat. A seat this control
+/// did not join while the room is full is held by a phone, and the refusal names the
+/// one way to take it back.
+fn join_refusal_reason(code: i32, index: usize, joined_here: bool) -> String {
+    let seat = index + 1;
+    match rpc::RejectionCode::try_from(code) {
+        Ok(rpc::RejectionCode::ResourceMissing) if joined_here => format!(
+            "seat {seat} is already joined through this control, and the room has no free place for another hero"
+        ),
+        Ok(rpc::RejectionCode::ResourceMissing) => format!(
+            "seat {seat} is held by a phone; use dev reclaim {seat} once it has been away 30 s"
+        ),
+        Ok(rpc::RejectionCode::StaleOffer) => {
+            "the room has left its join phase, so no hero can join it now".to_owned()
+        }
+        Ok(rpc::RejectionCode::InvalidSelection) => {
+            "the room code does not match this room".to_owned()
+        }
+        Ok(rpc::RejectionCode::RecoveryRequired) => {
+            "the room is recovering from an unresolved commit; retry the join after it recovers"
+                .to_owned()
+        }
+        Ok(rpc::RejectionCode::OperationConflict) => {
+            "this join conflicts with an earlier join operation; retry the join".to_owned()
+        }
+        Ok(rpc::RejectionCode::OperationExpired) => {
+            "this join operation expired; retry the join".to_owned()
+        }
+        _ => format!(
+            "the room refused the join ({})",
+            super::rejection_name(code)
+        ),
     }
 }
 
 /// `POST /dev/reclaim {"seat":"1"}` uses the room-code-only phone admission path.
 /// It reads no player view first: doing so would keep the abandoned credential active.
+/// A seat this control joined is taken back by its own hero. A seat a phone joined is
+/// taken back by the one away hero that no other control seat holds. Both follow the
+/// owner's away report, so the 30 s rule is the one the phones' "Take this hero back" uses.
 pub(super) async fn reclaim_seat(
     State(state): State<Arc<Shared>>,
     headers: HeaderMap,
@@ -72,33 +119,19 @@ pub(super) async fn reclaim_seat(
         .and_then(Value::as_str)
         .ok_or_else(|| bad_request("reclaim needs {\"seat\": \"1\"}"))?;
     let index = super::seat_index(seat).map_err(bad_request)?;
-    let member = state.seats.lock().await.seats[index]
-        .member
-        .clone()
-        .ok_or_else(|| bad_request("that seat has not joined"))?;
     let pending = state.seats.lock().await.seats[index].reclaim;
     let pending = match pending {
         Some(pending) => pending,
         None => {
-            let (reply, wait) = oneshot::channel();
-            state
-                .service
-                .actor
-                .try_submit(super::super::actor::Call::AwaySeats {
-                    room_code: super::super::journey::room_code(),
-                    reply,
-                })
-                .map_err(|_| failed("room actor queue full"))?;
-            let away = tokio::time::timeout(super::super::timing::active().reply, wait)
-                .await
-                .map_err(|_| failed("away seat read deadline"))?
-                .map_err(|_| failed("room owner stopped"))?
-                .map_err(|status| failed(status.message()))?;
-            let token = away
-                .into_iter()
-                .find(|hero| hero.member.as_slice() == member.as_slice())
-                .map(|hero| hero.token)
-                .unwrap_or([0; 32]);
+            let away = away_heroes(&state).await?;
+            let token = {
+                let seats = state.seats.lock().await;
+                reclaim_token(index, &seats, &away)
+            };
+            let token = match token {
+                Ok(token) => token,
+                Err(reason) => return reclaim_refusal(reason),
+            };
             let pending = super::PendingReclaim {
                 operation: random_array::<16>().await?,
                 token,
@@ -139,14 +172,73 @@ pub(super) async fn reclaim_seat(
     }
     match answer {
         Ok(joined) => store_join(&state, index, joined).await,
-        Err(reason) => Ok((
-            axum::http::StatusCode::OK,
-            Json(json!({
-                "status": "refused", "reason": format!("{reason:?}"),
-                "message": "No seat changed. Reclaim is accepted only for an away seat after 30 seconds; an active phone is never displaced."
-            })),
+        Err(reason) => reclaim_refusal(format!("{reason:?}")),
+    }
+}
+
+/// The owner's away report: each hero whose phone has been silent for 30 s, with the
+/// token a reclaim presents. The owner decides who is away; the control only asks.
+async fn away_heroes(
+    state: &Shared,
+) -> Result<Vec<super::super::room::AwayHero>, (axum::http::StatusCode, Json<Value>)> {
+    let (reply, wait) = oneshot::channel();
+    state
+        .service
+        .actor
+        .try_submit(super::super::actor::Call::AwaySeats {
+            room_code: super::super::journey::room_code(),
+            reply,
+        })
+        .map_err(|_| failed("room actor queue full"))?;
+    tokio::time::timeout(super::super::timing::active().reply, wait)
+        .await
+        .map_err(|_| failed("away seat read deadline"))?
+        .map_err(|_| failed("room owner stopped"))?
+        .map_err(|status| failed(status.message()))
+}
+
+/// The reclaim token for one control seat. A seat this control joined names its own
+/// hero; when that hero is not away the token stays zero and the owner refuses it. A seat
+/// it did not join is held by a phone, so the candidate is the one away hero that the
+/// other control seat does not hold. Zero or several candidates are refused, not guessed.
+fn reclaim_token(
+    index: usize,
+    seats: &Seats,
+    away: &[super::super::room::AwayHero],
+) -> Result<[u8; 32], String> {
+    if let Some(member) = seats.seats[index].member.as_deref() {
+        return Ok(away
+            .iter()
+            .find(|hero| hero.member.as_slice() == member)
+            .map_or([0; 32], |hero| hero.token));
+    }
+    let other = seats.seats[1 - index].member.as_deref();
+    let candidates: Vec<_> = away
+        .iter()
+        .filter(|hero| Some(hero.member.as_slice()) != other)
+        .collect();
+    match candidates.as_slice() {
+        [hero] => Ok(hero.token),
+        [] => Err(format!(
+            "seat {} is held by a phone, and no hero has been away for 30 s to take back; the phone must stay silent for 30 s first",
+            index + 1
+        )),
+        _ => Err(format!(
+            "several heroes are away and this control cannot tell which one holds seat {}; nothing was reclaimed",
+            index + 1
         )),
     }
+}
+
+/// A refusal that changed no seat.
+fn reclaim_refusal(reason: String) -> Outcome {
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(json!({
+            "status": "refused", "reason": reason,
+            "message": "No seat changed. Reclaim is accepted only for an away seat after 30 seconds; an active phone is never displaced."
+        })),
+    ))
 }
 
 async fn store_join(state: &Shared, index: usize, joined: rpc::JoinedRoom) -> Outcome {
@@ -1759,5 +1851,136 @@ mod creation_selection_tests {
         assert_eq!(appearance.presentation, "feminine");
         assert_eq!(appearance.pronouns, "she-her");
         assert!(selected_identity(&json!({"identity":{},"identity_choices":{}})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod phone_seat_tests {
+    use super::super::Seat;
+    use super::*;
+    use crate::gameplay::room::AwayHero;
+
+    fn bound_seat(member: u8) -> Seat {
+        Seat {
+            reclaim: None,
+            credential: Some([member; 32]),
+            member: Some(vec![member; 16]),
+            hero: None,
+        }
+    }
+
+    fn away(member: u8, token: u8) -> AwayHero {
+        AwayHero {
+            member: [member; 16],
+            name: format!("Hero {member}"),
+            token: [token; 32],
+        }
+    }
+
+    fn seats_with_first(first: Seat) -> Seats {
+        Seats {
+            session_id: None,
+            run_id: None,
+            seats: [first, Seat::empty()],
+        }
+    }
+
+    #[test]
+    fn refused_join_to_a_phone_held_seat_names_the_reclaim_and_the_30_second_rule() {
+        let code = rpc::RejectionCode::ResourceMissing as i32;
+
+        let reason = join_refusal_reason(code, 1, false);
+
+        assert_eq!(
+            reason,
+            "seat 2 is held by a phone; use dev reclaim 2 once it has been away 30 s"
+        );
+    }
+
+    #[test]
+    fn refused_join_to_a_seat_this_control_already_joined_says_so() {
+        let code = rpc::RejectionCode::ResourceMissing as i32;
+
+        let reason = join_refusal_reason(code, 0, true);
+
+        assert!(reason.contains("seat 1 is already joined through this control"));
+        assert!(!reason.contains("reclaim"));
+    }
+
+    #[test]
+    fn every_refused_join_carries_a_readable_reason_not_a_bare_code() {
+        for code in [
+            rpc::RejectionCode::StaleOffer,
+            rpc::RejectionCode::InvalidSelection,
+            rpc::RejectionCode::RecoveryRequired,
+            rpc::RejectionCode::OperationConflict,
+            rpc::RejectionCode::OperationExpired,
+        ] {
+            let reason = join_refusal_reason(code as i32, 0, false);
+            assert!(
+                reason.contains(' '),
+                "{code:?} reason is readable: {reason}"
+            );
+            assert_ne!(reason, super::super::rejection_name(code as i32));
+        }
+        assert!(join_refusal_reason(i32::MAX, 0, false).contains("refused the join"));
+    }
+
+    #[test]
+    fn reclaim_of_a_phone_held_seat_takes_the_one_away_hero_no_other_seat_holds() {
+        // Seat 1 is this control's hero (member 1). The phone holds seat 2 (member 2).
+        let seats = seats_with_first(bound_seat(1));
+        let away = [away(1, 0xa1), away(2, 0xb2)];
+
+        let token = reclaim_token(1, &seats, &away).expect("the phone's away hero is found");
+
+        assert_eq!(token, [0xb2; 32]);
+    }
+
+    #[test]
+    fn reclaim_of_a_phone_held_seat_is_refused_while_the_phone_is_active() {
+        // The owner reports no away hero while the phone has been active in the last 30 s.
+        let seats = seats_with_first(bound_seat(1));
+        let away = [away(1, 0xa1)];
+
+        let reason = reclaim_token(1, &seats, &away).expect_err("no phone hero is away");
+
+        assert!(reason.contains("held by a phone"));
+        assert!(reason.contains("30 s"));
+    }
+
+    #[test]
+    fn reclaim_of_a_phone_held_seat_refuses_when_several_heroes_could_be_it() {
+        // Neither hero is this control's, so the seat cannot be matched to one of them.
+        let seats = seats_with_first(bound_seat(1));
+        let away = [away(2, 0xb2), away(3, 0xc3)];
+
+        let reason = reclaim_token(1, &seats, &away).expect_err("two candidates are refused");
+
+        assert!(reason.contains("several heroes are away"));
+    }
+
+    #[test]
+    fn reclaim_of_a_seat_this_control_joined_uses_its_own_hero_token() {
+        // Seat 2 is bound to member 2; another away phone hero (member 3) must not be chosen.
+        let seats = Seats {
+            session_id: None,
+            run_id: None,
+            seats: [Seat::empty(), bound_seat(2)],
+        };
+        let away = [away(3, 0xc3), away(2, 0xb2)];
+
+        let token = reclaim_token(1, &seats, &away).expect("the bound hero is away");
+
+        assert_eq!(token, [0xb2; 32]);
+    }
+
+    #[test]
+    fn reclaim_of_a_bound_seat_that_is_not_away_keeps_the_zero_token_for_the_owner_to_refuse() {
+        let seats = seats_with_first(bound_seat(1));
+
+        let token = reclaim_token(0, &seats, &[away(2, 0xb2)]).expect("owner decides");
+
+        assert_eq!(token, [0; 32]);
     }
 }
