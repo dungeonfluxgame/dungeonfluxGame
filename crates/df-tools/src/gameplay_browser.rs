@@ -553,6 +553,9 @@ fn forget_saved_game(client: &Rc<RefCell<Client>>, reason: &str) {
 }
 /// The longest room code the server accepts.
 const MAXIMUM_ROOM_CODE: usize = 32;
+/// Input groups one offered action may carry: target, weapon, tactical choice and the attack
+/// panel's knock-out choice.
+const MAXIMUM_OFFER_INPUT_GROUPS: usize = 4;
 
 /// A room code as the server compares it: letters and digits only, upper-cased.
 fn clean_room_code(typed: &str) -> Option<String> {
@@ -1820,7 +1823,7 @@ fn action_button(
     offer: rpc::GameplayActionOffer,
 ) -> Result<(), JsValue> {
     let document = client.borrow().document.clone();
-    if offer.input_groups.len() > 3 {
+    if offer.input_groups.len() > MAXIMUM_OFFER_INPUT_GROUPS {
         return Err(JsValue::from_str("offered inputs exceed bound"));
     }
     if offer.destinations.len() > 4 {
