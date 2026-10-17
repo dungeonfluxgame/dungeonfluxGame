@@ -10,6 +10,8 @@ use serde_json::Value;
 
 const SETTLE: Duration = Duration::from_secs(3);
 const BAKE_INTERVAL: Duration = Duration::from_secs(10);
+/// After a failed fresh render for a capped edit chain, no new one is asked for this long.
+const CHAIN_REFRESH_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 pub(super) struct Book {
@@ -27,6 +29,11 @@ pub(super) struct Book {
     pub(super) latest_items: BTreeMap<String, String>,
     last_story_actor: Option<String>,
     focus: Option<Presentation>,
+    /// The still on screen is an edit, so it holds content the fresh base does not have.
+    pub(super) carried_edit: bool,
+    /// The plate id of a fresh render asked for to replace a capped edit chain's base.
+    pub(super) refresh: Option<String>,
+    refresh_failed_at: Option<Duration>,
 }
 
 impl Book {
@@ -278,6 +285,38 @@ pub(super) fn reset_scene(book: &mut super::Book, view: &View) -> bool {
         ..Book::default()
     };
     true
+}
+
+/// Stores the fresh base that a capped edit chain asked for. Only the base of the next edit
+/// changes: the still on screen stays up until that edit is ready.
+pub(super) fn finish_chain_refresh(
+    book: &mut super::Book,
+    id: &str,
+    result: Result<(ImageKey, Option<PlatePlacement>), ImageFailure>,
+    now: Duration,
+) {
+    book.state_images.refresh = None;
+    book.state_images.flying = false;
+    let current = book
+        .current
+        .as_ref()
+        .is_some_and(|current| current.id.as_deref() == Some(id));
+    match result {
+        Ok((key, placement)) if current => {
+            book.insert(id.to_owned(), super::Entry::Ready { key, placement });
+            book.state_images.carried_edit = false;
+        }
+        Ok(_) => {}
+        Err(failure) if current => {
+            book.state_images.refresh_failed_at = Some(now);
+            record(
+                "gameplay.living_scene.plate_refresh_failed",
+                &[("reason", failure.label().into())],
+            );
+            refresh_decision(book, "chain", "edit_chain_refresh_failed");
+        }
+        Err(_) => {}
+    }
 }
 
 pub(super) fn observe(book: &mut super::Book, view: &View, scene: &PlateScene, now: Duration) {
@@ -686,6 +725,52 @@ impl Shared {
         }
     }
 
+    /// Asks for a fresh render of the current scene to be the base of the next edit, instead of
+    /// stacking the edit on the still on screen. The still stays up until that edit is ready.
+    /// Returns whether the render was asked for.
+    pub(super) fn request_chain_refresh(
+        &self,
+        book: &mut super::Book,
+        now: Duration,
+        pipeline: &'static str,
+    ) -> bool {
+        if book
+            .state_images
+            .refresh_failed_at
+            .is_some_and(|failed| now.saturating_sub(failed) < CHAIN_REFRESH_COOLDOWN)
+        {
+            refresh_decision(book, pipeline, "edit_chain_refresh_cooling");
+            return false;
+        }
+        let Some(current) = book.current.as_ref() else {
+            return false;
+        };
+        let (Some(id), Some(scene)) = (current.id.clone(), current.scene.clone()) else {
+            return false;
+        };
+        let Ok(spec) = scene.stage(&current.heroes) else {
+            return false;
+        };
+        let job = super::Job::Fresh {
+            id: id.clone(),
+            graph_revision: current.graph_revision,
+            scene,
+            spec: Box::new(spec),
+            heroes: current.heroes.clone(),
+            faces: current.faces.clone(),
+            ahead: false,
+        };
+        if self.jobs.try_send(job).is_err() {
+            refresh_decision(book, pipeline, "queue_full");
+            return false;
+        }
+        book.state_images.refresh = Some(id);
+        book.state_images.flying = true;
+        book.state_images.last_started = Some(now);
+        refresh_decision(book, pipeline, "edit_chain_capped");
+        true
+    }
+
     pub(super) fn poll_state_images(&self) {
         self.poll_state_images_at(self.inner.now());
     }
@@ -733,6 +818,7 @@ impl Shared {
             );
             book.edit = Edit::Idle;
             book.state_images.shown = Some((key, layout));
+            book.state_images.carried_edit = true;
             book.state_images.baked_revision = Some(revision);
             book.state_images.last_shown = Some(now);
             if let Some(actor) = story_actor {
@@ -745,6 +831,9 @@ impl Shared {
             return;
         };
         let is_focus = pending.focus.is_some();
+        // Only a story beat's edit leaves the scene's state out of its prompt; every other edit
+        // carries the canonical current scene.
+        let lacks_scene_state = !is_focus && pending.story.is_some();
         if is_focus || self.inner.references.photographic_only() {
             use super::super::canonical::ReferenceStatus;
             let status = identities
@@ -804,9 +893,16 @@ impl Shared {
             refresh_decision(&mut book, "state", "settling_or_rate_limited");
             return;
         }
+        // Every edit starts from the fresh plate, never from the still on screen: an edit of an
+        // edit compounds the model's rendering loss. A story beat's edit has no scene state to
+        // carry, so while the still on screen is an edit it waits for a fresh render instead.
+        if lacks_scene_state && book.state_images.carried_edit {
+            self.request_chain_refresh(&mut book, now, "state");
+            return;
+        }
         // Keep the settled change pending until the original plate is ready to edit.
         // Re-requesting a fresh plate here used to restage the room and lose the pending edit.
-        let Some(base) = book.shown().map(|shown| shown.0) else {
+        let Some((base, _)) = book.fresh_base(true) else {
             refresh_decision(&mut book, "state", "awaiting_base_plate");
             return;
         };
@@ -830,8 +926,11 @@ impl Shared {
             .clone()
             .filter(|graph| graph.revision == pending.revision);
         let request_line = format!(
-            "IMAGERY request kind=scene_plate_edit reason={} state={}",
-            pending.reason, pending.revision,
+            "IMAGERY request kind=scene_plate_edit reason={} state={} base=fresh base_key={} carried_edit={}",
+            pending.reason,
+            pending.revision,
+            base.as_str(),
+            book.state_images.carried_edit,
         );
         let focus_state = pending.state.clone();
         let focus_revision = pending.revision;
@@ -1032,12 +1131,13 @@ impl Shared {
                         crate::gameplay::actor::record_audit_diagnostic(
                             "gameplay.living_scene.plate_story_edited",
                             format!(
-                                "PLATE story_edit sequence={} shot_kind={} angle={} focus_reason={} focus_actor={} image_key={}",
+                                "PLATE story_edit sequence={} shot_kind={} angle={} focus_reason={} focus_actor={} base=fresh base_key={} image_key={}",
                                 story.sequence,
                                 camera.kind(),
                                 camera.angle(),
                                 camera.focus_reason(),
                                 story.actor_id,
+                                base.as_str(),
                                 key.as_str(),
                             ),
                             serde_json::Map::from_iter([
@@ -1046,6 +1146,8 @@ impl Shared {
                                 ("angle".to_owned(), serde_json::json!(camera.angle())),
                                 ("focus_reason".to_owned(), serde_json::json!(camera.focus_reason())),
                                 ("focus_actor".to_owned(), serde_json::json!(story.actor_id)),
+                                ("base".to_owned(), serde_json::json!("fresh")),
+                                ("base_key".to_owned(), serde_json::json!(base.as_str())),
                                 ("image_key".to_owned(), serde_json::json!(key.as_str())),
                             ]),
                             &[("image.key", key.as_str().to_owned())],
@@ -1161,6 +1263,7 @@ impl Shared {
                                     );
                                     book.edit = Edit::Idle;
                                     book.state_images.shown = Some((key, layout));
+                                    book.state_images.carried_edit = true;
                                     book.state_images.baked_revision = Some(revision);
                                     book.state_images.last_shown = Some(now);
                                     if let Some(actor) = story_actor {

@@ -1009,7 +1009,7 @@ fn narrative_focus_waits_for_pending_references_and_reports_terminal_reference_f
 }
 
 #[tokio::test]
-async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_configured_interval() {
+async fn authored_story_coalesces_latest_reply_and_refreshes_the_base_before_a_second_edit() {
     let current = scene(SceneKey::DialogueSeal, "Harbor story", Some("Kestrel"));
     let (shared, mut queue) = shared(16);
     observe(&shared, &current, &[], &[1]);
@@ -1060,15 +1060,32 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
     }
     shared.poll_state_images_at(Duration::from_secs(33));
     assert!(drain(&mut queue).is_empty());
+    // The shown still is itself an edit and a story beat's edit carries no scene state, so the
+    // latest beat first gets a fresh render of the scene to start from.
     shared.poll_state_images_at(Duration::from_secs(34));
+    let Job::Fresh { id: refreshed, .. } = drain(&mut queue).remove(0) else {
+        panic!("chain refresh before the second story edit")
+    };
+    assert_eq!(refreshed, id);
+    assert_eq!(
+        locked(&shared.book).shown().unwrap().0,
+        key('b'),
+        "the edited still stays up until its successor is ready"
+    );
+    ready(&shared, &id, 'c');
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
+    // The refresh counts as a render start for the configured interval.
+    shared.poll_state_images_at(Duration::from_secs(63));
+    assert!(drain(&mut queue).is_empty());
+    shared.poll_state_images_at(Duration::from_secs(64));
     let Job::State(state_images::Job::Bake { pending, base, .. }) = drain(&mut queue).remove(0)
     else {
         panic!("latest story edit")
     };
     assert_eq!(
         base,
-        key('b'),
-        "edit the currently shown known-good picture"
+        key('c'),
+        "the story edit starts from the fresh plate, not from the edited still"
     );
     assert_eq!(pending.story.as_ref().unwrap().sequence, 5);
     assert_eq!(
@@ -1078,6 +1095,181 @@ async fn authored_story_coalesces_latest_reply_edits_shown_base_and_respects_con
     assert!(
         drain(&mut queue).is_empty(),
         "one bounded pending story, not one job per reply"
+    );
+}
+
+#[tokio::test]
+async fn a_state_edit_after_an_edit_starts_from_the_fresh_plate_not_the_edited_still() {
+    let generated = crate::gameplay::npc_dossier_tests::adventure(43);
+    let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
+    current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    let (shared, mut queue) = shared(16);
+    observe(&shared, &current, &[], &[1]);
+    let plate = PlateScene::of(&current).unwrap();
+    let id = shared.canonical_plate_id(&plate, &[1], &[], 1);
+    ready(&shared, &id, 'a');
+    let mut next = plate.clone();
+    let mut next_view = view(&current, &[1], false);
+    next_view.graph_revision = 2;
+    next.snapshot.as_mut().unwrap().model.things[0].open = true;
+    next.snapshot
+        .as_mut()
+        .unwrap()
+        .changes
+        .push("Brakka opens the door".into());
+    state_images::observe(
+        &mut locked(&shared.book),
+        &next_view,
+        &next,
+        Duration::from_secs(1),
+    );
+    shared.poll_state_images_at(Duration::from_secs(5));
+    let Job::State(state_images::Job::Bake {
+        scene: scene_key,
+        pending,
+        base,
+        ..
+    }) = drain(&mut queue).remove(0)
+    else {
+        panic!("first state edit")
+    };
+    assert_eq!(base, key('a'), "the first edit starts from the fresh plate");
+    shared.finish_state_image_at(
+        state_images::Done::Bake {
+            scene: scene_key,
+            state: pending.state,
+            revision: pending.revision,
+            story_actor: None,
+            result: Ok(key('b')),
+        },
+        Duration::from_secs(6),
+    );
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
+    next.snapshot.as_mut().unwrap().model.things[0].broken = true;
+    let mut third_view = view(&current, &[1], false);
+    third_view.graph_revision = 3;
+    state_images::observe(
+        &mut locked(&shared.book),
+        &third_view,
+        &next,
+        Duration::from_secs(20),
+    );
+    shared.poll_state_images_at(Duration::from_secs(25));
+    let Job::State(state_images::Job::Bake { base, .. }) = drain(&mut queue).remove(0) else {
+        panic!("second state edit")
+    };
+    assert_eq!(
+        base,
+        key('a'),
+        "the second edit starts from the fresh plate, not from the edited still"
+    );
+    assert_eq!(locked(&shared.book).shown().unwrap().0, key('b'));
+}
+
+/// Finishes the speaker's face edit `angry` with the image `edited`.
+fn show_face_edit(shared: &Shared, angry: Face, edited: ImageKey) {
+    shared.finish(Done::Edit {
+        scene_key: "opening|Word Before Dawn|assets/ui/generated/scene-place-bell-chamber.webp"
+            .to_owned(),
+        speaker_id: Some("keeper".to_owned()),
+        face: angry,
+        elapsed: Duration::from_secs(15),
+        result: Ok(edited),
+    });
+}
+
+#[tokio::test]
+async fn a_face_edit_after_an_edit_asks_for_a_fresh_plate_before_it_is_made() {
+    let (shared, mut queue) = shared(16);
+    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    let angry = Face {
+        expression: Expression::Angry,
+        tier: HealthTier::Healthy,
+    };
+    let contemptuous = Face {
+        expression: Expression::Contemptuous,
+        tier: HealthTier::Healthy,
+    };
+    locked(&shared.inner.state)
+        .plate_wants
+        .insert("keeper".to_owned(), angry);
+    shared.poll_face();
+    let Job::Edit { base, face, .. } = drain(&mut queue).remove(0) else {
+        panic!("first face edit")
+    };
+    assert_eq!((base, face), (key('a'), angry));
+    show_face_edit(&shared, angry, key('b'));
+    locked(&shared.inner.state)
+        .plate_wants
+        .insert("keeper".to_owned(), contemptuous);
+    shared.poll_face();
+    let Job::Fresh { id: refreshed, .. } = drain(&mut queue).remove(0) else {
+        panic!("a fresh plate before the second face edit")
+    };
+    assert_eq!(refreshed, id);
+    assert_eq!(
+        locked(&shared.book).shown().unwrap().0,
+        key('b'),
+        "the edited face stays up until its successor is ready"
+    );
+    shared.poll_face();
+    assert!(drain(&mut queue).is_empty());
+    ready(&shared, &id, 'c');
+    shared.poll_face();
+    let Job::Edit { base, face, .. } = drain(&mut queue).remove(0) else {
+        panic!("second face edit")
+    };
+    assert_eq!(
+        (base, face),
+        (key('c'), contemptuous),
+        "the second face edit starts from the refreshed fresh plate"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_fresh_plate_for_an_edit_chain_is_not_asked_for_again_during_the_cooldown() {
+    let (shared, mut queue) = shared(16);
+    let current = scene(SceneKey::Opening, "Word Before Dawn", Some("Kestrel"));
+    observe(&shared, &current, &[], &[1]);
+    let id = fresh_ids(&drain(&mut queue)).remove(0);
+    ready(&shared, &id, 'a');
+    let angry = Face {
+        expression: Expression::Angry,
+        tier: HealthTier::Healthy,
+    };
+    locked(&shared.inner.state)
+        .plate_wants
+        .insert("keeper".to_owned(), angry);
+    shared.poll_face();
+    drain(&mut queue);
+    show_face_edit(&shared, angry, key('b'));
+    locked(&shared.inner.state).plate_wants.insert(
+        "keeper".to_owned(),
+        Face {
+            expression: Expression::Contemptuous,
+            tier: HealthTier::Healthy,
+        },
+    );
+    shared.poll_face();
+    assert!(matches!(drain(&mut queue).remove(0), Job::Fresh { .. }));
+    shared.finish(Done::Fresh {
+        id: id.clone(),
+        graph_revision: 1,
+        ahead: false,
+        elapsed: Duration::from_secs(14),
+        result: Err(ImageFailure::Provider),
+    });
+    assert!(matches!(
+        locked(&shared.book).entries.get(&id),
+        Some(Entry::Ready { .. })
+    ));
+    shared.poll_face();
+    assert!(
+        drain(&mut queue).is_empty(),
+        "the failed refresh cools down instead of looping"
     );
 }
 
@@ -1195,9 +1387,37 @@ async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_
         pack::with_test_pack(loaded.clone(), || {
             plates.observe(&public_story_message(current, lines.clone()), sequence);
         });
-        let now = shared.inner.now() + Duration::from_secs(4 + (sequence - 2) * 31);
+        let now = shared.inner.now() + Duration::from_secs(4 + (sequence - 2) * 62);
         shared.poll_state_images_at(now);
-        let Job::State(job) = drain(&mut queue).remove(0) else {
+        // A story edit made from an edited still first gets a fresh render of the scene as its
+        // base (the cap), which takes one interval before the edit itself can start.
+        let job = match drain(&mut queue).remove(0) {
+            Job::Fresh {
+                id,
+                graph_revision,
+                scene,
+                spec,
+                heroes,
+                faces,
+                ..
+            } => {
+                let (fresh, placement, _) = shared
+                    .render_fresh(&scene, &spec, &heroes, &faces, &id, graph_revision, false)
+                    .await
+                    .unwrap();
+                shared.finish(Done::Fresh {
+                    id,
+                    graph_revision,
+                    ahead: false,
+                    elapsed: Duration::from_secs(1),
+                    result: Ok((fresh, placement)),
+                });
+                shared.poll_state_images_at(now + Duration::from_secs(31));
+                drain(&mut queue).remove(0)
+            }
+            job => job,
+        };
+        let Job::State(job) = job else {
             panic!("automatic story edit")
         };
         let state_images::Job::Bake {

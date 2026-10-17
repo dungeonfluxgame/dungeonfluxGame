@@ -845,6 +845,19 @@ impl Book {
         }
     }
 
+    /// The newest full render of the current scene that an edit starts from: the directed render
+    /// when `directed` and one is on screen, otherwise the fresh plate. An edit never starts from
+    /// another edit's output.
+    fn fresh_base(&self, directed: bool) -> Option<(ImageKey, Option<PlatePlacement>)> {
+        if let Some(shown) = self.direct.shown.as_ref().filter(|_| directed) {
+            return Some(shown.clone());
+        }
+        match self.current_entry() {
+            Some(Entry::Ready { key, placement }) => Some((key.clone(), placement.clone())),
+            _ => None,
+        }
+    }
+
     fn covers(&self) -> bool {
         self.current
             .as_ref()
@@ -3417,20 +3430,24 @@ impl Shared {
                 result,
                 ..
             } => {
-                let entry = match result {
-                    Ok((key, placement)) => Entry::Ready { key, placement },
-                    Err(_) => Entry::Failed,
-                };
-                let current_graph = book
-                    .current
-                    .as_ref()
-                    .is_some_and(|current| current.id.as_deref() == Some(id.as_str()));
-                // Speech changes the graph revision while the room's plate is still loading.
-                // Only scene/party identity supersedes that plate, never a speaker's expression.
-                if (current_graph || ahead) && book.entries.contains_key(&id) {
-                    book.entries.insert(id, entry);
-                    if current_graph {
-                        book.state_images.baked_revision = Some(graph_revision);
+                if book.state_images.refresh.as_deref() == Some(id.as_str()) {
+                    state_images::finish_chain_refresh(&mut book, &id, result, self.inner.now());
+                } else {
+                    let entry = match result {
+                        Ok((key, placement)) => Entry::Ready { key, placement },
+                        Err(_) => Entry::Failed,
+                    };
+                    let current_graph = book
+                        .current
+                        .as_ref()
+                        .is_some_and(|current| current.id.as_deref() == Some(id.as_str()));
+                    // Speech changes the graph revision while the room's plate is still loading.
+                    // Only scene/party identity supersedes that plate, never a speaker's expression.
+                    if (current_graph || ahead) && book.entries.contains_key(&id) {
+                        book.entries.insert(id, entry);
+                        if current_graph {
+                            book.state_images.baked_revision = Some(graph_revision);
+                        }
                     }
                 }
             }
@@ -3449,6 +3466,7 @@ impl Shared {
                     match result {
                         Ok(key) => {
                             book.edit = Edit::Ready { face, key };
+                            book.state_images.carried_edit = true;
                             if let Some(speaker_id) = speaker_id {
                                 self.inner.note_plate_face_shown(&speaker_id, face);
                             }
@@ -3489,23 +3507,8 @@ impl Shared {
         let Some(speaker) = scene.speaker.clone() else {
             return;
         };
-        let base = book
-            .state_images
-            .shown
-            .as_ref()
-            .map(|shown| shown.0.clone())
-            .or_else(|| {
-                if book.direct.keep.is_some() {
-                    book.direct.shown.as_ref().map(|shown| shown.0.clone())
-                } else {
-                    None
-                }
-            })
-            .or_else(|| match book.current_entry() {
-                Some(Entry::Ready { key, .. }) => Some(key.clone()),
-                _ => None,
-            });
-        let Some(base) = base else {
+        // A one-off directed shot is not a face edit's base; only a kept direction is.
+        let Some((base, _)) = book.fresh_base(book.direct.keep.is_some()) else {
             return;
         };
         let scene_key = current.scene_key.clone();
@@ -3544,6 +3547,13 @@ impl Shared {
                 refresh_decision(&mut book, "face", "unchanged_or_failed_target")
             }
             (Some(face), _) => {
+                // A face edit carries no scene state, so while the still on screen is an edit it
+                // waits for a fresh render of the scene to be its base.
+                if book.state_images.carried_edit {
+                    self.request_chain_refresh(&mut book, now, "face");
+                    return;
+                }
+                let base_key = base.as_str().to_owned();
                 let job = Job::Edit {
                     heroes,
                     scene_key,
@@ -3564,6 +3574,15 @@ impl Shared {
                             ("scene.expression", face.expression.label().to_owned()),
                             ("scene.tier", face.tier.label().to_owned()),
                         ],
+                    );
+                    record_plate_diagnostic(
+                        "gameplay.living_scene.plate_edit_base",
+                        format!("PLATE edit_base pipeline=face base=fresh base_key={base_key}"),
+                        serde_json::Map::from_iter([
+                            ("pipeline".to_owned(), serde_json::json!("face")),
+                            ("base".to_owned(), serde_json::json!("fresh")),
+                            ("base_key".to_owned(), serde_json::json!(base_key)),
+                        ]),
                     );
                     drop(book);
                     self.wake();

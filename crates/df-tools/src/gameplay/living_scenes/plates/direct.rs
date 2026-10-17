@@ -264,6 +264,7 @@ impl Shared {
             );
             if current && let Ok(shown) = result {
                 book.state_images.shown = None;
+                book.state_images.carried_edit = false;
                 book.direct.shown = Some(shown);
                 book.edit = Edit::Idle;
             }
