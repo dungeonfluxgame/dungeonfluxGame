@@ -22,12 +22,13 @@ use super::*;
 use crate::music_score::{
     ARRANGE_SECONDS, Bed, CueMemory, DUCK_LINE_ATTACK_SECONDS, DUCK_RELEASE_SECONDS,
     DUCK_SFX_ATTACK_SECONDS, DUCK_SFX_DECIBELS, DUCK_SFX_HOLD_SECONDS, DUCK_SFX_RELEASE_SECONDS,
-    Facts, LAYER_TRACKS, LINE_BUSY_SCALE, LINE_FILTER_HERTZ, LOOP_SECONDS, Outcome, Phase,
-    SOMBRE_FILTER_HERTZ, STINGER_TAKES, Stinger, Suite, TRANSITION_SECONDS, Tempo, VOICE_LUFS,
-    arrangement_for, arrangements_for, bubble_hold_ms, colour_for, duck_decibels, effective_phase,
-    facts_after_presentation, facts_of, gain_for_decibels, gap_hold_active, layer_track,
-    line_presenting, mix_for, mix_level_lufs, next_beat, next_take, scene_layer_gains,
-    stinger_between, stinger_track, suite_for, tempo_of, unvoiced_hold_ms,
+    Facts, GENERATED_MUSIC_ROUTE, LAYER_TRACKS, LINE_BUSY_SCALE, LINE_FILTER_HERTZ, LOOP_SECONDS,
+    Outcome, Phase, PlaceMusic, SOMBRE_FILTER_HERTZ, STINGER_TAKES, Stinger, Suite,
+    TRANSITION_SECONDS, Tempo, VOICE_LUFS, ambience_path_of, arrangement_for, arrangements_for,
+    bubble_hold_ms, colour_for, duck_decibels, effective_phase, facts_after_presentation,
+    facts_with_plan, gain_for_decibels, gap_hold_active, line_presenting, mix_for, mix_level_lufs,
+    next_beat, next_take, place_music_of, scene_layer_gains, shared_path, stinger_between,
+    stinger_track, suite_for, swap_boundary, tempo_of, unvoiced_hold_ms, wanted_layer_paths,
 };
 use gloo_timers::callback::Interval;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -37,7 +38,6 @@ use web_sys::{
     AudioScheduledSourceNode, BiquadFilterNode, BiquadFilterType, Event, GainNode, Response,
 };
 
-const MUSIC_PATH: &str = "/assets/music";
 const VOLUME_KEY: &str = "df.music.volume";
 /// Music clearly under the voice: the layers are mastered near -23 LUFS and the voice near -16.
 const DEFAULT_VOLUME: f32 = 0.85;
@@ -96,7 +96,8 @@ struct Applied {
 }
 
 struct Ambient {
-    track: &'static str,
+    /// Served path of the loop.
+    track: String,
     gain: GainNode,
     source: AudioBufferSourceNode,
 }
@@ -136,6 +137,8 @@ struct Graph {
 }
 
 struct Latest {
+    /// What the server planned for this place; the shared score until its own set is ready.
+    place: PlaceMusic,
     tempo: Tempo,
     facts: Facts,
     release_since: Option<f64>,
@@ -145,9 +148,10 @@ struct Director {
     document: Document,
     root: Element,
     graph: Option<Graph>,
-    buffers: HashMap<&'static str, AudioBuffer>,
-    requested: HashSet<&'static str>,
-    missing: Vec<&'static str>,
+    /// Decoded tracks by served path (shared score, beds and a place's own generated files).
+    buffers: HashMap<String, AudioBuffer>,
+    requested: HashSet<String>,
+    missing: Vec<String>,
     latest: Option<Latest>,
     enabled: bool,
     speaking: bool,
@@ -169,7 +173,7 @@ struct Director {
     /// Whether this session prefers the `-b` layer takes where their files exist.
     layer_alternate: bool,
     /// The layer tracks actually looping, if the layers have started.
-    layer_tracks: Option<[&'static str; 4]>,
+    layer_tracks: Option<[String; 4]>,
     /// Current arrangement epoch on the audio clock, and the voicing in use.
     epoch: Option<u64>,
     arrangement: usize,
@@ -392,7 +396,7 @@ impl Director {
 
     /// `connection` identifies the watch connection the view came from; a new one starts a new
     /// server cue sequence, so the consumed sequence is forgotten.
-    fn accept(&mut self, tempo: Tempo, facts: Facts, connection: u64) {
+    fn accept(&mut self, tempo: Tempo, facts: Facts, place: PlaceMusic, connection: u64) {
         if connection != self.connection {
             self.connection = connection;
             self.cues.reset();
@@ -424,6 +428,7 @@ impl Director {
             .as_ref()
             .and_then(|previous| stinger_between(&previous.facts, &facts));
         self.latest = Some(Latest {
+            place,
             tempo,
             facts,
             release_since,
@@ -437,7 +442,7 @@ impl Director {
 
     /// One pass of housekeeping: shared sound state, tab visibility, the audio graph, the
     /// mix and the debug snapshot. Returns the tracks that now need fetching.
-    fn step(&mut self) -> Result<Vec<&'static str>, JsValue> {
+    fn step(&mut self) -> Result<Vec<String>, JsValue> {
         if let Some(sound) = live_voice::sound_state() {
             self.enabled = sound.enabled;
             self.speaking = sound.speaking;
@@ -625,31 +630,44 @@ impl Director {
         })
     }
 
-    /// The four layer tracks for the wanted suite and this session's take pick.
-    fn wanted_layer_tracks(&self) -> [&'static str; 4] {
-        let suite = self.wanted_suite();
-        [
-            layer_track(suite, 0, self.layer_alternate),
-            layer_track(suite, 1, self.layer_alternate),
-            layer_track(suite, 2, self.layer_alternate),
-            layer_track(suite, 3, self.layer_alternate),
-        ]
+    /// The four layer paths for the wanted suite, this session's take pick and the server's
+    /// plan for the place: the place's own layers once ready, the shared score otherwise.
+    fn wanted_layer_tracks(&self) -> [String; 4] {
+        let place = self
+            .latest
+            .as_ref()
+            .map_or(&PlaceMusic::SharedScore, |latest| &latest.place);
+        wanted_layer_paths(self.wanted_suite(), self.layer_alternate, place)
     }
 
-    /// The tracks actually looped per layer: the wanted take, or the main-suite base when that
-    /// file is absent. `None` while the choice still depends on a fetch in flight.
-    fn resolved_layer_tracks(&self) -> Option<[&'static str; 4]> {
+    /// The tracks actually looped per layer: the wanted one, or the main-suite base when that
+    /// file is absent. A place's own layers stack only as a set, so one that failed to load
+    /// sends all four back to the shared score of the same suite. `None` while the choice still
+    /// depends on a fetch in flight.
+    fn resolved_layer_tracks(&self) -> Option<[String; 4]> {
         let wanted = self.wanted_layer_tracks();
-        let mut resolved = wanted;
-        for (index, track) in wanted.iter().enumerate() {
+        let own_set_failed = wanted
+            .iter()
+            .any(|track| track.starts_with(GENERATED_MUSIC_ROUTE) && self.missing.contains(track));
+        let source = if own_set_failed {
+            wanted_layer_paths(
+                self.wanted_suite(),
+                self.layer_alternate,
+                &PlaceMusic::SharedScore,
+            )
+        } else {
+            wanted
+        };
+        let mut resolved = source.clone();
+        for (index, track) in source.iter().enumerate() {
             if self.buffers.contains_key(track) {
                 continue;
             }
             if !self.missing.contains(track) {
                 return None;
             }
-            let base = LAYER_TRACKS[index];
-            if self.buffers.contains_key(base) || self.missing.contains(&base) {
+            let base = shared_path(LAYER_TRACKS[index]);
+            if self.buffers.contains_key(&base) || self.missing.contains(&base) {
                 resolved[index] = base;
             } else {
                 return None;
@@ -661,22 +679,26 @@ impl Director {
     /// Layers first (they start together), then the location ambience, then the stingers.
     /// Stinger takes all ride along: rotation needs them loaded, and a file that is not on
     /// disk is recorded once and never requested again.
-    fn tracks_to_fetch(&mut self) -> Vec<&'static str> {
+    fn tracks_to_fetch(&mut self) -> Vec<String> {
         if !self.enabled {
             return Vec::new();
         }
-        let bed = self.latest.as_ref().map(|latest| latest.facts.bed.track());
-        let layers = self.wanted_layer_tracks();
-        let mut wanted: Vec<&'static str> = layers.into_iter().chain(LAYER_TRACKS).collect();
+        let bed = self
+            .latest
+            .as_ref()
+            .and_then(|latest| ambience_path_of(&latest.place))
+            .map(str::to_owned);
+        let mut wanted: Vec<String> = self.wanted_layer_tracks().into_iter().collect();
+        wanted.extend(LAYER_TRACKS.iter().map(|track| shared_path(track)));
         for kind in Stinger::ALL {
             for take in 0..STINGER_TAKES {
-                wanted.push(stinger_track(kind, take));
+                wanted.push(shared_path(stinger_track(kind, take)));
             }
         }
         wanted.extend(bed);
         let mut fresh = Vec::new();
         for track in wanted {
-            if self.requested.insert(track) {
+            if self.requested.insert(track.clone()) {
                 fresh.push(track);
             }
         }
@@ -716,7 +738,7 @@ impl Director {
             self.suite = self.wanted_suite();
             return Ok(());
         }
-        if self.layer_tracks == Some(resolved) {
+        if self.layer_tracks.as_ref() == Some(&resolved) {
             return Ok(());
         }
         let Some(graph) = self.graph.as_mut() else {
@@ -724,11 +746,7 @@ impl Director {
         };
         let now = graph.context.current_time();
         let start = graph.started_at.unwrap_or(now);
-        let elapsed = (now - start).max(0.0);
-        let mut boundary = start + (elapsed / LOOP_SECONDS).ceil() * LOOP_SECONDS;
-        if boundary - now < SWAP_CROSSFADE_SECONDS + START_LEAD_SECONDS {
-            boundary += LOOP_SECONDS;
-        }
+        let boundary = swap_boundary(now, start, SWAP_CROSSFADE_SECONDS, START_LEAD_SECONDS);
         let retiring = graph.voices.len();
         for (index, track) in resolved.iter().enumerate() {
             let Some(buffer) = self.buffers.get(track) else {
@@ -753,35 +771,46 @@ impl Director {
         Ok(())
     }
 
-    /// Crossfades to the ambience of the current location once its track is loaded.
+    /// Crossfades to the ambience the server's plan names once its track is loaded. A plan with
+    /// no ambience fades the current one out and leaves the score alone.
     fn apply_bed(&mut self) -> Result<(), JsValue> {
         let (Some(graph), Some(latest)) = (self.graph.as_mut(), self.latest.as_ref()) else {
             return Ok(());
         };
-        let wanted = latest.facts.bed.track();
-        let playing = graph
-            .ambient
-            .as_ref()
-            .is_some_and(|ambient| ambient.track == wanted);
-        let Some(buffer) = self.buffers.get(wanted) else {
+        if !self.enabled {
             return Ok(());
-        };
-        if playing || !self.enabled {
+        }
+        let wanted = ambience_path_of(&latest.place);
+        let playing = graph.ambient.as_ref().map(|ambient| ambient.track.as_str());
+        if playing == wanted {
             return Ok(());
         }
         let now = graph.context.current_time();
-        let gain = silent_gain(&graph.context, &graph.ambient_bus)?;
-        let source = looping_source(&graph.context, buffer, &gain, None)?;
-        source.start_with_when(now)?;
-        glide(
-            &gain.gain(),
-            Some(0.0),
-            1.0,
-            now,
-            BED_CROSSFADE_SECONDS,
-            BED_CROSSFADE_SECONDS,
-            false,
-        )?;
+        let incoming = match wanted {
+            Some(path) => {
+                let Some(buffer) = self.buffers.get(path) else {
+                    return Ok(());
+                };
+                let gain = silent_gain(&graph.context, &graph.ambient_bus)?;
+                let source = looping_source(&graph.context, buffer, &gain, None)?;
+                source.start_with_when(now)?;
+                glide(
+                    &gain.gain(),
+                    Some(0.0),
+                    1.0,
+                    now,
+                    BED_CROSSFADE_SECONDS,
+                    BED_CROSSFADE_SECONDS,
+                    false,
+                )?;
+                Some(Ambient {
+                    track: path.to_owned(),
+                    gain,
+                    source,
+                })
+            }
+            None => None,
+        };
         if let Some(old) = graph.ambient.take() {
             glide(
                 &old.gain.gain(),
@@ -797,11 +826,7 @@ impl Director {
                 now + BED_CROSSFADE_SECONDS + 0.1,
             )?;
         }
-        graph.ambient = Some(Ambient {
-            track: wanted,
-            gain,
-            source,
-        });
+        graph.ambient = incoming;
         Ok(())
     }
 
@@ -989,7 +1014,7 @@ impl Director {
         let mut loaded = Vec::new();
         for take in 0..STINGER_TAKES {
             let track = stinger_track(stinger, take);
-            if self.buffers.contains_key(track) {
+            if self.buffers.contains_key(&shared_path(track)) {
                 loaded.push(track);
             }
         }
@@ -998,7 +1023,7 @@ impl Director {
         }
         let position = next_take(self.stinger_takes[index], loaded.len());
         let track = loaded[position];
-        let Some(buffer) = self.buffers.get(track) else {
+        let Some(buffer) = self.buffers.get(&shared_path(track)) else {
             return Ok(());
         };
         if matches!(stinger, Stinger::Victory | Stinger::Defeat)
@@ -1111,7 +1136,7 @@ impl Director {
 \"alternate_takes\":{},\"stinger_takes\":[{takes}],\"ducked\":{},\"duck_reason\":{},\
 \"duck_now\":{duck_now},\"music_db\":{},\"voice_db\":{:.1},\"duck_log\":{duck_log},\
 \"tick_ms\":{:.1},\"tick_ms_max\":{:.1},\
-\"sfx_count\":{},\"volume\":{},\"loaded\":{},\"missing\":{},\"stingers\":{},\"error\":{}}}",
+\"sfx_count\":{},\"volume\":{},\"loaded\":{},\"missing\":{},\"stingers\":{},\"place\":{},\"error\":{}}}",
             text(if self.enabled { "on" } else { "off" }),
             text(self.graph.as_ref().map_or("none", Graph::state_name)),
             optional_text(latest.map(|latest| latest.tempo.phase.name())),
@@ -1120,17 +1145,17 @@ impl Director {
             optional_number(latest.and_then(|latest| latest.tempo.cue)),
             optional_number(self.applied.map(|applied| applied.filter_hertz)),
             optional_number(self.applied.map(|applied| applied.master)),
-            optional_text(latest.map(|latest| latest.facts.bed.track())),
+            optional_text(latest.and_then(|latest| ambience_path_of(&latest.place))),
             optional_text(
                 self.graph
                     .as_ref()
                     .and_then(|graph| graph.ambient.as_ref())
-                    .map(|ambient| ambient.track)
+                    .map(|ambient| ambient.track.as_str())
             ),
             self.graph
                 .as_ref()
                 .is_some_and(|graph| graph.started_at.is_some()),
-            list(self.layer_tracks.iter().flatten().copied()),
+            list(self.layer_tracks.iter().flatten().map(String::as_str)),
             text(self.suite.name()),
             optional_text(arrangement),
             text(self.colour),
@@ -1144,8 +1169,13 @@ impl Director {
             optional_number(self.sfx_count),
             self.volume,
             self.buffers.len(),
-            list(self.missing.iter().copied()),
+            list(self.missing.iter().map(String::as_str)),
             list(self.fired.iter().copied()),
+            text(latest.map_or("none", |latest| match &latest.place {
+                PlaceMusic::SharedScore => "shared",
+                PlaceMusic::Fallback { .. } => "fallback",
+                PlaceMusic::Ready { .. } => "ready",
+            })),
             optional_text(self.failure.as_deref()),
         );
         if snapshot != self.published {
@@ -1237,10 +1267,11 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
     let scene = display.scene.clone().unwrap_or_default();
     let tempo = tempo_of(&scene, journey, sequence);
     super::live_battlefield::set_tempo(tempo.intensity);
-    let facts = facts_of(&scene, journey, &display.scene_asset);
+    let facts = facts_with_plan(&scene, journey, display.place_music.as_ref());
+    let place = place_music_of(display.place_music.as_ref());
     match director(&document, &root) {
         Ok(shared) => {
-            shared.borrow_mut().accept(tempo, facts, connection);
+            shared.borrow_mut().accept(tempo, facts, place, connection);
             tick(&shared);
         }
         Err(_) => {
@@ -1392,7 +1423,7 @@ fn presentation_sequences(document: &Document) -> Option<(u64, u64)> {
 
 /// Fetches and decodes one track. A missing or undecodable track is recorded and simply not
 /// played; it is never requested again.
-async fn load(shared: Shared, track: &'static str) {
+async fn load(shared: Shared, track: String) {
     let context = shared
         .borrow()
         .graph
@@ -1401,7 +1432,7 @@ async fn load(shared: Shared, track: &'static str) {
     let Some(context) = context else {
         return;
     };
-    let outcome = fetch_track(&context, track).await;
+    let outcome = fetch_track(&context, &track).await;
     {
         let mut state = shared.borrow_mut();
         match outcome {
@@ -1417,10 +1448,9 @@ async fn load(shared: Shared, track: &'static str) {
 /// Anything but a non-empty, bounded 200 response that decodes is an error.
 async fn fetch_track(context: &AudioContext, track: &str) -> Result<AudioBuffer, JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("window absent"))?;
-    let response: Response =
-        JsFuture::from(window.fetch_with_str(&format!("{MUSIC_PATH}/{track}")))
-            .await?
-            .dyn_into()?;
+    let response: Response = JsFuture::from(window.fetch_with_str(track))
+        .await?
+        .dyn_into()?;
     if response.status() != 200 {
         return Err(JsValue::from_str("music track unavailable"));
     }

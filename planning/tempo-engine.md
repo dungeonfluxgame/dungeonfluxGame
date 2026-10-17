@@ -60,6 +60,54 @@ into a mechanical restriction. A real countdown comes only from an approved
 server timer policy. Fictional NPC/environment choreography is a world/interactions
 proposal when it changes actual state; a cosmetic animation cannot become fact.
 
+### Place music
+
+Each place has its own score, decided by the server and generated on demand.
+Implementation: `crates/df-tools/src/gameplay/place_music*` (server),
+`music_score.rs` (shared rules) and `gameplay_browser/live_music.rs` (display player).
+
+- **MusicSpec.** Mood, energy, setting family, time of day, interior or exterior,
+  instrumentation palette, an optional ambience description and an optional
+  fallback bed, all from closed labels plus bounded author text. Only two things
+  may decide it: the pack's `music` block for that place (`pack.json`, keyed by
+  `place_id`), or Jev choosing among the closed labels from the place's content and
+  public scene facts. There is no keyword table, name match or asset-name guess
+  anywhere in the decision (a test reads the decision code to keep it so). With
+  neither a block nor a Jev answer the place has no spec: the shared score plays
+  with no ambience bed and the plan records why.
+- **Set.** Four layers (bed, motif, tension, combat) from `/v1/music` at the shared
+  score's 84 BPM, one key chosen from the mood (relaxed and warm places get a major
+  key) and 16 bars, plus one ambience bed from `/v1/sound-generation`. Each layer is
+  cut to exactly 2,016,000 frames, made seamless with an equal-power tail crossfade
+  (bed 2000 ms, motif and combat 714 ms, tension 450 ms) and set to -23.4 LUFS
+  (ambience -30); the ambience loops 24 s. The loop and the BS.1770 loudness are
+  plain Rust; only MP3 decode and encode use `ffmpeg` (`DF_FFMPEG` or `PATH`). The
+  set is a `MusicSet` resource of the generation hub (`gameplay/resources.rs`), keyed
+  by the canonical spec and the generator version; the hub owns the registry, the
+  single in-flight request per key, the timeout and attempt limit, the failure memory,
+  the spend ledger and the `RESOURCE` and `SPEND` audit lines. Place music reaches it
+  through `place_music::hub::MusicHub`, implemented over the hub by `HubMusic`
+  (`place_music/resource.rs`), which also keeps the MP3 bytes on disk under
+  `<cache>/sets/<key>/` (default `artifacts/tmp/play/music-cache`) and serves them at
+  `GET /gameplay/music/{key}/{bed|motif|tension|combat|ambience}` for keys the hub
+  reports ready. A set found on disk is not generated again in a later run. Nothing
+  is generated ahead of time: the first view of a place requests its set. One set
+  costs five provider calls, recorded on the ledger (unit `MusicCall`). There is no
+  budget, cap or limit on place music: nothing refuses a set for cost. One attempt per
+  set means a failed set stays failed until a developer regenerates it.
+  Timeouts: 120 s per provider call, 300 s for the whole set (every call and ffmpeg
+  run gets only the time that remains), 330 s for the hub's own bound on the job.
+- **Fallback.** While the set is pending, failed or unavailable the plan is FALLBACK:
+  the shared score plus the existing bed the spec names as fitting (or none). The
+  display switches to the place's layers at the next loop boundary of the running
+  layers with the usual 4 s crossfade, and back to the shared score if any of the four
+  fails to load. Fights keep the shared battle suite.
+- **Wire.** `DisplayGameplayView.place_music` (`PlaceMusicPlan`): spec label, setting
+  family, state, set key, the four layer paths, the ambience path, a fallback note and
+  the bpm, loop length and sample rate. A client that cannot match the shared score's
+  timebase, or sees a path outside the served music routes, keeps the fallback. The
+  tempo engine still decides the mix; the plan names only which files are mixed.
+
 ## Audience, preferences and observations
 
 Construct inputs/profiles from audience-permitted facts or a proven public cue.

@@ -1,5 +1,6 @@
 //! Pure rules of the adaptive score: which tempo a display view implies, how that tempo mixes
-//! the layers, which ambient bed fits a scene and which one-shot stinger a story change earns.
+//! the layers, which place music the server planned and which one-shot stinger a story change
+//! earns.
 //!
 //! Nothing here touches the browser, so the rules are checked natively. The Web Audio player
 //! (`gameplay_browser::live_music`) only applies what this module decides. The music follows
@@ -167,7 +168,44 @@ pub(crate) enum Bed {
 }
 
 impl Bed {
+    /// Every bed, which is also the closed vocabulary of setting families a place's music spec
+    /// may name (`Night` is the neutral family).
+    pub(crate) const ALL: [Bed; 9] = [
+        Bed::Harbour,
+        Bed::Market,
+        Bed::Forest,
+        Bed::Mountain,
+        Bed::Library,
+        Bed::Marsh,
+        Bed::Graveyard,
+        Bed::Farm,
+        Bed::Night,
+    ];
+
+    /// The closed label used in content and on the wire.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Bed::Harbour => "harbour",
+            Bed::Market => "market",
+            Bed::Forest => "forest",
+            Bed::Mountain => "mountain",
+            Bed::Library => "library",
+            Bed::Marsh => "marsh",
+            Bed::Graveyard => "graveyard",
+            Bed::Farm => "farm",
+            Bed::Night => "neutral",
+        }
+    }
+
+    /// The bed whose closed label is exactly `label`. Equality on a closed vocabulary only; it
+    /// never looks inside free text.
+    pub(crate) fn from_label(label: &str) -> Option<Bed> {
+        Bed::ALL.into_iter().find(|bed| bed.label() == label)
+    }
+
+    /// Only the server names a bed's file (the plan carries the path); the display never does.
     /// The served track name, `/assets/music/<track>`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn track(self) -> &'static str {
         match self {
             Bed::Harbour => "amb-harbour",
@@ -499,7 +537,7 @@ fn arrangement_hash(seed: u64, phase: Phase, bed: Bed, epoch: u64) -> u64 {
 
 /// Place and chapter colour: the same four layers, coloured per place or fight with what Web
 /// Audio already offers (filter, balance, ambience level). Derived only from facts the display
-/// view already carries (`Bed`, combat); no protobuf field is added. Scales multiply the
+/// view and the server's place music plan carry (the setting family, combat). Scales multiply the
 /// arrangement-weighted table gains; the filter scale multiplies the phase filter in Hertz.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Colour {
@@ -755,12 +793,26 @@ fn complete_tempo(
     }
 }
 
-/// Facts for stingers, the sombre defeat mix and the ambient bed. `display_asset` is the
-/// display view's own scene asset, used when the scene carries none.
+/// Facts for stingers, the sombre defeat mix and the place colour. The bed is the place's
+/// setting family, which only the server's music plan names (`facts_with_plan`); without a plan
+/// it is the neutral family. `display_asset` is ignored: an asset name decides nothing about
+/// the music. It is kept so existing callers keep their call shape; new code calls
+/// `facts_with_plan`.
 pub(crate) fn facts_of(
     scene: &rpc::GameplayScene,
     journey: &rpc::JourneyView,
-    display_asset: &str,
+    _display_asset: &str,
+) -> Facts {
+    facts_with_plan(scene, journey, None)
+}
+
+/// Facts from the server's own data only: the journey phase and party, the combat state, and
+/// the scene cast's role and speaking flags. No asset, portrait or speaker name is read. The
+/// setting family is the one the server's music plan names, or neutral when there is none.
+pub(crate) fn facts_with_plan(
+    scene: &rpc::GameplayScene,
+    journey: &rpc::JourneyView,
+    plan: Option<&rpc::PlaceMusicPlan>,
 ) -> Facts {
     let phase = rpc::JourneyPhase::try_from(journey.phase).ok();
     let finished = journey
@@ -783,55 +835,128 @@ pub(crate) fn facts_of(
         });
     Facts {
         in_combat: phase == Some(rpc::JourneyPhase::Combat),
+        // The cast's own role says who is speaking: the server sets `speaking` and `role` on
+        // every scene actor.
         antagonist_speaking: phase == Some(rpc::JourneyPhase::Dialogue)
-            && (scene.speaker_portrait.contains("portrait-ant-")
-                || scene.speaker_portrait.contains("bandit")
-                || journey.speaker == "Bandit"),
+            && scene
+                .cast
+                .iter()
+                .any(|actor| actor.speaking && actor.role == rpc::SceneRole::Antagonist as i32),
         outcome,
-        bed: bed_for_scene(scene, display_asset),
+        bed: plan
+            .and_then(|plan| Bed::from_label(&plan.setting_family))
+            .unwrap_or(Bed::Night),
     }
 }
 
-/// The scene's public location identity is more stable than its presentation asset. Generated
-/// adventures can use generic stems such as `scene-place-lamp-room`, while `location_id` and
-/// `place` still name the actual harbour, market, forest or library. Prefer those fields and
-/// only use the asset path when the authored location has no family name.
-pub(crate) fn bed_for_scene(scene: &rpc::GameplayScene, display_asset: &str) -> Bed {
-    [
-        scene.location_id.as_str(),
-        scene.place.as_str(),
-        scene.scene_asset.as_str(),
-        display_asset,
-    ]
-    .into_iter()
-    .map(bed_of)
-    .find(|bed| *bed != Bed::Night)
-    .unwrap_or(Bed::Night)
+/// What the display should play for the place it is in, from the server's plan. The shared
+/// score is always the fallback; the place's own layers are used only when the plan says they
+/// are ready and they share the shared score's timebase.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlaceMusic {
+    /// No plan, or one the client cannot use: the shared score, no ambience.
+    SharedScore,
+    /// The shared score with an existing ambience bed.
+    Fallback { ambience: Option<String> },
+    /// The place's generated layers (bed, motif, tension, combat) and ambience.
+    Ready {
+        key: String,
+        layers: [String; 4],
+        ambience: Option<String>,
+    },
 }
 
-/// The ambient family named by a server-provided scene asset path; unknown scenes get the
-/// neutral night bed.
-pub(crate) fn bed_of(asset: &str) -> Bed {
-    let name = asset.to_ascii_lowercase();
-    let has = |words: &[&str]| words.iter().any(|word| name.contains(word));
-    if has(&["market"]) {
-        Bed::Market
-    } else if has(&["pinewood", "forest", "trail"]) {
-        Bed::Forest
-    } else if has(&["windward", "mountain"]) {
-        Bed::Mountain
-    } else if has(&["library", "orrery"]) {
-        Bed::Library
-    } else if has(&["reedmoor", "marsh", "boardwalk"]) {
-        Bed::Marsh
-    } else if has(&["rookhill", "graveyard"]) {
-        Bed::Graveyard
-    } else if has(&["thistledown", "farm"]) {
-        Bed::Farm
-    } else if has(&["quay", "wharf", "harbor", "harbour", "dock"]) {
-        Bed::Harbour
+/// The route generated place sets are served from, and the one existing beds are served from.
+pub(crate) const GENERATED_MUSIC_ROUTE: &str = "/gameplay/music/";
+pub(crate) const SHARED_MUSIC_ROUTE: &str = "/assets/music/";
+/// Sample rate of the score and of every generated layer.
+pub(crate) const SAMPLE_RATE: u32 = 44_100;
+/// Frames in one 16-bar loop: 64 beats at 84 BPM.
+pub(crate) const LOOP_SAMPLES: u32 = 2_016_000;
+
+fn served_music_path(path: &str) -> bool {
+    (path.starts_with(GENERATED_MUSIC_ROUTE) || path.starts_with(SHARED_MUSIC_ROUTE))
+        && path.split('/').all(|segment| segment != "..")
+        && path.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
+/// Reads the server's plan. A set whose timebase differs from the shared score's, or whose
+/// paths are not served music paths, is not used: the explicit fallback of the tempo design.
+pub(crate) fn place_music_of(plan: Option<&rpc::PlaceMusicPlan>) -> PlaceMusic {
+    let Some(plan) = plan else {
+        return PlaceMusic::SharedScore;
+    };
+    let ambience = Some(plan.ambience_path.clone()).filter(|path| served_music_path(path));
+    let state = rpc::PlaceMusicState::try_from(plan.state).ok();
+    if state != Some(rpc::PlaceMusicState::Ready) {
+        return PlaceMusic::Fallback { ambience };
+    }
+    let same_timebase = plan.bpm == BPM as u32
+        && plan.sample_rate == SAMPLE_RATE
+        && plan.loop_samples == LOOP_SAMPLES;
+    let layers: Result<[String; 4], _> = plan.layer_paths.clone().try_into();
+    match layers {
+        Ok(layers)
+            if same_timebase
+                && layers
+                    .iter()
+                    .all(|path| path.starts_with(GENERATED_MUSIC_ROUTE))
+                && layers.iter().all(|path| served_music_path(path)) =>
+        {
+            PlaceMusic::Ready {
+                key: plan.spec_key.clone(),
+                layers,
+                ambience,
+            }
+        }
+        _ => PlaceMusic::Fallback { ambience },
+    }
+}
+
+/// The served path of a shared-score or bed track name.
+pub(crate) fn shared_path(track: &str) -> String {
+    format!("{SHARED_MUSIC_ROUTE}{track}")
+}
+
+/// The four layer paths to loop for `suite`. The place's own layers replace the main and finale
+/// suites once they are ready; a fight keeps the shared battle suite, because it never sounds
+/// like the room it interrupted. Until the place's layers are ready, and whenever they cannot be
+/// used, the shared score plays.
+pub(crate) fn wanted_layer_paths(suite: Suite, alternate: bool, place: &PlaceMusic) -> [String; 4] {
+    match (suite, place) {
+        (Suite::Battle, _) | (_, PlaceMusic::SharedScore | PlaceMusic::Fallback { .. }) => {
+            [0, 1, 2, 3].map(|layer| shared_path(layer_track(suite, layer, alternate)))
+        }
+        (_, PlaceMusic::Ready { layers, .. }) => layers.clone(),
+    }
+}
+
+/// The ambience path the place asks for, if any. Without one the score plays alone.
+pub(crate) fn ambience_path_of(place: &PlaceMusic) -> Option<&str> {
+    match place {
+        PlaceMusic::SharedScore => None,
+        PlaceMusic::Fallback { ambience } | PlaceMusic::Ready { ambience, .. } => {
+            ambience.as_deref()
+        }
+    }
+}
+
+/// When new layer voices should start so the swap lands on the loop grid: the next loop
+/// boundary of the layers that started together at `started_at`, pushed one loop later when
+/// that is closer than the crossfade plus the scheduling lead. The old voices fade out across
+/// the same crossfade the new ones fade in across.
+pub(crate) fn swap_boundary(
+    now: f64,
+    started_at: f64,
+    crossfade_seconds: f64,
+    lead_seconds: f64,
+) -> f64 {
+    let elapsed = (now - started_at).max(0.0);
+    let boundary = started_at + (elapsed / LOOP_SECONDS).ceil() * LOOP_SECONDS;
+    if boundary - now < crossfade_seconds + lead_seconds {
+        boundary + LOOP_SECONDS
     } else {
-        Bed::Night
+        boundary
     }
 }
 
@@ -958,19 +1083,181 @@ mod tests {
         assert_eq!(scene_layer_gains([0.7, 0.8, 0.9, 1.0], true)[3], 1.0);
     }
 
+    fn actor(name: &str, role: rpc::SceneRole, speaking: bool) -> rpc::SceneActor {
+        rpc::SceneActor {
+            name: name.to_owned(),
+            role: role as i32,
+            speaking,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn an_antagonist_speaker_raises_dialogue_and_is_a_reveal() {
-        let mut bandit = scene("");
-        bandit.speaker_portrait = "/assets/ui/generated/portrait-ant-bandit".to_owned();
+        let quiet = scene("");
+        let mut villain = scene("");
+        villain.cast = vec![
+            actor("Marek", rpc::SceneRole::Patron, false),
+            actor("Orsolya", rpc::SceneRole::Antagonist, true),
+        ];
         let talk = journey(rpc::JourneyPhase::Dialogue);
-        let friendly = tempo(&scene(""), &talk);
-        let hostile = tempo(&bandit, &talk);
+        let friendly = tempo(&quiet, &talk);
+        let hostile = tempo(&villain, &talk);
         assert_eq!(hostile.phase, Phase::Anticipation);
         assert!(hostile.intensity > friendly.intensity);
-        let before = facts_of(&scene(""), &talk, "");
-        let after = facts_of(&bandit, &talk, "");
+        let before = facts_of(&quiet, &talk, "");
+        let after = facts_of(&villain, &talk, "");
         assert_eq!(stinger_between(&before, &after), Some(Stinger::Reveal));
         assert_eq!(stinger_between(&after, &after), None);
+    }
+
+    #[test]
+    fn facts_never_inspect_asset_portrait_or_speaker_names() {
+        // Names that a keyword reader would take for a villain, on a cast that says otherwise.
+        let mut scene = scene("/assets/ui/generated/portrait-ant-bandit");
+        scene.speaker_portrait = "/assets/ui/generated/portrait-ant-bandit".to_owned();
+        scene.place = "Bandit Quay".to_owned();
+        scene.location_id = "place-bandit-market".to_owned();
+        scene.cast = vec![actor("Bandit", rpc::SceneRole::Bystander, true)];
+        let mut talk = journey(rpc::JourneyPhase::Dialogue);
+        talk.speaker = "Bandit".to_owned();
+        let facts = facts_of(&scene, &talk, "scene-lobby-harbor");
+        assert!(!facts.antagonist_speaking);
+        assert_eq!(facts.bed, Bed::Night);
+        // The same view with only the cast's role changed is the reveal.
+        scene.cast = vec![actor("Anyone", rpc::SceneRole::Antagonist, true)];
+        assert!(facts_of(&scene, &talk, "").antagonist_speaking);
+        // An antagonist on stage who is not the one speaking is no reveal.
+        scene.cast = vec![actor("Anyone", rpc::SceneRole::Antagonist, false)];
+        assert!(!facts_of(&scene, &talk, "").antagonist_speaking);
+    }
+
+    fn plan(state: rpc::PlaceMusicState, family: &str) -> rpc::PlaceMusicPlan {
+        rpc::PlaceMusicPlan {
+            spec_label: "relaxed warm day interior".to_owned(),
+            setting_family: family.to_owned(),
+            state: state as i32,
+            spec_key: "a".repeat(64),
+            layer_paths: ["bed", "motif", "tension", "combat"]
+                .map(|layer| format!("{GENERATED_MUSIC_ROUTE}{}/{layer}", "a".repeat(64)))
+                .to_vec(),
+            ambience_path: format!("{SHARED_MUSIC_ROUTE}amb-market"),
+            fallback_note: String::new(),
+            bpm: BPM as u32,
+            loop_samples: LOOP_SAMPLES,
+            sample_rate: SAMPLE_RATE,
+        }
+    }
+
+    #[test]
+    fn the_setting_family_comes_only_from_the_servers_plan_label() {
+        let quiet = scene("/assets/ui/generated/scene-salt-quay-arrival");
+        let room = journey(rpc::JourneyPhase::Room);
+        assert_eq!(facts_of(&quiet, &room, "").bed, Bed::Night);
+        let planned = plan(rpc::PlaceMusicState::Fallback, "market");
+        assert_eq!(
+            facts_with_plan(&quiet, &room, Some(&planned)).bed,
+            Bed::Market
+        );
+        let unknown = plan(rpc::PlaceMusicState::Fallback, "a quay at night");
+        assert_eq!(
+            facts_with_plan(&quiet, &room, Some(&unknown)).bed,
+            Bed::Night
+        );
+        for bed in Bed::ALL {
+            assert_eq!(Bed::from_label(bed.label()), Some(bed));
+        }
+    }
+
+    #[test]
+    fn a_ready_plan_with_the_shared_timebase_names_the_places_layers() {
+        let ready = plan(rpc::PlaceMusicState::Ready, "market");
+        match place_music_of(Some(&ready)) {
+            PlaceMusic::Ready {
+                layers, ambience, ..
+            } => {
+                assert!(layers[0].ends_with("/bed") && layers[3].ends_with("/combat"));
+                assert_eq!(ambience.as_deref(), Some("/assets/music/amb-market"));
+            }
+            other => panic!("expected the place's layers, got {other:?}"),
+        }
+        assert_eq!(place_music_of(None), PlaceMusic::SharedScore);
+    }
+
+    #[test]
+    fn a_fallback_plan_keeps_the_shared_score_with_its_chosen_bed() {
+        let fallback = plan(rpc::PlaceMusicState::Fallback, "market");
+        assert_eq!(
+            place_music_of(Some(&fallback)),
+            PlaceMusic::Fallback {
+                ambience: Some("/assets/music/amb-market".to_owned())
+            }
+        );
+        let mut silent = fallback;
+        silent.ambience_path.clear();
+        assert_eq!(
+            place_music_of(Some(&silent)),
+            PlaceMusic::Fallback { ambience: None }
+        );
+    }
+
+    #[test]
+    fn the_places_layers_replace_the_shared_score_once_ready_but_never_a_fight() {
+        let shared = wanted_layer_paths(Suite::Main, false, &PlaceMusic::SharedScore);
+        assert_eq!(shared[0], "/assets/music/score-bed");
+        assert_eq!(shared[3], "/assets/music/score-combat");
+        let fallback = PlaceMusic::Fallback {
+            ambience: Some("/assets/music/amb-market".to_owned()),
+        };
+        assert_eq!(wanted_layer_paths(Suite::Main, false, &fallback), shared);
+        let ready = place_music_of(Some(&plan(rpc::PlaceMusicState::Ready, "market")));
+        let own = wanted_layer_paths(Suite::Main, false, &ready);
+        assert_ne!(own, shared);
+        assert!(
+            own.iter()
+                .all(|path| path.starts_with(GENERATED_MUSIC_ROUTE))
+        );
+        assert_eq!(wanted_layer_paths(Suite::Finale, true, &ready), own);
+        let battle = wanted_layer_paths(Suite::Battle, false, &ready);
+        assert_eq!(battle[0], "/assets/music/b-score-bed");
+        assert_eq!(
+            ambience_path_of(&fallback),
+            Some("/assets/music/amb-market")
+        );
+        assert_eq!(ambience_path_of(&PlaceMusic::SharedScore), None);
+    }
+
+    #[test]
+    fn the_swap_to_the_places_layers_lands_on_a_loop_boundary_with_room_to_crossfade() {
+        let started = 10.0;
+        // Mid-loop: the next boundary is a whole number of loops after the start.
+        let boundary = swap_boundary(started + 5.0, started, TRANSITION_SECONDS + 1.0, 0.15);
+        assert!(((boundary - started) / LOOP_SECONDS).fract().abs() < 1e-9);
+        assert!(boundary - (started + 5.0) >= TRANSITION_SECONDS + 1.0 + 0.15);
+        // Too close to the boundary to fade across it: the following boundary is used.
+        let near = started + LOOP_SECONDS - 1.0;
+        let later = swap_boundary(near, started, 4.0, 0.15);
+        assert!((later - (started + 2.0 * LOOP_SECONDS)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn layers_that_do_not_share_the_timebase_or_route_are_not_used() {
+        let mut other_tempo = plan(rpc::PlaceMusicState::Ready, "market");
+        other_tempo.bpm = 96;
+        let mut other_loop = plan(rpc::PlaceMusicState::Ready, "market");
+        other_loop.loop_samples = LOOP_SAMPLES - 1;
+        let mut three_layers = plan(rpc::PlaceMusicState::Ready, "market");
+        three_layers.layer_paths.pop();
+        let mut escaped = plan(rpc::PlaceMusicState::Ready, "market");
+        escaped.layer_paths[1] = format!("{GENERATED_MUSIC_ROUTE}../../etc/passwd");
+        let mut elsewhere = plan(rpc::PlaceMusicState::Ready, "market");
+        elsewhere.layer_paths[2] = "https://example.invalid/track".to_owned();
+        for rejected in [other_tempo, other_loop, three_layers, escaped, elsewhere] {
+            assert!(matches!(
+                place_music_of(Some(&rejected)),
+                PlaceMusic::Fallback { .. }
+            ));
+        }
     }
 
     #[test]
@@ -993,52 +1280,6 @@ mod tests {
         assert_eq!(stinger_between(&victory, &victory), None);
         assert_eq!(tempo(&quiet, &lost).phase, Phase::Release);
         assert!(tempo(&quiet, &lost).intensity < tempo(&quiet, &won).intensity);
-    }
-
-    #[test]
-    fn location_family_comes_from_the_scene_asset_name() {
-        let cases = [
-            ("/assets/ui/generated/scene-salt-quay-arrival", Bed::Harbour),
-            (
-                "/assets/ui/generated/scene-lamplit-market-interior",
-                Bed::Market,
-            ),
-            (
-                "/assets/ui/generated/scene-pinewood-trail-arrival",
-                Bed::Forest,
-            ),
-            (
-                "/assets/ui/generated/scene-windward-pass-arrival",
-                Bed::Mountain,
-            ),
-            (
-                "/assets/ui/generated/scene-orrery-library-interior",
-                Bed::Library,
-            ),
-            (
-                "/assets/ui/generated/scene-reedmoor-boardwalk-arrival",
-                Bed::Marsh,
-            ),
-            (
-                "/assets/ui/generated/scene-rookhill-gate-interior",
-                Bed::Graveyard,
-            ),
-            (
-                "/assets/ui/generated/scene-thistledown-farm-arrival",
-                Bed::Farm,
-            ),
-            ("/assets/ui/generated/scene-courier-road", Bed::Night),
-            ("", Bed::Night),
-        ];
-        for (asset, expected) in cases {
-            assert_eq!(bed_of(asset), expected, "{asset}");
-        }
-        let facts = facts_of(
-            &scene(""),
-            &journey(rpc::JourneyPhase::Room),
-            "scene-lobby-harbor",
-        );
-        assert_eq!(facts.bed, Bed::Harbour);
     }
 
     #[test]
@@ -1068,27 +1309,6 @@ mod tests {
                 "{phase:?} fall"
             );
         }
-    }
-
-    #[test]
-    fn location_identity_wins_when_a_generated_scene_stem_is_generic() {
-        let mut scene = scene("assets/ui/generated/scene-place-lamp-room.webp");
-        scene.location_id = "salt-quay".to_owned();
-        scene.place = "The Salt Quay".to_owned();
-        assert_eq!(bed_for_scene(&scene, ""), Bed::Harbour);
-
-        scene.location_id = "orrery-library".to_owned();
-        scene.place.clear();
-        assert_eq!(bed_for_scene(&scene, ""), Bed::Library);
-    }
-
-    #[test]
-    fn display_asset_remains_the_last_location_hint() {
-        let scene = scene("");
-        assert_eq!(
-            bed_for_scene(&scene, "assets/ui/generated/scene-pinewood-trail-arrival"),
-            Bed::Forest
-        );
     }
 
     #[test]
