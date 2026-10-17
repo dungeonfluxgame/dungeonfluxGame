@@ -1,16 +1,20 @@
 use serde_json::json;
 
 use super::merchant_bargaining::{
-    HERO_TRADE_INSTRUCTIONS, HeroLine, HeroTradeIntent, HeroTradeMeaning, MerchantBuybackMemory,
-    MerchantMeaning, MerchantReplyCommitment, QuoteDecision, QuoteRejection, TradeDirection,
-    TradeExchange, TradeJudgement, TradeTerms, attach_buyback_memory, constrain_buyback_ceiling,
-    explicit_price_cp, fixed_price_purchase, hero_intent_from_judgement, hero_judgement_state,
-    hero_stated_price_cp, is_trade_dialogue_request, merchant_commitment_from_judgement,
-    quote_candidate, quote_candidate_for_item, quote_candidate_for_reply, quote_decision,
-    referenced_item_id, reply_context, reply_context_for_quote, revalidate_quote,
-    rules_hero_intent, rules_merchant_commitment, rules_quote_decision,
+    HERO_TRADE_INSTRUCTIONS, HeroLine, HeroTradeIntent, HeroTradeMeaning, ListedQuoteAction,
+    MerchantBuybackMemory, MerchantMeaning, MerchantReplyCommitment, QuoteDecision, QuoteRejection,
+    TradeDirection, TradeExchange, TradeJudgement, TradeTerms, attach_buyback_memory,
+    constrain_buyback_ceiling, discount_ask, discount_willingness, explicit_price_cp,
+    firm_buyback_quote_cp, fixed_price_purchase, hero_intent_from_judgement, hero_judgement_state,
+    hero_stated_price_cp, is_trade_dialogue_request, listed_quote_action,
+    merchant_commitment_from_judgement, quote_candidate, quote_candidate_for_item,
+    quote_candidate_for_reply, quote_decision, referenced_item_id, reply_context,
+    reply_context_for_quote, revalidate_quote, rules_hero_intent, rules_merchant_commitment,
+    rules_quote_decision, set_discount_offer, sold_out_purchase_item, sold_out_refusal,
+    trade_influence_applies,
 };
 use crate::gameplay::approach_model::JevUnavailable;
+use crate::gameplay::social::InfluenceWillingness;
 
 fn terms(direction: TradeDirection) -> TradeTerms {
     TradeTerms {
@@ -1599,5 +1603,321 @@ fn hero_lines_state_their_figure_past_an_article_and_merchant_lines_stay_strict(
         explicit_price_cp("They're a poor fit after all. I can do 1 gold for them."),
         Err(QuoteRejection::AmbiguousAmount),
         "a merchant commitment keeps the strict reading of an extra article"
+    );
+}
+
+#[test]
+fn sell_line_inside_the_buyback_terms_names_a_firm_figure_without_a_check() {
+    let terms = sold_out_sale_and_buyback();
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("sell_to_merchant").unwrap(),
+        words: "Marek, would you buy these traveler's clothes back from me for 1 gold?",
+    };
+
+    assert_eq!(
+        firm_buyback_quote_cp(&terms, "sigrun", "marek", line),
+        Some(("item-clothes-travelers".into(), 100)),
+        "a named price inside the 1 to 100 CP buyback terms is a firm figure, not an Influence ask"
+    );
+}
+
+#[test]
+fn sell_line_naming_no_price_takes_the_buyback_ceiling_and_the_reply_must_name_it() {
+    let terms = sold_out_sale_and_buyback();
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("sell_to_merchant").unwrap(),
+        words: "You sold them to me a minute ago, Marek. They're untouched. What will you give me for them?",
+    };
+
+    assert_eq!(
+        firm_buyback_quote_cp(&terms, "sigrun", "marek", line),
+        Some(("item-clothes-travelers".into(), 100)),
+        "a sell line that names no price is offered the terms price at once"
+    );
+    let context = reply_context(
+        &terms,
+        "sigrun",
+        "marek",
+        line,
+        Some("item-clothes-travelers"),
+        &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+    )
+    .expect("the buyback line has a trade context");
+    let buyback = context["available_trades"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["direction"] == "merchant_buys")
+        .expect("the buyback entry is in the context");
+    assert_eq!(buyback["hero_offer_cp"], 100);
+    assert!(
+        context["negotiation_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule.as_str().is_some_and(|rule| {
+                rule.contains("never ask to inspect or judge the item's condition first")
+                    && rule.contains("No inspection or condition check happens in this game")
+            })),
+        "the merchant must name the buyback price and never ask to inspect the item"
+    );
+}
+
+#[test]
+fn sell_line_naming_a_price_outside_the_buyback_terms_gets_no_firm_figure() {
+    let terms = sold_out_sale_and_buyback();
+    let outside = HeroLine {
+        intent: HeroTradeIntent::from_label("sell_to_merchant").unwrap(),
+        words: "Marek, would you buy these traveler's clothes back from me for 5 gold?",
+    };
+    let ask_price = HeroLine {
+        intent: HeroTradeIntent::from_label("ask_price").unwrap(),
+        words: "What are you asking for the traveler's clothes?",
+    };
+
+    assert_eq!(
+        firm_buyback_quote_cp(&terms, "sigrun", "marek", outside),
+        None
+    );
+    assert_eq!(
+        firm_buyback_quote_cp(&terms, "sigrun", "marek", ask_price),
+        None
+    );
+}
+
+#[test]
+fn discount_ask_below_the_listing_offers_the_named_price_held_within_the_bounds() {
+    let terms = [travelers_clothes_sale()];
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+        words: "Would you take 160 copper for the traveler's clothes?",
+    };
+    let ask = discount_ask(&terms, "sigrun", "marek", line)
+        .expect("a named price below the listing is a discount ask");
+
+    assert_eq!(ask.item_id, "item-clothes-travelers");
+    assert_eq!(ask.named_cp, 160);
+    assert_eq!(ask.listed_cp, 200);
+    assert_eq!(ask.offer_cp(), 160);
+
+    let below_bounds = HeroLine {
+        intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+        words: "Would you take 50 copper for the traveler's clothes?",
+    };
+    let floor = discount_ask(&terms, "sigrun", "marek", below_bounds)
+        .expect("a bid under the lowest price is still a discount ask");
+    assert_eq!(
+        floor.offer_cp(),
+        100,
+        "the merchant may not come down below the lowest price"
+    );
+}
+
+#[test]
+fn discount_ask_at_the_listing_or_on_a_sold_out_sale_is_not_a_discount_ask() {
+    let terms = [travelers_clothes_sale()];
+    let at_listing = HeroLine {
+        intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+        words: "Would you take 200 copper for the traveler's clothes?",
+    };
+    assert_eq!(discount_ask(&terms, "sigrun", "marek", at_listing), None);
+
+    let mut sold_out = travelers_clothes_sale();
+    sold_out.available = false;
+    sold_out.stock_units = 0;
+    let discount = HeroLine {
+        intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+        words: "Would you take 160 copper for the traveler's clothes?",
+    };
+    assert_eq!(
+        discount_ask(&[sold_out], "sigrun", "marek", discount),
+        None,
+        "a sold-out item cannot be discounted"
+    );
+}
+
+#[test]
+fn sold_out_sale_item_names_no_price_and_no_hero_figure_in_the_reply_context() {
+    let mut sold_out = travelers_clothes_sale();
+    sold_out.available = false;
+    sold_out.stock_units = 0;
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("ask_price").unwrap(),
+        words: "Marek, I'd like a set of those traveler's clothes too. Same price, two gold?",
+    };
+    let context = reply_context(
+        &[sold_out],
+        "sigrun",
+        "marek",
+        line,
+        None,
+        &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+    )
+    .expect("the sold-out item is named, so the merchant has a trade context");
+
+    let entry = &context["available_trades"].as_array().unwrap()[0];
+    assert_eq!(entry["direction"], "merchant_sells");
+    assert_eq!(entry["sold_out"], true);
+    assert_eq!(entry["available"], false);
+    assert!(entry.get("listed_price_cp").is_none());
+    assert!(entry.get("lowest_price_cp").is_none());
+    assert!(entry.get("hero_offer_cp").is_none());
+    assert!(
+        context["negotiation_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule.as_str().is_some_and(|rule| {
+                rule.contains("sold_out") && rule.contains("accept no payment")
+            })),
+        "a sold-out item must be refused as sold out, never sold for coin"
+    );
+}
+
+#[test]
+fn purchase_of_a_sold_out_item_is_named_as_sold_out_and_in_stock_items_are_not() {
+    let mut sold_out = travelers_clothes_sale();
+    sold_out.available = false;
+    sold_out.stock_units = 0;
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("buy_now").unwrap(),
+        words: "Good, I'll take them. Here's two gold.",
+    };
+
+    assert_eq!(
+        sold_out_purchase_item(std::slice::from_ref(&sold_out), "sigrun", "marek", line),
+        Some("traveler's clothes".into()),
+        "a purchase of the only sold-out item is refused as sold out"
+    );
+    assert_eq!(
+        fixed_price_purchase(std::slice::from_ref(&sold_out), "sigrun", line),
+        None,
+        "no purchase is committed for a sold-out item"
+    );
+    assert_eq!(
+        sold_out_purchase_item(&[travelers_clothes_sale()], "sigrun", "marek", line),
+        None,
+        "an item in stock is not reported as sold out"
+    );
+}
+
+#[test]
+fn a_bare_amount_counteroffer_is_recognised_so_a_refusal_cannot_withdraw_the_listed_quote() {
+    let counter = quote_decision(
+        HeroTradeIntent::from_label("ask_price").unwrap(),
+        "Would you take 160?",
+        200,
+    );
+    assert_eq!(
+        counter,
+        QuoteDecision::Counteroffer,
+        "a bare amount against a live quote is a counteroffer, not an unclear line"
+    );
+    assert_eq!(
+        listed_quote_action(counter, true),
+        ListedQuoteAction::Keep,
+        "the merchant refusing a counteroffer must not withdraw the listed quote"
+    );
+}
+
+#[test]
+fn a_refused_counteroffer_keeps_the_listed_quote_open_for_an_acceptance_at_its_price() {
+    assert_eq!(
+        listed_quote_action(QuoteDecision::Counteroffer, true),
+        ListedQuoteAction::Keep
+    );
+    let accept = quote_decision(
+        HeroTradeIntent::from_label("accept_quote").unwrap(),
+        "Fine, I'll take it at two gold.",
+        200,
+    );
+    assert_eq!(accept, QuoteDecision::Accept);
+    assert_eq!(listed_quote_action(accept, false), ListedQuoteAction::Keep);
+    assert_eq!(
+        listed_quote_action(QuoteDecision::Decline, false),
+        ListedQuoteAction::HeroDeclines,
+        "only an explicit decline closes the listed quote as the hero's"
+    );
+}
+
+#[test]
+fn a_firm_buyback_figure_skips_the_influence_check_even_for_an_influence_attempt() {
+    assert!(
+        trade_influence_applies(true, false, false),
+        "an ordinary influence attempt still rolls"
+    );
+    assert!(
+        !trade_influence_applies(true, true, false),
+        "a firm buyback figure is never an Influence check"
+    );
+    assert!(
+        trade_influence_applies(false, false, true),
+        "a discount ask rolls even when the approach is not an influence attempt"
+    );
+    assert!(!trade_influence_applies(false, false, false));
+}
+
+#[test]
+fn a_discount_ask_is_hesitant_unless_the_merchant_is_already_unwilling() {
+    assert_eq!(
+        discount_willingness(Some(InfluenceWillingness::Willing)),
+        InfluenceWillingness::Hesitant
+    );
+    assert_eq!(discount_willingness(None), InfluenceWillingness::Hesitant);
+    assert_eq!(
+        discount_willingness(Some(InfluenceWillingness::Unwilling)),
+        InfluenceWillingness::Unwilling
+    );
+}
+
+#[test]
+fn a_successful_discount_check_offers_the_bounded_figure_and_a_failure_keeps_the_listed_price() {
+    let terms = [travelers_clothes_sale()];
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+        words: "Would you take 160 copper for the traveler's clothes?",
+    };
+    let ask = discount_ask(&terms, "sigrun", "marek", line).expect("a discount ask");
+    let context = || {
+        json!({"available_trades": [{
+            "item": "traveler's clothes",
+            "direction": "merchant_sells",
+            "listed_price_cp": 200,
+            "hero_offer_cp": 160,
+        }]})
+    };
+
+    let mut success = context();
+    set_discount_offer(&mut success, &ask, true);
+    assert_eq!(success["available_trades"][0]["hero_offer_cp"], 160);
+    assert_eq!(success["available_trades"][0]["listed_price_cp"], 200);
+
+    let mut failure = context();
+    set_discount_offer(&mut failure, &ask, false);
+    assert!(
+        failure["available_trades"][0]
+            .get("hero_offer_cp")
+            .is_none(),
+        "a failed check leaves no figure for the merchant to state"
+    );
+    assert_eq!(failure["available_trades"][0]["listed_price_cp"], 200);
+}
+
+#[test]
+fn a_purchase_of_a_sold_out_item_gets_a_plain_sold_out_refusal_naming_no_price() {
+    let mut sold_out = travelers_clothes_sale();
+    sold_out.available = false;
+    sold_out.stock_units = 0;
+    let line = HeroLine {
+        intent: HeroTradeIntent::from_label("accept_quote").unwrap(),
+        words: "Good, I'll take them. Here's two gold.",
+    };
+    let refusal = sold_out_refusal(&[sold_out], "sigrun", "marek", line)
+        .expect("a purchase of the sold-out item is refused");
+
+    assert!(refusal.contains("sold out"), "{refusal}");
+    assert!(
+        !refusal.chars().any(|c| c.is_ascii_digit()),
+        "the refusal names no price: {refusal}"
     );
 }

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::living_scene::SceneTradeQuote;
 use crate::gameplay::approach_model::JevUnavailable;
+use crate::gameplay::social::InfluenceWillingness;
 
 /// Use the inventory owner's canonical direction and terms to avoid duplicating price bounds.
 pub(in crate::gameplay) type TradeDirection = super::living_scene::SceneTradeDirection;
@@ -892,6 +893,220 @@ pub(in crate::gameplay) fn quote_candidate_for_item(
     )
 }
 
+/// A firm buyback figure: a hero's sell line that names no price, or names a price inside the
+/// merchant's standing buyback terms for one item. The merchant states this figure at once, so it
+/// is never an Influence check. Returns the item and the figure, or `None` for any other line.
+pub(in crate::gameplay) fn firm_buyback_quote_cp(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    line: HeroLine<'_>,
+) -> Option<(String, u32)> {
+    if line.intent.meaning != HeroTradeMeaning::SellToMerchant
+        && line.intent.direction != Some(TradeDirection::HeroSells)
+    {
+        return None;
+    }
+    let buybacks: Vec<&TradeTerms> = terms
+        .iter()
+        .filter(|term| {
+            term.direction == TradeDirection::HeroSells
+                && valid_terms(term)
+                && term.stock_units > 0
+                && hero_id_for_terms(term) == authenticated_hero_id
+                && merchant_id_for_terms(term) == addressed_merchant_id
+        })
+        .collect();
+    let term = sole_or_named_term(&buybacks, line.words)?;
+    let price_cp = match hero_stated_price_cp(line.words) {
+        Ok(price_cp) if (term.minimum_price_cp..=term.maximum_price_cp).contains(&price_cp) => {
+            price_cp
+        }
+        Ok(_) => return None,
+        Err(QuoteRejection::MissingAmount) => term.maximum_price_cp,
+        Err(_) => return None,
+    };
+    Some((term.item_id.clone(), price_cp))
+}
+
+/// A discount ask: a hero's line names a price below the listed price of one item the merchant
+/// sells. Moving the merchant on it is an Influence check. A success lets the merchant come down to
+/// the named figure held within the price bounds; a failure keeps the listed price.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct DiscountAsk {
+    pub(in crate::gameplay) item_id: String,
+    pub(in crate::gameplay) item_name: String,
+    pub(in crate::gameplay) named_cp: u32,
+    pub(in crate::gameplay) listed_cp: u32,
+    pub(in crate::gameplay) lowest_cp: u32,
+}
+
+impl DiscountAsk {
+    /// The figure the merchant may come down to after a successful check: the named amount, or the
+    /// lowest price when the hero names less. Always below the listed price.
+    pub(in crate::gameplay) fn offer_cp(&self) -> u32 {
+        self.named_cp.max(self.lowest_cp)
+    }
+}
+
+/// The discount a hero's line asks for, when the line names a price below one sale listing that the
+/// merchant can make now. Returns `None` for a line at or above the listing, for a sold-out item,
+/// and for any line that names no price.
+pub(in crate::gameplay) fn discount_ask(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    line: HeroLine<'_>,
+) -> Option<DiscountAsk> {
+    let sales: Vec<&TradeTerms> = terms
+        .iter()
+        .filter(|term| {
+            term.direction == TradeDirection::HeroBuys
+                && valid_terms(term)
+                && term.available
+                && term.stock_units > 0
+                && hero_id_for_terms(term) == authenticated_hero_id
+                && merchant_id_for_terms(term) == addressed_merchant_id
+        })
+        .collect();
+    let term = sole_or_named_term(&sales, line.words)?;
+    let named_cp = hero_stated_price_cp(line.words).ok()?;
+    (named_cp < term.maximum_price_cp).then(|| DiscountAsk {
+        item_id: term.item_id.clone(),
+        item_name: term.item_name.clone(),
+        named_cp,
+        listed_cp: term.maximum_price_cp,
+        lowest_cp: term.minimum_price_cp,
+    })
+}
+
+/// The one candidate term the hero's words name, or the only candidate when the words name none.
+fn sole_or_named_term<'a>(candidates: &[&'a TradeTerms], words: &str) -> Option<&'a TradeTerms> {
+    let named: Vec<&'a TradeTerms> = candidates
+        .iter()
+        .copied()
+        .filter(|term| mentions_item(term, words))
+        .collect();
+    match (named.as_slice(), candidates) {
+        ([only], _) => Some(*only),
+        ([], [only]) => Some(*only),
+        _ => None,
+    }
+}
+
+/// The sale item a hero's purchase line names when the merchant no longer holds it. The merchant
+/// must refuse such a purchase as sold out: a price is never stated, and no payment changes hands.
+/// Returns the item's name, or `None` when the line is not a purchase or the item is in stock.
+pub(in crate::gameplay) fn sold_out_purchase_item(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    line: HeroLine<'_>,
+) -> Option<String> {
+    if !matches!(
+        line.intent.meaning,
+        HeroTradeMeaning::BuyNow | HeroTradeMeaning::OfferPrice | HeroTradeMeaning::AcceptQuote
+    ) {
+        return None;
+    }
+    let sold_out: Vec<&TradeTerms> = terms
+        .iter()
+        .filter(|term| {
+            term.direction == TradeDirection::HeroBuys
+                && valid_terms(term)
+                && (!term.available || term.stock_units == 0)
+                && hero_id_for_terms(term) == authenticated_hero_id
+                && merchant_id_for_terms(term) == addressed_merchant_id
+        })
+        .collect();
+    sole_or_named_term(&sold_out, line.words).map(|term| term.item_name.clone())
+}
+
+/// What a hero line and the merchant's reply do to the listed quote. Only an explicit decline closes
+/// the quote as the hero's. A counteroffer, and the merchant refusing it, leave the listed price
+/// standing so the hero can still accept it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) enum ListedQuoteAction {
+    HeroDeclines,
+    MerchantWithdraws,
+    Keep,
+}
+
+/// The listed quote's fate, from the hero's decision on the typed words and whether the merchant's
+/// reply refuses. The decision is read from the typed line, never from display text.
+pub(in crate::gameplay) fn listed_quote_action(
+    hero_decision: QuoteDecision,
+    merchant_refuses: bool,
+) -> ListedQuoteAction {
+    match hero_decision {
+        QuoteDecision::Decline => ListedQuoteAction::HeroDeclines,
+        QuoteDecision::Counteroffer | QuoteDecision::Accept => ListedQuoteAction::Keep,
+        QuoteDecision::Unclear if merchant_refuses => ListedQuoteAction::MerchantWithdraws,
+        QuoteDecision::Unclear => ListedQuoteAction::Keep,
+    }
+}
+
+/// Whether a trade turn runs the Influence check: an influence attempt or a discount ask, and never a
+/// firm buyback figure, which the merchant states at once.
+pub(in crate::gameplay) fn trade_influence_applies(
+    influence_attempt: bool,
+    firm_buyback: bool,
+    discount: bool,
+) -> bool {
+    (influence_attempt || discount) && !firm_buyback
+}
+
+/// The willingness a discount ask runs under: Hesitant, unless the NPC is already unwilling.
+pub(in crate::gameplay) fn discount_willingness(
+    appraised: Option<InfluenceWillingness>,
+) -> InfluenceWillingness {
+    match appraised {
+        Some(InfluenceWillingness::Unwilling) => InfluenceWillingness::Unwilling,
+        _ => InfluenceWillingness::Hesitant,
+    }
+}
+
+/// Sets the merchant's figure on a discount ask's sale entry. A successful check puts the offer on
+/// it; otherwise no figure is left there, so the listed price stands.
+pub(in crate::gameplay) fn set_discount_offer(
+    facts: &mut Value,
+    ask: &DiscountAsk,
+    succeeded: bool,
+) {
+    let Some(entries) = facts
+        .get_mut("available_trades")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for entry in entries
+        .iter_mut()
+        .filter(|entry| entry.get("direction").and_then(Value::as_str) == Some("merchant_sells"))
+    {
+        let Some(object) = entry.as_object_mut() else {
+            continue;
+        };
+        object.remove("hero_offer_cp");
+        if succeeded && object.get("item").and_then(Value::as_str) == Some(ask.item_name.as_str()) {
+            object.insert("hero_offer_cp".into(), json!(ask.offer_cp()));
+        }
+    }
+}
+
+/// The plain refusal for a purchase of an item the merchant no longer holds. It says the item is
+/// sold out and names no price, so no payment can be accepted for it in words.
+pub(in crate::gameplay) fn sold_out_refusal(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    line: HeroLine<'_>,
+) -> Option<String> {
+    let item = sold_out_purchase_item(terms, authenticated_hero_id, addressed_merchant_id, line)?;
+    Some(format!(
+        "Sorry, I have none of the {item} left. They're sold out."
+    ))
+}
+
 /// Narrow a canonical buyback ceiling to below the last committed purchase price. The
 /// inventory layer still validates its own item, purse, and canonical maximum; this only
 /// prevents a buyback quote from offering the hero the same or more than the merchant received.
@@ -1009,7 +1224,11 @@ pub(in crate::gameplay) fn quote_decision(
     if quoted_price_cp == 0 {
         return QuoteDecision::Unclear;
     }
-    match explicit_price_cp(words) {
+    let stated = match explicit_price_cp(words) {
+        Err(QuoteRejection::MissingAmount) => bare_amount_cp(words),
+        other => other,
+    };
+    match stated {
         Ok(price_cp) if price_cp != quoted_price_cp => return QuoteDecision::Counteroffer,
         Err(QuoteRejection::AmbiguousAmount | QuoteRejection::InvalidAmount) => {
             return QuoteDecision::Unclear;
@@ -1020,6 +1239,22 @@ pub(in crate::gameplay) fn quote_decision(
         HeroTradeMeaning::AcceptQuote => QuoteDecision::Accept,
         HeroTradeMeaning::DeclineQuote => QuoteDecision::Decline,
         _ => QuoteDecision::Unclear,
+    }
+}
+
+/// A bare whole number with no currency unit ("Would you take 160?") is read as the in-game
+/// currency amount against a live quote. Only one such number counts: a line with several numbers,
+/// or a decimal, names no single amount.
+fn bare_amount_cp(words: &str) -> Result<u32, QuoteRejection> {
+    let numbers: Vec<&str> = words
+        .split(|c: char| !(c.is_ascii_digit() || c == ','))
+        .filter(|token| token.starts_with(|c: char| c.is_ascii_digit()))
+        .collect();
+    match numbers.as_slice() {
+        [number] => {
+            parse_grouped_integer(number.trim_end_matches(',')).ok_or(QuoteRejection::InvalidAmount)
+        }
+        _ => Err(QuoteRejection::MissingAmount),
     }
 }
 
@@ -1240,6 +1475,11 @@ fn reply_context_with_quote(
     // live quote fixes that direction, otherwise the hero's typed reading does.
     let named_cp = hero_stated_price_cp(typed_words).ok();
     let offer_direction = live_quote.map_or(line.intent.direction, |quote| Some(quote.direction));
+    // A sell line inside the buyback terms, or naming no price, is a firm figure for its item.
+    let firm_buyback = live_quote
+        .is_none()
+        .then(|| firm_buyback_quote_cp(terms, authenticated_hero_id, merchant_id, line))
+        .flatten();
     let single_sale_entry = available
         .iter()
         .filter(|term| term.direction == TradeDirection::HeroBuys)
@@ -1264,7 +1504,11 @@ fn reply_context_with_quote(
                 TradeDirection::HeroBuys => single_sale_entry,
                 TradeDirection::HeroSells => single_buyback_entry,
             };
-            if term.direction == TradeDirection::HeroBuys {
+            let in_stock = term.available && term.stock_units > 0;
+            if term.direction == TradeDirection::HeroBuys && !in_stock {
+                // Sold out: the entry names no price, so the merchant has none to state.
+                entry["sold_out"] = json!(true);
+            } else if term.direction == TradeDirection::HeroBuys {
                 entry["listed_price_cp"] = json!(term.maximum_price_cp);
                 entry["lowest_price_cp"] = json!(term.minimum_price_cp);
             } else {
@@ -1273,11 +1517,18 @@ fn reply_context_with_quote(
             }
             if let Some(cp) = named_cp.filter(|_| {
                 offer_direction.is_none_or(|direction| direction == term.direction)
+                    && (term.direction == TradeDirection::HeroSells || in_stock)
                     && (mentions_item(term, typed_words)
                         || (single_entry
                             && (live_quote.is_some() || line.intent.refers_to_active_item)))
             }) {
                 entry["hero_offer_cp"] = json!(cp);
+            }
+            if let Some((item_id, price_cp)) = firm_buyback.as_ref()
+                && term.direction == TradeDirection::HeroSells
+                && term.item_id == *item_id
+            {
+                entry["hero_offer_cp"] = json!(price_cp);
             }
             entry["available"] = json!(term.available);
             entry["stock_units"] = json!(term.stock_units);
@@ -1308,6 +1559,8 @@ fn reply_context_with_quote(
             "A spoken offer is only a proposal. It does not buy, sell, transfer, or charge anything until the player explicitly accepts that exact live quote.",
             "For merchant_buys, a bid is one exact in-game currency amount from minimum_bid_cp to maximum_bid_cp inclusive, and the server enforces the same bounds. When hero_offer_cp is present on a merchant_buys entry, you must answer that figure: if it lies within that range, state that exact amount as your present, unconditional bid; if it is above maximum_bid_cp or below minimum_bid_cp, decline that figure and counter with one bid within the range. If recent_committed_purchase is present, say briefly that you sold this item recently. Never ask the player what they propose, or for any figure, once hero_offer_cp is present.",
             "A merchant_buys entry with available false cannot be bought back now. Decline plainly and name no bid.",
+            "Buyback: when the hero offers to sell an item and a merchant_buys entry gives a bid range, name one exact bid from minimum_bid_cp to maximum_bid_cp in this reply: the hero_offer_cp figure when present, otherwise the entry's maximum_bid_cp. Unless the listener facts say you refuse this request, never defer the price, never ask to inspect or judge the item's condition first, and never say you cannot name a price. No inspection or condition check happens in this game.",
+            "A merchant_sells entry marked sold_out is not in stock. Say plainly that the item is sold out, name no price for it, and accept no payment, bid or purchase for it, even when the hero offers exact coin. Nothing changes hands for an item the merchant does not hold.",
             "You may answer naturally, make one counteroffer, or decline. Keep any explanation brief and professional, and do not reveal private character facts unless the listener-safe facts say the character has shared them.",
         ],
     }))

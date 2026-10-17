@@ -22,8 +22,8 @@ use super::{
     wire,
 };
 use journey::merchant_bargaining::{
-    HeroLine, HeroTradeIntent, HeroTradeMeaning, MerchantMeaning, MerchantReplyCommitment,
-    QuoteDecision, QuoteRejection, TradeExchange, TradeJudgement,
+    HeroLine, HeroTradeIntent, HeroTradeMeaning, ListedQuoteAction, MerchantMeaning,
+    MerchantReplyCommitment, QuoteDecision, QuoteRejection, TradeExchange, TradeJudgement,
 };
 
 const MAXIMUM_MESSAGE_BYTES: usize = 8192;
@@ -367,6 +367,8 @@ pub(super) struct QuoteClosureEvidence {
     source_line_sequence: u64,
     player_line_sequence: Option<u64>,
     hero: HeroTradeIntent,
+    /// The hero's decision on the listed quote, read from the typed words.
+    hero_decision: QuoteDecision,
     merchant: Option<MerchantReplyCommitment>,
 }
 
@@ -2211,45 +2213,84 @@ impl Service {
             let shown = self.npc_voice.display_line(&context).await;
             let player_line = context.publish_typed_line(&self.table_log, &shown);
             let mut closed_prior_quote = false;
-            if let (Some(quote), Some(line)) =
-                (context.pending_quote.as_ref(), player_line.as_ref())
-            {
-                let decision = journey::merchant_bargaining::quote_decision(
+            // The listed quote's fate is read from the typed words that Jev's judgement read, never
+            // from the display line: cleanup can reword a bare amount, and a lost counteroffer would
+            // let a later refusal withdraw the listed quote.
+            let listed_decision = context.pending_quote.as_ref().map(|quote| {
+                journey::merchant_bargaining::quote_decision(
                     hero_trade,
-                    &line.text,
+                    &context.typed_words,
                     quote.price_cp,
-                );
-                if matches!(
-                    decision,
-                    QuoteDecision::Decline | QuoteDecision::Counteroffer
-                ) {
-                    match self
-                        .close_merchant_quote(
-                            credential,
-                            &quote.quote_id,
-                            journey::living_scene::MerchantQuoteClosureReason::HeroDeclined,
-                            QuoteClosureEvidence {
-                                source_line_sequence: line.sequence,
-                                player_line_sequence: None,
-                                hero: hero_trade,
-                                merchant: None,
-                            },
-                        )
-                        .await
-                    {
-                        Ok(_) => {
-                            closed_prior_quote = true;
-                            response.revision =
-                                Some(wire::revision(self.updates.borrow().basis().revision));
-                        }
-                        Err(error) => {
-                            actor::record_unavailable("merchant-quote-decline", error.message())
-                        }
+                )
+            });
+            if let (Some(quote), Some(line), Some(decision)) = (
+                context.pending_quote.as_ref(),
+                player_line.as_ref(),
+                listed_decision,
+            ) && journey::merchant_bargaining::listed_quote_action(decision, false)
+                == ListedQuoteAction::HeroDeclines
+            {
+                match self
+                    .close_merchant_quote(
+                        credential,
+                        &quote.quote_id,
+                        journey::living_scene::MerchantQuoteClosureReason::HeroDeclined,
+                        QuoteClosureEvidence {
+                            source_line_sequence: line.sequence,
+                            player_line_sequence: None,
+                            hero: hero_trade,
+                            hero_decision: decision,
+                            merchant: None,
+                        },
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        closed_prior_quote = true;
+                        response.revision =
+                            Some(wire::revision(self.updates.borrow().basis().revision));
+                    }
+                    Err(error) => {
+                        actor::record_unavailable("merchant-quote-decline", error.message())
                     }
                 }
             }
+            // A purchase of an item the merchant no longer holds is refused as sold out. No reply
+            // is generated for it, so no payment can be accepted in words.
+            let sold_out = if context.pending_quote.is_none() {
+                let current = self.updates.borrow().clone();
+                match journey::living_scene::merchant_trade_terms(&current, &context.hero_id) {
+                    Ok(terms) => journey::merchant_bargaining::sold_out_refusal(
+                        &terms,
+                        &context.hero_id,
+                        &context.actor_id,
+                        HeroLine {
+                            intent: hero_trade,
+                            words: &context.typed_words,
+                        },
+                    ),
+                    Err(error) => {
+                        actor::record_unavailable("merchant-sold-out", &format!("{error:?}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let _thinking = self.table_log.reply_pending(&context.speaker);
-            if let Some(exchange) = self
+            if let Some(refusal) = sold_out {
+                if let Some(line) = player_line.as_ref() {
+                    self.table_log.push_actor(
+                        &context.actor_id,
+                        &context.speaker,
+                        rpc::TableRole::Npc,
+                        line.hero_index,
+                        rpc::TableKind::Speech,
+                        &refusal,
+                    );
+                }
+                response.npc_reply = refusal;
+            } else if let Some(exchange) = self
                 .npc_voice
                 .converse_report(context, &self.table_log)
                 .await
@@ -2443,6 +2484,10 @@ impl Service {
                     && !exchange.private
                     && merchant_commitment
                         .is_some_and(|merchant| merchant.meaning == MerchantMeaning::Refuses)
+                    && let Some(hero_decision) = listed_decision.filter(|decision| {
+                        journey::merchant_bargaining::listed_quote_action(*decision, true)
+                            == ListedQuoteAction::MerchantWithdraws
+                    })
                     && let (Some(source_line_sequence), Some(player_line)) =
                         (exchange.source_line_sequence, player_line.as_ref())
                 {
@@ -2455,6 +2500,7 @@ impl Service {
                                 source_line_sequence,
                                 player_line_sequence: Some(player_line.sequence),
                                 hero: hero_trade,
+                                hero_decision,
                                 merchant: merchant_commitment,
                             },
                         )
@@ -2910,6 +2956,7 @@ impl actor::Actor {
             source_line_sequence,
             player_line_sequence,
             hero: hero_trade,
+            hero_decision,
             merchant: merchant_commitment,
         } = evidence;
         if self.fenced || self.owner.has_uncertain_operation() {
@@ -2938,19 +2985,12 @@ impl actor::Actor {
         let (actor_id, source_text) = match reason {
             journey::living_scene::MerchantQuoteClosureReason::HeroDeclined => {
                 let latest_hero = self.table_log.latest_hero_speech_after(0);
-                let decision = journey::merchant_bargaining::quote_decision(
-                    hero_trade,
-                    &line.text,
-                    quote.price_cp,
-                );
                 if latest_hero.as_ref().map(|line| line.sequence) != Some(source_line_sequence)
                     || line.role != rpc::TableRole::Hero as i32
                     || line.kind != rpc::TableKind::Speech as i32
                     || line.speaker != hero.chars().take(48).collect::<String>()
-                    || !matches!(
-                        decision,
-                        QuoteDecision::Decline | QuoteDecision::Counteroffer
-                    )
+                    || journey::merchant_bargaining::listed_quote_action(hero_decision, false)
+                        != ListedQuoteAction::HeroDeclines
                 {
                     return Err(Status::failed_precondition(
                         "hero line does not decline or counter the current quote",
@@ -3011,6 +3051,8 @@ impl actor::Actor {
                     || line.actor_id != merchant_id.as_str()
                     || !latest_npc_matches
                     || !player_was_negotiating
+                    || journey::merchant_bargaining::listed_quote_action(hero_decision, true)
+                        != ListedQuoteAction::MerchantWithdraws
                     || merchant.meaning != MerchantMeaning::Refuses
                     || replacement.is_ok()
                 {
@@ -3594,6 +3636,24 @@ impl actor::Actor {
                             }
                         }
                     }
+                    // The firm buyback figure skips the Influence roll; a discount ask runs it. Both are
+                    // read from the same terms and hero line the merchant's context is built from.
+                    reply.firm_buyback = if quote_followup.is_none() {
+                        journey::merchant_bargaining::firm_buyback_quote_cp(
+                            &terms,
+                            &hero_id,
+                            &reply.actor_id,
+                            line,
+                        )
+                    } else {
+                        None
+                    };
+                    reply.discount_ask = journey::merchant_bargaining::discount_ask(
+                        &terms,
+                        &hero_id,
+                        &reply.actor_id,
+                        line,
+                    );
                     let mut trade_facts = if let Some(quote) = quote_followup.as_ref() {
                         journey::merchant_bargaining::reply_context_for_quote(
                             &terms,

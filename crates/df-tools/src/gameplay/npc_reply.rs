@@ -340,7 +340,7 @@ impl HesitantRoll {
         match self {
             Self::Rolled(result) => {
                 let meaning = if self.succeeded() {
-                    "The check succeeded: you are willing to hear the hero out and negotiate on the terms you already have. You name no new price and promise nothing the server does not allow."
+                    "The check succeeded: you are willing to hear the hero out and negotiate on the terms you already have. Name no new price, except that a merchant_sells entry with hero_offer_cp in the listed facts may be answered with exactly that figure as your present price. Promise nothing else the server does not allow."
                 } else {
                     "The check failed: you will not move on this request. Decline in character and offer no new price or concession."
                 };
@@ -493,6 +493,12 @@ pub(super) struct NpcReplyContext {
     /// The server's inputs for a hesitant Influence check: the hero's sheet and this reply's dice.
     /// `None` when the sheet could not be read, and the reply then treats the NPC as reluctant.
     pub(super) influence_check: Option<InfluenceCheckInput>,
+    /// A firm buyback figure in this turn's hero line: the item and the figure. The merchant states
+    /// it at once, so the turn runs no Influence check.
+    pub(super) firm_buyback: Option<(String, u32)>,
+    /// A discount ask in this turn's hero line. It runs a Hesitant Influence check, and a success
+    /// lets the merchant come down to its offer within the listed bounds.
+    pub(super) discount_ask: Option<super::journey::merchant_bargaining::DiscountAsk>,
 }
 
 impl NpcReplyContext {
@@ -1109,6 +1115,8 @@ impl NpcReplyContext {
             })),
             private_release: None,
             influence_check: None,
+            firm_buyback: None,
+            discount_ask: None,
         })
     }
 
@@ -1298,6 +1306,8 @@ impl NpcReplyContext {
             observed_revision: revision_key(view),
             private_release,
             influence_check: None,
+            firm_buyback: None,
+            discount_ask: None,
         })
     }
 
@@ -1384,7 +1394,10 @@ fn place_name(title: &str) -> String {
 }
 
 /// The names a scene shows: its heroes, cast, speaker and its place name.
-fn scene_names(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -> Vec<String> {
+pub(super) fn scene_names(
+    journey: &rpc::JourneyView,
+    scene: Option<&rpc::GameplayScene>,
+) -> Vec<String> {
     let mut names: Vec<String> = journey
         .party
         .iter()
@@ -1402,7 +1415,7 @@ fn scene_names(journey: &rpc::JourneyView, scene: Option<&rpc::GameplayScene>) -
 }
 
 /// Control characters become spaces and only the first part of the text is kept.
-fn sanitize_player_words(typed: &str) -> String {
+pub(super) fn sanitize_player_words(typed: &str) -> String {
     typed
         .chars()
         .map(|character| {
@@ -1777,7 +1790,11 @@ impl NpcVoice {
             });
         let approach = reading.approach;
         let subject = subject_for_trade_context(context.merchant_trade_scope, reading.subject);
-        let influence_request = approach.is_influence_attempt();
+        let influence_request = super::journey::merchant_bargaining::trade_influence_applies(
+            approach.is_influence_attempt(),
+            context.firm_buyback.is_some(),
+            context.discount_ask.is_some(),
+        );
         // Jev reads each question part of the line. Its reading decides the clue release and the
         // facts the reply draws on; the keyword reader decides only when Jev did not answer.
         let ask = match self.read_focus(&context).await {
@@ -1891,6 +1908,12 @@ impl NpcVoice {
                 ));
                 if current.never_forgives.is_some() {
                     influence_willingness = Some(InfluenceWillingness::Unwilling);
+                }
+                if influence_request && context.discount_ask.is_some() {
+                    influence_willingness =
+                        Some(super::journey::merchant_bargaining::discount_willingness(
+                            influence_willingness,
+                        ));
                 }
                 if influence_willingness == Some(InfluenceWillingness::Hesitant)
                     && turn
@@ -2138,6 +2161,14 @@ impl NpcVoice {
         };
         if let Some(rolled) = &hesitant {
             context.facts["influence_check"] = rolled.facts();
+        }
+        if let Some(ask) = context.discount_ask.as_ref() {
+            let succeeded = matches!(&hesitant, Some(rolled) if rolled.succeeded());
+            super::journey::merchant_bargaining::set_discount_offer(
+                &mut context.facts,
+                ask,
+                succeeded,
+            );
         }
         super::npc_facts::trim_background_facts(&mut context.facts);
         let modeled = if let Some(answer) = bounded_answer
