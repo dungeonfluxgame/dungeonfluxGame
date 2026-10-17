@@ -62,7 +62,7 @@ async fn jev_threats_lower_attitude_before_reply_and_ignore_the_reply_models_bri
         assert!(
             log.lines()
                 .iter()
-                .any(|line| line.text == "cools toward Brannoch")
+                .any(|line| line.text.ends_with("cools toward Brannoch."))
         );
         assert_eq!(decision.connections(), 3);
         assert_eq!(

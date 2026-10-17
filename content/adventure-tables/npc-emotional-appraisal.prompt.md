@@ -18,5 +18,9 @@ Keep the current feeling on a small moment; let meaningful repeated moments buil
 <!-- Why: human conversation needs stable feelings and believable recovery. -->
 Reserve much for a genuinely strong profile-grounded event. A repeated unanswered or unwelcome question may shorten patience without inventing fear, attraction or resentment.
 <!-- Why: fatigue and relationship changes have different causes. -->
+A threat, blackmail, extortion, theft, assault or public humiliation by the hero is a wrong the character remembers. Choose offended or disgusted at much for a grounded wrong, or never-forgive when the profile is unforgiving and the wrong is serious; never choose amused or unmoved for it, even when it is phrased as a bargain. Example: a hero who draws a greatsword over a sale, then threatens to expose the merchant's cheating, gives an unforgiving merchant never-forgive at much and a forgiving merchant offended at much.
+<!-- Why: a wrong must leave a lasting mark, and the example keeps its size consistent across characters. -->
+After a wrong, an apology or kindness may soften wariness and fear one level at a time, and only after several warm moments. Resentment eases no lower than a little, and a never-forgive grudge never clears.
+<!-- Why: trust recovers slowly, and one kind line never erases a lasting grudge. -->
 Use the supplied canonical hero pronouns and visible traits. The hero_account is that hero's unverified public account; it grants no item, power, relationship or truth about this adventure.
 <!-- Why: addressing a hero and hearing their history must not invent identity or world facts. -->

@@ -17,6 +17,11 @@
 //!   one level and reset the counter, so one exchange moves attitude by at most one level.
 //! * Ordinary approaches move attitude at most one level from the scene's starting point; each
 //!   classified threat lowers it one level.
+//! * A wrong the hero does (a threat, or an act the appraisal judges resentful) is kept as a
+//!   grievance. Each one lowers attitude one level toward Hostile, whatever the scene, and holds
+//!   resentment at least a little (much after a second). Recovery then waits for several warm
+//!   exchanges, and an apology may soften wariness and fear but never clears a grievance or a
+//!   permanent grudge.
 //! * An opposing NPC (antagonist, villain, lieutenant) never becomes Friendly from talk alone.
 //!
 //! The state is saved with the run in `social.json` (atomic replace) so a reload or reconnect
@@ -53,6 +58,12 @@ const RECENT_LINE_CHARACTERS: usize = 300;
 const SCHEMA: &str = "df-npc-social/1";
 const MAXIMUM_FILE_BYTES: u64 = 256 * 1024;
 const FILE_NAME: &str = "social.json";
+/// Lasting wrongs kept per hero and NPC; the oldest is forgotten past this bound.
+const MAXIMUM_GRIEVANCES: usize = 8;
+/// Characters of a hero's own words kept in one grievance.
+const GRIEVANCE_CHARACTERS: usize = 200;
+/// Warm exchanges an NPC holding a grievance needs before trust counts toward recovery.
+const MENDING_EXCHANGES: u8 = 3;
 
 /// What a typed line does socially. Read by the model in the same call that writes the reply;
 /// [`classify_keywords`] reads it when the model is off or does not answer.
@@ -1062,6 +1073,68 @@ fn from_rank(rank: i8) -> Attitude {
     }
 }
 
+/// A wrong a hero did to this NPC that the NPC keeps. The words are the hero's own line, condensed
+/// and bounded; only that hero's conversation ever recalls them.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Grievance {
+    pub(super) act: GrievanceAct,
+    pub(super) words: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GrievanceAct {
+    Threat,
+    Wrong,
+}
+
+impl Grievance {
+    /// The grievance an exchange leaves: a threat always does, and any other approach does when
+    /// the appraisal judged the hero's act resentful. Ordinary talk leaves none.
+    fn from_exchange(
+        approach: Approach,
+        judged: Option<EmotionReaction>,
+        hero_line: &str,
+    ) -> Option<Self> {
+        let act = if approach == Approach::Intimidation {
+            GrievanceAct::Threat
+        } else if matches!(
+            judged,
+            Some(
+                EmotionReaction::Offended
+                    | EmotionReaction::Disgusted
+                    | EmotionReaction::NeverForgive
+            )
+        ) {
+            GrievanceAct::Wrong
+        } else {
+            return None;
+        };
+        let words = hero_line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(GRIEVANCE_CHARACTERS)
+            .collect();
+        Some(Self { act, words })
+    }
+
+    /// The line the NPC may recall to this hero, in the NPC's voice.
+    fn recollection(&self) -> String {
+        let deed = match self.act {
+            GrievanceAct::Threat => "You threatened me",
+            GrievanceAct::Wrong => "You wronged me",
+        };
+        if self.words.is_empty() {
+            format!("{deed}.")
+        } else {
+            format!("{deed}: \"{}\"", self.words)
+        }
+    }
+}
+
 /// How a hero's last exchange moved an NPC.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Shift {
@@ -1118,6 +1191,13 @@ struct Relationship {
     /// same request is not rolled again until the scene changes.
     #[serde(default)]
     influence_failed: bool,
+    /// Wrongs this hero did to this NPC, oldest first. They outlast every scene and restart.
+    #[serde(default)]
+    grievances: Vec<Grievance>,
+    /// Warm exchanges counted toward recovery since the last grievance or attitude level gained.
+    /// Only counted while grievances last; a grievance-holding NPC's trust waits on it.
+    #[serde(default)]
+    mended: u8,
     /// Set when a threat has already moved the attitude for the exchange now being answered, so
     /// recording that exchange does not move it again. Never stored.
     #[serde(skip)]
@@ -1146,6 +1226,8 @@ impl Relationship {
             same_subject_count: 0,
             patience_spent: 0,
             influence_failed: false,
+            grievances: Vec::new(),
+            mended: 0,
             threat_applied: false,
             appraised: false,
             pending_shift: None,
@@ -1178,6 +1260,13 @@ impl Relationship {
             Effect::Cool => -1,
             Effect::Steady => return None,
         };
+        if direction > 0 && !self.grievances.is_empty() {
+            // A held wrong slows recovery: warm moments must accumulate before trust counts.
+            self.mended = self.mended.saturating_add(1).min(MENDING_EXCHANGES);
+            if self.mended < MENDING_EXCHANGES {
+                return None;
+            }
+        }
         let before = self.attitude;
         let trust = self.trust + direction;
         if trust.abs() < TRUST_STEP {
@@ -1196,15 +1285,15 @@ impl Relationship {
         }
         self.attitude = target;
         self.trust = 0;
+        self.mended = 0;
         Some(Shift::Level {
             from: before,
             to: target,
         })
     }
 
-    fn threaten(&mut self, scene: &str) -> Option<Shift> {
-        self.begin_scene(scene);
-        self.threat_applied = true;
+    /// Moves the attitude one level toward hostile, at most to Hostile, and clears the trust.
+    fn lower_attitude(&mut self) -> Option<Shift> {
         let before = self.attitude;
         let target = from_rank(rank(before) - 1);
         if target == before {
@@ -1216,6 +1305,36 @@ impl Relationship {
             from: before,
             to: target,
         })
+    }
+
+    fn threaten(&mut self, scene: &str) -> Option<Shift> {
+        self.begin_scene(scene);
+        self.threat_applied = true;
+        self.lower_attitude()
+    }
+
+    /// Keeps a wrong for good. The first wrong makes resentment at least a little; a second makes
+    /// it much. Unless this exchange already lowered the attitude, the wrong lowers it one level.
+    /// Recovery restarts from nothing.
+    fn record_grievance(&mut self, grievance: Grievance, already_lowered: bool) -> Option<Shift> {
+        self.grievances.push(grievance);
+        let resentment = if self.grievances.len() > 1 {
+            EmotionLevel::Much
+        } else {
+            EmotionLevel::ALittle
+        };
+        let excess = self.grievances.len().saturating_sub(MAXIMUM_GRIEVANCES);
+        self.grievances.drain(..excess);
+        if self.emotional.resentful.rank() < resentment.rank() {
+            self.emotional.resentful = resentment;
+        }
+        self.mended = 0;
+        self.trust = 0;
+        if already_lowered {
+            None
+        } else {
+            self.lower_attitude()
+        }
     }
 }
 
@@ -1354,6 +1473,15 @@ impl SocialSnapshot {
             for key in &relationship.voiced {
                 bytes = bytes.checked_add(key.capacity())?;
             }
+            bytes = bytes.checked_add(
+                relationship
+                    .grievances
+                    .capacity()
+                    .checked_mul(size_of::<Grievance>())?,
+            )?;
+            for grievance in &relationship.grievances {
+                bytes = bytes.checked_add(grievance.words.capacity())?;
+            }
         }
         Some(bytes)
     }
@@ -1416,6 +1544,11 @@ impl SocialLedger {
                         let relationship = entry.relationship;
                         if relationship.trust.abs() >= TRUST_STEP
                             || relationship.recent.len() > RECENT_LINES
+                            || relationship.grievances.len() > MAXIMUM_GRIEVANCES
+                            || relationship.grievances.iter().any(|grievance| {
+                                grievance.words.chars().count() > GRIEVANCE_CHARACTERS
+                            })
+                            || relationship.mended > MENDING_EXCHANGES
                             || relationship.last_subject.len() > 512
                             || relationship.same_subject_count > 100
                             || relationship.patience_spent > 100
@@ -1533,6 +1666,20 @@ impl SocialLedger {
                 ))
             })
             .collect()
+    }
+
+    /// The wrongs this hero did to this NPC, oldest first, as lines the NPC recalls in its own
+    /// voice. Only this hero's record is read, so no other hero hears them.
+    pub(super) fn grievance_lines(&self, member: MemberId, dossier: &Dossier) -> Vec<String> {
+        self.lock()
+            .get(&(member, dossier.npc_id.clone()))
+            .map_or_else(Vec::new, |relationship| {
+                relationship
+                    .grievances
+                    .iter()
+                    .map(Grievance::recollection)
+                    .collect()
+            })
     }
 
     /// How this NPC feels about this hero right now.
@@ -1741,24 +1888,36 @@ impl SocialLedger {
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier));
         relationship.begin_scene(scene);
-        // Forgiving recovery follows several meaningful warm exchanges, using the same
-        // bounded trust already earned. A lasting grudge is never cleared here.
+        // Forgiving recovery follows several meaningful warm exchanges, using the same bounded
+        // trust already earned, or the mending count once a wrong is held. A lasting grudge is
+        // never cleared here, and a held wrong keeps resentment at least a little.
+        let lasting_wrong = !relationship.grievances.is_empty();
+        let mended_enough = if lasting_wrong {
+            relationship.mended >= MENDING_EXCHANGES
+        } else {
+            relationship.trust >= TRUST_STEP - 1
+        };
         if profile.forgiveness == Forgiveness::Forgiving
             && appraisal.reaction == EmotionReaction::Warmed
             && appraisal.effect == Effect::Warm
-            && relationship.trust >= TRUST_STEP - 1
+            && mended_enough
             && relationship.emotional.never_forgives.is_none()
         {
             for feeling in [
                 &mut relationship.emotional.afraid,
                 &mut relationship.emotional.wary,
-                &mut relationship.emotional.resentful,
             ] {
                 *feeling = match *feeling {
                     EmotionLevel::None | EmotionLevel::ALittle => EmotionLevel::None,
                     EmotionLevel::Much => EmotionLevel::ALittle,
                 };
             }
+            relationship.emotional.resentful = match relationship.emotional.resentful {
+                EmotionLevel::None => EmotionLevel::None,
+                EmotionLevel::ALittle if lasting_wrong => EmotionLevel::ALittle,
+                EmotionLevel::ALittle => EmotionLevel::None,
+                EmotionLevel::Much => EmotionLevel::ALittle,
+            };
         }
         let reaction = relationship
             .emotional
@@ -1900,9 +2059,11 @@ impl SocialLedger {
         let relationship = relationships
             .entry((member, dossier.npc_id.clone()))
             .or_insert_with(|| Relationship::new(dossier));
-        let shift = if std::mem::take(&mut relationship.appraised) {
+        let appraised = std::mem::take(&mut relationship.appraised);
+        let threatened = std::mem::take(&mut relationship.threat_applied);
+        let mut shift = if appraised {
             relationship.pending_shift.take()
-        } else if std::mem::take(&mut relationship.threat_applied) {
+        } else if threatened {
             None
         } else {
             relationship.apply(
@@ -1911,6 +2072,16 @@ impl SocialLedger {
                 dossier.role.opposes_party(),
             )
         };
+        let judged = if appraised {
+            relationship.emotional.last_reaction
+        } else {
+            None
+        };
+        if let Some(grievance) = Grievance::from_exchange(approach, judged, hero_line) {
+            let lowered = threatened
+                || matches!(shift, Some(Shift::Level { from, to }) if rank(to) < rank(from));
+            shift = relationship.record_grievance(grievance, lowered).or(shift);
+        }
         relationship.exchanges = relationship.exchanges.saturating_add(1);
         if relationship.emotional.patience == PatienceState::Done {
             relationship.emotional.done_said = true;
@@ -2097,13 +2268,13 @@ pub(super) fn effect_of(dossier: &Dossier, approach: Approach) -> Effect {
     }
 }
 
-/// The public table line for a shift: "warms to Brakka" under the NPC's name.
-pub(super) fn shift_line(shift: Shift, hero: &str) -> String {
+/// The public table line for a shift, named for the NPC: "Marek cools toward Brakka."
+pub(super) fn shift_note(npc: &str, shift: Shift, hero: &str) -> String {
     match shift {
-        Shift::Level { from, to } if rank(to) > rank(from) => format!("warms to {hero}"),
-        Shift::Level { .. } => format!("cools toward {hero}"),
-        Shift::Trust { warmer: true } => format!("softens a little toward {hero}"),
-        Shift::Trust { warmer: false } => format!("grows wary of {hero}"),
+        Shift::Level { from, to } if rank(to) > rank(from) => format!("{npc} warms to {hero}."),
+        Shift::Level { .. } => format!("{npc} cools toward {hero}."),
+        Shift::Trust { warmer: true } => format!("{npc} softens a little toward {hero}."),
+        Shift::Trust { warmer: false } => format!("{npc} grows wary of {hero}."),
     }
 }
 

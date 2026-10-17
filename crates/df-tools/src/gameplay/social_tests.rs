@@ -990,34 +990,6 @@ fn a_threat_lowers_attitude_immediately_even_when_the_dossier_is_steady() {
 }
 
 #[test]
-fn every_change_has_a_short_public_line() {
-    assert_eq!(
-        shift_line(
-            Shift::Level {
-                from: Attitude::Indifferent,
-                to: Attitude::Friendly
-            },
-            "Brakka"
-        ),
-        "warms to Brakka"
-    );
-    assert_eq!(
-        shift_line(
-            Shift::Level {
-                from: Attitude::Friendly,
-                to: Attitude::Indifferent
-            },
-            "Brakka"
-        ),
-        "cools toward Brakka"
-    );
-    assert_eq!(
-        shift_line(Shift::Trust { warmer: false }, "Brakka"),
-        "grows wary of Brakka"
-    );
-}
-
-#[test]
 fn attitude_and_the_recent_conversation_survive_a_reload() {
     let dossier = patron(Attitude::Indifferent);
     let directory = directory("reload");
@@ -1599,4 +1571,426 @@ fn a_snapshot_restores_standings_and_voiced_lines_in_memory_and_in_the_file() {
         SocialLedger::open(vec![dossier.clone()], "0x01", Some(directory.clone())).unwrap();
     assert_eq!(reloaded.voiced_for(hero), told);
     fs::remove_dir_all(directory).unwrap();
+}
+
+/// What the approach model judged for one perceived moment: hostile reactions cool the standing.
+fn judged(reaction: EmotionReaction, strength: EmotionLevel) -> Appraisal {
+    let effect = match reaction {
+        EmotionReaction::Warmed | EmotionReaction::Charmed => Effect::Warm,
+        _ => Effect::Cool,
+    };
+    Appraisal {
+        reaction,
+        strength,
+        willingness: None,
+        effect,
+    }
+}
+
+fn dossier_with(attitude: Attitude, forgiveness: Forgiveness) -> Dossier {
+    let mut dossier = patron(attitude);
+    let mut profile = dossier.emotional_profile();
+    profile.forgiveness = forgiveness;
+    dossier.emotional_profile = Some(profile);
+    dossier
+}
+
+#[test]
+fn a_threat_then_blackmail_leaves_lasting_resentment_and_a_hostile_attitude() {
+    let dossier = dossier_with(Attitude::Friendly, Forgiveness::Forgiving);
+    let ledger = SocialLedger::open(vec![dossier.clone()], "grievance", None).unwrap();
+    let hero = member(20);
+    let threat_line = "I draw my greatsword and lay it on your counter, Marek. Sell me those \
+clothes for 50 copper or I'll wreck this shop.";
+    let blackmail_line = "Fine. Then hand them over free, or I tell the whole market you water \
+your dyes and cheat travelers.";
+
+    ledger.apply_appraisal(
+        hero,
+        &dossier,
+        "opening",
+        judged(EmotionReaction::Uneasy, EmotionLevel::Much),
+    );
+    let threat = ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        threat_line,
+        "I won't sell to you under threat.",
+    );
+    assert_eq!(
+        threat.shift,
+        Some(Shift::Level {
+            from: Attitude::Friendly,
+            to: Attitude::Indifferent
+        })
+    );
+    assert_eq!(
+        shift_note("Marek", threat.shift.unwrap(), "Brakka"),
+        "Marek cools toward Brakka."
+    );
+    let after_threat = ledger.emotional_state(hero, &dossier, "opening");
+    assert_eq!(after_threat.resentful, EmotionLevel::ALittle);
+    assert_eq!(after_threat.wary, EmotionLevel::Much);
+
+    ledger.apply_appraisal(
+        hero,
+        &dossier,
+        "opening",
+        judged(EmotionReaction::Offended, EmotionLevel::Much),
+    );
+    let blackmail = ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        blackmail_line,
+        "Then I will not be cheated.",
+    );
+    assert_eq!(
+        blackmail.shift,
+        Some(Shift::Level {
+            from: Attitude::Indifferent,
+            to: Attitude::Hostile
+        })
+    );
+    assert_eq!(ledger.standing(hero, &dossier).attitude, Attitude::Hostile);
+    let state = ledger.emotional_state(hero, &dossier, "opening");
+    assert_eq!(state.resentful, EmotionLevel::Much);
+    assert!(
+        state.never_forgives.is_none(),
+        "a forgiving merchant holds the wrong without a permanent grudge"
+    );
+    assert_eq!(
+        ledger.grievance_lines(hero, &dossier),
+        vec![
+            format!("You threatened me: \"{threat_line}\""),
+            format!("You threatened me: \"{blackmail_line}\""),
+        ]
+    );
+}
+
+#[test]
+fn an_apology_never_clears_a_never_forgive_grudge_or_the_held_wrong() {
+    let dossier = dossier_with(Attitude::Indifferent, Forgiveness::Unforgiving);
+    let ledger = SocialLedger::open(vec![dossier.clone()], "grudge", None).unwrap();
+    let hero = member(21);
+    ledger.apply_appraisal(
+        hero,
+        &dossier,
+        "opening",
+        judged(EmotionReaction::NeverForgive, EmotionLevel::Much),
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        "Hand over the ledger or I burn your stall.",
+        "You will regret that.",
+    );
+    assert!(
+        ledger
+            .emotional_state(hero, &dossier, "opening")
+            .never_forgives
+            .is_some()
+    );
+
+    for scene in ["opening", "market", "inn"] {
+        for _ in 0..6 {
+            ledger.apply_appraisal(
+                hero,
+                &dossier,
+                scene,
+                judged(EmotionReaction::Warmed, EmotionLevel::Much),
+            );
+            ledger.record_exchange(
+                hero,
+                &dossier,
+                scene,
+                Approach::Apology,
+                "I am sorry for my temper.",
+                "Hm.",
+            );
+        }
+    }
+
+    let state = ledger.emotional_state(hero, &dossier, "inn");
+    assert!(state.never_forgives.is_some(), "the grudge survives");
+    assert_eq!(state.resentful, EmotionLevel::Much);
+    assert_eq!(ledger.standing(hero, &dossier).attitude, Attitude::Hostile);
+    assert_eq!(ledger.grievance_lines(hero, &dossier).len(), 1);
+}
+
+#[test]
+fn apologies_soften_wariness_only_after_several_warm_moments_and_keep_resentment() {
+    let dossier = dossier_with(Attitude::Friendly, Forgiveness::Forgiving);
+    let ledger = SocialLedger::open(vec![dossier.clone()], "mending", None).unwrap();
+    let hero = member(22);
+    ledger.apply_appraisal(
+        hero,
+        &dossier,
+        "opening",
+        judged(EmotionReaction::Uneasy, EmotionLevel::Much),
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        "Hand over the ledger or I burn your stall.",
+        "I will not.",
+    );
+    assert_eq!(
+        ledger.standing(hero, &dossier).attitude,
+        Attitude::Indifferent
+    );
+
+    let mut apologies = 0;
+    let mut apologise = |ledger: &SocialLedger| {
+        apologies += 1;
+        ledger.apply_appraisal(
+            hero,
+            &dossier,
+            "opening",
+            judged(EmotionReaction::Warmed, EmotionLevel::Much),
+        );
+        ledger.record_exchange(
+            hero,
+            &dossier,
+            "opening",
+            Approach::Apology,
+            "I am sorry.",
+            "Hm.",
+        );
+    };
+    for _ in 0..3 {
+        apologise(&ledger);
+    }
+    let three = ledger.emotional_state(hero, &dossier, "opening");
+    assert_eq!(three.wary, EmotionLevel::Much, "not yet mended");
+    assert_eq!(
+        ledger.standing(hero, &dossier).attitude,
+        Attitude::Indifferent,
+        "trust waits for the mending exchanges"
+    );
+
+    apologise(&ledger);
+    apologise(&ledger);
+    let five = ledger.emotional_state(hero, &dossier, "opening");
+    assert_ne!(five.wary, EmotionLevel::Much, "an apology softens wariness");
+    assert_eq!(
+        five.resentful,
+        EmotionLevel::ALittle,
+        "resentment never erased"
+    );
+    assert!(five.never_forgives.is_none());
+    assert_eq!(apologies, 5);
+    assert_eq!(ledger.standing(hero, &dossier).attitude, Attitude::Friendly);
+}
+
+#[test]
+fn a_held_wrong_survives_a_reload_and_an_older_save_without_it_still_loads() {
+    let dossier = dossier_with(Attitude::Friendly, Forgiveness::Forgiving);
+    let directory = directory("grievance-reload");
+    let ledger = SocialLedger::open(
+        vec![dossier.clone()],
+        "grievance-reload",
+        Some(directory.clone()),
+    )
+    .unwrap();
+    let hero = member(23);
+    ledger.apply_appraisal(
+        hero,
+        &dossier,
+        "opening",
+        judged(EmotionReaction::Uneasy, EmotionLevel::Much),
+    );
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        "Sell me those clothes for 50 copper or I'll wreck this shop.",
+        "I won't sell under threat.",
+    );
+    ledger.save().unwrap();
+    let attitude = ledger.standing(hero, &dossier).attitude;
+    let lines = ledger.grievance_lines(hero, &dossier);
+    assert_eq!(lines.len(), 1);
+
+    let reloaded = SocialLedger::open(
+        vec![dossier.clone()],
+        "grievance-reload",
+        Some(directory.clone()),
+    )
+    .unwrap();
+    assert_eq!(reloaded.grievance_lines(hero, &dossier), lines);
+    assert_eq!(reloaded.standing(hero, &dossier).attitude, attitude);
+
+    let file = directory.join("social.json");
+    let mut saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    for relationship in saved["relationships"].as_array_mut().unwrap() {
+        let fields = relationship.as_object_mut().unwrap();
+        fields.remove("grievances");
+        fields.remove("mended");
+    }
+    fs::write(&file, serde_json::to_vec_pretty(&saved).unwrap()).unwrap();
+    let older = SocialLedger::open(
+        vec![dossier.clone()],
+        "grievance-reload",
+        Some(directory.clone()),
+    )
+    .unwrap();
+    assert!(older.grievance_lines(hero, &dossier).is_empty());
+    assert_eq!(older.standing(hero, &dossier).attitude, attitude);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_held_wrong_belongs_to_the_hero_who_did_it() {
+    let dossier = dossier_with(Attitude::Friendly, Forgiveness::Forgiving);
+    let ledger = SocialLedger::open(vec![dossier.clone()], "isolation", None).unwrap();
+    let wrongdoer = member(24);
+    let bystander = member(25);
+    ledger.apply_appraisal(
+        wrongdoer,
+        &dossier,
+        "opening",
+        judged(EmotionReaction::Offended, EmotionLevel::Much),
+    );
+    ledger.record_exchange(
+        wrongdoer,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        "Give me the key.",
+        "No.",
+    );
+
+    assert_eq!(ledger.grievance_lines(wrongdoer, &dossier).len(), 1);
+    assert!(ledger.grievance_lines(bystander, &dossier).is_empty());
+    assert_eq!(
+        ledger.standing(bystander, &dossier).attitude,
+        Attitude::Friendly
+    );
+    assert_eq!(
+        ledger
+            .emotional_state(bystander, &dossier, "opening")
+            .resentful,
+        EmotionLevel::None
+    );
+}
+
+#[test]
+fn a_deterministic_threat_is_kept_as_a_grievance_without_lowering_twice() {
+    let dossier = dossier_with(Attitude::Friendly, Forgiveness::Forgiving);
+    let ledger = SocialLedger::open(vec![dossier.clone()], "threat-grievance", None).unwrap();
+    let hero = member(26);
+
+    assert_eq!(
+        ledger.threaten(hero, &dossier, "opening"),
+        Some(Shift::Level {
+            from: Attitude::Friendly,
+            to: Attitude::Indifferent
+        })
+    );
+    let recorded = ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        "Open the chest.",
+        "No.",
+    );
+
+    assert_eq!(
+        recorded.shift, None,
+        "the threat already moved the attitude"
+    );
+    assert_eq!(
+        ledger.standing(hero, &dossier).attitude,
+        Attitude::Indifferent
+    );
+    assert_eq!(ledger.grievance_lines(hero, &dossier).len(), 1);
+    assert_eq!(
+        ledger.emotional_state(hero, &dossier, "opening").resentful,
+        EmotionLevel::ALittle
+    );
+}
+
+#[test]
+fn a_held_wrong_is_condensed_and_the_list_forgets_only_the_oldest_past_its_bound() {
+    let dossier = dossier_with(Attitude::Friendly, Forgiveness::Forgiving);
+    let ledger = SocialLedger::open(vec![dossier.clone()], "bounded", None).unwrap();
+    let hero = member(27);
+    let long_line = format!("I\n\nhurt   you. {}", "x".repeat(400));
+    ledger.record_exchange(
+        hero,
+        &dossier,
+        "opening",
+        Approach::Intimidation,
+        &long_line,
+        "No.",
+    );
+    let lines = ledger.grievance_lines(hero, &dossier);
+    assert_eq!(
+        lines,
+        vec![format!(
+            "You threatened me: \"I hurt you. {}\"",
+            "x".repeat(GRIEVANCE_CHARACTERS - "I hurt you. ".len())
+        )]
+    );
+
+    for index in 0..MAXIMUM_GRIEVANCES + 3 {
+        ledger.record_exchange(
+            hero,
+            &dossier,
+            "opening",
+            Approach::Intimidation,
+            &format!("Threat number {index}."),
+            "No.",
+        );
+    }
+    let lines = ledger.grievance_lines(hero, &dossier);
+    assert_eq!(lines.len(), MAXIMUM_GRIEVANCES);
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("You threatened me: \"Threat number 10.\"")
+    );
+}
+
+#[test]
+fn every_change_names_the_npc_in_its_public_line() {
+    assert_eq!(
+        shift_note(
+            "Marek",
+            Shift::Level {
+                from: Attitude::Indifferent,
+                to: Attitude::Friendly
+            },
+            "Brakka"
+        ),
+        "Marek warms to Brakka."
+    );
+    assert_eq!(
+        shift_note(
+            "Marek",
+            Shift::Level {
+                from: Attitude::Friendly,
+                to: Attitude::Indifferent
+            },
+            "Brakka"
+        ),
+        "Marek cools toward Brakka."
+    );
+    assert_eq!(
+        shift_note("Marek", Shift::Trust { warmer: true }, "Brakka"),
+        "Marek softens a little toward Brakka."
+    );
+    assert_eq!(
+        shift_note("Marek", Shift::Trust { warmer: false }, "Brakka"),
+        "Marek grows wary of Brakka."
+    );
 }
