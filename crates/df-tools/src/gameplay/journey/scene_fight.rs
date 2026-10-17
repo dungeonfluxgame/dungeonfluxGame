@@ -845,7 +845,8 @@ pub(super) fn stage_assault(
 /// The one rule for how it ends (SRD 5.2.1 p. 18, Stable at 0 Hit Points): a hero at 0 hit points
 /// who is not dead is Stable, so no Death Saving Throws follow the fight; Stable and unconscious
 /// at 0 hit points is the state they stay in. When every hero is down the narration says the
-/// watch drags them out (someone fled to call it) or the survivors leave them where they fell.
+/// watch arrives and guards them where they lie (someone fled to call it), or the survivors leave
+/// them where they fell; nobody is moved, because no other place exists to move them to.
 /// Heroes who died stay dead. A person at 0 hit points is dead (monster rules), a person knocked
 /// out sits at 1 hit point unconscious, and both stay down. Turn budgets reset and nobody lies
 /// prone who is awake. No experience, no payment and no beat change.
@@ -921,7 +922,7 @@ pub(in crate::gameplay) fn aftermath_narration(
     }
     if every_hero_down && !lines.is_empty() {
         lines.push(if anyone_fled {
-            "The watch arrives and drags the heroes out.".to_owned()
+            "The watch arrives and stands guard over the fallen heroes.".to_owned()
         } else if survivors.is_empty() {
             "No one is left standing.".to_owned()
         } else {
@@ -1872,12 +1873,12 @@ mod tests {
                 assert_eq!(value(&state, *hero, "action-used").unwrap(), 0);
                 assert!(!hero_dead(&state, *hero), "stable, not dead");
             }
-            // Marek fled to call the watch, so the watch drags the heroes out.
+            // Marek fled to call the watch, so the watch arrives; the heroes stay where they fell.
             let told = aftermath_narration(&state).unwrap();
             assert!(told.contains("Marek fled the shop."), "{told}");
             assert!(told.contains("lies unconscious and stable."), "{told}");
             assert!(
-                told.ends_with("The watch arrives and drags the heroes out."),
+                told.ends_with("The watch arrives and stands guard over the fallen heroes."),
                 "{told}"
             );
         });
