@@ -470,7 +470,19 @@ pub(super) struct CombatTuning {
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TacticalEncounterTuning {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) enemies: Vec<TacticalEnemy>,
+    /// Freeplay only: the tactical engine is on so a hero's attack on a scene person can start a
+    /// real fight, but the pack has no roster, so no random encounter can ever start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) scene_assault: Option<SceneAssaultTuning>,
+}
+/// The scene-assault-only variant of the tactical block.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SceneAssaultTuning {
+    /// Id of the authored battle scene (a grid the server holds) the fights are played on.
+    pub(super) battle_scene: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -683,6 +695,19 @@ pub(super) struct SceneCastMember {
     pub(super) gender: Option<Gender>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) age: Option<Age>,
+    /// The SRD 5.2.1 stat block this person fights with when a hero starts a scene assault
+    /// (an id from `df_rules::SRD_521_CREATURES` or `df_rules::SCENE_COMMONER`). Absent means
+    /// the person has no combat profile and cannot be attacked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) stat_block: Option<String>,
+}
+
+/// Whether a scene person's stat block is a creature this build compiles from SRD 5.2.1.
+pub(super) fn scene_stat_block_known(id: &str) -> bool {
+    df_rules::SRD_521_CREATURES
+        .iter()
+        .chain([&df_rules::SCENE_COMMONER])
+        .any(|creature| creature.id == id)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -1101,7 +1126,13 @@ pub(super) fn load_from_bytes(
         }
     }
     let mut departures = departures(&pack, &tuning);
-    if tuning.tactical.is_some() {
+    // A scene-assault-only pack stays on the standard rules profile until a fight happens; the
+    // fight's own disclosure carries the tactical departures (see `journey::scene_fight`).
+    if tuning
+        .tactical
+        .as_ref()
+        .is_some_and(|tactical| tactical.scene_assault.is_none())
+    {
         departures.extend(
             df_rules::tactical::DEPARTURES
                 .iter()
@@ -1360,7 +1391,19 @@ fn placeholders_are_defined(text: &str, allowed: &[&str]) -> bool {
 fn validate_tuning(tuning: &TuningFile, freeplay: bool) -> Result<(), PackError> {
     if let Some(tactical) = &tuning.tactical {
         let mut total = 0_u16;
-        if tactical.enemies.is_empty() || tactical.enemies.len() > 4 {
+        let scene_assault = tactical.scene_assault.as_ref();
+        if let Some(scene_assault) = scene_assault
+            && (!freeplay
+                || !tactical.enemies.is_empty()
+                || !super::journey::tactical::holds_scene(&scene_assault.battle_scene))
+        {
+            return Err(malformed(
+                SourceFile::Tuning,
+                "tactical.scene_assault",
+                "a freeplay pack with no roster enemies and a battle scene the server holds",
+            ));
+        }
+        if scene_assault.is_none() && (tactical.enemies.is_empty() || tactical.enemies.len() > 4) {
             return Err(malformed(
                 SourceFile::Tuning,
                 "tactical.enemies",
@@ -1407,9 +1450,12 @@ fn validate_tuning(tuning: &TuningFile, freeplay: bool) -> Result<(), PackError>
             || hero.weapon.item != "greatsword"
             || hero.weapon.damage_dice != 2
             || hero.weapon.damage_sides != 6
-            || tuning.combat.round_ticks != 6
-            || tuning.combat.critical_threshold != 20
-            || tuning.rest.short_rest_seconds != 3600
+            // A scene-assault-only pack states no combat or rest section; its rounds are the
+            // SRD baseline (see `combat()` and `rest()`).
+            || (scene_assault.is_none()
+                && (tuning.combat.round_ticks != 6
+                    || tuning.combat.critical_threshold != 20
+                    || tuning.rest.short_rest_seconds != 3600))
             || hero.ability_arrays.len() != baseline.creation.ability_arrays.len()
             || hero.ability_arrays.iter().any(|array| {
                 !baseline
@@ -1530,7 +1576,10 @@ fn validate_tuning(tuning: &TuningFile, freeplay: bool) -> Result<(), PackError>
             || tuning.combat != CombatTuning::default()
             || tuning.rest != RestTuning::default()
             || tuning.narrative != NarrativeTuning::default()
-            || tuning.tactical.is_some()
+            || tuning
+                .tactical
+                .as_ref()
+                .is_some_and(|tactical| tactical.scene_assault.is_none())
         {
             return Err(malformed(
                 FILE,
@@ -2176,6 +2225,15 @@ fn validate_scenes(scenes: &[Scene], freeplay: bool) -> Result<(), PackError> {
             text(FILE, &format!("{member}.sprite"), &actor.sprite, 0, 128)?;
             text(FILE, &format!("{member}.portrait"), &actor.portrait, 0, 128)?;
             text(FILE, &format!("{member}.voice"), &actor.voice, 0, 96)?;
+            if let Some(stat_block) = &actor.stat_block
+                && !scene_stat_block_known(stat_block)
+            {
+                return Err(PackError::Malformed {
+                    file: FILE,
+                    path: format!("{member}.stat_block"),
+                    expected: "an SRD 5.2.1 creature id compiled into df-rules",
+                });
+            }
         }
         if let Some(rested) = &scene.narration_rested {
             text(
@@ -2417,6 +2475,22 @@ fn validate_cross_references(pack: &PackFile, tuning: &TuningFile) -> Result<(),
                 CrossRefReason::OptionWithoutArray,
             ));
         }
+    }
+    // A scene-assault pack with nobody to fight would offer nothing: refuse it at load.
+    if tuning
+        .tactical
+        .as_ref()
+        .is_some_and(|tactical| tactical.scene_assault.is_some())
+        && !pack
+            .scenes
+            .iter()
+            .any(|scene| scene.cast.iter().any(|actor| actor.stat_block.is_some()))
+    {
+        return Err(malformed(
+            SourceFile::Tuning,
+            "tactical.scene_assault",
+            "at least one scene cast member with a stat_block",
+        ));
     }
     Ok(())
 }
@@ -2959,8 +3033,34 @@ pub(super) fn appearance_fits_package(appearance: &str, package: &str) -> bool {
     appearance_is_archer(appearance) == (package == "archer")
 }
 
+/// Whether the loaded pack is freeplay with only scene assaults: it states no combat or rest
+/// numbers, so its fights use the SRD baseline ones.
+fn scene_assault_only(loaded: &LoadedPack) -> bool {
+    loaded
+        .tuning
+        .tactical
+        .as_ref()
+        .is_some_and(|tactical| tactical.scene_assault.is_some())
+}
+
+/// The battle scene of the active pack's scene assaults, when it has them.
+pub(super) fn scene_assault_battle() -> Option<String> {
+    active().and_then(|loaded| {
+        loaded
+            .tuning
+            .tactical
+            .as_ref()?
+            .scene_assault
+            .as_ref()
+            .map(|assault| assault.battle_scene.clone())
+    })
+}
+
 pub(super) fn combat() -> df_rules::local_journey::CombatRules {
     active().map_or(df_rules::local_journey::SRD_521_BASELINE.combat, |loaded| {
+        if scene_assault_only(&loaded) {
+            return df_rules::local_journey::SRD_521_BASELINE.combat;
+        }
         let value = loaded.tuning.combat;
         df_rules::local_journey::CombatRules {
             critical_threshold: value.critical_threshold,
@@ -2985,6 +3085,9 @@ pub(super) fn second_wind() -> df_rules::local_journey::SecondWindRules {
 }
 pub(super) fn rest() -> df_rules::local_journey::RestRules {
     active().map_or(df_rules::local_journey::SRD_521_BASELINE.rest, |loaded| {
+        if scene_assault_only(&loaded) {
+            return df_rules::local_journey::SRD_521_BASELINE.rest;
+        }
         df_rules::local_journey::RestRules {
             short_rest_seconds: loaded.tuning.rest.short_rest_seconds,
         }

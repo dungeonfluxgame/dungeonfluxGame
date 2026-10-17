@@ -228,6 +228,13 @@ impl rpc::action_service_server::ActionService for Service {
         {
             return Err(Status::invalid_argument("bounded action fields required"));
         }
+        // A scene assault starts a fight through the one entry point every route shares.
+        if request.action_kind == rpc::GameplayActionKind::SceneAssault as i32 {
+            return self
+                .scene_assault_submit(credential, request)
+                .await
+                .map(Response::new);
+        }
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Submit {

@@ -381,6 +381,7 @@ fn member(id: &str, name: &str, sprite: &str, role: pack::CastRole) -> pack::Sce
         voice: "warm".to_owned(),
         gender: Some(Gender::She),
         age: Some(Age::Adult),
+        stat_block: None,
     }
 }
 

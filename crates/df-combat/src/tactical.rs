@@ -549,8 +549,10 @@ fn approach_target(battle: &Battle, id: u32) -> Result<Option<Action>, RuleError
 
 fn attacks_unconscious_target(kind: CreatureKind) -> Result<bool, RuleError> {
     let id = kind.srd_id().ok_or(RuleError::InvalidCombatant)?;
+    // The authored scene Commoner is no antagonist-table row, but it fights (scene assaults).
     let source = df_rules::SRD_521_CREATURES
         .iter()
+        .chain([&df_rules::SCENE_COMMONER])
         .find(|creature| creature.id == id)
         .ok_or(RuleError::UnsupportedCreature)?;
     Ok(source.attacks_unconscious)

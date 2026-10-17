@@ -590,6 +590,58 @@ async fn owner_submit_action(
     Ok((StatusCode::OK, Json(submit_json(response))))
 }
 
+/// Starts a scene fight for a seat the way a typed attack does: the service's one entry point
+/// plans the bystanders from the social ledger, commits through the owner and records the
+/// consequences. The target is the scene person the offer's `scene-target` choice names.
+async fn owner_scene_assault(
+    state: &Shared,
+    credential: [u8; 32],
+    submit: rpc::SubmitActionRequest,
+) -> Outcome {
+    let target = submit
+        .action_choices
+        .iter()
+        .find(|choice| choice.group_id == crate::gameplay::journey::scene_fight::TARGET_GROUP)
+        .map(|choice| choice.option_id.clone())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "a scene assault names its target"})),
+            )
+        })?;
+    let origin = super::dialogue::SceneFightOrigin {
+        session_id: submit.session_id,
+        run_id: submit.run_id,
+        observed_revision: submit.observed_revision,
+        operation_id: submit.operation_id,
+    };
+    let started = state
+        .service
+        .start_scene_fight(credential, origin, &target, "I attack.")
+        .await
+        .map_err(|status| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": status.message()})),
+            )
+        })?;
+    let ids = |people: &[crate::gameplay::journey::scene_fight::Person]| {
+        people
+            .iter()
+            .map(|person| person.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut body = receipt_json(started.receipt);
+    body["scene_fight"] = json!({
+        "target": started.plan.target.id,
+        "join": ids(&started.plan.joiners),
+        "flee": ids(&started.plan.fleers),
+        "out": ids(&started.plan.out),
+        "narration": started.narration,
+    });
+    Ok((StatusCode::OK, Json(body)))
+}
+
 fn submit_json(response: rpc::SubmitActionResponse) -> Value {
     match response.outcome {
         Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) => {

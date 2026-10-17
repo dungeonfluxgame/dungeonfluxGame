@@ -177,7 +177,7 @@ pub(super) fn events_for_kind(kind: rpc::GameplayActionKind) -> &'static [Event]
         K::BeginStory => &[Event::Begin, Event::ScriptStep],
         K::ExamineHarborSeal => &[Event::ScriptStep, Event::StoryChoice],
         K::AskCourier | K::EscortCourier | K::ChooseHarborScene => &[Event::StoryChoice],
-        K::DefendCourier => &[Event::StartFight],
+        K::DefendCourier | K::SceneAssault => &[Event::StartFight],
         K::GreatswordAttack
         | K::SecondWind
         | K::StabiliseWithHealersKit
@@ -308,6 +308,14 @@ pub(super) fn outcome_legal(
             matches!(after, SessionState::Aftermath | SessionState::Ended)
         }
     }
+}
+
+/// Where a step of a freeplay scene fight may land. A scene fight is an encounter inside the
+/// freeplay beat, so its end returns to that beat's own state (Story) instead of moving on to the
+/// Aftermath: it is the one lawful way back from `Fight`, open to nothing else, and the loaded
+/// script's beat never changes.
+pub(super) fn scene_fight_outcome_legal(before: SessionState, after: SessionState) -> bool {
+    before == SessionState::Fight && matches!(after, SessionState::Fight | SessionState::Story)
 }
 
 /// The one table: for the current state and an event, the next state or a

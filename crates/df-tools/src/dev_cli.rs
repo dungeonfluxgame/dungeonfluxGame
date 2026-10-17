@@ -198,6 +198,7 @@ fn print_help() {
          preview <seat>              --appearance <text> --backstory <text>; review returned identity JSON\n\
          act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id>\n\
                                       help-attack: --ally <hero> --target <foe> (SRD 2024 Help, Attack)\n\
+                                      scene-assault: --target <scene person> starts a fight in a freeplay scene\n\
          say <hero> <text>            speak one line; [--context question|social|plan|meta|joke]\n\
          direct plate <text>          re-render the current scene picture; [--keep] [--wait]\n\
          direct clear                 clear held directions and return to the ordinary plate\n\
@@ -227,7 +228,7 @@ fn print_help() {
          override is temporarily disabled server-side\n\
          (direct edits need the milestone 3 proof); see dev describe.\n\
          \n\
-         actions: begin ask escort defend move attack second-wind end-turn dash dodge\n\
+         actions: begin ask escort defend scene-assault move attack second-wind end-turn dash dodge\n\
                   disengage stand pick-up short-rest inn resolve search new-adventure\n\
                   opportunity-attack decline-reaction stabilise-kit stabilise-medicine help-attack table-setting\n\
          choose any offer: act <hero> <label-or-id>, or act <hero> choose --option <label-or-id>\n\

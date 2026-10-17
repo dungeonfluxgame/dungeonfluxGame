@@ -124,6 +124,7 @@ fn source_digests() -> &'static SourceDigests {
             include_bytes!("journey/courier_reaction.rs").as_slice(),
             include_bytes!("journey/encounter_outcome.rs").as_slice(),
             include_bytes!("journey/objective_outcome.rs").as_slice(),
+            include_bytes!("journey/scene_fight.rs").as_slice(),
         ] {
             handler.update(source);
         }
@@ -132,6 +133,8 @@ fn source_digests() -> &'static SourceDigests {
         for source in [
             CONTENT,
             include_bytes!("../../../../content/battle-scenes/harbor-journey.json").as_slice(),
+            // Shop scene assaults fight on this grid, so its layout is part of the replayed content.
+            include_bytes!("../../../../content/battle-scenes/merchant-shop.json").as_slice(),
             include_bytes!("../../../../content/battle-scenes/salt-quay.json").as_slice(),
             include_bytes!("../../../../content/battle-scenes/pinewood-trail.json").as_slice(),
             include_bytes!("../../../../content/battle-scenes/windward-pass.json").as_slice(),

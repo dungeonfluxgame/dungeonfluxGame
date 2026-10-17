@@ -518,6 +518,7 @@ fn action_name(kind: i32) -> &'static str {
         Ok(rpc::GameplayActionKind::StabiliseMedicine) => "stabilise-medicine",
         Ok(rpc::GameplayActionKind::HelpAttack) => "help-attack",
         Ok(rpc::GameplayActionKind::SetTableSetting) => "table-setting",
+        Ok(rpc::GameplayActionKind::SceneAssault) => "scene-assault",
         _ => "unknown",
     }
 }

@@ -73,6 +73,7 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
         "ask-courier" => rpc::GameplayActionKind::AskCourier,
         "escort-courier" => rpc::GameplayActionKind::EscortCourier,
         "defend-courier" => rpc::GameplayActionKind::DefendCourier,
+        "scene-assault" => rpc::GameplayActionKind::SceneAssault,
         "greatsword-attack" => rpc::GameplayActionKind::GreatswordAttack,
         "second-wind" => rpc::GameplayActionKind::SecondWind,
         "stabilise-kit" => rpc::GameplayActionKind::StabiliseWithHealersKit,
@@ -102,6 +103,7 @@ pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str
         rpc::GameplayActionKind::AskCourier => "ask-courier",
         rpc::GameplayActionKind::EscortCourier => "escort-courier",
         rpc::GameplayActionKind::DefendCourier => "defend-courier",
+        rpc::GameplayActionKind::SceneAssault => "scene-assault",
         rpc::GameplayActionKind::GreatswordAttack => "greatsword-attack",
         rpc::GameplayActionKind::SecondWind => "second-wind",
         rpc::GameplayActionKind::StabiliseWithHealersKit => "stabilise-kit",
@@ -171,9 +173,13 @@ pub(super) fn journey_input(
         && (interaction_offer
             || super::beat_script_runtime::is_observation_offer(current, &request.offer_id)
                 .map_err(|_| invalid())?);
-    if request.action_choices.len() > choice_bound(interaction_offer || observation_offer)
+    // A scene assault carries its target and, from the caller that knows the attitudes, a roster.
+    let scene_assault = kind == rpc::GameplayActionKind::SceneAssault;
+    if request.action_choices.len()
+        > choice_bound(interaction_offer || observation_offer || scene_assault)
         || (!super::journey::tactical::present(current.state())
             && !observation_offer
+            && !scene_assault
             && kind != rpc::GameplayActionKind::ShortRest
             && !request.action_choices.is_empty())
     {
@@ -329,7 +335,8 @@ fn attack_group(id: &str, label: &str, description: &str) -> rpc::JourneyGroup {
     }
 }
 fn journey_tactical_creation() -> bool {
-    super::journey::tactical::enabled()
+    // A pack that is tactical only for scene assaults keeps its own character creation.
+    super::journey::tactical::enabled() && !super::journey::tactical::scene_assault_only()
 }
 pub(super) fn creation_offer() -> Result<rpc::CharacterCreationOffer, RepositoryError> {
     use super::pack;
@@ -1112,6 +1119,11 @@ pub(super) fn project_journey(
                             "On a miss, apply your Strength modifier as damage",
                         ),
                     ]
+                } else if kind == rpc::GameplayActionKind::SceneAssault {
+                    vec![stage(
+                        "view-scene-assault-targets",
+                        journey::scene_fight::target_group(current, principal),
+                    )?]
                 } else if kind == rpc::GameplayActionKind::ExamineHarborSeal
                     && stage(
                         "view-observation-offer",
@@ -1318,6 +1330,15 @@ pub(super) fn project_journey(
     } else {
         narration
     };
+    // What fights left in a freeplay scene (people down or fled, heroes down), told the same way
+    // on every view.
+    let aftermath = stage(
+        "view-scene-aftermath",
+        journey::scene_fight::aftermath_narration(state),
+    )?;
+    if !aftermath.is_empty() {
+        narration = format!("{narration} {aftermath}");
+    }
     let encounter_xp = stage(
         "view-encounter-experience",
         journey::rewards::encounter_experience(state),
@@ -1354,7 +1375,10 @@ pub(super) fn project_journey(
         rested_rules_note.as_deref(),
         epilogue_replaces,
     );
-    if key == SceneKey::Combat && super::journey::tactical::present(current.state()) {
+    // A fight inside a freeplay scene discloses the same tactical departures as any other.
+    if (key == SceneKey::Combat || journey::scene_fight::open(state))
+        && super::journey::tactical::present(current.state())
+    {
         rules_note.push_str(" Disclosed custom rule tactical.cover-centre-line: cover is adjudicated along the segment between cell centres.");
         add_scan_barrier_reach_note(&mut rules_note);
         rules_note.push_str(&journey::tactical::unmodelled_features_note(

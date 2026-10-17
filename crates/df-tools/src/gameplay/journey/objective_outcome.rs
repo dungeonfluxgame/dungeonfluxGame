@@ -85,6 +85,11 @@ pub(super) fn pending(
     let [previous] = before.state().encounters.as_slice() else {
         return Ok(None);
     };
+    // A scene assault in a freeplay scene ends by closing its encounter in that same scene
+    // (`scene_fight::close`): there is no victory or defeat beat for an objective to move to.
+    if super::scene_fight::open(before.state()) {
+        return Ok(None);
+    }
     let [encounter] = state.encounters.as_slice() else {
         return invalid();
     };

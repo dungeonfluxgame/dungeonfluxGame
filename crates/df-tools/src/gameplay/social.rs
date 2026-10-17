@@ -2342,6 +2342,44 @@ impl SocialLedger {
         }
     }
 
+    /// Records a hero's assault on this NPC: the NPC keeps it as a wrong in its own recollection,
+    /// and its standing toward that hero becomes Hostile. The hero's line is condensed and bounded
+    /// like any grievance. Returns the level shift when the standing changed.
+    pub(super) fn record_assault(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        scene: &str,
+        hero_line: &str,
+    ) -> Option<Shift> {
+        let words = hero_line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(GRIEVANCE_CHARACTERS)
+            .collect();
+        let mut relationships = self.lock();
+        let relationship = relationships
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier));
+        relationship.begin_scene(scene);
+        let from = relationship.attitude;
+        // The attitude is set directly, so the grievance itself must not lower it a second time.
+        relationship.record_grievance(
+            Grievance {
+                act: GrievanceAct::Wrong,
+                words,
+            },
+            true,
+        );
+        relationship.attitude = Attitude::Hostile;
+        (from != Attitude::Hostile).then_some(Shift::Level {
+            from,
+            to: Attitude::Hostile,
+        })
+    }
+
     /// Records a coerced demand the NPC was pressed with: a threat (Intimidation) or a lie it had to
     /// believe (Deception). The wrong is a lasting grievance against that hero only. A demand the NPC
     /// met turns it Hostile toward that hero; a refused demand keeps the grievance and lowers its

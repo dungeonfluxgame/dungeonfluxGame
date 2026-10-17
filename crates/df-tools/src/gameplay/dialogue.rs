@@ -67,6 +67,34 @@ fn record_physical_action_event(
     );
 }
 
+/// The session scope and operation a scene fight is submitted under: copied from the line (or
+/// request) that caused it, so a retry of that line is a retry of the same operation.
+pub(super) struct SceneFightOrigin {
+    pub(super) session_id: Option<rpc::SessionId>,
+    pub(super) run_id: Option<rpc::RunId>,
+    pub(super) observed_revision: Option<rpc::SessionRevision>,
+    pub(super) operation_id: Option<rpc::OperationId>,
+}
+
+impl SceneFightOrigin {
+    pub(super) fn of(request: &rpc::RawDialogueRequest) -> Self {
+        Self {
+            session_id: request.session_id.clone(),
+            run_id: request.run_id.clone(),
+            observed_revision: request.observed_revision.clone(),
+            operation_id: request.input_id.clone(),
+        }
+    }
+}
+
+/// What a committed scene fight reports: the owner's receipt, who fights, flees and stays out,
+/// and the narration the table log already carries.
+pub(super) struct SceneFightStart {
+    pub(super) receipt: rpc::DecisionReceipt,
+    pub(super) plan: journey::scene_fight::Plan,
+    pub(super) narration: String,
+}
+
 fn record_merchant_quote_candidate(
     status: &str,
     reason: &str,
@@ -2256,6 +2284,42 @@ impl Service {
             |skill, face, dc| freeform_action::skill_roll(state, hero_entity, skill, face, dc),
         )
         .await;
+        // A blow at a scene person who has a stat block is the start of a real fight, not a single
+        // roll; so is rough contact with a person who is already hostile to this hero.
+        if journey::tactical::scene_assault_only()
+            && !journey::tactical::present(current.state())
+            && let Some(person) = freeform_action::fight_target(&resolution, scene, &|person| {
+                journey::scene_fight::attitude_of(&self.social, member, person)
+                    == super::adventure::dossier::Attitude::Hostile
+            })
+        {
+            match self
+                .start_scene_fight(
+                    credential,
+                    SceneFightOrigin::of(request),
+                    &person.id,
+                    &request.text,
+                )
+                .await
+            {
+                Ok(started) => {
+                    return Ok(DialogueReply::Raw(
+                        rpc::DialogueResponse {
+                            input_id: request.input_id.clone(),
+                            disposition: rpc::DialogueDisposition::Action as i32,
+                            revision: started.receipt.revision,
+                            npc_reply: started.narration,
+                            ..Default::default()
+                        },
+                        None,
+                    ));
+                }
+                Err(status) => actor::record_audit_line(
+                    "gameplay.scene_fight",
+                    format!("SCENE-FIGHT unavailable reason={:?}", status.message()),
+                ),
+            }
+        }
         let narration = freeform_action::narrate(storyteller, &resolution, &request.text).await;
         let roll = match &resolution.verdict {
             freeform_action::Verdict::Performed(performance) => {
@@ -2322,6 +2386,41 @@ impl Service {
             super::approach_model::PhysicalActionKind::Trade => "trade",
             super::approach_model::PhysicalActionKind::Use => "use",
         };
+        // An attack on a scene person who has a stat block starts a real fight.
+        if action.kind == super::approach_model::PhysicalActionKind::Attack
+            && journey::tactical::scene_assault_only()
+            && !journey::tactical::present(current.state())
+            && let Some(person) =
+                journey::scene_fight::attackable(current.state(), &scene, &action.target)
+                    .map_err(actor::unavailable)?
+        {
+            let started = self
+                .start_scene_fight(
+                    credential,
+                    SceneFightOrigin::of(request),
+                    &person.id,
+                    &request.text,
+                )
+                .await?;
+            record_physical_action_event(
+                "gameplay.physical_action_resolved",
+                "attack",
+                &action.target,
+                "action",
+                "scene-assault initiative=started",
+                None,
+            );
+            return Ok(DialogueReply::Raw(
+                rpc::DialogueResponse {
+                    input_id: request.input_id.clone(),
+                    disposition: rpc::DialogueDisposition::Action as i32,
+                    revision: started.receipt.revision,
+                    npc_reply: started.narration,
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
         if action.kind == super::approach_model::PhysicalActionKind::Attack
             && !journey::tactical::present(current.state())
             && journey::encounter_admission::scene_combat_binding(&current, &action.target)
@@ -2556,6 +2655,167 @@ impl Service {
             Some(reason),
         );
         self.narrated_no_op(credential, request).await
+    }
+
+    /// The single entry point that starts a fight with a scene person. Typed attacks, freeform
+    /// strikes and the SCENE_ASSAULT offer all come here, so the bystander rule runs once, the
+    /// consequences are recorded once, and every route tells the same story.
+    ///
+    /// It reads the people's attitudes toward the aggressor from the social ledger, plans who
+    /// joins, flees or stays out, submits the SCENE_ASSAULT through the session owner with that
+    /// roster, and only after the owner commits it records the assault for the target and every
+    /// witness who joined or fled, toward this aggressor only. The table log gets the narration
+    /// and the audit log one line.
+    pub(super) async fn start_scene_fight(
+        &self,
+        credential: [u8; 32],
+        origin: SceneFightOrigin,
+        target_person_id: &str,
+        hero_line: &str,
+    ) -> Result<SceneFightStart, Status> {
+        let (member_reply, member_wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::SpeechMember {
+                credential,
+                reply: member_reply,
+            })
+            .map_err(|_| Status::resource_exhausted("dialogue actor queue full"))?;
+        let member = tokio::time::timeout(super::timing::active().reply, member_wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("dialogue owner did not resolve the player"))?
+            .map_err(|_| Status::unavailable("dialogue actor stopped"))??;
+        let current = self.updates.borrow().clone();
+        let scene =
+            super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
+        let hero = journey::name(
+            current.state(),
+            journey::player_entity(member, &current).map_err(actor::unavailable)?,
+        )
+        .map_err(actor::unavailable)?;
+        let plan =
+            journey::scene_fight::plan_with(current.state(), &scene, target_person_id, &|person| {
+                journey::scene_fight::attitude_of(&self.social, member, person)
+            })
+            .map_err(|_| {
+                Status::failed_precondition("scene assault unavailable: nobody to fight")
+            })?;
+        let submit = rpc::SubmitActionRequest {
+            session_id: origin.session_id,
+            run_id: origin.run_id,
+            observed_revision: origin.observed_revision,
+            operation_id: origin.operation_id,
+            offer_id: journey::scene_fight::offer_id(&current),
+            action_kind: rpc::GameplayActionKind::SceneAssault as i32,
+            action_choices: vec![
+                rpc::JourneyChoice {
+                    group_id: journey::scene_fight::TARGET_GROUP.to_owned(),
+                    option_id: plan.target.id.clone(),
+                },
+                rpc::JourneyChoice {
+                    group_id: journey::scene_fight::ROSTER_GROUP.to_owned(),
+                    option_id: plan.roster(),
+                },
+            ],
+            ..Default::default()
+        };
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::Submit {
+                credential,
+                request: submit,
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+        let response = tokio::time::timeout(super::timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("retain the attack operation for lookup"))?
+            .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+        let Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) =
+            response.outcome
+        else {
+            return Err(Status::failed_precondition("attack was not committed"));
+        };
+        if !matches!(
+            receipt.outcome,
+            Some(rpc::decision_receipt::Outcome::Accepted(_))
+        ) {
+            return Err(Status::failed_precondition("attack was refused"));
+        }
+        // The owner has committed the fight: the people it touched now remember it.
+        let recorded = journey::scene_fight::record_consequences(
+            &self.social,
+            member,
+            &format!("{:?}", scene.key),
+            &scene,
+            &plan,
+            hero_line,
+        );
+        if recorded > 0 {
+            let ledger = self.social.clone();
+            let saved = tokio::task::spawn_blocking(move || ledger.save()).await;
+            if !matches!(saved, Ok(Ok(()))) {
+                actor::record_unavailable("scene-fight-social-save", &format!("{saved:?}"));
+            }
+        }
+        let (lines, audit) = journey::scene_fight::announce(&hero, &plan);
+        actor::record_audit_line("gameplay.scene_fight", audit);
+        for line in &lines {
+            self.table_log.push(
+                "Narrator",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Action,
+                line,
+            );
+        }
+        Ok(SceneFightStart {
+            receipt: *receipt,
+            plan,
+            narration: lines.join(" "),
+        })
+    }
+
+    /// The SCENE_ASSAULT offer pressed by a client. It goes through the same entry point as a
+    /// typed attack, so the bystanders and the recorded consequences are the same. A retry of a
+    /// fight that is already committed, or an offer that has gone stale, no longer plans a fight
+    /// and goes to the session owner unchanged, which answers with the retained receipt or its
+    /// own refusal.
+    pub(super) async fn scene_assault_submit(
+        &self,
+        credential: [u8; 32],
+        request: rpc::SubmitActionRequest,
+    ) -> Result<rpc::SubmitActionResponse, Status> {
+        let target = request
+            .action_choices
+            .iter()
+            .find(|choice| choice.group_id == journey::scene_fight::TARGET_GROUP)
+            .map(|choice| choice.option_id.clone());
+        if let Some(target) = target {
+            let origin = SceneFightOrigin {
+                session_id: request.session_id.clone(),
+                run_id: request.run_id.clone(),
+                observed_revision: request.observed_revision.clone(),
+                operation_id: request.operation_id.clone(),
+            };
+            if let Ok(started) = self
+                .start_scene_fight(credential, origin, &target, "I attack.")
+                .await
+            {
+                return Ok(wire::committed(started.receipt));
+            }
+        }
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::Submit {
+                credential,
+                request,
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+        tokio::time::timeout(super::timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("retain your gameplay operation for lookup"))?
+            .map_err(|_| Status::unavailable("gameplay actor stopped"))?
     }
 
     /// The narrator's reply for a line the scene cannot act on. It runs the line through the

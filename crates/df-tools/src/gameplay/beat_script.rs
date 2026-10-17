@@ -759,6 +759,9 @@ impl BeatScript {
         // This is an explicit social session contract, not an escape from graph validation.
         // Only native creation/begin handlers may change its two durable states. Ordinary
         // interactions append their own validated journal without completing a story beat.
+        // A scene fight is no beat either: it is one encounter inside the `freeplay` beat, opened
+        // by a hero's scene assault and closed back into the same beat (`journey::scene_fight`),
+        // which `beat_script_runtime::validate` admits when the pack states scene assaults.
         let [gather, store] = self.beats.as_slice() else {
             return Err(refuse(&self.entry, E::HandlerWiring));
         };

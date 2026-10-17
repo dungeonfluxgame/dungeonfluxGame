@@ -44,5 +44,10 @@
       "damage_dice": 2,
       "damage_sides": 6
     }
+  },
+  "tactical": {
+    "scene_assault": {
+      "battle_scene": "merchant-shop"
+    }
   }
 }

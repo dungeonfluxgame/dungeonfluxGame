@@ -26,6 +26,31 @@ pub(in crate::gameplay) struct SceneCombatBinding {
     pub(super) objective: &'static str,
 }
 
+/// An authored scene person whose assault is admitted as a combat binding. Each row names the
+/// cast member the scene must still hold, the entity `courier_reaction` persists for it, and the
+/// SRD creature it fights with. The courier is the only row: it is the harbor scene's one fixed
+/// person with a persisted entity. The people of a freeplay scene (the shop) do not use this
+/// table; a hero's SCENE_ASSAULT against them is staged by `scene_fight`.
+struct SceneCombatRow {
+    scene_person_id: &'static str,
+    cast_name: &'static str,
+    entity: fn() -> Result<EntityId, RepositoryError>,
+    definition: &'static str,
+    identity: &'static str,
+    creature: &'static df_rules::SrdCreature,
+    objective: &'static str,
+}
+
+const SCENE_COMBAT_ROWS: &[SceneCombatRow] = &[SceneCombatRow {
+    scene_person_id: "courier",
+    cast_name: "Courier",
+    entity: super::courier_reaction::courier,
+    definition: "lantern-wharf-courier",
+    identity: "lantern-wharf-courier-1",
+    creature: &df_rules::SCENE_COMMONER,
+    objective: "scene-npc-assault",
+}];
+
 /// The fixed harbor pack currently authorizes only its canonical Courier.
 /// The entity and identity are already persisted by `courier_reaction`; this
 /// function only exposes the additional authored combat binding.
@@ -33,29 +58,34 @@ pub(in crate::gameplay) fn scene_combat_binding(
     current: &Checkpoint,
     scene_person_id: &str,
 ) -> Result<Option<SceneCombatBinding>, RepositoryError> {
-    if !scene_person_id.eq_ignore_ascii_case("courier")
-        || !super::super::beat_script_runtime::scene(current.state())?
-            .cast
-            .iter()
-            .any(|person| person.id == "courier" && person.name == "Courier")
+    let Some(row) = SCENE_COMBAT_ROWS
+        .iter()
+        .find(|row| scene_person_id.eq_ignore_ascii_case(row.scene_person_id))
+    else {
+        return Ok(None);
+    };
+    if !super::super::beat_script_runtime::scene(current.state())?
+        .cast
+        .iter()
+        .any(|person| person.id == row.scene_person_id && person.name == row.cast_name)
     {
         return Ok(None);
     }
-    let courier = super::courier_reaction::courier()?;
-    let definition = model::content("lantern-wharf-courier")?;
-    let revision = model::label("lantern-wharf-courier-1")?;
-    if !current.state().entities.iter().any(|entity| {
-        entity.id == courier
-            && entity.definition == definition
-            && entity.identity_revision == revision
+    let entity = (row.entity)()?;
+    let definition = model::content(row.definition)?;
+    let revision = model::label(row.identity)?;
+    if !current.state().entities.iter().any(|candidate| {
+        candidate.id == entity
+            && candidate.definition == definition
+            && candidate.identity_revision == revision
     }) {
         return Ok(None);
     }
     Ok(Some(SceneCombatBinding {
-        scene_person_id: "courier",
-        entity: courier,
-        creature: &df_rules::SCENE_COMMONER,
-        objective: "scene-npc-assault",
+        scene_person_id: row.scene_person_id,
+        entity,
+        creature: row.creature,
+        objective: row.objective,
     }))
 }
 
@@ -109,6 +139,27 @@ impl ParticipantOwner for CurrentJourney<'_> {
         else {
             return Err(RepositoryError::InvalidCandidate);
         };
+        // A hero's scene assault in a freeplay scene has no courier source to check: the freeplay
+        // beat is the source, and the offer is the scene's own list of people who can be fought.
+        if action.entry.as_str() == super::scene_fight::ACTION {
+            let fight = super::scene_fight::fight_of(self.current, self.command)?
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            if self.command.observed_revision != current.revision
+                || *actor != player_entity(self.command.member, self.current)?
+                || !targets.is_empty()
+                || !super::scene_fight::offered_targets(self.current, self.command.member)?
+                    .iter()
+                    .any(|(id, _)| *id == fight.plan.target.id)
+                || !self.current.state().encounters.is_empty()
+                || phase(self.current)? != rpc::JourneyPhase::Opening
+                || self.staged.members != self.current.state().members
+                || self.staged.logical_time != self.current.state().logical_time
+                || self.staged.entities.len() > 512
+            {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            return Ok(());
+        }
         let scene_attack = scene_attack_target(self.current, self.command)?.is_some();
         if self.command.observed_revision != current.revision
             || *actor != player_entity(self.command.member, self.current)?
@@ -204,6 +255,17 @@ impl ParticipantOwner for CurrentJourney<'_> {
         else {
             return Ok(ParticipantStatus::Unknown);
         };
+        // The people of a freeplay scene assault were brought on stage by this very command.
+        if let Some(fight) = super::scene_fight::fight_of(self.current, self.command)?
+            && let Some(foe) = fight.foes.iter().find(|foe| foe.entity == *actor)
+        {
+            return super::scene_fight::foe_status(
+                self.current.state(),
+                self.staged,
+                candidate,
+                foe,
+            );
+        }
         let scene_attack = scene_attack_target(self.current, self.command)?.is_some();
         let monster = if scene_attack {
             super::courier_reaction::courier()?
@@ -340,6 +402,14 @@ pub(super) fn admission<'a>(
                 scene_attack_target(current, command).map_err(ParticipantError::Owner)?
             {
                 vec![Ok(binding.entity)]
+            } else if let Some(fight) =
+                super::scene_fight::fight_of(current, command).map_err(ParticipantError::Owner)?
+            {
+                fight
+                    .foes
+                    .iter()
+                    .map(|foe| Ok(foe.entity))
+                    .collect::<Vec<_>>()
             } else if super::tactical::enabled() {
                 super::tactical::enemies()
                     .map_err(ParticipantError::Owner)?

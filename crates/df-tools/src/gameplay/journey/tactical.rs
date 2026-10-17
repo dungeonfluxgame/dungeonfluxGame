@@ -51,6 +51,10 @@ const SCENES: &[(&str, &[u8])] = &[
         "harbor-journey",
         include_bytes!("../../../../../content/battle-scenes/harbor-journey.json"),
     ),
+    (
+        "merchant-shop",
+        include_bytes!("../../../../../content/battle-scenes/merchant-shop.json"),
+    ),
     // The Gaussian-splat scan scenes. A story location never names one: they are reached only
     // when `DF_GAMEPLAY_BATTLE_SCENE` forces the scene (see `force_scene`), and the three that carry
     // no licence are private test scenes.
@@ -108,6 +112,7 @@ const LIGHTING: &[(&str, tactical_rules::Lighting)] = &[
     ),
     ("orrery-library", tactical_rules::Lighting::NightOrInterior),
     ("harbor-journey", tactical_rules::Lighting::NightOrInterior),
+    ("merchant-shop", tactical_rules::Lighting::NightOrInterior),
     ("scan-riverbed", tactical_rules::Lighting::Sunlight),
     ("scan-village", tactical_rules::Lighting::Sunlight),
     ("scan-valley-bridges", tactical_rules::Lighting::Sunlight),
@@ -227,6 +232,15 @@ pub(super) fn scene_ids() -> impl Iterator<Item = &'static str> {
 pub(in crate::gameplay) fn enabled() -> bool {
     pack::active().is_some_and(|loaded| loaded.tuning.tactical.is_some())
 }
+/// The tactical engine is on only so scene people can be fought: the pack has no roster, so no
+/// fight ever starts except by a hero's scene assault, and character creation stays the pack's.
+pub(in crate::gameplay) fn scene_assault_only() -> bool {
+    pack::scene_assault_battle().is_some()
+}
+/// Whether the server holds an authored battle scene (a rules grid) with this id.
+pub(in crate::gameplay) fn holds_scene(id: &str) -> bool {
+    SCENES.iter().any(|(known, _)| *known == id)
+}
 pub(in crate::gameplay) fn present(state: &GameState) -> bool {
     state
         .encounters
@@ -284,6 +298,10 @@ fn roster(
     groups: &[pack::TacticalEnemy],
     test: Option<&TestFight>,
 ) -> Result<Vec<(String, u16)>, RepositoryError> {
+    // A scene-assault-only pack has no roster, so even a test fight cannot invent a random one.
+    if groups.is_empty() {
+        return Ok(Vec::new());
+    }
     let Some(test) = test else {
         return Ok(groups
             .iter()
@@ -359,7 +377,7 @@ pub(super) fn read(state: &GameState) -> Result<Battle, RepositoryError> {
     }
     Ok(battle)
 }
-fn canonical(state: &GameState, id: u32) -> Result<EntityId, RepositoryError> {
+pub(super) fn canonical(state: &GameState, id: u32) -> Result<EntityId, RepositoryError> {
     snapshot(state)?
         .actors
         .iter()
@@ -600,6 +618,7 @@ fn creature_can_speak(kind: tactical_rules::CreatureKind) -> bool {
     };
     df_rules::SRD_521_CREATURES
         .iter()
+        .chain([&df_rules::SCENE_COMMONER])
         .find(|creature| creature.id == id)
         .is_some_and(|creature| creature.can_speak())
 }
@@ -919,6 +938,10 @@ fn finish_if_done(state: &mut GameState, battle: &Battle) -> Result<(), Reposito
     if !battle.finished() {
         return Ok(());
     }
+    // A fight that began in a freeplay scene ends in that same scene: no ending beat, no reward.
+    if super::scene_fight::open(state) {
+        return super::scene_fight::close(state, battle);
+    }
     beat(state, "complete")?;
     Ok(())
 }
@@ -1147,7 +1170,74 @@ pub(super) fn start(
             );
         }
     };
-    let location = staged_location(location);
+    let scene_binding = encounter_admission::scene_attack_target(current, command)?;
+    let foes = match scene_binding {
+        Some(binding) => Foes::Courier(binding),
+        None => Foes::Tuned,
+    };
+    start_on(
+        current,
+        command,
+        state,
+        draws,
+        outcomes,
+        supplier,
+        staged_location(location),
+        foes,
+    )
+}
+/// Starts the fight a hero's scene assault begins in a freeplay scene, on the pack's battle scene.
+/// The foes are the people `scene_fight` chose; their entities already stand in `state`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn start_scene(
+    current: &Checkpoint,
+    command: &CommandInput,
+    state: &mut GameState,
+    draws: &mut Vec<ActualDraw>,
+    outcomes: &mut Vec<rpc::CombatOutcome>,
+    supplier: DiceSource<'_>,
+    battle_scene: &str,
+    fight: &super::scene_fight::Fight,
+) -> Result<(), RepositoryError> {
+    start_on(
+        current,
+        command,
+        state,
+        draws,
+        outcomes,
+        supplier,
+        staged_location(battle_scene.to_owned()),
+        Foes::Scene(fight),
+    )
+}
+/// Who the fight is against.
+enum Foes<'a> {
+    /// The pack's own roster (`tuning.tactical.enemies`).
+    Tuned,
+    /// The canonical Courier of a harbor scene assault.
+    Courier(encounter_admission::SceneCombatBinding),
+    /// The people of a freeplay scene assault.
+    Scene(&'a super::scene_fight::Fight),
+}
+#[allow(clippy::too_many_arguments)]
+fn start_on(
+    current: &Checkpoint,
+    command: &CommandInput,
+    state: &mut GameState,
+    draws: &mut Vec<ActualDraw>,
+    outcomes: &mut Vec<rpc::CombatOutcome>,
+    supplier: DiceSource<'_>,
+    location: String,
+    foes: Foes<'_>,
+) -> Result<(), RepositoryError> {
+    let scene_binding = match &foes {
+        Foes::Courier(binding) => Some(*binding),
+        _ => None,
+    };
+    let scene_fight = match &foes {
+        Foes::Scene(fight) => Some(*fight),
+        _ => None,
+    };
     let bytes = noted(
         "fight-scene-bytes",
         SCENES
@@ -1182,7 +1272,6 @@ pub(super) fn start(
             .ok_or(RepositoryError::InvalidCandidate),
     )?;
     let map = noted("fight-scene-map", scene_map(bytes, &layout.id))?;
-    let scene_binding = encounter_admission::scene_attack_target(current, command)?;
     let mut specs = Vec::new();
     let mut actors = Vec::new();
     for (index, entity) in noted(
@@ -1254,6 +1343,12 @@ pub(super) fn start(
     }
     let enemy_roster = if let Some(binding) = scene_binding {
         vec![(binding.entity, binding.creature.id.to_owned(), 0_u16)]
+    } else if let Some(fight) = scene_fight {
+        fight
+            .foes
+            .iter()
+            .map(|foe| (foe.entity, foe.creature.id.to_owned(), 0_u16))
+            .collect()
     } else {
         enemies()?
     };
@@ -1272,7 +1367,10 @@ pub(super) fn start(
             "fight-enemy-spec",
             CombatantSpec::creature(id, &source_id, cell, ammunition).map_err(bad),
         )?;
-        if state.entities.iter().any(|entity| entity.id == who) && scene_binding.is_none() {
+        if state.entities.iter().any(|entity| entity.id == who)
+            && scene_binding.is_none()
+            && scene_fight.is_none()
+        {
             return noted(
                 "fight-enemy-duplicate",
                 Err(RepositoryError::InvalidCandidate),
@@ -1285,7 +1383,7 @@ pub(super) fn start(
                 y: i64::from(cell.1) * 5,
                 z: 0,
             });
-        } else if scene_binding.is_some() {
+        } else if scene_binding.is_some() || scene_fight.is_some() {
             // A scene assault must use the authored canonical NPC already in
             // the scene. Never synthesize a Bandit-shaped replacement when
             // that identity is missing.
@@ -1418,9 +1516,11 @@ pub(super) fn start(
         participants: actors.iter().map(|(_, who)| *who).collect(),
         turn_order: Vec::new(),
         active_turn: None,
-        objectives: vec![model::content(
-            scene_binding.map_or("defend-courier", |binding| binding.objective),
-        )?],
+        objectives: vec![model::content(match (scene_binding, scene_fight) {
+            (Some(binding), _) => binding.objective,
+            (None, Some(_)) => super::scene_fight::OBJECTIVE,
+            (None, None) => "defend-courier",
+        })?],
         combat_policy: model::content("tactical-srd521-cover-policy")?,
         tactical: Some(TacticalSnapshot {
             schema: 1,
@@ -1433,7 +1533,10 @@ pub(super) fn start(
         }),
     });
     noted("fight-store", store(state, &result.battle))?;
-    noted("fight-beat", beat(state, "combat"))?;
+    // A freeplay scene stays on its own beat: the fight is an encounter inside it, not a beat.
+    if scene_fight.is_none() {
+        noted("fight-beat", beat(state, "combat"))?;
+    }
     if scene_binding.is_some() {
         Ok(())
     } else {
@@ -2108,7 +2211,8 @@ pub(super) fn stage(
             supplier,
         )?;
     }
-    if all_heroes_dead(state)? {
+    // A freeplay fight that just ended has closed its encounter, so there is no battle to read.
+    if present(state) && all_heroes_dead(state)? {
         super::super::beat_script_runtime::end_for_total_party_death(state).inspect_err(|_| {
             crate::gameplay::refusal_detail::note("total-party-death-transition")
         })?;
@@ -2601,7 +2705,8 @@ pub(super) fn initiative(
 ) -> Result<Vec<rpc::InitiativeRoll>, RepositoryError> {
     let state = current.state();
     let battle = read(state)?;
-    let start = state.facts.iter().find(|fact| matches!(&fact.value, FactValue::ContentEvent {definition, ..} if definition.entry.as_str() == "defend-courier")).ok_or(RepositoryError::InvalidCandidate)?;
+    // The latest start: a freeplay scene may see more than one fight.
+    let start = state.facts.iter().rev().find(|fact| matches!(&fact.value, FactValue::ContentEvent {definition, ..} if matches!(definition.entry.as_str(), "defend-courier" | super::scene_fight::OBJECTIVE))).ok_or(RepositoryError::InvalidCandidate)?;
     let decision = state
         .decisions
         .iter()
@@ -6764,6 +6869,35 @@ mod shared_scene_tests {
             scene_map(quay, "open-quay").unwrap().lighting(),
             tactical_rules::Lighting::NightOrInterior
         );
+    }
+
+    // The shop grid is served from SCENES and the renderer's embedded list; its rules grid must
+    // validate on each layout, with the street door open (non-blocking) and counter blocked.
+    #[test]
+    fn the_shop_battle_scene_loads_and_validates_on_both_layouts() {
+        let bytes: &[u8] =
+            include_bytes!("../../../../../content/battle-scenes/merchant-shop.json");
+        let cell = tactical_rules::Cell;
+        for layout in ["counter-side", "rack-aisle"] {
+            let map = tactical_rules::BattleMap::from_json(bytes, layout)
+                .unwrap_or_else(|error| panic!("{layout}: {error:?}"));
+            assert_eq!(map.id(), layout);
+            assert_eq!(map.dimensions(), (8, 6));
+            assert_eq!(map.hero_spawns().len(), 4);
+            assert_eq!(map.enemy_spawns().len(), 4);
+        }
+        let counter_side = tactical_rules::BattleMap::from_json(bytes, "counter-side").unwrap();
+        assert!(counter_side.is_blocked(cell(1, 1)), "counter");
+        assert!(counter_side.is_blocked(cell(6, 0)), "clothing rack");
+        assert!(
+            !counter_side.is_blocked(cell(2, 0)),
+            "Marek's floor behind the counter"
+        );
+        assert!(!counter_side.is_blocked(cell(7, 5)), "street door is open");
+        let rack_aisle = tactical_rules::BattleMap::from_json(bytes, "rack-aisle").unwrap();
+        assert!(rack_aisle.is_blocked(cell(2, 2)), "aisle rack");
+        assert!(!rack_aisle.is_blocked(cell(1, 5)), "hero spawn");
+        assert!(tactical_rules::BattleMap::from_json(bytes, "no-such-layout").is_err());
     }
 
     #[test]

@@ -10,6 +10,9 @@ pub(in crate::gameplay) fn paid(state: &GameState) -> bool {
 /// Public encounter total, derived from the canonical won ending, not a projected image.
 /// SRD 5.2.1 p. 256: "XP is awarded for defeating the monster in combat or otherwise neutralizing it."
 /// Character allocation and advancement remain a separately configured progression policy.
+/// House decision: a freeplay scene assault awards no XP. Freeplay has no ending and its fight
+/// closes its encounter in `scene_fight::close`, so the `ended` guard below returns `None` for it;
+/// that must stay so.
 pub(in crate::gameplay) fn encounter_experience(
     state: &GameState,
 ) -> Result<Option<u32>, RepositoryError> {

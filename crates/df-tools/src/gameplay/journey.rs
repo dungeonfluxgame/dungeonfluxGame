@@ -39,6 +39,7 @@ mod objective_outcome;
 #[cfg(test)]
 mod objective_outcome_tests;
 pub(super) mod rewards;
+pub(super) mod scene_fight;
 #[cfg(test)]
 mod session_flow_tests;
 pub(super) mod session_machine;
@@ -81,8 +82,12 @@ const THREAD_EVENTS: &[(&str, &str)] = &[
     ("pick-up-weapon", THREAT_THREAD),
     ("end-turn", THREAT_THREAD),
 ];
+// `scene-person` is the definition of every world entity a scene assault creates for a scene
+// person (Marek, Corin, Jessa); their identity labels carry the person id (`scene_fight`).
 pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "scene-interaction",
+    "scene-person",
+    "scene-assault",
     "npc-scene-interaction",
     "merchant-trade-quote",
     "merchant-quote-closure",
@@ -268,7 +273,20 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
         .map(|bytes| Ok((bytes, None)))
         .collect::<Result<Vec<_>, RepositoryError>>()?;
     if pack::with_content(|content| content.is_freeplay()) {
-        // A social slice has no authored encounter participants or enemy resource bounds.
+        // A social slice has no authored encounter roster. Only the scene people a hero's scene
+        // assault can bring into a fight have enemy resource bounds.
+        if tactical::scene_assault_only() {
+            for (person, creature) in scene_fight::combatants() {
+                let spec = df_rules::tactical::CombatantSpec::creature(
+                    3,
+                    creature.id,
+                    df_rules::tactical::Cell(0, 0),
+                    0,
+                )
+                .map_err(bad)?;
+                owners.push((*scene_fight::person_entity(&person)?.as_bytes(), Some(spec)));
+            }
+        }
     } else if tactical::enabled() {
         for (who, source_id, ammunition) in tactical::enemies()? {
             owners.push((
@@ -334,6 +352,8 @@ pub(super) fn resources() -> Result<Vec<ResourceConstraint>, RepositoryError> {
             ("held-weapon", 0, 1),
             ("action-used", 0, 1),
             ("bonus-used", 0, 1),
+            // Set only for a hero who died in a freeplay fight (`scene_fight::close`).
+            ("dead", 0, 1),
         ] {
             result.push(ResourceConstraint {
                 owner: entity(owner)?,
@@ -473,6 +493,9 @@ pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, Repositor
     }
     if who == entity(BANDIT)? {
         return Ok(pack::with_content(|pack| pack.bandit.name.clone()));
+    }
+    if let Some(person) = scene_fight::person_name(state, who) {
+        return Ok(person);
     }
     if state.entities.iter().any(|candidate| {
         candidate.id == who && candidate.definition.entry.as_str() == "lantern-wharf-courier"
@@ -972,6 +995,9 @@ pub(super) fn offer_id(current: &Checkpoint, kind: rpc::GameplayActionKind) -> S
     if let Some(id) = super::beat_script_runtime::scripted_id(current, kind) {
         return id;
     }
+    if kind == rpc::GameplayActionKind::SceneAssault {
+        return scene_fight::offer_id(current);
+    }
     if kind == rpc::GameplayActionKind::ChooseHarborScene {
         return format!(
             "journey-inn-{}-{}-{}",
@@ -1028,6 +1054,11 @@ pub(super) fn offered(
     }
     if tactical::present(current.state())
         && tactical::hero_is_dead(current.state(), player_entity(member, current)?)?
+    {
+        return Ok(Vec::new());
+    }
+    // A hero who died in a freeplay fight has nothing more to do: no fight is open to read.
+    if player_entity(member, current).is_ok_and(|who| scene_fight::hero_dead(current.state(), who))
     {
         return Ok(Vec::new());
     }
@@ -3843,6 +3874,11 @@ fn stage_using(
             },
         );
     }
+    // A scene assault starts a fight inside the freeplay scene; it is no beat offer, so the
+    // machine and the offer list are consulted by `scene_fight` itself.
+    if kind == rpc::GameplayActionKind::SceneAssault {
+        return scene_fight::stage_assault(current, command, supplier);
+    }
     if kind == rpc::GameplayActionKind::ExamineHarborSeal
         && submitted_choices
             .iter()
@@ -3954,6 +3990,8 @@ fn stage_using(
                 .current(current.state())
                 .is_ok_and(|beat| beat.kind != super::beat_script::BeatKind::Fight)
         });
+    // A step of a freeplay scene fight: no beat offer backs it and no script choice records it.
+    let scene_fight_step = scene_fight::open(current.state());
     match kind {
         kind if tactical::combat_action(kind) && tactical::present(&state) => {
             tactical::stage(
@@ -4205,6 +4243,7 @@ fn stage_using(
                 && selected.effect != super::beat_script::BeatEffect::Observe)
                 || original_kind == rpc::GameplayActionKind::CreateCharacter
                 || aftermath
+                || scene_fight_step
             {
                 None
             } else {
@@ -4219,16 +4258,19 @@ fn stage_using(
     })?;
     // The candidate must land where the machine's transition said: no
     // executor may move the session anywhere else, or backwards.
-    if !session_machine::outcome_legal(
-        machine_state,
-        machine_event,
-        machine_transition,
-        session_machine::SessionState::of(&candidate)?,
-    ) {
+    let landed = session_machine::SessionState::of(&candidate)?;
+    if !(if scene_fight_step {
+        session_machine::scene_fight_outcome_legal(machine_state, landed)
+    } else {
+        session_machine::outcome_legal(machine_state, machine_event, machine_transition, landed)
+    }) {
         refusal_detail::note("session-machine-outcome");
         return Err(RepositoryError::InvalidCandidate);
     }
-    super::beat_script::validate_step(current, &candidate, original_kind, &selected.id)?;
+    // A freeplay fight step stays on the freeplay beat, which no beat transition describes.
+    if !scene_fight_step {
+        super::beat_script::validate_step(current, &candidate, original_kind, &selected.id)?;
+    }
     if private {
         super::courier_ai::append_request(candidate, command.operation)
     } else {
@@ -4257,16 +4299,63 @@ pub(super) fn validate_script_native_prefix(
 /// Reuse character admission to verify a no-encounter script has preserved all source
 /// choices, abilities, resources, equipment identities and creation provenance.
 pub(super) fn validate_script_characters(state: &GameState) -> Result<(), RepositoryError> {
-    let source = rule()?;
-    let bootstrap = bootstrap_member()?;
+    // A freeplay scene that has seen a fight also holds the fought people's resources, and its
+    // heroes' combat resources and weapon counts are no longer their creation values.
+    let fought = scene_fight::fought(state);
     if state.characters.len() > 2
-        || state
-            .resources
-            .iter()
-            .any(|r| !state.characters.iter().any(|c| c.entity == r.owner))
+        || state.resources.iter().any(|r| {
+            !state.characters.iter().any(|c| c.entity == r.owner)
+                && !(fought && scene_fight::is_person(state, r.owner))
+        })
     {
         return Err(RepositoryError::InvalidCandidate);
     }
+    let expected = recreated_heroes(state)?;
+    let actual_items = state
+        .entities
+        .iter()
+        .filter(|entity| pack::COMPILED_ITEMS.contains(&entity.definition.entry.as_str()))
+        .collect::<Vec<_>>();
+    let expected_items = expected
+        .entities
+        .iter()
+        .filter(|entity| pack::COMPILED_ITEMS.contains(&entity.definition.entry.as_str()))
+        .collect::<Vec<_>>();
+    let (resources_agree, inventory_agrees) = if fought {
+        let heroes = state
+            .resources
+            .iter()
+            .filter(|r| state.characters.iter().any(|c| c.entity == r.owner))
+            .cloned()
+            .collect::<Vec<_>>();
+        (
+            scene_fight::resources_match(&expected.resources, &heroes),
+            scene_fight::inventory_matches(&expected.inventory, &state.inventory),
+        )
+    } else {
+        (
+            expected.resources == state.resources,
+            expected.inventory == state.inventory,
+        )
+    };
+    if expected.characters != state.characters
+        || !resources_agree
+        || !inventory_agrees
+        || expected.continuity.creation != state.continuity.creation
+        || actual_items != expected_items
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    Ok(())
+}
+
+/// The state as character creation left it: `state` with every accepted character created again
+/// from its recorded choices, so each hero has the creation resources, kit and sheet. Refuses a
+/// character whose record does not belong to its member or its build. The replay of a creation
+/// receipt reads the sheet from this, because a freeplay fight changes a hero's combat resources.
+pub(super) fn recreated_heroes(state: &GameState) -> Result<GameState, RepositoryError> {
+    let source = rule()?;
+    let bootstrap = bootstrap_member()?;
     let mut expected = state.clone();
     expected.characters.clear();
     expected.resources.clear();
@@ -4302,25 +4391,7 @@ pub(super) fn validate_script_characters(state: &GameState) -> Result<(), Reposi
             .collect::<Result<Vec<_>, RepositoryError>>()?;
         accept_character(&mut expected, character.entity, character.owner, &choices)?;
     }
-    let actual_items = state
-        .entities
-        .iter()
-        .filter(|entity| pack::COMPILED_ITEMS.contains(&entity.definition.entry.as_str()))
-        .collect::<Vec<_>>();
-    let expected_items = expected
-        .entities
-        .iter()
-        .filter(|entity| pack::COMPILED_ITEMS.contains(&entity.definition.entry.as_str()))
-        .collect::<Vec<_>>();
-    if expected.characters != state.characters
-        || expected.resources != state.resources
-        || expected.inventory != state.inventory
-        || expected.continuity.creation != state.continuity.creation
-        || actual_items != expected_items
-    {
-        return Err(RepositoryError::InvalidCandidate);
-    }
-    Ok(())
+    Ok(expected)
 }
 
 fn phase_from_state(
@@ -4335,6 +4406,14 @@ fn phase_from_state(
             narrative_phase::classify(state)
         } else {
             let beat = script.current(before.state())?;
+            // A step of a freeplay scene fight never leaves the freeplay beat: the receipt says
+            // Combat while the encounter is open and the beat's own phase once it has closed.
+            if scene_fight::open(before.state()) {
+                return Ok(scene_fight::phase_after(
+                    state,
+                    super::beat_script_runtime::phase_of(beat),
+                ));
+            }
             // After a won fight a dying hero's timed Death Saving Throws advance the clock on
             // the beat that follows the fight. The offer that does it belongs to the fight
             // beat, so the following beat has no transition for it and the story stays put.

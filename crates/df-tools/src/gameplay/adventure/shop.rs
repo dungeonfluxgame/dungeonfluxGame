@@ -29,11 +29,15 @@ pub(super) fn tuning_bytes(tuning: &pack::TuningFile) -> Result<Vec<u8>, serde_j
         schema: &'a str,
         pack: &'a str,
         hero: &'a pack::HeroTuning,
+        /// The scene-assault-only tactical block: without it a reloaded shop could not fight.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tactical: &'a Option<pack::TacticalEncounterTuning>,
     }
     serde_json::to_vec_pretty(&CreationTuning {
         schema: &tuning.schema,
         pack: &tuning.pack,
         hero: &tuning.hero,
+        tactical: &tuning.tactical,
     })
 }
 
@@ -301,8 +305,10 @@ mod tests {
                     .any(|entity| entity.definition.entry.as_str() == "lantern-wharf-courier")
             );
             let offers = runtime::view_offers(&opening, native::first()).unwrap();
-            assert_eq!(offers.len(), 1);
+            // The scene's own look-around, and its offer to start a fight with any of its people.
+            assert_eq!(offers.len(), 2);
             assert_eq!(offers[0].1, "Look around");
+            assert_eq!(offers[1].0, rpc::GameplayActionKind::SceneAssault);
             let view =
                 wire::journey_view(&opening, LocalDemoRole::Player, native::first()).unwrap();
             for (id, name) in [
@@ -1384,7 +1390,12 @@ mod tests {
         assert_eq!(content["scenes"].as_array().unwrap().len(), 2);
         assert_eq!(content["offer_labels"].as_object().unwrap().len(), 2);
         let tuning: serde_json::Value = serde_json::from_slice(&documents.tuning).unwrap();
-        assert_eq!(tuning.as_object().unwrap().len(), 3);
+        // Schema, pack, creation rules, and the scene-assault-only tactical block: no roster.
+        assert_eq!(tuning.as_object().unwrap().len(), 4);
+        assert_eq!(
+            tuning["tactical"],
+            json!({"scene_assault": {"battle_scene": "merchant-shop"}})
+        );
         let record: serde_json::Value = serde_json::from_slice(&documents.record).unwrap();
         assert!(record.get("settings").is_none());
         assert!(record.get("freeplay_setting").is_some());

@@ -264,6 +264,18 @@ pub(super) fn scene(state: &GameState) -> Result<pack::Scene, RepositoryError> {
         {
             setting.model = Some(snapshot.model);
         }
+        // People who fled a fight are gone from the scene, and people it left down neither answer
+        // nor can be spoken to: only those still standing are on stage. The narration says where
+        // the others lie (`scene_fight::aftermath_narration`).
+        let mut standing = Vec::with_capacity(scene.cast.len());
+        for member in std::mem::take(&mut scene.cast) {
+            if journey::scene_fight::presence(state, &member.id)?
+                == journey::scene_fight::Presence::Standing
+            {
+                standing.push(member);
+            }
+        }
+        scene.cast = standing;
         Ok(scene)
     })
 }
@@ -462,11 +474,17 @@ pub(super) fn validate(
         .validate_resume(current.basis(), &model::pins()?)
         .map_err(|_| RepositoryError::InvalidCandidate)?;
     let state = current.state();
+    // A freeplay state may hold one encounter: the open fight of a hero's scene assault.
+    if !state.encounters.is_empty()
+        && !(script.mode == beat_script::ScriptMode::Freeplay
+            && journey::scene_fight::encounters_admissible(current)?)
+    {
+        refusal_detail::note("scene-fight-encounter");
+        return invalid();
+    }
     if script.uses_encounter()
         || state.narrative.definition != model::content("room")?
-        || !state.encounters.is_empty()
         || !state.schedules.is_empty()
-        || state.logical_time.ticks != 0
         || state.narrative.remaining_budget != pack::narrative_budget()
     {
         return invalid();
@@ -481,6 +499,10 @@ pub(super) fn validate(
     let mut creations = 0usize;
     let mut restart_seen = false;
     let mut observation_draws = 0usize;
+    // Freeplay scene fights: whether one is open in the replay so far, and what they drew.
+    let mut fight_open = false;
+    let mut fight_draws = 0usize;
+    let mut fought = false;
     for decision in &state.decisions {
         if decision.source_policy.as_str() != journey::THREAD_POLICY {
             continue;
@@ -508,8 +530,44 @@ pub(super) fn validate(
             restart_seen = true;
             continue;
         }
+        if script.mode == beat_script::ScriptMode::Freeplay
+            && let FactValue::ContentEvent {
+                definition,
+                subjects,
+            } = &terminal.value
+            && let Some(step) = journey::scene_fight::replay_step(
+                definition.entry.as_str(),
+                receipt.phase,
+                fight_open,
+            )?
+        {
+            // A scene fight is an encounter inside the freeplay beat: its decisions record rules
+            // outcomes, never a script choice, so they leave the beat and its ledgers as they were.
+            if !subjects.is_empty()
+                || terminal.audience != AudienceScope::Shared
+                || choice(state, decision)?.is_some()
+                || receipt.check.is_some()
+                || receipt.scene.is_some()
+                || receipt.character.is_some()
+            {
+                refusal_detail::note("scene-fight-replay");
+                return invalid();
+            }
+            fought = true;
+            fight_draws += decision.draws.len();
+            fight_open = step != journey::scene_fight::Step::Closes;
+            continue;
+        }
         let Some((choice_fact, id, member)) = choice(state, decision)? else {
-            let mut creation_state = state.clone();
+            // A fight changes a hero's combat resources (and a fight in progress adds weapon
+            // rows to the sheet), so a fought scene reads each sheet as creation left it.
+            let mut creation_state = if journey::scene_fight::fought(state) {
+                let mut recreated = journey::recreated_heroes(state)?;
+                recreated.encounters.clear();
+                recreated
+            } else {
+                state.clone()
+            };
             creation_state
                 .decisions
                 .retain(|record| record.revision <= decision.revision);
@@ -639,7 +697,16 @@ pub(super) fn validate(
     }
     // Every die is an observation check or a scene-interaction theft check; the scene replay
     // re-validates each theft draw against its receipt.
-    if state.draws.len() != observation_draws + journey::living_scene::interaction_draws(state) {
+    // Time passes in a fight by whole rounds and in no other freeplay step.
+    if state.draws.len()
+        != observation_draws + fight_draws + journey::living_scene::interaction_draws(state)
+        || fight_open != !state.encounters.is_empty()
+        || (state.logical_time.ticks != 0
+            && !(fought
+                && state.logical_time.ticks_per_second == 1
+                && state.logical_time.ticks % 6 == 0))
+    {
+        refusal_detail::note("scene-fight-accounting");
         return invalid();
     }
     if creations != state.characters.len()
@@ -669,7 +736,7 @@ pub(super) fn validate(
     {
         return invalid();
     }
-    Ok(phase_of(beat))
+    Ok(journey::scene_fight::phase_after(state, phase_of(beat)))
 }
 
 fn finding_skill_name(skill: pack::FindingSkill) -> &'static str {
@@ -889,6 +956,11 @@ pub(super) fn select(
 ) -> Result<BeatOffer, RepositoryError> {
     beat_script::with_script(|script| {
         let beat = script.current(current.state())?;
+        // A freeplay scene fight has no fight beat to select from: its steps are the engine's own
+        // tactical actions, which carry the effect of the attack, Second Wind or End Turn offer.
+        if journey::scene_fight::open(current.state()) && journey::tactical::combat_action(action) {
+            return journey::scene_fight::step_offer(action);
+        }
         if journey::tactical::present(current.state()) && journey::tactical::combat_action(action) {
             let source = if beat.kind == BeatKind::Fight {
                 beat
@@ -941,7 +1013,9 @@ pub(super) fn matches_id(
     action: rpc::GameplayActionKind,
     id: &str,
 ) -> Result<bool, RepositoryError> {
-    if action == rpc::GameplayActionKind::StartNewAdventure {
+    if action == rpc::GameplayActionKind::StartNewAdventure
+        || action == rpc::GameplayActionKind::SceneAssault
+    {
         return Ok(id == journey::offer_id(current, action));
     }
     beat_script::with_script(|script| {
@@ -995,6 +1069,12 @@ pub(super) fn view_offers(
             return Ok(result);
         }
         let mut result = Vec::new();
+        // A hero who died in a freeplay fight has nothing left to choose.
+        if journey::player_entity(member, current)
+            .is_ok_and(|who| journey::scene_fight::hero_dead(current.state(), who))
+        {
+            return Ok(result);
+        }
         for offer in &script.current(current.state())?.offers {
             // Authored pure steps are the script's own; no handler affordance backs them.
             let pure = matches!(
@@ -1016,6 +1096,14 @@ pub(super) fn view_offers(
                     id_for(current, offer),
                 ));
             }
+        }
+        // A freeplay scene may offer to start a fight with any of its people who can be fought.
+        if !journey::scene_fight::offered_targets(current, member)?.is_empty() {
+            result.push((
+                rpc::GameplayActionKind::SceneAssault,
+                journey::scene_fight::OFFER_LABEL.to_owned(),
+                journey::scene_fight::offer_id(current),
+            ));
         }
         Ok(result)
     })
@@ -1108,6 +1196,9 @@ pub(super) fn action_label(
 ) -> Result<String, RepositoryError> {
     if kind == rpc::GameplayActionKind::StartNewAdventure {
         return Ok("Start a new adventure".to_owned());
+    }
+    if kind == rpc::GameplayActionKind::SceneAssault {
+        return Ok(journey::scene_fight::OFFER_LABEL.to_owned());
     }
     if journey::tactical::enabled() && journey::tactical::combat_action(kind) {
         return Ok(match kind {

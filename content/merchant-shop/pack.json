@@ -203,6 +203,7 @@
       "cast": [
         {
           "id": "merchant",
+          "stat_block": "commoner",
           "name": "Marek",
           "role": "patron",
           "sprite": "sprite-patron-merchant-documentary-photo",
@@ -213,6 +214,7 @@
         },
         {
           "id": "shop-adventurer",
+          "stat_block": "scout",
           "name": "Corin",
           "role": "bystander",
           "sprite": "sprite-shop-adventurer-documentary-photo",
@@ -223,6 +225,7 @@
         },
         {
           "id": "shop-soldier",
+          "stat_block": "guard",
           "name": "Jessa",
           "role": "bystander",
           "sprite": "sprite-shop-soldier-documentary-photo",
@@ -252,6 +255,7 @@
       "cast": [
         {
           "id": "merchant",
+          "stat_block": "commoner",
           "name": "Marek",
           "role": "patron",
           "sprite": "sprite-patron-merchant-documentary-photo",
@@ -262,6 +266,7 @@
         },
         {
           "id": "shop-adventurer",
+          "stat_block": "scout",
           "name": "Corin",
           "role": "bystander",
           "sprite": "sprite-shop-adventurer-documentary-photo",
@@ -272,6 +277,7 @@
         },
         {
           "id": "shop-soldier",
+          "stat_block": "guard",
           "name": "Jessa",
           "role": "bystander",
           "sprite": "sprite-shop-soldier-documentary-photo",

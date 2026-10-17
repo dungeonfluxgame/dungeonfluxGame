@@ -29,12 +29,12 @@ impl SrdCreature {
 }
 /// Authored scene-NPC profile used only by an explicit scene combat binding.
 /// Source: official SRD v5.2.1 (CC-BY-4.0), Wizards of the Coast,
-/// https://www.dndbeyond.com/srd. Commoner is kept separate from the generated
-/// antagonist table because it is not a generated adventure antagonist.
+/// https://www.dndbeyond.com/srd, p. 275 (Commoner, CR 0). Commoner is kept separate from the
+/// generated antagonist table because it is not a generated adventure antagonist.
 pub const SCENE_COMMONER: SrdCreature = SrdCreature {
     id: "commoner",
     name: "Commoner",
-    page: 0,
+    page: 275,
     challenge_rating: ChallengeRating::Zero,
     languages: "Common",
     exact: true,
@@ -101,6 +101,8 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
         },
     },
     // SRD 5.2.1, p. 296. Spear used as a melee attack, as the stat block allows. Thrown use is not offered.
+    // Shop caveat: Jessa is off duty in plain clothes, but the block's Chain Shirt and Shield (AC 16)
+    // are kept as written rather than inventing an unarmored variant.
     SrdCreature {
         id: "guard",
         name: "Guard",
@@ -653,6 +655,22 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         "melee, reach 5 ft",
     ),
     feature("scout", "Longbow", Action, Implemented, "ranged 150/600 ft"),
+    // SRD 5.2.1, p. 275. Training grants Advantage on one GM-chosen skill check outside combat;
+    // no tactical fight resolves skill checks, so this trait is disclosed rather than modelled.
+    feature(
+        "commoner",
+        "Training",
+        Trait,
+        Missing,
+        "Advantage on one GM-chosen skill check is not modelled; no tactical fight rolls skill checks.",
+    ),
+    feature(
+        "commoner",
+        "Club",
+        Action,
+        Implemented,
+        "melee, reach 5 ft, 1d4 bludgeoning",
+    ),
 ];
 /// The gaps a fight against this creature must disclose.
 pub fn missing_features(creature: &str) -> impl Iterator<Item = &'static CreatureFeature> + '_ {
@@ -768,7 +786,10 @@ mod tests {
         }
         for row in SRD_521_CREATURE_FEATURES {
             assert!(
-                SRD_521_CREATURES.iter().any(|c| c.id == row.creature),
+                SRD_521_CREATURES
+                    .iter()
+                    .chain([&SCENE_COMMONER])
+                    .any(|c| c.id == row.creature),
                 "{}",
                 row.creature
             );
@@ -838,5 +859,77 @@ mod tests {
                 creature.id, creature.page
             );
         }
+    }
+
+    fn compiled(id: &str) -> &'static SrdCreature {
+        SRD_521_CREATURES
+            .iter()
+            .chain([&SCENE_COMMONER])
+            .find(|creature| creature.id == id)
+            .expect("shop cast creature from SRD 5.2.1")
+    }
+
+    // SRD 5.2.1 p. 275 (Commoner: AC 10, HP 4 (1d8), all abilities 10, Club +2, 2 (1d4));
+    // p. 296 (Guard: AC 16, HP 11, Str 13 Dex 12 Con 12 Int 10 Wis 11 Cha 10, Spear +3, 4 (1d6+1));
+    // p. 322 (Scout: AC 13, HP 16, Str 11 Dex 14 Con 12 Int 11 Wis 13 Cha 11, Shortsword +4, 5 (1d6+2)).
+    #[test]
+    fn the_shop_cast_stat_blocks_match_their_srd_pages() {
+        let commoner = compiled("commoner");
+        assert_eq!(commoner.page, 275);
+        assert_eq!(commoner.rules.hit_points, 4);
+        assert_eq!(commoner.rules.armor_class, 10);
+        assert_eq!(commoner.rules.abilities, [10; 6]);
+        assert_eq!(commoner.rules.attack_bonus, 2);
+        assert_eq!(commoner.rules.damage_modifier, 0);
+        assert_eq!(commoner.rules.weapon.damage_dice, 1);
+        assert_eq!(commoner.rules.weapon.damage_sides, 4);
+
+        let guard = compiled("guard");
+        assert_eq!(guard.page, 296);
+        assert_eq!(guard.rules.hit_points, 11);
+        assert_eq!(guard.rules.armor_class, 16);
+        assert_eq!(guard.rules.abilities, [13, 12, 12, 10, 11, 10]);
+        assert_eq!(guard.rules.attack_bonus, 3);
+        assert_eq!(guard.rules.damage_modifier, 1);
+        assert_eq!(guard.rules.weapon.damage_sides, 6);
+
+        let scout = compiled("scout");
+        assert_eq!(scout.page, 322);
+        assert_eq!(scout.rules.hit_points, 16);
+        assert_eq!(scout.rules.armor_class, 13);
+        assert_eq!(scout.rules.abilities, [11, 14, 12, 11, 13, 11]);
+        assert_eq!(scout.rules.attack_bonus, 4);
+        assert_eq!(scout.rules.damage_modifier, 2);
+        assert_eq!(scout.rules.weapon.damage_sides, 6);
+    }
+
+    // The three shop cast stat blocks each list their actions, and the Commoner's skill
+    // Training is disclosed as missing rather than silently omitted.
+    #[test]
+    fn the_shop_cast_srd_feature_disclosure_covers_each_creature_used() {
+        for id in ["commoner", "guard", "scout"] {
+            let rows = SRD_521_CREATURE_FEATURES
+                .iter()
+                .filter(|row| row.creature == id)
+                .collect::<Vec<_>>();
+            assert!(
+                rows.iter().any(|row| row.kind == Action),
+                "{id} lists no action"
+            );
+            assert!(rows.iter().all(|row| !row.note.is_empty()));
+        }
+        let training = SRD_521_CREATURE_FEATURES
+            .iter()
+            .find(|row| row.creature == "commoner" && row.name == "Training")
+            .expect("commoner Training disclosed");
+        assert_eq!(training.status, Missing);
+        assert_eq!(
+            missing_features("commoner")
+                .map(|row| row.name)
+                .collect::<Vec<_>>(),
+            vec!["Training"]
+        );
+        assert_eq!(missing_features("guard").count(), 0);
+        assert_eq!(missing_features("scout").count(), 0);
     }
 }

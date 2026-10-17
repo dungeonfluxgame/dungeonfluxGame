@@ -58,6 +58,7 @@ pub(super) enum PlayAction {
     StabiliseWithHealersKit,
     StabiliseMedicine,
     HelpAttack,
+    SceneAssault,
     EndTurn,
     OpportunityAttack,
     DeclineReaction,
@@ -90,6 +91,7 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "stabilise-kit" | "stabilise-with-healers-kit" => PlayAction::StabiliseWithHealersKit,
         "stabilise-medicine" => PlayAction::StabiliseMedicine,
         "help-attack" => PlayAction::HelpAttack,
+        "scene-assault" => PlayAction::SceneAssault,
         "end-turn" => PlayAction::EndTurn,
         "opportunity-attack" => PlayAction::OpportunityAttack,
         "decline-reaction" => PlayAction::DeclineReaction,
@@ -124,6 +126,7 @@ impl PlayAction {
             Self::StabiliseWithHealersKit => rpc::GameplayActionKind::StabiliseWithHealersKit,
             Self::StabiliseMedicine => rpc::GameplayActionKind::StabiliseMedicine,
             Self::HelpAttack => rpc::GameplayActionKind::HelpAttack,
+            Self::SceneAssault => rpc::GameplayActionKind::SceneAssault,
             Self::EndTurn => rpc::GameplayActionKind::EndTurn,
             Self::OpportunityAttack => rpc::GameplayActionKind::OpportunityAttack,
             Self::DeclineReaction => rpc::GameplayActionKind::DeclineReaction,
@@ -152,6 +155,7 @@ impl PlayAction {
                 | Self::StabiliseWithHealersKit
                 | Self::StabiliseMedicine
                 | Self::HelpAttack
+                | Self::SceneAssault
                 | Self::PickUpWeapon
                 | Self::Search
                 | Self::Choose

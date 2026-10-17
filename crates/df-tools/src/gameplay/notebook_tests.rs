@@ -520,6 +520,7 @@ fn a_beast_antagonist_is_not_added_to_the_people_list() {
         voice: String::new(),
         gender: None,
         age: None,
+        stat_block: None,
     });
     let notebook = NotebookLedger::open("seed", Vec::new(), vec![sheet], None).unwrap();
 
@@ -548,6 +549,7 @@ fn scene(key: super::pack::SceneKey) -> super::pack::Scene {
             voice: String::new(),
             gender: None,
             age: None,
+            stat_block: None,
         }],
         narration_rested: None,
         speaker: "Jorun Greaves".to_owned(),

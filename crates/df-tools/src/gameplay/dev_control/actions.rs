@@ -766,6 +766,11 @@ pub(super) async fn act(
         value: Some(operation.to_vec()),
     });
     fill_action_choices(&body, action, offer, &mut submit)?;
+    // A scene assault goes through the one entry point that starts a scene fight, so the
+    // bystanders' stances and the consequences are the same as for a typed attack.
+    if action_kind == rpc::GameplayActionKind::SceneAssault {
+        return super::owner_scene_assault(&state, credential, submit).await;
+    }
     if body.get("confirmation_token").is_some() {
         let mut request = tonic::Request::new(rpc::ConfirmDialogueRequest {
             input_id: Some(rpc::OperationId {
@@ -1056,7 +1061,9 @@ fn default_action_choices(
         attack_option(body, &group.options)?
     } else if matches!(
         action,
-        parse::PlayAction::StabiliseWithHealersKit | parse::PlayAction::StabiliseMedicine
+        parse::PlayAction::StabiliseWithHealersKit
+            | parse::PlayAction::StabiliseMedicine
+            | parse::PlayAction::SceneAssault
     ) {
         target_option(body, &group.options)?
     } else if action == parse::PlayAction::HelpAttack {
@@ -1081,7 +1088,7 @@ fn target_option(
     let target = body
         .get("target")
         .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("stabilisation needs {\"target\": \"<hero>\"}"))?;
+        .ok_or_else(|| bad_request("this action needs {\"target\": \"<name>\"}"))?;
     let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
     unique_label_match(&labels, options, target)
 }

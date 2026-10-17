@@ -1815,6 +1815,32 @@ pub(super) async fn narrate(
     }
 }
 
+/// The scene person a performed act turns into a real fight with, when it does. A strike at a
+/// person who has a stat block always does: it is an attack, played out on the battle grid (the
+/// single roll the adjudicator made is not the blow). Rough contact (a shove, a punch pulled to
+/// jostle) stays one resolved check and starts no fight, unless the person is already hostile to
+/// this hero. `hostile` answers that from the social ledger, by person.
+pub(super) fn fight_target<'a>(
+    resolution: &Resolution,
+    scene: &'a pack::Scene,
+    hostile: &dyn Fn(&pack::SceneCastMember) -> bool,
+) -> Option<&'a pack::SceneCastMember> {
+    if !matches!(resolution.verdict, Verdict::Performed(_)) {
+        return None;
+    }
+    let target = resolution
+        .target
+        .as_ref()
+        .filter(|target| target.kind == TargetKind::Person)?;
+    let person = scene.cast.iter().find(|member| member.id == target.id)?;
+    journey::scene_fight::creature_for(person.stat_block.as_deref())?;
+    match resolution.act? {
+        ActKind::Strike => Some(person),
+        ActKind::ContactRough if hostile(person) => Some(person),
+        _ => None,
+    }
+}
+
 /// Publishes the hero's own typed line first, as an action row, before any roll or narration.
 pub(super) fn publish_hero_line(log: &TableLog, hero: &str, hero_index: u32, typed: &str) {
     log.push(

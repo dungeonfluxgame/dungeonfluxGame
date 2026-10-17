@@ -798,6 +798,7 @@ embedded!(
     "thistledown-farm",
     "orrery-library",
     "harbor-journey",
+    "merchant-shop",
     "scan-riverbed",
     "scan-village",
     "scan-valley-bridges",
@@ -896,7 +897,7 @@ mod tests {
             assert!(scene.grid.walkable_cells().count() >= 12, "{id}");
             assert!(scene.ground.stem.starts_with("ground-"));
         }
-        assert_eq!(embedded_ids().count(), 17);
+        assert_eq!(embedded_ids().count(), 18);
     }
 
     #[test]

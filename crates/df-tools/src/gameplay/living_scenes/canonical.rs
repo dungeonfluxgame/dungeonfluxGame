@@ -278,6 +278,7 @@ mod tests {
             voice: "warm".to_owned(),
             gender: Some(Gender::He),
             age: Some(Age::Adult),
+            stat_block: None,
         }];
 
         let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(

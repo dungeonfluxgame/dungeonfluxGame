@@ -57,6 +57,7 @@ pub(super) fn cast_member(
         sprite: sprite_of(portrait),
         portrait: portrait.to_owned(),
         voice: voice.to_owned(),
+        stat_block: None,
     }
 }
 
