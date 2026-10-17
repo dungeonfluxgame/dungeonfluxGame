@@ -132,14 +132,17 @@ fn join_host(url: &str) -> String {
 }
 
 fn is_fixed_harbor_dialogue(phase: rpc::JourneyPhase, scene: &rpc::GameplayScene) -> bool {
-    phase == rpc::JourneyPhase::Dialogue
-        && scene.scene_asset.contains(art_contract::HARBOR_PHOTO)
+    phase == rpc::JourneyPhase::Dialogue && scene.scene_asset.contains(art_contract::HARBOR_PHOTO)
 }
 
 fn is_fixed_harbor_art(scene: &rpc::GameplayScene) -> bool {
-    ["mara-harbor-v4.png", art_contract::HARBOR_PHOTO, HARBOR_CANDID_STEM]
-        .iter()
-        .any(|stem| scene.scene_asset.contains(stem))
+    [
+        "mara-harbor-v4.png",
+        art_contract::HARBOR_PHOTO,
+        HARBOR_CANDID_STEM,
+    ]
+    .iter()
+    .any(|stem| scene.scene_asset.contains(stem))
 }
 
 fn fallback_art(

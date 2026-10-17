@@ -3226,7 +3226,11 @@ mod tests {
                 .iter()
                 .all(|(_, path)| path.contains("-documentary-photo"))
         );
-        for painted in ["sprite-patron-bell-ringer", "sprite-ant-wolf", "live-canonical-photo"] {
+        for painted in [
+            "sprite-patron-bell-ringer",
+            "sprite-ant-wolf",
+            "live-canonical-photo",
+        ] {
             let candidates = art_candidates(
                 &format!("/assets/ui/generated/{painted}"),
                 "/assets/ui/generated/portrait-patron-bell-ringer",
