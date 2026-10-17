@@ -1441,6 +1441,7 @@ Owner decisions recorded this session:
 - Art is photographic only. Painted references are deleted. Missing depictions (monsters, villains, patrons) are generated live when first needed, never ahead of time.
 - No keyword tables anywhere, not even as fallbacks. Jev or an LLM decides meaning; without Jev the result is neutral and audited.
 - Every system has logs in the dev CLI, plus create/read/update/delete where feasible.
+- No spend caps, of any kind (owner: "no fucking caps"). The hub's spend ledger records every charge but never refuses one; single-flight and failed-attempt limits are not caps.
 - Every generated resource goes through one contract: ResourceSpec, then ResourceKey, then the hub's get_or_request. The hub owns the spend ledger, single-flight, the RESOURCE audit line and the dev-CLI hooks.
 - Splat worlds (World Labs Marble): the narrative engine flags from the conversation that a fight is likely, early enough to generate the world in time. It also decides where the fight happens (inside the shop, or moved outside).
 - The DM remembers everything, or everything relevant, to keep the story consistent. Story memory uses OpenAI embeddings and pgvector in the game's own Postgres.
