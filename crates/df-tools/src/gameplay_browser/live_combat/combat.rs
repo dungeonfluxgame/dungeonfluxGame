@@ -189,33 +189,6 @@ fn death_save_roll(outcome: &rpc::CombatOutcome, index: usize) -> Option<RollTex
     })
 }
 
-/// A stabilise check is its own kind of roll on the card: the Medicine die against its DC (or a
-/// healer's kit that rolls nothing), never an attack with zeros.
-fn stabilise_roll(outcome: &rpc::CombatOutcome, index: usize) -> Option<RollText> {
-    let card = crate::table_roll::stabilise_card(outcome)?;
-    let rolled = card.value.parse::<u32>().ok();
-    Some(RollText {
-        key: format!("roll-{index}"),
-        label: card.label,
-        value: card.value,
-        explanation: card.explanation,
-        source: card.source,
-        verdict: (
-            card.verdict,
-            if card.succeeded {
-                CombatTone::Success
-            } else {
-                CombatTone::Failure
-            },
-        ),
-        die_face: rolled
-            .and_then(|die| u8::try_from(die).ok())
-            .filter(|face| (1..=20).contains(face)),
-        die_rest: rolled
-            .and_then(|die| crate::gameplay_browser::live_dice::rest_url_for(die, &[die], 0)),
-    })
-}
-
 fn conditions_resource(member: &rpc::PartyMemberView) -> Option<String> {
     if member
         .conditions
@@ -237,6 +210,27 @@ fn tactical_option_label(label: &str, target: &rpc::LegalCombatTarget) -> String
         format!("{} cover", target.cover)
     };
     let mut label = format!("{label} · {cover} · {}", target.range_reason);
+    // P6-82: every option names its advantage sources too, not only disadvantage.
+    let advantage_reasons = target
+        .reasons
+        .iter()
+        .filter_map(|reason| reason.strip_prefix("advantage: "))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let disadvantage_reasons = target
+        .reasons
+        .iter()
+        .filter_map(|reason| reason.strip_prefix("disadvantage: "))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !advantage_reasons.is_empty() && disadvantage_reasons.is_empty() && !target.disadvantage {
+        label.push_str(&format!(" · Advantage: {advantage_reasons}"));
+    } else if !advantage_reasons.is_empty() && !disadvantage_reasons.is_empty() {
+        label.push_str(&format!(
+            " · Advantage: {advantage_reasons} · Disadvantage: {} (they cancel)",
+            disadvantage_reasons.replace("hostile within 5 ft", "an enemy within 5 ft")
+        ));
+    }
     if target.disadvantage {
         let reasons = target
             .reasons
@@ -500,9 +494,6 @@ fn rolls(combat: &rpc::CombatView, released_sequence: Option<u64>) -> Vec<RollTe
         .enumerate()
         .filter_map(|(index, outcome)| {
             if let Some(roll) = death_save_roll(outcome, index) {
-                return Some(roll);
-            }
-            if let Some(roll) = stabilise_roll(outcome, index) {
                 return Some(roll);
             }
             let damage_rolls = outcome
@@ -1507,7 +1498,7 @@ fn publish_fight_map(
                 }
             }
             MapSquare::Reachable(id) => {
-                let Some((list, _)) = &move_list else {
+                let Some((list, listed)) = &move_list else {
                     continue;
                 };
                 let (picked, target, board, line, describe) = (
@@ -1536,6 +1527,17 @@ fn publish_fight_map(
                         "aria-label",
                         &format!("Column {}, row {}", col + 1, row + 1),
                     )?;
+                }
+                // P6-83: the server lists a provoking move with its warning in the
+                // option text; mark the matching square so the risk shows before Move.
+                if let Some((_, text)) = listed.iter().find(|(option, _)| *option == id)
+                    && text.contains("provokes")
+                {
+                    cell.set_attribute("data-provokes", "")?;
+                    let warning = text
+                        .split_once("· ")
+                        .map_or(text.as_str(), |(_, warning)| warning);
+                    cell.set_attribute("aria-label", &format!("Move here: {warning}"))?;
                 }
             }
         }
@@ -2386,6 +2388,21 @@ mod tests {
         assert_eq!(
             tactical_option_label("Longbow at Weasel", &covered),
             "Longbow at Weasel · half (+2 AC) cover · normal range: 10 ft · Disadvantage"
+        );
+    }
+
+    #[test]
+    fn tactical_option_label_shows_advantage_from_help() {
+        let target = rpc::LegalCombatTarget {
+            cover: "none".to_owned(),
+            range_reason: "melee reach: 5 ft".to_owned(),
+            disadvantage: false,
+            reasons: vec!["advantage: Help from an ally".to_owned()],
+            ..Default::default()
+        };
+        assert_eq!(
+            tactical_option_label("Greatsword at Corin", &target),
+            "Greatsword at Corin · no cover · melee reach: 5 ft · Advantage: Help from an ally"
         );
     }
 

@@ -1819,6 +1819,86 @@ fn start_on(
         )
     }
 }
+/// The phone attack panel's knock-out choice group.
+const KNOCK_OUT_GROUP: &str = "knock-out";
+/// People, as opposed to monsters: the knock-out choice defaults to knocking
+/// these targets out (SRD 5.2.1, Knocking Out a Creature).
+fn person_kind(kind: CreatureKind) -> bool {
+    matches!(
+        kind,
+        CreatureKind::Guard | CreatureKind::Scout | CreatureKind::Commoner
+    )
+}
+/// SRD 5.2.1: a melee attack that would drop a creature to 0 HP may knock it
+/// out instead. The default is to knock out when the attack is an unarmed
+/// strike (a brawl) or the target uses one of the supported non-monster person
+/// stat blocks; the attacking hero may override it on the attack panel.
+fn default_knockout(state: &GameState, battle: &Battle, target: u32, usage: &AttackUse) -> bool {
+    if usage.ranged
+        || battle
+            .actor(target)
+            .is_ok_and(|target| target.health().knocked_out)
+    {
+        return false;
+    }
+    (usage.weapon == Weapon::UnarmedStrike && declared_target(state, battle) == Some(target))
+        || battle
+            .actor(target)
+            .is_ok_and(|target| person_kind(target.spec().kind))
+}
+/// The declared target of a scene assault that has just started: the first foe
+/// (the person the fight was started against), while no hero has acted yet.
+fn declared_target(state: &GameState, battle: &Battle) -> Option<u32> {
+    let encounter = state.encounters.first()?;
+    if !encounter
+        .objectives
+        .iter()
+        .any(|objective| objective.entry.as_str() == super::scene_fight::OBJECTIVE)
+        || battle.round() != 1
+    {
+        return None;
+    }
+    let heroes: Vec<EntityId> = state
+        .characters
+        .iter()
+        .map(|character| character.entity)
+        .collect();
+    for decision in &state.decisions {
+        if let Ok(receipt) = accepted(decision)
+            && receipt.combat.iter().any(|outcome| {
+                heroes
+                    .iter()
+                    .any(|hero| outcome.actor_id == hero.as_bytes())
+                    && matches!(
+                        rpc::OutcomeKind::try_from(outcome.kind),
+                        Ok(rpc::OutcomeKind::Attack | rpc::OutcomeKind::OpportunityAttack)
+                    )
+            })
+        {
+            return None;
+        }
+    }
+    battle
+        .combatants()
+        .iter()
+        .find(|combatant| combatant.side() != Side::Heroes)
+        .map(|combatant| combatant.id())
+}
+/// How many opportunity attacks a move provokes, as the rules resolve it.
+fn provoked_opportunity_attacks(
+    battle: &Battle,
+    actor: u32,
+    action: &Action,
+) -> Result<usize, RepositoryError> {
+    let source = rule()?;
+    let context = binding(OperationId::from_bytes(&[1; 16]).map_err(bad)?, &source, 0)?;
+    match tactical_rules::resolve(battle, actor, action, context, &[]) {
+        Ok(resolution) => Ok(resolution.battle.reaction_offers().len()),
+        Err(RuleError::MissingDraw { .. }) => Ok(0),
+        Err(error) => Err(bad(error)),
+    }
+}
+
 fn weapon(actor: &tactical_rules::Combatant, weapon: Weapon) -> AttackUse {
     AttackUse {
         weapon,
@@ -1951,6 +2031,8 @@ fn options(
                                 usage.savage_attacker = savage;
                                 usage.use_mastery = mastery;
                                 for target in battle.legal_targets(actor, usage).map_err(bad)? {
+                                    usage.knockout =
+                                        default_knockout(state, &battle, target, &usage);
                                     let label = format!(
                                         "{}{} → {}{}{}",
                                         weapon_display_name(held.id()),
@@ -2095,6 +2177,9 @@ fn options(
     });
     if kind == K::GreatswordAttack {
         let weapons = &combatant.spec().weapons;
+        // The fight's declared opening (a scene assault's target, struck
+        // unarmed) is the first turn's default selection.
+        let declared = declared_target(state, &battle);
         let mut ranked = candidates
             .into_iter()
             .map(|candidate| {
@@ -2104,6 +2189,10 @@ fn options(
                     spend,
                 } = &candidate.1
                 {
+                    let opening = !(declared == Some(*target)
+                        && weapon.weapon == Weapon::UnarmedStrike
+                        && !weapon.ranged
+                        && *spend == AttackSpend::Action);
                     let (advantage, disadvantage) = battle
                         .attack_reasons(actor, *target, *weapon)
                         .map_err(bad)?;
@@ -2125,7 +2214,13 @@ fn options(
                         AttackSpend::Nick => 2,
                         AttackSpend::Multiattack => 3,
                     };
+                    // A combatant who is already down is the last default target.
+                    let target_down = battle
+                        .actor(*target)
+                        .is_ok_and(|target| target.health().incapacitated());
                     (
+                        opening,
+                        target_down,
                         !disadvantage.is_empty() && advantage.is_empty(),
                         cover_rank,
                         weapon_rank,
@@ -2133,7 +2228,7 @@ fn options(
                         spend_rank,
                     )
                 } else {
-                    (false, 0, 0, false, 0)
+                    (true, false, false, 0, 0, false, 0)
                 };
                 Ok((rank, candidate))
             })
@@ -2221,20 +2316,53 @@ pub(in crate::gameplay) fn groups(
         .to_owned(),
         options: Vec::new(),
     }];
-    for (option_id, action, label) in candidates {
-        let option_id = match &action {
+    let battle = read(current.state())?;
+    for (option_id, action, label) in &candidates {
+        let option_id = match action {
             Action::Attack {
                 target,
                 weapon,
                 spend,
             } => tactical_attack_id(*target, *weapon, *spend),
-            _ => option_id,
+            _ => option_id.clone(),
+        };
+        // P6-83: a move that leaves reach names its opportunity attacks before it is taken.
+        let provokes = if matches!(action, Action::Move(_)) {
+            provoked_opportunity_attacks(&battle, actor, action)?
+        } else {
+            0
+        };
+        let warning = (provokes > 0).then(|| {
+            format!(
+                "provokes {provokes} opportunity attack{} — Disengage first?",
+                if provokes == 1 { "" } else { "s" }
+            )
+        });
+        // P6-82: every attack option names its advantage/disadvantage sources.
+        let description = match action {
+            Action::Attack { target, weapon, .. } => {
+                let (advantage, disadvantage) = battle
+                    .attack_reasons(actor, *target, *weapon)
+                    .map_err(bad)?;
+                let mut parts: Vec<String> = advantage
+                    .iter()
+                    .map(|reason| format!("Advantage: {}", reason_label(*reason)))
+                    .collect();
+                parts.extend(
+                    disadvantage
+                        .iter()
+                        .map(|reason| format!("Disadvantage: {}", reason_label(*reason))),
+                );
+                parts.join(" · ")
+            }
+            Action::Move(_) => warning.clone().unwrap_or_default(),
+            _ => String::new(),
         };
         let options = &mut groups[0].options;
         if !options.iter().any(|option| option.option_id == option_id) {
             options.push(rpc::JourneyOption {
                 option_id,
-                label: match &action {
+                label: match action {
                     Action::Attack { target, weapon, .. } => format!(
                         "{}{} → {}",
                         weapon_display_name(weapon.weapon.id()),
@@ -2245,9 +2373,13 @@ pub(in crate::gameplay) fn groups(
                         },
                         name(current.state(), canonical(current.state(), *target)?)?
                     ),
-                    _ => label,
+                    Action::Move(_) => match &warning {
+                        Some(warning) => format!("{label} · {warning}"),
+                        None => label.clone(),
+                    },
+                    _ => label.clone(),
                 },
-                description: String::new(),
+                description,
                 ..Default::default()
             });
         }
@@ -2263,6 +2395,34 @@ pub(in crate::gameplay) fn groups(
             "savage-attacker",
             "Savage Attacker (once a turn)",
         ));
+    }
+    // P6-71: the attacking hero chooses lethal or knock-out on the attack
+    // panel; the default (listed first) follows the top-ranked melee attack.
+    if kind == rpc::GameplayActionKind::GreatswordAttack
+        && let Some((_, Action::Attack { weapon, .. }, _)) = candidates.iter().find(
+            |(_, action, _)| matches!(action, Action::Attack { weapon, .. } if !weapon.ranged),
+        )
+    {
+        let knockout_first = weapon.knockout;
+        let yes = rpc::JourneyOption {
+            option_id: "yes".to_owned(),
+            label: "Knock out (unconscious, stable)".to_owned(),
+            ..Default::default()
+        };
+        let no = rpc::JourneyOption {
+            option_id: "no".to_owned(),
+            label: "Kill".to_owned(),
+            ..Default::default()
+        };
+        groups.push(rpc::JourneyGroup {
+            group_id: KNOCK_OUT_GROUP.to_owned(),
+            label: "When this attack drops a creature to 0 HP".to_owned(),
+            options: if knockout_first {
+                vec![yes, no]
+            } else {
+                vec![no, yes]
+            },
+        });
     }
     Ok(groups)
 }
@@ -2311,9 +2471,13 @@ fn selected_candidate<'a>(
     let mut savage = false;
     let mut mastery_seen = false;
     let mut savage_seen = false;
+    let mut knockout_seen = false;
     for (group, option) in choices {
         match (*group, *option) {
             ("tactical-choice", id) if tactical_choice.is_none() => tactical_choice = Some(id),
+            // The knock-out choice does not pick a candidate; `stage` applies
+            // it (or the default) to the chosen attack.
+            (KNOCK_OUT_GROUP, "yes" | "no") if !knockout_seen => knockout_seen = true,
             ("weapon-mastery", "yes") if !mastery_seen => {
                 mastery = true;
                 mastery_seen = true;
@@ -2457,11 +2621,24 @@ pub(super) fn stage(
                 return Err(RepositoryError::InvalidCandidate);
             }
         }
+        // P6-71: apply the hero's knock-out choice, or its default, to the attack.
+        let mut action = selected.1.clone();
+        if let Action::Attack { target, weapon, .. } = &mut action {
+            let choice = choices
+                .iter()
+                .find(|(group, _)| *group == KNOCK_OUT_GROUP)
+                .map(|(_, option)| *option);
+            weapon.knockout = match choice {
+                Some("yes") => !weapon.ranged,
+                Some("no") => false,
+                _ => default_knockout(state, &battle, *target, weapon),
+            };
+        }
         let next = apply(
             state,
             &battle,
             actor,
-            &selected.1,
+            &action,
             command.operation,
             (draws, outcomes),
             supplier,
@@ -3247,18 +3424,8 @@ pub(in crate::gameplay) fn project_combat(
             };
             let source = battle.actor(actor).map_err(bad)?;
             let destination = battle.actor(target).map_err(bad)?;
-            let cells = battle
-                .combatants()
-                .iter()
-                .filter(|candidate| {
-                    candidate.id() != actor && candidate.id() != target && !candidate.health().dead
-                })
-                .map(|candidate| candidate.cell())
-                .collect::<Vec<_>>();
-            let cover = battle
-                .map()
-                .cover_between(source.cell(), destination.cell(), &cells)
-                .map_err(bad)?;
+            // One cover source: the same computation the attack resolution uses.
+            let cover = battle.attack_cover(actor, target).map_err(bad)?;
             let (advantage, disadvantage) =
                 battle.attack_reasons(actor, target, weapon).map_err(bad)?;
             let distance = source.cell().distance(destination.cell());
@@ -4314,6 +4481,7 @@ pub(super) mod tests {
             } else {
                 (rpc::GameplayActionKind::EndTurn, None)
             };
+            let selected_option = selection.clone();
             let choices = selection
                 .map(|id| {
                     vec![(
@@ -4355,7 +4523,7 @@ pub(super) mod tests {
                         })
                     }
                 },
-            ).unwrap_or_else(|error|panic!("play operation={operation},kind={kind:?},seed={seed:?},battle={battle:?}: {error:?}"));
+            ).unwrap_or_else(|error|panic!("play operation={operation},kind={kind:?},selected={selected_option:?},attacks={attacks:?},seed={seed:?},battle={battle:?},refusal={:?}: {error:?}", super::super::refusal_detail::take()));
             assert!(recorded.next().is_none());
             let bytes =
                 df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&current, codec())
@@ -4388,7 +4556,9 @@ pub(super) mod tests {
             maximum_document_bytes: 2 * 1024 * 1024,
             maximum_allocated_bytes: 2 * 1024 * 1024,
             maximum_collection_items: 4096,
-            maximum_text_bytes: 4096,
+            // The deterministic multi-round acceptance transcript can retain a 4.5 KiB
+            // semantic result; keep the checkpoint fixture above that observed payload.
+            maximum_text_bytes: 8192,
         }
     }
     #[test]
@@ -5940,7 +6110,19 @@ pub(super) mod tests {
                 &request(&current, 9, K::EndTurn, None),
                 &mut |_| panic!("next hero has no draw"),
             );
-            let shot=options(current.state(),2,K::GreatswordAttack).unwrap().into_iter().find(|(_,action,_)|matches!(action,Action::Attack {target:4,weapon,..} if weapon.weapon==Weapon::Longbow && !weapon.use_mastery && !weapon.savage_attacker)).unwrap().0;
+            let battle = read(current.state()).unwrap();
+            let shot = options(current.state(), 2, K::GreatswordAttack)
+                .unwrap()
+                .into_iter()
+                .find(|(_, action, _)| {
+                    matches!(action, Action::Attack { target, weapon, .. }
+                        if weapon.weapon == Weapon::Longbow
+                            && !weapon.use_mastery
+                            && !weapon.savage_attacker
+                            && battle.attack_cover(2, *target).is_ok_and(|cover| cover == tactical_rules::Cover::Half))
+                })
+                .unwrap()
+                .0;
             let mut view = rpc::CombatView::default();
             project_combat(&current, Some(entity(ENTITIES[1]).unwrap()), &mut view).unwrap();
             assert_eq!(
@@ -6180,19 +6362,51 @@ pub(super) mod tests {
                 snapshot(current.state()).unwrap().source_revision.as_str(),
                 TACTICAL_SOURCE_REVISION_LATEST_POLICY
             );
-            let cell_option = |current: &Checkpoint, cell| {
-                options(current.state(),1,K::Move).unwrap().into_iter().find(|(_,action,_)|matches!(action,Action::Move(path) if path.last()==Some(&cell))).unwrap().0
-            };
-            let adjacent = cell_option(&current, tactical_rules::Cell(3, 2));
+            let battle = read(current.state()).unwrap();
+            let source = rule().unwrap();
+            let operation = OperationId::from_bytes(&[9; 16]).unwrap();
+            let context = binding(operation, &source, 0).unwrap();
+            let adjacent = options(current.state(), 1, K::Move)
+                .unwrap()
+                .into_iter()
+                .find(|(_, action, _)| {
+                    let Action::Move(path) = action else {
+                        return false;
+                    };
+                    let Some(destination) = path.last() else {
+                        return false;
+                    };
+                    let near_enemy = battle.combatants().iter().any(|enemy| {
+                        enemy.side() == Side::Enemies
+                            && !enemy.health().incapacitated()
+                            && destination.distance(enemy.cell()) <= 5
+                    });
+                    near_enemy
+                        && tactical_rules::resolve(&battle, 1, action, context, &[])
+                            .is_ok_and(|resolution| resolution.battle.reaction_offers().is_empty())
+                })
+                .unwrap_or_else(|| {
+                    panic!("the fixture must expose a move out of reach: {battle:?}")
+                })
+                .0;
+            // The approach ends within reach without leaving it; the next path provokes.
             let current = submit(
                 &current,
                 first,
                 &request(&current, 8, K::Move, Some(&adjacent)),
-                &mut |_| panic!("approach draws"),
+                &mut |_| Ok(1),
             );
-            let exit = cell_option(&current, tactical_rules::Cell(3, 3));
-            let source = rule().unwrap();
-            let operation = OperationId::from_bytes(&[9; 16]).unwrap();
+            let battle = read(current.state()).unwrap();
+            let exit = options(current.state(), 1, K::Move)
+                .unwrap()
+                .into_iter()
+                .find(|(_, action, _)| {
+                    matches!(action, Action::Move(_))
+                        && tactical_rules::resolve(&battle, 1, action, context, &[])
+                            .is_ok_and(|resolution| !resolution.battle.reaction_offers().is_empty())
+                })
+                .unwrap()
+                .0;
             let movement = options(current.state(), 1, K::Move)
                 .unwrap()
                 .into_iter()
@@ -6274,7 +6488,12 @@ pub(super) mod tests {
                 &request(&current, 9, K::Disengage, None),
                 &mut |_| panic!("Disengage has no draw"),
             );
-            let exit = cell_option(&disengaged, tactical_rules::Cell(3, 3));
+            let exit = options(disengaged.state(), 1, K::Move)
+                .unwrap()
+                .into_iter()
+                .find(|(_, action, _)| matches!(action, Action::Move(_)))
+                .unwrap()
+                .0;
             let movement = options(disengaged.state(), 1, K::Move)
                 .unwrap()
                 .into_iter()
@@ -6314,6 +6533,196 @@ pub(super) mod tests {
         });
     }
 
+    /// SRD 5.2.1, Knocking Out a Creature: the attack-panel choice is recorded
+    /// on the submitted attack, while an unarmed declaration defaults to KO.
+    #[test]
+    fn submitted_melee_attack_records_knockout_choice_and_brawl_default() {
+        use rpc::GameplayActionKind as K;
+        with_live(|| {
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            for kill in [false, true] {
+                let current = fight(true);
+                let adjacent = options(current.state(), 1, K::Move)
+                    .unwrap()
+                    .into_iter()
+                    .find(|(_, action, _)| {
+                        matches!(action, Action::Move(path) if path.last() == Some(&tactical_rules::Cell(3, 2)))
+                    })
+                    .unwrap()
+                    .0;
+                let current = submit(
+                    &current,
+                    first,
+                    &request(&current, 8, K::Move, Some(&adjacent)),
+                    &mut |_| Ok(1),
+                );
+                let (shot, target) = options(current.state(), 1, K::GreatswordAttack)
+                    .unwrap()
+                    .into_iter()
+                    .find_map(|(_, action, _)| match action {
+                        Action::Attack {
+                            target,
+                            weapon,
+                            spend: AttackSpend::Action,
+                        } if weapon.weapon == Weapon::Greatsword => Some((
+                            tactical_attack_id(target, weapon, AttackSpend::Action),
+                            target,
+                        )),
+                        _ => None,
+                    })
+                    .unwrap();
+                let mut attack = request(&current, 9, K::GreatswordAttack, Some(&shot));
+                attack.action_choices.push(rpc::JourneyChoice {
+                    group_id: KNOCK_OUT_GROUP.to_owned(),
+                    option_id: if kill { "no" } else { "yes" }.to_owned(),
+                });
+                let current = submit(&current, first, &attack, &mut |sides| Ok(sides));
+                let health = read(current.state())
+                    .unwrap()
+                    .actor(target)
+                    .unwrap()
+                    .health();
+                if kill {
+                    assert!(health.dead, "the Kill choice is lethal: {health:?}");
+                } else {
+                    assert!(
+                        !health.dead && health.knocked_out && health.unconscious,
+                        "a person is knocked out, not killed: {health:?}"
+                    );
+                    assert_eq!(health.hit_points, 1);
+                    let receipt = accepted(current.state().decisions.last().unwrap()).unwrap();
+                    assert!(receipt.combat.iter().any(|outcome| outcome.knocked_out));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn knockout_default_is_unarmed_or_a_supported_nonmonster_target() {
+        with_live(|| {
+            let current = fight(true);
+            let mut state = current.state().clone();
+            let battle = read(&state).unwrap();
+            let bandit = battle
+                .combatants()
+                .iter()
+                .find(|actor| actor.spec().kind == CreatureKind::Bandit)
+                .unwrap()
+                .id();
+            let mut unarmed = weapon(battle.actor(1).unwrap(), Weapon::UnarmedStrike);
+            assert!(!default_knockout(&state, &battle, bandit, &unarmed));
+
+            unarmed.weapon = Weapon::Greatsword;
+            assert!(!default_knockout(&state, &battle, bandit, &unarmed));
+            unarmed.weapon = Weapon::UnarmedStrike;
+            state.encounters[0].objectives =
+                vec![model::content(super::super::scene_fight::OBJECTIVE).unwrap()];
+            let brawl = read(&state).unwrap();
+            assert!(default_knockout(&state, &brawl, bandit, &unarmed));
+            assert!(person_kind(CreatureKind::Guard));
+            assert!(person_kind(CreatureKind::Scout));
+            assert!(person_kind(CreatureKind::Commoner));
+            assert!(!person_kind(CreatureKind::Cultist));
+        });
+    }
+
+    #[test]
+    fn declared_scene_target_opens_with_the_unarmed_strike_first() {
+        use rpc::GameplayActionKind as K;
+        with_live(|| {
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let current = fight(true);
+            let mut state = current.state().clone();
+            state.encounters[0].objectives =
+                vec![model::content(super::super::scene_fight::OBJECTIVE).unwrap()];
+            let current = model::checkpoint(current.basis(), state).unwrap();
+            let adjacent = options(current.state(), 1, K::Move)
+                .unwrap()
+                .into_iter()
+                .find(|(_, action, _)| {
+                    matches!(action, Action::Move(path) if path.last() == Some(&tactical_rules::Cell(3, 2)))
+                })
+                .unwrap()
+                .0;
+            let current = submit(
+                &current,
+                first,
+                &request(&current, 8, K::Move, Some(&adjacent)),
+                &mut |_| Ok(1),
+            );
+            let battle = read(current.state()).unwrap();
+            let declared = battle
+                .combatants()
+                .iter()
+                .find(|combatant| combatant.side() != Side::Heroes)
+                .unwrap()
+                .id();
+            let candidates = options(current.state(), 1, K::GreatswordAttack).unwrap();
+            let (_, action, _) = candidates.first().unwrap();
+            assert!(
+                matches!(action, Action::Attack { target, weapon, spend: AttackSpend::Action }
+                    if *target == declared && weapon.weapon == Weapon::UnarmedStrike && !weapon.ranged && weapon.knockout),
+                "the declared unarmed strike on the declared target is preselected, got {action:?}"
+            );
+            let groups = groups(&current, first, K::GreatswordAttack).unwrap();
+            assert!(groups.iter().any(|group| {
+                group.group_id == KNOCK_OUT_GROUP
+                    && group
+                        .options
+                        .first()
+                        .is_some_and(|option| option.option_id == "yes")
+            }));
+        });
+    }
+
+    #[test]
+    fn move_options_warn_when_the_path_provokes_opportunity_attacks() {
+        use rpc::GameplayActionKind as K;
+        with_live(|| {
+            let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let current = fight(true);
+            let adjacent = options(current.state(), 1, K::Move)
+                .unwrap()
+                .into_iter()
+                .find(|(_, action, _)| {
+                    matches!(action, Action::Move(path) if path.last() == Some(&tactical_rules::Cell(3, 2)))
+                })
+                .unwrap()
+                .0;
+            let current = submit(
+                &current,
+                first,
+                &request(&current, 8, K::Move, Some(&adjacent)),
+                &mut |_| Ok(1),
+            );
+            let groups = groups(&current, first, K::Move).unwrap();
+            let exit = groups[0]
+                .options
+                .iter()
+                .find(|option| option.label.contains("provokes"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "a reachable cell warns before Move: {:?}",
+                        groups[0]
+                            .options
+                            .iter()
+                            .map(|option| option.label.as_str())
+                            .collect::<Vec<_>>()
+                    )
+                });
+            assert!(
+                exit.label.contains("opportunity attack")
+                    && exit.label.contains("Disengage first?"),
+                "the exit cell warns before Move: {}",
+                exit.label
+            );
+            assert_eq!(
+                exit.description,
+                exit.label.split(" · ").nth(1).unwrap_or_default()
+            );
+        });
+    }
+
     #[test]
     fn submitted_optional_hero_reaction_during_enemy_turn_survives_checkpoint_and_declines_without_spending()
      {
@@ -6323,11 +6732,13 @@ pub(super) mod tests {
             let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
             let current = fight(true);
             let adjacent=options(current.state(),1,K::Move).unwrap().into_iter().find(|(_,action,_)|matches!(action,Action::Move(path) if path.last()==Some(&tactical_rules::Cell(3,2)))).unwrap().0;
+            // The approach provokes an opportunity attack under the current
+            // policy; a 1 misses, so the move completes.
             let current = submit(
                 &current,
                 first,
                 &request(&current, 8, K::Move, Some(&adjacent)),
-                &mut |_| panic!("move draws"),
+                &mut |_| Ok(1),
             );
             let current = submit(
                 &current,
