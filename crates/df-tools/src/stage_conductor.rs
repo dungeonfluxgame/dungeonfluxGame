@@ -1127,7 +1127,9 @@ impl<D: Clone> Conductor<D> {
                 } else {
                     "skipped"
                 };
-                if run.opened_ms.is_some() {
+                // A speech-intent loader never opens, but its bubble is on screen: it must be
+                // told it is done, or the scene change leaves it behind.
+                if run.opened_ms.is_some() || run.intent.is_some() {
                     run.timing.closed_ms = Some(now_ms);
                     run.state = LineState::Done;
                     self.emit_line(&run, out);
@@ -3535,6 +3537,87 @@ mod tests {
         harness.view(scene(None, Vec::new(), vec![0, 1]));
         harness.run_to(4_000);
         assert!(harness.line_at("typing 0", LineState::Closing).is_some());
+    }
+
+    /// The loader ids the log names for a payload, oldest first.
+    fn loader_ids(harness: &Harness, detail: &'static str) -> Vec<LineId> {
+        let mut ids = Vec::new();
+        for (_, command) in &harness.log {
+            if let Command::Line { id, detail: d, .. } = command
+                && *d == detail
+                && !ids.contains(id)
+            {
+                ids.push(*id);
+            }
+        }
+        ids
+    }
+
+    #[test]
+    fn a_loader_still_composing_when_the_scene_changes_is_told_it_is_done() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.view(scene(None, Vec::new(), vec![0, 1]));
+        // Typed while the scene is already leaving: the exit does not close this loader.
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(4_000);
+        assert!(
+            harness
+                .log
+                .iter()
+                .any(|(_, command)| matches!(command, Command::Scene(SceneState::Entering))),
+            "the scene swapped"
+        );
+        assert_eq!(
+            harness.line_trace("typing 0"),
+            [LineState::Composing, LineState::Done]
+        );
+    }
+
+    #[test]
+    fn a_newer_mark_for_a_hero_whose_loader_left_with_the_scene_gets_one_new_loader() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.view(scene(None, Vec::new(), vec![0, 1]));
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(4_000);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        let ids = loader_ids(&harness, "typing 0");
+        let [first, second] = ids.as_slice() else {
+            panic!("two loaders over time, found {ids:?}");
+        };
+        let done = harness.line_at("typing 0", LineState::Done);
+        assert!(done.is_some(), "the first loader is retired");
+        let (first_done, _) = harness
+            .log
+            .iter()
+            .enumerate()
+            .find_map(|(index, (at, command))| match command {
+                Command::Line {
+                    id,
+                    state: LineState::Done,
+                    ..
+                } if id == first => Some((index, *at)),
+                _ => None,
+            })
+            .expect("the first loader is told it is done");
+        let second_composing = harness
+            .log
+            .iter()
+            .position(|(_, command)| {
+                matches!(command, Command::Line { id, state: LineState::Composing, .. } if id == second)
+            })
+            .expect("the newer loader opens");
+        assert!(first_done < second_composing, "one loader at a time");
+    }
+
+    #[test]
+    fn a_repeated_mark_for_a_composing_hero_refreshes_the_same_loader() {
+        let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1]);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(300);
+        harness.intents(vec![mark(0, IntentKind::Typing)]);
+        harness.run_to(600);
+        assert_eq!(loader_ids(&harness, "typing 0").len(), 1);
+        assert_eq!(harness.line_trace("typing 0"), [LineState::Composing]);
     }
 
     fn killing_blow_plan() -> ViewPlan<&'static str> {

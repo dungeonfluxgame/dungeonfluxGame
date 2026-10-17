@@ -458,6 +458,47 @@ fn overlaps(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
     a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
 
+/// A hero has one speech loader at a time: a new loader `keep` takes the place of every other
+/// loader of that hero in the hosts (the figure's bubbles and its HUD card). The conductor keeps at
+/// most one live loader per hero, so an older one left in the DOM is already retired.
+fn retire_hero_loaders(
+    hosts: [&Element; 2],
+    keep: &str,
+    hero: &str,
+    scene: &str,
+) -> Result<(), JsValue> {
+    for host in hosts {
+        let loaders = host.query_selector_all(".tv-intent")?;
+        for index in 0..loaders.length() {
+            let Some(other) = loaders
+                .item(index)
+                .and_then(|node| node.dyn_into::<Element>().ok())
+            else {
+                continue;
+            };
+            let other_id = other.get_attribute("data-line-id");
+            if other.get_attribute("data-hero").as_deref() != Some(hero)
+                || other_id.as_deref() == Some(keep)
+            {
+                continue;
+            }
+            if let Some(id) = other_id.and_then(|id| id.parse::<u64>().ok()) {
+                super::presentation_timing::component(
+                    Some(&other),
+                    PresentationComponent::IntentLoader,
+                    id,
+                    scene,
+                    ComponentPhase::Hidden,
+                    "successor",
+                    0,
+                );
+            }
+            other.remove();
+        }
+    }
+    Ok(())
+}
+
 impl Figures {
     pub(super) fn mount(document: &Document, parent: &Element) -> Result<Self, JsValue> {
         let root = node(document, parent, "div", "tv-figures", "")?;
@@ -2324,6 +2365,12 @@ impl Figures {
                 for _ in 0..3 {
                     node(&self.document, &wave, "b", "", "")?;
                 }
+                retire_hero_loaders(
+                    [host, other_host],
+                    &id.to_string(),
+                    hero,
+                    &self.scene.borrow(),
+                )?;
                 if !combat {
                     self.place_bubble(figure);
                 }
@@ -3395,6 +3442,38 @@ mod tests {
         let heroes = [Some("Aria".to_owned()), None];
 
         assert_eq!(typed_line_anchor("Bram", &heroes), None);
+    }
+
+    #[test]
+    fn a_new_loader_for_a_hero_takes_the_place_of_the_one_still_on_the_figure() {
+        use crate::stage_conductor::IntentKind;
+        use crate::stage_machines::LineState;
+        use wasm_bindgen::JsCast;
+
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = super::Figures::mount(&document, &parent).unwrap();
+        figures
+            .set_intent(0, 21, LineState::Composing, IntentKind::Typing, "Brakka")
+            .unwrap();
+        figures
+            .set_intent(0, 23, LineState::Submitted, IntentKind::Submitted, "Brakka")
+            .unwrap();
+        let loaders = figures.figures[0]
+            .bubbles
+            .query_selector_all(".tv-intent")
+            .unwrap();
+        assert_eq!(loaders.length(), 1);
+        let survivor = loaders
+            .item(0)
+            .unwrap()
+            .dyn_into::<web_sys::Element>()
+            .unwrap();
+        assert_eq!(
+            survivor.get_attribute("data-line-id").as_deref(),
+            Some("23")
+        );
     }
 
     #[test]
