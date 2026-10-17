@@ -1736,6 +1736,17 @@ impl Service {
         } else {
             None
         };
+        // A give of something the scene model does not list (a kit item) cannot be a scene interaction,
+        // so it takes the freeform route a freeform reading takes.
+        let hand_over = scene_interaction.as_ref().is_some_and(|(target, option)| {
+            let listed = party_scene
+                .setting
+                .as_ref()
+                .and_then(|setting| setting.model.as_ref())
+                .is_some_and(|model| model.things.iter().any(|thing| thing.id == *target));
+            freeform_action::is_unlisted_hand_over(option, listed)
+        });
+        let freeform = freeform || hand_over;
         let scene_interaction = scene_interaction
             .filter(|(_, option)| !freeform || freeform_action::keeps_scene_interaction(option));
         if freeform && scene_interaction.is_none() {
@@ -2266,7 +2277,22 @@ impl Service {
             receipt.outcome,
             Some(rpc::decision_receipt::Outcome::Accepted(_))
         ) {
-            return Err(Status::failed_precondition("interaction was refused"));
+            // The hero's line is already on the table; the narrator answers it with one line instead of
+            // failing the input silently.
+            actor::record_audit_line(
+                "gameplay.scene_interaction",
+                format!("SCENE-INTERACTION refused option={option} target={target:?}"),
+            );
+            return Ok(DialogueReply::Raw(
+                rpc::DialogueResponse {
+                    input_id: request.input_id.clone(),
+                    disposition: rpc::DialogueDisposition::Action as i32,
+                    revision: receipt.revision,
+                    npc_reply: NOTHING_HERE_NARRATION.to_owned(),
+                    ..Default::default()
+                },
+                None,
+            ));
         }
         let operation = df_api::operation_id(request.input_id.as_ref())
             .map_err(|_| Status::invalid_argument("interaction identity required"))?;

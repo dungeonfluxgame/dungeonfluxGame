@@ -906,6 +906,16 @@ fn a_door_opened_or_closed_from_a_freeform_reading_keeps_the_scene_interaction()
 }
 
 #[test]
+fn a_give_of_an_unlisted_kit_item_is_a_freeform_hand_over_and_a_listed_give_is_not() {
+    // Sigrun hands Brakka her waterskin: the scene model lists no such thing, so no scene give takes it.
+    assert!(is_unlisted_hand_over("give", false));
+    assert!(!is_unlisted_hand_over("give", true));
+    for option in ["gift", "take", "open", "examine", "none"] {
+        assert!(!is_unlisted_hand_over(option, false), "{option}");
+    }
+}
+
+#[test]
 fn sitting_on_the_edge_of_the_counter_is_a_position_that_moves_nothing_and_offends_nobody() {
     let situation = market_street();
     let resolution = run(

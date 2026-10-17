@@ -2014,6 +2014,13 @@ pub(super) fn keeps_scene_interaction(option: &str) -> bool {
     matches!(option, "open" | "close")
 }
 
+/// Whether a give Jev labels is a hand-over of something the scene model does not list, such as a
+/// starting-kit item the hero carries, to a person or hero. No scene interaction can take it: a give
+/// needs a listed scene thing. The freeform act owns it and shows the held item to the recipient.
+pub(super) fn is_unlisted_hand_over(option: &str, names_scene_thing: bool) -> bool {
+    option == "give" && !names_scene_thing
+}
+
 /// The scene person a performed act turns into a real fight with, when it does. A strike at a
 /// person who has a stat block always does: it is an attack, played out on the battle grid (the
 /// single roll the adjudicator made is not the blow). Rough contact (a shove, a punch pulled to
