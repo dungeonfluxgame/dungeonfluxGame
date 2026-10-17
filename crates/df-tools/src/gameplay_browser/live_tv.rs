@@ -2810,7 +2810,8 @@ impl TvStage {
         };
         self.title.set_text_content(Some(lobby_title));
         self.place.set_text_content(Some(&model.place));
-        set_hidden(&self.place, model.place.is_empty())?;
+        // A scene titled after its place does not repeat the place beneath the title.
+        set_hidden(&self.place, model.place.is_empty() || model.place == *lobby_title)?;
         self.lede.set_text_content(Some(&model.lede));
         self.rules_text.set_text_content(Some(&model.rules_note));
         set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
@@ -2996,7 +2997,10 @@ impl TvStage {
         };
         self.establish_title.set_text_content(Some(establish_title));
         self.establish_place.set_text_content(Some(&model.place));
-        set_hidden(&self.establish_place, model.place.is_empty())?;
+        set_hidden(
+            &self.establish_place,
+            model.place.is_empty() || model.place == *establish_title,
+        )?;
         *self.caption_cast.borrow_mut() = model.cast.clone();
         self.set_plate(&model.plate, &model.scene_key, model.narrated)?;
         if lobby {
