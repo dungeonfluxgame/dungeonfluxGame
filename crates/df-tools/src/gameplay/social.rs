@@ -65,6 +65,25 @@ const MAXIMUM_WITNESSED_THEFTS: usize = 32;
 const GRIEVANCE_CHARACTERS: usize = 200;
 /// Warm exchanges an NPC holding a grievance needs before trust counts toward recovery.
 const MENDING_EXCHANGES: u8 = 3;
+/// Try-on consents kept per hero and NPC; the oldest is forgotten past this bound.
+const MAXIMUM_TRY_ON_CONSENTS: usize = 8;
+
+/// A Jev-judged handover of coin in a spoken line (see
+/// `approach_model::ApproachModel::judge_coin_handover`). `amount_cp` is the total in copper
+/// pieces when Jev could name a count and denomination; `None` means coin changed hands but
+/// the amount was not specified. This type carries no words and moves no money by itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct CoinHandover {
+    pub(super) amount_cp: Option<u32>,
+}
+
+/// One owner's consent that one hero may try on or handle one canonical item without buying
+/// it. Stored per hero and per owner NPC in the social ledger; it grants no ownership.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TryOnConsent {
+    pub(super) item_id: String,
+}
 
 /// What a typed line does socially. Read by the model in the same call that writes the reply;
 /// [`neutral_reading`] stands in when the model is off or does not answer.
@@ -580,6 +599,9 @@ struct Relationship {
     /// Operation IDs of theft attempts already recorded against this hero.
     #[serde(default)]
     witnessed_thefts: Vec<String>,
+    /// Items this NPC, as owner/keeper, has consented for this hero to try on or handle.
+    #[serde(default)]
+    try_on_consents: Vec<TryOnConsent>,
     /// Warm exchanges counted toward recovery since the last grievance or attitude level gained.
     /// Only counted while grievances last; a grievance-holding NPC's trust waits on it.
     #[serde(default)]
@@ -614,6 +636,7 @@ impl Relationship {
             influence_failed: false,
             grievances: Vec::new(),
             witnessed_thefts: Vec::new(),
+            try_on_consents: Vec::new(),
             mended: 0,
             threat_applied: false,
             appraised: false,
@@ -752,6 +775,27 @@ impl Relationship {
                 self.emotional.never_forgives = Some(format!("caught stealing {item}"));
             }
         }
+        true
+    }
+
+    /// Keeps one try-on consent for this hero, once per item. Returns whether it was new.
+    #[allow(dead_code)] // Called through the ledger consent API (see its note).
+    fn record_try_on_consent(&mut self, item_id: &str) -> bool {
+        if self
+            .try_on_consents
+            .iter()
+            .any(|consent| consent.item_id == item_id)
+        {
+            return false;
+        }
+        self.try_on_consents.push(TryOnConsent {
+            item_id: item_id.to_owned(),
+        });
+        let excess = self
+            .try_on_consents
+            .len()
+            .saturating_sub(MAXIMUM_TRY_ON_CONSENTS);
+        self.try_on_consents.drain(..excess);
         true
     }
 }
@@ -974,6 +1018,7 @@ impl SocialLedger {
                                 grievance.words.chars().count() > GRIEVANCE_CHARACTERS
                             })
                             || relationship.mended > MENDING_EXCHANGES
+                            || relationship.try_on_consents.len() > MAXIMUM_TRY_ON_CONSENTS
                             || relationship.last_subject.len() > 512
                             || relationship.same_subject_count > 100
                             || relationship.patience_spent > 100
@@ -1602,14 +1647,102 @@ impl SocialLedger {
             .threaten(scene)
     }
 
-    /// The NPC dossier for a scene person, by person id. Dossier ids are `role:person`.
+    /// The NPC dossier for a scene person, by person id. Dossier ids are `role:person`; a
+    /// caller may also pass the full dossier id or a longer canonical ref ending in the
+    /// person id, so the owner of a witnessed theft is not missed for a spelling difference.
     fn dossier_for_person(&self, person_id: &str) -> Option<&Dossier> {
+        let person = person_id.rsplit(':').next().unwrap_or(person_id);
         self.dossiers.iter().find(|dossier| {
-            dossier
-                .npc_id
-                .split_once(':')
-                .is_some_and(|(_, id)| id == person_id)
+            dossier.npc_id == person_id
+                || dossier
+                    .npc_id
+                    .split_once(':')
+                    .is_some_and(|(_, id)| id == person || id == person_id)
         })
+    }
+
+    /// Records one noticed theft against one hero for the owner and for a different noticer.
+    /// The owner keeps the grievance and turns Hostile; the noticer keeps the grievance and
+    /// cools one level (both through [`Relationship::record_theft`]). Idempotent per
+    /// `operation_id` per NPC, so a replayed journal or a repeated NPC_EVENT reveal records
+    /// nothing twice. Returns whether anything was new; the caller saves.
+    pub(super) fn record_noticed_theft(
+        &self,
+        member: MemberId,
+        owner: Option<&Dossier>,
+        noticer: Option<&Dossier>,
+        item_name: &str,
+        operation_id: &str,
+    ) -> bool {
+        let mut recorded = false;
+        if let Some(owner) = owner {
+            let keeper = TheftKeeper::Owner {
+                unforgiving: owner.emotional_profile().forgiveness == Forgiveness::Unforgiving,
+            };
+            recorded |= self
+                .lock()
+                .entry((member, owner.npc_id.clone()))
+                .or_insert_with(|| Relationship::new(owner))
+                .record_theft(operation_id, item_name, keeper);
+        }
+        if let Some(noticer) = noticer
+            && owner.is_none_or(|owner| owner.npc_id != noticer.npc_id)
+        {
+            recorded |= self
+                .lock()
+                .entry((member, noticer.npc_id.clone()))
+                .or_insert_with(|| Relationship::new(noticer))
+                .record_theft(operation_id, item_name, TheftKeeper::Noticer);
+        }
+        recorded
+    }
+
+    /// Records owner consent that this hero may try on or handle `item_id`, given by the NPC
+    /// whose dossier this is. Returns whether it was new; the caller saves.
+    #[allow(dead_code)] // Wired by the dialogue/actor lane per M3 request.md; covered by tests.
+    pub(super) fn record_try_on_consent(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        item_id: &str,
+    ) -> bool {
+        self.lock()
+            .entry((member, dossier.npc_id.clone()))
+            .or_insert_with(|| Relationship::new(dossier))
+            .record_try_on_consent(item_id)
+    }
+
+    /// Whether this owner has consented for this hero to try on or handle `item_id`. Other
+    /// code (for example a freeform handling judgement) reads this; it grants nothing itself.
+    #[allow(dead_code)] // Read by handling/freeform code per M3 request.md; covered by tests.
+    pub(super) fn has_try_on_consent(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+        item_id: &str,
+    ) -> bool {
+        self.lock()
+            .get(&(member, dossier.npc_id.clone()))
+            .is_some_and(|relationship| {
+                relationship
+                    .try_on_consents
+                    .iter()
+                    .any(|consent| consent.item_id == item_id)
+            })
+    }
+
+    /// The canonical item ids this hero may try on or handle with this NPC's consent.
+    #[allow(dead_code)] // Read by handling/freeform code per M3 request.md; covered by tests.
+    pub(super) fn try_on_consents(&self, member: MemberId, dossier: &Dossier) -> Vec<String> {
+        self.lock()
+            .get(&(member, dossier.npc_id.clone()))
+            .map_or_else(Vec::new, |relationship| {
+                relationship
+                    .try_on_consents
+                    .iter()
+                    .map(|consent| consent.item_id.clone())
+                    .collect()
+            })
     }
 
     /// Records every witnessed theft in a replayed journal. The owner keeps the wrong and turns
@@ -1628,30 +1761,14 @@ impl SocialLedger {
                 .owner_id
                 .as_deref()
                 .and_then(|id| self.dossier_for_person(id));
-            if let Some(owner) = owner {
-                let keeper = TheftKeeper::Owner {
-                    unforgiving: owner.emotional_profile().forgiveness == Forgiveness::Unforgiving,
-                };
-                recorded |= self
-                    .lock()
-                    .entry((member, owner.npc_id.clone()))
-                    .or_insert_with(|| Relationship::new(owner))
-                    .record_theft(&witness.operation_id, &witness.item_name, keeper);
-            }
-            let noticer = self
-                .dossier_for_person(&witness.noticer_id)
-                .filter(|noticer| owner.is_none_or(|owner| owner.npc_id != noticer.npc_id));
-            if let Some(noticer) = noticer {
-                recorded |= self
-                    .lock()
-                    .entry((member, noticer.npc_id.clone()))
-                    .or_insert_with(|| Relationship::new(noticer))
-                    .record_theft(
-                        &witness.operation_id,
-                        &witness.item_name,
-                        TheftKeeper::Noticer,
-                    );
-            }
+            let noticer = self.dossier_for_person(&witness.noticer_id);
+            recorded |= self.record_noticed_theft(
+                member,
+                owner,
+                noticer,
+                &witness.item_name,
+                &witness.operation_id,
+            );
         }
         Ok(recorded)
     }

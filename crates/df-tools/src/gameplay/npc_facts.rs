@@ -975,7 +975,7 @@ pub(super) fn facts_for(
         "scene": {"title": kept(inputs.scene_title)},
         "player": {
             "hero_name": inputs.hero,
-            "addressing": "Use the hero name only when needed; no honorific or pronouns are established.",
+            "addressing": "Address the hero by name only when needed; no honorific or pronouns are established.",
             "exact_words": withheld.redact(inputs.words),
             // The hero's questions, up to three, in order: the reply answers each in turn.
             // Part of the player's own speech, redacted like it, so untrusted words live

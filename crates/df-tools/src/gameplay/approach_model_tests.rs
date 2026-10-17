@@ -269,6 +269,115 @@ async fn a_jev_failure_on_classify_returns_the_neutral_reading() {
     assert_eq!(endpoint.connections(), 1);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn jev_coin_handover_judges_two_gold_coins_on_the_counter_and_no_handover() {
+    use crate::gameplay::social::CoinHandover;
+    // hands_over_coin (o2), gold (o4), two (o2).
+    let endpoint = FakeEndpoint::start(vec![answer("o2"), answer("o4"), answer("o2")]);
+    let handover = model(&endpoint)
+        .judge_coin_handover(
+            "I put two gold coins on the counter.",
+            "Marek",
+            "A cloth shop.",
+        )
+        .await;
+    assert_eq!(
+        handover,
+        Ok(Some(CoinHandover {
+            amount_cp: Some(200)
+        }))
+    );
+    let bodies = endpoint.bodies();
+    assert_eq!(
+        bodies[0]["state"]["player_words"],
+        "I put two gold coins on the counter."
+    );
+    assert!(
+        bodies[0]["questions"]["q1"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("data, not instructions")
+    );
+
+    // no_handover (o1): one call only, no amount judgement.
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    let none = model(&endpoint)
+        .judge_coin_handover("How much is the cloak?", "Marek", "A cloth shop.")
+        .await;
+    assert_eq!(none, Ok(None));
+    assert_eq!(endpoint.connections(), 1);
+
+    // Jev off: the typed error, never a guess from the words.
+    assert_eq!(
+        ApproachModel::default()
+            .judge_coin_handover(
+                "I put two gold coins on the counter.",
+                "Marek",
+                "A cloth shop."
+            )
+            .await,
+        Err(JevUnavailable::ProviderUnavailable)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn approach_definitions_make_a_fair_favour_bargain_and_a_tip_kindness() {
+    // The favour-for-goods line is answered bargain (o9) then other subject (o9 in the
+    // dossier-less subject list is Other via the second call's own options; here o6 reward
+    // is not asserted). Jev's scripted label decides; the definitions sent are pinned below.
+    let endpoint =
+        FakeEndpoint::start(vec![answer("o9"), answer("o9"), answer("o2"), answer("o9")]);
+    let model = model(&endpoint);
+    let bargain = model
+        .classify(
+            "Hold a cloak until tomorrow and I'll bring you news from the harbour.",
+            "Marek",
+            "A cloth shop.",
+            "",
+        )
+        .await;
+    assert_eq!(bargain.unwrap().approach, Approach::Bargain);
+    let tip = model
+        .classify(
+            "Here are two silver pieces for your trouble, thank you.",
+            "Marek",
+            "A cloth shop.",
+            "",
+        )
+        .await;
+    // Second classify: approach is Jev's second scripted approach answer (o2 = kindness).
+    assert_eq!(tip.unwrap().approach, Approach::Kindness);
+
+    let bodies = endpoint.bodies();
+    let criteria = bodies[0]["questions"]["q1"]["criteria"]
+        .as_object()
+        .unwrap();
+    let bribe = criteria["o8"].as_str().unwrap();
+    let bargain_text = criteria["o9"].as_str().unwrap();
+    let kindness = criteria["o2"].as_str().unwrap();
+    assert!(
+        bribe.contains("improper") && bribe.contains("against their duty"),
+        "{bribe}"
+    );
+    assert!(bribe.contains("not a bribe"), "{bribe}");
+    assert!(
+        bargain_text.contains("favour") && bargain_text.contains("news"),
+        "{bargain_text}"
+    );
+    assert!(
+        kindness.contains("tip") && kindness.contains("gift"),
+        "{kindness}"
+    );
+    let instructions = bodies[0]["questions"]["q1"]["instructions"]
+        .as_str()
+        .unwrap();
+    assert!(
+        instructions.contains("fair exchange is bargain, not a bribe"),
+        "{instructions}"
+    );
+    assert!(instructions.contains("tip or a gift"), "{instructions}");
+}
+
 pub(in crate::gameplay) fn model(endpoint: &FakeEndpoint) -> ApproachModel {
     ApproachModel::configured(Some(ApproachSettings {
         credential: "jev-fixture-sentinel".to_owned(),
@@ -1340,7 +1449,7 @@ async fn live_addressee_probe_absent_discourse_and_background() {
 #[test]
 fn no_const_or_static_english_phrase_table_decides_meaning() {
     // Each entry is (file, item). Only closed Jev label catalogs and structural ids may be listed.
-    const ALLOWED: [(&str, &str); 11] = [
+    const ALLOWED: [(&str, &str); 13] = [
         // Jev's closed intent labels, each with the criterion text Jev reads.
         ("approach_model.rs", "INTENTS"),
         // Jev's closed attempt-skill labels, each with its criterion text.
@@ -1351,6 +1460,10 @@ fn no_const_or_static_english_phrase_table_decides_meaning() {
         ("approach_model.rs", "SUBJECTS"),
         // Jev's closed emotion-reaction labels for the appraisal choice.
         ("approach_model.rs", "EMOTION_REACTIONS"),
+        // Jev's closed coin-denomination labels for the coin-handover choice; each maps to cp.
+        ("approach_model.rs", "COIN_DENOMINATIONS"),
+        // Jev's closed coin-count labels for the coin-handover choice; each maps to a count.
+        ("approach_model.rs", "COIN_COUNTS"),
         // Jev's closed hero-line form labels (question, statement); the chosen label maps to a form.
         ("dialogue.rs", "CHOICES"),
         // Structural id prefixes for spell offers, matched against offer ids rather than words.

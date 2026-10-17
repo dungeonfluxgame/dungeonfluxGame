@@ -1709,3 +1709,59 @@ fn a_witnessed_theft_keeps_the_owners_wrong_for_that_hero_only_and_turns_the_own
         "a second hero's standing is unchanged"
     );
 }
+
+#[test]
+fn a_noticed_theft_cools_the_noticer_and_records_try_on_consent_for_one_hero() {
+    let dossiers = dossiers_of(0x5eed_7717);
+    let owner = dossiers[0].clone();
+    let noticer = dossiers[1].clone();
+    let ledger = SocialLedger::open(dossiers.clone(), "adventure", None).unwrap();
+    let (sigrun, brakka) = (member(7), member(8));
+    let noticer_before = ledger.standing(sigrun, &noticer).attitude;
+
+    assert!(ledger.record_noticed_theft(
+        sigrun,
+        Some(&owner),
+        Some(&noticer),
+        "pair of gloves",
+        "op-noticed-theft-1",
+    ));
+    assert!(
+        !ledger.record_noticed_theft(
+            sigrun,
+            Some(&owner),
+            Some(&noticer),
+            "pair of gloves",
+            "op-noticed-theft-1",
+        ),
+        "the same noticed theft is recorded once"
+    );
+    assert_eq!(ledger.standing(sigrun, &owner).attitude, Attitude::Hostile);
+    assert!(
+        rank(ledger.standing(sigrun, &noticer).attitude) < rank(noticer_before)
+            || noticer_before == Attitude::Hostile,
+        "the noticer cools toward the hero"
+    );
+    for dossier in [&owner, &noticer] {
+        assert!(
+            ledger
+                .grievance_lines(sigrun, dossier)
+                .iter()
+                .any(|line| line.contains("caught trying to steal")),
+            "{} keeps the theft",
+            dossier.name
+        );
+        assert!(ledger.grievance_lines(brakka, dossier).is_empty());
+    }
+
+    assert!(ledger.record_try_on_consent(sigrun, &owner, "item-fur-cloak"));
+    assert!(!ledger.record_try_on_consent(sigrun, &owner, "item-fur-cloak"));
+    assert!(ledger.has_try_on_consent(sigrun, &owner, "item-fur-cloak"));
+    assert!(!ledger.has_try_on_consent(sigrun, &owner, "item-gloves"));
+    assert!(!ledger.has_try_on_consent(brakka, &owner, "item-fur-cloak"));
+    assert!(!ledger.has_try_on_consent(sigrun, &noticer, "item-fur-cloak"));
+    assert_eq!(
+        ledger.try_on_consents(sigrun, &owner),
+        vec!["item-fur-cloak".to_owned()]
+    );
+}

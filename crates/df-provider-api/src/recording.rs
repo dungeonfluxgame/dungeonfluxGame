@@ -64,6 +64,14 @@ pub enum RecordingError<Denied, Unavailable, Unknown> {
     Unknown(Unknown),
 }
 
+/// Result error shared by recording lookup, publication, and listing operations.
+pub type RecordingStoreError<Denied, Unavailable, Unknown> =
+    RecordingError<Denied, Unavailable, Unknown>;
+
+/// Result shared by recording lookup, publication, and listing operations.
+pub type RecordingStoreResult<Value, Denied, Unavailable, Unknown> =
+    Result<Value, RecordingStoreError<Denied, Unavailable, Unknown>>;
+
 /// A published record reference is opaque and is not itself a reusable authorization.
 pub struct RecordingArtifact<Artifact> {
     pub artifact: Artifact,
@@ -83,20 +91,22 @@ pub trait RecordingStore<Key, Contract> {
     fn lookup(
         &mut self,
         manifest: &RecordingManifest<Key, Contract>,
-    ) -> Result<Option<Self::Entry>, RecordingError<Self::Denied, Self::Unavailable, Self::Unknown>>;
+    ) -> RecordingStoreResult<Option<Self::Entry>, Self::Denied, Self::Unavailable, Self::Unknown>;
 
     fn publish_complete(
         &mut self,
         manifest: RecordingManifest<Key, Contract>,
         verified_bytes: Vec<u8>,
         verified_sha256: [u8; 32],
-    ) -> Result<
+    ) -> RecordingStoreResult<
         RecordingArtifact<Self::Artifact>,
-        RecordingError<Self::Denied, Self::Unavailable, Self::Unknown>,
+        Self::Denied,
+        Self::Unavailable,
+        Self::Unknown,
     >;
 
     fn list(
         &mut self,
         page: RecordingPage,
-    ) -> Result<Vec<Self::Entry>, RecordingError<Self::Denied, Self::Unavailable, Self::Unknown>>;
+    ) -> RecordingStoreResult<Vec<Self::Entry>, Self::Denied, Self::Unavailable, Self::Unknown>;
 }

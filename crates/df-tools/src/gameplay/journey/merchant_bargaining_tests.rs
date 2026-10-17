@@ -8,15 +8,16 @@ use crate::gameplay::storyteller::tests::{FakeEndpoint, Reply, cache_directory, 
 use super::merchant_bargaining::{
     HERO_TRADE_INSTRUCTIONS, HeroLine, HeroTradeIntent, HeroTradeMeaning, ListedQuoteAction,
     MerchantBuybackMemory, MerchantMeaning, MerchantReplyCommitment, OfferChoices, QuoteDecision,
-    QuoteRejection, TradeDirection, TradeExchange, TradeFocus, TradeItemChoices, TradeJudgement,
-    TradeTerms, attach_bulk_ask, attach_buyback_memory, bulk_ask_from_picks,
-    constrain_buyback_ceiling, discount_ask, discount_willingness, explicit_price_cp,
-    firm_buyback_quote_cp, fixed_price_purchase, hero_intent_from_judgement, hero_judgement_state,
-    hero_stated_price_cp, judge_trade_item, judged_bulk_picks, listed_quote_action,
-    merchant_commitment_from_judgement, parse_bulk_picks, quote_candidate,
-    quote_candidate_for_item, quote_candidate_for_reply, quote_decision, referenced_item_id,
-    reply_context, reply_context_for_quote, revalidate_quote, set_discount_offer,
-    sold_out_purchase_item, sold_out_refusal, trade_influence_applies,
+    QuoteRejection, SERVICE_DECISION_INSTRUCTIONS, TradeDirection, TradeExchange, TradeFocus,
+    TradeItemChoices, TradeJudgement, TradeTerms, attach_bulk_ask, attach_buyback_memory,
+    bulk_ask_from_picks, bundle_discount_ask, constrain_buyback_ceiling, discount_ask,
+    discount_willingness, explicit_price_cp, firm_buyback_quote_cp, fixed_price_purchase,
+    hero_intent_from_judgement, hero_judgement_state, hero_stated_price_cp, judge_trade_item,
+    judged_bulk_picks, listed_quote_action, merchant_commitment_from_judgement, parse_bulk_picks,
+    quote_candidate, quote_candidate_for_item, quote_candidate_for_reply, quote_decision,
+    referenced_item_id, reply_context, reply_context_for_quote, revalidate_quote,
+    service_decision_from_judgement, service_facts, set_bundle_offer, set_discount_offer,
+    sold_out_purchase_item, sold_out_refusal, trade_influence_applies, unlisted_service_quote_cp,
 };
 use crate::gameplay::approach_model::{ApproachModel, JevUnavailable};
 use crate::gameplay::social::InfluenceWillingness;
@@ -2613,6 +2614,207 @@ async fn the_storyteller_bulk_pick_is_validated_against_the_listed_items() {
     .unwrap();
     assert_eq!(picks, ids);
     assert_eq!(endpoint.bodies().len(), 1);
+}
+
+#[test]
+fn haggling_over_two_cloaks_reads_the_bare_seven_gold_offer_against_the_fur_lined_floor() {
+    let terms = authored_sale_terms("sigrun");
+    let fur = terms
+        .iter()
+        .find(|term| term.item_name == "fur-lined cloak")
+        .unwrap()
+        .clone();
+    assert_eq!(fur.maximum_price_cp, 1_000);
+    assert_eq!(fur.minimum_price_cp, 500);
+    let words = "Ten gold for the fur-lined cloak is steep, Marek. Would you take seven? We're buying two cloaks today.";
+    let line = jev_line("offer_price", words);
+    let ask = discount_ask(&terms, "sigrun", "merchant", line, Some(&fur.item_id))
+        .expect("the bare seven inherits gold and is the haggle offer, not the two-cloak count");
+    assert_eq!(ask.named_cp, 700);
+    assert_eq!(ask.listed_cp, 1_000);
+    assert_eq!(ask.lowest_cp, 500);
+    assert_eq!(ask.offer_cp(), 700);
+    assert_eq!(ask.counteroffer_cp(), 700);
+
+    let context = reply_context(
+        &terms,
+        "sigrun",
+        "merchant",
+        line,
+        focus_picked(&fur.item_id),
+        &json!({"npc": {"name": "Marek", "role": "merchant"}}),
+    )
+    .unwrap();
+    let entry = context["available_trades"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["item"] == "fur-lined cloak")
+        .unwrap();
+    assert_eq!(entry["hero_offer_cp"], 700);
+    assert_eq!(entry["lowest_price_cp"], 500);
+    let rules = context["negotiation_rules"].to_string();
+    assert!(rules.contains("counteroffer at lowest_price_cp"), "{rules}");
+    assert!(rules.contains("exactly one"), "{rules}");
+
+    let candidate = quote_candidate(
+        &fur,
+        "sigrun",
+        "merchant",
+        &jev_turn(
+            "offer_price",
+            words,
+            "firm_price",
+            "I can do 700 copper for the fur-lined cloak.",
+        ),
+    )
+    .unwrap();
+    assert_eq!(candidate.price_cp, 700);
+}
+
+#[test]
+fn a_haggle_below_the_floor_counters_at_the_floor_not_at_the_listed_price() {
+    let terms = authored_sale_terms("sigrun");
+    let fur_id = terms
+        .iter()
+        .find(|term| term.item_name == "fur-lined cloak")
+        .unwrap()
+        .item_id
+        .clone();
+    let line = jev_line(
+        "offer_price",
+        "Would you take four gold for the fur-lined cloak?",
+    );
+    let ask = discount_ask(&terms, "sigrun", "merchant", line, Some(&fur_id)).unwrap();
+    assert_eq!(ask.named_cp, 400);
+    assert_eq!(
+        ask.counteroffer_cp(),
+        500,
+        "the counteroffer is the floor, never below it and never the listed price"
+    );
+}
+
+#[test]
+fn a_multi_item_purchase_gets_a_bounded_bundle_discount_after_a_successful_check() {
+    let terms = authored_sale_terms("sigrun");
+    let ids: Vec<String> = ["warm wool cloak", "fur-lined cloak"]
+        .iter()
+        .map(|name| {
+            terms
+                .iter()
+                .find(|term| term.item_name == *name)
+                .unwrap()
+                .item_id
+                .clone()
+        })
+        .collect();
+    let line = jev_line(
+        "offer_price",
+        "Would you take eleven gold for the warm wool cloak and the fur-lined cloak together?",
+    );
+    let ask = bundle_discount_ask(&terms, "sigrun", "merchant", line, &ids)
+        .expect("a named total below the combined listing is a bundle discount ask");
+    assert_eq!(ask.listed_total_cp(), 1_300);
+    assert_eq!(ask.lowest_total_cp(), 650);
+    assert_eq!(ask.offer_total_cp(), 1_100);
+    let mut total = 0;
+    for item in &ask.items {
+        let offer = ask.item_offer_cp(&item.item_id).unwrap();
+        assert!(
+            (item.lowest_cp..=item.listed_cp).contains(&offer),
+            "{item:?}"
+        );
+        total += offer;
+    }
+    assert_eq!(total, 1_100);
+
+    let mut facts = json!({"available_trades": [
+        {"item": "warm wool cloak", "direction": "merchant_sells", "listed_price_cp": 300},
+        {"item": "fur-lined cloak", "direction": "merchant_sells", "listed_price_cp": 1000}
+    ]});
+    set_bundle_offer(&mut facts, &ask, true);
+    let offered: u32 = facts["available_trades"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["hero_offer_cp"].as_u64().unwrap() as u32)
+        .sum();
+    assert_eq!(offered, 1_100);
+    set_bundle_offer(&mut facts, &ask, false);
+    assert!(
+        facts["available_trades"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry.get("hero_offer_cp").is_none())
+    );
+
+    let mut context = json!({"negotiation_rules": []});
+    attach_bulk_ask(&mut context, &ask.ask);
+    assert_eq!(context["bulk_ask"]["lowest_total_cp"], 650);
+    let rules = context["negotiation_rules"].to_string();
+    assert!(rules.contains("bundle"), "{rules}");
+    assert!(!rules.contains("Do not promise a bundle price"), "{rules}");
+}
+
+#[test]
+fn an_unlisted_service_must_be_quoted_at_one_price_or_declined_with_a_reason() {
+    let facts = service_facts(&[]);
+    let rules = facts["services_rules"].to_string();
+    assert!(rules.contains("not listed"), "{rules}");
+    assert!(rules.contains("one exact"), "{rules}");
+    assert!(rules.contains("decline"), "{rules}");
+    assert!(!SERVICE_DECISION_INSTRUCTIONS.contains("oilcloth"));
+
+    let accepts = service_decision_from_judgement(Ok("accepts_at_price"));
+    assert_eq!(
+        unlisted_service_quote_cp(accepts, "I can wrap it in oilcloth for 20 copper."),
+        Ok(20)
+    );
+    let declines = service_decision_from_judgement(Ok("declines_with_reason"));
+    assert_eq!(
+        unlisted_service_quote_cp(declines, "I cannot wrap that; I have no oilcloth to spare."),
+        Err(QuoteRejection::MerchantRefused)
+    );
+    let hedges = service_decision_from_judgement(Ok("hedges_or_asks"));
+    assert_eq!(
+        unlisted_service_quote_cp(hedges, "Maybe I could wrap it, for some trouble."),
+        Err(QuoteRejection::NoMerchantCommitment),
+        "an evasive hedge is not a service quote"
+    );
+}
+
+#[test]
+fn only_the_selling_npc_may_quote_or_offer_stock() {
+    let terms = authored_sale_terms("sigrun");
+    let fur = terms
+        .iter()
+        .find(|term| term.item_name == "fur-lined cloak")
+        .unwrap();
+    let turn = jev_turn(
+        "ask_price",
+        "Jessa, how much for the fur-lined cloak?",
+        "firm_price",
+        "I can do 1000 copper for the fur-lined cloak.",
+    );
+    assert_eq!(
+        quote_candidate(fur, "sigrun", "shop-soldier", &turn),
+        Err(QuoteRejection::InvalidTerms),
+        "a bystander is not the seller on the term, so her price makes no quote"
+    );
+    assert!(
+        reply_context(
+            &terms,
+            "sigrun",
+            "shop-soldier",
+            jev_line("ask_price", "Jessa, how much for the fur-lined cloak?"),
+            focus_picked(&fur.item_id),
+            &json!({"npc": {"name": "Jessa", "role": "off-duty soldier"}}),
+        )
+        .is_none(),
+        "a bystander receives no trade context to quote from"
+    );
+    assert!(HERO_TRADE_INSTRUCTIONS.contains("may quote or offer stock"));
 }
 
 #[tokio::test(flavor = "current_thread")]

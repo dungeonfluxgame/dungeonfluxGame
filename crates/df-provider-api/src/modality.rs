@@ -151,6 +151,16 @@ pub struct SoundRequest<Intent, OutputProfile, LoopMetadata> {
     checked: CheckedModalityRequest<SoundSemantics<Intent, OutputProfile, LoopMetadata>>,
 }
 
+/// Canonical request binding for a text-to-speech request.
+pub type TtsRequestBinding<Text, Voice, OutputFormat, PcmFormat, Timebase> =
+    RequestBinding<RequestBasis<TtsSemantics<Text, Voice, OutputFormat, PcmFormat, Timebase>>>;
+
+/// Current owner state for a text-to-speech request.
+pub type TtsRequestOwner<'a, Text, Voice, OutputFormat, PcmFormat, Timebase> = RequestOwnerState<
+    'a,
+    RequestBasis<TtsSemantics<Text, Voice, OutputFormat, PcmFormat, Timebase>>,
+>;
+
 fn checked_for<Semantic: Eq>(
     expected: RequestModality,
     binding: RequestBinding<RequestBasis<Semantic>>,
@@ -211,16 +221,11 @@ impl<Text: Eq, Voice: Eq, OutputFormat: Eq, PcmFormat: Eq, Timebase: Eq>
     TtsRequest<Text, Voice, OutputFormat, PcmFormat, Timebase>
 {
     pub fn new(
-        binding: RequestBinding<
-            RequestBasis<TtsSemantics<Text, Voice, OutputFormat, PcmFormat, Timebase>>,
-        >,
+        binding: TtsRequestBinding<Text, Voice, OutputFormat, PcmFormat, Timebase>,
         payload: &[u8],
         usage: RequestUsage,
         limits: RequestLimits,
-        owner: RequestOwnerState<
-            '_,
-            RequestBasis<TtsSemantics<Text, Voice, OutputFormat, PcmFormat, Timebase>>,
-        >,
+        owner: TtsRequestOwner<'_, Text, Voice, OutputFormat, PcmFormat, Timebase>,
     ) -> Result<Self, ModalityRequestError> {
         let checked = checked_for(RequestModality::Tts, binding, payload, usage, limits, owner)?;
         Ok(Self { checked })
