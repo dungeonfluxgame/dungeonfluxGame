@@ -363,8 +363,9 @@ impl TableLog {
         }
     }
 
-    /// A table setting changed: every screen gets one fresh view, though no line was said and the
-    /// game revision did not move. The version it bumps is the one each view carries.
+    /// A table setting changed, or a notebook entry was written: every screen gets one fresh view,
+    /// though no line was said and the game revision did not move. The version it bumps is the one
+    /// each view carries.
     pub(super) fn settings_changed(&self) {
         if !self.enabled {
             return;
@@ -474,6 +475,10 @@ impl TableLog {
                 ],
             );
             span.finish_unmeasured("recorded");
+            // A notebook write is not a table line, but the phone's notebook rides in the view,
+            // and a view at an unchanged revision is dropped as a duplicate. Wake the watchers so
+            // the next view carries the entry.
+            self.settings_changed();
             return None;
         }
         if !self.enabled {
@@ -2140,6 +2145,27 @@ mod tests {
         assert_eq!(thinking.reply_speaker, "Courier");
         assert_eq!(done.reply_speaker, "");
         assert!(wake.has_changed().unwrap());
+    }
+
+    // A party note is written to the notebook, not the table feed, yet the phones read the
+    // notebook from the view: its write must wake every watcher to publish a fresh view.
+    #[test]
+    fn a_notebook_write_wakes_watchers_without_adding_a_table_line() {
+        let log = TableLog::new();
+        let wake = log.subscribe();
+        let before = attached(&log);
+        log.push(
+            "table",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            "NOTE added kind=note title=\"Party note\" scene=opening",
+        );
+        let after = attached(&log);
+
+        assert!(wake.has_changed().unwrap());
+        assert!(after.presentation_sequence > before.presentation_sequence);
+        assert!(after.table_log.is_empty());
     }
 
     #[test]

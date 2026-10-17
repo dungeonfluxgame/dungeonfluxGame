@@ -746,3 +746,52 @@ fn an_existing_place_alias_is_merged_on_scene_refresh() {
     assert_eq!(places[0].title, "the Binding Workshop");
     assert_eq!(places[0].text, "Tomas works here.");
 }
+
+// SRD 5.2.1 p. N/A: this test covers the shared party notebook projection, not a game rule.
+#[test]
+fn a_party_note_from_one_member_reaches_every_members_projected_notebook() {
+    use df_protocol::common as rpc;
+
+    let notebook = NotebookLedger::none();
+    notebook
+        .add_note(
+            member(1),
+            "Brakka",
+            "Marek is out of traveler's clothes.",
+            "opening",
+        )
+        .unwrap();
+    assert!(
+        notebook
+            .public_entries()
+            .iter()
+            .any(|entry| entry.kind == Kind::Note)
+    );
+    for viewer in [member(1), member(2)] {
+        let mut view = rpc::ViewMessage {
+            audience: Some(rpc::view_message::Audience::Player(
+                rpc::PlayerGameplayView {
+                    journey: Some(rpc::JourneyView::default()),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        super::wire::attach_notebook(&mut view, &notebook.visible_to(viewer)).unwrap();
+        let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
+            panic!("a player view is expected");
+        };
+        let notes = player
+            .journey
+            .unwrap()
+            .notebook
+            .into_iter()
+            .filter(|entry| entry.kind == rpc::NotebookKind::Note as i32)
+            .collect::<Vec<_>>();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].title, "Party note");
+        assert_eq!(notes[0].text, "Marek is out of traveler's clothes.");
+        assert_eq!(notes[0].author.as_deref(), Some("Brakka"));
+        assert_eq!(notes[0].owner, None);
+    }
+}
