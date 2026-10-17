@@ -85,6 +85,9 @@ const HEIGHT: u32 = 1080;
 /// the URL twice is the follow-up, and needs a pinned storage host (see the report).
 const STILL_QUALITY: u8 = 85;
 const DEFAULT_CACHE: &str = "artifacts/tmp/play/home-video-cache";
+/// The landing's one generic plate: the reviewed photograph of the harbour quay, a served asset
+/// under `assets/ui/` (the owner's choice of a cached generic landing plate, 2026-10-17).
+const LANDING_PLATE: &str = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
 /// The fal media hosts the download is pinned to. The adapter refuses any other host.
 const CDN_HOSTS: [&str; 2] = ["v3.fal.media", "v3b.fal.media"];
 const MAXIMUM_CLIP_BYTES: usize = 16 * 1024 * 1024;
@@ -645,12 +648,16 @@ pub(crate) fn apply(message: &mut rpc::ViewMessage) {
     let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
         return;
     };
-    // The lobby's painting is the audience's own `scene_asset`, the one the stage draws.
-    let painting = display.scene_asset.clone();
     let Some(journey) = display.journey.as_mut() else {
         return;
     };
     let lobby = journey.phase == rpc::JourneyPhase::Room as i32;
+    // The landing shows one generic photographic plate whatever the adventure, so its loop is
+    // made once and reused across runs; the stage draws the same plate the loop starts from.
+    if lobby {
+        display.scene_asset = LANDING_PLATE.to_owned();
+    }
+    let painting = display.scene_asset.clone();
     let loop_view = if lobby && !painting.is_empty() {
         observe(&painting)
     } else {

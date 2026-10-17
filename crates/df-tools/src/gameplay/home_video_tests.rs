@@ -647,6 +647,36 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+#[test]
+fn the_lobby_shows_the_generic_landing_plate_whatever_art_the_adventure_names() {
+    // Arrange: a lobby view whose adventure names the live room photograph token, and a scene view.
+    let view = |phase: rpc::JourneyPhase| rpc::ViewMessage {
+        audience: Some(rpc::view_message::Audience::Display(
+            rpc::DisplayGameplayView {
+                scene_asset: "live-room-photo".to_owned(),
+                journey: Some(rpc::JourneyView {
+                    phase: phase as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    let asset = |message: rpc::ViewMessage| match message.audience {
+        Some(rpc::view_message::Audience::Display(display)) => display.scene_asset,
+        _ => panic!("a display view"),
+    };
+    // Act
+    let mut lobby = view(rpc::JourneyPhase::Room);
+    home_video::apply(&mut lobby);
+    let mut opening = view(rpc::JourneyPhase::Opening);
+    home_video::apply(&mut opening);
+    // Assert: the landing draws (and loops) the one reviewed plate; a scene keeps its own art.
+    assert_eq!(asset(lobby), PAINTING);
+    assert_eq!(asset(opening), "live-room-photo");
+}
+
 /// Development check: one real generation of a painting's loop through the engine, reporting the
 /// outcome and the time. It spends one clip, and runs only when `DF_HOME_VIDEO_LIVE_GENERATE` names
 /// the painting; the key comes from `FAL_KEY` in the environment of that one command.

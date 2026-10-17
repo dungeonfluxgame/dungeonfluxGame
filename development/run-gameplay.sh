@@ -252,6 +252,10 @@ if test -z "${ELEVENLABS_API_KEY:-}" && test -f "$ROOT/.env"; then
   if test -n "$ELEVENLABS_API_KEY"; then export ELEVENLABS_API_KEY; else unset ELEVENLABS_API_KEY; fi
 fi
 export DF_GAMEPLAY_VOICE_CACHE=${DF_GAMEPLAY_VOICE_CACHE:-$ARTIFACT_ROOT/tmp/play/voice-cache}
+# The landing loop and place music are kept across runs and fresh games, under the artifact root
+# rather than the working directory (a play snapshot would otherwise keep its own copies).
+export DF_GAMEPLAY_HOME_VIDEO_CACHE=${DF_GAMEPLAY_HOME_VIDEO_CACHE:-$ARTIFACT_ROOT/tmp/play/home-video-cache}
+export DF_GAMEPLAY_MUSIC_CACHE=${DF_GAMEPLAY_MUSIC_CACHE:-$ARTIFACT_ROOT/tmp/play/music-cache}
 # Optional scan settings, passed through to the server when set: serve downloaded splat scans from
 # DF_GAMEPLAY_SPLAT_DIR and stage every fight on the scene DF_GAMEPLAY_BATTLE_SCENE (see development/README.md).
 if test "${DF_GAMEPLAY_SPLAT_DIR+x}" = x; then export DF_GAMEPLAY_SPLAT_DIR; echo "Splat scans are served from $DF_GAMEPLAY_SPLAT_DIR"; fi
