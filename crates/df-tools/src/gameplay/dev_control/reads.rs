@@ -127,7 +127,7 @@ fn stale_seat_json(index: usize, hero: Option<&str>, error: &Value) -> Value {
     })
 }
 
-fn display_journey(view: &rpc::ViewMessage) -> HashMap<String, Value> {
+pub(super) fn display_journey(view: &rpc::ViewMessage) -> HashMap<String, Value> {
     let mut out = HashMap::new();
     let Some(rpc::view_message::Audience::Display(display)) = view.audience.as_ref() else {
         return out;
@@ -198,7 +198,7 @@ fn visual_asset_summary(scene: &rpc::GameplayScene) -> Value {
 /// The server-derived public music plan used by the shared display. This is intentionally a
 /// summary of the same pure score functions the browser consumes, so an agent can compare the
 /// authoritative cue and scene family with `data-music-state` without exposing audio bytes.
-fn music_plan_summary(scene: &rpc::GameplayScene, journey: &rpc::JourneyView) -> Value {
+pub(super) fn music_plan_summary(scene: &rpc::GameplayScene, journey: &rpc::JourneyView) -> Value {
     let tempo = crate::music_score::tempo_of(scene, journey, 0);
     let facts = crate::music_score::facts_of(scene, journey, "");
     let suite = crate::music_score::suite_for(facts.in_combat, facts.outcome);
@@ -391,7 +391,7 @@ pub(super) async fn feelings(
     ))
 }
 
-fn feelings_identity(scene: &crate::gameplay::pack::Scene, requested: &str) -> String {
+pub(super) fn feelings_identity(scene: &crate::gameplay::pack::Scene, requested: &str) -> String {
     use crate::gameplay::pack::CastRole;
     let role_name = |role| match role {
         CastRole::Patron => "patron",
@@ -930,11 +930,15 @@ fn ledger_json(current: &Checkpoint) -> Result<Value, RepositoryError> {
         .setting
         .as_ref()
         .map(|setting| setting.place_id.as_str());
-    let (items, merchants) = match (place, living_scene::snapshot(state, &scene)?) {
+    // The market is the authored model of the current place. Before the story begins, or in a
+    // scene with no authored model, there is no market to show, and the status says which.
+    let (items, market, market_status) = match (place, living_scene::snapshot(state, &scene)?) {
         (Some(place_id), Some(snapshot)) => {
-            scene_ledger(current, place_id, &snapshot.model, &hero_names)?
+            let (items, market) = scene_ledger(current, place_id, &snapshot.model, &hero_names)?;
+            (items, market, "shown")
         }
-        _ => (Vec::new(), Vec::new()),
+        (Some(_), None) => (Vec::new(), Market::default(), "no_authored_market"),
+        (None, _) => (Vec::new(), Market::default(), "no_place"),
     };
     let party = heroes
         .iter()
@@ -980,7 +984,10 @@ fn ledger_json(current: &Checkpoint) -> Result<Value, RepositoryError> {
         "revision": checkpoint_revision_json(current),
         "place_id": place,
         "party": party,
-        "merchants": merchants,
+        "market_status": market_status,
+        "merchants": market.merchants,
+        "services": market.services,
+        "npc_purses": market.purses,
         "scene_items": items.into_iter().map(|item| item.json).collect::<Vec<_>>(),
         "open_quotes_count": open_quotes_count,
         "quote_count": quote_count,
@@ -995,7 +1002,7 @@ fn scene_ledger(
     place_id: &str,
     model: &SceneModel,
     hero_names: &[&str],
-) -> Result<(Vec<LedgerItem>, Vec<Value>), RepositoryError> {
+) -> Result<(Vec<LedgerItem>, Market), RepositoryError> {
     let (stock_revisions, purse_revisions) = trade_revisions(current, hero_names)?;
     let authored = model.inventory();
     let mut items = Vec::new();
@@ -1034,15 +1041,103 @@ fn scene_ledger(
         let Some(person) = model.people.iter().find(|person| person.id == seller) else {
             continue;
         };
+        let offers = merchant_offers(model, seller, &items, &stock_revisions);
+        let offers_available = offers
+            .iter()
+            .filter(|offer| offer["available"] == true)
+            .count();
         merchants.push(json!({
             "id": person.id,
             "name": person.name,
             "place_id": place_id,
             "purse_cp": person.coin_cp,
             "purse_revision": purse_revisions.get(seller).copied(),
+            "offers": offers,
+            "offers_available": offers_available,
         }));
     }
-    Ok((items, merchants))
+    let services = model
+        .services
+        .iter()
+        .map(|service| {
+            json!({
+                "id": service.id,
+                "provider_id": service.provider_id,
+                "provider": person_name_in(model, &service.provider_id),
+                "name": service.name,
+                "price_cp": service.price_cp,
+            })
+        })
+        .collect();
+    let purses = model
+        .people
+        .iter()
+        .map(|person| {
+            json!({
+                "id": person.id,
+                "name": person.name,
+                "purse_cp": person.coin_cp,
+                "purse_revision": purse_revisions.get(&person.id).copied(),
+                "merchant": model.offers.iter().any(|offer| offer.seller_id == person.id),
+            })
+        })
+        .collect();
+    Ok((
+        items,
+        Market {
+            merchants,
+            services,
+            purses,
+        },
+    ))
+}
+
+/// The trading side of one place: merchants with their offers, the services on offer, and every
+/// person's purse. Empty when the place has no authored market.
+#[derive(Default)]
+struct Market {
+    merchants: Vec<Value>,
+    services: Vec<Value>,
+    purses: Vec<Value>,
+}
+
+/// One merchant's offers in authored order: each finite item with its price, whether it is still
+/// available, and its stock revision. Availability comes from the same inventory rows as the item
+/// list, so a sold offer reads as sold in both places.
+fn merchant_offers(
+    model: &SceneModel,
+    seller: &str,
+    items: &[LedgerItem],
+    stock_revisions: &HashMap<String, u64>,
+) -> Vec<Value> {
+    model
+        .offers
+        .iter()
+        .filter(|offer| offer.seller_id == seller)
+        .map(|offer| {
+            let item_id = offer.canonical_item_id().to_owned();
+            let available = items
+                .iter()
+                .find(|item| item.json["item_id"].as_str() == Some(item_id.as_str()))
+                .and_then(|item| item.json["available"].as_bool());
+            json!({
+                "offer_id": offer.id,
+                "item_id": item_id,
+                "name": offer.name,
+                "cost_cp": offer.cost_cp,
+                "available": available,
+                "stock_revision": stock_revisions.get(&item_id).copied(),
+            })
+        })
+        .collect()
+}
+
+fn person_name_in(model: &SceneModel, person_id: &str) -> Option<String> {
+    model
+        .people
+        .iter()
+        .find(|person| person.id == person_id)
+        .map(|person| person.name.clone())
 }
 
 /// Stock and purse revisions from the server's own trade terms, keyed by item and by merchant.
@@ -1290,7 +1385,20 @@ fn describe_commands() -> Vec<Value> {
         json!({"command":"feelings", "method":"GET", "path":"/dev/feelings?name=<npc>", "args":{"name":"NPC id or name"},"output":"development-only profile and current relationships"}),
         json!({"command":"timeline", "method":"GET", "path":"/dev/timeline?last=<N>&type=<resource_type>&component=<component>&summary=<bool>", "args":{"last":"1..1000, default 50", "type":"text_model|speech_input|voice|image|plate|video|browser_media|state", "component":"subtitle|speech_bubble|thinking_loader|intent_loader|check_card|item_card|title_card|scene_card|plate_incoming|plate_outgoing", "summary":"true returns counts only"},"output":"{events[{sequence,unix_ms,elapsed_ms,event,line,fields}],matched,summary{window_events,resource_count,by_resource_type,by_stage,by_status,component_count,by_component,by_component_phase,by_visibility},filter,dropped,capacity,scope}; correlated lifecycle and browser delivery/source events; no prompt, transcript, credentials, raw URLs or media bytes"}),
         json!({"command":"merchant-quotes", "method":"GET", "path":"/dev/merchant-quotes?last=<N>", "args":{"last":"1..1000, default 50"}, "output":"{quotes[{quote_id,direction,item_id,offer_id,seller_id,buyer_id,price_cp,stock_revision,purse_revision,source_line_id,source_line_sequence,source_revision,source_actor_id,status,attempt_count,last_rejection,close_reason}],count,returned}; durable exact-quote outcomes and closure reasons, no source speech text or private facts"}),
-        json!({"command":"ledger", "method":"GET", "path":"/dev/ledger", "args":{}, "output":"{revision{epoch,sequence}, place_id, party[{id, name, coin_cp, coin_breakdown{gp,sp,cp}, items[item+custody]}], merchants[{id, name, place_id, purse_cp, purse_revision}], scene_items[item], open_quotes_count, quote_count, quotes[last 5 merchant quote records as in merchant-quotes]}; item = {item_id, source_id, name, provenance_kind, owner_id, owner, holder_id, holder, location{kind: stock|scene|held, position|holder_id}, available, cost_cp, stock_revision}; owner_id and holder_id are canonical actor refs, owner and holder the authored ids; custody is permanent when the hero owns the item, observation_only when the hero only holds it; stock_revision and purse_revision are null when the server's trade terms do not expose them; reads the canonical checkpoint for every hero, no seat, token-gated, no credentials"}),
+        json!({"command":"ledger", "method":"GET", "path":"/dev/ledger", "args":{}, "output":"{revision{epoch,sequence}, place_id, party[{id, name, coin_cp, coin_breakdown{gp,sp,cp}, items[item+custody]}], market_status: shown|no_authored_market|no_place, merchants[{id, name, place_id, purse_cp, purse_revision, offers[{offer_id, item_id, name, cost_cp, available, stock_revision}], offers_available}], services[{id, provider_id, provider, name, price_cp}], npc_purses[{id, name, purse_cp, purse_revision, merchant}] (every person in the place), scene_items[item], open_quotes_count, quote_count, quotes[last 5 merchant quote records as in merchant-quotes]}; item = {item_id, source_id, name, provenance_kind, owner_id, owner, holder_id, holder, location{kind: stock|scene|held, position|holder_id}, available, cost_cp, stock_revision}; owner_id and holder_id are canonical actor refs, owner and holder the authored ids; custody is permanent when the hero owns the item, observation_only when the hero only holds it; stock_revision and purse_revision are null when the server's trade terms do not expose them; reads the canonical checkpoint for every hero, no seat, token-gated, no credentials"}),
+        json!({"command":"lore", "method":"GET", "path":"/dev/lore?scene=<key|current>", "args":{"scene":"optional scene key, or current"}, "output":"{scene_filter, scene_count, scenes[{scene, count, facts[{kind, name, content, established_by}]}]}; the run's local canon, oldest fact first; read-only"}),
+        json!({"command":"lore add", "method":"POST", "path":"/dev/lore", "args":{"scene":"current, or a scene that already holds canon","kind":"place|person|rumour|custom|service|history","name":"short name","content":"one sentence"}, "output":"{status: added|refused, scene, fact|reason, edited}; the same validator a reply's fact meets (kind|name|content); a refusal names its reason and changes nothing; an added fact is saved and marks the run edited"}),
+        json!({"command":"lore edit|delete", "method":"POST", "path":"/dev/lore/edit|/dev/lore/delete", "args":{}, "output":"{status: unavailable, reason, edited: false}; not supported: changing or removing canon needs a canon-ledger mutator this surface does not add"}),
+        json!({"command":"social", "method":"GET", "path":"/dev/social?name=<npc>&hero=<name>", "args":{"name":"NPC id or name","hero":"optional hero name"}, "output":"{npc, npc_id, profile, count, relationships[{hero, attitude, trust, emotion{fond, afraid, drawn_to, resentful, wary, never_forgives}|null, grievances[line with the hero's words]}]}; the NPC's standing with each hero; read-only, never begins a scene"}),
+        json!({"command":"social edit", "method":"POST", "path":"/dev/social/edit", "args":"attitude <level>, grievance add|remove, clear-never-forgives", "output":"{status: unavailable, reason, edited: false}; not supported: needs a social-ledger mutator this surface does not add"}),
+        json!({"command":"fight", "method":"GET", "path":"/dev/fight", "args":{}, "output":"{open, scene, people[{id, name, presence: standing|down|dead|gone}], roster{aggressor, target, join[], flee[], out[], sequence}|null, combat|null}; roster is the latest SCENE-FIGHT audit line (the stances each person took); combat is shown only while a fight is open; read-only"}),
+        json!({"command":"fight restore|end", "method":"POST", "path":"/dev/fight/edit", "args":"restore <person> | end", "output":"{status: unavailable, reason, edited: false}; not supported: staged decisions through the override path, which is disabled server-side"}),
+        json!({"command":"scene-changes", "method":"GET", "path":"/dev/scene-changes?last=<N>", "args":{"last":"1..1000, default 50"}, "output":"{count, returned, changes[{revision{epoch,sequence}, place, hero, paid_cp, entity_id, description, kind{kind, ...receipt as stored}}]}; the committed scene changes (services, coin, purchases, sales, pickpockets, plants, thefts, witnessed attempts, coerced handovers and coin); read as stored, never re-judged"}),
+        json!({"command":"economy edit", "method":"POST", "path":"/dev/economy/edit", "args":"purse <npc> --cp <n> | coin <hero> --cp <n> | offer add|remove|restock <offer>", "output":"{status: unavailable, reason, edited: false}; not supported: staged decisions through the override path, which is disabled server-side"}),
+        json!({"command":"audit", "method":"GET", "path":"/dev/audit?type=<LINE-KIND>&last=<N>", "args":{"type":"optional line kind: IMAGERY, MUSIC, INFLUENCE, DECEPTION, SCENE-FIGHT, LINE_JUDGEMENT, ...","last":"1..1000, default 50"}, "output":"{events[{sequence, unix_ms, event, type, line}], matched, returned, filter, dropped, capacity}; the audit lines the server prints, from the shared bounded ring"}),
+        json!({"command":"decisions", "method":"GET", "path":"/dev/decisions?kind=<kind>&last=<N>", "args":{"kind":"line|trade|quote|attempt|action|target|npc-target|approach|freeform|scene|npc-event","last":"1..1000, default 50"}, "output":"{decisions[{sequence, unix_ms, kind, event, source: jev|rules|null, neutral, line}], matched, returned, filter, dropped, capacity}; neutral is true when Jev was unavailable and the rules fallback decided, or when a freeform plan was unavailable"}),
+        json!({"command":"music", "method":"GET", "path":"/dev/music", "args":{}, "output":"{plan: the music plan of the scene on screen, or null, track_status: not_built, scope}; read-only"}),
+        json!({"command":"music regenerate|clear", "method":"POST", "path":"/dev/music/edit", "args":"<place>", "output":"{status: unavailable, reason, edited: false}; no place music spec or track cache exists in this build"}),
         json!({"command":"layout list|get", "method":"GET", "path":"/dev/layout", "args":{},"output":"{revision,status,overrides,visibility,clients,capacity}; actual browser IDs with per-client exact-revision rect/configured/effective-transform/visibility readback and explicit overflow"}),
         json!({"command":"layout transform <id>", "method":"POST", "path":"/dev/layout/transform", "args":"--translate-x <n> --translate-y <n> --unit px|percent [--scale <n>|--scale-x <n> --scale-y <n>] [--rotate <degrees>]", "output":"{status:pending,id,revision}; changes only the named registered visual"}),
         json!({"command":"layout move <id>", "method":"POST", "path":"/dev/layout/move", "args":"[--x <n>] [--y <n>] --unit px|percent; translation offsets compose with scale and rotation", "output":"{status:pending,id,revision}; changes bounded translation offsets"}),
@@ -1594,8 +1702,25 @@ mod command_coverage_tests {
         }
         let description = describe_json();
         for name in [
-            "scene", "feelings", "timeline", "play", "preview", "confirm", "cancel", "create",
-            "act", "say", "view",
+            "scene",
+            "feelings",
+            "timeline",
+            "play",
+            "preview",
+            "confirm",
+            "cancel",
+            "create",
+            "act",
+            "say",
+            "view",
+            "lore",
+            "lore add",
+            "social",
+            "fight",
+            "scene-changes",
+            "decisions",
+            "audit",
+            "music",
         ] {
             assert!(
                 description["commands"]
@@ -1772,6 +1897,56 @@ mod ledger_tests {
                     .expect("projection reads the checkpoint")
                     .is_none()
             );
+        });
+    }
+
+    #[test]
+    fn ledger_lists_each_merchant_offer_with_availability_and_every_purse() {
+        let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let before = ledger_json(&opening).unwrap();
+            assert_eq!(before["market_status"], "shown");
+            let merchant = row(&before["merchants"], "id", "merchant");
+            let offers = merchant["offers"].as_array().unwrap();
+            assert!(
+                !offers.is_empty(),
+                "the cloth merchant lists its finite stock"
+            );
+            let travelers = row(&merchant["offers"], "item_id", "item-clothes-travelers");
+            assert_eq!(travelers["available"], true);
+            assert_eq!(travelers["cost_cp"], 200);
+            assert_eq!(travelers["stock_revision"], 0);
+            assert_eq!(merchant["offers_available"], offers.len());
+            assert!(before["services"].is_array());
+            let purse = row(&before["npc_purses"], "id", "merchant");
+            assert_eq!(purse["merchant"], true);
+            assert_eq!(
+                purse["purse_cp"],
+                row(&before["merchants"], "id", "merchant")["purse_cp"]
+            );
+
+            let quoted = trade_clothes(&opening, 6, "100");
+            let bought = trade_clothes(&quoted, 7, "200");
+            let after = ledger_json(&bought).unwrap();
+            let merchant = row(&after["merchants"], "id", "merchant");
+            let travelers = row(&merchant["offers"], "item_id", "item-clothes-travelers");
+            assert_eq!(travelers["available"], false, "a sold offer reads as sold");
+            assert_eq!(merchant["offers_available"], offers.len() - 1);
+        });
+    }
+
+    #[test]
+    fn ledger_shows_the_authored_market_of_the_current_place_before_the_story_begins() {
+        let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let prepared = native::prepared();
+            let before_story = ledger_json(&prepared).unwrap();
+            assert_eq!(before_story["market_status"], "shown");
+            assert!(!before_story["merchants"].as_array().unwrap().is_empty());
+            assert!(!before_story["npc_purses"].as_array().unwrap().is_empty());
         });
     }
 }

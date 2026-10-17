@@ -1500,6 +1500,7 @@ async fn serve_run(
         table: table_log.clone(),
         social: social.clone(),
         notebook: notebook.clone(),
+        lore: local_lore.clone(),
     };
     let dev_on = dev_control::setting_on(settings.listen).unwrap_or(false);
     if dev_on {

@@ -1399,6 +1399,39 @@ pub(in crate::gameplay) fn accepted(
         .transpose()
 }
 
+/// One committed scene change read back from the decision journal, with the receipt it carries.
+pub(in crate::gameplay) struct JournalSceneChange {
+    pub(in crate::gameplay) revision: df_types::SessionRevision,
+    pub(in crate::gameplay) place: String,
+    pub(in crate::gameplay) hero: String,
+    pub(in crate::gameplay) paid_cp: u32,
+    pub(in crate::gameplay) change: SceneChange,
+}
+
+/// Every scene change in the checkpoint's decision journal, oldest first. Read-only: the journal
+/// is replayed as stored and nothing is staged or committed.
+pub(in crate::gameplay) fn scene_change_journal(
+    current: &Checkpoint,
+) -> Result<Vec<JournalSceneChange>, RepositoryError> {
+    let mut changes = Vec::new();
+    for decision in &current.state().decisions {
+        let Some(entry) = read(decision)? else {
+            continue;
+        };
+        let Some(change) = entry.change else {
+            continue;
+        };
+        changes.push(JournalSceneChange {
+            revision: decision.revision,
+            place: entry.place,
+            hero: entry.hero,
+            paid_cp: entry.paid_cp,
+            change,
+        });
+    }
+    Ok(changes)
+}
+
 pub(in crate::gameplay) fn snapshot(
     state: &GameState,
     scene: &pack::Scene,

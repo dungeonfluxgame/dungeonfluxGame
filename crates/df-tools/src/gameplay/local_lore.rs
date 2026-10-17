@@ -119,7 +119,7 @@ only from wariness or a grievance.";
 /// Why a proposal was refused. The label is a closed vocabulary for the audit line; it never
 /// carries the proposal's text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Rejection {
+pub(in crate::gameplay) enum Rejection {
     Malformed,
     UnknownKind,
     NameLength,
@@ -139,7 +139,7 @@ pub(super) enum Rejection {
 }
 
 impl Rejection {
-    pub(super) fn label(self) -> &'static str {
+    pub(in crate::gameplay) fn label(self) -> &'static str {
         match self {
             Self::Malformed => "malformed",
             Self::UnknownKind => "unknown_kind",
@@ -163,7 +163,7 @@ impl Rejection {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum FactKind {
+pub(in crate::gameplay) enum FactKind {
     Place,
     Person,
     Rumour,
@@ -186,7 +186,7 @@ impl FactKind {
         }
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub(in crate::gameplay) fn label(self) -> &'static str {
         match self {
             Self::Place => "place",
             Self::Person => "person",
@@ -201,18 +201,18 @@ impl FactKind {
 /// One established fact: canon for its scene from the moment it is recorded.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(super) struct LocalFact {
-    pub(super) kind: FactKind,
-    pub(super) name: String,
-    pub(super) content: String,
-    pub(super) established_by: String,
+pub(in crate::gameplay) struct LocalFact {
+    pub(in crate::gameplay) kind: FactKind,
+    pub(in crate::gameplay) name: String,
+    pub(in crate::gameplay) content: String,
+    pub(in crate::gameplay) established_by: String,
 }
 
 /// The names a proposal must not reuse: the heroes, whom no fact may name, and the scene's
 /// people, things, exits and places, which game state already owns.
-pub(super) struct Names<'a> {
-    pub(super) heroes: &'a [String],
-    pub(super) game_state: &'a [String],
+pub(in crate::gameplay) struct Names<'a> {
+    pub(in crate::gameplay) heroes: &'a [String],
+    pub(in crate::gameplay) game_state: &'a [String],
 }
 
 /// Canon for one adventure run: the facts each scene has established, persisted when a directory
@@ -345,7 +345,7 @@ impl LocalLore {
 
     /// Checks a reply's `local_fact` text and, when it is a fact, records it as canon for `scene`.
     /// `none` records nothing. Nothing changes when the proposal is refused.
-    pub(super) fn propose(
+    pub(in crate::gameplay) fn propose(
         &self,
         scene: &str,
         text: &str,
@@ -384,7 +384,7 @@ impl LocalLore {
     }
 
     /// Saves the canon beside the run when it has a file. A ledger without one saves nothing.
-    pub(super) fn save(&self) -> Result<(), LoreError> {
+    pub(in crate::gameplay) fn save(&self) -> Result<(), LoreError> {
         let Some(file) = &self.file else {
             return Ok(());
         };
@@ -408,6 +408,19 @@ impl LocalLore {
 
     fn lock(&self) -> MutexGuard<'_, BTreeMap<String, Vec<LocalFact>>> {
         self.scenes.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Read-only development view of canon: the facts each scene holds, oldest first, for every
+    /// scene or only `scene` when one is named. Nothing here changes the canon.
+    pub(in crate::gameplay) fn development_facts(
+        &self,
+        scene: Option<&str>,
+    ) -> Vec<(String, Vec<LocalFact>)> {
+        self.lock()
+            .iter()
+            .filter(|(key, _)| scene.is_none_or(|wanted| key.as_str() == wanted))
+            .map(|(key, facts)| (key.clone(), facts.clone()))
+            .collect()
     }
 }
 

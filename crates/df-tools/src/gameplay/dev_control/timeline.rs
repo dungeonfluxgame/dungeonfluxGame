@@ -1,6 +1,6 @@
 //! Development-only bounded mirror of the shared audit path, never authoritative game state.
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::VecDeque,
     sync::{Mutex, OnceLock},
@@ -197,6 +197,130 @@ impl Timeline {
     }
 }
 
+/// The Jev classification events a `dev decisions` view lists, as `(kind, event)`. Each event
+/// names its judgement in a `source=` token: `jev` when the model decided, `rules` when it was
+/// unavailable and the neutral fallback decided.
+pub(super) const DECISION_KINDS: &[(&str, &str)] = &[
+    ("line", "gameplay.line_judgement"),
+    ("trade", "gameplay.merchant.trade_judgement"),
+    ("quote", "gameplay.merchant.quote_candidate"),
+    ("attempt", "gameplay.attempt_classified"),
+    ("action", "gameplay.physical_action_classified"),
+    ("target", "gameplay.investigation_target"),
+    ("npc-target", "gameplay.npc_target"),
+    ("approach", "gameplay.social.reading"),
+    ("freeform", "gameplay.freeform_action"),
+    ("scene", "gameplay.scene_interaction"),
+    ("npc-event", "gameplay.npc.reply_event"),
+];
+
+/// The kind a line starts with: its first word when that word is a plain upper-case token such as
+/// `LINE_JUDGEMENT`, `SCENE-FIGHT` or `IMAGERY`; otherwise `other`.
+fn line_kind(line: &str) -> String {
+    let word = line.split_whitespace().next().unwrap_or("");
+    let plain = !word.is_empty()
+        && word.bytes().all(|byte| {
+            byte.is_ascii_uppercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        });
+    if plain {
+        word.to_owned()
+    } else {
+        "other".to_owned()
+    }
+}
+
+/// Compares two kind names the way an agent types them: case-insensitive, `_` and `-` alike.
+fn same_kind(left: &str, right: &str) -> bool {
+    let normal = |text: &str| text.to_ascii_uppercase().replace('_', "-");
+    normal(left) == normal(right)
+}
+
+/// The `source=` token of an audit line, when the line carries one.
+fn source_of(line: &str) -> Option<&str> {
+    line.split_whitespace()
+        .find_map(|word| word.strip_prefix("source="))
+}
+
+impl Timeline {
+    /// The newest `last` audit lines, optionally only those of one kind, oldest first.
+    fn audit(&self, last: usize, line_kind_filter: Option<&str>) -> Value {
+        let matched: Vec<Value> = self
+            .events
+            .iter()
+            .filter_map(|event| {
+                let kind = line_kind(&event.line);
+                if line_kind_filter.is_some_and(|wanted| !same_kind(&kind, wanted)) {
+                    return None;
+                }
+                Some(json!({
+                    "sequence": event.sequence,
+                    "unix_ms": event.unix_ms,
+                    "event": event.event,
+                    "type": kind,
+                    "line": event.line,
+                }))
+            })
+            .collect();
+        let total = matched.len();
+        let events: Vec<Value> = matched
+            .into_iter()
+            .skip(total.saturating_sub(last))
+            .collect();
+        json!({
+            "events": events,
+            "matched": total,
+            "returned": events.len(),
+            "filter": {"type": line_kind_filter},
+            "dropped": self.next - 1 - self.events.len() as u64,
+            "capacity": CAPACITY,
+            "scope": "current server process; the same audit lines the server prints, mirrored in a bounded ring",
+        })
+    }
+
+    /// The newest `last` Jev classification events, optionally only those of one kind, oldest
+    /// first. An event with `source=rules` (or `plan=unavailable`) is a neutral outcome: the model
+    /// did not decide it.
+    fn decisions(&self, last: usize, kind_filter: Option<&str>) -> Value {
+        let matched: Vec<Value> = self
+            .events
+            .iter()
+            .filter_map(|event| {
+                let kind = DECISION_KINDS
+                    .iter()
+                    .find(|(_, name)| *name == event.event)?
+                    .0;
+                if kind_filter.is_some_and(|wanted| wanted != kind) {
+                    return None;
+                }
+                let source = source_of(&event.line);
+                Some(json!({
+                    "sequence": event.sequence,
+                    "unix_ms": event.unix_ms,
+                    "kind": kind,
+                    "event": event.event,
+                    "source": source,
+                    "neutral": source == Some("rules") || event.line.contains("plan=unavailable"),
+                    "line": event.line,
+                }))
+            })
+            .collect();
+        let total = matched.len();
+        let decisions: Vec<Value> = matched
+            .into_iter()
+            .skip(total.saturating_sub(last))
+            .collect();
+        json!({
+            "decisions": decisions,
+            "matched": total,
+            "returned": decisions.len(),
+            "filter": {"kind": kind_filter},
+            "dropped": self.next - 1 - self.events.len() as u64,
+            "capacity": CAPACITY,
+            "scope": "current server process; Jev classifications and their neutral fallbacks from the audit ring",
+        })
+    }
+}
+
 fn resource_type(event: &str, line: &str, fields: &Map<String, Value>) -> Option<&'static str> {
     if let Some(value) = fields.get("resource_type").and_then(Value::as_str) {
         return RESOURCE_TYPES.iter().copied().find(|kind| *kind == value);
@@ -349,6 +473,24 @@ pub(super) fn snapshot(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .snapshot(last, resource_filter, component_filter, summary_only)
+}
+
+/// `dev audit`: the newest audit lines from the shared ring, optionally of one line kind.
+pub(super) fn audit(last: usize, line_kind: Option<&str>) -> Value {
+    TIMELINE
+        .get_or_init(|| Mutex::new(Timeline::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .audit(last, line_kind)
+}
+
+/// `dev decisions`: the newest Jev classifications from the shared ring, optionally of one kind.
+pub(super) fn decisions(last: usize, kind: Option<&str>) -> Value {
+    TIMELINE
+        .get_or_init(|| Mutex::new(Timeline::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .decisions(last, kind)
 }
 
 #[cfg(test)]
@@ -530,5 +672,83 @@ mod tests {
         let summary = timeline.snapshot(20, Some("browser_media"), Some("speech_bubble"), true);
         assert_eq!(summary["events"].as_array().unwrap().len(), 0);
         assert_eq!(summary["matched"], 4);
+    }
+
+    #[test]
+    fn audit_filters_by_line_kind_in_any_spelling_and_keeps_order() {
+        let mut timeline = Timeline::new();
+        for (event, line) in [
+            (
+                "gameplay.scene_fight",
+                "SCENE-FIGHT aggressor=\"Brynn\" target=\"corin\"",
+            ),
+            ("gameplay.imagery.request", "IMAGERY kind=item reason=coin"),
+            (
+                "gameplay.line_judgement",
+                "LINE_JUDGEMENT stage=scene source=jev",
+            ),
+            (
+                "gameplay.scene_fight",
+                "SCENE-FIGHT unavailable reason=\"busy\"",
+            ),
+        ] {
+            timeline.push(event, line, Map::new());
+        }
+
+        let fights = timeline.audit(10, Some("scene_fight"));
+        let events = fights["events"].as_array().unwrap();
+        assert_eq!(fights["matched"], 2);
+        assert_eq!(events[0]["type"], "SCENE-FIGHT");
+        assert!(events[0]["line"].as_str().unwrap().contains("Brynn"));
+        assert!(events[1]["line"].as_str().unwrap().contains("unavailable"));
+        assert!(events[0]["sequence"].as_u64() < events[1]["sequence"].as_u64());
+
+        let newest = timeline.audit(1, None);
+        assert_eq!(newest["matched"], 4);
+        assert_eq!(newest["returned"], 1);
+        assert_eq!(newest["events"][0]["type"], "SCENE-FIGHT");
+        assert_eq!(timeline.audit(10, Some("INFLUENCE"))["matched"], 0);
+    }
+
+    #[test]
+    fn decisions_mark_the_rules_fallback_as_neutral_and_filter_by_kind() {
+        let mut timeline = Timeline::new();
+        for (event, line) in [
+            (
+                "gameplay.line_judgement",
+                "LINE_JUDGEMENT stage=scene source=jev meaning=examine reason=none",
+            ),
+            (
+                "gameplay.merchant.trade_judgement",
+                "MERCHANT_TRADE_JUDGEMENT stage=offer source=rules meaning=unavailable reason=provider",
+            ),
+            (
+                "gameplay.freeform_action",
+                "FREEFORM plan=unavailable reason=provider",
+            ),
+            ("gameplay.imagery.request", "IMAGERY kind=item"),
+        ] {
+            timeline.push(event, line, Map::new());
+        }
+
+        let all = timeline.decisions(10, None);
+        let decisions = all["decisions"].as_array().unwrap();
+        assert_eq!(
+            all["matched"], 3,
+            "only Jev classification events are listed"
+        );
+        assert_eq!(decisions[0]["kind"], "line");
+        assert_eq!(decisions[0]["source"], "jev");
+        assert_eq!(decisions[0]["neutral"], false);
+        assert_eq!(decisions[1]["kind"], "trade");
+        assert_eq!(decisions[1]["source"], "rules");
+        assert_eq!(decisions[1]["neutral"], true);
+        assert_eq!(decisions[2]["kind"], "freeform");
+        assert!(decisions[2]["source"].is_null());
+        assert_eq!(decisions[2]["neutral"], true);
+
+        let trades = timeline.decisions(10, Some("trade"));
+        assert_eq!(trades["matched"], 1);
+        assert_eq!(trades["decisions"][0]["kind"], "trade");
     }
 }

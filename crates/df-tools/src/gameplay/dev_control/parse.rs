@@ -184,6 +184,47 @@ mod action_name_tests {
     }
 }
 
+/// Parses a `--last` count of log entries: 1 to 1000.
+pub(super) fn parse_last(text: &str) -> Result<usize, String> {
+    match text.trim().parse::<usize>() {
+        Ok(last) if (1..=1000).contains(&last) => Ok(last),
+        _ => Err(format!("last {text:?} must be 1 to 1000")),
+    }
+}
+
+/// Parses a `--kind` for `dev decisions` against the closed Jev classification kinds.
+pub(super) fn parse_decision_kind(text: &str) -> Result<&'static str, String> {
+    let wanted = text.trim().to_ascii_lowercase();
+    super::timeline::DECISION_KINDS
+        .iter()
+        .find(|(kind, _)| *kind == wanted)
+        .map(|(kind, _)| *kind)
+        .ok_or_else(|| {
+            let known: Vec<&str> = super::timeline::DECISION_KINDS
+                .iter()
+                .map(|(kind, _)| *kind)
+                .collect();
+            format!("kind {text:?} must be one of {}", known.join(", "))
+        })
+}
+
+/// Parses a `--type` for `dev audit`: a line kind such as `SCENE-FIGHT` or `IMAGERY`.
+pub(super) fn parse_audit_type(text: &str) -> Result<String, String> {
+    let trimmed = text.trim();
+    let plain = !trimmed.is_empty()
+        && trimmed.len() <= 32
+        && trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    if plain {
+        Ok(trimmed.to_owned())
+    } else {
+        Err(format!(
+            "type {text:?} must be 1 to 32 letters, digits, '-' or '_' (e.g. SCENE-FIGHT)"
+        ))
+    }
+}
+
 /// Whether `query` names `candidate`: an exact case-insensitive match, or a
 /// unique case-insensitive substring. Returns false on ambiguity (callers
 /// refuse rather than guess); use [`match_index`] to find the single hit.
@@ -271,5 +312,31 @@ mod tests {
         assert_eq!(match_index(&names, "ner"), Some(1));
         assert_eq!(match_index(&names, "r"), None);
         assert_eq!(match_index(&names, "tobin"), None);
+    }
+
+    #[test]
+    fn log_counts_and_kinds_are_bounded_and_closed() {
+        assert_eq!(parse_last("1"), Ok(1));
+        assert_eq!(parse_last(" 1000 "), Ok(1000));
+        assert!(parse_last("0").is_err());
+        assert!(parse_last("1001").is_err());
+        assert!(parse_last("many").is_err());
+
+        assert_eq!(parse_decision_kind("Trade"), Ok("trade"));
+        assert_eq!(parse_decision_kind("npc-target"), Ok("npc-target"));
+        let refused = parse_decision_kind("guess").unwrap_err();
+        assert!(refused.contains("line, trade"), "{refused}");
+
+        assert_eq!(
+            parse_audit_type("SCENE-FIGHT"),
+            Ok("SCENE-FIGHT".to_owned())
+        );
+        assert_eq!(
+            parse_audit_type("LINE_JUDGEMENT"),
+            Ok("LINE_JUDGEMENT".to_owned())
+        );
+        for bad in ["", "a b", "x;rm", "IMAGERY/../etc"] {
+            assert!(parse_audit_type(bad).is_err(), "{bad:?} must be refused");
+        }
     }
 }

@@ -31,29 +31,37 @@ use super::{actor, timing};
 use crate::BUILD_ID;
 
 mod actions;
+mod audit_log;
 pub(super) mod candidate;
 pub(crate) mod commands;
 pub(super) mod config;
 pub(super) mod direct;
 pub(super) mod directions;
+mod economy;
+mod fight;
 pub(crate) mod history;
 mod jumps;
 pub(super) mod layout;
+mod lore;
+mod music;
 mod notebook;
 mod parse;
 mod reads;
+mod social_view;
 pub(super) mod timeline;
 
 /// The development history bundle, wired only when the surface is on: the
 /// back/forward ring plus the actor-side state the checkpoint does not carry
 /// (the table log for save-time floors, the social ledger for snapshots), so
-/// a rewind restores all of it or none.
+/// a rewind restores all of it or none. The local lore canon rides along for
+/// the read and add surface; it is not part of a rewind.
 #[derive(Clone)]
 pub(super) struct Bundle {
     pub history: Arc<std::sync::Mutex<history::History>>,
     pub table: Arc<super::table_log::TableLog>,
     pub social: Arc<super::social::SocialLedger>,
     pub notebook: Arc<super::notebook::NotebookLedger>,
+    pub lore: Arc<super::npc_reply::local_lore::LocalLore>,
 }
 
 /// Shared development control state, cloned into every route handler.
@@ -77,6 +85,8 @@ struct Shared {
     social: Arc<super::social::SocialLedger>,
     /// The party notebook shared by all players.
     notebook: Arc<super::notebook::NotebookLedger>,
+    /// The NPC local lore canon (read, and add through the reply validator).
+    lore: Arc<super::npc_reply::local_lore::LocalLore>,
 }
 
 /// The two joinable seats and the session scope learned from the first join.
@@ -178,6 +188,7 @@ pub(super) fn setup(
         table: bundle.table,
         social: bundle.social,
         notebook: bundle.notebook,
+        lore: bundle.lore,
     };
     let state = Arc::new(shared);
     let router = Router::new()
@@ -199,6 +210,19 @@ pub(super) fn setup(
         .route("/dev/timeline", get(reads::timeline))
         .route("/dev/merchant-quotes", get(reads::merchant_quotes))
         .route("/dev/ledger", get(reads::ledger))
+        .route("/dev/ledger/edit", post(economy::unsupported_edit))
+        .route("/dev/scene-changes", get(economy::scene_changes))
+        .route("/dev/lore", get(lore::read).post(lore::add))
+        .route("/dev/lore/edit", post(lore::unsupported_edit))
+        .route("/dev/lore/delete", post(lore::unsupported_delete))
+        .route("/dev/social", get(social_view::read))
+        .route("/dev/social/edit", post(social_view::unsupported_edit))
+        .route("/dev/fight", get(fight::read))
+        .route("/dev/fight/edit", post(fight::unsupported_edit))
+        .route("/dev/decisions", get(audit_log::decisions))
+        .route("/dev/audit", get(audit_log::audit))
+        .route("/dev/music", get(music::read))
+        .route("/dev/music/edit", post(music::unsupported_edit))
         .route("/dev/layout", get(layout::list))
         .route(
             "/dev/layout/transform",
@@ -330,6 +354,20 @@ fn failed(message: impl Into<String>) -> (StatusCode, Json<Value>) {
         StatusCode::BAD_GATEWAY,
         Json(json!({"error": message.into()})),
     )
+}
+
+/// The answer for a write this surface does not perform: `unavailable` with the named reason and
+/// `edited` false, so nothing is changed and nothing is marked. Never a silent no-op.
+fn write_unavailable(surface: &str, reason: &str) -> Outcome {
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "unavailable",
+            "surface": surface,
+            "reason": reason,
+            "edited": false,
+        })),
+    ))
 }
 
 type Outcome = Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)>;

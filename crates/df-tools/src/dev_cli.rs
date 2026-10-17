@@ -212,6 +212,18 @@ fn print_help() {
          merchant-quotes [--last <n>]  exact source-bound quote status and closed outcomes\n\
          ledger                       canonical coin, item custody, merchant purses and stock for every hero\n\
          play --to <phase> [--max-steps <n>] play to room|creation|opening|dialogue|combat|complete|ended\n\
+         lore [--scene <key|current>] the run's local canon, oldest fact first (read)\n\
+         lore add <scene> <kind> <name> <content>  add one fact through the reply validator; marks edited\n\
+         lore edit|delete ...         unsupported here: answers unavailable with the reason\n\
+         social <npc> [--hero <name>] attitude, trust, emotion and grievances with their causes\n\
+         social edit <op> <npc> <hero> [value]  unsupported here: answers unavailable\n\
+         fight                        the open scene fight, its people and the latest roster\n\
+         fight restore <person> | end unsupported here: answers unavailable\n\
+         scene-changes [--last <n>]   committed scene changes with their receipts\n\
+         economy purse|coin <name> --cp <n> | offer add|remove|restock <offer>  unsupported here\n\
+         audit [--type <KIND>] [--last <n>]  recent audit lines (IMAGERY, SCENE-FIGHT, ...)\n\
+         decisions [--kind <kind>] [--last <n>]  Jev classifications; neutral marks the rules fallback\n\
+         music                        the current music plan; music regenerate|clear <place> unsupported\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
          script <file>                run one dev command per line, stop at first failure\n\
@@ -397,6 +409,43 @@ async fn dispatch(
             .await
         }
         "ledger" => get(client, "/dev/ledger").await,
+        "lore" => lore(client, positional, options).await,
+        "social" => social(client, positional, options).await,
+        "fight" => fight(client, positional).await,
+        "economy" => economy(client, positional, options).await,
+        "music" => music(client, positional).await,
+        "scene-changes" => {
+            let last = flag("--last")
+                .or_else(|| positional.get(1).cloned())
+                .unwrap_or_else(|| "50".into());
+            get(
+                client,
+                &format!("/dev/scene-changes?last={}", url_escape(&last)),
+            )
+            .await
+        }
+        "decisions" => {
+            let mut path = format!(
+                "/dev/decisions?last={}",
+                url_escape(&flag("--last").unwrap_or_else(|| "50".into()))
+            );
+            if let Some(kind) = flag("--kind") {
+                path.push_str("&kind=");
+                path.push_str(&url_escape(&kind));
+            }
+            get(client, &path).await
+        }
+        "audit" => {
+            let mut path = format!(
+                "/dev/audit?last={}",
+                url_escape(&flag("--last").unwrap_or_else(|| "50".into()))
+            );
+            if let Some(line_type) = flag("--type") {
+                path.push_str("&type=");
+                path.push_str(&url_escape(&line_type));
+            }
+            get(client, &path).await
+        }
         "layout" => layout::run(client, positional, options).await,
         "play" => play::run(client, options).await,
         "wait" => wait(client, options).await,
@@ -564,6 +613,175 @@ async fn direct(
         }
         Ok(Err(message)) => CommandResult::Transport(message),
         Err(_) => client.print(&json!({"status": "wait-timeout", "kind": kind}), true),
+    }
+}
+
+/// The value of the last `name` option that was given.
+fn option_value(options: &[(String, String)], name: &str) -> Option<String> {
+    options
+        .iter()
+        .rev()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.clone())
+}
+
+/// The words from `from` on, joined with single spaces, as free text.
+fn rest_text(positional: &[String], from: usize) -> String {
+    positional.get(from..).unwrap_or(&[]).join(" ")
+}
+
+/// The body of `dev lore add <scene> <kind> <name> <content…>`.
+fn lore_add_body(positional: &[String]) -> Result<Value, String> {
+    let (Some(scene), Some(kind), Some(name)) =
+        (positional.get(2), positional.get(3), positional.get(4))
+    else {
+        return Err("lore add needs <scene> <kind> <name> <content>".to_owned());
+    };
+    Ok(json!({"scene": scene, "kind": kind, "name": name, "content": rest_text(positional, 5)}))
+}
+
+async fn lore(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    match positional.get(1).map(String::as_str) {
+        None => {
+            let path = match option_value(options, "--scene") {
+                Some(scene) => format!("/dev/lore?scene={}", url_escape(&scene)),
+                None => "/dev/lore".to_owned(),
+            };
+            get(client, &path).await
+        }
+        Some("add") => match lore_add_body(positional) {
+            Ok(body) => post(client, "/dev/lore", &body).await,
+            Err(message) => client.print_error(message),
+        },
+        Some("edit") => match (positional.get(2), positional.get(3)) {
+            (Some(scene), Some(name)) => {
+                let body =
+                    json!({"scene": scene, "name": name, "content": rest_text(positional, 4)});
+                post(client, "/dev/lore/edit", &body).await
+            }
+            _ => client.print_error("lore edit needs <scene> <name> <content>"),
+        },
+        Some("delete") => match (positional.get(2), positional.get(3)) {
+            (Some(scene), Some(name)) => {
+                post(
+                    client,
+                    "/dev/lore/delete",
+                    &json!({"scene": scene, "name": name}),
+                )
+                .await
+            }
+            _ => client.print_error("lore delete needs <scene> <name>"),
+        },
+        Some(_) => client.print_error("lore takes no word to read, or add|edit|delete"),
+    }
+}
+
+/// The body of `dev social edit <op> <npc> <hero> [value…]`.
+fn social_edit_body(positional: &[String]) -> Result<Value, String> {
+    let (Some(op), Some(npc), Some(hero)) =
+        (positional.get(2), positional.get(3), positional.get(4))
+    else {
+        return Err("social edit needs <op> <npc> <hero> [value]".to_owned());
+    };
+    Ok(json!({"op": op, "npc": npc, "hero": hero, "value": rest_text(positional, 5)}))
+}
+
+async fn social(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    if positional.get(1).map(String::as_str) == Some("edit") {
+        return match social_edit_body(positional) {
+            Ok(body) => post(client, "/dev/social/edit", &body).await,
+            Err(message) => client.print_error(message),
+        };
+    }
+    let Some(npc) = positional.get(1) else {
+        return client.print_error("social needs an NPC name or id, or edit <op> <npc> <hero>");
+    };
+    let mut path = format!("/dev/social?name={}", url_escape(npc));
+    if let Some(hero) = option_value(options, "--hero") {
+        path.push_str("&hero=");
+        path.push_str(&url_escape(&hero));
+    }
+    get(client, &path).await
+}
+
+async fn fight(client: &Client, positional: &[String]) -> CommandResult {
+    match positional.get(1).map(String::as_str) {
+        None => get(client, "/dev/fight").await,
+        Some("restore") => match positional.get(2) {
+            Some(person) => {
+                post(
+                    client,
+                    "/dev/fight/edit",
+                    &json!({"op": "restore", "person": person}),
+                )
+                .await
+            }
+            None => client.print_error("fight restore needs <person>"),
+        },
+        Some("end") => post(client, "/dev/fight/edit", &json!({"op": "end"})).await,
+        Some(_) => client.print_error("fight takes no word to read, or restore <person> | end"),
+    }
+}
+
+/// The body of `dev economy purse|coin <name> --cp <n>` or `dev economy offer <op> <offer>`.
+fn economy_body(positional: &[String], options: &[(String, String)]) -> Result<Value, String> {
+    match positional.get(1).map(String::as_str) {
+        Some(what @ ("purse" | "coin")) => {
+            let name = positional
+                .get(2)
+                .ok_or_else(|| format!("economy {what} needs <name> --cp <n>"))?;
+            let text = option_value(options, "--cp")
+                .ok_or_else(|| format!("economy {what} needs --cp <n>"))?;
+            let cp: u64 = text
+                .parse()
+                .map_err(|_| "--cp must be a whole number of copper".to_owned())?;
+            Ok(json!({"what": what, "name": name, "cp": cp}))
+        }
+        Some("offer") => match (positional.get(2), positional.get(3)) {
+            (Some(op), Some(offer)) => Ok(json!({"what": "offer", "op": op, "name": offer})),
+            _ => Err("economy offer needs add|remove|restock <offer>".to_owned()),
+        },
+        _ => Err(
+            "economy needs purse <npc> --cp <n>, coin <hero> --cp <n>, or offer add|remove|restock <offer>"
+                .to_owned(),
+        ),
+    }
+}
+
+async fn economy(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    match economy_body(positional, options) {
+        Ok(body) => post(client, "/dev/economy/edit", &body).await,
+        Err(message) => client.print_error(message),
+    }
+}
+
+async fn music(client: &Client, positional: &[String]) -> CommandResult {
+    match positional.get(1).map(String::as_str) {
+        None => get(client, "/dev/music").await,
+        Some(op @ ("regenerate" | "clear")) => match positional.get(2) {
+            Some(place) => {
+                post(
+                    client,
+                    "/dev/music/edit",
+                    &json!({"op": op, "place": place}),
+                )
+                .await
+            }
+            None => client.print_error(format!("music {op} needs <place>")),
+        },
+        Some(_) => client.print_error("music takes no word to read, or regenerate|clear <place>"),
     }
 }
 
@@ -868,6 +1086,57 @@ mod selection_flag_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod dev_write_request_tests {
+    use super::*;
+
+    fn words(text: &str) -> Vec<String> {
+        split_words(text)
+    }
+
+    #[test]
+    fn lore_add_names_scene_kind_and_name_and_keeps_the_content_words() {
+        let body = lore_add_body(&words(
+            "lore add current place Salt-Quay The quay runs along the wall.",
+        ))
+        .unwrap();
+        assert_eq!(body["scene"], "current");
+        assert_eq!(body["kind"], "place");
+        assert_eq!(body["name"], "Salt-Quay");
+        assert_eq!(body["content"], "The quay runs along the wall.");
+        assert!(lore_add_body(&words("lore add current place")).is_err());
+    }
+
+    #[test]
+    fn social_edit_and_economy_requests_name_their_target_and_refuse_missing_parts() {
+        let edit =
+            social_edit_body(&words("social edit attitude merchant Brynn friendly")).unwrap();
+        assert_eq!(edit["op"], "attitude");
+        assert_eq!(edit["npc"], "merchant");
+        assert_eq!(edit["hero"], "Brynn");
+        assert_eq!(edit["value"], "friendly");
+        assert!(social_edit_body(&words("social edit attitude merchant")).is_err());
+
+        let options = [("--cp".to_owned(), "200".to_owned())];
+        let purse = economy_body(&words("economy purse merchant"), &options).unwrap();
+        assert_eq!(purse["what"], "purse");
+        assert_eq!(purse["cp"], 200);
+        assert!(economy_body(&words("economy purse merchant"), &[]).is_err());
+        assert!(
+            economy_body(
+                &words("economy coin Brynn"),
+                &[("--cp".to_owned(), "two hundred".to_owned())]
+            )
+            .is_err()
+        );
+        let offer =
+            economy_body(&words("economy offer restock item-clothes-travelers"), &[]).unwrap();
+        assert_eq!(offer["what"], "offer");
+        assert_eq!(offer["op"], "restock");
+        assert!(economy_body(&words("economy"), &[]).is_err());
     }
 }
 
