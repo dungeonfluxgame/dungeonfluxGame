@@ -84,6 +84,8 @@ pub(in crate::gameplay) enum ResourceKind {
     PlateStaging,
     /// A generated 3D splat world for a place.
     SplatWorld,
+    /// Home-angle fighter guard frames and idle, attack and last-hit clips.
+    CharacterClip,
     /// Reserved for the music worker.
     MusicSet,
     /// Reserved for the voice migration.
@@ -102,6 +104,7 @@ impl ResourceKind {
             Self::PlateSegments => "plate_segments",
             Self::PlateStaging => "plate_staging",
             Self::SplatWorld => "splat_world",
+            Self::CharacterClip => "character_clip",
             Self::MusicSet => "music_set",
             Self::VoiceLine => "voice_line",
             Self::VideoClip => "video_clip",
@@ -237,6 +240,7 @@ impl Limits {
             ResourceKind::PlateStaging => 240,
             // Submit, a 15-minute poll, export and two provider-bounded downloads.
             ResourceKind::SplatWorld => 1_620,
+            ResourceKind::CharacterClip => 2_400,
             ResourceKind::MusicSet => 600,
             ResourceKind::VoiceLine => 90,
             ResourceKind::VideoClip => 900,

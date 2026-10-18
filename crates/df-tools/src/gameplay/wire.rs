@@ -1197,9 +1197,8 @@ pub(super) fn project_journey(
                 {
                     vec![stage(
                         "view-observation-options",
-                        observation_group(current).and_then(|group| {
-                            group.ok_or(RepositoryError::InvalidCandidate)
-                        }),
+                        observation_group(current)
+                            .and_then(|group| group.ok_or(RepositoryError::InvalidCandidate)),
                     )?]
                 } else {
                     Vec::new()
@@ -1241,7 +1240,11 @@ pub(super) fn project_journey(
         let outcomes = state
             .decisions
             .iter()
-            .filter(|decision| decision.source_policy.as_str() == journey::THREAD_POLICY)
+            .filter(|decision| {
+                decision.source_policy.as_str() == journey::THREAD_POLICY
+                    || journey::tactical::development_receipt(decision)
+                        .is_ok_and(|receipt| receipt.is_some())
+            })
             .map(journey::accepted)
             .collect::<Result<Vec<_>, _>>()
             .inspect_err(|_| super::refusal_detail::note("view-combat-outcomes"))?
@@ -1345,6 +1348,44 @@ pub(super) fn project_journey(
             journey::tactical::project_combat(current, own, view),
         )?;
     }
+    // Tactical projection replaces the outcome list. Attach display metadata only to the
+    // shared-display view, after that projection.
+    if role == LocalDemoRole::Display
+        && let Some(view) = combat.as_mut()
+    {
+        for outcome in &mut view.outcomes {
+            outcome.display_metadata.get_or_insert_with(|| {
+                let attack_type = if outcome.attack_style == 0 {
+                    0
+                } else {
+                    match df_render::battle::AttackStyle::for_weapon(
+                        outcome.attack_style != 1,
+                        &outcome.weapon,
+                    ) {
+                        df_render::battle::AttackStyle::Melee => 1,
+                        df_render::battle::AttackStyle::Thrown => 3,
+                        _ => 2,
+                    }
+                };
+                rpc::CombatDisplayMetadata {
+                    ability_name: outcome.weapon.clone(),
+                    attack_type,
+                    icon: match attack_type {
+                        1 => Some("\u{2694}".to_owned()),
+                        2 | 3 => Some("\u{27b6}".to_owned()),
+                        _ => None,
+                    },
+                    ..Default::default()
+                }
+            });
+            if outcome.grazed
+                && let Some(metadata) = outcome.display_metadata.as_mut()
+                && metadata.mastery.is_none()
+            {
+                metadata.mastery = Some("Graze".to_owned());
+            }
+        }
+    }
     use super::pack::{self, SceneKey};
     let authored = stage("view-scene", super::beat_script_runtime::scene(state))?;
     let arena_place = if combat.is_some() && journey::scene_fight::open(state) {
@@ -1363,8 +1404,9 @@ pub(super) fn project_journey(
                 .filter(|place| super::fight_foresight::approved_large_arena(place))
         };
         view.battle_world = world_place.as_deref().and_then(|place| {
-            super::splat_world::battle_world(
+            project_battle_world(
                 role == LocalDemoRole::Display && !view.finished,
+                journey::tactical::forced_scene(),
                 super::splat_world::ready_world(place),
             )
         });
@@ -1646,7 +1688,11 @@ pub(super) fn project_journey(
         .decisions
         .last()
         .filter(|decision| decision.revision == current.basis().revision)
-        .filter(|decision| decision.source_policy.as_str() == journey::THREAD_POLICY)
+        .filter(|decision| {
+            decision.source_policy.as_str() == journey::THREAD_POLICY
+                || journey::tactical::development_receipt(decision)
+                    .is_ok_and(|receipt| receipt.is_some())
+        })
         .map(journey::accepted)
         .transpose()?
         .and_then(|accepted| accepted.check);
@@ -1975,3 +2021,11 @@ pub(super) fn action_offer_rejection(
 #[cfg(test)]
 #[path = "wire_combat_tests.rs"]
 mod combat_tests;
+
+fn project_battle_world(
+    display_open: bool,
+    forced_scene: Option<&str>,
+    ready: Option<super::splat_world::ReadyWorld>,
+) -> Option<rpc::BattleWorld> {
+    super::splat_world::battle_world(display_open && forced_scene.is_none(), ready)
+}

@@ -32,6 +32,8 @@ struct U {
     // Figures on the field, two vectors each: the screen box (left, bottom, right, top in device
     // coordinates), then view depth in metres and 1 when the slot is used.
     figs: array<vec4<f32>, 32>,
+    fire_position: vec4<f32>,
+    fire_colour: vec4<f32>,
 }
 "#;
 
@@ -159,6 +161,12 @@ fn project_splat(i: u32, out: ptr<function, array<u32, 8>>, key: ptr<function, u
         lit = mix(vec3<f32>(u.grade.z), vec3<f32>(1.08, 1.0, 0.86), weight);
     }
     col = max(col * lit, vec3<f32>(0.0));
+    let fire_delta = pos - u.fire_position.xyz;
+    let fire_radius = max(u.fire_position.w, 0.001);
+    let fire_d2 = dot(fire_delta, fire_delta) / (fire_radius * fire_radius);
+    let fire_cut = max(1.0 - fire_d2, 0.0);
+    let fire = u.fire_colour.rgb * u.fire_colour.w * fire_cut * fire_cut / (1.0 + fire_d2 * 8.0);
+    col = col + fire * (col + vec3<f32>(0.12));
 
     let depth = -vc.z;
     // Which splats may hide a figure (see `figure_clear.rs`): one in front of a figure by 0.35 m

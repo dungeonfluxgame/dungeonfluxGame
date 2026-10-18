@@ -581,6 +581,7 @@ pub struct Battle {
     pub(crate) map: BattleMap,
     pub(crate) actors: Vec<Combatant>,
     pub(crate) order: Vec<u32>,
+    pub(crate) initiatives: BTreeMap<u32, i32>,
     pub(crate) active: usize,
     pub(crate) round: u32,
     pub(crate) pending: Option<PendingMove>,
@@ -965,7 +966,7 @@ impl Battle {
 }
 /// Begin from validated actor data and supplied Initiative faces. Identical monster groups
 /// share one supplied face; ties retain caller order (party agreement / explicit GM choice).
-fn begin_faces(
+pub(super) fn begin_faces(
     map: BattleMap,
     specs: Vec<CombatantSpec>,
     initiative: &[u32],
@@ -1046,6 +1047,17 @@ fn begin_faces(
         )
     });
     let order = order.into_iter().map(|index| specs[index].id).collect();
+    let initiatives = specs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            (
+                spec.id,
+                initiative[index] as i32
+                    + crate::local_journey::ability_modifier(spec.abilities[1]),
+            )
+        })
+        .collect();
     let actors = specs
         .into_iter()
         .map(|spec| Combatant {
@@ -1115,6 +1127,7 @@ fn begin_faces(
         map,
         actors,
         order,
+        initiatives,
         active: 0,
         round: 1,
         pending: None,

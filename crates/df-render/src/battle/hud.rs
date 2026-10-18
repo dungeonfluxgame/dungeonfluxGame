@@ -173,6 +173,8 @@ pub struct Hud {
     floats: Element,
     roll: Element,
     roll_value: Element,
+    presentation_dice: Element,
+    presentation_dice_signature: String,
     roll_label: Element,
     roll_verdict: Element,
     roll_text: Element,
@@ -270,6 +272,7 @@ impl Hud {
         let target_tag = element(document, &overlays, "div", "bf-target-tag", "")?;
         let banner = element(document, &root, "div", "bf-banner", "")?;
         let roll = element(document, &root, "section", "bf-roll", "")?;
+        let presentation_dice = element(document, &root, "div", "bf-technique-dice", "")?;
         let roll_value = element(document, &roll, "div", "bf-roll-die", "")?;
         let roll_words = element(document, &roll, "div", "bf-roll-words", "")?;
         let roll_label = element(document, &roll_words, "h2", "bf-roll-label", "")?;
@@ -303,6 +306,8 @@ impl Hud {
             floats,
             roll,
             roll_value,
+            presentation_dice,
+            presentation_dice_signature: String::new(),
             roll_label,
             roll_verdict,
             roll_text,
@@ -565,6 +570,31 @@ impl Hud {
             }
         }
 
+        let signature = format!("{:?}", frame.hud.presentation_dice);
+        if signature != self.presentation_dice_signature {
+            self.presentation_dice.set_text_content(None);
+            if let Some(dice) = &frame.hud.presentation_dice {
+                self.presentation_dice
+                    .set_attribute("data-settled", if dice.settled { "true" } else { "false" })?;
+                self.presentation_dice
+                    .set_attribute("data-kind", if dice.damage { "damage" } else { "d20" })?;
+                for face in &dice.faces {
+                    let label = if dice.settled {
+                        face.to_string()
+                    } else {
+                        String::new()
+                    };
+                    element(
+                        &self.document,
+                        &self.presentation_dice,
+                        "span",
+                        "bf-technique-die",
+                        &label,
+                    )?;
+                }
+            }
+            self.presentation_dice_signature = signature;
+        }
         match &frame.hud.roll_card {
             Some(card) => {
                 self.roll.set_attribute("data-tone", &card.tone)?;

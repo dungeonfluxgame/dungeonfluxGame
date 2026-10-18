@@ -2823,6 +2823,8 @@ impl TvStage {
         self.set_art(&image_layers(&model.art, model.art_fallback))?;
         live_home::apply(&self.root, &self.atmosphere, model.home.as_ref())?;
         // The loop plays only in the lobby; a story scene or a fight never shows it.
+        // HOME-01: the loop is paired with the still on screen, so its records name it.
+        self.home_loop.note_still(&model.art);
         self.home_loop.apply(if lobby {
             model.home_video.as_deref()
         } else {

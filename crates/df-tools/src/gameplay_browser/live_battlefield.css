@@ -16,7 +16,11 @@ z-index and is first in the container, so the dice (z 1) paint above it; the HUD
 above the dice, so a die never covers a card or a label. */
 .battlefield>.tv-dice{position:absolute;left:21%;top:50%;transform:translate(-50%,-50%);z-index:1;margin:0;transition:left .25s ease}
 .battlefield[data-dice-side=right]>.tv-dice{left:79%}
-.battlefield>.tv-dice .tv-die{--die-size:calc(min(52vh,38vw)*.8)}
+.battlefield>.tv-dice{max-width:min(36vw,42vh);max-height:42vh;overflow:visible}
+.battlefield>.tv-dice .tv-die{--die-size:min(18vw,26vh);width:var(--die-size);height:var(--die-size);flex-shrink:0}
+.battlefield>.tv-dice[data-mode=advantage],.battlefield>.tv-dice[data-mode=disadvantage]{display:grid;grid-template-columns:1fr 1fr;gap:calc(var(--u)*.4)}
+.battlefield>.tv-dice[data-mode=advantage]::before,.battlefield>.tv-dice[data-mode=disadvantage]::before{grid-column:1 / -1;content:attr(data-mode) ' ? ' attr(data-reason);font:700 calc(var(--u)*1.2)/1.3 system-ui,sans-serif;text-align:center;text-transform:capitalize;max-width:34vw;overflow-wrap:anywhere}
+.battlefield>.tv-dice .tv-die[data-kept=false]{opacity:.38;filter:grayscale(.8)}
 .battlefield>.tv-roll{z-index:1;top:44%}
 
 .bf-top{position:absolute;top:calc(var(--u)*2.2);left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*.5);text-align:center;transition:opacity .6s ease}
@@ -47,20 +51,32 @@ above the dice, so a die never covers a card or a label. */
 .bf-party .bf-hp-fill{background:linear-gradient(90deg,#3f9d58,#7fd68a)}
 
 .bf-floats{position:absolute;inset:0}
-.bf-float{position:absolute;transform:translate(-50%,-50%);max-width:51%;white-space:normal;overflow-wrap:anywhere;text-align:center;font-size:calc(var(--u)*2.6);font-weight:700;color:#ff6b5e;text-shadow:0 3px 14px #000,0 0 calc(var(--u)*1) #000}
+.bf-float{position:absolute;transform:translate(-50%,-50%);max-width:min(51%,calc(100vw - 2 * clamp(12px,3vw,40px)));white-space:normal;overflow-wrap:anywhere;text-align:center;font-size:calc(var(--u)*2.6);font-weight:700;color:#ff6b5e;text-shadow:0 3px 14px #000,0 0 calc(var(--u)*1) #000}
 .bf-float[data-tone=critical]{font-size:calc(var(--u)*3.2);color:#ffd24a}
 .bf-float[data-tone=miss]{font-size:calc(var(--u)*2.4);font-style:italic;font-weight:400;color:#c9d3df}
 .bf-float[data-tone=heal]{color:#7ee8a0}
 
 .bf-roll{position:absolute;left:50%;bottom:calc(var(--u)*3);transform:translate(-50%,calc(var(--u)*1.5));display:flex;align-items:center;gap:calc(var(--u)*1.6);max-width:calc(var(--u)*58);padding:calc(var(--u)*.8) calc(var(--u)*1.6);background:linear-gradient(135deg,#0b1623ee,#050b13f2);border:1px solid #c9a35fa6;border-radius:calc(var(--u)*.7);opacity:0;transition:opacity .35s ease,transform .35s ease}
 .bf-roll[data-open]{opacity:1;transform:translate(-50%,0)}
-.bf-roll-die{display:grid;place-items:center;flex:none;width:calc(var(--u)*6.4);height:calc(var(--u)*6.4);border:max(2px,calc(var(--u)*.16)) solid var(--gold);border-radius:calc(var(--u)*1.1);font-size:calc(var(--u)*3.6);font-weight:700;color:var(--gold);background:#101a28}
+.bf-roll-die{display:none}
+.battlefield>.tv-damage-dice{position:absolute;left:50%;bottom:24%;transform:translateX(-50%);z-index:3;display:flex;flex-wrap:wrap;justify-content:center;gap:calc(var(--u)*.5);max-width:70vw}
+.tv-damage-die{display:grid;place-items:center;width:calc(var(--u)*3.8);height:calc(var(--u)*3.8);border:1px solid #c9a35f;background:#101b2a;border-radius:calc(var(--u)*.6);font-size:calc(var(--u)*2);color:transparent;animation:bf-damage-tumble var(--damage-roll-ms,800ms) ease-out}
+.tv-damage-dice[data-settled] .tv-damage-die{color:var(--ivory)}
+.tv-damage-dice[data-closing]{opacity:0;transition:opacity 320ms}
+.tv-die[data-fallback-tumble]{animation:bf-damage-tumble 1100ms ease-out}
+@keyframes bf-damage-tumble{from{transform:rotate(-280deg) translateY(-20px)}to{transform:rotate(0) translateY(0)}}
 .bf-roll-label{margin:0;font-size:calc(var(--u)*1.6);font-weight:400}
 .bf-roll-verdict{margin:calc(var(--u)*.2) 0;font-size:calc(var(--u)*1.7);letter-spacing:.18em;text-transform:uppercase;color:#bfe0b4}
 .bf-roll[data-tone=miss] .bf-roll-verdict{color:#e7a39a}
 .bf-roll[data-tone=critical] .bf-roll-verdict{color:#ffd24a}
 .bf-roll-text{margin:0;font-size:calc(var(--u)*1.3);color:#c9bb9b;text-shadow:none}
 .bf-hud[data-finish] .bf-roll{opacity:0}
+/* The live attack sequence owns this card's open state. The legacy roll animation can still
+   hold its first entry hidden, so the scheduled open phase must win over that animation. */
+.tv-stage.tv-stage .live-screen[data-role=display][data-attack-card=open] .combat-roll-panel,
+.tv-stage.tv-stage .live-screen[data-role=display][data-attack-card=open] .combat-roll-panel .combat-roll{visibility:visible!important}
+/* Keep the complete breakdown inside the display safe area on both the TV and compact panes. */
+.tv-stage.tv-stage .live-screen[data-role=display][data-attack-card=open] .combat-roll-panel{position:fixed;top:auto;left:50%;right:auto;bottom:clamp(12px,3vh,40px);width:min(92vw,calc(var(--u)*76));max-width:calc(100vw - 2 * clamp(12px,3vw,40px));max-height:calc(100vh - 2 * clamp(12px,3vh,40px));overflow:auto;transform:translateX(-50%)}
 .bf-bar{position:absolute;left:0;right:0;height:0;background:#000;transition:height .9s ease}
 .bf-bar-top{top:0}
 .bf-bar-bottom{bottom:0}
@@ -145,3 +161,9 @@ spoken, below the bar so it never covers the place or the progress. Hidden when 
 .bf-speech-name{display:block;margin-bottom:calc(var(--u)*.25);font-size:calc(var(--u)*1.15);font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#7a5a24}
 .bf-speech[data-side=enemy] .bf-speech-name{color:#8a2f1f}
 .bf-speech-text{display:block}
+
+/* Technique fixtures use the same single visible dice seat; faces appear only after settle. */
+.bf-technique-dice{position:absolute;left:21%;top:48%;transform:translate(-50%,-50%);display:flex;flex-wrap:wrap;justify-content:center;gap:calc(var(--u)*.5);max-width:30vw}
+.bf-technique-die{width:calc(var(--u)*5);height:calc(var(--u)*5);display:grid;place-items:center;background:linear-gradient(145deg,#b8aa82,#26303e 60%,#111a25);border:2px solid #ead5a5;border-radius:20%;box-shadow:0 6px 16px #0008;font:700 calc(var(--u)*2.6)/1 Georgia,serif;color:#fff9e9;text-shadow:0 2px 3px #000}
+.bf-technique-dice[data-kind=d20] .bf-technique-die{clip-path:polygon(50% 0,94% 25%,94% 75%,50% 100%,6% 75%,6% 25%);width:calc(var(--u)*9);height:calc(var(--u)*9)}
+.bf-technique-dice[data-settled=false] .bf-technique-die{animation:bf-damage-tumble 800ms ease-out}

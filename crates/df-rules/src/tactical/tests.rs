@@ -2593,3 +2593,231 @@ fn fighter_srd_521_p49_champion_initiative_consumes_two_independent_d20s() {
     assert_eq!(result.draws.len(), 3);
     assert_eq!(result.battle.active_actor(), Some(1));
 }
+
+#[test]
+fn development_edits_preserve_sources_and_add_to_depleted_battles() {
+    let initial = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(5, 1), 20).unwrap(),
+    ]);
+    let original = initial.snapshot().unwrap();
+    assert_eq!(
+        initial.development_edit(1, &DevelopmentEdit::Cell(Cell(5, 1))),
+        Err(RuleError::Occupied)
+    );
+    assert_eq!(initial.snapshot().unwrap(), original);
+    let depleted = initial
+        .development_edit(1, &DevelopmentEdit::HitPoints(3))
+        .unwrap()
+        .development_edit(
+            1,
+            &DevelopmentEdit::Resource {
+                name: "second-wind".to_owned(),
+                value: 0,
+            },
+        )
+        .unwrap()
+        .development_edit(
+            1,
+            &DevelopmentEdit::Resource {
+                name: "ammo".to_owned(),
+                value: 0,
+            },
+        )
+        .unwrap();
+    let added = depleted
+        .development_add(
+            CombatantSpec::creature(4, "wolf", Cell(3, 3), 0).unwrap(),
+            13,
+        )
+        .unwrap();
+    assert_eq!(added.actor(1).unwrap().health().hit_points, 3);
+    assert_eq!(added.actor(1).unwrap().spec().second_wind_uses, 0);
+    assert_eq!(added.actor(1).unwrap().arrows(), 0);
+    assert_eq!(added.development_initiative(4), Some(13));
+    let restored = added
+        .development_edit(1, &DevelopmentEdit::Restore)
+        .unwrap();
+    assert_eq!(restored.actor(1).unwrap().health().hit_points, 13);
+    let removed = restored
+        .development_edit(4, &DevelopmentEdit::Remove)
+        .unwrap();
+    assert_eq!(removed.combatants().len(), 2);
+    assert_eq!(
+        Battle::from_snapshot(removed.map().clone(), &removed.snapshot().unwrap()).unwrap(),
+        removed
+    );
+}
+#[test]
+fn development_legacy_initiative_metadata_is_optional_and_attaches_real_totals_without_rerolling() {
+    let initial = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(5, 1), 20).unwrap(),
+    ]);
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&initial.snapshot().unwrap()).unwrap();
+    legacy.as_object_mut().unwrap().remove("initiatives");
+    let decoded =
+        Battle::from_snapshot(initial.map().clone(), &serde_json::to_vec(&legacy).unwrap())
+            .unwrap();
+    assert_eq!(decoded.development_initiative(1), None);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&decoded.snapshot().unwrap()).unwrap(),
+        legacy
+    );
+    let order = decoded.initiative_order().to_vec();
+    let active = decoded.active_actor();
+    let migrated = decoded
+        .with_development_initiatives(&[(1, 21), (3, 2)])
+        .unwrap();
+    assert_eq!(migrated.initiative_order(), order);
+    assert_eq!(migrated.active_actor(), active);
+    assert_eq!(migrated.development_initiative(1), Some(21));
+    assert!(
+        migrated
+            .development_add(
+                CombatantSpec::creature(4, "wolf", Cell(3, 3), 0).unwrap(),
+                100
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn development_restore_clears_a_dying_turn_without_reopening_a_consumed_save() {
+    let dying = dying_hero_state();
+    let restored = dying
+        .development_edit(1, &DevelopmentEdit::Restore)
+        .unwrap();
+    assert!(!restored.needs_death_save());
+    assert!(restored.actor(1).unwrap().health().hit_points > 0);
+    let saved = step(&dying, 1, Action::DeathSave, &[(20, 10)]).battle;
+    assert!(!saved.needs_death_save());
+    let edited = saved
+        .development_edit(3, &DevelopmentEdit::HitPoints(5))
+        .unwrap();
+    assert!(!edited.needs_death_save());
+    rejects(&edited, 1, Action::DeathSave, RuleError::NotYourTurn);
+    let healed = dying
+        .development_edit(1, &DevelopmentEdit::HitPoints(2))
+        .unwrap();
+    assert!(!healed.needs_death_save());
+    let another_turn = saved.development_edit(1, &DevelopmentEdit::Turn).unwrap();
+    assert!(another_turn.needs_death_save());
+    assert!(another_turn.actor(1).unwrap().turn_count > saved.actor(1).unwrap().turn_count);
+    let spent = step(&restored, 1, Action::Dodge, &[]).battle;
+    assert!(spent.actor(1).unwrap().budget().action_used);
+    let refreshed = spent.development_edit(1, &DevelopmentEdit::Turn).unwrap();
+    assert!(!refreshed.actor(1).unwrap().budget().action_used);
+    assert_eq!(refreshed.actor(1).unwrap().budget().movement_spent_ft, 0);
+}
+
+#[test]
+fn development_depleted_crossbow_ammunition_can_be_refilled() {
+    let initial = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(5, 1), 20).unwrap(),
+    ]);
+    let empty = initial
+        .development_edit(
+            3,
+            &DevelopmentEdit::Resource {
+                name: "ammo".to_owned(),
+                value: 0,
+            },
+        )
+        .unwrap();
+    assert_eq!(empty.actor(3).unwrap().spec().bolts, 0);
+    let refilled = empty
+        .development_edit(
+            3,
+            &DevelopmentEdit::Resource {
+                name: "ammo".to_owned(),
+                value: 20,
+            },
+        )
+        .unwrap();
+    assert_eq!(refilled.actor(3).unwrap().spec().bolts, 20);
+    for values in [
+        serde_json::json!({"1":21}),
+        serde_json::json!({"1":99,"3":2}),
+        serde_json::json!({"1":21,"3":2,"99":10}),
+    ] {
+        let mut malformed: serde_json::Value =
+            serde_json::from_slice(&refilled.snapshot().unwrap()).unwrap();
+        malformed["initiatives"] = values;
+        assert!(
+            Battle::from_snapshot(
+                refilled.map().clone(),
+                &serde_json::to_vec(&malformed).unwrap()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn development_conditions_refuse_conscious_zero_hp_and_dead_stable_combinations() {
+    let dying = dying_hero_state();
+    let before = dying.snapshot().unwrap();
+    assert!(
+        dying
+            .development_edit(
+                1,
+                &DevelopmentEdit::Condition {
+                    name: "unconscious".to_owned(),
+                    present: false
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(dying.snapshot().unwrap(), before);
+    let stable = dying
+        .development_edit(
+            1,
+            &DevelopmentEdit::Condition {
+                name: "stable".to_owned(),
+                present: true,
+            },
+        )
+        .unwrap();
+    assert!(!stable.needs_death_save());
+    assert!(
+        stable
+            .development_edit(
+                1,
+                &DevelopmentEdit::Condition {
+                    name: "dead".to_owned(),
+                    present: true
+                }
+            )
+            .is_err()
+    );
+    let unstable = stable
+        .development_edit(
+            1,
+            &DevelopmentEdit::Condition {
+                name: "stable".to_owned(),
+                present: false,
+            },
+        )
+        .unwrap();
+    assert!(unstable.needs_death_save());
+    let dead = dying
+        .development_edit(3, &DevelopmentEdit::HitPoints(0))
+        .unwrap();
+    let corpse = dead.snapshot().unwrap();
+    for (name, present) in [("stable", true), ("dead", false), ("unconscious", false)] {
+        assert!(
+            dead.development_edit(
+                3,
+                &DevelopmentEdit::Condition {
+                    name: name.to_owned(),
+                    present
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(dead.snapshot().unwrap(), corpse);
+    }
+}

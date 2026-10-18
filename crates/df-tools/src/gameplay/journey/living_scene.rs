@@ -1818,6 +1818,11 @@ fn snapshot_with_scope(
     // is checked against the owner, observers and DC that held when that action was accepted.
     let mut replay = model.clone();
     for decision in &state.decisions {
+        super::scene_fight::apply_development_restoration(
+            decision,
+            &setting.place_id,
+            &mut replay,
+        )?;
         let Some(interaction) = read(decision)? else {
             continue;
         };
@@ -2480,7 +2485,8 @@ pub(in crate::gameplay) fn hand_items(
     let Some(setting) = scene.setting.as_ref() else {
         return Ok(Vec::new());
     };
-    let inventory = inventory_projection(state, &snapshot.model, &setting.place_id)?;
+    let canonical = full_snapshot(state, scene)?.ok_or_else(invalid)?;
+    let inventory = inventory_projection(state, &canonical.model, &setting.place_id)?;
     Ok(snapshot
         .model
         .things

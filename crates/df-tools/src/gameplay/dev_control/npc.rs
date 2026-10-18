@@ -36,14 +36,17 @@ pub(crate) fn held(name: &str) -> bool {
     HOLDS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .contains(&hold_key(name))
+        .iter()
+        .any(|held| held == "all" || *held == hold_key(name))
 }
 
 /// Sets or clears the hold on one NPC.
-fn set_hold(name: &str, on: bool) {
+pub(crate) fn set_hold(name: &str, on: bool) {
     let mut holds = HOLDS.lock().unwrap_or_else(PoisonError::into_inner);
     if on {
         holds.insert(hold_key(name));
+    } else if hold_key(name) == "all" {
+        holds.clear();
     } else {
         holds.remove(&hold_key(name));
     }
@@ -58,8 +61,7 @@ pub(crate) fn choose_turn<T, E>(
     if held { Ok(None) } else { policy().map(Some) }
 }
 
-/// One fight action the CLI can take for an NPC. `Policy` is not offered on the command line: it
-/// is what a released hold hands back to the enemy policy.
+/// One fight action the CLI can take for an NPC, including an explicit ordinary policy step.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum NpcAct {
     Attack {
@@ -74,6 +76,16 @@ pub(crate) enum NpcAct {
     Disengage,
     EndTurn,
     Policy,
+    Development(super::fight::BattleCommand),
+    Opportunity {
+        weapon: Option<String>,
+    },
+    DeclineReaction,
+    NimbleDisengage,
+    Stand,
+    DropProne,
+    DoffShield,
+    DeathSave,
 }
 
 impl NpcAct {
@@ -117,7 +129,12 @@ impl NpcAct {
                     .ok_or_else(|| "--to must be <col,row> in whole grid cells".to_owned())?;
                 Ok(Self::Move { cell })
             }
-            "dash" | "dodge" | "disengage" | "end-turn" => {
+            "opportunity" | "opportunity-attack" => {
+                refuse_extra("target", target.is_some())?;
+                refuse_extra("to", to.is_some())?;
+                Ok(Self::Opportunity { weapon: weapon.map(str::to_owned) })
+            }
+            "dash" | "dodge" | "disengage" | "end-turn" | "decline-reaction" | "nimble-disengage" | "stand" | "drop-prone" | "policy" | "doff-shield" | "death-save" => {
                 refuse_extra("target", target.is_some())?;
                 refuse_extra("weapon", weapon.is_some())?;
                 refuse_extra("to", to.is_some())?;
@@ -125,10 +142,17 @@ impl NpcAct {
                     "dash" => Self::Dash,
                     "dodge" => Self::Dodge,
                     "disengage" => Self::Disengage,
+                    "decline-reaction" => Self::DeclineReaction,
+                    "nimble-disengage" => Self::NimbleDisengage,
+                    "stand" => Self::Stand,
+                    "drop-prone" => Self::DropProne,
+                    "policy" => Self::Policy,
+                    "doff-shield" => Self::DoffShield,
+                    "death-save" => Self::DeathSave,
                     _ => Self::EndTurn,
                 })
             }
-            _ => Err("npc act takes attack, move, dash, dodge, disengage or end-turn".to_owned()),
+            _ => Err("npc act takes attack, move, dash, dodge, disengage, nimble-disengage, stand, drop-prone, doff-shield, death-save, opportunity, decline-reaction, end-turn or policy".to_owned()),
         }
     }
 
@@ -144,6 +168,14 @@ impl NpcAct {
             Self::Disengage => "disengage".to_owned(),
             Self::EndTurn => "end-turn".to_owned(),
             Self::Policy => "policy turn".to_owned(),
+            Self::Development(command) => format!("development {command:?}"),
+            Self::Opportunity { weapon } => format!("opportunity {weapon:?}"),
+            Self::DeclineReaction => "decline-reaction".to_owned(),
+            Self::NimbleDisengage => "nimble-disengage".to_owned(),
+            Self::Stand => "stand".to_owned(),
+            Self::DropProne => "drop-prone".to_owned(),
+            Self::DoffShield => "doff-shield".to_owned(),
+            Self::DeathSave => "death-save".to_owned(),
         }
     }
 }
@@ -242,6 +274,7 @@ pub(super) async fn say(
     Json(body): Json<SayBody>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
+    super::require_gameplay_overrides()?;
     let requested = npc_name(&body.npc)?;
     let text = say_text(&body.text).map_err(bad_request)?;
     let scene = current_scene(&state)?;
@@ -310,6 +343,7 @@ pub(super) async fn hold(
     Json(body): Json<HoldBody>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
+    super::require_gameplay_overrides()?;
     let name = display_name(&current_scene(&state)?, &npc_name(&body.npc)?);
     set_hold(&name, body.on);
     let waiting = {
@@ -326,8 +360,11 @@ pub(super) async fn hold(
             Json(json!({"status": "held", "npc": name, "edited": false})),
         ));
     }
-    if waiting.is_some_and(|waiting| waiting.eq_ignore_ascii_case(&name)) {
-        let mut answer = commit(&state, &name, NpcAct::Policy).await?;
+    if waiting
+        .as_ref()
+        .is_some_and(|waiting| name == "all" || waiting.eq_ignore_ascii_case(&name))
+    {
+        let mut answer = commit(&state, &waiting.unwrap_or(name.clone()), NpcAct::Policy).await?;
         answer["hold"] = json!("released");
         return Ok((StatusCode::OK, Json(answer)));
     }
@@ -358,6 +395,7 @@ pub(super) async fn act(
     Json(body): Json<ActBody>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
+    super::require_gameplay_overrides()?;
     let act = NpcAct::parse(
         &body.action,
         body.target.as_deref(),
@@ -373,7 +411,7 @@ pub(super) async fn act(
 
 /// Sends one NPC turn to the owner, records the committed revision as an edit and returns the
 /// answer: `acted` with the revision, or the owner's own refusal.
-async fn commit(
+pub(super) async fn commit(
     state: &Shared,
     npc: &str,
     act: NpcAct,
@@ -442,9 +480,44 @@ mod tests {
         assert!(NpcAct::parse("move", None, None, None).is_err());
         assert!(NpcAct::parse("dodge", Some("Brynn"), None, None).is_err());
         assert!(NpcAct::parse("attack", Some("Brynn"), None, Some("1,1")).is_err());
-        assert!(NpcAct::parse("policy", None, None, None).is_err());
+        assert_eq!(
+            NpcAct::parse("policy", None, None, None),
+            Ok(NpcAct::Policy)
+        );
     }
 
+    #[test]
+    fn every_policy_action_and_reaction_parses_with_legal_flags() {
+        for action in [
+            "dodge",
+            "disengage",
+            "decline-reaction",
+            "nimble-disengage",
+            "stand",
+            "drop-prone",
+            "doff-shield",
+            "death-save",
+            "policy",
+        ] {
+            assert!(NpcAct::parse(action, None, None, None).is_ok(), "{action}");
+            assert!(
+                NpcAct::parse(action, Some("Brynn"), None, None).is_err(),
+                "{action}"
+            );
+        }
+        assert_eq!(
+            NpcAct::parse("opportunity", None, Some("unarmed-strike"), None).unwrap(),
+            NpcAct::Opportunity {
+                weapon: Some("unarmed-strike".to_owned())
+            }
+        );
+        set_hold("one-dev-enemy", true);
+        set_hold("all", true);
+        assert!(held("a-future-enemy"));
+        set_hold("all", false);
+        assert!(!held("one-dev-enemy"));
+        assert!(!held("a-future-enemy"));
+    }
     #[test]
     fn say_collapses_whitespace_and_refuses_empty_or_overlong_lines() {
         assert_eq!(

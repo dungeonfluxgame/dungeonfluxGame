@@ -14,9 +14,11 @@ use super::{
     grid::{Cell, Grid},
     model::{
         AttackResult, AttackStyle, Beat, CameraCommand, CameraFocus, FloatTone, Highlight,
-        HighlightKind, InitiativeRoll, Side, Token, TokenId,
+        HighlightKind, InitiativeRoll, ProjectileKind, RollCard, Side, StrikeDisplay, Token,
+        TokenId,
     },
     sound::SoundKind,
+    techniques::{EffectAnchor, EffectCue, EffectKind, MAX_AREA_TARGETS},
 };
 
 /// The camera settles on a turn's shot over this long, then holds a beat before anything moves.
@@ -49,8 +51,40 @@ pub const HEAL: Duration = Duration::from_millis(1300);
 /// The bow is drawn back for this long, then released; the figure settles over `DRAW`.
 pub const DRAW_RELEASE: Duration = Duration::from_millis(450);
 pub const DRAW: Duration = Duration::from_millis(600);
-/// How long the arrow takes from the bow to the target.
-pub const FLIGHT: Duration = Duration::from_millis(400);
+/// In-place thrown-weapon wind-up: the weapon is released this far into [`THROW`].
+pub const THROW_RELEASE: Duration = Duration::from_millis(320);
+pub const THROW: Duration = Duration::from_millis(560);
+/// Bounded flight speeds: arrows are fast, thrown weapons slower and more lobbed.
+pub const ARROW_SPEED_M_PER_S: f32 = 30.0;
+pub const THROWN_SPEED_M_PER_S: f32 = 18.0;
+pub const ARROW_FLIGHT_MIN: Duration = Duration::from_millis(120);
+pub const ARROW_FLIGHT_MAX: Duration = Duration::from_millis(900);
+pub const THROWN_FLIGHT_MIN: Duration = Duration::from_millis(220);
+pub const THROWN_FLIGHT_MAX: Duration = Duration::from_millis(1100);
+/// Longest any scaled flight can take; pacing fallbacks budget for this.
+pub const FLIGHT_MAX: Duration = THROWN_FLIGHT_MAX;
+
+/// Ground distance in metres between two cells on a grid of `cell_m`-metre cells.
+pub fn distance_m(a: Cell, b: Cell, cell_m: f32) -> f32 {
+    let dx = (a.col - b.col) as f32 * cell_m;
+    let dz = (a.row - b.row) as f32 * cell_m;
+    dx.hypot(dz)
+}
+
+/// Flight time for a projectile covering `distance_m` metres at its bounded speed,
+/// clamped so point-blank and extreme-range shots both stay readable.
+pub fn flight_for(style: AttackStyle, distance_m: f32) -> Duration {
+    let (speed, min, max) = match style {
+        AttackStyle::Thrown => (THROWN_SPEED_M_PER_S, THROWN_FLIGHT_MIN, THROWN_FLIGHT_MAX),
+        _ => (ARROW_SPEED_M_PER_S, ARROW_FLIGHT_MIN, ARROW_FLIGHT_MAX),
+    };
+    let seconds = if distance_m.is_finite() && distance_m > 0.0 {
+        distance_m / speed
+    } else {
+        0.0
+    };
+    Duration::from_secs_f32(seconds).clamp(min, max)
+}
 /// The slowest a long walk is staged, so a far approach does not stall the fight.
 pub(crate) const MAX_APPROACH: Duration = Duration::from_millis(780);
 pub(crate) const MIN_STEP: Duration = Duration::from_millis(65);
@@ -79,6 +113,11 @@ pub enum Anim {
     Draw {
         toward: TokenId,
     },
+    /// In-place wind-up and release of a thrown weapon: the figure never steps
+    /// toward the target; the weapon itself flies (see `Step::Projectile`).
+    Throw {
+        toward: TokenId,
+    },
     /// The "ready" flourish at a roll-call stop.
     Ready {
         style: ReadyStyle,
@@ -104,6 +143,7 @@ impl Anim {
             Self::Fall => FALL,
             Self::Heal => HEAL,
             Self::Draw { .. } => DRAW,
+            Self::Throw { .. } => THROW,
             Self::Ready { .. } => READY,
         }
     }
@@ -118,6 +158,10 @@ pub enum FlashTone {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    Technique(EffectCue),
+    RollCard(RollCard),
+    PresentationDice(Option<super::model::PresentationDice>),
+    CloseRollCard,
     SetActive(Option<TokenId>),
     Camera {
         command: CameraCommand,
@@ -219,12 +263,21 @@ pub enum Step {
         index: u32,
         last: bool,
     },
-    /// An arrow in flight from one token to another. A miss flies past the target.
+    /// A projectile in flight from one token to another. A miss flies past the
+    /// target (arrow) or falls short (thrown weapon) and lands visibly.
     Projectile {
         from: TokenId,
         to: TokenId,
         hits: bool,
         flight: Duration,
+        kind: ProjectileKind,
+    },
+    /// A melee beat whose figures are more than one cell apart: a staging bug to
+    /// log, never an excuse to lunge across the gap. The stage counts these.
+    MeleeOutOfReach {
+        attacker: TokenId,
+        target: TokenId,
+        cells: u32,
     },
 }
 
@@ -243,6 +296,7 @@ pub struct Timeline {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlanError {
     UnknownToken(TokenId),
+    InvalidTechnique,
 }
 
 struct Builder {
@@ -292,6 +346,29 @@ fn camera(shot: ShotName, focus: CameraFocus, dolly: f32) -> CameraCommand {
 /// actually stands.
 pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, PlanError> {
     match beat {
+        Beat::Flurry {
+            attacker,
+            strikes,
+            action_surge_at,
+        } => plan_flurry(grid, tokens, attacker, strikes, *action_surge_at),
+        Beat::Missiles { caster, darts } => plan_missiles(tokens, caster, darts),
+        Beat::AreaEffect {
+            caster,
+            centre,
+            radius_m,
+            targets,
+        } => {
+            if !grid.in_bounds(*centre) || !radius_m.is_finite() || !(0.1..=12.0).contains(radius_m)
+            {
+                return Err(PlanError::InvalidTechnique);
+            }
+            plan_burst(tokens, caster, *centre, *radius_m, targets)
+        }
+        Beat::Shield {
+            attacker,
+            defender,
+            display,
+        } => plan_shield(grid, tokens, attacker, defender, display.as_deref()),
         Beat::Initiative { rolls } => plan_initiative(tokens, rolls),
         Beat::TurnStart { actor } => plan_turn(tokens, actor),
         Beat::Approach { attacker, target } => {
@@ -314,6 +391,12 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
         } => {
             let fight_over = matches!(beat, Beat::FightEndingStrike { .. });
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
+            if attacker.attack == AttackStyle::Bolt {
+                return plan_bolt(attacker, target, *result, *target_hit_points_after);
+            }
+            if matches!(attacker.attack, AttackStyle::Missiles | AttackStyle::Burst) {
+                return Err(PlanError::InvalidTechnique);
+            }
             let mut builder = Builder { steps: Vec::new() };
             builder.at(Duration::ZERO, Step::SetActive(Some(attacker.id.clone())));
             let end = strike(
@@ -324,6 +407,7 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
                 *target_hit_points_after,
                 Duration::ZERO,
                 fight_over,
+                grid.cell_m(),
             );
             Ok(builder.finish(end))
         }
@@ -341,6 +425,12 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
         } => {
             let fight_over = matches!(beat, Beat::FightEndingAttack { .. });
             let (attacker, target) = (find(tokens, attacker)?, find(tokens, target)?);
+            if attacker.attack == AttackStyle::Bolt {
+                return plan_bolt(attacker, target, *result, *target_hit_points_after);
+            }
+            if matches!(attacker.attack, AttackStyle::Missiles | AttackStyle::Burst) {
+                return Err(PlanError::InvalidTechnique);
+            }
             let mut builder = Builder { steps: Vec::new() };
             let ready = approach(&mut builder, attacker, target, Duration::ZERO);
             let end = strike(
@@ -351,6 +441,7 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
                 *target_hit_points_after,
                 ready + FOCUS_HOLD,
                 fight_over,
+                grid.cell_m(),
             );
             Ok(builder.finish(end))
         }
@@ -364,10 +455,582 @@ pub fn plan(grid: &Grid, tokens: &[Token], beat: &Beat) -> Result<Timeline, Plan
     }
 }
 
+const TECHNIQUE_READ: Duration = Duration::from_millis(2800);
+const SPELL_WINDUP: Duration = Duration::from_millis(650);
+const SPELL_FLIGHT: Duration = Duration::from_millis(900);
+const BURST_EXPAND: Duration = Duration::from_millis(360);
+const SURGE_HOLD: Duration = Duration::from_millis(1100);
+
+fn token_anchor(id: &TokenId) -> EffectAnchor {
+    EffectAnchor::Token(id.clone())
+}
+
+fn effect(builder: &mut Builder, at: Duration, cue: EffectCue) {
+    builder.at(at, Step::Technique(cue));
+}
+
+fn spell_open(builder: &mut Builder, caster: &TokenId, target: Option<&TokenId>) {
+    builder.at(Duration::ZERO, Step::SetActive(Some(caster.clone())));
+    builder.at(
+        Duration::ZERO,
+        Step::Camera {
+            command: camera(
+                ShotName::TurnFocus,
+                target.map_or(CameraFocus::Wide, |target| {
+                    action_focus(caster, Some(target), None)
+                }),
+                1.0,
+            ),
+            pan: FOCUS_PAN,
+        },
+    );
+    builder.at(
+        FOCUS_PAN,
+        Step::Animate {
+            token: caster.clone(),
+            anim: Anim::Ready {
+                style: ReadyStyle::Brandish,
+            },
+        },
+    );
+}
+
+/// Results are applied together at contact. Read cards can follow individually without delaying
+/// any target's reaction or inventing a rules-side ordering for a simultaneous area outcome.
+fn spell_result(
+    builder: &mut Builder,
+    caster: &TokenId,
+    target: &Token,
+    display: &StrikeDisplay,
+    contact: Duration,
+) {
+    let (text, tone, downed) = match display.result {
+        AttackResult::Miss => ("Miss".to_owned(), FloatTone::Miss, false),
+        AttackResult::Hit {
+            damage,
+            critical,
+            downed,
+        } => (
+            damage.to_string(),
+            if critical {
+                FloatTone::Critical
+            } else {
+                FloatTone::Damage
+            },
+            downed,
+        ),
+    };
+    builder.at(
+        contact,
+        Step::Animate {
+            token: target.id.clone(),
+            anim: match display.result {
+                AttackResult::Miss => Anim::Dodge {
+                    from: caster.clone(),
+                },
+                AttackResult::Hit { .. } => Anim::Recoil {
+                    from: caster.clone(),
+                },
+            },
+        },
+    );
+    builder.at(
+        contact,
+        Step::Float {
+            token: target.id.clone(),
+            text,
+            tone,
+            attacker: Some(caster.clone()),
+            downed,
+        },
+    );
+    if let Some(current) = display.target_hit_points_after {
+        builder.at(
+            contact,
+            Step::ShowHitPoints {
+                token: target.id.clone(),
+                current,
+            },
+        );
+    }
+    if downed {
+        builder.at(
+            contact + FALL_DELAY,
+            Step::Animate {
+                token: target.id.clone(),
+                anim: Anim::Fall,
+            },
+        );
+    }
+}
+
+fn spell_close(builder: &mut Builder, end: Duration) {
+    builder.at(
+        end - SETTLE_PAN,
+        Step::Camera {
+            command: camera(ShotName::CombatEst, CameraFocus::Wide, 1.0),
+            pan: SETTLE_PAN,
+        },
+    );
+    builder.at(end, Step::Banner(None));
+}
+
+fn plan_bolt(
+    caster: &Token,
+    target: &Token,
+    result: AttackResult,
+    after: Option<u32>,
+) -> Result<Timeline, PlanError> {
+    let mut builder = Builder { steps: Vec::new() };
+    spell_open(&mut builder, &caster.id, Some(&target.id));
+    builder.at(FOCUS_PAN, Step::Banner(Some("Fire Bolt".to_owned())));
+    effect(
+        &mut builder,
+        SPELL_WINDUP,
+        EffectCue {
+            kind: EffectKind::Bolt,
+            from: token_anchor(&caster.id),
+            to: token_anchor(&target.id),
+            duration: SPELL_FLIGHT,
+            radius_m: 0.24,
+            fan_m: 0.0,
+        },
+    );
+    let contact = SPELL_WINDUP + SPELL_FLIGHT;
+    if matches!(result, AttackResult::Hit { .. }) {
+        effect(
+            &mut builder,
+            contact,
+            EffectCue {
+                kind: EffectKind::Flare,
+                from: token_anchor(&target.id),
+                to: token_anchor(&target.id),
+                duration: Duration::from_millis(650),
+                radius_m: 0.85,
+                fan_m: 0.0,
+            },
+        );
+    }
+    spell_result(
+        &mut builder,
+        &caster.id,
+        target,
+        &StrikeDisplay {
+            target: target.id.clone(),
+            result,
+            target_hit_points_after: after,
+            card: None,
+            roll: None,
+        },
+        contact,
+    );
+    let end = contact + TECHNIQUE_READ;
+    spell_close(&mut builder, end);
+    Ok(builder.finish(end))
+}
+
+/// Returns the full read deadline; no dice are invented for outcomes without a roll contract.
+fn present_roll(builder: &mut Builder, start: Duration, display: &StrikeDisplay) -> Duration {
+    use super::model::PresentationDice;
+    let Some(roll) = &display.roll else {
+        if let Some(card) = &display.card {
+            builder.at(start, Step::RollCard(card.clone()));
+        }
+        builder.at(start + TECHNIQUE_READ, Step::CloseRollCard);
+        return start + TECHNIQUE_READ;
+    };
+    builder.at(start, Step::CloseRollCard);
+    let card_at = if let Some(face) = roll.d20 {
+        builder.at(
+            start,
+            Step::PresentationDice(Some(PresentationDice {
+                faces: vec![face],
+                damage: false,
+                settled: false,
+            })),
+        );
+        builder.at(
+            start + DICE_TUMBLE,
+            Step::PresentationDice(Some(PresentationDice {
+                faces: vec![face],
+                damage: false,
+                settled: true,
+            })),
+        );
+        start + DICE_TUMBLE + DICE_READ
+    } else {
+        start
+    };
+    if let Some(card) = &roll.attack_card {
+        builder.at(card_at, Step::RollCard(card.clone()));
+    }
+    let result_at = if roll.damage_faces.is_empty() {
+        card_at
+    } else {
+        builder.at(
+            card_at,
+            Step::PresentationDice(Some(PresentationDice {
+                faces: roll.damage_faces.clone(),
+                damage: true,
+                settled: false,
+            })),
+        );
+        builder.at(
+            card_at + DAMAGE_DICE_TUMBLE,
+            Step::PresentationDice(Some(PresentationDice {
+                faces: roll.damage_faces.clone(),
+                damage: true,
+                settled: true,
+            })),
+        );
+        card_at + DAMAGE_DICE_TUMBLE
+    };
+    if let Some(card) = &display.card {
+        builder.at(result_at, Step::RollCard(card.clone()));
+    }
+    let end = result_at
+        + if matches!(display.result, AttackResult::Miss) {
+            ROLL_CARD_MISS_HOLD
+        } else {
+            ROLL_CARD_HIT_HOLD
+        };
+    builder.at(end, Step::PresentationDice(None));
+    builder.at(end, Step::CloseRollCard);
+    end
+}
+
+fn plan_flurry(
+    grid: &Grid,
+    tokens: &[Token],
+    attacker: &TokenId,
+    strikes: &[StrikeDisplay],
+    surge: Option<u32>,
+) -> Result<Timeline, PlanError> {
+    if strikes.is_empty()
+        || strikes.len() > 4
+        || surge.is_some_and(|at| at == 0 || at as usize >= strikes.len())
+    {
+        return Err(PlanError::InvalidTechnique);
+    }
+    let attacker = find(tokens, attacker)?;
+    if !matches!(attacker.attack, AttackStyle::Melee | AttackStyle::Bolt) {
+        return Err(PlanError::InvalidTechnique);
+    }
+    let mut builder = Builder { steps: Vec::new() };
+    let mut cursor = Duration::ZERO;
+    for (index, display) in strikes.iter().enumerate() {
+        let target = find(tokens, &display.target)?;
+        if surge == Some(index as u32) {
+            builder.at(cursor, Step::Banner(Some("Action Surge".to_owned())));
+            builder.at(
+                cursor,
+                Step::Animate {
+                    token: attacker.id.clone(),
+                    anim: Anim::Ready {
+                        style: ReadyStyle::Brandish,
+                    },
+                },
+            );
+            effect(
+                &mut builder,
+                cursor,
+                EffectCue {
+                    kind: EffectKind::Surge,
+                    from: token_anchor(&attacker.id),
+                    to: token_anchor(&attacker.id),
+                    duration: SURGE_HOLD,
+                    radius_m: 0.65,
+                    fan_m: 0.0,
+                },
+            );
+            cursor += SURGE_HOLD;
+            builder.at(cursor, Step::Banner(None));
+        }
+        let ready = if attacker.attack == AttackStyle::Bolt {
+            cursor
+        } else {
+            approach(&mut builder, attacker, target, cursor)
+        };
+        let read_end = present_roll(&mut builder, ready, display);
+        let contact_ready = ready
+            + if display.roll.as_ref().is_some_and(|roll| roll.d20.is_some()) {
+                DICE_TUMBLE
+                    + DICE_READ
+                    + if display
+                        .roll
+                        .as_ref()
+                        .is_some_and(|roll| !roll.damage_faces.is_empty())
+                    {
+                        DAMAGE_DICE_TUMBLE
+                    } else {
+                        Duration::ZERO
+                    }
+            } else {
+                FOCUS_HOLD
+            };
+        let end = if attacker.attack == AttackStyle::Bolt {
+            effect(
+                &mut builder,
+                contact_ready,
+                EffectCue {
+                    kind: EffectKind::Bolt,
+                    from: token_anchor(&attacker.id),
+                    to: token_anchor(&target.id),
+                    duration: SPELL_FLIGHT,
+                    radius_m: 0.24,
+                    fan_m: 0.0,
+                },
+            );
+            effect(
+                &mut builder,
+                contact_ready + SPELL_FLIGHT,
+                EffectCue {
+                    kind: EffectKind::Flare,
+                    from: token_anchor(&target.id),
+                    to: token_anchor(&target.id),
+                    duration: Duration::from_millis(650),
+                    radius_m: 0.85,
+                    fan_m: 0.0,
+                },
+            );
+            spell_result(
+                &mut builder,
+                &attacker.id,
+                target,
+                display,
+                contact_ready + SPELL_FLIGHT,
+            );
+            contact_ready + SPELL_FLIGHT
+        } else {
+            strike(
+                &mut builder,
+                attacker,
+                target,
+                display.result,
+                display.target_hit_points_after,
+                contact_ready,
+                false,
+                grid.cell_m(),
+            )
+        };
+        // Hold the action frame between swings: no repeated pull back / push in.
+        builder.steps.retain(|timed| {
+            !(timed.at >= cursor
+                && matches!(
+                    &timed.step,
+                    Step::Camera {
+                        command: CameraCommand {
+                            focus: CameraFocus::Wide,
+                            ..
+                        },
+                        ..
+                    }
+                ))
+        });
+        cursor = end.max(read_end);
+    }
+    spell_close(&mut builder, cursor + SETTLE_PAN);
+    Ok(builder.finish(cursor + SETTLE_PAN))
+}
+
+fn plan_missiles(
+    tokens: &[Token],
+    caster: &TokenId,
+    darts: &[StrikeDisplay],
+) -> Result<Timeline, PlanError> {
+    if darts.len() != 3 {
+        return Err(PlanError::InvalidTechnique);
+    }
+    find(tokens, caster)?;
+    let mut builder = Builder { steps: Vec::new() };
+    spell_open(&mut builder, caster, None);
+    builder.at(FOCUS_PAN, Step::Banner(Some("Magic Missile".to_owned())));
+    let mut last = Duration::ZERO;
+    for (index, display) in darts.iter().enumerate() {
+        let target = find(tokens, &display.target)?;
+        let release = SPELL_WINDUP + Duration::from_millis(110) * index as u32;
+        effect(
+            &mut builder,
+            release,
+            EffectCue {
+                kind: EffectKind::Dart,
+                from: token_anchor(caster),
+                to: token_anchor(&target.id),
+                duration: SPELL_FLIGHT,
+                radius_m: 0.13,
+                fan_m: (index as f32 - 1.0) * 0.85,
+            },
+        );
+        last = release + SPELL_FLIGHT;
+        builder.at(
+            last,
+            Step::Animate {
+                token: target.id.clone(),
+                anim: Anim::Recoil {
+                    from: caster.clone(),
+                },
+            },
+        );
+        effect(
+            &mut builder,
+            last,
+            EffectCue {
+                kind: EffectKind::Ward,
+                from: token_anchor(&target.id),
+                to: token_anchor(&target.id),
+                duration: Duration::from_millis(350),
+                radius_m: 0.28,
+                fan_m: 0.0,
+            },
+        );
+    }
+    let mut end = last + Duration::from_millis(250);
+    for display in darts {
+        let result_at = end
+            + if display
+                .roll
+                .as_ref()
+                .is_some_and(|roll| !roll.damage_faces.is_empty())
+            {
+                DAMAGE_DICE_TUMBLE
+            } else {
+                Duration::ZERO
+            };
+        spell_result(
+            &mut builder,
+            caster,
+            find(tokens, &display.target)?,
+            display,
+            result_at,
+        );
+        end = present_roll(&mut builder, end, display);
+    }
+    spell_close(&mut builder, end);
+    Ok(builder.finish(end))
+}
+
+fn plan_burst(
+    tokens: &[Token],
+    caster: &TokenId,
+    centre: Cell,
+    radius_m: f32,
+    targets: &[StrikeDisplay],
+) -> Result<Timeline, PlanError> {
+    if targets.is_empty() || targets.len() > MAX_AREA_TARGETS {
+        return Err(PlanError::InvalidTechnique);
+    }
+    find(tokens, caster)?;
+    let mut builder = Builder { steps: Vec::new() };
+    spell_open(&mut builder, caster, None);
+    builder.at(FOCUS_PAN, Step::Banner(Some("Fireball".to_owned())));
+    effect(
+        &mut builder,
+        SPELL_WINDUP,
+        EffectCue {
+            kind: EffectKind::Bead,
+            from: token_anchor(caster),
+            to: EffectAnchor::Cell(centre),
+            duration: SPELL_FLIGHT,
+            radius_m: 0.1,
+            fan_m: 0.0,
+        },
+    );
+    let lands = SPELL_WINDUP + SPELL_FLIGHT;
+    effect(
+        &mut builder,
+        lands,
+        EffectCue {
+            kind: EffectKind::Burst,
+            from: EffectAnchor::Cell(centre),
+            to: EffectAnchor::Cell(centre),
+            duration: Duration::from_millis(1700),
+            radius_m,
+            fan_m: 0.0,
+        },
+    );
+    let contact = lands + BURST_EXPAND;
+    for display in targets {
+        builder.at(
+            contact,
+            Step::Animate {
+                token: display.target.clone(),
+                anim: Anim::Recoil {
+                    from: caster.clone(),
+                },
+            },
+        );
+    }
+    let mut end = contact + Duration::from_millis(250);
+    for display in targets {
+        let result_at = end + display.roll.as_ref().map_or(Duration::ZERO, |roll|
+            if roll.d20.is_some() { DICE_TUMBLE + DICE_READ } else { Duration::ZERO }
+                + if roll.damage_faces.is_empty() { Duration::ZERO } else { DAMAGE_DICE_TUMBLE });
+        spell_result(
+            &mut builder,
+            caster,
+            find(tokens, &display.target)?,
+            display,
+            result_at,
+        );
+        end = present_roll(&mut builder, end, display);
+    }
+    spell_close(&mut builder, end);
+    Ok(builder.finish(end))
+}
+
+fn plan_shield(
+    grid: &Grid,
+    tokens: &[Token],
+    attacker: &TokenId,
+    defender: &TokenId,
+    display: Option<&StrikeDisplay>,
+) -> Result<Timeline, PlanError> {
+    let (attacker, defender) = (find(tokens, attacker)?, find(tokens, defender)?);
+    let mut builder = Builder { steps: Vec::new() };
+    let ready = approach(&mut builder, attacker, defender, Duration::ZERO);
+    let read_end = display.map(|display| present_roll(&mut builder, ready, display));
+    let ward = ready
+        + if read_end.is_some() {
+            DICE_TUMBLE
+        } else {
+            Duration::from_millis(100)
+        };
+    effect(
+        &mut builder,
+        ward,
+        EffectCue {
+            kind: EffectKind::Ward,
+            from: token_anchor(&defender.id),
+            to: token_anchor(&defender.id),
+            duration: Duration::from_millis(850),
+            radius_m: defender.clamped_height() * 0.65,
+            fan_m: 0.0,
+        },
+    );
+    builder.at(ward, Step::Banner(Some("Shield".to_owned())));
+    let end = strike(
+        &mut builder,
+        attacker,
+        defender,
+        AttackResult::Miss,
+        None,
+        ward,
+        false,
+        grid.cell_m(),
+    )
+    .max(read_end.unwrap_or(ward + TECHNIQUE_READ));
+    spell_close(&mut builder, end);
+    Ok(builder.finish(end))
+}
+
 /// Gap between one combatant's die and the next, and how long a die tumbles.
 const DICE_STAGGER: Duration = Duration::from_millis(280);
-pub(crate) const DICE_TUMBLE: Duration = Duration::from_millis(800);
-pub(crate) const DICE_READ: Duration = Duration::from_millis(700);
+/// Shared display cadence: tumble, settle on the server face, then hold before the card.
+pub const DICE_TUMBLE: Duration = Duration::from_millis(1100);
+pub const DICE_READ: Duration = Duration::from_millis(400);
+pub const DAMAGE_DICE_TUMBLE: Duration = Duration::from_millis(800);
+pub const ROLL_CARD_MISS_HOLD: Duration = Duration::from_millis(2500);
+pub const ROLL_CARD_HIT_HOLD: Duration = Duration::from_millis(2000);
 /// One roll-call stop is about a second; the whole roll-call never runs past this.
 pub const STOP: Duration = Duration::from_millis(1000);
 pub const MAX_ROLL_CALL: Duration = Duration::from_millis(7000);
@@ -702,6 +1365,7 @@ fn strike(
     hit_points_after: Option<u32>,
     base: Duration,
     fight_over: bool,
+    cell_m: f32,
 ) -> Duration {
     let sound = |builder: &mut Builder, at, kind, token: &Token| {
         builder.at(
@@ -721,8 +1385,10 @@ fn strike(
     );
     let ranged = attacker.attack != AttackStyle::Melee;
     let hits = matches!(result, AttackResult::Hit { .. });
+    let gap_m = distance_m(attacker.cell, target.cell, cell_m);
     let (contact, mut end) = if attacker.attack == AttackStyle::Ranged {
         let release = base + DRAW_RELEASE;
+        let flight = flight_for(AttackStyle::Ranged, gap_m);
         builder.at(
             base,
             Step::Animate {
@@ -747,17 +1413,22 @@ fn strike(
                 from: attacker.id.clone(),
                 to: target.id.clone(),
                 hits,
-                flight: FLIGHT,
+                flight,
+                kind: ProjectileKind::Arrow,
             },
         );
-        let contact = release + FLIGHT;
+        let contact = release + flight;
         (contact, contact + (LUNGE - LUNGE_CONTACT))
     } else if attacker.attack == AttackStyle::Thrown {
+        // In place: wind up, release the weapon itself, and land contact on arrival.
+        // The attacker never steps toward the target.
+        let release = base + THROW_RELEASE;
+        let flight = flight_for(AttackStyle::Thrown, gap_m);
         builder.at(
             base,
             Step::Animate {
                 token: attacker.id.clone(),
-                anim: Anim::Lunge {
+                anim: Anim::Throw {
                     toward: target.id.clone(),
                 },
             },
@@ -769,18 +1440,42 @@ fn strike(
             SoundKind::Effort,
             attacker,
         );
-        builder.at(base + Duration::from_millis(30), Step::Whoosh);
-        (base + LUNGE_CONTACT, base + LUNGE)
-    } else {
         builder.at(
-            base,
-            Step::Animate {
-                token: attacker.id.clone(),
-                anim: Anim::Lunge {
-                    toward: target.id.clone(),
-                },
+            release,
+            Step::Projectile {
+                from: attacker.id.clone(),
+                to: target.id.clone(),
+                hits,
+                flight,
+                kind: ProjectileKind::ThrownWeapon,
             },
         );
+        let contact = release + flight;
+        (contact, contact + (THROW - THROW_RELEASE))
+    } else {
+        // Melee only ever lunges between adjacent figures. A wider gap is a staging
+        // bug: flag it for the stage to log and keep the figure where it stands.
+        let cells = attacker.cell.steps_to(target.cell);
+        if cells > 1 {
+            builder.at(
+                base,
+                Step::MeleeOutOfReach {
+                    attacker: attacker.id.clone(),
+                    target: target.id.clone(),
+                    cells,
+                },
+            );
+        } else {
+            builder.at(
+                base,
+                Step::Animate {
+                    token: attacker.id.clone(),
+                    anim: Anim::Lunge {
+                        toward: target.id.clone(),
+                    },
+                },
+            );
+        }
         sound(builder, base, SoundKind::SwordSwing, attacker);
         sound(
             builder,
@@ -1078,6 +1773,210 @@ mod tests {
         (grid, tokens)
     }
 
+    fn technique_display(target: &str, face: Option<u32>) -> StrikeDisplay {
+        let card = RollCard {
+            value: "19".to_owned(),
+            label: target.to_owned(),
+            explanation: "committed breakdown".to_owned(),
+            verdict: "HIT".to_owned(),
+            tone: "hit".to_owned(),
+        };
+        StrikeDisplay {
+            target: TokenId::new(target),
+            result: AttackResult::Hit {
+                damage: 8,
+                critical: false,
+                downed: false,
+            },
+            target_hit_points_after: Some(9),
+            card: Some(card.clone()),
+            roll: Some(super::super::model::ResolvedRoll {
+                d20: face,
+                damage_faces: vec![5],
+                attack_card: face.map(|_| card),
+            }),
+        }
+    }
+
+    #[test]
+    fn technique_flurry_reads_every_strike_before_next_and_surge_breaks_between_actions() {
+        let (grid, tokens) = field();
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &Beat::Flurry {
+                attacker: TokenId::new("hero"),
+                strikes: vec![technique_display("enemy", Some(12)); 4],
+                action_surge_at: Some(2),
+            },
+        )
+        .unwrap();
+        let rolls: Vec<_> = timeline.steps.iter().filter(|step| matches!(&step.step, Step::PresentationDice(Some(dice)) if !dice.settled && !dice.damage)).map(|step| step.at).collect();
+        assert_eq!(rolls.len(), 4);
+        for pair in rolls.windows(2) {
+            assert!(
+                pair[1] - pair[0]
+                    >= DICE_TUMBLE + DICE_READ + DAMAGE_DICE_TUMBLE + ROLL_CARD_HIT_HOLD
+            );
+        }
+        let surge = timeline
+            .steps
+            .iter()
+            .find(
+                |step| matches!(&step.step, Step::Technique(cue) if cue.kind == EffectKind::Surge),
+            )
+            .unwrap();
+        assert!(surge.at > rolls[1]);
+        assert!(surge.at + SURGE_HOLD <= rolls[2]);
+    }
+
+    #[test]
+    fn technique_magic_missile_has_three_fanned_contacts_and_only_damage_dice() {
+        let (grid, tokens) = field();
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &Beat::Missiles {
+                caster: TokenId::new("hero"),
+                darts: vec![
+                    technique_display("enemy", None),
+                    technique_display("ally", None),
+                    technique_display("enemy", None),
+                ],
+            },
+        )
+        .unwrap();
+        let darts: Vec<_> = timeline
+            .steps
+            .iter()
+            .filter_map(|step| {
+                if let Step::Technique(cue) = &step.step {
+                    (cue.kind == EffectKind::Dart).then_some((step.at, cue))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(darts.len(), 3);
+        assert!(darts[0].0 < darts[1].0 && darts[1].0 < darts[2].0);
+        assert!(darts[0].1.fan_m < darts[1].1.fan_m && darts[1].1.fan_m < darts[2].1.fan_m);
+        assert!(
+            !timeline.steps.iter().any(
+                |step| matches!(&step.step, Step::PresentationDice(Some(dice)) if !dice.damage)
+            )
+        );
+        let first_card = timeline
+            .steps
+            .iter()
+            .find(|step| matches!(step.step, Step::RollCard(_)))
+            .unwrap();
+        assert!(first_card.at >= darts[2].0 + SPELL_FLIGHT + DAMAGE_DICE_TUMBLE);
+    }
+
+    #[test]
+    fn technique_fireball_reacts_every_target_after_bead_and_rolls_each_save_before_damage() {
+        let (grid, tokens) = field();
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &Beat::AreaEffect {
+                caster: TokenId::new("hero"),
+                centre: Cell::new(4, 1),
+                radius_m: 6.1,
+                targets: vec![
+                    technique_display("enemy", Some(9)),
+                    technique_display("ally", Some(18)),
+                ],
+            },
+        )
+        .unwrap();
+        let bead = timeline
+            .steps
+            .iter()
+            .find_map(|step| match &step.step {
+                Step::Technique(cue) if cue.kind == EffectKind::Bead => {
+                    Some(step.at + cue.duration)
+                }
+                _ => None,
+            })
+            .unwrap();
+        for target in ["enemy", "ally"] {
+            let reaction = timeline.steps.iter().find(|step| matches!(&step.step, Step::Animate { token, anim: Anim::Recoil { .. } } if token.0 == target)).unwrap();
+            assert!(reaction.at >= bead + BURST_EXPAND);
+        }
+        let saves = timeline.steps.iter().filter(|step| matches!(&step.step, Step::PresentationDice(Some(dice)) if !dice.damage && !dice.settled)).count();
+        assert_eq!(saves, 2);
+        let first_damage = timeline
+            .steps
+            .iter()
+            .find(|step| matches!(&step.step, Step::Float { .. }))
+            .unwrap();
+        assert!(
+            first_damage.at >= bead + BURST_EXPAND + DICE_TUMBLE + DICE_READ + DAMAGE_DICE_TUMBLE
+        );
+    }
+
+    #[test]
+    fn technique_shield_ward_precedes_miss_card_without_damage_dice() {
+        let (grid, tokens) = field();
+        let mut display = technique_display("enemy", Some(12));
+        display.result = AttackResult::Miss;
+        display.roll.as_mut().unwrap().damage_faces.clear();
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &Beat::Shield {
+                attacker: TokenId::new("hero"),
+                defender: TokenId::new("enemy"),
+                display: Some(Box::new(display)),
+            },
+        )
+        .unwrap();
+        let ward = timeline
+            .steps
+            .iter()
+            .find(|step| matches!(&step.step, Step::Technique(cue) if cue.kind == EffectKind::Ward))
+            .unwrap();
+        let card = timeline
+            .steps
+            .iter()
+            .find(|step| matches!(&step.step, Step::RollCard(_)))
+            .unwrap();
+        assert!(ward.at < card.at);
+        assert!(
+            !timeline.steps.iter().any(
+                |step| matches!(&step.step, Step::PresentationDice(Some(dice)) if dice.damage)
+            )
+        );
+    }
+
+    #[test]
+    fn technique_procedural_bolt_and_light_need_no_effect_or_figure_assets() {
+        let (grid, mut tokens) = field();
+        tokens[0].attack = AttackStyle::Bolt;
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &Beat::Flurry {
+                attacker: TokenId::new("hero"),
+                strikes: vec![technique_display("enemy", Some(14))],
+                action_surge_at: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            tokens
+                .iter()
+                .all(|token| token.figure.is_none() && token.portrait.is_none())
+        );
+        assert!(timeline.steps.iter().any(
+            |step| matches!(&step.step, Step::Technique(cue) if cue.kind == EffectKind::Bolt)
+        ));
+        assert!(timeline.steps.iter().any(
+            |step| matches!(&step.step, Step::Technique(cue) if cue.kind == EffectKind::Flare)
+        ));
+    }
+
     fn attack(result: AttackResult) -> Beat {
         Beat::Attack {
             attacker: TokenId::new("hero"),
@@ -1093,6 +1992,10 @@ mod tests {
             .steps
             .iter()
             .map(|timed| match &timed.step {
+                Step::Technique(_) => "technique",
+                Step::RollCard(_) => "roll-card",
+                Step::PresentationDice(_) => "presentation-dice",
+                Step::CloseRollCard => "card-close",
                 Step::SetActive(_) => "active",
                 Step::Camera { command, .. } => match command.shot {
                     ShotName::TurnFocus => "focus",
@@ -1111,6 +2014,7 @@ mod tests {
                     Anim::Fall => "fall",
                     Anim::Heal => "heal",
                     Anim::Draw { .. } => "draw",
+                    Anim::Throw { .. } => "throw",
                     Anim::Ready { .. } => "ready",
                 },
                 Step::Shake { .. } => "shake",
@@ -1159,7 +2063,11 @@ mod tests {
                 Step::Sting { .. } => "sting",
                 Step::Target(Some(_)) => "target",
                 Step::Target(None) => "untarget",
-                Step::Projectile { .. } => "arrow",
+                Step::Projectile { kind, .. } => match kind {
+                    ProjectileKind::Arrow => "arrow",
+                    ProjectileKind::ThrownWeapon => "thrown-weapon",
+                },
+                Step::MeleeOutOfReach { .. } => "melee-out-of-reach",
             })
             .collect()
     }
@@ -1171,9 +2079,15 @@ mod tests {
             .unwrap_or_else(|| panic!("{wanted} missing from {names:?}"))
     }
 
+    fn melee_field() -> (Grid, Vec<Token>) {
+        let (grid, mut tokens) = field();
+        tokens[2].cell = Cell::new(4, 4);
+        (grid, tokens)
+    }
+
     #[test]
     fn a_downing_hit_runs_focus_step_lunge_impact_fall_then_the_finishing_cue_in_order() {
-        let (grid, tokens) = field();
+        let (grid, tokens) = melee_field();
         let timeline = plan(
             &grid,
             &tokens,
@@ -1323,7 +2237,7 @@ mod tests {
 
     #[test]
     fn approach_and_strike_together_match_the_whole_attack_in_order() {
-        let (grid, tokens) = field();
+        let (grid, tokens) = melee_field();
         let result = AttackResult::Hit {
             damage: 4,
             critical: false,
@@ -1500,9 +2414,13 @@ mod tests {
         let impact = times_of(&timeline, "snd-arrow-impact")[0];
         let number = times_of(&timeline, "float")[0];
         assert!(draw < release && release == flight && flight < impact);
+        let expected = flight_for(
+            AttackStyle::Ranged,
+            distance_m(Cell::new(3, 4), Cell::new(4, 1), grid.cell_m()),
+        );
         assert_eq!(
             impact - release,
-            FLIGHT,
+            expected,
             "the blow lands when the arrow arrives"
         );
         assert_eq!(number, impact);
@@ -1510,8 +2428,62 @@ mod tests {
         assert!(times_of(&timeline, "snd-arrow-flight")[0] >= release);
         assert!(times_of(&timeline, "snd-pain")[0] > impact);
         assert!(times_of(&timeline, "snd-swing").is_empty());
-        let flight_ms = FLIGHT.as_millis();
-        assert!((350..=450).contains(&flight_ms), "{flight_ms}");
+        // No lunge toward the target on a ranged attack.
+        assert!(!labels.contains(&"lunge") && !labels.contains(&"throw"));
+    }
+
+    #[test]
+    fn flight_time_grows_with_distance_and_stays_bounded() {
+        let near = flight_for(AttackStyle::Ranged, 1.524);
+        let mid = flight_for(AttackStyle::Ranged, 7.5);
+        let far = flight_for(AttackStyle::Ranged, 36.576);
+        assert!(near < mid && mid < far, "{near:?} {mid:?} {far:?}");
+        assert_eq!(near, ARROW_FLIGHT_MIN.max(Duration::from_millis(50)));
+        assert!(far <= ARROW_FLIGHT_MAX);
+        assert_eq!(flight_for(AttackStyle::Ranged, 500.0), ARROW_FLIGHT_MAX);
+        assert_eq!(flight_for(AttackStyle::Ranged, 0.0), ARROW_FLIGHT_MIN);
+        // Thrown weapons are slower than arrows over the same span.
+        assert!(flight_for(AttackStyle::Thrown, 7.5) > flight_for(AttackStyle::Ranged, 7.5));
+        assert_eq!(flight_for(AttackStyle::Thrown, 500.0), THROWN_FLIGHT_MAX);
+    }
+
+    #[test]
+    fn contact_equals_release_plus_flight_for_bow_and_thrown() {
+        for style in [AttackStyle::Ranged, AttackStyle::Thrown] {
+            let (grid, mut tokens) = field();
+            tokens[0].attack = style;
+            tokens[0].cell = Cell::new(0, 4);
+            tokens[2].cell = Cell::new(6, 4);
+            let timeline = plan(
+                &grid,
+                &tokens,
+                &attack(AttackResult::Hit {
+                    damage: 4,
+                    critical: false,
+                    downed: false,
+                }),
+            )
+            .unwrap();
+            let projectile = timeline
+                .steps
+                .iter()
+                .find_map(|timed| match &timed.step {
+                    Step::Projectile { flight, .. } => Some((timed.at, *flight)),
+                    _ => None,
+                })
+                .unwrap();
+            let impact = timeline
+                .steps
+                .iter()
+                .find_map(|timed| match &timed.step {
+                    Step::Impact { .. } => Some(timed.at),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(impact, projectile.0 + projectile.1, "{style:?}");
+            let float_at = times_of(&timeline, "float")[0];
+            assert_eq!(float_at, impact, "damage float lands at contact");
+        }
     }
 
     #[test]
@@ -1541,7 +2513,6 @@ mod tests {
         let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
         let labels = names(&timeline);
         assert!(labels.contains(&"snd-throw"), "{labels:?}");
-        assert!(labels.contains(&"whoosh"), "{labels:?}");
         for absent in [
             "snd-bow-draw",
             "snd-bow-release",
@@ -1550,6 +2521,107 @@ mod tests {
         ] {
             assert!(!labels.contains(&absent), "{absent} in {labels:?}");
         }
+    }
+
+    #[test]
+    fn a_thrown_beat_flies_the_weapon_with_no_lunge_toward_the_target() {
+        let (grid, mut tokens) = field();
+        tokens[0].attack = AttackStyle::Thrown;
+        tokens[0].cell = Cell::new(0, 4);
+        tokens[2].cell = Cell::new(5, 4);
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &attack(AttackResult::Hit {
+                damage: 6,
+                critical: false,
+                downed: false,
+            }),
+        )
+        .unwrap();
+        let labels = names(&timeline);
+        assert!(labels.contains(&"throw"), "{labels:?}");
+        assert!(labels.contains(&"thrown-weapon"), "{labels:?}");
+        assert!(
+            !labels.contains(&"lunge"),
+            "no lunge on a throw: {labels:?}"
+        );
+        assert!(moves(&timeline).is_empty(), "the attacker never moves");
+        let (release, flight, kind, hits) = timeline
+            .steps
+            .iter()
+            .find_map(|timed| match &timed.step {
+                Step::Projectile {
+                    flight, kind, hits, ..
+                } => Some((timed.at, *flight, *kind, *hits)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(kind, ProjectileKind::ThrownWeapon);
+        assert!(hits);
+        let expected = flight_for(
+            AttackStyle::Thrown,
+            distance_m(Cell::new(0, 4), Cell::new(5, 4), grid.cell_m()),
+        );
+        assert_eq!(flight, expected);
+        // Contact, float and impact all land on arrival, after release.
+        let impact = times_of(&timeline, "impact")[0];
+        assert_eq!(impact, release + flight);
+        assert!(release > times_of(&timeline, "throw")[0]);
+    }
+
+    #[test]
+    fn a_thrown_miss_projectile_does_not_hit() {
+        let (grid, mut tokens) = field();
+        tokens[0].attack = AttackStyle::Thrown;
+        let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
+        let projectile = timeline
+            .steps
+            .iter()
+            .find_map(|timed| match &timed.step {
+                Step::Projectile { hits, kind, .. } => Some((*hits, *kind)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(projectile, (false, ProjectileKind::ThrownWeapon));
+        let labels = names(&timeline);
+        assert!(!labels.contains(&"impact"), "{labels:?}");
+        assert!(labels.contains(&"dodge"), "{labels:?}");
+    }
+
+    #[test]
+    fn a_melee_beat_more_than_one_cell_apart_is_flagged_not_lunged_across() {
+        let (grid, tokens) = field();
+        // hero (3,4) to enemy (4,1): three cells apart.
+        assert_eq!(Cell::new(3, 4).steps_to(Cell::new(4, 1)), 3);
+        let timeline = plan(
+            &grid,
+            &tokens,
+            &attack(AttackResult::Hit {
+                damage: 4,
+                critical: false,
+                downed: false,
+            }),
+        )
+        .unwrap();
+        let labels = names(&timeline);
+        assert!(labels.contains(&"melee-out-of-reach"), "{labels:?}");
+        assert!(!labels.contains(&"lunge"), "{labels:?}");
+        let cells = timeline
+            .steps
+            .iter()
+            .find_map(|timed| match &timed.step {
+                Step::MeleeOutOfReach { cells, .. } => Some(*cells),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(cells, 3);
+        // Adjacent melee still lunges and is not flagged.
+        let (grid, tokens) = melee_field();
+        let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
+        let labels = names(&timeline);
+        assert!(labels.contains(&"lunge"), "{labels:?}");
+        assert!(!labels.contains(&"melee-out-of-reach"), "{labels:?}");
     }
 
     #[test]
@@ -1566,7 +2638,7 @@ mod tests {
 
     #[test]
     fn a_melee_blow_sounds_swing_effort_then_impact_and_pain_in_order() {
-        let (grid, tokens) = field();
+        let (grid, tokens) = melee_field();
         let timeline = plan(
             &grid,
             &tokens,
@@ -1606,7 +2678,7 @@ mod tests {
 
     #[test]
     fn the_target_is_ringed_during_the_focus_shot_and_released_at_contact() {
-        let (grid, tokens) = field();
+        let (grid, tokens) = melee_field();
         let timeline = plan(&grid, &tokens, &attack(AttackResult::Miss)).unwrap();
         let labels = names(&timeline);
         assert!(position(&labels, "target") < position(&labels, "lunge"));
@@ -1657,6 +2729,16 @@ mod tests {
         let pace = walk_pace(steps);
         assert!(pace < STEP && pace >= MIN_STEP);
         assert!(pace * steps <= MAX_APPROACH + Duration::from_millis(12));
+    }
+
+    #[test]
+    fn attack_display_timing_keeps_face_before_card_and_bounded_holds() {
+        assert_eq!(DICE_TUMBLE, Duration::from_millis(1100));
+        assert_eq!(DICE_READ, Duration::from_millis(400));
+        assert_eq!(DAMAGE_DICE_TUMBLE, Duration::from_millis(800));
+        assert_eq!(ROLL_CARD_MISS_HOLD, Duration::from_millis(2500));
+        assert_eq!(ROLL_CARD_HIT_HOLD, Duration::from_millis(2000));
+        assert!(DICE_TUMBLE < DICE_TUMBLE + DICE_READ);
     }
 
     fn roll(id: &str, die: u32, modifier: i32) -> InitiativeRoll {

@@ -45,6 +45,7 @@ pub mod splash;
 mod splat;
 mod stage;
 mod status;
+mod techniques;
 mod terrain;
 mod theme;
 mod world_grid;
@@ -54,7 +55,11 @@ pub use collider_mesh::{ColliderMesh, MAX_GLB_BYTES, MAX_TRIANGLES, MAX_VERTICES
 pub use combat_feed::{
     CombatFeed, CombatSnapshot, FeedMode, FeedReport, InitiativeEntry, Member, Outcome,
 };
-pub use director::{Anim, FlashTone, PlanError, ReadyStyle, Step, TimedStep, Timeline, plan};
+pub use director::{
+    Anim, DAMAGE_DICE_TUMBLE, DICE_READ as ATTACK_FACE_DWELL, DICE_TUMBLE as ATTACK_D20_TUMBLE,
+    FlashTone, PlanError, ROLL_CARD_HIT_HOLD, ROLL_CARD_MISS_HOLD, ReadyStyle, Step, TimedStep,
+    Timeline, distance_m, flight_for, plan,
+};
 pub use figure_art::{VisibleBounds, visible_bounds};
 pub use formation::{Formation, FormationError, derive as derive_formation, from_layout};
 pub use grid::{Cell, Grid, GridError};
@@ -67,8 +72,9 @@ pub use math::{Mat4, Quat, Vec3};
 pub use model::{
     AttackResult, AttackStyle, BadgeView, Beat, CameraCommand, CameraFocus, DieView, FinishingBlow,
     FloatTone, FloatingText, Highlight, HighlightKind, HitPointChange, HitPoints, HudState,
-    InitiativeRoll, InitiativeShow, RollCard, Side, Token, TokenId, advance_presented_sequence,
-    hit_points_at_sequence, hold_server_turn, initiative_line, ordinal,
+    InitiativeRoll, InitiativeShow, PresentationDice, ProjectileKind, ResolvedRoll, RollCard, Side,
+    StrikeDisplay, Token, TokenId, advance_presented_sequence, hit_points_at_sequence,
+    hold_server_turn, initiative_line, ordinal,
 };
 pub use occupancy::{Occupancy, OccupancyError};
 pub use pacing::{BattleFps, FramePacer, Pace};
@@ -93,6 +99,7 @@ pub use stage::{
 pub use status::{
     Resolved, Status, StatusPose, StatusSet, derived_from_view, icon_statuses, pose_for, resolve,
 };
+pub use techniques::{EffectAnchor, EffectCue, EffectKind, EffectView, FireLight};
 pub use terrain::{
     GroundPoint, GroundSettings, HeightField, TerrainError, WalkSettings, blocked_cells,
     blocker_density, estimate_height_field, estimate_height_field_covered,

@@ -411,9 +411,18 @@ pub(super) fn show_roll(
         library.last = Some(first);
         Some((first, second, library.path))
     }) else {
-        mark_rest_band(client, 0);
+        mark_rest_band(
+            client,
+            super::live_motion::development_duration(
+                "dice-tumble",
+                crate::dice_roll::ATTACK_D20_TUMBLE_MS,
+            ),
+        );
         fallback_stills(&document, &host, panel, &play, short)?;
-        return Ok(0);
+        return Ok(super::live_motion::development_duration(
+            "dice-tumble",
+            crate::dice_roll::ATTACK_D20_TUMBLE_MS,
+        ));
     };
     let overlay = document.create_element("div")?;
     overlay.set_class_name("tv-dice");
@@ -432,15 +441,16 @@ pub(super) fn show_roll(
         },
     )?;
     let rest_ms = LIBRARY.with(|library| library.borrow().clips[first].clip.rest_ms);
+    let timing = crate::dice_roll::d20_timing(rest_ms, short);
     overlay.set_attribute(
         "style",
         &format!(
             "--dice-rest:{}ms;--dice-hold:{}ms",
-            rest_ms.min(2_500),
-            fight_hold_ms(short)
+            timing.land_ms,
+            timing.clear_ms - timing.land_ms - crate::dice_roll::DICE_FADE_MS
         ),
     )?;
-    mark_rest_band(client, rest_ms);
+    mark_rest_band(client, timing.land_ms);
     let still = should_show_still(path);
     die(
         &document,
@@ -454,20 +464,8 @@ pub(super) fn show_roll(
     if let (Some(other), Some(second)) = (play.other, second) {
         die(&document, &overlay, second, other, false, None, still)?;
     }
-    schedule_clear(
-        &overlay,
-        crate::dice_roll::d20_timing(rest_ms, short).clear_ms,
-    )?;
-    Ok(rest_ms)
-}
-
-/// How long a fight's die stays on screen after it lands.
-fn fight_hold_ms(short: bool) -> u64 {
-    if short {
-        crate::dice_roll::FIGHT_RESULT_HOLD_CATCH_UP_MS
-    } else {
-        crate::dice_roll::FIGHT_RESULT_HOLD_MS
-    }
+    schedule_clear(&overlay, timing.clear_ms)?;
+    Ok(timing.land_ms)
 }
 
 /// A roll shown while the display catches up still tumbles (FPX-01: nearly every roll arrives
@@ -514,7 +512,13 @@ pub(super) fn show_damage(client: &Rc<RefCell<Client>>, faces: &[u32]) -> Result
             crate::dice_roll::DiceHost::Stage => "stage",
         },
     )?;
-    overlay.set_attribute("style", &format!("--damage-roll-ms:{}ms", timing.land_ms))?;
+    overlay.set_attribute(
+        "style",
+        &format!(
+            "--damage-roll-ms:{}ms",
+            super::live_motion::development_duration("damage-dice-tumble", timing.land_ms)
+        ),
+    )?;
     match kind {
         crate::dice_roll::DiceHost::Battlefield => {
             if let Some(words) = host.query_selector(".bf-roll-words")? {
@@ -536,7 +540,7 @@ pub(super) fn show_damage(client: &Rc<RefCell<Client>>, faces: &[u32]) -> Result
         die.set_text_content(Some(&face.to_string()));
         overlay.append_child(&die)?;
     }
-    schedule_clear(&overlay, timing.clear_ms)
+    Ok(())
 }
 
 fn schedule_clear(overlay: &Element, clear_ms: u64) -> Result<(), JsValue> {
@@ -548,6 +552,7 @@ fn schedule_clear(overlay: &Element, clear_ms: u64) -> Result<(), JsValue> {
     let callback = Closure::wrap(Box::new(move || {
         let _ready = target.set_attribute("data-clear-ready", "true");
         if target.has_attribute("data-clear-pending")
+            && !target.has_attribute("data-presentation-owned")
             && let Some(parent) = target.parent_node()
             && let Ok(parent) = parent.dyn_into::<Element>()
         {
@@ -576,8 +581,28 @@ fn fallback_stills(
     let overlay = document.create_element("div")?;
     overlay.set_class_name("tv-dice");
     overlay.set_attribute(
+        "data-mode",
+        match play.mode {
+            RollMode::Plain => "plain",
+            RollMode::Advantage => "advantage",
+            RollMode::Disadvantage => "disadvantage",
+        },
+    )?;
+    overlay.set_attribute(
         "style",
-        &format!("--dice-rest:0ms;--dice-hold:{}ms", fight_hold_ms(short)),
+        &format!(
+            "--dice-rest:{}ms;--dice-hold:{}ms",
+            super::live_motion::development_duration(
+                "dice-tumble",
+                crate::dice_roll::ATTACK_D20_TUMBLE_MS
+            ),
+            crate::dice_roll::fight_beat_ms(short)
+                .saturating_sub(super::live_motion::development_duration(
+                    "dice-tumble",
+                    crate::dice_roll::ATTACK_D20_TUMBLE_MS
+                ))
+                .saturating_sub(crate::dice_roll::DICE_FADE_MS)
+        ),
     )?;
     if panel {
         host.insert_before(&overlay, host.first_element_child().as_deref())?;
@@ -611,7 +636,6 @@ fn fallback_still(
     image.set_attribute("alt", "")?;
     image.set_attribute("style", "display:block")?;
     let figure = node(document, &die, "div", "tv-die-num", &face.to_string())?;
-    figure.set_attribute("data-settled", "true")?;
     if let Some(natural) = natural {
         figure.set_attribute(
             "data-nat",
@@ -623,8 +647,24 @@ fn fallback_still(
     }
     figure.set_attribute(
         "style",
-        "left:50%;top:49%;width:30%;height:30%;font-size:calc(var(--u)*4);opacity:1!important;transform:translate(-50%,-50%)",
+        "left:50%;top:49%;width:30%;height:30%;font-size:calc(var(--u)*4);opacity:0!important;transform:translate(-50%,-50%)",
     )?;
+    let settled = figure.clone();
+    let die = die.clone();
+    let _marked = die.set_attribute("data-fallback-tumble", "true");
+    spawn_local(async move {
+        TimeoutFuture::new(super::live_motion::development_duration(
+            "dice-tumble",
+            crate::dice_roll::ATTACK_D20_TUMBLE_MS,
+        ) as u32)
+        .await;
+        if !settled.is_connected() {
+            return;
+        }
+        let _ = die.remove_attribute("data-fallback-tumble");
+        let _ = settled.set_attribute("data-settled", "true");
+        let _ = settled.set_attribute("style", "left:50%;top:49%;width:30%;height:30%;font-size:calc(var(--u)*4);opacity:1!important;transform:translate(-50%,-50%)");
+    });
     Ok(())
 }
 
@@ -637,6 +677,10 @@ pub(super) fn clear(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     for index in 0..previous.length() {
         if let Some(shown) = previous.item(index) {
             let shown: Element = shown.dyn_into().map_err(JsValue::from)?;
+            if shown.has_attribute("data-presentation-owned") {
+                waiting_for_roll = true;
+                continue;
+            }
             if shown.has_attribute("data-clear-ready") {
                 if let Some(parent) = shown.parent_node()
                     && let Ok(parent) = parent.dyn_into::<Element>()
@@ -728,6 +772,26 @@ fn mark_rest_band(client: &Rc<RefCell<Client>>, rest_ms: u64) {
     }
 }
 
+fn attack_card_visibility(action: &crate::dice_roll::AttackDisplayAction) -> Option<&'static str> {
+    use crate::dice_roll::AttackDisplayAction;
+
+    match action {
+        AttackDisplayAction::OpenCard => Some("open"),
+        AttackDisplayAction::Close | AttackDisplayAction::Hide => Some("closed"),
+        _ => None,
+    }
+}
+
+fn set_attack_card_visibility(root: &Element, state: &str) {
+    if let Ok(Some(screen)) = root.query_selector(".live-screen[data-role=display]") {
+        if state == "open" {
+            let _ = screen.set_attribute("data-attack-card", "open");
+        } else {
+            let _ = screen.remove_attribute("data-attack-card");
+        }
+    }
+}
+
 fn die(
     document: &Document,
     parent: &Element,
@@ -737,7 +801,7 @@ fn die(
     natural: Option<Natural>,
     still: bool,
 ) -> Result<(), JsValue> {
-    let settled_now = still;
+    let settled_now = false;
     let die = node(document, parent, "div", "tv-die", "")?;
     die.set_attribute("data-kept", kept_attribute(kept))?;
     die.set_attribute("style", "outline:none")?;
@@ -800,7 +864,7 @@ fn number(
     settled_now: bool,
     video: Option<web_sys::HtmlVideoElement>,
 ) -> Result<(), JsValue> {
-    let (center, corners, rotation, rest_ms) = LIBRARY.with(|library| {
+    let (center, corners, rotation, _rest_ms) = LIBRARY.with(|library| {
         let library = library.borrow();
         let clip = &library.clips[clip].clip;
         (
@@ -865,7 +929,10 @@ fn number(
     // resting frame instead of standing black behind the number. The timer belongs to this
     // die: a later cue taking other dice down never cancels it, and a die that has gone by
     // then is left alone.
-    let rest = u32::try_from(rest_ms.min(2_500)).unwrap_or(2_500);
+    let rest = super::live_motion::development_duration(
+        "dice-tumble",
+        crate::dice_roll::ATTACK_D20_TUMBLE_MS,
+    ) as u32;
     spawn_local(async move {
         TimeoutFuture::new(rest).await;
         if !settled.is_connected() {
@@ -893,6 +960,13 @@ fn web_clip(
     video.set_attribute("muted", "")?;
     video.set_attribute("playsinline", "")?;
     video.set_attribute("preload", "auto")?;
+    video.set_playback_rate(LIBRARY.with(|library| {
+        library.borrow().clips[clip].clip.rest_ms as f64
+            / super::live_motion::development_duration(
+                "dice-tumble",
+                crate::dice_roll::ATTACK_D20_TUMBLE_MS,
+            ) as f64
+    }));
     video.set_src(&url);
     die.append_child(&video)?;
     // A clip that refuses to start leaves its resting frame (already underneath) and the
@@ -933,6 +1007,13 @@ fn keyed_clip(
     video.set_attribute("muted", "")?;
     video.set_attribute("playsinline", "")?;
     video.set_attribute("preload", "auto")?;
+    video.set_playback_rate(LIBRARY.with(|library| {
+        library.borrow().clips[clip].clip.rest_ms as f64
+            / super::live_motion::development_duration(
+                "dice-tumble",
+                crate::dice_roll::ATTACK_D20_TUMBLE_MS,
+            ) as f64
+    }));
     video.set_src(&url);
     die.append_child(&video)?;
     let key = LIBRARY.with(|library| library.borrow().key);
@@ -1080,39 +1161,56 @@ fn call(context: &JsValue, name: &str, args: &[JsValue]) -> Result<JsValue, JsVa
 /// The rest time a roll shown now should budget before the clips' own times are known: the
 /// slowest loaded clip's, else the default.
 pub(super) fn expected_rest_ms() -> u64 {
-    LIBRARY
-        .with(|library| {
-            library
-                .borrow()
-                .clips
-                .iter()
-                .map(|ready| ready.clip.rest_ms)
-                .max()
-        })
-        .map_or(crate::roll_card::DEFAULT_REST_MS, |rest| rest.min(2_500))
+    super::live_motion::development_duration("dice-tumble", crate::dice_roll::ATTACK_D20_TUMBLE_MS)
 }
 
 /// Component ids of a fight blow's dice start here, so they never collide with a dice line's
 /// (those are the line machine's ids); the low bits are the blow's server sequence.
 const FIGHT_COMPONENT_BASE: u64 = 1 << 40;
 
-/// Writes a fight blow's die to the DISPLAY log through the shared component path, as the scene
-/// rolls are: requested and opened when the die starts (with the beat's queue lag), readable at
-/// the rest time when the number lands, closing when its hold is over, hidden after the fade.
-/// The records carry `opened_ms`, `closed_ms` and the held time, so the die's presentation can be
-/// checked from logs. Nothing here changes what is shown.
+/// Owns the actual attack overlay/card lifecycle. Each await checks the original connected
+/// overlay so a replacement roll or a scene teardown cannot receive stale mutations.
 pub(super) fn log_fight_roll(
     client: &Rc<RefCell<Client>>,
     sequence: u64,
     lag_ms: u64,
-    rest_ms: u64,
-    short: bool,
+    _rest_ms: u64,
+    _short: bool,
 ) {
-    if sequence == 0 {
+    use crate::dice_roll::AttackDisplayAction;
+    // Cue entry precedes Render: the accepted view already contains this result, while the
+    // battlefield's cache can still contain only the preceding view.
+    let outcome = {
+        let state = client.borrow();
+        state
+            .views
+            .as_ref()
+            .and_then(|views| views.current())
+            .and_then(|view| {
+                let rpc::view_message::Audience::Display(display) = view.audience.as_ref()? else {
+                    return None;
+                };
+                crate::dice_roll::live_attack(display.journey.as_ref()?.combat.as_ref()?, sequence)
+                    .cloned()
+            })
+    }
+    .or_else(|| super::live_battlefield::attack_outcome(sequence));
+    let Some(outcome) = outcome else {
+        return;
+    };
+    if outcome
+        .presentation
+        .as_ref()
+        .is_some_and(crate::dice_roll::technique_owns_roll)
+    {
+        if let Ok(Some(dice)) = client.borrow().root.query_selector(".tv-dice") {
+            dice.remove();
+        }
         return;
     }
-    let id = FIGHT_COMPONENT_BASE | sequence;
-    let hold_ms = u32::try_from(fight_hold_ms(short)).unwrap_or(u32::MAX);
+    let Some(mut display) = crate::dice_roll::AttackDisplay::new(&outcome) else {
+        return;
+    };
     let (root, scene) = {
         let state = client.borrow();
         (
@@ -1123,117 +1221,190 @@ pub(super) fn log_fight_roll(
                 .unwrap_or_default(),
         )
     };
-    let dice = root.query_selector(".tv-dice").ok().flatten();
-    let die_elements = dice
-        .as_ref()
-        .and_then(|dice| dice.query_selector_all(".tv-die").ok());
-    record_fight_component(
-        None,
-        PresentationComponent::RollCard,
-        id,
-        &scene,
-        ComponentPhase::Requested,
-        "ready",
-        hold_ms,
+    // start_roll normally mounted this die. Keep the live entry complete when a caller has
+    // only the committed outcome (and never add a second die to an existing seat).
+    if root.query_selector(".tv-dice").ok().flatten().is_none()
+        && show_roll(client, display.play, false).is_err()
+    {
+        return;
+    }
+    let Some(dice) = root.query_selector(".tv-dice").ok().flatten() else {
+        return;
+    };
+    let reason = outcome.reasons.join("; ");
+    let hit = outcome.hit || outcome.grazed;
+    super::live_battlefield::begin_attack_presentation(outcome);
+    let _ = dice.set_attribute("data-sequence", &sequence.to_string());
+    let _ = dice.set_attribute("data-presentation-owned", "true");
+    let _ = dice.set_attribute("style", "animation:none");
+    if !reason.is_empty() {
+        let _ = dice.set_attribute("data-reason", &reason);
+    }
+    let settled_ms =
+        super::live_motion::development_duration("dice-tumble", display.timing.settled_ms);
+    let card_ms = settled_ms
+        + super::live_motion::development_duration(
+            "dice-read",
+            crate::dice_roll::ATTACK_FACE_DWELL_MS,
+        );
+    let damage_ms = super::live_motion::development_duration(
+        "damage-dice-tumble",
+        df_render::battle::DAMAGE_DICE_TUMBLE.as_millis() as u64,
     );
+    let hold = super::live_motion::development_duration(
+        if hit {
+            "roll-card-hit-hold"
+        } else {
+            "roll-card-miss-hold"
+        },
+        if hit {
+            df_render::battle::ROLL_CARD_HIT_HOLD
+        } else {
+            df_render::battle::ROLL_CARD_MISS_HOLD
+        }
+        .as_millis() as u64,
+    ) as u32;
+    let has_damage = !display.damage_faces.is_empty();
+    let closing_ms = card_ms + if has_damage { damage_ms } else { 0 } + u64::from(hold);
+    display.timing = crate::dice_roll::AttackTiming {
+        settled_ms,
+        card_ms,
+        damage_settled_ms: has_damage.then_some(card_ms + damage_ms),
+        closing_ms,
+        hidden_ms: closing_ms + crate::dice_roll::DICE_FADE_MS,
+    };
     super::presentation_timing::note_lag(lag_ms);
-    let card = root.query_selector(".bf-roll[data-open]").ok().flatten();
-    record_fight_component(
-        card.as_ref(),
-        PresentationComponent::RollCard,
-        id,
-        &scene,
-        ComponentPhase::Opened,
-        "ready",
-        hold_ms,
-    );
-    let mut die_records = Vec::new();
-    if let Some(die_elements) = die_elements {
-        for index in 0..die_elements.length() {
-            if let Some(element) = die_elements
-                .item(index)
-                .and_then(|node| node.dyn_into::<Element>().ok())
-            {
-                let die_id = FIGHT_COMPONENT_BASE
-                    | sequence.saturating_mul(4).saturating_add(u64::from(index));
+    let id = FIGHT_COMPONENT_BASE | sequence;
+    let client = Rc::clone(client);
+    spawn_local(async move {
+        let mut previous_ms = 0;
+        let mut card = None;
+        let mut damage = None;
+        let completed = async {
+            for (at_ms, action) in display.steps() {
+                TimeoutFuture::new(at_ms.saturating_sub(previous_ms) as u32).await;
+                previous_ms = at_ms;
+                if !dice.is_connected()
+                    || !super::live_battlefield::ordinary_presentation_active(sequence)
+                {
+                    return false;
+                }
+                if let Some(state) = attack_card_visibility(&action) {
+                    set_attack_card_visibility(&root, state);
+                }
+                match action {
+                    AttackDisplayAction::OpenDie
+                    | AttackDisplayAction::SettleDie
+                    | AttackDisplayAction::ReadCard => {}
+                    AttackDisplayAction::OpenCard => {
+                        if !super::live_battlefield::show_attack_card(
+                            sequence,
+                            display.attack_card.clone(),
+                        ) {
+                            return false;
+                        }
+                        // A card request is not a visible opening: wait for the renderer's DOM.
+                        for _ in 0..10 {
+                            TimeoutFuture::new(16).await;
+                            if !dice.is_connected() {
+                                return false;
+                            }
+                            card = root.query_selector(".bf-roll[data-open]").ok().flatten();
+                            if card.is_some() {
+                                break;
+                            }
+                        }
+                        if card.is_none() {
+                            return false;
+                        }
+                        if !has_damage {
+                            super::live_battlefield::show_attack_card(
+                                sequence,
+                                display.damage_card.clone(),
+                            );
+                            super::live_battlefield::damage_readable(sequence);
+                        }
+                    }
+                    AttackDisplayAction::OpenDamage => {
+                        if show_damage(&client, &display.damage_faces).is_err() {
+                            return false;
+                        }
+                        damage = root.query_selector(".tv-damage-dice").ok().flatten();
+                    }
+                    AttackDisplayAction::SettleDamage => {
+                        if let Some(damage) = &damage {
+                            let _ = damage.set_attribute("data-settled", "true");
+                        }
+                        if !super::live_battlefield::show_attack_card(
+                            sequence,
+                            display.damage_card.clone(),
+                        ) {
+                            return false;
+                        }
+                        super::live_battlefield::damage_readable(sequence);
+                    }
+                    AttackDisplayAction::Close => {
+                        // Retain ownership through the fade; no generic clear may remove the die
+                        // before the corresponding Hidden records are emitted.
+                        super::live_battlefield::close_attack_card(sequence);
+                        let _ = dice.set_attribute("style", "opacity:0;transition:opacity 320ms");
+                        if let Some(damage) = &damage {
+                            let _ = damage.set_attribute("data-closing", "true");
+                        }
+                    }
+                    AttackDisplayAction::Hide => {
+                        dice.remove();
+                        if let Some(damage) = &damage {
+                            damage.remove();
+                        }
+                        super::live_battlefield::finish_attack_presentation(sequence);
+                    }
+                }
+                for (component, phase, reason) in action.records(has_damage) {
+                    let (element, component_id) = match component {
+                        PresentationComponent::Die => (Some(&dice), id),
+                        PresentationComponent::Dice => (damage.as_ref(), id ^ 0xD000_0000),
+                        _ => (card.as_ref(), id),
+                    };
+                    record_fight_component(
+                        element,
+                        component,
+                        component_id,
+                        &scene,
+                        phase,
+                        reason,
+                        hold,
+                    );
+                }
+            }
+            true
+        }
+        .await;
+        if !completed {
+            // A missing HUD, replaced sequence or disconnected scene cancels this owner;
+            // it must not leave a permanently owned overlay or hold the next live attack.
+            dice.remove();
+            if let Some(damage) = &damage {
+                damage.remove();
+            }
+            super::live_battlefield::finish_attack_presentation(sequence);
+            for (component, _, _) in AttackDisplayAction::Hide.records(has_damage) {
+                let (element, component_id) = match component {
+                    PresentationComponent::Die => (Some(&dice), id),
+                    PresentationComponent::Dice => (damage.as_ref(), id ^ 0xD000_0000),
+                    _ => (None, id),
+                };
                 record_fight_component(
-                    Some(&element),
-                    PresentationComponent::Die,
-                    die_id,
+                    element,
+                    component,
+                    component_id,
                     &scene,
-                    ComponentPhase::Opened,
-                    "ready",
-                    hold_ms,
+                    ComponentPhase::Hidden,
+                    "attack-cancelled",
+                    hold,
                 );
-                die_records.push((element, die_id));
             }
         }
-    }
-    let rest = u32::try_from(rest_ms).unwrap_or(u32::MAX);
-    spawn_local(async move {
-        TimeoutFuture::new(rest).await;
-        for (element, die_id) in &die_records {
-            record_fight_component(
-                Some(element),
-                PresentationComponent::Die,
-                *die_id,
-                &scene,
-                ComponentPhase::Readable,
-                "read",
-                hold_ms,
-            );
-        }
-        record_fight_component(
-            card.as_ref(),
-            PresentationComponent::RollCard,
-            id,
-            &scene,
-            ComponentPhase::Readable,
-            "read",
-            hold_ms,
-        );
-        TimeoutFuture::new(hold_ms).await;
-        for (element, die_id) in &die_records {
-            record_fight_component(
-                Some(element),
-                PresentationComponent::Die,
-                *die_id,
-                &scene,
-                ComponentPhase::Closing,
-                "read",
-                hold_ms,
-            );
-        }
-        record_fight_component(
-            card.as_ref(),
-            PresentationComponent::RollCard,
-            id,
-            &scene,
-            ComponentPhase::Closing,
-            "read",
-            hold_ms,
-        );
-        TimeoutFuture::new(320).await;
-        for (_, die_id) in &die_records {
-            record_fight_component(
-                None,
-                PresentationComponent::Die,
-                *die_id,
-                &scene,
-                ComponentPhase::Hidden,
-                "read",
-                hold_ms,
-            );
-        }
-        record_fight_component(
-            None,
-            PresentationComponent::RollCard,
-            id,
-            &scene,
-            ComponentPhase::Hidden,
-            "read",
-            hold_ms,
-        );
     });
 }
 
@@ -1479,7 +1650,8 @@ fn open_card(client: &Rc<RefCell<Client>>, id: u64, card: &RollCard) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::{DicePath, kept_attribute, should_show_still};
+    use super::{DicePath, attack_card_visibility, kept_attribute, should_show_still};
+    use crate::dice_roll::AttackDisplayAction;
 
     #[test]
     fn a_playable_clip_plays_whatever_the_motion_preference_says() {
@@ -1494,5 +1666,21 @@ mod tests {
     fn only_the_server_selected_die_gets_the_kept_marker() {
         assert_eq!(kept_attribute(true), "true");
         assert_eq!(kept_attribute(false), "false");
+    }
+
+    #[test]
+    fn the_attack_card_open_phase_sets_and_clears_its_visible_state() {
+        assert_eq!(
+            attack_card_visibility(&AttackDisplayAction::OpenCard),
+            Some("open")
+        );
+        assert_eq!(
+            attack_card_visibility(&AttackDisplayAction::Close),
+            Some("closed")
+        );
+        assert_eq!(
+            attack_card_visibility(&AttackDisplayAction::Hide),
+            Some("closed")
+        );
     }
 }

@@ -621,6 +621,7 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
                 layout_revision: 0,
                 place_music: None,
                 effects_off: Vec::new(),
+                camera_override: None,
                 journey: Some(rpc::JourneyView {
                     phase: rpc::JourneyPhase::Room as i32,
                     ..Default::default()
@@ -649,7 +650,7 @@ async fn the_display_lobby_view_carries_the_loop_once_the_flight_has_landed_it()
 }
 
 #[test]
-fn the_lobby_shows_the_generic_landing_plate_whatever_art_the_adventure_names() {
+fn the_lobby_keeps_the_still_it_shows_and_pairs_no_loop_made_from_another() {
     // Arrange: a lobby view whose adventure names the live room photograph token, and a scene view.
     let view = |phase: rpc::JourneyPhase| rpc::ViewMessage {
         audience: Some(rpc::view_message::Audience::Display(
@@ -664,8 +665,11 @@ fn the_lobby_shows_the_generic_landing_plate_whatever_art_the_adventure_names() 
         )),
         ..Default::default()
     };
-    let asset = |message: rpc::ViewMessage| match message.audience {
-        Some(rpc::view_message::Audience::Display(display)) => display.scene_asset,
+    let parts = |message: rpc::ViewMessage| match message.audience {
+        Some(rpc::view_message::Audience::Display(display)) => (
+            display.scene_asset,
+            display.journey.expect("a journey").home_video_path,
+        ),
         _ => panic!("a display view"),
     };
     // Act
@@ -673,9 +677,104 @@ fn the_lobby_shows_the_generic_landing_plate_whatever_art_the_adventure_names() 
     home_video::apply(&mut lobby);
     let mut opening = view(rpc::JourneyPhase::Opening);
     home_video::apply(&mut opening);
-    // Assert: the landing draws (and loops) the one reviewed plate; a scene keeps its own art.
-    assert_eq!(asset(lobby), PAINTING);
-    assert_eq!(asset(opening), "live-room-photo");
+    // Assert (HOME-01): the shown still is never replaced by another picture's plate,
+    // and no loop made from a different still rides over it; a scene keeps its own art.
+    assert_eq!(parts(lobby), ("live-room-photo".to_owned(), String::new()));
+    assert_eq!(
+        parts(opening),
+        ("live-room-photo".to_owned(), String::new())
+    );
+}
+
+#[tokio::test]
+async fn a_lobby_view_never_pairs_a_loop_with_a_still_other_than_its_source() {
+    // Arrange: the loop that is ready for the harbour painting, and a lobby view that
+    // shows a different still (the adventure's own opening picture).
+    let root = asset_root();
+    let painting_still = home_video::prepare_still_for_test(&root, PAINTING)
+        .await
+        .expect("the painting still");
+    let painting_path = format!("/gameplay/home-video/{}", clip_key(&painting_still));
+    let view = rpc::ViewMessage {
+        audience: Some(rpc::view_message::Audience::Display(
+            rpc::DisplayGameplayView {
+                scene_asset: OTHER.to_owned(),
+                scene: Some(rpc::GameplayScene {
+                    scene_asset: OTHER.to_owned(),
+                    ..Default::default()
+                }),
+                journey: Some(rpc::JourneyView {
+                    phase: rpc::JourneyPhase::Room as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    // Act
+    let mut view = view;
+    home_video::apply(&mut view);
+    // Assert: the view shows its own still unchanged and carries no foreign loop;
+    // its own loop, once ready for this still, is the only path it may ever carry.
+    let display = match view.audience {
+        Some(rpc::view_message::Audience::Display(display)) => display,
+        _ => panic!("a display view"),
+    };
+    assert_eq!(display.scene_asset, OTHER);
+    assert_eq!(
+        display.scene.expect("a scene").scene_asset,
+        OTHER,
+        "the shown still is not replaced"
+    );
+    let journey = display.journey.expect("a journey");
+    assert_ne!(
+        journey.home_video_path, painting_path,
+        "a loop made from another still is never paired with this one"
+    );
+    if !journey.home_video_path.is_empty() {
+        let other_still = home_video::prepare_still_for_test(&root, OTHER)
+            .await
+            .expect("the other still");
+        assert_eq!(
+            journey.home_video_path,
+            format!("/gameplay/home-video/{}", clip_key(&other_still)),
+            "the only loop a view may carry is the one made from its shown still"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_ready_loop_is_only_ever_observed_for_the_still_it_was_made_from() {
+    // Arrange: a cached loop for the harbour painting only.
+    let fake = fake(Scenario::MalformedClip);
+    let directory = scratch("pairing");
+    let root = asset_root();
+    let engine = test_engine(
+        root.clone(),
+        directory.clone(),
+        endpoints(&fake),
+        Duration::from_secs(30),
+    );
+    let still = home_video::prepare_still_for_test(&root, PAINTING)
+        .await
+        .expect("the still");
+    let key = clip_key(&still);
+    std::fs::write(directory.join(format!("{key}.mp4")), vec![0u8; 64]).expect("a cached clip");
+    // Act: ask for the painting's loop and for another still's loop.
+    assert_eq!(engine.observe_for_test(PAINTING), LoopView::Pending);
+    assert_eq!(settle(&engine, PAINTING).await, format!("ready:{key}"));
+    let other = engine.observe_for_test(OTHER);
+    // Assert: the ready loop answers only its own still; the other still gets no
+    // path (its own loop is asked for instead and is not ready yet).
+    assert_eq!(
+        engine.observe_for_test(PAINTING),
+        LoopView::Ready {
+            path: format!("/gameplay/home-video/{key}")
+        }
+    );
+    assert_eq!(other, LoopView::Pending);
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// Development check: one real generation of a painting's loop through the engine, reporting the

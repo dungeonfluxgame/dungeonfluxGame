@@ -105,8 +105,8 @@ impl FightForesight {
         place: &Place,
         lines: &[(String, String)],
         request: impl FnMut(&SplatWorldSpec) -> bool,
-    ) {
-        self.judge(place, lines, false, request).await;
+    ) -> bool {
+        self.judge(place, lines, false, request).await
     }
 
     /// An unforecast opening gets one bounded question, including after failure or timeout.
@@ -170,7 +170,7 @@ impl FightForesight {
         lines: &[(String, String)],
         fight_starting: bool,
         mut request: impl FnMut(&SplatWorldSpec) -> bool,
-    ) {
+    ) -> bool {
         let mut choices = vec!["unlikely".to_owned(), "likely | large here".to_owned()];
         choices.extend(
             place
@@ -263,6 +263,7 @@ impl FightForesight {
                 place.id
             ),
         );
+        verdict == "likely"
     }
 
     /// A proposal for the session owner; this never changes rules state or the current place.
@@ -450,6 +451,9 @@ pub(super) async fn prepare_opening(current: &df_model::checkpoint::Checkpoint) 
             })
             .collect(),
     };
+    super::character_clips::request_fighters(super::character_clips::forecast_fighters(
+        current.state(),
+    ));
     director
         .opening(&place, |spec| request_ready_world(&director, spec))
         .await
@@ -565,7 +569,7 @@ fn subscribe(
                     recent.pop_front();
                 }
                 let lines = recent.iter().cloned().collect::<Vec<_>>();
-                director
+                let likely = director
                     .after_line(&place, &lines, |spec| {
                         // A run reset while Jev was answering must not dispatch an old forecast.
                         checkpoints.borrow().basis().run == run
@@ -580,6 +584,11 @@ fn subscribe(
                         .as_deref()
                         == Some(place.id.as_str())
                 {
+                    if likely {
+                        super::character_clips::request_fighters(
+                            super::character_clips::forecast_fighters(latest.state()),
+                        );
+                    }
                     director.prepare_after_line(&latest, &place.id).await;
                 }
             }

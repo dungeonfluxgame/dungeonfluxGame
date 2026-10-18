@@ -91,11 +91,15 @@ body:has(.tv-stage[data-tv-mode=lobby]) .tv-voice-control{right:5vw!important;to
 .tv-fx-cloud-shadow{background:linear-gradient(100deg,rgb(3 6 14/0) 0%,rgb(3 6 14/.38) 30%,rgb(3 6 14/0) 60%);background-size:160% 100%;animation:tv-fx-cloud 36s linear infinite}
 @keyframes tv-fx-cloud{from{background-position:0% 0}to{background-position:100% 0}}
 
-/* PLAY-V10: the looping video over the still. Two stacked clips cross-fade; the still beneath stays
-   visible until a clip is on, and nothing here depends on the device's motion setting. */
+/* PLAY-V10: the looping video over the still. At a wrap the incoming clip fades in on top
+   (data-top) while the outgoing one stays fully opaque underneath, and only rests once the
+   incoming one is fully opaque, so the still beneath never shows through mid-fade (HOME-01);
+   the still stays visible until the first clip is on, and nothing here depends on the
+   device's motion setting. */
 .tv-loop{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0}
-.tv-loop-clip{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 40%;opacity:0;transition:opacity 500ms linear}
+.tv-loop-clip{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 40%;opacity:0;transition:opacity 500ms linear;z-index:0}
 .tv-loop-clip[data-on]{opacity:1}
+.tv-loop-clip[data-top]{z-index:1}
 .tv-loop-clip[data-first]{transition-duration:900ms}
 
 /* In a small pane the sound control is only its icon; the TV keeps its label. */

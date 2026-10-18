@@ -93,6 +93,16 @@ impl CameraPose {
         Ok(())
     }
 
+    /// Clip-safe proximity to the authored home angle. Target and lens are part of the pose:
+    /// a translated or differently framed shot must not enable home-angle clips.
+    pub fn is_at_home(&self, home: &Self) -> bool {
+        super::framing::wrap_deg(self.yaw_deg - home.yaw_deg).abs() <= 12.0
+            && (self.pitch_deg - home.pitch_deg).abs() <= 5.0
+            && (self.distance / home.distance - 1.0).abs() <= 0.15
+            && (self.target - home.target).length() <= 0.25
+            && (self.fov_deg - home.fov_deg).abs() <= 2.0
+    }
+
     pub fn eye(&self) -> Vec3 {
         let yaw = self.yaw_deg.to_radians();
         let pitch = self.pitch_deg.to_radians();
@@ -116,7 +126,7 @@ impl CameraPose {
         Self {
             target: self.target.lerp(other.target, t),
             distance: lerp(self.distance, other.distance, t),
-            yaw_deg: lerp(self.yaw_deg, other.yaw_deg, t),
+            yaw_deg: self.yaw_deg + super::framing::wrap_deg(other.yaw_deg - self.yaw_deg) * t,
             pitch_deg: lerp(self.pitch_deg, other.pitch_deg, t),
             fov_deg: lerp(self.fov_deg, other.fov_deg, t),
         }
@@ -291,8 +301,13 @@ impl CameraRig {
             self.pose = pan.from.lerp(&pan.to, eased);
             if pan.elapsed < pan.duration {
                 self.pan = Some(pan);
-            } else if pan.whip {
-                self.punch = PUNCH + dt;
+            } else {
+                // Land exactly on the validated destination; interpolation roundoff must not
+                // start another home refit or leave a 360-degree equivalent heading in state.
+                self.pose = pan.to;
+                if pan.whip {
+                    self.punch = PUNCH + dt;
+                }
             }
         }
         self.punch = (self.punch - dt).max(0.0);
@@ -317,6 +332,50 @@ mod tests {
             pitch_deg: 30.0,
             fov_deg: 40.0,
         }
+    }
+
+    #[test]
+    fn camera_home_tolerance_includes_wrap_target_distance_and_lens() {
+        let home = pose(10.0, 179.0);
+        assert!(
+            CameraPose {
+                yaw_deg: -179.0,
+                ..home
+            }
+            .is_at_home(&home)
+        );
+        for outside in [
+            CameraPose {
+                yaw_deg: home.yaw_deg + 12.1,
+                ..home
+            },
+            CameraPose {
+                pitch_deg: home.pitch_deg + 5.1,
+                ..home
+            },
+            CameraPose {
+                distance: home.distance * 1.151,
+                ..home
+            },
+            CameraPose {
+                target: home.target + Vec3::new(0.26, 0.0, 0.0),
+                ..home
+            },
+            CameraPose {
+                fov_deg: home.fov_deg + 2.1,
+                ..home
+            },
+        ] {
+            assert!(!outside.is_at_home(&home), "{outside:?}");
+        }
+    }
+
+    #[test]
+    fn camera_home_pan_crosses_the_yaw_seam_by_the_shortest_path() {
+        let mut rig = CameraRig::new(pose(10.0, 179.0));
+        rig.pan_to(pose(10.0, -179.0), Duration::from_secs(1));
+        rig.update(Duration::from_millis(500));
+        assert!((rig.pose().yaw_deg - 180.0).abs() < 0.01);
     }
 
     #[test]

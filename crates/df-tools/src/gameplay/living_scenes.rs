@@ -81,6 +81,49 @@ fn live_hero_key(state: &State, hero: &StageHero) -> Option<ImageKey> {
     canonical.or_else(|| state.hero_cutouts.get(&hero.name).cloned())
 }
 
+/// Combat-only creatures do not occur in the story cast. Admit their stable public identity
+/// through the same canonical owner and publish only completed cache handles, never guessed URLs.
+fn apply_creature_faces(
+    canonical: &mut canonical::References,
+    journey: Option<&mut rpc::JourneyView>,
+) {
+    let Some(journey) = journey else {
+        return;
+    };
+    let Some(combat) = &journey.combat else {
+        return;
+    };
+    for participant in combat
+        .participants
+        .iter()
+        .filter(|participant| participant.side == 2 && !participant.creature_id.is_empty())
+    {
+        let id = format!("combat-creature:{}", participant.creature_id);
+        let sprite = format!("figure-ant-{}", participant.creature_id);
+        let reviewed = art_contract::identity_photo(&sprite).is_some();
+        if !reviewed {
+            canonical.admit_cast(&Member {
+                id: id.clone(),
+                role: CharacterRole::Antagonist,
+                life_stage: LifeStage::Adult,
+                name: participant.creature_id.replace('-', " "),
+                sprite,
+                dossier_id: None,
+                opposes: true,
+                starting_attitude: None,
+            });
+        }
+        if let Some(key) = canonical.npc(&id) {
+            let path = key.path();
+            journey.live_faces.push(rpc::LiveFace {
+                name: participant.name.clone(),
+                sprite: path.clone(),
+                battle_sprite: path,
+            });
+        }
+    }
+}
+
 /// The characters whose art a hero's health variants are made from: one character sourced from
 /// the hero's live picture when it exists (the same variant serves the stage and the
 /// battlefield), otherwise the authored stage and battlefield arts.
@@ -1627,9 +1670,11 @@ impl Inner {
                 }
                 display.scene_graph = state.scene_graph.as_ref().map(graph_to_wire);
                 apply_hero_faces(&state, display.journey.as_mut());
+                apply_creature_faces(&mut state.canonical, display.journey.as_mut());
             }
             Some(rpc::view_message::Audience::Player(player)) => {
                 apply_hero_faces(&state, player.journey.as_mut());
+                apply_creature_faces(&mut state.canonical, player.journey.as_mut());
             }
             None => {}
         }

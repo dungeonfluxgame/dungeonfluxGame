@@ -743,6 +743,72 @@ async fn video_normal_uses_first_frame_and_container_clock() {
 }
 
 #[tokio::test]
+async fn character_clip_kling_preserves_distinct_end_frame_and_single_frame_loops() {
+    let model = df_providers::KLING_O1_IMAGE_TO_VIDEO;
+    for distinct_end in [false, true] {
+        let prefix = format!("https://queue.fal.run/{model}/requests/{ID}");
+        let mut fixture = Fixture::new(vec![Reply::json(json!({
+            "request_id": ID, "status_url": format!("{prefix}/status"),
+            "response_url": format!("{prefix}/response"), "cancel_url": format!("{prefix}/cancel"),
+        }))]);
+        let config = FalMediaConfig::loopback_fixture(
+            FalMediaFamily::Video,
+            fixture.address,
+            fixture.address,
+        )
+        .unwrap()
+        .with_video_model(model)
+        .unwrap();
+        let provider = registered_fal_media_provider(config, "fixture-key", limits()).unwrap();
+        let mut current = video_basis();
+        current.semantic_basis.semantic.output_profile.model = model.to_owned();
+        let end_url = "https://v3.fal.media/output/fallen.png";
+        if distinct_end {
+            let mut end = current.semantic_basis.semantic.reference_frames[0].clone();
+            end.locator = end_url.to_owned();
+            end.asset.digest = ContentDigest([9; 32]);
+            current.semantic_basis.semantic.reference_frames.push(end);
+        }
+        let request = video_request(&current);
+        provider
+            .submit_video(&request, owner(&current), future::pending())
+            .await
+            .unwrap();
+        let captured = fixture.finish();
+        assert_eq!(captured.len(), 1);
+        let body: Value = serde_json::from_slice(&captured[0].body).unwrap();
+        assert_eq!(body["start_image_url"], PNG_URL);
+        assert_eq!(
+            body["end_image_url"],
+            if distinct_end { end_url } else { PNG_URL }
+        );
+        assert_eq!(body["duration"], "5");
+        assert!(body.get("image_url").is_none());
+    }
+}
+
+#[tokio::test]
+async fn character_clip_second_reference_is_rejected_on_models_without_bookends() {
+    let mut fixture = Fixture::new(Vec::new());
+    let provider = provider(FalMediaFamily::Video, &fixture);
+    let mut current = video_basis();
+    let second = current.semantic_basis.semantic.reference_frames[0].clone();
+    current
+        .semantic_basis
+        .semantic
+        .reference_frames
+        .push(second);
+    let request = video_request(&current);
+    let error = provider
+        .submit_video(&request, owner(&current), future::pending())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.reason, FalMediaReason::Reference);
+    assert!(fixture.finish().is_empty());
+}
+
+#[tokio::test]
 async fn sound_normal_retains_pcm_frames_loop_bounds_and_usage() {
     let mut fixture = Fixture::new(vec![
         submit(FalMediaFamily::Sound),

@@ -20,7 +20,8 @@ use super::{camera::CameraPose, math::Vec3};
 /// The part of the picture figures are kept inside, as `(left, top, right, bottom)` shares of the
 /// frame (y down). It clears the party and enemy cards at the sides, the round strip at the top
 /// and the floating numbers and roll card below.
-pub const SAFE_AREA: (f32, f32, f32, f32) = (0.16, 0.28, 0.84, 0.92);
+// Reserve the lower fifth for the expanded, television-readable attack breakdown.
+pub const SAFE_AREA: (f32, f32, f32, f32) = (0.16, 0.28, 0.84, 0.80);
 /// Aspect ratio the framing is solved for (the shared display is 16:9).
 pub const FRAMED_ASPECT: f32 = 16.0 / 9.0;
 /// Camera angle from the line of action, over the target's shoulder and over the attacker's.

@@ -21,11 +21,11 @@ use super::{
         TokenId,
     },
     particles::Particles,
-    rest_shot,
     scene_file::BattleScene,
     sound::{SoundEvent, SoundKind, voice_for},
     speech,
     status::{self, Status, StatusPose, StatusSet},
+    techniques::{self, ActiveEffect, EffectAnchor, EffectView, FireLight},
 };
 
 /// Beats waiting behind the one playing. A further beat is refused, not dropped silently.
@@ -50,6 +50,7 @@ const ARROW_STICK_SECONDS: f32 = 0.9;
 pub enum StageError {
     UnknownToken(TokenId),
     QueueFull,
+    InvalidTechnique,
     /// The beat would move or attack with a figure that is down; bodies do not act.
     ActorDown(TokenId),
 }
@@ -62,7 +63,7 @@ pub enum StageError {
 pub mod beat_timing {
     use super::director::{
         DICE_READ, DICE_TUMBLE, DRAW_RELEASE, FALL, FALL_DELAY, FINISHING_DELAY, FINISHING_HOLD,
-        FLIGHT, FOCUS_HOLD, FOCUS_PAN, IMPACT_HOLD, LEAN_TOTAL, LUNGE, MAX_APPROACH, MIN_STEP,
+        FLIGHT_MAX, FOCUS_HOLD, FOCUS_PAN, IMPACT_HOLD, LEAN_TOTAL, LUNGE, MAX_APPROACH, MIN_STEP,
         MOVE_SETTLE_HOLD, SETTLE_PAN, STEP, STOP, STRIKE_CAMERA_DELAY, STRIKE_END_HOLD,
         WINDUP_PUSH,
     };
@@ -105,7 +106,9 @@ pub mod beat_timing {
     pub fn blow_parts_ms(ranged: bool, hit: bool, downed: bool) -> (u64, u64, u64) {
         let approach = ms(FOCUS_PAN + WINDUP_PUSH);
         let (contact, swing_end) = if ranged {
-            let contact = DRAW_RELEASE + FLIGHT;
+            // Worst case over bow and thrown: the longest release plus the longest
+            // distance-scaled flight, so the fallback never releases a beat early.
+            let contact = DRAW_RELEASE + FLIGHT_MAX;
             (ms(contact), ms(contact + LUNGE))
         } else {
             (ms(super::director::LUNGE_CONTACT), ms(LUNGE))
@@ -137,7 +140,7 @@ pub mod beat_timing {
 
 /// The token a beat would move or attack with, when it has one. Turn focus, heals and
 /// initiative have no acting token for this purpose: a downed figure may still be
-/// focused (its death save), healed and struck — it just never acts.
+/// focused (its death save), healed and struck â€” it just never acts.
 fn acting_token(beat: &Beat) -> Option<&TokenId> {
     match beat {
         Beat::Attack { attacker, .. }
@@ -145,6 +148,8 @@ fn acting_token(beat: &Beat) -> Option<&TokenId> {
         | Beat::Approach { attacker, .. }
         | Beat::Strike { attacker, .. }
         | Beat::FightEndingStrike { attacker, .. } => Some(attacker),
+        Beat::Flurry { attacker, .. } | Beat::Shield { attacker, .. } => Some(attacker),
+        Beat::Missiles { caster, .. } | Beat::AreaEffect { caster, .. } => Some(caster),
         Beat::Move { actor, .. } => Some(actor),
         Beat::TurnStart { .. } | Beat::Heal { .. } | Beat::Initiative { .. } => None,
     }
@@ -158,6 +163,8 @@ fn heading_token(beat: &Beat) -> Option<&TokenId> {
         | Beat::Approach { attacker, .. }
         | Beat::Strike { attacker, .. }
         | Beat::FightEndingStrike { attacker, .. } => Some(attacker),
+        Beat::Flurry { attacker, .. } | Beat::Shield { attacker, .. } => Some(attacker),
+        Beat::Missiles { caster, .. } | Beat::AreaEffect { caster, .. } => Some(caster),
         Beat::Heal { source, .. } => Some(source),
         Beat::Initiative { .. } => None,
     }
@@ -181,13 +188,14 @@ struct ActiveAnim {
     landed: bool,
 }
 
-/// An arrow in the air or stuck in the ground.
+/// A projectile in the air or stuck in the ground.
 struct Projectile {
     from: Vec3,
     to: Vec3,
     hits: bool,
     flight_s: f32,
     age_s: f32,
+    kind: super::model::ProjectileKind,
 }
 
 struct Runtime {
@@ -243,11 +251,6 @@ const REACT_STAGGER_S: f32 = 0.3;
 
 /// How far the resting shot leans toward the figure whose turn begins (a share of its distance).
 pub const LEAN_DOLLY: f32 = 0.72;
-/// The resting shot is refitted (and the camera eased there) only when the new one differs this much.
-const REFIT_TARGET_M: f32 = 0.6;
-const REFIT_DISTANCE_SHARE: f32 = 0.06;
-const REFIT_YAW_DEG: f32 = 4.0;
-const REFIT_PAN_S: f32 = 1.0;
 
 /// Attack names waiting for their blows, at most.
 const MAX_PENDING_LABELS: usize = 16;
@@ -341,13 +344,14 @@ pub struct CoverPip {
     pub level: Cover,
 }
 
-/// An arrow as the renderer draws it.
+/// A projectile as the renderer draws it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectileView {
     pub head: Vec3,
     pub tail: Vec3,
     pub trail: Vec3,
     pub alpha: f32,
+    pub kind: super::model::ProjectileKind,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -410,6 +414,8 @@ pub struct FrameView<'a> {
     pub tactical_highlights: &'a [Highlight],
     pub speech: Option<SpeechView<'a>>,
     pub projectiles: Vec<ProjectileView>,
+    pub techniques: Vec<EffectView>,
+    pub fire_light: FireLight,
     /// The layout in play and the grid with its obstacles applied.
     pub layout: Option<&'a Layout>,
     pub grid: &'a Grid,
@@ -437,12 +443,15 @@ pub struct Stage {
     sounds: VecDeque<SoundEvent>,
     dropped_sounds: u32,
     projectiles: Vec<Projectile>,
+    techniques: Vec<ActiveEffect>,
     target: Option<TokenId>,
     /// Whether the timeline now playing is the start-of-fight initiative sequence.
     initiative_playing: bool,
     restrained: bool,
     tokens: Vec<Runtime>,
     rig: CameraRig,
+    home_override: Option<CameraPose>,
+    dev_shot: Option<ShotName>,
     playing: Option<Playback>,
     queue: VecDeque<QueuedBeat>,
     pending_tokens: Option<(Vec<Token>, u64)>,
@@ -469,10 +478,14 @@ pub struct Stage {
     flash: Option<Flash>,
     clock_s: f32,
     dropped_beats: u32,
+    /// Melee beats staged with figures more than one cell apart (a staging bug).
+    melee_out_of_reach: u32,
     next_float_id: u64,
     roll_card_left_s: f32,
+    /// The live dice presenter closes this card after its readable damage/miss hold.
+    attack_card_owned: bool,
     /// A roll card waiting for the camera to arrive, and how long it has waited.
-    pending_roll_card: Option<(super::model::RollCard, f32)>,
+    pending_roll_card: Option<(super::model::RollCard, f32, f32)>,
     /// Whether the beat now playing is a creature's walk: its attack's card waits for it.
     playing_move: bool,
     feel: FeelState,
@@ -485,7 +498,7 @@ pub struct Stage {
     last_angles: Option<(f32, f32)>,
     /// Who the camera was last framed on, to pull focus when the subject changes.
     last_framing: Option<(TokenId, Option<TokenId>)>,
-    /// The resting wide shot the camera was last sent to, while it is the shot being held.
+    /// The resting home shot the camera was last sent to, while it is the shot being held.
     rest_pose: Option<CameraPose>,
     show_grid: bool,
     /// Something the resting shot depends on changed (figures, cells, a beat ended): refit it once
@@ -506,18 +519,17 @@ fn flat_direction(from: Vec3, to: Vec3) -> Vec3 {
 
 impl Stage {
     pub fn new(scene: BattleScene) -> Self {
-        let opening = scene
-            .cameras
-            .get(&ShotName::Tactical)
-            .copied()
-            .expect("scene files are validated to hold every named shot");
+        let opening = scene.home;
         Self {
             rig: CameraRig::new(opening),
+            home_override: None,
+            dev_shot: None,
             grid: scene.grid.clone(),
             layout: None,
             sounds: VecDeque::new(),
             dropped_sounds: 0,
             projectiles: Vec::new(),
+            techniques: Vec::new(),
             target: None,
             initiative_playing: false,
             restrained: false,
@@ -542,8 +554,10 @@ impl Stage {
             flash: None,
             clock_s: 0.0,
             dropped_beats: 0,
+            melee_out_of_reach: 0,
             next_float_id: 0,
             roll_card_left_s: 0.0,
+            attack_card_owned: false,
             pending_roll_card: None,
             playing_move: false,
             feel: FeelState::new(),
@@ -656,18 +670,41 @@ impl Stage {
     /// still moving to them the card would hang over the wrong picture. Movement and finishing
     /// holds drain first; the camera then gets at most [`ROLL_CARD_MAX_WAIT_S`] to settle.
     pub fn show_roll_card(&mut self, card: super::model::RollCard) {
+        self.show_roll_card_for(card, ROLL_CARD_SECONDS);
+    }
+
+    /// Opens a committed card after its die has settled, with a bounded readable hold.
+    pub fn show_roll_card_for(&mut self, card: super::model::RollCard, hold_s: f32) {
+        self.attack_card_owned = false;
         if self.finishing_ahead()
             || self.celebration.is_some()
             || self.rig.is_panning()
             || self.camera_move_ahead()
             || self.move_ahead()
         {
-            self.pending_roll_card = Some((card, 0.0));
+            self.pending_roll_card = Some((card, hold_s.clamp(0.5, 4.0), 0.0));
         } else {
             self.pending_roll_card = None;
             self.hud.roll_card = Some(card);
-            self.roll_card_left_s = ROLL_CARD_SECONDS;
+            self.roll_card_left_s = hold_s.clamp(0.5, 4.0);
         }
+    }
+
+    /// The dice presenter already waited for its face dwell; do not defer this committed card
+    /// behind another camera cue. The presentation owner closes it at its read deadline.
+    pub fn open_attack_card(&mut self, card: super::model::RollCard) {
+        self.attack_card_owned = true;
+        self.pending_roll_card = None;
+        self.hud.roll_card = Some(card);
+        self.roll_card_left_s = 4.0;
+    }
+
+    /// Ends the current owned attack presentation, including a queued card.
+    pub fn close_attack_card(&mut self) {
+        self.attack_card_owned = false;
+        self.pending_roll_card = None;
+        self.hud.roll_card = None;
+        self.roll_card_left_s = 0.0;
     }
 
     /// A line is spoken by the figure called `speaker_name`: a bubble opens over it and the camera
@@ -882,6 +919,11 @@ impl Stage {
         self.dropped_beats
     }
 
+    /// Melee beats whose figures were more than one cell apart when staged.
+    pub fn melee_out_of_reach(&self) -> u32 {
+        self.melee_out_of_reach
+    }
+
     pub fn is_busy(&self) -> bool {
         self.playing.is_some()
             || !self.queue.is_empty()
@@ -894,11 +936,49 @@ impl Stage {
         self.tokens.iter().map(|runtime| &runtime.token)
     }
 
+    /// The effective home, including a display-only development override.
+    pub fn home_pose(&self) -> CameraPose {
+        self.home_override.unwrap_or(self.scene.home)
+    }
+
+    /// The actual rendered pose is used, including any camera feel.
+    pub fn camera_at_home(&self) -> bool {
+        self.frame().camera.is_at_home(&self.home_pose())
+    }
+
+    /// Replaces the home for this display and starts the 900 ms return immediately.
+    pub fn set_home_override(
+        &mut self,
+        pose: Option<CameraPose>,
+    ) -> Result<(), super::camera::PoseError> {
+        if let Some(pose) = pose {
+            pose.validate()?;
+        }
+        self.home_override = pose;
+        self.dev_shot = None;
+        self.return_home();
+        Ok(())
+    }
+
+    /// Holds a named development shot until another camera command or reset.
+    pub fn set_camera_shot(&mut self, shot: ShotName) {
+        self.dev_shot = Some(shot);
+        if let Some(pose) = self.scene.cameras.get(&shot) {
+            self.rig.cut_to(*pose);
+        }
+    }
+
+    fn return_home(&mut self) {
+        let pose = self.home_pose();
+        self.rest_pose = Some(pose);
+        self.rig.pan_to(pose, Duration::from_millis(900));
+    }
+
     pub fn camera_pose(&self) -> CameraPose {
         self.rig.pose()
     }
 
-    /// Which shot the camera is holding, for a harness: `wide` is the solved resting shot, `action`
+    /// Which shot the camera is holding, for a harness: `wide` is the resting home shot, `action`
     /// anything else (a lean at the start of a turn, a strike, a speaker, a finishing blow).
     pub fn camera_label(&self) -> &'static str {
         if self.rest_pose.is_some() {
@@ -931,7 +1011,6 @@ impl Stage {
         }
     }
 
-    /// Opens on the wide tactical shot and eases to the combat establishing shot.
     /// Cuts straight to `pose` (used by the preview to look at a scene from any angle).
     pub fn set_camera_pose(&mut self, pose: CameraPose) {
         self.rig.cut_to(pose);
@@ -1105,9 +1184,11 @@ impl Stage {
         self.celebration = None;
         self.pending_roll_card = None;
         self.pending_prompt = None;
+        self.attack_card_owned = false;
         self.hud.roll_card = None;
         self.floats.clear();
         self.projectiles.clear();
+        self.techniques.clear();
         for runtime in &mut self.tokens {
             runtime.hp_hold_s = None;
             runtime.walk = None;
@@ -1134,7 +1215,42 @@ impl Stage {
     /// Queues a beat with the round in which the server resolved it.
     pub fn stage_in_round(&mut self, beat: Beat, round: u32) -> Result<(), StageError> {
         let known = |id: &TokenId| self.tokens.iter().any(|runtime| &runtime.token.id == id);
+        // Validate bounds before accepting an entire sequence; never partially stage a malformed
+        // spell or silently drop one of its targets.
+        let token_models: Vec<_> = self
+            .tokens
+            .iter()
+            .map(|runtime| runtime.token.clone())
+            .collect();
+        if matches!(
+            director::plan(&self.grid, &token_models, &beat),
+            Err(PlanError::InvalidTechnique)
+        ) {
+            return Err(StageError::InvalidTechnique);
+        }
         let missing = match &beat {
+            Beat::Flurry {
+                attacker, strikes, ..
+            } => std::iter::once(attacker)
+                .chain(strikes.iter().map(|strike| &strike.target))
+                .find(|id| !known(id))
+                .cloned(),
+            Beat::Missiles { caster, darts } => std::iter::once(caster)
+                .chain(darts.iter().map(|dart| &dart.target))
+                .find(|id| !known(id))
+                .cloned(),
+            Beat::AreaEffect {
+                caster, targets, ..
+            } => std::iter::once(caster)
+                .chain(targets.iter().map(|target| &target.target))
+                .find(|id| !known(id))
+                .cloned(),
+            Beat::Shield {
+                attacker, defender, ..
+            } => [attacker, defender]
+                .into_iter()
+                .find(|id| !known(id))
+                .cloned(),
             Beat::TurnStart { actor } => (!known(actor)).then(|| actor.clone()),
             Beat::Attack {
                 attacker, target, ..
@@ -1247,7 +1363,9 @@ impl Stage {
                     });
                     return;
                 }
-                Err(PlanError::UnknownToken(_)) => self.dropped_beats += 1,
+                Err(PlanError::UnknownToken(_) | PlanError::InvalidTechnique) => {
+                    self.dropped_beats += 1
+                }
             }
         }
     }
@@ -1354,6 +1472,11 @@ impl Stage {
             badge.age_s += dt;
         }
         self.update_facing();
+        for effect in &mut self.techniques {
+            effect.age_s += dt;
+        }
+        self.techniques
+            .retain(|effect| effect.age_s < effect.cue.duration.as_secs_f32());
         for projectile in &mut self.projectiles {
             projectile.age_s += dt;
         }
@@ -1366,22 +1489,23 @@ impl Stage {
                 };
             projectile.age_s < life
         });
-        if let Some((card, waited)) = self.pending_roll_card.take() {
+        if let Some((card, hold_s, waited)) = self.pending_roll_card.take() {
             // Movement and finishing holds do not spend the camera's settle allowance.
             if self.move_ahead() || self.finishing_ahead() || self.celebration.is_some() {
-                self.pending_roll_card = Some((card, 0.0));
+                self.pending_roll_card = Some((card, hold_s, 0.0));
             } else if (self.rig.is_panning() || self.camera_move_ahead())
                 && waited < ROLL_CARD_MAX_WAIT_S
             {
-                self.pending_roll_card = Some((card, waited + real_dt));
+                self.pending_roll_card = Some((card, hold_s, waited + real_dt));
             } else {
                 self.hud.roll_card = Some(card);
-                self.roll_card_left_s = ROLL_CARD_SECONDS;
+                self.roll_card_left_s = hold_s;
             }
         }
         if self.roll_card_left_s > 0.0 {
             self.roll_card_left_s -= dt;
             if self.roll_card_left_s <= 0.0 {
+                self.attack_card_owned = false;
                 self.hud.roll_card = None;
             }
         }
@@ -1468,6 +1592,9 @@ impl Stage {
         {
             self.playing = None;
             self.initiative_playing = false;
+            if self.queue.is_empty() && self.celebration.is_none() && self.dev_shot.is_none() {
+                self.return_home();
+            }
             self.start_next();
         } else {
             self.playing = Some(playback);
@@ -1562,83 +1689,73 @@ impl Stage {
         self.last_angles = Some((pose.yaw_deg, pose.pitch_deg));
     }
 
-    /// The resting shot: solved from everyone alive, the cells the server says can be reached or
-    /// targeted, and the scene's own wide shot as a hint (see `rest_shot`).
+    /// The stable, clip-authoring home angle held between beats.
     fn wide_pose(&self) -> Option<CameraPose> {
-        let hint = *self.scene.cameras.get(&ShotName::Tactical)?;
-        let mut bodies: Vec<Body> = self
+        if !self.playing_move {
+            return Some(self.home_pose());
+        }
+        // A walk may leave the clip-authoring home frame. Its beat gets a fitted wide shot,
+        // then returns home; the camera must contain the whole server-provided walk area.
+        let bodies: Vec<_> = self
             .tokens
             .iter()
-            .filter(|runtime| !runtime.downed)
             .map(|runtime| Body {
                 feet: runtime.position,
                 height_m: runtime.token.clamped_height(),
             })
             .collect();
-        if bodies.is_empty() {
-            bodies = self
-                .tokens
-                .iter()
-                .map(|runtime| Body {
-                    feet: runtime.position,
-                    height_m: runtime.token.clamped_height(),
-                })
-                .collect();
-        }
-        if bodies.is_empty() {
-            return Some(hint);
-        }
-        let mut ground = Vec::new();
-        for highlight in &self.tactical_highlights {
-            for cell in &highlight.cells {
-                ground.extend(rest_shot::cell_corners(
-                    self.grid.cell_centre(*cell),
-                    self.grid.cell_m(),
-                ));
-            }
-        }
-        // Where the figures stand, a cell each: a fight with nothing to reach still shows its place.
-        for body in &bodies {
-            ground.extend(rest_shot::cell_corners(body.feet, self.grid.cell_m()));
-        }
-        Some(rest_shot::rest_pose(&rest_shot::RestInput {
+        let ground: Vec<_> = self
+            .grid
+            .walkable_cells()
+            .flat_map(|cell| {
+                super::rest_shot::cell_corners(self.grid.cell_centre(cell), self.grid.cell_m())
+            })
+            .collect();
+        Some(super::rest_shot::rest_pose(&super::rest_shot::RestInput {
             bodies: &bodies,
             ground: &ground,
-            hint: &hint,
-            previous_yaw: Some(self.rig.pose().yaw_deg),
+            hint: &self.home_pose(),
+            previous_yaw: Some(self.home_pose().yaw_deg),
             occupancy: self.scene.occupancy.as_ref(),
             aspect: framing::FRAMED_ASPECT,
         }))
     }
 
-    /// Eases the camera to a refitted resting shot when what it depends on changed and it is the
-    /// shot being held, if the new one is noticeably different.
     fn refit_rest(&mut self) {
         self.rest_dirty = false;
-        let Some(held) = self.rest_pose else {
+        if self.dev_shot.is_some() {
             return;
-        };
+        }
         if self.speech.is_some() {
             self.rest_dirty = true;
             return;
         }
-        let Some(fresh) = self.wide_pose() else {
-            return;
-        };
-        let moved = (fresh.target - held.target).length();
-        let changed = moved > REFIT_TARGET_M
-            || (fresh.distance / held.distance - 1.0).abs() > REFIT_DISTANCE_SHARE
-            || framing::wrap_deg(fresh.yaw_deg - held.yaw_deg).abs() > REFIT_YAW_DEG;
-        if changed {
-            self.rest_pose = Some(fresh);
-            self.rig.pan_to(fresh, Duration::from_secs_f32(REFIT_PAN_S));
+        if self.rig.pose() != self.home_pose() || self.rig.is_panning() {
+            self.return_home();
         }
     }
 
     /// The pose for a camera command, and whether reaching it is a cut (a swing too big to pan).
     fn camera_pose_for(&self, command: &CameraCommand) -> Option<(CameraPose, bool)> {
+        if self.dev_shot.is_some() {
+            return None;
+        }
         match &command.focus {
-            CameraFocus::Wide => return Some((self.wide_pose()?.dollied(command.dolly), false)),
+            CameraFocus::Wide => {
+                let pose = self.wide_pose()?.dollied(command.dolly);
+                let cut = self.playing_move
+                    && self.tokens.iter().any(|runtime| {
+                        !framing::in_safe_area(
+                            &self.rig.pose(),
+                            framing::FRAMED_ASPECT,
+                            &Body {
+                                feet: runtime.position,
+                                height_m: runtime.token.clamped_height(),
+                            },
+                        )
+                    });
+                return Some((pose, cut));
+            }
             CameraFocus::Lean(id) => {
                 let chest = self.focus_point(&CameraFocus::Token(id.clone()))?;
                 return Some((
@@ -1688,11 +1805,7 @@ impl Stage {
                     height_m: runtime.token.clamped_height(),
                 })
                 .collect();
-            let home_yaw = self
-                .scene
-                .cameras
-                .get(&ShotName::Tactical)
-                .map(|pose| pose.yaw_deg);
+            let home_yaw = Some(self.home_pose().yaw_deg);
             let shot = self.scene.occupancy.as_ref().map_or_else(
                 || {
                     Some(framing::action_shot_from_with_dolly(
@@ -1791,7 +1904,7 @@ impl Stage {
         match step {
             Step::SetActive(active) => {
                 // The card of an earlier creature's attack does not stay over the next turn.
-                if active != self.hud.active {
+                if active != self.hud.active && !self.attack_card_owned {
                     self.hud.roll_card = None;
                 }
                 self.hud.active = active;
@@ -1922,8 +2035,10 @@ impl Stage {
                 }
             }
             Step::FinishingBlow { hero, enemy } => {
-                self.hud.roll_card = None;
-                self.roll_card_left_s = 0.0;
+                if !self.attack_card_owned {
+                    self.hud.roll_card = None;
+                    self.roll_card_left_s = 0.0;
+                }
                 let name = |id: &TokenId| {
                     self.token_index(id)
                         .map(|index| self.tokens[index].token.name.clone())
@@ -2013,19 +2128,58 @@ impl Stage {
                 let rate = if last { 0.8 } else { 0.9 + 0.13 * index as f32 };
                 self.emit_at_rate(kind, &token, rate);
             }
+            Step::PresentationDice(dice) => self.hud.presentation_dice = dice,
+            Step::CloseRollCard => self.close_attack_card(),
+            Step::RollCard(card) => {
+                self.attack_card_owned = false;
+                // The director schedules this after framing has settled, with a full read hold.
+                self.pending_roll_card = None;
+                self.hud.roll_card = Some(card);
+                self.roll_card_left_s = ROLL_CARD_SECONDS;
+            }
+            Step::Technique(cue) => {
+                let point = |anchor: &EffectAnchor| match anchor {
+                    EffectAnchor::Cell(cell) => Some(self.grid.cell_centre(*cell) + Vec3::UP * 0.7),
+                    EffectAnchor::Token(id) => self.token_index(id).map(|index| {
+                        let runtime = &self.tokens[index];
+                        runtime.position + Vec3::UP * (runtime.token.clamped_height() * 0.58)
+                    }),
+                };
+                if let (Some(from), Some(to)) = (point(&cue.from), point(&cue.to)) {
+                    if self.techniques.len() == techniques::MAX_EFFECTS {
+                        self.techniques.remove(0);
+                    }
+                    self.techniques.push(ActiveEffect {
+                        cue,
+                        from,
+                        to,
+                        age_s: 0.0,
+                    });
+                }
+            }
             Step::Target(target) => self.target = target,
             Step::Projectile {
                 from,
                 to,
                 hits,
                 flight,
-            } => self.launch(&from, &to, hits, flight),
+                kind,
+            } => self.launch(&from, &to, hits, flight, kind),
+            Step::MeleeOutOfReach { .. } => self.melee_out_of_reach += 1,
         }
     }
 
-    /// Looses an arrow from `from` toward `to`. A miss flies on past the target and sticks in
-    /// the ground behind it.
-    fn launch(&mut self, from: &TokenId, to: &TokenId, hits: bool, flight: Duration) {
+    /// Looses a projectile from `from` toward `to`. An arrow miss flies on past the
+    /// target and sticks in the ground behind it; a thrown weapon that misses
+    /// falls short and lands in front of the target.
+    fn launch(
+        &mut self,
+        from: &TokenId,
+        to: &TokenId,
+        hits: bool,
+        flight: Duration,
+        kind: super::model::ProjectileKind,
+    ) {
         let (Some(archer), Some(mark)) = (self.token_index(from), self.token_index(to)) else {
             return;
         };
@@ -2037,6 +2191,8 @@ impl Stage {
         let chest = mark.position + Vec3::new(0.0, mark.token.clamped_height() * 0.55, 0.0);
         let end = if hits {
             chest
+        } else if kind == super::model::ProjectileKind::ThrownWeapon {
+            mark.position - heading * 0.9 + Vec3::new(0.0, 0.12, 0.0)
         } else {
             mark.position + heading * 2.4 + Vec3::new(0.0, 0.12, 0.0)
         };
@@ -2046,6 +2202,7 @@ impl Stage {
             hits,
             flight_s: flight.as_secs_f32().max(0.05),
             age_s: 0.0,
+            kind,
         });
     }
 
@@ -2266,6 +2423,7 @@ impl Stage {
         let other = match &anim {
             Anim::Lunge { toward: other }
             | Anim::Draw { toward: other }
+            | Anim::Throw { toward: other }
             | Anim::Recoil { from: other }
             | Anim::Dodge { from: other } => self
                 .token_index(other)
@@ -2273,7 +2431,9 @@ impl Stage {
             Anim::Fall | Anim::Heal | Anim::Ready { .. } => None,
         };
         let direction = match (&anim, other) {
-            (Anim::Lunge { .. } | Anim::Draw { .. }, Some(other)) => flat_direction(here, other),
+            (Anim::Lunge { .. } | Anim::Draw { .. } | Anim::Throw { .. }, Some(other)) => {
+                flat_direction(here, other)
+            }
             (Anim::Ready { .. }, _) => {
                 // Facing the other side: heroes stand near the camera, enemies far.
                 if self.tokens[index].token.side == Side::Enemy {
@@ -2332,7 +2492,7 @@ impl Stage {
         };
         let mut camera = self.rig.pose();
         let mut roll_deg = view.shake_roll_deg;
-        if self.feel_enabled {
+        if self.feel_enabled && self.is_busy() {
             // The living camera: a slow handheld sway whenever it is otherwise still (less while
             // it moves), plus the slow orbit drift on a wide shot.
             let sway = feel::sway(
@@ -2346,7 +2506,11 @@ impl Stage {
             roll_deg += sway.roll_deg * calm;
         }
         let rig_shake = self.rig.shake_offset_px();
+        let techniques: Vec<_> = self.techniques.iter().map(ActiveEffect::view).collect();
+        let fire_light = techniques::fire_light(&techniques);
         FrameView {
+            techniques,
+            fire_light,
             show_grid: self.show_grid,
             camera,
             roll_deg,
@@ -2480,6 +2644,18 @@ impl Stage {
                         position = position - active.direction * (0.08 * arc);
                     }
                 },
+                Anim::Throw { .. } => {
+                    // In place: lean back on the wind-up, snap forward on release.
+                    // The figure's feet never move toward the target.
+                    let release = director::THROW_RELEASE.as_secs_f32() / duration;
+                    let pull = if progress < release {
+                        ease_in_out(progress / release)
+                    } else {
+                        -0.3 * (1.0 - (progress - release) / (1.0 - release))
+                    };
+                    lean = -0.15 * pull * active.direction.x.signum();
+                    position.y += 0.04 * arc;
+                }
                 Anim::Draw { .. } => {
                     // Lean back while the string comes to the ear, then snap forward on release.
                     let release = director::DRAW_RELEASE.as_secs_f32() / duration;
@@ -2675,7 +2851,12 @@ fn fall_slump(progress: f32) -> f32 {
 
 fn arrow_at(projectile: &Projectile, t: f32) -> Vec3 {
     let travel = projectile.to - projectile.from;
-    let height = (0.2 + 0.05 * travel.length()) * 4.0 * t * (1.0 - t);
+    // Thrown weapons lob higher than arrows on the same span.
+    let loft = match projectile.kind {
+        super::model::ProjectileKind::ThrownWeapon => 0.38 + 0.07 * travel.length(),
+        super::model::ProjectileKind::Arrow => 0.2 + 0.05 * travel.length(),
+    };
+    let height = loft * 4.0 * t * (1.0 - t);
     projectile.from + travel * t + Vec3::new(0.0, height, 0.0)
 }
 
@@ -2688,7 +2869,11 @@ fn projectile_view(projectile: &Projectile) -> ProjectileView {
     } else {
         tangent
     };
-    let tail = head - tangent * 0.85;
+    let length = match projectile.kind {
+        super::model::ProjectileKind::ThrownWeapon => 0.62,
+        super::model::ProjectileKind::Arrow => 0.85,
+    };
+    let tail = head - tangent * length;
     let trail = arrow_at(projectile, (t - 0.28).max(0.0));
     let stuck_for = (projectile.age_s - projectile.flight_s).max(0.0);
     let alpha = if projectile.hits {
@@ -2701,6 +2886,7 @@ fn projectile_view(projectile: &Projectile) -> ProjectileView {
         tail,
         trail: if stuck_for > 0.0 { tail } else { trail },
         alpha,
+        kind: projectile.kind,
     }
 }
 
@@ -2919,6 +3105,21 @@ mod tests {
             verdict: "HIT".to_owned(),
             tone: "hit".to_owned(),
         }
+    }
+
+    #[test]
+    fn live_attack_card_keeps_its_read_hold_through_finishing_and_turn_cues() {
+        let mut stage = stage();
+        stage.open_attack_card(roll_card("12"));
+        stage.apply(Step::SetActive(Some(TokenId::new("hero"))));
+        stage.apply(Step::FinishingBlow {
+            hero: TokenId::new("hero"),
+            enemy: TokenId::new("enemy"),
+        });
+        run(&mut stage, 2.5);
+        assert_eq!(stage.hud().roll_card.as_ref().unwrap().value, "12");
+        stage.close_attack_card();
+        assert!(stage.hud().roll_card.is_none());
     }
 
     #[test]
@@ -3258,6 +3459,12 @@ mod tests {
     #[test]
     fn a_downing_blow_plays_through_walk_impact_fall_and_the_finishing_card() {
         let mut stage = stage();
+        // Melee lunges only between adjacent figures: stand the enemy beside the hero.
+        stage.set_tokens(vec![
+            token("hero", Side::Hero, Cell::new(3, 4), 12),
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 4), 5),
+        ]);
         stage.stage(killing_blow()).unwrap();
         let mut saw_walk_away_from_cell = false;
         let mut saw_float = false;
@@ -3844,8 +4051,9 @@ mod tests {
             }
         }
         let flight_ms = in_flight * 20;
+        // Distance-scaled: ~4.7 m at 30 m/s, not the old fixed 400 ms.
         assert!(
-            (340..=500).contains(&flight_ms),
+            (100..=300).contains(&flight_ms),
             "{flight_ms} ms in the air"
         );
         let peak = heights.iter().copied().fold(f32::MIN, f32::max);
@@ -3886,6 +4094,114 @@ mod tests {
             "past the target, away from the archer"
         );
         assert!(stage.frame().projectiles.is_empty(), "then gone");
+    }
+
+    #[test]
+    fn a_thrown_weapon_flies_from_the_hand_and_the_thrower_never_steps_toward_the_target() {
+        let mut stage = stage();
+        let mut thrower = token("hero", Side::Hero, Cell::new(3, 4), 12);
+        thrower.attack = crate::battle::model::AttackStyle::Thrown;
+        stage.set_tokens(vec![
+            thrower,
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 3,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(2),
+            })
+            .unwrap();
+        let home = stage.grid().cell_centre(Cell::new(3, 4));
+        let mut saw_thrown = false;
+        for _ in 0..200 {
+            stage.update(Duration::from_millis(20));
+            if let Some(projectile) = stage.frame().projectiles.first() {
+                assert_eq!(
+                    projectile.kind,
+                    crate::battle::model::ProjectileKind::ThrownWeapon
+                );
+                saw_thrown = true;
+            }
+            let hero = figure(&stage, "hero");
+            assert!(
+                (hero.position - home).length() < 0.05,
+                "thrower stays in place: {:?} vs {home:?}",
+                hero.position
+            );
+        }
+        assert!(saw_thrown, "the thrown weapon itself flew");
+        assert_eq!(stage.melee_out_of_reach(), 0);
+    }
+
+    #[test]
+    fn a_thrown_miss_falls_short_and_lands_in_front_of_the_target() {
+        let mut stage = stage();
+        let mut thrower = token("hero", Side::Hero, Cell::new(3, 4), 12);
+        thrower.attack = crate::battle::model::AttackStyle::Thrown;
+        stage.set_tokens(vec![
+            thrower,
+            token("ally", Side::Hero, Cell::new(5, 4), 12),
+            token("enemy", Side::Enemy, Cell::new(4, 1), 5),
+        ]);
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            })
+            .unwrap();
+        let target = stage.grid().cell_centre(Cell::new(4, 1));
+        let thrower_pos = stage.grid().cell_centre(Cell::new(3, 4));
+        let mut stuck = None;
+        for _ in 0..300 {
+            stage.update(Duration::from_millis(20));
+            if let Some(projectile) = stage.frame().projectiles.first()
+                && projectile.trail == projectile.tail
+            {
+                stuck = Some(*projectile);
+            }
+        }
+        let landed = stuck.expect("the thrown weapon landed visibly");
+        assert!(landed.head.y < 0.3, "in the ground");
+        // Short of the target: between thrower and target, not past it.
+        assert!(
+            landed.head.z > target.z && landed.head.z < thrower_pos.z,
+            "falls short: head {:?} target {target:?} thrower {thrower_pos:?}",
+            landed.head
+        );
+    }
+
+    #[test]
+    fn a_melee_beat_across_a_gap_is_counted_and_moves_nobody_toward_the_target() {
+        let mut stage = stage();
+        // Default fixture: hero (3,4), enemy (4,1) — three cells apart.
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Hit {
+                    damage: 2,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(3),
+            })
+            .unwrap();
+        run(&mut stage, 3.0);
+        assert_eq!(stage.melee_out_of_reach(), 1);
+        let hero = figure(&stage, "hero");
+        assert!(
+            (hero.position - stage.grid().cell_centre(Cell::new(3, 4))).length() < 0.05,
+            "no lunge across the gap"
+        );
     }
 
     #[test]
@@ -4682,39 +4998,18 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_lives_while_it_waits_and_follows_the_tempo() {
-        let sampled = |tempo: u16| {
+    fn camera_home_is_still_between_beats_at_every_tempo() {
+        for tempo in [0, 1000] {
             let mut stage = stage();
             stage.set_tempo_intensity(tempo);
-            let mut yaws = Vec::new();
-            for _ in 0..(30 * 30) {
+            run(&mut stage, 2.0);
+            let first = stage.frame().camera;
+            for _ in 0..120 {
                 frame_step(&mut stage);
-                yaws.push(stage.frame().camera.yaw_deg);
             }
-            yaws
-        };
-        let calm = sampled(0);
-        let peak = sampled(1000);
-        let spread = |values: &[f32]| {
-            values.iter().cloned().fold(f32::MIN, f32::max)
-                - values.iter().cloned().fold(f32::MAX, f32::min)
-        };
-        assert!(
-            spread(&calm) > 0.2,
-            "it drifts when calm: {}",
-            spread(&calm)
-        );
-        // Two frames a second apart differ: the idle camera is alive.
-        assert!((calm[60] - calm[90]).abs() > 1e-3);
-        assert!(peak != calm);
-        // With effects off the camera is dead still, as before.
-        let mut off = stage();
-        off.set_feel_enabled(false);
-        let first = off.frame().camera;
-        for _ in 0..120 {
-            frame_step(&mut off);
+            assert_eq!(stage.frame().camera, first);
+            assert_eq!(first, stage.home_pose());
         }
-        assert_eq!(off.frame().camera, first);
     }
 
     /// The riverbed defect: the enemy attacks a hero while a bystander stands elsewhere, and the
@@ -5903,12 +6198,11 @@ mod tests {
     }
 
     #[test]
-    fn the_camera_rests_on_a_wide_shot_that_holds_everyone_clear_of_the_hud_on_every_scene() {
-        use crate::battle::rest_shot::{REST_AREA, hud_keep_outs, rects_overlap};
+    fn camera_home_holds_on_every_scene_after_turn_and_reach_updates() {
         let mut cases = 0;
         for id in crate::battle::embedded_ids() {
-            for (heroes, enemies) in [(1, 1), (4, 3), (6, 6)] {
-                let Some((mut stage, reachable)) = sized_stage(id, heroes, enemies) else {
+            for (heroes, enemies) in [(1, 1), (2, 3), (4, 4), (6, 6)] {
+                let Some((mut stage, _)) = sized_stage(id, heroes, enemies) else {
                     continue;
                 };
                 stage
@@ -5917,44 +6211,12 @@ mod tests {
                     })
                     .unwrap();
                 run(&mut stage, 4.0);
-                let pose = stage.rig.pose();
-                let keep_outs = hud_keep_outs(heroes, enemies);
-                let inside = |rect: (f32, f32, f32, f32), area: (f32, f32, f32, f32)| {
-                    rect.0 >= area.0 && rect.1 >= area.1 && rect.2 <= area.2 && rect.3 <= area.3
-                };
-                for figure in stage.frame().figures {
-                    let body = framing::Body {
-                        feet: figure.position,
-                        height_m: figure.height_m,
-                    };
-                    let rect = framing::project_body(&pose, framing::FRAMED_ASPECT, &body)
-                        .unwrap_or_else(|| panic!("{id} {heroes}v{enemies}: behind the camera"));
-                    assert!(
-                        inside(rect, framing::SAFE_AREA) && inside(rect, REST_AREA),
-                        "{id} {heroes}v{enemies}: {} at {rect:?}",
-                        figure.id.0
-                    );
-                    for keep_out in &keep_outs {
-                        assert!(
-                            !rects_overlap(rect, *keep_out),
-                            "{id} {heroes}v{enemies}: {} {rect:?} under {keep_out:?}",
-                            figure.id.0
-                        );
-                    }
-                }
-                for cell in &reachable {
-                    for corner in crate::battle::rest_shot::cell_corners(
-                        stage.grid().cell_centre(*cell),
-                        stage.grid().cell_m(),
-                    ) {
-                        let (x, y) =
-                            framing::project_point(&pose, framing::FRAMED_ASPECT, corner).unwrap();
-                        assert!(
-                            (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y),
-                            "{id} {heroes}v{enemies}: a reachable cell leaves the frame"
-                        );
-                    }
-                }
+                assert_eq!(
+                    stage.rig.pose(),
+                    stage.home_pose(),
+                    "{id} {heroes}v{enemies}"
+                );
+                assert!(stage.camera_at_home());
                 cases += 1;
             }
         }
@@ -5962,25 +6224,65 @@ mod tests {
     }
 
     #[test]
-    fn a_move_keeps_the_wide_shot_and_refits_when_the_reachable_cells_change() {
+    fn camera_home_does_not_change_when_reachable_cells_change() {
         let (mut stage, _) = sized_stage("scan-village", 2, 3).unwrap();
         run(&mut stage, 2.0);
-        stage
-            .stage(Beat::TurnStart {
-                actor: TokenId::new("hero0"),
-            })
-            .unwrap();
-        run(&mut stage, 3.0);
         let before = stage.rig.pose();
-        // The server now offers only a couple of cells: the held region shrinks, the camera follows.
         stage.set_tactical_highlights(vec![Cell::new(2, 3)], vec![Cell::new(2, 2)]);
         run(&mut stage, 2.5);
-        let after = stage.rig.pose();
-        assert!(after.pitch_deg >= 33.0 && before.pitch_deg >= 33.0);
-        assert!(
-            (after.distance - before.distance).abs() > 1e-3
-                || (after.target - before.target).length() > 1e-3,
-            "{before:?} {after:?}"
-        );
+        assert_eq!(stage.rig.pose(), before);
+        assert_eq!(before, stage.home_pose());
+    }
+
+    #[test]
+    fn camera_home_returns_within_900_ms_after_attack_and_holds() {
+        let mut stage = stage();
+        stage.set_feel_enabled(false);
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            })
+            .unwrap();
+        let mut left_home = false;
+        for _ in 0..400 {
+            stage.update(Duration::from_millis(50));
+            left_home |= !stage.camera_at_home();
+            if !stage.is_busy() {
+                break;
+            }
+        }
+        assert!(!stage.is_busy(), "attack must finish within 20 seconds");
+        assert!(left_home, "the attack must actually leave home");
+        for _ in 0..18 {
+            stage.update(Duration::from_millis(50));
+        }
+        assert_eq!(stage.rig.pose(), stage.home_pose());
+        assert!(stage.camera_at_home());
+        run(&mut stage, 5.0);
+        assert_eq!(stage.rig.pose(), stage.home_pose());
+    }
+
+    #[test]
+    fn camera_home_override_eases_immediately_and_reset_restores_authored_home() {
+        let mut stage = stage();
+        let authored = stage.scene().home;
+        let chosen = CameraPose {
+            yaw_deg: authored.yaw_deg + 30.0,
+            pitch_deg: 18.0,
+            ..authored
+        };
+        stage.set_home_override(Some(chosen)).unwrap();
+        run(&mut stage, 0.45);
+        assert_ne!(stage.rig.pose(), authored);
+        run(&mut stage, 0.5);
+        assert_eq!(stage.rig.pose(), chosen);
+        stage.set_camera_shot(ShotName::Impact);
+        assert_eq!(stage.rig.pose(), stage.scene().cameras[&ShotName::Impact]);
+        stage.set_home_override(None).unwrap();
+        run(&mut stage, 1.0);
+        assert_eq!(stage.rig.pose(), authored);
     }
 }

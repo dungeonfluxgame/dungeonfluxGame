@@ -8,8 +8,262 @@
 //! Clip files and the resting-face geometry come from the `dice-rolls.json` manifest the
 //! server routes (see `gameplay::startup_configuration::load_dice_assets`); clip choice is
 //! a hash of the server's own numbers, so a replay shows the same clip.
-#[cfg(test)]
+use df_observe::presentation::{ComponentPhase, PresentationComponent};
 use df_protocol::common as rpc;
+
+/// The live cue reads the accepted view, which can precede the battlefield redraw/cache.
+pub(crate) fn live_attack(combat: &rpc::CombatView, sequence: u64) -> Option<&rpc::CombatOutcome> {
+    combat.outcomes.iter().find(|outcome| {
+        sequence != 0
+            && outcome.sequence == sequence
+            && matches!(
+                rpc::OutcomeKind::try_from(outcome.kind),
+                Ok(rpc::OutcomeKind::Attack
+                    | rpc::OutcomeKind::OpportunityAttack
+                    | rpc::OutcomeKind::Unspecified)
+            )
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AttackDisplayAction {
+    OpenDie,
+    SettleDie,
+    OpenCard,
+    ReadCard,
+    OpenDamage,
+    SettleDamage,
+    Close,
+    Hide,
+}
+
+impl AttackDisplayAction {
+    pub(crate) fn records(
+        self,
+        damage_dice: bool,
+    ) -> Vec<(PresentationComponent, ComponentPhase, &'static str)> {
+        use AttackDisplayAction::*;
+        use ComponentPhase::*;
+        use PresentationComponent::{Dice, Die, RollCard};
+        match self {
+            OpenDie => vec![(Die, Opened, "attack-rolled")],
+            SettleDie => vec![(Die, Readable, "attack-settled")],
+            OpenCard => vec![(RollCard, Opened, "face-dwell-complete")],
+            ReadCard => vec![(RollCard, Readable, "attack-breakdown")],
+            OpenDamage => vec![(Dice, Opened, "damage-rolled")],
+            SettleDamage => vec![(Dice, Readable, "damage-settled")],
+            Close | Hide => {
+                let (phase, die, card, damage) = if self == Close {
+                    (
+                        Closing,
+                        "attack-clearing",
+                        "read-complete",
+                        "damage-clearing",
+                    )
+                } else {
+                    (Hidden, "attack-cleared", "card-closed", "damage-cleared")
+                };
+                let mut records = vec![(Die, phase, die), (RollCard, phase, card)];
+                if damage_dice {
+                    records.push((Dice, phase, damage));
+                }
+                records
+            }
+        }
+    }
+}
+
+/// Executed by the browser's ordinary attack presenter and by native committed-outcome tests.
+/// Times are offsets from opening the die; all values and cards come from the server outcome.
+pub(crate) struct AttackDisplay {
+    pub(crate) play: DicePlay,
+    pub(crate) damage_faces: Vec<u32>,
+    pub(crate) attack_card: df_render::battle::RollCard,
+    pub(crate) damage_card: df_render::battle::RollCard,
+    pub(crate) timing: AttackTiming,
+}
+
+impl AttackDisplay {
+    pub(crate) fn new(outcome: &rpc::CombatOutcome) -> Option<Self> {
+        let play = play_of(outcome.attack_die, &outcome.faces, outcome.roll_mode)?;
+        let damage_faces = if !outcome.hit && !outcome.grazed {
+            Vec::new()
+        } else if outcome.damage_rolls.is_empty() {
+            outcome.damage_dice.clone()
+        } else {
+            outcome
+                .damage_rolls
+                .iter()
+                .filter(|roll| roll.kept)
+                .flat_map(|roll| roll.dice.iter().copied())
+                .collect()
+        };
+        Some(Self {
+            play,
+            timing: attack_timing(outcome.hit || outcome.grazed, !damage_faces.is_empty()),
+            damage_faces,
+            attack_card: committed_roll_card(outcome, false),
+            damage_card: committed_roll_card(outcome, true),
+        })
+    }
+
+    pub(crate) fn steps(&self) -> Vec<(u64, AttackDisplayAction)> {
+        use AttackDisplayAction::*;
+        let timing = self.timing;
+        let mut steps = vec![
+            (0, OpenDie),
+            (timing.settled_ms, SettleDie),
+            (timing.card_ms, OpenCard),
+        ];
+        if timing.damage_settled_ms.is_some() {
+            steps.push((timing.card_ms, OpenDamage));
+        }
+        steps.push((timing.card_ms + 350, ReadCard));
+        if let Some(at) = timing.damage_settled_ms {
+            steps.push((at, SettleDamage));
+        }
+        steps.extend([(timing.closing_ms, Close), (timing.hidden_ms, Hide)]);
+        steps.sort_by_key(|(at, _)| *at);
+        steps
+    }
+}
+
+pub(crate) fn committed_roll_card(
+    outcome: &rpc::CombatOutcome,
+    include_damage: bool,
+) -> df_render::battle::RollCard {
+    let faces = if outcome.faces.is_empty() {
+        outcome.attack_die.to_string()
+    } else {
+        outcome
+            .faces
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    let label = outcome
+        .display_metadata
+        .as_ref()
+        .map(|metadata| metadata.ability_name.clone())
+        .filter(|name| !name.is_empty())
+        .or_else(|| (!outcome.weapon.is_empty()).then(|| outcome.weapon.clone()))
+        .unwrap_or_else(|| "Attack".to_owned());
+    let metadata = outcome.display_metadata.as_ref();
+    let parts = metadata.map(|metadata| {
+        [
+            ("ability", metadata.ability_modifier),
+            ("proficiency", metadata.proficiency_modifier),
+            ("other", metadata.other_modifier),
+        ]
+    });
+    let bonus =
+        if let Some(parts) = parts.filter(|parts| parts.iter().all(|(_, value)| value.is_some())) {
+            parts
+                .iter()
+                .filter_map(|(name, value)| value.map(|value| format!(" {value:+} {name}")))
+                .collect::<String>()
+        } else {
+            format!(" {:+} bonus", outcome.attack_modifier)
+        };
+    let mut explanation = format!(
+        "{} d20 {}{} = {} vs {} AC {}",
+        outcome.actor_name,
+        faces,
+        bonus,
+        outcome.attack_total,
+        outcome.target_name,
+        outcome.target_armor_class
+    );
+    if let Some(metadata) = metadata {
+        if let Some(parts) = parts.filter(|parts| parts.iter().any(|(_, value)| value.is_none())) {
+            for (name, value) in parts {
+                if let Some(value) = value {
+                    explanation.push_str(&format!(" | {name} {value:+}"));
+                }
+            }
+        }
+        let attack_type = match metadata.attack_type {
+            1 => "melee",
+            2 => "ranged",
+            3 => "thrown",
+            _ => "",
+        };
+        if !attack_type.is_empty() {
+            explanation.push_str(&format!(" | {attack_type}"));
+        }
+        if let Some(mastery) = &metadata.mastery {
+            explanation.push_str(&format!(" | mastery: {mastery}"));
+        }
+    }
+    if !outcome.reasons.is_empty() {
+        explanation.push_str(&format!(" | {}", outcome.reasons.join("; ")));
+    }
+    if include_damage && (outcome.hit || outcome.grazed) {
+        let faces: Vec<_> = if outcome.damage_rolls.is_empty() {
+            outcome.damage_dice.clone()
+        } else {
+            outcome
+                .damage_rolls
+                .iter()
+                .filter(|roll| roll.kept)
+                .flat_map(|roll| roll.dice.iter().copied())
+                .collect()
+        };
+        let damage_faces = faces
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" + ");
+        explanation.push_str(&format!(
+            " | damage {} {:+} = {} {}",
+            damage_faces, outcome.damage_modifier, outcome.damage, outcome.damage_type
+        ));
+    }
+    let verdict = if outcome.hit && outcome.critical {
+        "CRITICAL HIT"
+    } else if outcome.hit {
+        "HIT"
+    } else if outcome.grazed {
+        "GRAZE"
+    } else if outcome.attack_die == 1 {
+        "FUMBLE"
+    } else {
+        "MISS"
+    };
+    df_render::battle::RollCard {
+        value: outcome.attack_total.to_string(),
+        label: format!(
+            "{} {} -> {}",
+            metadata
+                .and_then(|metadata| metadata.icon.as_deref())
+                .unwrap_or(""),
+            label,
+            outcome.target_name
+        ),
+        explanation,
+        verdict: verdict.to_owned(),
+        tone: if outcome.hit { "hit" } else { "miss" }.to_owned(),
+    }
+}
+
+/// A complete server technique owns its single dice seat. Partial/legacy metadata leaves the
+/// ordinary clip presenter in charge so an incomplete optional extension cannot hide a roll.
+pub(crate) fn technique_owns_roll(technique: &rpc::BattleTechnique) -> bool {
+    use rpc::BattleTechniqueKind;
+    let count = technique.strikes.len();
+    let supported = match BattleTechniqueKind::try_from(technique.kind) {
+        Ok(
+            BattleTechniqueKind::BattleTechniqueFireBolt
+            | BattleTechniqueKind::BattleTechniqueShield,
+        ) => count == 1,
+        Ok(BattleTechniqueKind::BattleTechniqueMagicMissile) => count == 3,
+        Ok(BattleTechniqueKind::BattleTechniqueFlurry) => (1..=4).contains(&count),
+        Ok(BattleTechniqueKind::BattleTechniqueFireball) => (1..=16).contains(&count),
+        _ => false,
+    };
+    supported && technique.strikes.iter().all(|strike| strike.roll.is_some())
+}
 
 /// The display's dice live under this path, extensionless like every other extra asset.
 pub(crate) const DICE_URL_PREFIX: &str = "/assets/ui/generated/dice/";
@@ -365,42 +619,60 @@ pub(crate) struct DiceTiming {
     pub(crate) clear_ms: u64,
 }
 
-const RESULT_READ_MS: u64 = 800;
-const DICE_FADE_MS: u64 = 320;
-const DAMAGE_ROLL_MS: u64 = 1_000;
-/// How long a fight's d20 stays on screen after it lands, so the roll card beside it is read
-/// with the die in view. A display that is catching up shortens this, never the tumble.
-pub(crate) const FIGHT_RESULT_HOLD_MS: u64 = 3_000;
-pub(crate) const FIGHT_RESULT_HOLD_CATCH_UP_MS: u64 = 2_000;
-/// The rest time budgeted for one fight blow's die before the clip's own time is known: the
-/// director holds the next blow back at least this long plus the hold and fade.
-pub(crate) const FIGHT_REST_BUDGET_MS: u64 = 1_500;
+/// Settled-face dwell before a damage result is readable.
+const RESULT_READ_MS: u64 = df_render::battle::ROLL_CARD_HIT_HOLD.as_millis() as u64;
+pub(crate) const DICE_FADE_MS: u64 = 320;
+const DAMAGE_ROLL_MS: u64 = df_render::battle::DAMAGE_DICE_TUMBLE.as_millis() as u64;
+pub(crate) const FIGHT_RESULT_HOLD_MS: u64 =
+    df_render::battle::ROLL_CARD_MISS_HOLD.as_millis() as u64;
+pub(crate) const ATTACK_D20_TUMBLE_MS: u64 =
+    df_render::battle::ATTACK_D20_TUMBLE.as_millis() as u64;
+pub(crate) const ATTACK_FACE_DWELL_MS: u64 =
+    df_render::battle::ATTACK_FACE_DWELL.as_millis() as u64;
+pub(crate) const FIGHT_REST_BUDGET_MS: u64 = ATTACK_D20_TUMBLE_MS;
 
-/// The least time one d20 beat of a fight takes from the die starting to the next die being
-/// allowed to start: the tumble, the held result and the fade.
-pub(crate) const fn fight_beat_ms(catching_up: bool) -> u64 {
-    FIGHT_REST_BUDGET_MS
-        + if catching_up {
-            FIGHT_RESULT_HOLD_CATCH_UP_MS
-        } else {
-            FIGHT_RESULT_HOLD_MS
-        }
-        + DICE_FADE_MS
+/// Display-only ordering of already committed results, in milliseconds from roll start.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AttackTiming {
+    pub(crate) settled_ms: u64,
+    pub(crate) card_ms: u64,
+    pub(crate) damage_settled_ms: Option<u64>,
+    pub(crate) closing_ms: u64,
+    pub(crate) hidden_ms: u64,
 }
 
-/// When a fight's d20 lands and when it clears: it stays for [`FIGHT_RESULT_HOLD_MS`] after it
-/// lands (or the catch-up hold), then fades.
-pub(crate) fn d20_timing(rest_ms: u64, catching_up: bool) -> DiceTiming {
-    let land_ms = rest_ms;
+pub(crate) const fn attack_timing(hit: bool, damage_dice: bool) -> AttackTiming {
+    let card_ms = ATTACK_D20_TUMBLE_MS + ATTACK_FACE_DWELL_MS;
+    let damage_settled_ms = if damage_dice {
+        Some(card_ms + DAMAGE_ROLL_MS)
+    } else {
+        None
+    };
+    let closing_ms = card_ms
+        + if damage_dice { DAMAGE_ROLL_MS } else { 0 }
+        + if hit {
+            RESULT_READ_MS
+        } else {
+            FIGHT_RESULT_HOLD_MS
+        };
+    AttackTiming {
+        settled_ms: ATTACK_D20_TUMBLE_MS,
+        card_ms,
+        damage_settled_ms,
+        closing_ms,
+        hidden_ms: closing_ms + DICE_FADE_MS,
+    }
+}
+
+/// Reserve the longer hit sequence during catch-up too; never truncate a readable result.
+pub(crate) const fn fight_beat_ms(_catching_up: bool) -> u64 {
+    attack_timing(true, true).hidden_ms + 200
+}
+
+pub(crate) fn d20_timing(_rest_ms: u64, _catching_up: bool) -> DiceTiming {
     DiceTiming {
-        land_ms,
-        clear_ms: land_ms
-            + if catching_up {
-                FIGHT_RESULT_HOLD_CATCH_UP_MS
-            } else {
-                FIGHT_RESULT_HOLD_MS
-            }
-            + DICE_FADE_MS,
+        land_ms: ATTACK_D20_TUMBLE_MS,
+        clear_ms: fight_beat_ms(false),
     }
 }
 
@@ -601,18 +873,18 @@ mod tests {
     }
 
     #[test]
-    fn d20_result_holds_three_seconds_after_the_server_face_lands() {
+    fn d20_result_uses_the_fixed_attack_tumble_and_hold() {
         let timing = d20_timing(1_200, false);
 
-        assert_eq!(timing.land_ms, 1_200);
-        assert_eq!(timing.clear_ms, 1_200 + 3_000 + 320);
+        assert_eq!(timing.land_ms, ATTACK_D20_TUMBLE_MS);
+        assert_eq!(timing.clear_ms, fight_beat_ms(false));
 
         let catching_up = d20_timing(1_200, true);
         assert_eq!(
-            catching_up.land_ms, 1_200,
+            catching_up.land_ms, ATTACK_D20_TUMBLE_MS,
             "the die still tumbles to its rest"
         );
-        assert_eq!(catching_up.clear_ms, 1_200 + 2_000 + 320);
+        assert_eq!(catching_up.clear_ms, fight_beat_ms(true));
     }
 
     #[test]
@@ -624,16 +896,140 @@ mod tests {
             assert!(fight_beat_ms(false) >= d20_timing(rest, false).clear_ms);
             assert!(fight_beat_ms(true) >= d20_timing(rest, true).clear_ms);
         }
-        assert!(fight_beat_ms(true) < fight_beat_ms(false));
-        assert!(FIGHT_RESULT_HOLD_CATCH_UP_MS >= 2_000);
+        assert_eq!(fight_beat_ms(true), fight_beat_ms(false));
+        assert!(RESULT_READ_MS >= 2_000);
     }
 
     #[test]
-    fn damage_dice_roll_for_a_second_then_hold_the_result() {
+    fn technique_dice_ownership_requires_a_complete_supported_plan() {
+        let mut technique = rpc::BattleTechnique {
+            kind: rpc::BattleTechniqueKind::BattleTechniqueFlurry as i32,
+            strikes: vec![
+                rpc::BattleTechniqueStrike::default(),
+                rpc::BattleTechniqueStrike::default(),
+            ],
+            ..Default::default()
+        };
+        assert!(!technique_owns_roll(&technique));
+        technique.strikes[0].roll = Some(rpc::BattleTechniqueRoll {
+            d20: Some(12),
+            ..Default::default()
+        });
+        assert!(
+            !technique_owns_roll(&technique),
+            "partial extension keeps the ordinary presenter"
+        );
+        technique.strikes[1].roll = Some(rpc::BattleTechniqueRoll {
+            d20: Some(9),
+            ..Default::default()
+        });
+        assert!(
+            technique_owns_roll(&technique),
+            "complete extension has one timeline seat"
+        );
+        technique.kind = 999;
+        assert!(
+            !technique_owns_roll(&technique),
+            "unsupported extension retains the fallback"
+        );
+    }
+
+    #[test]
+    fn committed_card_preserves_authority_and_hides_damage_until_settled() {
+        let mut outcome = rpc::CombatOutcome {
+            actor_name: "Aster".to_owned(),
+            target_name: "Skeleton".to_owned(),
+            weapon: "Longsword".to_owned(),
+            attack_die: 16,
+            faces: vec![16, 4],
+            attack_modifier: 7,
+            attack_total: 23,
+            target_armor_class: 15,
+            hit: true,
+            damage_dice: vec![5],
+            damage: 8,
+            damage_modifier: 3,
+            damage_type: "slashing".to_owned(),
+            ..Default::default()
+        };
+        let initial = committed_roll_card(&outcome, false);
+        assert!(initial.explanation.contains("16 / 4 +7 bonus = 23"));
+        assert!(!initial.explanation.contains("damage"));
+        assert!(
+            committed_roll_card(&outcome, true)
+                .explanation
+                .contains("damage 5 +3 = 8 slashing")
+        );
+        outcome.display_metadata = Some(rpc::CombatDisplayMetadata {
+            icon: Some("\u{2694}".to_owned()),
+            ability_modifier: Some(4),
+            proficiency_modifier: Some(3),
+            other_modifier: Some(0),
+            ..Default::default()
+        });
+        assert!(
+            committed_roll_card(&outcome, false)
+                .explanation
+                .contains("+4 ability +3 proficiency +0 other")
+        );
+        assert!(
+            committed_roll_card(&outcome, false)
+                .label
+                .starts_with("\u{2694}")
+        );
+        outcome.damage_rolls = vec![
+            rpc::DamageRoll {
+                dice: vec![1],
+                kept: false,
+                ..Default::default()
+            },
+            rpc::DamageRoll {
+                dice: vec![6],
+                kept: true,
+                ..Default::default()
+            },
+        ];
+        assert!(
+            committed_roll_card(&outcome, true)
+                .explanation
+                .contains("damage 6 +3")
+        );
+        outcome.hit = false;
+        outcome.attack_die = 1;
+        assert_eq!(committed_roll_card(&outcome, true).verdict, "FUMBLE");
+        assert!(
+            !committed_roll_card(&outcome, true)
+                .explanation
+                .contains("damage")
+        );
+        outcome.attack_die = 9;
+        assert_eq!(committed_roll_card(&outcome, false).verdict, "MISS");
+        outcome.hit = true;
+        outcome.critical = true;
+        assert_eq!(committed_roll_card(&outcome, false).verdict, "CRITICAL HIT");
+    }
+
+    #[test]
+    fn attack_plan_orders_face_dwell_damage_and_full_read_hold() {
+        let hit = attack_timing(true, true);
+        assert_eq!(hit.settled_ms, 1100);
+        assert_eq!(hit.card_ms, 1500);
+        assert_eq!(hit.damage_settled_ms, Some(2300));
+        assert_eq!(hit.closing_ms, 4300);
+        assert_eq!(hit.hidden_ms, 4620);
+        let miss = attack_timing(false, false);
+        assert_eq!(miss.card_ms, 1500);
+        assert_eq!(miss.damage_settled_ms, None);
+        assert_eq!(miss.closing_ms, 4000);
+        assert!(fight_beat_ms(true) >= miss.hidden_ms);
+    }
+
+    #[test]
+    fn damage_dice_roll_tumbles_then_holds_the_result() {
         let timing = damage_timing();
 
-        assert_eq!(timing.land_ms, 1_000);
-        assert_eq!(timing.clear_ms, 2_120);
+        assert_eq!(timing.land_ms, 800);
+        assert_eq!(timing.clear_ms, 3_120);
     }
 
     #[test]

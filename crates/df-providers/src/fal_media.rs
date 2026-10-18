@@ -304,6 +304,12 @@ impl fmt::Debug for NativeFalMediaProvider {
 }
 
 impl NativeFalMediaProvider {
+    /// Inspect a retained video with the same bounded container checks as acquired outputs.
+    /// This does not decode frames, contact the supplier or mint an asset reference.
+    pub fn inspect_video(bytes: &[u8]) -> Result<EncodedMediaFacts, FalMediaError> {
+        inspect_mp4(bytes).map_err(|reason| error(FalMediaReason::Container(reason), None))
+    }
+
     pub(crate) fn new(
         config: FalMediaConfig,
         credential: &str,
@@ -390,13 +396,18 @@ impl NativeFalMediaProvider {
         {
             return Err(error(FalMediaReason::Profile, None));
         }
-        let [frame] = semantic.reference_frames.as_slice() else {
+        let frames = semantic.reference_frames.as_slice();
+        let Some(frame) = frames.first() else {
             return Err(error(FalMediaReason::Reference, None));
         };
-        if frame.asset.kind != AssetKind::Image
-            || frame.asset.byte_length == 0
-            || frame.asset.byte_length > 10 * 1024 * 1024
-            || !reference_locator_ok(&frame.locator)
+        if frames.len() > 2
+            || (frames.len() == 2 && p.model != KLING_O1_IMAGE_TO_VIDEO)
+            || frames.iter().any(|frame| {
+                frame.asset.kind != AssetKind::Image
+                    || frame.asset.byte_length == 0
+                    || frame.asset.byte_length > 10 * 1024 * 1024
+                    || !reference_locator_ok(&frame.locator)
+            })
         {
             return Err(error(FalMediaReason::Reference, None));
         }
@@ -406,11 +417,14 @@ impl NativeFalMediaProvider {
             Duration::from_secs(u64::from(p.duration_seconds)),
             UsageUnit::VideoMillisecond,
         )?;
-        // Kling o1 animates between a start and an end frame; the same still is both, so the clip
-        // returns to the picture it began from. Its body has no resolution or seed fields.
+        // One reference loops back to itself; two references supply distinct bookends.
+        // Kling's body has no resolution or seed fields.
         let body = if p.model == KLING_O1_IMAGE_TO_VIDEO {
+            let end = frames
+                .last()
+                .ok_or_else(|| error(FalMediaReason::Reference, None))?;
             json!({
-                "prompt":semantic.prompt,"start_image_url":frame.locator,"end_image_url":frame.locator,
+                "prompt":semantic.prompt,"start_image_url":frame.locator,"end_image_url":end.locator,
                 "duration":p.duration_seconds.to_string()
             })
         } else {

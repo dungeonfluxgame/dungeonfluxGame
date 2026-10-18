@@ -305,7 +305,8 @@ fn shade(in: VOut) -> vec4<f32> {
     if (out_a < 0.004) {
         discard;
     }
-    let out_rgb = rgb * alpha + glow * rim * min(glow_a, 1.0) * 0.8;
+    let lit_rgb = rgb + fire_spill(in.world) * (rgb + vec3<f32>(0.12)) * a;
+    let out_rgb = lit_rgb * alpha + glow * rim * min(glow_a, 1.0) * 0.8;
     return vec4<f32>(out_rgb, out_a);
 }
 

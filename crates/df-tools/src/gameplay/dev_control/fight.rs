@@ -1,7 +1,5 @@
-//! `dev fight`: whether a scene fight is open, every scene person's presence, the roster and
-//! stances the latest SCENE-FIGHT audit line recorded, and the open encounter's combat view. Read
-//! only. Restoring a downed or fled person and ending a fight are staged decisions this surface
-//! does not add: they answer unavailable.
+//! Authenticated battle inspection and typed development orders. The session owner stages,
+//! validates, commits and publishes every authoritative change; reads expose committed evidence.
 
 use axum::{
     Json,
@@ -12,7 +10,7 @@ use df_model::checkpoint::GameState;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use super::{Outcome, Shared, authorized, failed, timeline, write_unavailable};
+use super::{Outcome, Shared, authorized, failed, require_gameplay_overrides, timeline};
 use crate::gameplay::{
     beat_script_runtime,
     journey::scene_fight::{self, Presence},
@@ -87,7 +85,7 @@ pub(super) fn fight_document(
     combat: Value,
     roster: Value,
 ) -> Result<Value, (StatusCode, Json<Value>)> {
-    let open = scene_fight::open(game);
+    let open = scene_fight::open(game) || crate::gameplay::journey::tactical::present(game);
     let mut people = Vec::new();
     for person in &scene.cast {
         let presence = scene_fight::presence(game, &person.id)
@@ -104,6 +102,7 @@ pub(super) fn fight_document(
         "people": people,
         "roster": roster,
         "combat": if open { combat } else { Value::Null },
+        "battle_scene": crate::gameplay::journey::tactical::development_scene_document(game).map_err(|_| failed("battle scene unavailable"))?,
     }))
 }
 
@@ -121,16 +120,140 @@ pub(super) async fn read(State(state): State<Arc<Shared>>, headers: HeaderMap) -
     Ok((StatusCode::OK, Json(document)))
 }
 
-/// `POST /dev/fight/edit`: restore and end are not performed by this surface.
-pub(super) async fn unsupported_edit(
+/// Typed development command; only the owner resolves and commits state changes.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) enum BattleCommand {
+    Start {
+        foe: String,
+        count: usize,
+        #[serde(default)]
+        level: Option<u8>,
+        #[serde(default)]
+        scene: Option<String>,
+        #[serde(default)]
+        layout: Option<String>,
+    },
+    End {
+        outcome: String,
+    },
+    Restore {
+        person: String,
+    },
+    Add {
+        foe: String,
+        #[serde(default)]
+        cell: Option<String>,
+    },
+    Remove {
+        name: String,
+    },
+    Scene {
+        scene: String,
+        #[serde(default)]
+        layout: Option<String>,
+    },
+    Edit {
+        name: String,
+        kind: String,
+        #[serde(default)]
+        value: Option<i64>,
+        #[serde(default)]
+        condition: Option<String>,
+        #[serde(default)]
+        present: Option<bool>,
+        #[serde(default)]
+        cell: Option<String>,
+        #[serde(default)]
+        resource: Option<String>,
+    },
+}
+
+pub(super) async fn edit(
     State(state): State<Arc<Shared>>,
     headers: HeaderMap,
+    Json(command): Json<BattleCommand>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    write_unavailable(
-        "fight",
-        "restoring a downed or fled person and ending a scene fight are staged decisions through the owner's override path, which is disabled server-side until the milestone 3 projection-safety proof",
-    )
+    require_gameplay_overrides()?;
+    super::npc::commit(&state, "battle", super::npc::NpcAct::Development(command))
+        .await
+        .map(|answer| (StatusCode::OK, Json(answer)))
+}
+
+pub(super) async fn initiative(State(state): State<Arc<Shared>>, headers: HeaderMap) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let current = state.service.updates.borrow().clone();
+    if current.state().encounters.is_empty() {
+        return Ok((StatusCode::OK, Json(json!({"initiative": []}))));
+    }
+    let initiative = crate::gameplay::journey::initiative_rolls(&current)
+        .map_err(|error| failed(format!("initiative unavailable: {error:?}")))?;
+    Ok((
+        StatusCode::OK,
+        Json(
+            json!({"initiative":initiative.iter().map(|roll|json!({"participant_id":crate::gameplay::journey::hex(&roll.participant_id),"name":roll.name,"die":roll.die,"modifier":roll.modifier,"total":roll.total,"order":roll.order})).collect::<Vec<_>>()}),
+        ),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct LogQuery {
+    #[serde(default = "log_limit")]
+    last: usize,
+}
+fn log_limit() -> usize {
+    50
+}
+pub(super) async fn log(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<LogQuery>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    if query.last == 0 || query.last > 1000 {
+        return Err(super::bad_request("--last must be 1..=1000"));
+    }
+    let current = state.service.updates.borrow().clone();
+    let mut records = Vec::new();
+    for decision in &current.state().decisions {
+        if let Ok(receipt) = crate::gameplay::journey::accepted(decision) {
+            for outcome in receipt.combat {
+                records.push(json!({"revision":decision.revision.sequence(),"operation":crate::gameplay::journey::hex(decision.operation.as_bytes()),"outcome":super::combat_json(&outcome)}));
+            }
+        }
+    }
+    let start = records.len().saturating_sub(query.last);
+    Ok((
+        StatusCode::OK,
+        Json(json!({"outcomes":&records[start..],"total":records.len()})),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct OffersQuery {
+    hero: String,
+}
+pub(super) async fn offers(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<OffersQuery>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let index = {
+        let seats = state.seats.lock().await;
+        super::resolve_hero(&seats, &query.hero).map_err(super::bad_request)?
+    };
+    let (_, message) = super::seat_view(&state, index).await?;
+    let Some(df_protocol::common::view_message::Audience::Player(view)) = message.audience else {
+        return Err(failed("player view unavailable"));
+    };
+    Ok((
+        StatusCode::OK,
+        Json(
+            json!({"hero":query.hero,"offers":view.offers.iter().map(|offer|json!({"offer_id":offer.offer_id,"action_kind":offer.action_kind,"label":offer.label,"input_groups":offer.input_groups.iter().map(|group|json!({"group_id":group.group_id,"options":group.options.iter().map(|option|json!({"option_id":option.option_id,"label":option.label})).collect::<Vec<_>>()})).collect::<Vec<_>>()})).collect::<Vec<_>>()}),
+        ),
+    ))
 }
 
 #[cfg(test)]

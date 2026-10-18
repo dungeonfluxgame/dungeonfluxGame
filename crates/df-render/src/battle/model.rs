@@ -30,6 +30,12 @@ pub enum AttackStyle {
     Ranged,
     /// Stays put and throws a melee weapon at the target.
     Thrown,
+    /// A practical fire projectile, with warm spill at impact.
+    Bolt,
+    /// Three luminous darts; individual destinations arrive in `Beat::Missiles`.
+    Missiles,
+    /// A bead and spherical fire burst; area membership comes from the server.
+    Burst,
 }
 
 impl AttackStyle {
@@ -37,12 +43,24 @@ impl AttackStyle {
     pub fn for_weapon(ranged: bool, weapon: &str) -> Self {
         if !ranged {
             Self::Melee
-        } else if matches!(weapon, "javelin" | "spear" | "dagger") {
+        } else if matches!(
+            weapon,
+            "javelin" | "spear" | "dagger" | "handaxe" | "hand-axe" | "hand_axe"
+        ) {
             Self::Thrown
         } else {
             Self::Ranged
         }
     }
+}
+
+/// What is in the air between attacker and target. A thrown weapon is the weapon
+/// itself (selected by weapon id via [`AttackStyle::for_weapon`]); an arrow is a
+/// bow shot. Presentation only.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectileKind {
+    Arrow,
+    ThrownWeapon,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,9 +132,63 @@ pub enum AttackResult {
     },
 }
 
+/// One committed strike or save, in presentation order. No roll or damage is calculated here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StrikeDisplay {
+    pub target: TokenId,
+    pub result: AttackResult,
+    pub target_hit_points_after: Option<u32>,
+    /// Attack roll or saving throw, including the server's half-damage explanation.
+    pub card: Option<RollCard>,
+    pub roll: Option<ResolvedRoll>,
+}
+
+/// Authoritative display fixture or server-projected dice; `None` d20 means automatic damage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedRoll {
+    pub d20: Option<u32>,
+    pub damage_faces: Vec<u32>,
+    /// Breakdown without the damage line, revealed only after the d20 face dwell.
+    pub attack_card: Option<RollCard>,
+}
+
+/// One visible dice seat for technique timelines. Faces remain hidden while tumbling.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentationDice {
+    pub faces: Vec<u32>,
+    pub damage: bool,
+    pub settled: bool,
+}
+
 /// One server fact to stage. The director turns a beat into an ordered timeline.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Beat {
+    /// At most four resolved strikes by one actor. `action_surge_at` is the zero-based index
+    /// before which to show the flourish (normally 2). This grants no actions or attacks.
+    Flurry {
+        attacker: TokenId,
+        strikes: Vec<StrikeDisplay>,
+        action_surge_at: Option<u32>,
+    },
+    /// Exactly three server-resolved darts, in fan order; targets may repeat.
+    Missiles {
+        caster: TokenId,
+        darts: Vec<StrikeDisplay>,
+    },
+    /// All and only the server-supplied area targets react after the bead lands. Radius is
+    /// cosmetic metres; neither geometry nor target membership is resolved by the client.
+    AreaEffect {
+        caster: TokenId,
+        centre: Cell,
+        radius_m: f32,
+        targets: Vec<StrikeDisplay>,
+    },
+    /// A committed miss caused by Shield: the ward precedes the miss caption.
+    Shield {
+        attacker: TokenId,
+        defender: TokenId,
+        display: Option<Box<StrikeDisplay>>,
+    },
     TurnStart {
         actor: TokenId,
     },
@@ -290,6 +362,7 @@ pub struct HudState {
     pub initiative: Vec<TokenId>,
     pub finishing_blow: Option<FinishingBlow>,
     pub roll_for_initiative: InitiativeShow,
+    pub presentation_dice: Option<PresentationDice>,
 }
 
 /// What the d20 panel shows, copied from the server's roll description.
@@ -425,6 +498,14 @@ mod tests {
         );
         assert_eq!(AttackStyle::for_weapon(true, "spear"), AttackStyle::Thrown);
         assert_eq!(AttackStyle::for_weapon(true, "dagger"), AttackStyle::Thrown);
+        assert_eq!(
+            AttackStyle::for_weapon(true, "handaxe"),
+            AttackStyle::Thrown
+        );
+        assert_eq!(
+            AttackStyle::for_weapon(true, "hand-axe"),
+            AttackStyle::Thrown
+        );
         assert_eq!(
             AttackStyle::for_weapon(true, "longbow"),
             AttackStyle::Ranged

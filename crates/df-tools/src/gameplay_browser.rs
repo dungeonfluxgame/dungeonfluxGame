@@ -2176,6 +2176,7 @@ fn receive_view(
                 | crate::live_art::merge_art(shown, new)
         }) {
             drop(state);
+            live_battlefield::camera_view(client, &view);
             if let Some(rpc::view_message::Audience::Display(display)) = &view.audience {
                 layout::apply(client, &display.layout_json, display.layout_revision)?;
             }
@@ -2189,6 +2190,7 @@ fn receive_view(
         ConnectionViewAcceptance::View(ViewAcceptance::Applied | ViewAcceptance::Duplicate { .. })
     ) && let Some(rpc::view_message::Audience::Display(display)) = &view.audience
     {
+        live_battlefield::camera_view(client, &view);
         layout::apply(client, &display.layout_json, display.layout_revision)?;
     }
     if acceptance != ConnectionViewAcceptance::ObsoleteGeneration {

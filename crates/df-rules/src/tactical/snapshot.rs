@@ -18,6 +18,8 @@ struct Snapshot {
     layout: String,
     actors: Vec<Combatant>,
     order: Vec<u32>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    initiatives: std::collections::BTreeMap<u32, i32>,
     active: usize,
     round: u32,
     pending: Option<PendingMove>,
@@ -45,6 +47,7 @@ impl Battle {
             layout: self.map.id().to_owned(),
             actors: self.actors.clone(),
             order: self.order.clone(),
+            initiatives: self.initiatives.clone(),
             active: self.active,
             round: self.round,
             pending: self.pending.clone(),
@@ -211,6 +214,18 @@ impl Battle {
                 return Err(RuleError::SnapshotData);
             }
         }
+        if !state.initiatives.is_empty()
+            && (state.initiatives.len() != state.actors.len()
+                || state.actors.iter().any(|actor| {
+                    let modifier = crate::local_journey::ability_modifier(actor.spec.abilities[1]);
+                    state
+                        .initiatives
+                        .get(&actor.id())
+                        .is_none_or(|total| !(1 + modifier..=20 + modifier).contains(total))
+                }))
+        {
+            return Err(RuleError::SnapshotData);
+        }
         for effect in &state.helped_attacks {
             let helper = state
                 .actors
@@ -279,6 +294,7 @@ impl Battle {
             map,
             actors: state.actors,
             order: state.order,
+            initiatives: state.initiatives,
             active: state.active,
             round: state.round,
             pending: state.pending,

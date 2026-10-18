@@ -21,23 +21,22 @@ use axum::{extract::State, http::HeaderMap, response::Json};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use super::{Outcome, Shared, authorized, bad_request, display_view, failed};
+use super::{Outcome, Shared, authorized, bad_request, failed};
 use crate::gameplay::dev_control::{commands, history};
 
-/// The current revision as a plain pair, read from the display view.
+/// The authoritative checkpoint revision, independent of display projection availability.
 pub(super) async fn current_revision(
     state: &Shared,
 ) -> Result<
     (history::Revision, df_protocol::common::SessionRevision),
     (axum::http::StatusCode, Json<Value>),
 > {
-    let (revision, _) = display_view(state).await?;
-    let epoch = revision
-        .epoch
-        .as_ref()
-        .and_then(|epoch| epoch.value)
-        .unwrap_or(0);
-    Ok(((epoch, revision.sequence.unwrap_or(0)), revision))
+    let current = state.service.updates.borrow().clone();
+    let revision = current.basis().revision;
+    Ok((
+        (revision.epoch().get(), revision.sequence()),
+        super::super::wire::revision(revision),
+    ))
 }
 
 /// Drops a redo stack forked by playing on, reporting what went.
@@ -147,11 +146,6 @@ fn jumps_disabled() -> Outcome {
 /// the owner-supported rewind, which the view projection accepts.
 fn jumps_off() -> bool {
     false
-}
-
-/// Kill switch for overrides (milestone 3): still off.
-fn overrides_off() -> bool {
-    true
 }
 
 /// `POST /dev/restore {"name": "<snapshot>"}`: returns to a named point.
@@ -367,13 +361,35 @@ pub(super) async fn apply_override(
     Json(body): Json<Value>,
 ) -> Outcome {
     authorized(&headers, &state.token)?;
-    if overrides_off() {
-        return jumps_disabled();
-    }
+    super::require_gameplay_overrides()?;
     let kind = body
         .get("kind")
         .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("override needs {\"kind\": \"hp\"|\"budget\", ...}"))?;
+        .ok_or_else(|| bad_request("override needs kind"))?;
+    if kind != "budget" {
+        let name = body
+            .get("hero")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad_request("override needs a combatant name"))?;
+        let command = super::fight::BattleCommand::Edit {
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            value: body.get("value").and_then(Value::as_i64),
+            condition: body
+                .get("condition")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            present: body.get("present").and_then(Value::as_bool),
+            cell: body.get("cell").and_then(Value::as_str).map(str::to_owned),
+            resource: body
+                .get("resource")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        };
+        return super::npc::commit(&state, name, super::npc::NpcAct::Development(command))
+            .await
+            .map(|answer| (axum::http::StatusCode::OK, Json(answer)));
+    }
     let (current, _) = current_revision(&state).await?;
     let mut notices = take_stale_notices(&state, current);
     let credential = {

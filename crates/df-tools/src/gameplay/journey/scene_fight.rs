@@ -3234,8 +3234,428 @@ mod tests {
             assert!(offered_targets(&room, native::first()).unwrap().is_empty());
         });
     }
+    #[test]
+    fn development_npc_terminal_turn_closes_an_edited_authored_scene_fight() {
+        development_authored_terminal(false);
+    }
+    #[test]
+    fn development_restore_scene_person_reconciles_the_projected_model() {
+        development_authored_terminal(true);
+    }
+    fn development_authored_terminal(restore_projection: bool) {
+        use crate::gameplay::dev_control::{
+            candidate,
+            fight::BattleCommand,
+            npc::{self, NpcAct},
+        };
+        let commit = |current: &Checkpoint, act: NpcAct, npc_name: &str, tag: u8| {
+            let operation = OperationId::from_bytes(&[tag; 16]).unwrap();
+            let turn = tactical::npc_turn(current, npc_name, &act, operation).unwrap();
+            let built = candidate::build(
+                current,
+                &candidate::Change::NpcTurn {
+                    turn: Box::new(turn),
+                },
+                current.basis().revision.next_sequence().unwrap(),
+                operation,
+                model::rule().unwrap().catalog,
+                "scene terminal test".to_owned(),
+                ReferenceInventory {
+                    rules: &[model::rule().unwrap(), rule().unwrap()],
+                    content: &model::contents().unwrap(),
+                    resources: &resources_for(current.state()).unwrap(),
+                    assets: &[],
+                },
+                model::limits(),
+            )
+            .unwrap()
+            .candidate;
+            living_scene::stage_fight_completion(current, built).unwrap_or_else(|error| {
+                panic!(
+                    "close at operation {tag}: {error:?}; step={:?}",
+                    refusal_detail::take()
+                )
+            })
+        };
+        let generated = crate::gameplay::adventure::shop::generate(
+            46,
+            crate::gameplay::adventure::RulesMode::Standard,
+            crate::gameplay::startup_configuration::ContentRating::default(),
+        )
+        .unwrap();
+        let (loaded, _) =
+            crate::gameplay::adventure::record::reload(&generated.documents(true).unwrap())
+                .unwrap();
+        pack::with_test_pack(loaded, || {
+            npc::set_hold("all", true);
+            let opening = opening();
+            let expected_phase = phase(&opening).unwrap();
+            let scene = beat_script_runtime::scene(opening.state()).unwrap();
+            let possessions = scene
+                .cast
+                .iter()
+                .map(|person| (person.id.clone(), Vec::<serde_json::Value>::new()))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let preparation:living_scene::FightPreparation=serde_json::from_value(serde_json::json!({"fight_id":hex(&[180;16]),"place":scene.setting.as_ref().unwrap().place_id,"scene":scene.key,"possessions":possessions})).unwrap();
+            let opening = living_scene::commit_fight_preparation(
+                &opening,
+                OperationId::from_bytes(&[179; 16]).unwrap(),
+                preparation,
+            )
+            .unwrap();
+            let mut current = start(&opening, 180, "shop-adventurer", None);
+            let historical = tactical::initiative(&current).unwrap();
+            let mut legacy = current.state().clone();
+            let saved = legacy.encounters[0].tactical.as_mut().unwrap();
+            let mut encoded: serde_json::Value =
+                serde_json::from_slice(saved.rules_state()).unwrap();
+            encoded.as_object_mut().unwrap().remove("initiatives");
+            saved.set_rules_state(serde_json::to_vec(&encoded).unwrap());
+            current = model::checkpoint(current.basis(), legacy).unwrap();
+            wire::journey_view(
+                &current,
+                df_persistence::local_demo_scope::LocalDemoRole::Display,
+                native::first(),
+            )
+            .unwrap();
+            assert_eq!(tactical::initiative(&current).unwrap(), historical);
+            let heroes = current
+                .state()
+                .characters
+                .iter()
+                .map(|hero| (hero.entity, name(current.state(), hero.entity).unwrap()))
+                .collect::<Vec<_>>();
+            for (index, (_, hero)) in heroes.iter().enumerate() {
+                current = commit(
+                    &current,
+                    NpcAct::Development(BattleCommand::Edit {
+                        name: hero.clone(),
+                        kind: "hp".to_owned(),
+                        value: Some(if index == 0 { 1 } else { 0 }),
+                        condition: None,
+                        present: None,
+                        cell: None,
+                        resource: None,
+                    }),
+                    "battle",
+                    181 + index as u8,
+                );
+            }
+            let battle = tactical::read(current.state()).unwrap();
+            let enemy = battle
+                .combatants()
+                .iter()
+                .find(|actor| actor.side() == Side::Enemies)
+                .unwrap()
+                .id();
+            let enemy_weapon = battle.actor(enemy).unwrap().spec().weapons[0]
+                .id()
+                .to_owned();
+            let enemy_name = name(
+                current.state(),
+                tactical::canonical(current.state(), enemy).unwrap(),
+            )
+            .unwrap();
+            let hero_id = battle
+                .combatants()
+                .iter()
+                .find(|actor| actor.side() == Side::Heroes && actor.health().hit_points == 1)
+                .unwrap()
+                .id();
+            let origin = battle.actor(hero_id).unwrap().cell();
+            let (cols, rows) = battle.map().dimensions();
+            let adjacent = (0..cols)
+                .flat_map(|col| (0..rows).map(move |row| tactical_rules::Cell(col, row)))
+                .find(|cell| {
+                    cell.distance(origin) == 5
+                        && !battle.map().is_blocked(*cell)
+                        && battle
+                            .combatants()
+                            .iter()
+                            .all(|actor| actor.cell() != *cell)
+                })
+                .unwrap();
+            current = commit(
+                &current,
+                NpcAct::Development(BattleCommand::Edit {
+                    name: enemy_name.clone(),
+                    kind: "cell".to_owned(),
+                    value: None,
+                    condition: None,
+                    present: None,
+                    cell: Some(format!("{},{}", adjacent.0, adjacent.1)),
+                    resource: None,
+                }),
+                "battle",
+                184,
+            );
+            current = commit(
+                &current,
+                NpcAct::Development(BattleCommand::Edit {
+                    name: enemy_name.clone(),
+                    kind: "turn".to_owned(),
+                    value: None,
+                    condition: None,
+                    present: None,
+                    cell: None,
+                    resource: None,
+                }),
+                "battle",
+                185,
+            );
+            let before_terminal = current.clone();
+            crate::gameplay::dice::enqueue(20, &[20; 16]).unwrap();
+            crate::gameplay::dice::enqueue(6, &[6; 32]).unwrap();
+            current = commit(
+                &current,
+                NpcAct::Attack {
+                    target: heroes[0].1.clone(),
+                    weapon: Some(enemy_weapon),
+                },
+                &enemy_name,
+                186,
+            );
+            npc::set_hold("all", false);
+            crate::gameplay::dice::clear();
+            assert!(!open(current.state()));
+            assert!(!tactical::present(current.state()));
+            assert_eq!(phase(&current).unwrap(), expected_phase);
+            assert_eq!(
+                current.state().decisions.last().unwrap().source_policy,
+                model::label(THREAD_POLICY).unwrap()
+            );
+            if !restore_projection {
+                wire::journey_view(
+                    &current,
+                    df_persistence::local_demo_scope::LocalDemoRole::Display,
+                    native::first(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("terminal view {error:?}; step={:?}", refusal_detail::take())
+                });
+            }
+            // A fled scene person is restored through the same owner path after the fight.
+            current = commit(
+                &current,
+                NpcAct::Development(BattleCommand::Restore {
+                    person: "merchant".to_owned(),
+                }),
+                "battle",
+                187,
+            );
+            assert_eq!(
+                presence(current.state(), "merchant").unwrap(),
+                Presence::Standing
+            );
+            let scene = beat_script_runtime::scene(current.state()).unwrap();
+            let setting = scene.setting.as_ref().unwrap();
+            let decision = current.state().decisions.last().unwrap();
+            assert!(
+                tactical::development_restoration(decision)
+                    .unwrap()
+                    .is_some()
+            );
+            let mut detached = living_scene::full_snapshot(current.state(), &scene)
+                .unwrap()
+                .unwrap()
+                .model;
+            apply_development_restoration(decision, &setting.place_id, &mut detached).unwrap();
+            assert!(detached.people.iter().any(|person| person.id == "merchant"
+                && person.present_in.iter().any(|scene| scene != "absent")
+                && person.description.contains("restored")));
+            assert!(
+                setting
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .people
+                    .iter()
+                    .any(|person| person.id == "merchant"
+                        && person.present_in.iter().any(|scene| scene != "absent")
+                        && person.description.contains("restored")),
+                "the scene journal must apply typed restoration metadata before projecting presence"
+            );
+            let ended = commit(
+                &before_terminal,
+                NpcAct::Development(BattleCommand::End {
+                    outcome: "flee".to_owned(),
+                }),
+                "battle",
+                188,
+            );
+            assert!(!open(ended.state()));
+            assert_eq!(
+                ended.state().decisions.last().unwrap().source_policy,
+                model::label(THREAD_POLICY).unwrap()
+            );
+            wire::journey_view(
+                &ended,
+                df_persistence::local_demo_scope::LocalDemoRole::Display,
+                native::first(),
+            )
+            .unwrap();
+            wire::journey_view(
+                &current,
+                df_persistence::local_demo_scope::LocalDemoRole::Display,
+                native::first(),
+            )
+            .unwrap();
+        });
+    }
 }
 
 #[cfg(test)]
 #[path = "scene_fight_tests.rs"]
 mod scene_fight_tests;
+
+/// Explicit development restoration of a scene person (including fled people) or created hero.
+/// The caller stages this state and commits an edited decision through the session owner.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::gameplay) struct DevelopmentRestoration {
+    person_id: String,
+    place_id: String,
+    scene: String,
+}
+pub(super) fn development_restoration(
+    state: &GameState,
+    requested: &str,
+) -> Result<Option<DevelopmentRestoration>, RepositoryError> {
+    let person_id = if let Some(person) = cast_in(state)?.into_iter().find(|person| {
+        person.id.eq_ignore_ascii_case(requested) || person.name.eq_ignore_ascii_case(requested)
+    }) {
+        person.id
+    } else if let Some(hero) = state.characters.iter().find(|hero| {
+        name(state, hero.entity).is_ok_and(|name| name.eq_ignore_ascii_case(requested))
+    }) {
+        name(state, hero.entity)?
+    } else {
+        // Synthetic fight actors have no narrative scene person to restore.
+        return Ok(None);
+    };
+    let scene = super::super::beat_script_runtime::scene(state)?;
+    Ok(Some(DevelopmentRestoration {
+        person_id,
+        place_id: scene
+            .setting
+            .as_ref()
+            .ok_or(RepositoryError::InvalidCandidate)?
+            .place_id
+            .clone(),
+        scene: scene.key.source_label().to_owned(),
+    }))
+}
+
+/// The scene journal owner must call this for each decision, in journal order, before reading
+/// its ordinary interaction. It changes a detached canonical model, never a public-only copy.
+pub(in crate::gameplay) fn apply_development_restoration(
+    decision: &AcceptedDecision,
+    place_id: &str,
+    model: &mut crate::gameplay::adventure::scene_model::SceneModel,
+) -> Result<(), RepositoryError> {
+    let Some(restored) = tactical::development_restoration(decision)? else {
+        return Ok(());
+    };
+    if restored.place_id != place_id {
+        return Ok(());
+    }
+    let original_presence = pack::with_content(|content| {
+        content
+            .scenes
+            .iter()
+            .chain(
+                content
+                    .beat_script
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|script| script.scenes.values()),
+            )
+            .filter_map(|scene| scene.setting.as_ref())
+            .filter(|setting| setting.place_id == place_id)
+            .filter_map(|setting| setting.model.as_ref())
+            .flat_map(|model| &model.people)
+            .find(|person| person.id == restored.person_id)
+            .map(|person| person.present_in.clone())
+    });
+    let person = model
+        .people
+        .iter_mut()
+        .find(|person| person.id == restored.person_id)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    if let Some(original_presence) = original_presence {
+        person.present_in = original_presence;
+    } else if person.present_in.iter().all(|scene| scene == "absent") {
+        person.present_in = vec![restored.scene];
+    }
+    person.description = format!(
+        "{} stands {} after being restored.",
+        person.name, person.position
+    );
+    // Identity and item ownership remain in the canonical model. Restoration never recreates
+    // spent or transferred possessions, and later journal outcomes can still change presence.
+    Ok(())
+}
+
+pub(super) fn development_restore(
+    state: &mut GameState,
+    requested: &str,
+) -> Result<(), RepositoryError> {
+    let who = if let Some(person) = cast_in(state)?.into_iter().find(|person| {
+        person.id.eq_ignore_ascii_case(requested) || person.name.eq_ignore_ascii_case(requested)
+    }) {
+        person_entity(&person.id)?
+    } else {
+        state
+            .characters
+            .iter()
+            .find(|hero| {
+                name(state, hero.entity).is_ok_and(|name| name.eq_ignore_ascii_case(requested))
+            })
+            .map(|hero| hero.entity)
+            .ok_or(RepositoryError::InvalidCandidate)?
+    };
+    let world = state
+        .entities
+        .iter_mut()
+        .find(|world| world.id == who)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    world.location = Some(room_entity()?);
+    let mut hp = false;
+    for resource in state
+        .resources
+        .iter_mut()
+        .filter(|resource| resource.owner == who)
+    {
+        match resource.resource.as_str() {
+            "hit-points" => {
+                resource.value = resource.maximum;
+                hp = true;
+            }
+            "unconscious" | "prone" | "dead" | "action-used" | "bonus-used" => resource.value = 0,
+            _ => {}
+        }
+    }
+    if !hp {
+        // Fleers have a canonical identity but never entered the battle, so no combat
+        // mirror was stored. Admit their initial health from the existing source bounds.
+        if state.characters.iter().any(|hero| hero.entity == who) {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        let maximum = resources_for(state)?
+            .into_iter()
+            .find(|resource| resource.owner == who && resource.resource.as_str() == "hit-points")
+            .ok_or(RepositoryError::InvalidCandidate)?
+            .maximum;
+        add_resource(state, who, "hit-points", maximum)?;
+    }
+    for name in ["unconscious", "prone", "dead", "action-used", "bonus-used"] {
+        if !state
+            .resources
+            .iter()
+            .any(|resource| resource.owner == who && resource.resource.as_str() == name)
+        {
+            add_resource(state, who, name, 0)?;
+        }
+    }
+    Ok(())
+}

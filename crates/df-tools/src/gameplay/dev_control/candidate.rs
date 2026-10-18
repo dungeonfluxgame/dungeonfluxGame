@@ -7,8 +7,8 @@
 //! the owner's `validate_candidate` gate demands. Anything else (session,
 //! run, pins, mode) is carried over untouched, so a dev commit is
 //! indistinguishable in form from a player commit; its provenance lives in the
-//! new decision's `semantic_output`. No provider work is ever staged: no new
-//! intents, effects, facts or draws are added.
+//! new decision's `semantic_output`. Provider work is never staged. Battle orders retain their actual rules draws and the
+//! canonical DrawAccepted facts required by the ordinary owner accounting gate.
 
 use df_model::checkpoint::{
     AcceptedDecision, Basis, CHECKPOINT_SCHEMA, Checkpoint, CheckpointLimits, GameState,
@@ -59,6 +59,18 @@ pub(crate) fn build(
     inventory: ReferenceInventory<'_>,
     limits: CheckpointLimits,
 ) -> Result<Built, String> {
+    if let Change::NpcTurn { turn } = change
+        && turn.ordinary
+    {
+        let candidate =
+            super::super::journey::tactical::ordinary_npc_candidate(current, turn, next, operation)
+                .map_err(|error| format!("ordinary NPC candidate: {error:?}"))?;
+        return Ok(Built {
+            candidate,
+            before: turn.before.clone(),
+            after: turn.after.clone(),
+        });
+    }
     let mut state = match change {
         Change::Restore { saved, .. } => restore_state(current, saved)?,
         Change::NpcTurn { turn } => turn.state.clone(),
@@ -74,18 +86,67 @@ pub(crate) fn build(
         Change::NpcTurn { turn } => {
             // A fight turn is a thread decision: its receipt carries the combat outcomes the
             // view reads, and its draws are the ones the rules consumed.
+            let facts = super::super::journey::tactical::development_draw_facts(
+                current,
+                &mut state,
+                next,
+                operation,
+                &turn.draws,
+            )
+            .map_err(|error| format!("development draw accounting: {error:?}"))?;
             state.draws.extend(turn.draws.iter().cloned());
             AcceptedDecision {
                 operation,
                 revision: next,
-                facts: Vec::new(),
+                facts,
                 draws: turn.draws.iter().map(|draw| draw.ordinal).collect(),
                 effects: Vec::new(),
-                source_policy: super::super::model::label(super::super::journey::THREAD_POLICY)
-                    .map_err(|_| "thread policy label unavailable".to_owned())?,
-                semantic_output: Some(turn.receipt.clone()),
+                source_policy: super::super::model::rule()
+                    .map_err(|_| "development policy unavailable")?
+                    .catalog,
+                semantic_output: Some(
+                    super::super::journey::tactical::development_encoded(
+                        current,
+                        &{
+                            use prost::Message;
+                            df_protocol::common::AcceptedAction::decode(
+                                super::super::journey::unhex(&turn.receipt)
+                                    .map_err(|_| "development receipt invalid")?
+                                    .as_slice(),
+                            )
+                            .map_err(|_| "development receipt invalid")?
+                        },
+                        &turn.after,
+                        turn.restoration.as_ref(),
+                    )
+                    .map_err(|error| format!("development receipt: {error:?}"))?,
+                ),
             }
         }
+        Change::Budget { .. } => AcceptedDecision {
+            operation,
+            revision: next,
+            facts: Vec::new(),
+            draws: Vec::new(),
+            effects: Vec::new(),
+            source_policy: super::super::model::rule()
+                .map_err(|_| "development policy unavailable")?
+                .catalog,
+            semantic_output: Some(
+                super::super::journey::tactical::development_encoded(
+                    current,
+                    &df_protocol::common::AcceptedAction {
+                        phase: super::super::journey::phase(current)
+                            .map_err(|_| "development phase unavailable")?
+                            as i32,
+                        ..Default::default()
+                    },
+                    &note,
+                    None,
+                )
+                .map_err(|error| format!("development budget receipt: {error:?}"))?,
+            ),
+        },
         _ => AcceptedDecision {
             operation,
             revision: next,
@@ -101,6 +162,12 @@ pub(crate) fn build(
         session: current.basis().session,
         run: current.basis().run,
         revision: next,
+    };
+    let resources = super::super::journey::resources_for(&state)
+        .map_err(|error| format!("development resource bounds: {error:?}"))?;
+    let inventory = ReferenceInventory {
+        resources: &resources,
+        ..inventory
     };
     let candidate = Checkpoint::new(
         CHECKPOINT_SCHEMA,

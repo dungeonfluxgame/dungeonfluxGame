@@ -188,3 +188,189 @@ fn combat_accepts_a_ready_participant_depiction_in_the_next_same_revision_view()
         assert_eq!(actor.name, "Jessa");
     });
 }
+
+#[test]
+fn forced_battle_scene_projects_no_generated_world_even_when_ready() {
+    let ready = || {
+        Some(super::super::splat_world::ReadyWorld {
+            ply_url: "/world.ply".to_owned(),
+            collider_url: "/collider.glb".to_owned(),
+            metric_scale_factor: Some(1.0),
+            ground_plane_offset: Some(0.0),
+        })
+    };
+    assert!(project_battle_world(true, None, ready()).is_some());
+    for scene in ["scan-riverbed", "merchant-shop"] {
+        let mut combat = rpc::CombatView::default();
+        combat.battle_world = project_battle_world(true, Some(scene), ready());
+        assert!(combat.battle_world.is_none(), "forced {scene}");
+    }
+    assert!(project_battle_world(false, None, ready()).is_none());
+}
+
+#[test]
+fn live_display_executes_committed_hit_and_miss_before_battlefield_redraw() {
+    use crate::dice_roll::{AttackDisplay, AttackDisplayAction, live_attack};
+    use crate::stage_director::{Command, StageDirector, StageState, ViewDiff};
+    use df_observe::presentation::{ComponentPhase, PresentationComponent};
+    with_spilled_fight(|fight| {
+        let member = native::first();
+        let kind = rpc::GameplayActionKind::GreatswordAttack;
+        let groups = journey::tactical::groups(&fight, member, kind).unwrap();
+        let selected = groups.first().unwrap().options.first().unwrap();
+        let offer_id = beat_script_runtime::view_offers(&fight, member)
+            .unwrap()
+            .into_iter()
+            .find(|(offered, ..)| *offered == kind)
+            .unwrap()
+            .2;
+        for (face, hit) in [(5, false), (19, true)] {
+            let request = rpc::SubmitActionRequest {
+                session_id: Some(rpc::SessionId {
+                    value: Some(fight.basis().session.as_bytes().to_vec()),
+                }),
+                run_id: Some(rpc::RunId {
+                    value: Some(fight.basis().run.as_bytes().to_vec()),
+                }),
+                observed_revision: Some(revision(fight.basis().revision)),
+                operation_id: Some(rpc::OperationId {
+                    value: Some(vec![77; 16]),
+                }),
+                action_kind: kind as i32,
+                offer_id: offer_id.clone(),
+                action_choices: vec![rpc::JourneyChoice {
+                    group_id: groups[0].group_id.clone(),
+                    option_id: selected.option_id.clone(),
+                }],
+                ..Default::default()
+            };
+            let input = journey_input(&request, member, &fight).unwrap();
+            let committed = journey::stage_with_supplier(&fight, &input, &mut |sides| {
+                Ok(if sides == 20 { face } else { sides.min(3) })
+            })
+            .unwrap();
+            let recovered = native::persisted(&committed);
+            let projected = project_journey(&recovered, LocalDemoRole::Display, member).unwrap();
+            let Some(rpc::view_message::Audience::Display(display)) = projected.view.audience
+            else {
+                panic!("display projection");
+            };
+            let combat = display.journey.unwrap().combat.unwrap();
+            let outcome = combat
+                .outcomes
+                .iter()
+                .find(|outcome| outcome.actor_name == "Brynn")
+                .unwrap();
+            assert_eq!(outcome.hit, hit);
+            let mut director = StageDirector::new();
+            let commands = director.on_view(
+                0,
+                ViewDiff {
+                    roll: Some(outcome.sequence),
+                    impact: Some(outcome.sequence),
+                    sequence: outcome.sequence,
+                    ..ViewDiff::default()
+                },
+            );
+            assert!(
+                !commands
+                    .iter()
+                    .any(|command| matches!(command, Command::Render))
+            );
+            let sequence = commands
+                .into_iter()
+                .find_map(|command| match command {
+                    Command::Enter {
+                        state: StageState::Rolling,
+                        detail: Some(sequence),
+                        ..
+                    } => Some(sequence),
+                    _ => None,
+                })
+                .expect("the live director starts this committed roll before redraw");
+            // The renderer still has the previous empty snapshot when this cue enters.
+            assert!(live_attack(&rpc::CombatView::default(), sequence).is_none());
+            let attack = AttackDisplay::new(live_attack(&combat, sequence).unwrap()).unwrap();
+            assert_eq!(u32::from(attack.play.kept), outcome.attack_die);
+            assert_eq!(attack.play.other, None, "one ordinary attack die");
+            assert!(!attack.attack_card.explanation.contains(" | damage "));
+            let steps = attack.steps();
+            assert_eq!(steps[0], (0, AttackDisplayAction::OpenDie));
+            assert_eq!(steps[1], (1100, AttackDisplayAction::SettleDie));
+            assert_eq!(steps[2], (1500, AttackDisplayAction::OpenCard));
+            let records: Vec<_> = steps
+                .into_iter()
+                .flat_map(|(at, action)| {
+                    action
+                        .records(!attack.damage_faces.is_empty())
+                        .into_iter()
+                        .map(move |(component, phase, reason)| (at, component, phase, reason))
+                })
+                .collect();
+            assert!(records.contains(&(
+                0,
+                PresentationComponent::Die,
+                ComponentPhase::Opened,
+                "attack-rolled"
+            )));
+            assert!(records.contains(&(
+                1100,
+                PresentationComponent::Die,
+                ComponentPhase::Readable,
+                "attack-settled"
+            )));
+            assert!(records.contains(&(
+                1500,
+                PresentationComponent::RollCard,
+                ComponentPhase::Opened,
+                "face-dwell-complete"
+            )));
+            assert!(records.contains(&(
+                1850,
+                PresentationComponent::RollCard,
+                ComponentPhase::Readable,
+                "attack-breakdown"
+            )));
+            if hit {
+                assert!(!attack.damage_faces.is_empty());
+                assert!(attack.damage_card.explanation.contains(" | damage "));
+                assert!(records.contains(&(
+                    1500,
+                    PresentationComponent::Dice,
+                    ComponentPhase::Opened,
+                    "damage-rolled"
+                )));
+                assert!(records.contains(&(
+                    2300,
+                    PresentationComponent::Dice,
+                    ComponentPhase::Readable,
+                    "damage-settled"
+                )));
+            } else {
+                assert!(attack.damage_faces.is_empty());
+                assert!(
+                    !records
+                        .iter()
+                        .any(|(_, component, ..)| *component == PresentationComponent::Dice)
+                );
+            }
+            let closing_ms = if hit { 4300 } else { 4000 };
+            for component in [PresentationComponent::Die, PresentationComponent::RollCard] {
+                assert!(
+                    records
+                        .iter()
+                        .any(|(at, observed, phase, _)| *at == closing_ms
+                            && *observed == component
+                            && *phase == ComponentPhase::Closing)
+                );
+                assert!(
+                    records
+                        .iter()
+                        .any(|(at, observed, phase, _)| *at == closing_ms + 320
+                            && *observed == component
+                            && *phase == ComponentPhase::Hidden)
+                );
+            }
+        }
+    });
+}

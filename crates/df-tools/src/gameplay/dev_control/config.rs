@@ -42,6 +42,12 @@ pub(super) fn setting(
     Ok(Setting::On)
 }
 
+/// Reads the separate opt-in for development commands that edit battle state.
+/// The control surface can be authenticated while these mutations remain off.
+pub(super) fn overrides_enabled(input: Result<String, VarError>) -> bool {
+    matches!(optional(input).ok().flatten().as_deref(), Some("on"))
+}
+
 /// The value of one optional setting: unset is `None`, set is its text. This
 /// mirrors the startup configuration convention without depending on it.
 fn optional(input: Result<String, VarError>) -> Result<Option<String>, io::Error> {
@@ -152,6 +158,14 @@ mod tests {
     fn control_surface_refuses_unknown_values() {
         assert!(setting(var("yes"), unset(), loopback()).is_err());
         assert!(setting(var("ON"), unset(), loopback()).is_err());
+    }
+
+    #[test]
+    fn gameplay_overrides_are_opt_in() {
+        assert!(!overrides_enabled(unset()));
+        assert!(!overrides_enabled(var("off")));
+        assert!(!overrides_enabled(var("ON")));
+        assert!(overrides_enabled(var("on")));
     }
 
     #[test]

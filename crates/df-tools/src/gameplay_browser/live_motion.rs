@@ -219,6 +219,197 @@ type BattlefieldProgress = (Option<u32>, Option<(u32, u32, bool)>, bool);
 
 thread_local! {static MOTION:RefCell<Option<Motion>>=const{RefCell::new(None)};}
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentPresentation {
+    schema: u32,
+    revision: u64,
+    paused: bool,
+    steps: u64,
+    replays: u64,
+    speed: f64,
+    timing: std::collections::BTreeMap<String, u32>,
+}
+struct DevelopmentQueue {
+    generation: u64,
+    revision: u64,
+    paused: bool,
+    steps: u64,
+    replays: u64,
+    speed: f64,
+    timing: std::collections::BTreeMap<String, u32>,
+    pending: VecDeque<ViewPlan<Detail>>,
+    last: Option<ViewPlan<Detail>>,
+    real_ms: u64,
+    clock_ms: f64,
+}
+impl Default for DevelopmentQueue {
+    fn default() -> Self {
+        Self {
+            generation: u64::MAX,
+            revision: 0,
+            paused: false,
+            steps: 0,
+            replays: 0,
+            speed: 1.0,
+            timing: Default::default(),
+            pending: VecDeque::new(),
+            last: None,
+            real_ms: 0,
+            clock_ms: 0.0,
+        }
+    }
+}
+thread_local! {static DEVELOPMENT:RefCell<DevelopmentQueue>=RefCell::new(DevelopmentQueue::default());}
+fn development_clock(real: u64) -> u64 {
+    DEVELOPMENT.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.real_ms == 0 {
+            state.clock_ms = real as f64;
+        } else {
+            state.clock_ms += real.saturating_sub(state.real_ms) as f64 * state.speed;
+        }
+        state.real_ms = real;
+        state.clock_ms as u64
+    })
+}
+pub(super) fn development_duration(name: &str, default_ms: u64) -> u64 {
+    DEVELOPMENT.with(|state| {
+        let state = state.borrow();
+        (f64::from(state.timing.get(name).copied().unwrap_or(default_ms as u32)) / state.speed)
+            .round()
+            .max(1.0) as u64
+    })
+}
+fn development_paused() -> bool {
+    DEVELOPMENT.with(|state| state.borrow().paused)
+}
+fn development_submit(
+    motion: &mut Motion,
+    now: u64,
+    plan: ViewPlan<Detail>,
+) -> Vec<Command<Detail>> {
+    let plans = DEVELOPMENT.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.paused && state.pending.len() < 128 {
+            state.pending.push_back(plan);
+            return Vec::new();
+        }
+        let overflow = state.paused;
+        let mut plans = state.pending.drain(..).collect::<Vec<_>>();
+        plans.push(plan);
+        if overflow {
+            state.paused = false;
+            super::presentation_timing::component(
+                None,
+                df_observe::presentation::PresentationComponent::Battlefield,
+                super::presentation_timing::next_component_id(),
+                "development-presentation",
+                df_observe::presentation::ComponentPhase::Failed,
+                "dev-pause-capacity-resumed",
+                0,
+            );
+        }
+        plans
+    });
+    let mut commands = Vec::new();
+    for plan in plans {
+        if plan.diff.roll.is_some() || plan.diff.turn.is_some() {
+            DEVELOPMENT.with(|state| state.borrow_mut().last = Some(plan.clone()));
+        }
+        commands.extend(motion.conductor.on_view(now, plan));
+    }
+    commands
+}
+/// Equal-revision layout watch updates arrive here before layout decoding. Rules are untouched.
+pub(super) fn development_presentation(
+    client: &Rc<RefCell<Client>>,
+    value: &serde_json::Value,
+) -> Result<(), JsValue> {
+    let command: DevelopmentPresentation = serde_json::from_value(value.clone())
+        .map_err(|_| JsValue::from_str("invalid development presentation"))?;
+    if command.schema != 1
+        || !command.speed.is_finite()
+        || !(0.25..=4.0).contains(&command.speed)
+        || command.timing.len() > 5
+        || command.timing.values().any(|ms| !(1..=60000).contains(ms))
+    {
+        return Err(JsValue::from_str("invalid development presentation bounds"));
+    }
+    ensure_motion(client);
+    let now = development_clock(now_ms());
+    let generation = client.borrow().generation;
+    let plans = DEVELOPMENT.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.generation != generation {
+            state.pending.clear();
+            state.last = None;
+            state.steps = command.steps;
+            state.replays = command.replays;
+            state.revision = 0;
+            state.paused = command.paused;
+            state.speed = command.speed;
+            state.timing = command.timing.clone();
+            state.generation = generation;
+        }
+        if command.revision <= state.revision {
+            return Vec::new();
+        }
+        let mut plans = Vec::new();
+        if !command.paused {
+            plans.extend(state.pending.drain(..));
+        } else {
+            for _ in state.steps..command.steps {
+                if let Some(plan) = state.pending.pop_front() {
+                    plans.push(plan);
+                }
+            }
+        }
+        if command.replays > state.replays
+            && let Some(mut plan) = state.last.clone()
+        {
+            // Sequence zero is the director's explicitly untracked display cue. Preserve the
+            // committed outcome identity inside Detail, without advancing the presented receipt.
+            plan.diff.sequence = 0;
+            plan.diff.blow_only = true;
+            plan.diff.scene_changed = false;
+            plan.diff.enters_combat = false;
+            plan.diff.banner = None;
+            plan.diff.title = None;
+            plan.diff.closing = None;
+            plan.script.clear();
+            plans.push(plan);
+        }
+        state.revision = command.revision;
+        state.paused = command.paused;
+        state.steps = command.steps;
+        state.replays = command.replays;
+        state.speed = command.speed;
+        state.timing = command.timing;
+        plans
+    });
+    let commands = with_motion(|motion| {
+        let mut commands = Vec::new();
+        for plan in plans {
+            if plan.diff.roll.is_some() || plan.diff.turn.is_some() {
+                DEVELOPMENT.with(|state| state.borrow_mut().last = Some(plan.clone()));
+            }
+            commands.extend(motion.conductor.on_view(now, plan));
+        }
+        commands
+    })
+    .unwrap_or_default();
+    apply(client, commands)?;
+    if let Some(tv) = client.borrow().live.tv.as_ref() {
+        tv.root().set_attribute(
+            "data-development-paused",
+            if command.paused { "true" } else { "false" },
+        )?;
+    }
+    ensure_frame();
+    Ok(())
+}
+
 fn with_motion<R>(operate: impl FnOnce(&mut Motion) -> R) -> Option<R> {
     MOTION.with(|slot| slot.borrow_mut().as_mut().map(operate))
 }
@@ -240,6 +431,11 @@ fn clear_timeline(motion: &mut Motion) {
 /// Drops line and combat history before processing a restored view. The connection generation,
 /// conductor sound state and current server view remain owned by their existing lifetimes.
 pub(super) fn reset_timeline() {
+    DEVELOPMENT.with(|state| {
+        let mut state = state.borrow_mut();
+        state.pending.clear();
+        state.last = None;
+    });
     with_motion(clear_timeline);
 }
 
@@ -844,7 +1040,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let standing = presentation::standing_cells(journey);
     let sound_on = live_voice::effects_gate().is_some();
     let thinking = presentation::replying_speaker(&view);
-    let now = now_ms();
+    let now = development_clock(now_ms());
     let planned = with_motion(|motion| {
         // The server restarts its table-log sequence on a new watch connection.
         if motion.generation != generation {
@@ -1112,7 +1308,9 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         motion.party_hit_points = hit_points.clone();
         motion.generation = generation;
         motion.thinking_for = thinking.clone();
-        if let Some(overlay) = motion.overlay.take() {
+        if !development_paused()
+            && let Some(overlay) = motion.overlay.take()
+        {
             overlay.remove();
         }
         motion.conductor.set_sound(sound_on);
@@ -1146,12 +1344,12 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             commands.extend(motion.conductor.restart(now, plan));
         } else {
             for earlier in &before {
-                commands.extend(motion.conductor.on_view(now, blow_plan(earlier)));
+                commands.extend(development_submit(motion, now, blow_plan(earlier)));
             }
             let later: Vec<ViewPlan<Detail>> = after.iter().map(blow_plan).collect();
-            commands.extend(motion.conductor.on_view(now, plan));
+            commands.extend(development_submit(motion, now, plan));
             for turn in later {
-                commands.extend(motion.conductor.on_view(now, turn));
+                commands.extend(development_submit(motion, now, turn));
             }
         }
         commands.extend(motion.conductor.on_intents(now, intents));
@@ -1160,7 +1358,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let Some((commands, chime)) = planned else {
         return Ok(());
     };
-    if chime {
+    if chime && !development_paused() {
         live_sfx::play(Cue::TurnChime, Duration::ZERO);
     }
     let applied = apply(client, commands);
@@ -1505,8 +1703,12 @@ fn apply(client: &Rc<RefCell<Client>>, commands: Vec<Command<Detail>>) -> Result
                 if beat.is_empty() {
                     outcome
                 } else {
-                    let more = with_motion(|motion| motion.conductor.install_beat(now_ms(), beat))
-                        .unwrap_or_default();
+                    let more = with_motion(|motion| {
+                        motion
+                            .conductor
+                            .install_beat(development_clock(now_ms()), beat)
+                    })
+                    .unwrap_or_default();
                     outcome.and(apply(client, more))
                 }
             }
@@ -2322,7 +2524,7 @@ pub(super) fn clip_signal(id: LineId, signal: ClipSignal) {
     if let Some((state, at_ms)) = voice_observation {
         super::presentation_timing::voice_at(id, state, at_ms);
     }
-    let now = now_ms();
+    let now = development_clock(now_ms());
     let planned = with_motion(|motion| {
         (
             motion.client.upgrade(),
@@ -2455,6 +2657,7 @@ fn frame(timestamp: f64) {
 
 /// Advances the conductor to `now` and applies what it commands.
 fn tick(now: u64) {
+    let now = development_clock(now);
     let commands = with_motion(|motion| {
         motion
             .conductor

@@ -74,6 +74,8 @@ struct FileScene {
     grid: FileGrid,
     cameras: BTreeMap<String, FilePose>,
     #[serde(default)]
+    home: Option<FilePose>,
+    #[serde(default)]
     splat: Option<FileSplat>,
     /// `public` (default) or `private-test-only`: a scan used for local testing under no licence.
     #[serde(default)]
@@ -408,6 +410,8 @@ pub struct BattleScene {
     pub backdrop: BackdropLayer,
     pub grid: Grid,
     pub cameras: BTreeMap<ShotName, CameraPose>,
+    /// Stable home angle used between beats and when authoring character clips.
+    pub home: CameraPose,
     pub splat: Option<SplatLayer>,
     pub distribution: Distribution,
     pub attribution: Option<Attribution>,
@@ -577,7 +581,25 @@ pub fn parse(json: &str) -> Result<BattleScene, SceneFileError> {
         .transpose()
         .map_err(SceneFileError::Occupancy)?;
     frame_for_grid(&mut cameras, &grid);
+    let home = match file.home {
+        Some(pose) => CameraPose {
+            target: Vec3::new(pose.target[0], pose.target[1], pose.target[2]),
+            distance: pose.distance,
+            yaw_deg: pose.yaw_deg,
+            pitch_deg: pose.pitch_deg,
+            fov_deg: pose.fov_deg,
+        },
+        None => CameraPose {
+            pitch_deg: 15.0,
+            fov_deg: 38.0,
+            distance: cameras[&ShotName::CombatEst].distance,
+            ..cameras[&ShotName::Tactical]
+        },
+    };
+    home.validate()
+        .map_err(|error| SceneFileError::Camera("home".to_owned(), error))?;
     Ok(BattleScene {
+        home,
         location_id: file.location_id,
         title: file.title,
         playable: file.playable,
@@ -962,6 +984,32 @@ mod tests {
 
     fn base() -> serde_json::Value {
         serde_json::from_str(load_embedded("salt-quay").map(|_| EMBEDDED[0].1).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn camera_home_is_derived_or_authored_and_validated_like_other_poses() {
+        let scene = parse(&base().to_string()).unwrap();
+        assert_eq!(scene.home.pitch_deg, 15.0);
+        assert_eq!(scene.home.fov_deg, 38.0);
+        assert_eq!(
+            scene.home.yaw_deg,
+            scene.cameras[&ShotName::Tactical].yaw_deg
+        );
+        assert_eq!(
+            scene.home.distance,
+            scene.cameras[&ShotName::CombatEst].distance
+        );
+        let mut value = base();
+        value["home"] = serde_json::json!({"target":[0,1,0],"distance":8,"yaw_deg":23,"pitch_deg":18,"fov_deg":40});
+        let scene = parse(&value.to_string()).unwrap();
+        assert_eq!(scene.home.yaw_deg, 23.0);
+        for (key, bad) in [("distance", 0.0), ("pitch_deg", 90.0), ("fov_deg", 101.0)] {
+            let mut invalid = value.clone();
+            invalid["home"][key] = bad.into();
+            assert!(
+                matches!(parse(&invalid.to_string()), Err(SceneFileError::Camera(name, _)) if name == "home")
+            );
+        }
     }
 
     fn rejects(edit: impl FnOnce(&mut serde_json::Value)) -> SceneFileError {

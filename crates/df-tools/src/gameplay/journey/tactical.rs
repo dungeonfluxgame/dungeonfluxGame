@@ -402,6 +402,7 @@ pub(super) fn read(state: &GameState) -> Result<Battle, RepositoryError> {
             TACTICAL_SOURCE_REVISION_LEGACY_POLICY
                 | TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY
                 | TACTICAL_SOURCE_REVISION_LATEST_POLICY
+                | DEVELOPMENT_SOURCE_REVISION
         )
         || saved.scene_digest.0 != <[u8; 32]>::from(Sha256::digest(&saved.scene))
         || !SCENES
@@ -514,6 +515,22 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
         ] {
             set(state, who, key, value)?;
         }
+        if development_mode(state)
+            || state
+                .entities
+                .iter()
+                .any(|world| world.id == who && development_profile(world).is_some())
+        {
+            if let Some(dead) = state
+                .resources
+                .iter_mut()
+                .find(|resource| resource.owner == who && resource.resource.as_str() == "dead")
+            {
+                dead.value = i64::from(health.dead);
+            } else {
+                add_resource(state, who, "dead", i64::from(health.dead))?;
+            }
+        }
         if actor.side() == Side::Heroes {
             if actor
                 .spec()
@@ -554,7 +571,16 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
                 {
                     item.quantity = quantity;
                 } else if quantity != 0 {
-                    return Err(RepositoryError::InvalidCandidate);
+                    if !development_mode(state) {
+                        return Err(RepositoryError::InvalidCandidate);
+                    }
+                    let mut restored = super::recreated_heroes(state)?
+                        .inventory
+                        .into_iter()
+                        .find(|item| item.owner == who && item.origin.entry.as_str() == entry)
+                        .ok_or(RepositoryError::InvalidCandidate)?;
+                    restored.quantity = quantity;
+                    state.inventory.push(restored);
                 }
             }
         }
@@ -816,7 +842,9 @@ fn prior_attacks(
     use super::super::fight_lines::AttackFact;
     let mut prior = Vec::new();
     for decision in &state.decisions {
-        if decision.source_policy.as_str() != THREAD_POLICY {
+        if decision.source_policy.as_str() != THREAD_POLICY
+            && development_receipt(decision)?.is_none()
+        {
             continue;
         }
         for outcome in accepted(decision)?.combat {
@@ -1194,6 +1222,9 @@ fn apply(
     Ok(result.battle)
 }
 fn finish_if_done(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> {
+    if development_encounter(state) {
+        return Ok(());
+    }
     if !battle.finished() {
         return Ok(());
     }
@@ -1254,7 +1285,9 @@ fn policy(
     let choose = match saved.source_revision.as_str() {
         TACTICAL_SOURCE_REVISION_LEGACY_POLICY => df_combat::tactical::choose_legacy,
         TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY => df_combat::tactical::choose,
-        TACTICAL_SOURCE_REVISION_LATEST_POLICY => df_combat::tactical::choose_latest,
+        TACTICAL_SOURCE_REVISION_LATEST_POLICY | DEVELOPMENT_SOURCE_REVISION => {
+            df_combat::tactical::choose_latest
+        }
         _ => {
             return noted(
                 "enemy-policy-version",
@@ -1407,6 +1440,8 @@ pub(in crate::gameplay) struct StagedNpcTurn {
     pub(in crate::gameplay) receipt: String,
     pub(in crate::gameplay) before: String,
     pub(in crate::gameplay) after: String,
+    pub(in crate::gameplay) ordinary: bool,
+    pub(in crate::gameplay) restoration: Option<super::scene_fight::DevelopmentRestoration>,
 }
 
 /// The combatant the battle is waiting on: a pending reaction first, otherwise the active turn.
@@ -1488,6 +1523,9 @@ fn chosen_weapon(
     requested: Option<&str>,
 ) -> Result<Weapon, String> {
     let weapons = &actor.spec().weapons;
+    if requested.is_some_and(|text| text.eq_ignore_ascii_case("unarmed-strike")) {
+        return Ok(Weapon::UnarmedStrike);
+    }
     match requested {
         Some(text) => weapons
             .iter()
@@ -1509,7 +1547,12 @@ fn act_action(
     id: u32,
     act: &NpcAct,
 ) -> Result<Option<Action>, String> {
-    if battle.reaction_offers().first().is_some() && *act != NpcAct::Policy {
+    if !battle.reaction_offers().is_empty()
+        && !matches!(
+            act,
+            NpcAct::Policy | NpcAct::Opportunity { .. } | NpcAct::DeclineReaction
+        )
+    {
         return Err(
             "a reaction is waiting on this NPC: release the hold to let the policy answer it"
                 .to_owned(),
@@ -1519,6 +1562,29 @@ fn act_action(
         .actor(id)
         .map_err(|_| "the NPC is not in the fight")?;
     let action = match act {
+        NpcAct::Development(_) => {
+            return Err("a development command is not an NPC action".to_owned());
+        }
+        NpcAct::Opportunity { weapon: requested } => {
+            let chosen = match requested {
+                Some(requested) => chosen_weapon(actor, Some(requested))?,
+                None => actor
+                    .held_weapons()
+                    .iter()
+                    .copied()
+                    .find(|weapon| !weapon.ranged_weapon())
+                    .unwrap_or(Weapon::UnarmedStrike),
+            };
+            Some(Action::Opportunity {
+                attack: Some(weapon(actor, chosen)),
+            })
+        }
+        NpcAct::DeclineReaction => Some(Action::Opportunity { attack: None }),
+        NpcAct::NimbleDisengage => Some(Action::NimbleDisengage),
+        NpcAct::Stand => Some(Action::Stand),
+        NpcAct::DropProne => Some(Action::DropProne),
+        NpcAct::DoffShield => Some(Action::DoffShield),
+        NpcAct::DeathSave => Some(Action::DeathSave),
         NpcAct::Policy => None,
         NpcAct::EndTurn => Some(Action::EndTurn),
         NpcAct::Dash => Some(Action::Dash),
@@ -1568,7 +1634,7 @@ fn act_action(
 
 /// Resolves one NPC turn against the open fight: the act the CLI chose, or `Policy` to let the
 /// enemy policy take a turn whose hold was released. Refused unless the battle is waiting on that
-/// NPC and the turn leaves the fight open. Nothing is committed here: the owner commits the
+/// NPC, including a terminal turn. Nothing is committed here: the owner commits the
 /// returned turn as one decision, as a hero's action is committed.
 pub(in crate::gameplay) fn npc_turn(
     current: &Checkpoint,
@@ -1576,13 +1642,22 @@ pub(in crate::gameplay) fn npc_turn(
     act: &NpcAct,
     operation: OperationId,
 ) -> Result<StagedNpcTurn, String> {
+    if let NpcAct::Development(command) = act {
+        return development_turn(current, command, operation);
+    }
     if !present(current.state()) {
         return Err("no fight is open: NPC actions outside a fight are a later step".to_owned());
     }
     let mut state = current.state().clone();
     let battle = read(&state).map_err(|error| format!("fight state unavailable: {error:?}"))?;
     let id = npc_waiting_actor(&state, &battle, npc)?;
-    let action = act_action(&state, &battle, id, act)?;
+    let action = match act_action(&state, &battle, id, act)? {
+        Some(action) => Some(action),
+        None => Some(
+            policy(current, &state, &battle, id, operation, 0)
+                .map_err(|error| format!("NPC policy refused: {error:?}"))?,
+        ),
+    };
     let mut draws = Vec::new();
     let mut outcomes = Vec::new();
     let mut sample = super::sample_face;
@@ -1610,25 +1685,35 @@ pub(in crate::gameplay) fn npc_turn(
         supplier,
     )
     .map_err(|error| format!("the turn could not be resolved: {error:?}"))?;
-    let ended = match read(&state) {
-        Ok(battle) => battle.finished(),
-        Err(_) => true,
-    };
-    if ended {
-        return Err(
-            "this turn would end the fight: fight endings stay on the hero's path".to_owned(),
-        );
-    }
+    // NPC turns are committed through the same owner path as hero turns. A terminal
+    // result is therefore retained in the staged state and the owner publication
+    // hook closes the fight, rather than refusing a valid winning turn.
     let receipt = rpc::AcceptedAction {
         combat: outcomes,
-        phase: rpc::JourneyPhase::Combat as i32,
+        phase: if present(&state) {
+            if read(&state)
+                .map_err(|_| "fight state unavailable")?
+                .finished()
+            {
+                rpc::JourneyPhase::Complete as i32
+            } else {
+                rpc::JourneyPhase::Combat as i32
+            }
+        } else {
+            super::super::beat_script::with_script(|script| {
+                script
+                    .current(&state)
+                    .map(super::super::beat_script_runtime::phase_of)
+            })
+            .map_err(|_| "scene phase unavailable")? as i32
+        },
         ..Default::default()
     };
     let encoded = super::hex(&receipt.encode_to_vec());
     if encoded.len() > model::limits().maximum_text_bytes {
         return Err("the turn's receipt is too large to record".to_owned());
     }
-    let policy_revision = snapshot(&state)
+    let policy_revision = snapshot(current.state())
         .map(|saved| saved.source_revision.as_str().to_owned())
         .map_err(|_| "fight snapshot unavailable")?;
     let (action_name, reason) = match &action {
@@ -1651,6 +1736,8 @@ pub(in crate::gameplay) fn npc_turn(
         receipt: encoded,
         before: format!("{npc} waiting for its turn"),
         after: format!("{npc}: {}", act.label()),
+        ordinary: !development_encounter(current.state()),
+        restoration: None,
     })
 }
 
@@ -2046,6 +2133,25 @@ fn start_on(
                 .map_err(bad),
         )?;
     }
+    let clip_fighters = actors
+        .iter()
+        .filter_map(|(id, who)| {
+            let combatant = result.battle.actor(*id).ok()?;
+            let weapon = combatant.spec().weapons.first().copied()?;
+            let subject = if state.characters.iter().any(|hero| hero.entity == *who) {
+                crate::gameplay::character_clips::hero_subject(*who)
+            } else if let Some(foe) =
+                scene_fight.and_then(|fight| fight.foes.iter().find(|foe| foe.entity == *who))
+            {
+                foe.person.id.clone()
+            } else if scene_binding.is_some() {
+                "courier".to_owned()
+            } else {
+                format!("combat-creature:{}", combatant.spec().kind.srd_id()?)
+            };
+            crate::gameplay::character_clips::fighter_for(state, *who, subject, weapon)
+        })
+        .collect::<Vec<_>>();
     state.encounters.push(EncounterState {
         id: RecordId::from_bytes(&ENCOUNTER).map_err(bad)?,
         definition: model::content("combat")?,
@@ -2069,6 +2175,7 @@ fn start_on(
         }),
     });
     noted("fight-store", store(state, &result.battle))?;
+    crate::gameplay::character_clips::request_fighters(clip_fighters);
     // A freeplay scene stays on its own beat: the fight is an encounter inside it, not a beat.
     if scene_fight.is_none() {
         noted("fight-beat", beat(state, "combat"))?;
@@ -2963,7 +3070,7 @@ pub(super) fn stage(
         )?;
     }
     // A freeplay fight that just ended has closed its encounter, so there is no battle to read.
-    if present(state) && all_heroes_dead(state)? {
+    if !development_encounter(state) && present(state) && all_heroes_dead(state)? {
         super::super::beat_script_runtime::end_for_total_party_death(state).inspect_err(|_| {
             crate::gameplay::refusal_detail::note("total-party-death-transition")
         })?;
@@ -3456,6 +3563,33 @@ pub(super) fn initiative(
 ) -> Result<Vec<rpc::InitiativeRoll>, RepositoryError> {
     let state = current.state();
     let battle = read(state)?;
+    if development_mode(state)
+        && battle
+            .combatants()
+            .iter()
+            .all(|actor| battle.development_initiative(actor.id()).is_some())
+    {
+        return battle
+            .initiative_order()
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let actor = battle.actor(*id).map_err(bad)?;
+                let modifier = rules::ability_modifier(actor.spec().abilities[1]);
+                let total = battle
+                    .development_initiative(*id)
+                    .ok_or(RepositoryError::InvalidCandidate)?;
+                Ok(rpc::InitiativeRoll {
+                    participant_id: canonical(state, *id)?.as_bytes().to_vec(),
+                    name: name(state, canonical(state, *id)?)?,
+                    die: u32::try_from(total - modifier).map_err(bad)?,
+                    modifier,
+                    total,
+                    order: index as u32 + 1,
+                })
+            })
+            .collect();
+    }
     // The latest start: a freeplay scene may see more than one fight.
     let start = state.facts.iter().rev().find(|fact| matches!(&fact.value, FactValue::ContentEvent {definition, ..} if matches!(definition.entry.as_str(), "defend-courier" | super::scene_fight::OBJECTIVE))).ok_or(RepositoryError::InvalidCandidate)?;
     let decision = state
@@ -3662,12 +3796,10 @@ pub(in crate::gameplay) fn project_member(
     } else {
         1
     };
-    for decision in state
-        .decisions
-        .iter()
-        .rev()
-        .filter(|decision| decision.source_policy.as_str() == THREAD_POLICY)
-    {
+    for decision in state.decisions.iter().rev().filter(|decision| {
+        decision.source_policy.as_str() == THREAD_POLICY
+            || development_receipt(decision).is_ok_and(|receipt| receipt.is_some())
+    }) {
         if let Some(outcome) = accepted(decision)?
             .combat
             .iter()
@@ -8556,4 +8688,1574 @@ mod private_outcome_tests {
                 .all(|outcome| outcome.target_armor_class == 0)
         );
     }
+}
+
+// Development mutations are detached staged rules changes. The owner remains the sole committer.
+const DEVELOPMENT_PREFIX: &str = "dev:battle:";
+const DEVELOPMENT_SOURCE_REVISION: &str = "SRD-5.2.1:PLAY-T01:3:development-v1";
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentReceipt {
+    baseline_phase: i32,
+    label: String,
+    receipt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    restoration: Option<super::scene_fight::DevelopmentRestoration>,
+}
+fn development_map(
+    scene: &str,
+    layout: Option<&str>,
+) -> Result<(&'static [u8], BattleMap), String> {
+    let scene = preferred_scene(scene).ok_or("unknown authored battle scene")?;
+    let rendered = df_render::battle::load_embedded(scene)
+        .ok_or("battle scene has no renderer")?
+        .map_err(|_| "invalid battle scene")?;
+    if !rendered.playable {
+        return Err("battle scene is not playable".to_owned());
+    }
+    let bytes = SCENES
+        .iter()
+        .find(|(id, _)| *id == scene)
+        .map(|(_, bytes)| *bytes)
+        .ok_or("battle scene has no grid")?;
+    let data: tactical_rules::BattleSceneData =
+        serde_json::from_slice(bytes).map_err(|_| "invalid battle scene grid")?;
+    let layout = layout
+        .or_else(|| data.layouts.first().map(|layout| layout.id.as_str()))
+        .ok_or("battle scene has no layout")?;
+    Ok((
+        bytes,
+        scene_map(bytes, layout).map_err(|_| "unknown or invalid battle layout")?,
+    ))
+}
+fn development_envelope(
+    decision: &AcceptedDecision,
+) -> Result<Option<DevelopmentReceipt>, RepositoryError> {
+    let Some(text) = decision
+        .semantic_output
+        .as_deref()
+        .and_then(|text| text.strip_prefix(DEVELOPMENT_PREFIX))
+    else {
+        return Ok(None);
+    };
+    if decision.source_policy != model::rule()?.catalog
+        || decision.facts.len() != decision.draws.len()
+        || !decision.effects.is_empty()
+    {
+        return Err(RepositoryError::InvalidReceipt);
+    }
+    let envelope: DevelopmentReceipt = serde_json::from_str(text).map_err(bad)?;
+    if envelope.label.is_empty() || rpc::JourneyPhase::try_from(envelope.baseline_phase).is_err() {
+        return Err(RepositoryError::InvalidReceipt);
+    }
+    Ok(Some(envelope))
+}
+pub(in crate::gameplay) fn development_receipt(
+    decision: &AcceptedDecision,
+) -> Result<Option<rpc::AcceptedAction>, RepositoryError> {
+    development_envelope(decision)?
+        .map(|envelope| {
+            rpc::AcceptedAction::decode(unhex(&envelope.receipt)?.as_slice()).map_err(bad)
+        })
+        .transpose()
+}
+pub(in crate::gameplay) fn development_mode(state: &GameState) -> bool {
+    development_encounter(state)
+        || state.decisions.iter().any(|decision| {
+            decision
+                .semantic_output
+                .as_deref()
+                .is_some_and(|text| text.starts_with(DEVELOPMENT_PREFIX))
+        })
+}
+fn development_encounter(state: &GameState) -> bool {
+    state.encounters.iter().any(|encounter| {
+        encounter
+            .tactical
+            .as_ref()
+            .is_some_and(|saved| saved.source_revision.as_str() == DEVELOPMENT_SOURCE_REVISION)
+    })
+}
+fn development_baseline(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
+    for decision in current.state().decisions.iter().rev() {
+        if let Some(envelope) = development_envelope(decision)? {
+            return rpc::JourneyPhase::try_from(envelope.baseline_phase).map_err(bad);
+        }
+    }
+    super::phase(current)
+}
+pub(in crate::gameplay) fn development_phase(
+    current: &Checkpoint,
+) -> Result<Option<rpc::JourneyPhase>, RepositoryError> {
+    if !development_mode(current.state()) {
+        return Ok(None);
+    }
+    current
+        .validate_resume(current.basis(), &model::pins()?)
+        .map_err(bad)?;
+    // Each development draw has the same canonical DrawAccepted fact and ownership as a
+    // registered rules command. Development receipts never introduce story facts or effects.
+    for decision in &current.state().decisions {
+        if development_receipt(decision)?.is_some() {
+            for (id, ordinal) in decision.facts.iter().zip(&decision.draws) {
+                let fact = current
+                    .state()
+                    .facts
+                    .iter()
+                    .find(|fact| fact.id == *id)
+                    .ok_or(RepositoryError::InvalidCandidate)?;
+                if fact.operation != decision.operation
+                    || fact.revision != decision.revision
+                    || !matches!(fact.value,FactValue::DrawAccepted{operation,ordinal:draw_ordinal} if operation==decision.operation&&draw_ordinal==*ordinal)
+                {
+                    return Err(RepositoryError::InvalidCandidate);
+                }
+            }
+        }
+    }
+    if present(current.state()) {
+        validate_encounter(current)?;
+        return Ok(Some(if read(current.state())?.finished() {
+            rpc::JourneyPhase::Complete
+        } else {
+            rpc::JourneyPhase::Combat
+        }));
+    }
+    super::super::beat_script::with_script(|script| {
+        if script.uses_encounter() {
+            super::narrative_phase::classify(current.state()).map(Some)
+        } else {
+            script
+                .current(current.state())
+                .map(|beat| Some(super::super::beat_script_runtime::phase_of(beat)))
+        }
+    })
+}
+pub(in crate::gameplay) fn development_encoded(
+    current: &Checkpoint,
+    receipt: &rpc::AcceptedAction,
+    label: &str,
+    restoration: Option<&super::scene_fight::DevelopmentRestoration>,
+) -> Result<String, RepositoryError> {
+    let envelope = DevelopmentReceipt {
+        baseline_phase: development_baseline(current)? as i32,
+        label: label.to_owned(),
+        receipt: hex(&receipt.encode_to_vec()),
+        restoration: restoration.cloned(),
+    };
+    let encoded = format!(
+        "{DEVELOPMENT_PREFIX}{}",
+        serde_json::to_string(&envelope).map_err(bad)?
+    );
+    if encoded.len() > model::limits().maximum_text_bytes {
+        return Err(RepositoryError::Capacity);
+    }
+    Ok(encoded)
+}
+pub(in crate::gameplay) fn development_restoration(
+    decision: &AcceptedDecision,
+) -> Result<Option<super::scene_fight::DevelopmentRestoration>, RepositoryError> {
+    Ok(development_envelope(decision)?.and_then(|envelope| envelope.restoration))
+}
+fn development_profile(world: &WorldEntity) -> Option<(&str, u16)> {
+    let text = world
+        .identity_revision
+        .as_str()
+        .strip_prefix("dev-battle-")?;
+    let (source, slot) = text.rsplit_once('-')?;
+    Some((source, slot.parse().ok()?))
+}
+pub(super) fn development_name(state: &GameState, who: EntityId) -> Option<String> {
+    let (source, slot) = development_profile(state.entities.iter().find(|world| world.id == who)?)?;
+    Some(format!("{} {}", weapon_display_name(source), slot))
+}
+pub(super) fn development_resources(
+    state: &GameState,
+) -> Result<Vec<ResourceConstraint>, RepositoryError> {
+    let mut result = Vec::new();
+    for world in &state.entities {
+        let Some((source, _)) = development_profile(world) else {
+            continue;
+        };
+        let spec =
+            CombatantSpec::creature(1, source, tactical_rules::Cell(0, 0), TEST_FOE_AMMUNITION)
+                .map_err(bad)?;
+        for (name, minimum, maximum) in [
+            ("hit-points", 0, i64::from(spec.hit_points)),
+            (
+                "armor-class",
+                i64::from(spec.armor_class.saturating_sub(2)),
+                i64::from(spec.armor_class),
+            ),
+            ("strength", 1, 30),
+            ("dexterity", 1, 30),
+            ("constitution", 1, 30),
+            ("intelligence", 1, 30),
+            ("wisdom", 1, 30),
+            ("charisma", 1, 30),
+            ("second-wind", 0, 0),
+            ("unconscious", 0, 1),
+            ("prone", 0, 1),
+            ("held-weapon", 0, 1),
+            ("action-used", 0, 1),
+            ("bonus-used", 0, 1),
+            ("dead", 0, 1),
+        ] {
+            result.push(ResourceConstraint {
+                owner: world.id,
+                resource: model::label(name)?,
+                minimum,
+                maximum,
+                source: rule()?,
+            });
+        }
+    }
+    Ok(result)
+}
+fn development_actor(state: &GameState, battle: &Battle, requested: &str) -> Result<u32, String> {
+    let matches = battle
+        .combatants()
+        .iter()
+        .filter_map(|actor| {
+            let who = canonical(state, actor.id()).ok()?;
+            let display = name(state, who).ok()?;
+            (display.eq_ignore_ascii_case(requested)
+                || requested.parse::<u32>().is_ok_and(|id| id == actor.id())
+                || hex(who.as_bytes()).eq_ignore_ascii_case(requested))
+            .then_some(actor.id())
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [id] => Ok(*id),
+        [] => Err(format!("{requested:?} is not a combatant in this fight")),
+        _ => Err("ambiguous name: use the combatant id".to_owned()),
+    }
+}
+fn development_cell(text: &str) -> Result<tactical_rules::Cell, String> {
+    if let Some((col, row)) = text.split_once(',') {
+        return Ok(tactical_rules::Cell(
+            col.trim()
+                .parse()
+                .map_err(|_| "invalid zero-based column")?,
+            row.trim().parse().map_err(|_| "invalid zero-based row")?,
+        ));
+    }
+    let text = text.to_ascii_lowercase();
+    let (col, row) = text
+        .strip_prefix('c')
+        .and_then(|text| text.split_once('r'))
+        .ok_or("cell must be col,row (zero-based) or c<col>r<row> (one-based)")?;
+    let col = col
+        .parse::<u16>()
+        .ok()
+        .and_then(|value| value.checked_sub(1))
+        .ok_or("cell columns begin at c1")?;
+    let row = row
+        .parse::<u16>()
+        .ok()
+        .and_then(|value| value.checked_sub(1))
+        .ok_or("cell rows begin at r1")?;
+    Ok(tactical_rules::Cell(col, row))
+}
+fn development_insert_enemy(
+    state: &mut GameState,
+    id: u32,
+    slot: u16,
+    source: &str,
+    cell: tactical_rules::Cell,
+    operation: OperationId,
+) -> Result<(EntityId, CombatantSpec), RepositoryError> {
+    let source = source.strip_prefix("srd.").unwrap_or(source);
+    let spec = CombatantSpec::creature(id, source, cell, TEST_FOE_AMMUNITION).map_err(bad)?;
+    let hash = Sha256::new()
+        .chain_update(b"dev-battle-entity")
+        .chain_update(operation.as_bytes())
+        .chain_update(id.to_be_bytes())
+        .finalize();
+    let who = entity(hash[..16].try_into().map_err(bad)?)?;
+    state.entities.push(WorldEntity {
+        id: who,
+        definition: model::content("bandit")?,
+        location: Some(room_entity()?),
+        position: Some(Position {
+            x: i64::from(cell.0) * 5,
+            y: i64::from(cell.1) * 5,
+            z: 0,
+        }),
+        identity_revision: model::label(&format!("dev-battle-{source}-{slot}"))?,
+    });
+    for (key, value) in [
+        ("hit-points", i64::from(spec.hit_points)),
+        ("armor-class", i64::from(spec.armor_class)),
+        ("strength", i64::from(spec.abilities[0])),
+        ("dexterity", i64::from(spec.abilities[1])),
+        ("constitution", i64::from(spec.abilities[2])),
+        ("intelligence", i64::from(spec.abilities[3])),
+        ("wisdom", i64::from(spec.abilities[4])),
+        ("charisma", i64::from(spec.abilities[5])),
+        ("second-wind", 0),
+        ("unconscious", 0),
+        ("prone", 0),
+        ("held-weapon", 1),
+        ("action-used", 0),
+        ("bonus-used", 0),
+    ] {
+        add_resource(state, who, key, value)?;
+    }
+    Ok((who, spec))
+}
+fn development_start(
+    current: &Checkpoint,
+    state: &mut GameState,
+    command: &super::super::dev_control::fight::BattleCommand,
+    operation: OperationId,
+    draws: &mut Vec<ActualDraw>,
+    outcomes: &mut Vec<rpc::CombatOutcome>,
+    supplier: DiceSource<'_>,
+) -> Result<(), String> {
+    use super::super::dev_control::fight::BattleCommand;
+    let BattleCommand::Start {
+        foe,
+        count,
+        level,
+        scene,
+        layout,
+    } = command
+    else {
+        return Err("start command required".to_owned());
+    };
+    if present(state)
+        && !read(state)
+            .map_err(|error| format!("fight unavailable: {error:?}"))?
+            .finished()
+    {
+        return Err("a fight is already open; end it first".to_owned());
+    }
+    if !(1..=4).contains(count) || level.is_some_and(|level| !matches!(level, 1 | 5)) {
+        return Err("count must be 1..=4 and level must be 1 or 5".to_owned());
+    }
+    let baseline =
+        super::phase(current).map_err(|error| format!("phase unavailable: {error:?}"))?;
+    if matches!(
+        baseline,
+        rpc::JourneyPhase::Room | rpc::JourneyPhase::Unspecified
+    ) || state.characters.is_empty()
+    {
+        return Err("create the heroes and begin the story before starting a fight".to_owned());
+    }
+    state.encounters.clear();
+    let configured =
+        development_next_scene(current).map_err(|_| "next battle scene unavailable")?;
+    let scene_id = scene
+        .as_deref()
+        .or_else(|| configured.as_ref().map(|(scene, _)| scene.as_str()))
+        .or(forced_scene())
+        .unwrap_or("salt-quay");
+    let selected_layout = layout.as_deref().or_else(|| {
+        configured
+            .as_ref()
+            .and_then(|(_, layout)| layout.as_deref())
+    });
+    let (bytes, map) = development_map(scene_id, selected_layout)?;
+    let mut specs = Vec::new();
+    let mut actors = Vec::new();
+    for (index, hero) in state.characters.clone().iter().enumerate() {
+        let id = u32::try_from(index + 1).map_err(|_| "too many heroes")?;
+        let cell = *map
+            .hero_spawns()
+            .get(index)
+            .ok_or("scene lacks a hero spawn")?;
+        let selected = hero
+            .choices
+            .iter()
+            .filter(|choice| {
+                super::super::hero_identity::is_character_pack_validation_choice(
+                    choice.offer.as_str(),
+                ) && choice.offer.as_str() != "test-fighter-level"
+            })
+            .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
+            .collect::<Vec<_>>();
+        let legal = pack::validate_character(
+            &name(state, hero.entity).map_err(|_| "hero name unavailable")?,
+            &selected,
+        )
+        .map_err(|error| format!("hero build: {error:?}"))?;
+        let spec = if legal
+            .choices
+            .iter()
+            .any(|(key, value)| key == "array" && value == "dexterous")
+        {
+            tactical_rules::validate_archer(&legal.name, &selected)
+                .map_err(|error| format!("archer build: {error:?}"))?
+                .combatant(id, cell)
+        } else {
+            CombatantSpec::melee_hero(&legal, id, cell)
+                .map_err(|error| format!("hero build: {error:?}"))?
+        };
+        let requested_level = level.unwrap_or(
+            super::fighter_progression(state, hero.entity)
+                .map_err(|_| "hero progression unavailable")?
+                .level(),
+        );
+        let spec = if requested_level > 1 {
+            spec.at_fighter_level(requested_level)
+                .map_err(|error| format!("fighter level: {error:?}"))?
+        } else {
+            spec
+        };
+        if requested_level
+            != super::fighter_progression(state, hero.entity)
+                .map_err(|_| "hero progression unavailable")?
+                .level()
+        {
+            let character = state
+                .characters
+                .iter_mut()
+                .find(|character| character.entity == hero.entity)
+                .ok_or("hero unavailable")?;
+            character
+                .choices
+                .retain(|choice| choice.offer.as_str() != "test-fighter-level");
+            if requested_level > 1 {
+                character.choices.push(AcceptedChoice {
+                    participant: hero.owner,
+                    offer: model::label("test-fighter-level").map_err(|_| "level choice")?,
+                    selected: model::label("fighter-5").map_err(|_| "level choice")?,
+                    source: rule().map_err(|_| "level source")?,
+                });
+            }
+            for draft in state
+                .continuity
+                .creation
+                .iter_mut()
+                .filter(|draft| draft.entity == hero.entity)
+            {
+                draft.choices = character.choices.clone();
+            }
+            let constraints = super::resources_for(state).map_err(|_| "level resource bounds")?;
+            state.resources.retain(|resource| {
+                resource.owner != hero.entity
+                    || resource.resource.as_str() != "action-surge"
+                    || requested_level > 1
+            });
+            for resource in state
+                .resources
+                .iter_mut()
+                .filter(|resource| resource.owner == hero.entity)
+            {
+                let constraint = constraints
+                    .iter()
+                    .find(|constraint| {
+                        constraint.owner == hero.entity && constraint.resource == resource.resource
+                    })
+                    .ok_or("level resource constraint")?;
+                resource.minimum = constraint.minimum;
+                resource.maximum = constraint.maximum;
+                resource.value = match resource.resource.as_str() {
+                    "hit-points" => i64::from(spec.hit_points),
+                    "armor-class" => i64::from(spec.armor_class),
+                    "second-wind" => i64::from(spec.second_wind_uses),
+                    "hit-point-dice" => i64::from(requested_level),
+                    "strength" => i64::from(spec.abilities[0]),
+                    "dexterity" => i64::from(spec.abilities[1]),
+                    "constitution" => i64::from(spec.abilities[2]),
+                    "intelligence" => i64::from(spec.abilities[3]),
+                    "wisdom" => i64::from(spec.abilities[4]),
+                    "charisma" => i64::from(spec.abilities[5]),
+                    "action-surge" => 1,
+                    _ => resource.value.min(resource.maximum),
+                };
+            }
+            if requested_level > 1
+                && !state.resources.iter().any(|resource| {
+                    resource.owner == hero.entity && resource.resource.as_str() == "action-surge"
+                })
+            {
+                super::add_resource(state, hero.entity, "action-surge", 1)
+                    .map_err(|_| "action surge resource")?;
+            }
+        }
+        specs.push(spec);
+        actors.push((id, hero.entity));
+    }
+    for index in 0..*count {
+        let id =
+            u32::try_from(state.characters.len() + index + 1).map_err(|_| "too many combatants")?;
+        let cell = *map
+            .enemy_spawns()
+            .get(index)
+            .ok_or("scene lacks an enemy spawn")?;
+        let (who, spec) =
+            development_insert_enemy(state, id, index as u16 + 1, foe, cell, operation)
+                .map_err(|error| format!("unsupported foe: {error:?}"))?;
+        specs.push(spec);
+        actors.push((id, who));
+    }
+    let mut result = resolve_with_draws(operation, draws, supplier, |binding, records| {
+        tactical_rules::begin(map.clone(), specs.clone(), binding, records)
+    })
+    .map_err(|error| format!("fight initiative refused: {error:?}"))?;
+    for (id, who) in &actors {
+        if !state.characters.iter().any(|hero| hero.entity == *who) {
+            continue;
+        }
+        let arrows = u16::try_from(
+            state
+                .inventory
+                .iter()
+                .find(|item| item.owner == *who && item.origin.entry.as_str() == "arrow")
+                .map_or(0, |item| item.quantity),
+        )
+        .map_err(|_| "invalid ammunition")?;
+        result.battle = result
+            .battle
+            .with_hero_resources(
+                *id,
+                u16::try_from(value(state, *who, "hit-points").map_err(|_| "hero HP unavailable")?)
+                    .map_err(|_| "invalid HP")?,
+                arrows.min(20),
+                u8::try_from(
+                    value(state, *who, "second-wind").map_err(|_| "hero resource unavailable")?,
+                )
+                .map_err(|_| "invalid resource")?,
+            )
+            .map_err(|error| format!("hero resources refused: {error:?}"))?;
+        if arrows > 20 {
+            result.battle = result
+                .battle
+                .development_edit(
+                    *id,
+                    &tactical_rules::DevelopmentEdit::Resource {
+                        name: "ammo".to_owned(),
+                        value: arrows,
+                    },
+                )
+                .map_err(|error| format!("ammunition bounds: {error:?}"))?;
+        }
+        if super::fighter_progression(state, *who)
+            .map_err(|_| "fighter progression unavailable")?
+            .level()
+            >= 2
+        {
+            result.battle = result
+                .battle
+                .with_hero_action_surge(
+                    *id,
+                    value(state, *who, "action-surge").map_err(|_| "action surge unavailable")?
+                        != 0,
+                )
+                .map_err(|_| "invalid action surge")?;
+        }
+        let endurance = result
+            .battle
+            .actor(*id)
+            .map_err(|_| "hero combat profile unavailable")?
+            .spec()
+            .relentless_endurance_available;
+        result.battle = result
+            .battle
+            .with_hero_feature_resources(
+                *id,
+                u8::try_from(
+                    value(state, *who, "healer-kit-uses")
+                        .map_err(|_| "healer kit resource unavailable")?,
+                )
+                .map_err(|_| "healer kit bounds")?,
+                endurance,
+            )
+            .map_err(|error| format!("hero feature resources: {error:?}"))?;
+        let quantities = result
+            .battle
+            .actor(*id)
+            .map_err(|_| "hero combat profile unavailable")?
+            .spec()
+            .weapons
+            .iter()
+            .map(|weapon| {
+                let quantity = state
+                    .inventory
+                    .iter()
+                    .find(|item| item.owner == *who && item.origin.entry.as_str() == weapon.id())
+                    .map_or(0, |item| item.quantity);
+                Ok((
+                    *weapon,
+                    u16::try_from(quantity).map_err(|_| "weapon quantity bounds")?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        result.battle = result
+            .battle
+            .with_hero_weapons(*id, &quantities)
+            .map_err(|error| format!("hero equipment: {error:?}"))?;
+    }
+    state.encounters.push(EncounterState {
+        id: RecordId::from_bytes(&ENCOUNTER).map_err(|_| "encounter id")?,
+        definition: model::content("combat").map_err(|_| "combat definition")?,
+        participants: actors.iter().map(|(_, who)| *who).collect(),
+        turn_order: Vec::new(),
+        active_turn: None,
+        objectives: vec![model::content("defend-courier").map_err(|_| "combat objective")?],
+        combat_policy: model::content("tactical-srd521-cover-policy")
+            .map_err(|_| "combat policy")?,
+        tactical: Some(TacticalSnapshot {
+            schema: 1,
+            source_revision: model::label(DEVELOPMENT_SOURCE_REVISION)
+                .map_err(|_| "battle revision")?,
+            scene_digest: ContentDigest(Sha256::digest(bytes).into()),
+            scene: bytes.to_vec(),
+            layout: model::label(map.id()).map_err(|_| "layout")?,
+            actors,
+            state: result.battle.snapshot().map_err(|_| "battle snapshot")?,
+        }),
+    });
+    store(state, &result.battle)
+        .map_err(|error| format!("canonical battle state refused: {error:?}"))?;
+    enemy_turns(
+        current,
+        state,
+        result.battle,
+        operation,
+        draws,
+        outcomes,
+        supplier,
+    )
+    .map_err(|error| format!("opening enemy turns refused: {error:?}"))?;
+    Ok(())
+}
+fn development_turn(
+    current: &Checkpoint,
+    command: &super::super::dev_control::fight::BattleCommand,
+    operation: OperationId,
+) -> Result<StagedNpcTurn, String> {
+    use super::super::dev_control::fight::BattleCommand as Command;
+    use tactical_rules::DevelopmentEdit as Edit;
+    let mut state = current.state().clone();
+    let mut draws = Vec::new();
+    let mut outcomes = Vec::new();
+    let mut sample = super::sample_face;
+    let supplier: DiceSource<'_> = &mut sample;
+    let before = format!(
+        "{:?}",
+        super::phase(current).map_err(|error| format!("phase: {error:?}"))?
+    );
+    if let Command::Scene { scene, layout } = command {
+        development_map(scene, layout.as_deref())?;
+    } else if let Command::Start { .. } = command {
+        development_start(
+            current,
+            &mut state,
+            command,
+            operation,
+            &mut draws,
+            &mut outcomes,
+            supplier,
+        )?;
+    } else if let Command::Restore { person } = command
+        && !present(&state)
+    {
+        super::scene_fight::development_restore(&mut state, person)
+            .map_err(|error| format!("restore refused: {error:?}"))?;
+    } else {
+        let mut battle = read(&state).map_err(|_| "no tactical fight is present")?;
+        if battle
+            .combatants()
+            .iter()
+            .any(|actor| battle.development_initiative(actor.id()).is_none())
+        {
+            let totals = initiative(current)
+                .map_err(|_| "historical initiative unavailable")?
+                .into_iter()
+                .map(|roll| {
+                    let who = EntityId::from_bytes(&roll.participant_id)
+                        .map_err(|_| "initiative identity invalid")?;
+                    Ok((
+                        actor_id(&state, who).map_err(|_| "initiative actor unavailable")?,
+                        roll.total,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            battle = battle
+                .with_development_initiatives(&totals)
+                .map_err(|_| "historical initiative rejected")?;
+        }
+        match command {
+            Command::End { outcome } => {
+                if !matches!(outcome.as_str(), "victory" | "defeat" | "flee") {
+                    return Err("end takes victory, defeat or flee".to_owned());
+                }
+                if outcome != "flee" {
+                    let losing = if outcome == "victory" {
+                        Side::Enemies
+                    } else {
+                        Side::Heroes
+                    };
+                    let ids = battle
+                        .combatants()
+                        .iter()
+                        .filter(|actor| actor.side() == losing)
+                        .map(|actor| actor.id())
+                        .collect::<Vec<_>>();
+                    for id in ids {
+                        battle = battle
+                            .development_edit(id, &Edit::HitPoints(0))
+                            .map_err(|error| format!("end refused: {error:?}"))?;
+                    }
+                }
+                store(&mut state, &battle).map_err(|error| format!("end sync: {error:?}"))?;
+                if super::scene_fight::open(&state) {
+                    super::scene_fight::close(&mut state, &battle)
+                        .map_err(|error| format!("end scene close: {error:?}"))?;
+                } else {
+                    state.encounters.clear();
+                }
+                if !pack::with_content(|content| content.is_freeplay()) {
+                    beat(&mut state, "complete").map_err(|_| "ending beat unavailable")?;
+                }
+            }
+            Command::Add { foe, cell } => {
+                let id = battle
+                    .combatants()
+                    .iter()
+                    .map(|actor| actor.id())
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or("combatant ids exhausted")?;
+                let slot = battle
+                    .combatants()
+                    .iter()
+                    .filter(|actor| actor.side() == Side::Enemies)
+                    .count() as u16
+                    + 1;
+                let cell = match cell {
+                    Some(cell) => development_cell(cell)?,
+                    None => *battle
+                        .map()
+                        .enemy_spawns()
+                        .iter()
+                        .find(|cell| {
+                            battle
+                                .combatants()
+                                .iter()
+                                .all(|actor| actor.cell() != **cell)
+                        })
+                        .ok_or("no unoccupied enemy spawn")?,
+                };
+                let (who, spec) =
+                    development_insert_enemy(&mut state, id, slot, foe, cell, operation)
+                        .map_err(|error| format!("enemy profile: {error:?}"))?;
+                let initiative_total = if let Some(existing) = battle
+                    .combatants()
+                    .iter()
+                    .find(|actor| actor.spec().kind == spec.kind)
+                {
+                    battle
+                        .development_initiative(existing.id())
+                        .ok_or("group initiative unavailable")?
+                } else {
+                    let face = draw(operation, 20, &mut draws, supplier)
+                        .map_err(|error| format!("initiative draw: {error:?}"))?;
+                    let face = if spec.kind == CreatureKind::Kobold
+                        && battle.map().lighting() == tactical_rules::Lighting::Sunlight
+                    {
+                        face.min(
+                            draw(operation, 20, &mut draws, supplier)
+                                .map_err(|_| "sunlight initiative draw")?,
+                        )
+                    } else {
+                        face
+                    };
+                    face as i32 + rules::ability_modifier(spec.abilities[1])
+                };
+                battle = battle
+                    .development_add(spec, initiative_total)
+                    .map_err(|error| format!("add refused: {error:?}"))?;
+                let encounter = state
+                    .encounters
+                    .first_mut()
+                    .ok_or("encounter unavailable")?;
+                encounter.participants.push(who);
+                encounter
+                    .tactical
+                    .as_mut()
+                    .ok_or("snapshot unavailable")?
+                    .actors
+                    .push((id, who));
+                store(&mut state, &battle).map_err(|error| format!("add sync: {error:?}"))?;
+            }
+            Command::Remove { name } => {
+                let id = development_actor(&state, &battle, name)?;
+                let who = canonical(&state, id).map_err(|_| "canonical combatant unavailable")?;
+                battle = battle
+                    .development_edit(id, &Edit::Remove)
+                    .map_err(|error| format!("{name}: remove refused: {error:?}; at least one combatant on each side must remain; use fight end to finish the encounter"))?;
+                let encounter = state
+                    .encounters
+                    .first_mut()
+                    .ok_or("encounter unavailable")?;
+                encounter.participants.retain(|entity| *entity != who);
+                encounter
+                    .tactical
+                    .as_mut()
+                    .ok_or("snapshot unavailable")?
+                    .actors
+                    .retain(|(actor, _)| *actor != id);
+                store(&mut state, &battle).map_err(|error| format!("remove sync: {error:?}"))?;
+            }
+            Command::Restore { person } if development_actor(&state, &battle, person).is_err() => {
+                super::scene_fight::development_restore(&mut state, person)
+                    .map_err(|error| format!("scene person restore refused: {error:?}"))?;
+            }
+            Command::Restore { person } | Command::Edit { name: person, .. } => {
+                let id = development_actor(&state, &battle, person)?;
+                let edit = match command {
+                    Command::Restore { .. } => Edit::Restore,
+                    Command::Edit {
+                        kind,
+                        value,
+                        condition,
+                        present,
+                        cell,
+                        resource,
+                        ..
+                    } => match kind.as_str() {
+                        "hp" => Edit::HitPoints(
+                            u16::try_from(value.ok_or("hp needs a value")?)
+                                .map_err(|_| "HP must be 0..=maximum")?,
+                        ),
+                        "condition" => Edit::Condition {
+                            name: condition.clone().ok_or("condition needs its name")?,
+                            present: present.ok_or("condition needs add or remove")?,
+                        },
+                        "cell" => {
+                            Edit::Cell(development_cell(cell.as_deref().ok_or("cell required")?)?)
+                        }
+                        "resource" => Edit::Resource {
+                            name: resource.clone().ok_or("resource name required")?,
+                            value: u16::try_from(value.ok_or("resource value required")?)
+                                .map_err(|_| "resource value must be nonnegative")?,
+                        },
+                        "turn" => Edit::Turn,
+                        "initiative" => Edit::Initiative(
+                            i32::try_from(value.ok_or("initiative total required")?)
+                                .map_err(|_| "invalid initiative")?,
+                        ),
+                        _ => return Err("unknown combatant override".to_owned()),
+                    },
+                    _ => return Err("combatant edit required".to_owned()),
+                };
+                let profile = battle.actor(id).map_err(|_| "combatant unavailable")?;
+                let maximum = profile.health().maximum;
+                let wind = profile
+                    .spec()
+                    .fighter_level()
+                    .map_or(0, |level| level.second_wind_maximum());
+                let dexterity = rules::ability_modifier(profile.spec().abilities[1]);
+                battle=battle.development_edit(id,&edit).map_err(|error|format!("{person}: {edit:?} refused: {error:?}; zero HP must remain unconscious; dead/stable cannot coexist, restore or set positive HP to revive; HP 0..={maximum}, second-wind 0..={wind}, action-surge 0..=1 (Fighter 2+), ammo 0..=1000, initiative {}..={}; conditions: prone unconscious dead stable dodging disengaged slowed sapped",1+dexterity,20+dexterity))?;
+                store(&mut state, &battle)
+                    .map_err(|error| format!("edit canonical sync: {error:?}"))?;
+            }
+            _ => return Err("scene configuration applies to the next fight".to_owned()),
+        }
+    }
+    let phase = if present(&state) {
+        rpc::JourneyPhase::Combat
+    } else {
+        development_baseline(current).map_err(|_| "baseline phase unavailable")?
+    };
+    let receipt = rpc::AcceptedAction {
+        combat: outcomes,
+        phase: phase as i32,
+        ..Default::default()
+    };
+    let restoration = if let Command::Restore { person } = command {
+        super::scene_fight::development_restoration(&state, person)
+            .map_err(|error| format!("restore scene identity: {error:?}"))?
+    } else {
+        None
+    };
+    Ok(StagedNpcTurn {
+        ordinary: matches!(command, Command::End { .. })
+            && super::scene_fight::open(current.state()),
+        restoration,
+        state,
+        draws,
+        receipt: hex(&receipt.encode_to_vec()),
+        before,
+        after: if matches!(command, Command::Scene { .. }) {
+            format!(
+                "next-scene:{}",
+                serde_json::to_string(command).map_err(|_| "scene configuration encoding")?
+            )
+        } else {
+            format!("{command:?}")
+        },
+    })
+}
+
+/// Ordinary authored fights keep their normal thread facts and scene-close journal path.
+/// The development HTTP path still marks the committed operation edited in the owner history.
+pub(in crate::gameplay) fn ordinary_npc_candidate(
+    current: &Checkpoint,
+    turn: &StagedNpcTurn,
+    next: df_types::SessionRevision,
+    operation: OperationId,
+) -> Result<Checkpoint, RepositoryError> {
+    super::finish(
+        current,
+        Basis {
+            revision: next,
+            ..current.basis()
+        },
+        turn.state.clone(),
+        operation,
+        turn.draws.clone(),
+        super::DecisionContent {
+            entry: "end-turn",
+            semantic: Some(turn.receipt.clone()),
+            policy: THREAD_POLICY,
+            audience: AudienceScope::Shared,
+            reaction: None,
+            escort_target: None,
+            objective_command: None,
+            script_choice: None,
+        },
+    )
+}
+pub(in crate::gameplay) fn development_draw_facts(
+    current: &Checkpoint,
+    state: &mut GameState,
+    revision: df_types::SessionRevision,
+    operation: OperationId,
+    draws: &[ActualDraw],
+) -> Result<Vec<FactId>, RepositoryError> {
+    let mut facts = Vec::with_capacity(draws.len());
+    for draw in draws {
+        let digest = Sha256::new()
+            .chain_update(operation.as_bytes())
+            .chain_update(draw.ordinal.to_le_bytes())
+            .finalize();
+        let id = FactId::from_bytes(&digest[..16]).map_err(bad)?;
+        state.facts.push(GameFact {
+            id,
+            revision,
+            operation,
+            ordinal: draw.ordinal,
+            cause: current.state().facts.last().map(|fact| fact.id),
+            audience: AudienceScope::Shared,
+            value: FactValue::DrawAccepted {
+                operation,
+                ordinal: draw.ordinal,
+            },
+        });
+        facts.push(id);
+    }
+    Ok(facts)
+}
+pub(super) fn development_stage(
+    current: &Checkpoint,
+    input: &GameInput,
+    supplier: DiceSource<'_>,
+) -> Result<Option<Checkpoint>, RepositoryError> {
+    if !development_encounter(current.state()) || !present(current.state()) {
+        return Ok(None);
+    }
+    noted("development-phase", development_phase(current))?;
+    df_model::commands::validate_client_command(
+        input,
+        current,
+        ReferenceInventory {
+            rules: &[model::rule()?, rule()?],
+            content: &model::contents()?,
+            resources: &super::resources_for(current.state())?,
+            assets: &[],
+        },
+        df_model::commands::CommandLimits {
+            maximum_records: 32,
+            maximum_text_bytes: 128,
+            maximum_retained_bytes: 8192,
+        },
+    )
+    .map_err(bad)?;
+    let command = super::command(input)?;
+    let GameCommand::ProposeAction { actor, action, .. } = &command.command else {
+        return Err(RepositoryError::InvalidCandidate);
+    };
+    if *actor != player_entity(command.member, current)?
+        || command.basis != current.basis()
+        || command.observed_revision != current.basis().revision
+    {
+        return Err(RepositoryError::Unauthorized);
+    }
+    let kind = wire::action_kind(action.entry.as_str()).ok_or(RepositoryError::InvalidCandidate)?;
+    noted(
+        "development-input",
+        validate_input(current, command.member, action, &[]),
+    )?;
+    let mut state = current.state().clone();
+    let mut draws = Vec::new();
+    let mut outcomes = Vec::new();
+    stage(
+        current,
+        command,
+        kind,
+        &mut state,
+        &mut draws,
+        &mut outcomes,
+        supplier,
+    )
+    .inspect_err(|_| crate::gameplay::refusal_detail::note("development-rules-stage"))?;
+    let next = current.basis().revision.next_sequence().map_err(bad)?;
+    let phase = if present(&state) {
+        if read(&state)?.finished() {
+            rpc::JourneyPhase::Complete
+        } else {
+            rpc::JourneyPhase::Combat
+        }
+    } else {
+        super::super::beat_script::with_script(|script| {
+            script
+                .current(&state)
+                .map(super::super::beat_script_runtime::phase_of)
+        })?
+    };
+    let receipt = rpc::AcceptedAction {
+        combat: outcomes,
+        phase: phase as i32,
+        ..Default::default()
+    };
+    let facts = development_draw_facts(current, &mut state, next, command.operation, &draws)?;
+    state.draws.extend(draws.iter().cloned());
+    state.decisions.push(AcceptedDecision {
+        operation: command.operation,
+        revision: next,
+        facts,
+        draws: draws.iter().map(|draw| draw.ordinal).collect(),
+        effects: Vec::new(),
+        source_policy: model::rule()?.catalog,
+        semantic_output: Some(development_encoded(current, &receipt, "hero action", None)?),
+    });
+    model::checkpoint(
+        Basis {
+            revision: next,
+            ..current.basis()
+        },
+        state,
+    )
+    .inspect_err(|_| crate::gameplay::refusal_detail::note("development-checkpoint"))
+    .map(Some)
+}
+
+#[cfg(test)]
+mod development_tests {
+    use super::*;
+    use crate::gameplay::{
+        adventure::{RulesMode, record, shop},
+        beat_script_variety_tests as native,
+        dev_control::{candidate, fight::BattleCommand},
+        startup_configuration::ContentRating,
+    };
+    fn commit(current: &Checkpoint, command: BattleCommand, tag: u8) -> Checkpoint {
+        let operation = OperationId::from_bytes(&[tag; 16]).unwrap();
+        let turn = npc_turn(current, "battle", &NpcAct::Development(command), operation).unwrap();
+        candidate::build(
+            current,
+            &candidate::Change::NpcTurn {
+                turn: Box::new(turn),
+            },
+            current.basis().revision.next_sequence().unwrap(),
+            operation,
+            model::rule().unwrap().catalog,
+            "development scenario".to_owned(),
+            ReferenceInventory {
+                rules: &[model::rule().unwrap(), rule().unwrap()],
+                content: &model::contents().unwrap(),
+                resources: &super::super::resources_for(current.state()).unwrap(),
+                assets: &[],
+            },
+            model::limits(),
+        )
+        .unwrap()
+        .candidate
+    }
+    fn npc_commit(current: &Checkpoint, npc: &str, act: NpcAct, tag: u8) -> Checkpoint {
+        let operation = OperationId::from_bytes(&[tag; 16]).unwrap();
+        let turn = npc_turn(current, npc, &act, operation).unwrap();
+        candidate::build(
+            current,
+            &candidate::Change::NpcTurn {
+                turn: Box::new(turn),
+            },
+            current.basis().revision.next_sequence().unwrap(),
+            operation,
+            model::rule().unwrap().catalog,
+            "NPC development scenario".to_owned(),
+            ReferenceInventory {
+                rules: &[model::rule().unwrap(), rule().unwrap()],
+                content: &model::contents().unwrap(),
+                resources: &super::super::resources_for(current.state()).unwrap(),
+                assets: &[],
+            },
+            model::limits(),
+        )
+        .unwrap()
+        .candidate
+    }
+    struct HeldNpcs;
+    impl HeldNpcs {
+        fn all() -> Self {
+            crate::gameplay::dev_control::npc::set_hold("all", true);
+            crate::gameplay::dice::clear();
+            Self
+        }
+    }
+    impl Drop for HeldNpcs {
+        fn drop(&mut self) {
+            crate::gameplay::dev_control::npc::set_hold("all", false);
+            crate::gameplay::dice::clear();
+        }
+    }
+    fn project(current: &Checkpoint) {
+        validate_encounter(current).unwrap();
+        crate::gameplay::wire::journey_view(
+            current,
+            df_persistence::local_demo_scope::LocalDemoRole::Display,
+            native::first(),
+        )
+        .unwrap();
+        crate::gameplay::wire::journey_view(
+            current,
+            df_persistence::local_demo_scope::LocalDemoRole::Player,
+            native::first(),
+        )
+        .unwrap();
+    }
+    #[test]
+    fn development_start_runs_unheld_enemy_first_policy() {
+        let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let documents = generated.documents(true).unwrap();
+        let (loaded, _) = record::reload(&documents).unwrap();
+        pack::with_test_pack(loaded, || {
+            let _cleanup = HeldNpcs;
+            crate::gameplay::dev_control::npc::set_hold("all", false);
+            crate::gameplay::dice::clear();
+            crate::gameplay::dice::enqueue(20, &[1, 1, 20]).unwrap();
+            let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let current = commit(
+                &opening,
+                BattleCommand::Start {
+                    foe: "bandit".to_owned(),
+                    count: 1,
+                    level: Some(1),
+                    scene: Some("salt-quay".to_owned()),
+                    layout: Some("open-quay".to_owned()),
+                },
+                230,
+            );
+            project(&current);
+            let battle = read(current.state()).unwrap();
+            assert!(
+                battle
+                    .active_actor()
+                    .is_some_and(|id| battle.actor(id).unwrap().side() == Side::Heroes)
+                    || battle
+                        .reaction_offers()
+                        .iter()
+                        .any(|id| battle.actor(*id).unwrap().side() == Side::Heroes)
+            );
+            assert!(
+                current
+                    .state()
+                    .draws
+                    .iter()
+                    .any(|draw| draw.sides == 20 && draw.value == 20)
+            );
+        });
+    }
+    #[test]
+    fn development_commands_start_edit_restore_add_remove_end_and_project_each_commit() {
+        let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let documents = generated.documents(true).unwrap();
+        let (loaded, _) = record::reload(&documents).unwrap();
+        pack::with_test_pack(loaded, || {
+            let _held = HeldNpcs::all();
+            let current = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let mut current = commit(
+                &current,
+                BattleCommand::Start {
+                    foe: "bandit".to_owned(),
+                    count: 2,
+                    level: Some(1),
+                    scene: Some("salt-quay".to_owned()),
+                    layout: Some("open-quay".to_owned()),
+                },
+                201,
+            );
+            project(&current);
+            let hero = name(current.state(), current.state().characters[0].entity).unwrap();
+            let edit = |kind: &str,
+                        value: Option<i64>,
+                        condition: Option<&str>,
+                        present: Option<bool>,
+                        cell: Option<&str>,
+                        resource: Option<&str>| BattleCommand::Edit {
+                name: hero.clone(),
+                kind: kind.to_owned(),
+                value,
+                condition: condition.map(str::to_owned),
+                present,
+                cell: cell.map(str::to_owned),
+                resource: resource.map(str::to_owned),
+            };
+            current = commit(&current, edit("hp", Some(3), None, None, None, None), 202);
+            project(&current);
+            assert_eq!(
+                read(current.state())
+                    .unwrap()
+                    .actor(1)
+                    .unwrap()
+                    .health()
+                    .hit_points,
+                3
+            );
+            current = commit(
+                &current,
+                edit("condition", None, Some("prone"), Some(true), None, None),
+                203,
+            );
+            project(&current);
+            assert!(
+                read(current.state())
+                    .unwrap()
+                    .actor(1)
+                    .unwrap()
+                    .health()
+                    .prone
+            );
+            current = commit(&current, edit("turn", None, None, None, None, None), 204);
+            project(&current);
+            assert_eq!(read(current.state()).unwrap().active_actor(), Some(1));
+            current = commit(
+                &current,
+                BattleCommand::Restore {
+                    person: hero.clone(),
+                },
+                205,
+            );
+            project(&current);
+            // The same forced queues consumed by `dev dice next` feed ordinary hero/NPC rules.
+            let battle = read(current.state()).unwrap();
+            let origin = battle.actor(1).unwrap().cell();
+            let (cols, rows) = battle.map().dimensions();
+            let adjacent = (0..cols)
+                .flat_map(|col| (0..rows).map(move |row| tactical_rules::Cell(col, row)))
+                .find(|cell| {
+                    cell.distance(origin) == 5
+                        && !battle.map().is_blocked(*cell)
+                        && battle
+                            .combatants()
+                            .iter()
+                            .all(|actor| actor.cell() != *cell)
+                })
+                .unwrap();
+            current = commit(
+                &current,
+                BattleCommand::Edit {
+                    name: "3".to_owned(),
+                    kind: "cell".to_owned(),
+                    cell: Some(format!("{},{}", adjacent.0, adjacent.1)),
+                    value: None,
+                    condition: None,
+                    present: None,
+                    resource: None,
+                },
+                210,
+            );
+            project(&current);
+            let before = read(current.state()).unwrap().snapshot().unwrap();
+            assert!(
+                npc_turn(
+                    &current,
+                    "battle",
+                    &NpcAct::Development(BattleCommand::Edit {
+                        name: hero.clone(),
+                        kind: "cell".to_owned(),
+                        cell: Some(format!("{},{}", adjacent.0, adjacent.1)),
+                        value: None,
+                        condition: None,
+                        present: None,
+                        resource: None
+                    }),
+                    OperationId::from_bytes(&[211; 16]).unwrap()
+                )
+                .is_err()
+            );
+            assert_eq!(read(current.state()).unwrap().snapshot().unwrap(), before);
+            crate::gameplay::dice::enqueue(20, &[20; 16]).unwrap();
+            crate::gameplay::dice::enqueue(6, &[1; 32]).unwrap();
+            let choice=options(current.state(),1,rpc::GameplayActionKind::GreatswordAttack).unwrap().into_iter().find(|(_,action,_)|matches!(action,Action::Attack{weapon,spend:AttackSpend::Action,..}if weapon.weapon==Weapon::Greatsword&&!weapon.savage_attacker&&!weapon.use_mastery)).unwrap();
+            let actor = current.state().characters[0].entity;
+            let member = current.state().characters[0].owner;
+            let input = GameInput::Game(CommandInput {
+                basis: current.basis(),
+                observed_revision: current.basis().revision,
+                operation: OperationId::from_bytes(&[212; 16]).unwrap(),
+                member,
+                command: GameCommand::ProposeAction {
+                    actor,
+                    action: model::content("greatsword-attack").unwrap(),
+                    targets: Vec::new(),
+                    choices: vec![(
+                        model::label("tactical-choice").unwrap(),
+                        model::label(&choice.0).unwrap(),
+                    )],
+                },
+            });
+            current = super::super::stage(&current, &input).unwrap_or_else(|error| {
+                panic!(
+                    "development hero act: {error:?} step={:?}",
+                    crate::gameplay::refusal_detail::take()
+                )
+            });
+            project(&current);
+            let receipt = accepted(current.state().decisions.last().unwrap()).unwrap();
+            assert!(
+                receipt
+                    .combat
+                    .iter()
+                    .any(|outcome| outcome.faces.contains(&20)
+                        && outcome.hit
+                        && outcome.damage > 0)
+            );
+            current = commit(
+                &current,
+                BattleCommand::Edit {
+                    name: "3".to_owned(),
+                    kind: "turn".to_owned(),
+                    value: None,
+                    condition: None,
+                    present: None,
+                    cell: None,
+                    resource: None,
+                },
+                213,
+            );
+            project(&current);
+            let npc = name(current.state(), canonical(current.state(), 3).unwrap()).unwrap();
+            current = npc_commit(
+                &current,
+                &npc,
+                NpcAct::parse("attack", Some(&hero), Some("scimitar"), None).unwrap(),
+                214,
+            );
+            project(&current);
+            assert!(
+                accepted(current.state().decisions.last().unwrap())
+                    .unwrap()
+                    .combat
+                    .iter()
+                    .any(|outcome| outcome.actor_name == npc && outcome.faces.contains(&20))
+            );
+            current = commit(
+                &current,
+                BattleCommand::Restore {
+                    person: hero.clone(),
+                },
+                215,
+            );
+            project(&current);
+            current = commit(
+                &current,
+                BattleCommand::Add {
+                    foe: "wolf".to_owned(),
+                    cell: None,
+                },
+                206,
+            );
+            project(&current);
+            assert_eq!(read(current.state()).unwrap().combatants().len(), 5);
+            current = commit(
+                &current,
+                BattleCommand::Remove {
+                    name: "Wolf 3".to_owned(),
+                },
+                207,
+            );
+            project(&current);
+            assert_eq!(read(current.state()).unwrap().combatants().len(), 4);
+            current = commit(
+                &current,
+                BattleCommand::End {
+                    outcome: "victory".to_owned(),
+                },
+                208,
+            );
+            assert!(current.state().encounters.is_empty());
+            crate::gameplay::wire::journey_view(
+                &current,
+                df_persistence::local_demo_scope::LocalDemoRole::Display,
+                native::first(),
+            )
+            .unwrap();
+            current = commit(
+                &current,
+                BattleCommand::Scene {
+                    scene: "merchant-shop".to_owned(),
+                    layout: Some("rack-aisle".to_owned()),
+                },
+                216,
+            );
+            current = commit(
+                &current,
+                BattleCommand::Start {
+                    foe: "wolf".to_owned(),
+                    count: 1,
+                    level: Some(5),
+                    scene: None,
+                    layout: None,
+                },
+                217,
+            );
+            project(&current);
+            assert_eq!(
+                super::super::fighter_progression(current.state(), actor)
+                    .unwrap()
+                    .level(),
+                5
+            );
+            assert_eq!(
+                snapshot(current.state()).unwrap().layout.as_str(),
+                "rack-aisle"
+            );
+            assert_eq!(
+                development_scene_document(current.state()).unwrap()["scene"],
+                "merchant-shop"
+            );
+            current = commit(
+                &current,
+                BattleCommand::Edit {
+                    name: hero.clone(),
+                    kind: "resource".to_owned(),
+                    value: Some(0),
+                    resource: Some("ammo".to_owned()),
+                    condition: None,
+                    present: None,
+                    cell: None,
+                },
+                218,
+            );
+            project(&current);
+            current = commit(
+                &current,
+                BattleCommand::Edit {
+                    name: hero.clone(),
+                    kind: "resource".to_owned(),
+                    value: Some(20),
+                    resource: Some("ammo".to_owned()),
+                    condition: None,
+                    present: None,
+                    cell: None,
+                },
+                219,
+            );
+            project(&current);
+            current = commit(
+                &current,
+                BattleCommand::Edit {
+                    name: hero.clone(),
+                    kind: "initiative".to_owned(),
+                    value: Some(15),
+                    resource: None,
+                    condition: None,
+                    present: None,
+                    cell: None,
+                },
+                220,
+            );
+            project(&current);
+            assert_eq!(
+                initiative(&current)
+                    .unwrap()
+                    .iter()
+                    .find(|roll| roll.name == hero)
+                    .unwrap()
+                    .total,
+                15
+            );
+            let replay = model::checkpoint(current.basis(), current.state().clone()).unwrap();
+            project(&replay);
+            current = commit(
+                &replay,
+                BattleCommand::End {
+                    outcome: "flee".to_owned(),
+                },
+                221,
+            );
+            assert!(current.state().encounters.is_empty());
+            let offered = super::super::offered(&current, member).unwrap();
+            assert!(!offered.is_empty());
+            let story_id = crate::gameplay::beat_script::with_script(|script| {
+                script
+                    .current(current.state())
+                    .unwrap()
+                    .offers
+                    .iter()
+                    .find(|offer| !offer.id.contains("fight"))
+                    .unwrap()
+                    .id
+                    .clone()
+            });
+            let prior_revision = current.basis().revision;
+            current = native::act(&current, member, 222, &story_id);
+            assert!(current.basis().revision > prior_revision);
+            assert!(!present(current.state()));
+            crate::gameplay::wire::journey_view(
+                &current,
+                df_persistence::local_demo_scope::LocalDemoRole::Player,
+                member,
+            )
+            .unwrap();
+        });
+    }
+}
+
+fn development_next_scene(
+    current: &Checkpoint,
+) -> Result<Option<(String, Option<String>)>, RepositoryError> {
+    for decision in current.state().decisions.iter().rev() {
+        if let Some(envelope) = development_envelope(decision)?
+            && let Some(text) = envelope.label.strip_prefix("next-scene:")
+        {
+            let command: super::super::dev_control::fight::BattleCommand =
+                serde_json::from_str(text).map_err(bad)?;
+            if let super::super::dev_control::fight::BattleCommand::Scene { scene, layout } =
+                command
+            {
+                return Ok(Some((scene, layout)));
+            }
+            return Err(RepositoryError::InvalidReceipt);
+        }
+    }
+    Ok(None)
+}
+pub(in crate::gameplay) fn development_scene_document(
+    state: &GameState,
+) -> Result<serde_json::Value, RepositoryError> {
+    if !present(state) {
+        return Ok(serde_json::Value::Null);
+    }
+    let saved = snapshot(state)?;
+    let battle = read(state)?;
+    let scene_id = SCENES
+        .iter()
+        .find(|(_, bytes)| *bytes == saved.scene.as_slice())
+        .map(|(id, _)| *id)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    df_render::battle::load_embedded(scene_id)
+        .ok_or(RepositoryError::InvalidCandidate)?
+        .map_err(bad)?;
+    let (cols, rows) = battle.map().dimensions();
+    Ok(
+        serde_json::json!({"scene":scene_id,"layout":saved.layout.as_str(),"world":serde_json::from_slice::<serde_json::Value>(&saved.scene).map_err(bad)?.get("splat").cloned(),"scan":scene_id.starts_with("scan-"),"grid":{"columns":cols,"rows":rows,"feet_per_cell":5},"source_revision":saved.source_revision.as_str()}),
+    )
 }

@@ -23,7 +23,7 @@ message AbilityCheckResult { uint32 die = 1; sint32 ability_modifier = 2; uint32
 message DecisionReceipt { OperationId operation_id = 1; SessionRevision revision = 2; SessionId session_id = 3; RunId run_id = 4; bool replayed = 5; oneof outcome { AcceptedAction accepted = 6; Rejection rejected = 7; } }
 message WatchViewRequest { SessionId session_id = 1; RunId run_id = 2; ClientBindingId client_binding_id = 3; SessionRevision after_revision = 4; }
 message PlayerGameplayView { string offer_id = 1; string narration = 2; AbilityCheckResult check = 3; string private_clue = 4; bool action_available = 5; repeated GameplayActionOffer offers = 6; GameplayScene scene = 7; JourneyView journey = 8; }
-message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; string layout_json = 9; uint64 layout_revision = 10; PlaceMusicPlan place_music = 11; repeated string effects_off = 12; }
+message DisplayGameplayView { string narration = 1; string scene_asset = 2; GameplayScene scene = 3; JourneyView journey = 4; DisplaySceneGraph scene_graph = 5; uint64 live_plate_graph_revision = 6; AbilityCheckResult check = 7; optional uint32 encounter_xp = 8; string layout_json = 9; uint64 layout_revision = 10; PlaceMusicPlan place_music = 11; repeated string effects_off = 12; BattleCameraOverride camera_override = 13; }
 message ViewMessage { SessionRevision revision = 1; oneof audience { PlayerGameplayView player = 2; DisplayGameplayView display = 3; } }
 message OperationObservation { RejectionCode code = 1; }
 message SubmitActionResponse { oneof outcome { DecisionReceipt committed_decision = 1; OperationObservation operation_observation = 2; } }
@@ -117,7 +117,35 @@ message DeathSaveState { bytes participant_id = 1; string name = 2; uint32 succe
 // browser only captions and voices it, never inventing one. Voice role and budget follow the existing
 // narrator/NPC voice path by role.
 message FightLine { TableRole role = 1; uint32 hero_index = 2; string speaker = 3; string text = 4; }
-message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; string weapon = 17; uint32 attack_style = 18; string damage_type = 19; uint32 distance_ft = 20; OutcomeKind kind = 21; repeated GridCell path = 22; uint32 cost_ft = 23; uint32 remaining_ft = 24; sint32 roll_mode = 25; repeated uint32 faces = 26; repeated string reasons = 27; string cover = 28; DeathSaveResult death_save_result = 29; uint32 death_successes = 30; uint32 death_failures = 31; uint32 recovery_hours = 32; repeated FightLine lines = 33; uint64 sequence = 34; StabilizationResult stabilization = 35; repeated DamageRoll damage_rolls = 36; sint32 damage_modifier = 37; }
+message CombatOutcome { string actor_name = 1; string target_name = 2; uint32 attack_die = 3; sint32 attack_modifier = 4; sint32 attack_total = 5; uint32 target_armor_class = 6; bool hit = 7; bool critical = 8; repeated uint32 damage_dice = 9; uint32 damage = 10; uint32 target_hit_points = 11; bool knocked_out = 12; bool grazed = 13; string source_revision = 14; bytes actor_id = 15; bytes target_id = 16; string weapon = 17; uint32 attack_style = 18; string damage_type = 19; uint32 distance_ft = 20; OutcomeKind kind = 21; repeated GridCell path = 22; uint32 cost_ft = 23; uint32 remaining_ft = 24; sint32 roll_mode = 25; repeated uint32 faces = 26; repeated string reasons = 27; string cover = 28; DeathSaveResult death_save_result = 29; uint32 death_successes = 30; uint32 death_failures = 31; uint32 recovery_hours = 32; repeated FightLine lines = 33; uint64 sequence = 34; StabilizationResult stabilization = 35; repeated DamageRoll damage_rolls = 36; sint32 damage_modifier = 37; optional BattleTechnique presentation = 38; optional CombatDisplayMetadata display_metadata = 39; }
+// Server-projected audience metadata for an already committed outcome. It contains no rules and is optional so older outcomes remain renderable.
+// Optional committed breakdown; absence means the historical outcome recorded only the sum.
+enum CombatAttackType { COMBAT_ATTACK_TYPE_UNSPECIFIED = 0; COMBAT_ATTACK_TYPE_MELEE = 1; COMBAT_ATTACK_TYPE_RANGED = 2; COMBAT_ATTACK_TYPE_THROWN = 3; }
+message CombatDisplayMetadata { string ability_name = 1; optional string icon = 2; CombatAttackType attack_type = 3; optional sint32 ability_modifier = 4; optional sint32 proficiency_modifier = 5; optional sint32 other_modifier = 6; optional string mastery = 7; }
+// Optional audience-safe presentation of committed outcomes, never an action/rules request.
+// One parent outcome/sequence owns the complete technique. Do not also emit ordinary attack
+// cues for its contained strikes. IDs are the same public IDs as CombatOutcome actor/target_id.
+enum BattleTechniqueKind { BATTLE_TECHNIQUE_UNSPECIFIED = 0; BATTLE_TECHNIQUE_FIRE_BOLT = 1; BATTLE_TECHNIQUE_MAGIC_MISSILE = 2; BATTLE_TECHNIQUE_FIREBALL = 3; BATTLE_TECHNIQUE_SHIELD = 4; BATTLE_TECHNIQUE_FLURRY = 5; }
+message BattleTechnique {
+  BattleTechniqueKind kind = 1;
+  repeated BattleTechniqueStrike strikes = 2;
+  optional GridCell centre = 3;
+  optional float radius_m = 4;
+  optional uint32 action_surge_at = 5;
+}
+message BattleTechniqueStrike {
+  bytes target_id = 1;
+  bool hit = 2;
+  uint32 damage = 3;
+  bool critical = 4;
+  bool downed = 5;
+  optional uint32 hit_points_after = 6;
+  optional BattleTechniqueCard card = 7;
+  optional BattleTechniqueRoll roll = 8;
+}
+// Includes the server's saving throw/DC and full or half damage in explanation/verdict.
+message BattleTechniqueRoll { optional uint32 d20 = 1; repeated uint32 damage_faces = 2; optional BattleTechniqueCard attack_card = 3; }
+message BattleTechniqueCard { string value = 1; string label = 2; string explanation = 3; string verdict = 4; string tone = 5; }
 message StabilizationResult { StabilizationMethod method = 1; uint32 die = 2; sint32 wisdom_modifier = 3; uint32 dc = 4; bool succeeded = 5; uint32 uses_left = 6; }
 // Photographic presentation only; the server grid remains authoritative. Raw OpenCV assets.
 message BattleWorld { string ply_url = 1; string collider_url = 2; double metric_scale_factor = 3; double ground_plane_offset = 4; }
@@ -216,3 +244,8 @@ message PreviewHeroIdentityResponse { HeroIdentity proposed_identity = 1; repeat
 service PresentationTelemetryService { rpc Upload(PresentationTelemetryRequest) returns (PresentationTelemetryResponse); }
 message PresentationTelemetryRequest { WatchViewRequest scope = 1; bytes producer_id = 2; uint64 batch_sequence = 3; bytes otlp_logs = 4; uint64 dropped_records = 5; }
 message PresentationTelemetryResponse { uint64 batch_sequence = 1; uint32 accepted_records = 2; bool replayed = 3; }
+
+// Development-only display state; never read by rules or player views. A present message with
+// neither home nor shot resets the display to its authored home. Revision orders same-phase edits.
+message BattleCameraOverride { uint64 revision = 1; BattleCameraHome home = 2; string shot = 3; }
+message BattleCameraHome { float pitch_deg = 1; float yaw_deg = 2; float distance = 3; float fov_deg = 4; }

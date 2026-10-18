@@ -13,6 +13,8 @@ struct Frame {
     ground: vec4<f32>,    // centre x, centre z, half size, fall-off
     backdrop: vec4<f32>,  // wall z, half width, base y, height
     spot: vec4<f32>,      // warm pool under the acting figure: x, z, radius, strength
+    fire_position: vec4<f32>, // xyz, radius metres
+    fire_colour: vec4<f32>,   // rgb, strength
     plane: vec4<f32>,     // play-plane height, ground margin, unused x2
 }
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -24,6 +26,15 @@ fn lifted_depth(world: vec3<f32>) -> f32 {
     let moved = world + normalize(frame.eye.xyz - world) * frame.viewport.w;
     let clip = frame.view_proj * vec4<f32>(moved, 1.0);
     return clamp(clip.z / clip.w, 0.0, 1.0);
+}
+
+// Compact point-light tint: the same finite, inverse-square-like falloff on the scan and actors.
+fn fire_spill(world: vec3<f32>) -> vec3<f32> {
+    let delta = world - frame.fire_position.xyz;
+    let radius = max(frame.fire_position.w, 0.001);
+    let d2 = dot(delta, delta) / (radius * radius);
+    let cutoff = max(1.0 - d2, 0.0);
+    return frame.fire_colour.rgb * frame.fire_colour.w * cutoff * cutoff / (1.0 + d2 * 8.0);
 }
 
 struct FOut {
@@ -118,6 +129,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // The detail is clamped so a bright highlight never turns into speckle.
     let detail = clamp(base - soft, vec3<f32>(-0.07), vec3<f32>(0.07)) * 1.3;
     var colour = max(base + detail, vec3<f32>(0.0));
+    colour = colour + fire_spill(vec3<f32>(in.world_xz.x, frame.plane.x, in.world_xz.y)) * (colour + vec3<f32>(0.12));
     let offset = abs(in.world_xz - frame.ground.xy);
     let edge = frame.ground.z - max(offset.x, offset.y);
     let sides = smoothstep(0.0, max(frame.ground.w, 0.01), edge);
@@ -622,3 +634,78 @@ pub fn particle() -> String {
 pub fn post() -> String {
     POST.to_owned()
 }
+
+/// Asset-free soft volumes: one bounded instanced draw, no textures or extra scene copy.
+pub(super) fn technique() -> String {
+    format!("{FRAME}{TECHNIQUE}")
+}
+
+const TECHNIQUE: &str = r#"
+struct VOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) p: vec2<f32>,
+    @location(1) centre: vec4<f32>,
+    @location(2) look: vec4<f32>,
+}
+@vertex
+fn vs(@builtin(vertex_index) i: u32, @location(0) place: vec4<f32>,
+    @location(1) look: vec4<f32>) -> VOut {
+    var corners = array<vec2<f32>, 6>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0),
+        vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
+    let p = corners[i];
+    let right = vec3<f32>(frame.view[0].x, frame.view[1].x, frame.view[2].x);
+    let up = vec3<f32>(frame.view[0].y, frame.view[1].y, frame.view[2].y);
+    var out: VOut;
+    out.pos = frame.view_proj * vec4<f32>(place.xyz + (right * p.x + up * p.y) * place.w, 1.0);
+    out.p = p;
+    out.centre = place;
+    out.look = look;
+    return out;
+}
+fn noise(p: vec3<f32>) -> f32 {
+    return 0.5 + 0.5 * sin(p.x * 5.1 + sin(p.y * 4.7)) * sin(p.z * 5.3 + p.y * 3.2);
+}
+@fragment
+fn fs(in: VOut) -> FOut {
+    let d2 = dot(in.p, in.p);
+    if (d2 > 1.0) { discard; }
+    let cap = sqrt(max(1.0 - d2, 0.0));
+    let right = vec3<f32>(frame.view[0].x, frame.view[1].x, frame.view[2].x);
+    let up = vec3<f32>(frame.view[0].y, frame.view[1].y, frame.view[2].y);
+    let forward = normalize(frame.eye.xyz - in.centre.xyz);
+    let surface = in.centre.xyz + (right * in.p.x + up * in.p.y + forward * cap) * in.centre.w;
+    let age = in.look.y;
+    let kind = in.look.x;
+    let opacity = in.look.z;
+    var rgb = vec3<f32>(0.0);
+    var alpha = 0.0;
+    if (kind == 5.0) {
+        // A filmed glass ward: quiet interior and a brief pale Fresnel rim, no glyphs or neon disc.
+        let rim = pow(1.0 - cap, 2.5) * (1.0 - smoothstep(0.86, 1.0, sqrt(d2)));
+        alpha = (rim * 0.7 + cap * 0.035) * opacity;
+        rgb = vec3<f32>(0.65, 0.8, 0.95) * alpha;
+    } else if (kind == 6.0) {
+        // Action Surge is breath and stirred dust, never a magical aura on the fighter.
+        alpha = (1.0 - smoothstep(0.2, 1.0, d2)) * 0.15 * opacity;
+        rgb = vec3<f32>(0.6, 0.49, 0.32) * alpha;
+    } else if (kind == 1.0) {
+        alpha = exp(-d2 * 4.5) * opacity * 0.65;
+        rgb = vec3<f32>(0.7, 0.8, 1.0) * alpha * 1.3;
+    } else {
+        // Low-frequency rolling fire, white-hot centre, orange envelope, a dark smoke tail.
+        let flow = vec3<f32>(in.p * 2.0, cap * 2.0) - vec3<f32>(0.0, age * 1.4, age * 0.4);
+        let rolling = noise(flow) * 0.65 + noise(flow * 2.1) * 0.35;
+        let edge = 1.0 - smoothstep(0.55 + rolling * 0.3, 1.0, sqrt(d2));
+        let heat = clamp(cap * (0.5 + rolling * 0.5) - age * 0.22, 0.0, 1.0);
+        let fire = mix(vec3<f32>(0.35, 0.065, 0.009), vec3<f32>(1.6, 0.7, 0.14), heat);
+        rgb = mix(fire, vec3<f32>(1.7, 1.35, 0.8), pow(heat, 7.0));
+        alpha = edge * opacity * mix(0.35, 0.72, heat);
+        rgb = rgb * alpha;
+    }
+    var out: FOut;
+    out.colour = vec4<f32>(rgb, alpha);
+    let clip = frame.view_proj * vec4<f32>(surface, 1.0);
+    out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
+    return out;
+}
+"#;

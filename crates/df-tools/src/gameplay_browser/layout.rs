@@ -403,7 +403,18 @@ pub(super) fn apply(
         stop();
         return Ok(());
     }
-    let document = LayoutDocument::parse(text).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let mut envelope: serde_json::Value = serde_json::from_str(text)
+        .map_err(|_| JsValue::from_str("invalid development layout document"))?;
+    if let Some(presentation) = envelope
+        .as_object_mut()
+        .and_then(|object| object.remove("development_presentation"))
+    {
+        super::live_motion::development_presentation(client, &presentation)?;
+    }
+    let layout_text = serde_json::to_string(&envelope)
+        .map_err(|_| JsValue::from_str("invalid layout document"))?;
+    let document =
+        LayoutDocument::parse(&layout_text).map_err(|e| JsValue::from_str(&e.to_string()))?;
     if document.revision != revision {
         return Err(JsValue::from_str("layout envelope revision mismatch"));
     }

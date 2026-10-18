@@ -1,6 +1,7 @@
 //! Pure SRD 5.2.1 tactical subset. See planning/tactical-combat.md for source clauses,
 //! explicit geometry adjudication, unsupported modes and the durable integration handoff.
 mod build;
+mod development;
 mod map;
 mod resolve;
 mod snapshot;
@@ -12,6 +13,7 @@ pub use crate::local_journey::{
     background_origin_feat, experience_points_for_challenge_rating,
 };
 pub use build::{ARCHER_CREATION_JSON, ArcherBuild, LEVEL_FIVE_BUILDS, validate_archer};
+pub use development::DevelopmentEdit;
 pub use map::{
     BattleMap, BattleSceneData, Cell, Cover, GridData, LayoutData, Lighting, ObstacleData,
     SpawnData,

@@ -9,6 +9,7 @@ mod beat_script_runtime;
 mod beat_script_tests;
 #[cfg(test)]
 mod beat_script_variety_tests;
+mod character_clips;
 #[cfg(test)]
 mod connection_tests;
 #[cfg(test)]
@@ -1625,6 +1626,54 @@ async fn serve_run(
         _ => splat_world::SplatWorlds::cached(imagery.hub().clone(), room_photograph, splat_cache),
     };
     splat_world::install(splat_worlds);
+    let clip_source: character_clips::Source = {
+        let living = living.clone();
+        let imagery = imagery.clone();
+        let references =
+            imagery::ReferenceStore::new(std::path::Path::new(&asset_root).join("generated"));
+        Arc::new(move |fighter| {
+            let living = living.clone();
+            let imagery = imagery.clone();
+            let subject = fighter.depiction_subject.clone();
+            let reviewed = fighter.reviewed_figure.clone();
+            let references = references.clone();
+            Box::pin(async move {
+                let depiction = living.describe_depiction(
+                    df_render::art_contract::Role::GenerationReference,
+                    "",
+                    &df_render::art_contract::Subject::character(subject),
+                )?;
+                if let Some(key) = depiction.asset.strip_prefix("/gameplay/imagery/") {
+                    return match imagery.image(key).await {
+                        imagery::Lookup::Image { bytes, format } => {
+                            Some(character_clips::Depiction {
+                                bytes: bytes.to_vec(),
+                                format,
+                                revision: key.to_owned(),
+                            })
+                        }
+                        imagery::Lookup::Unregistered | imagery::Lookup::NotReady => None,
+                    };
+                }
+                let reviewed = reviewed?;
+                let reference = tokio::task::spawn_blocking(move || references.load(&reviewed))
+                    .await
+                    .ok()?
+                    .ok()?;
+                Some(character_clips::Depiction {
+                    bytes: reference.bytes.to_vec(),
+                    format: reference.format,
+                    revision: reference.sha256,
+                })
+            })
+        })
+    };
+    let _character_clip_worker = character_clips::start(
+        imagery.hub().clone(),
+        clip_source,
+        std::env::current_dir()?.join("artifacts/cache/character-clips"),
+        interactive,
+    )?;
     let _fight_foresight_worker = fight_foresight::start(
         approach_model::ApproachModel::configured(if interactive {
             startup_configuration::approach_settings(

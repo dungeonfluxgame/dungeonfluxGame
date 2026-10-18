@@ -31,7 +31,7 @@ use crate::battle::{
 
 const BINS: usize = 1 << 16;
 const WORKGROUP: u32 = 256;
-const UNIFORM_BYTES: usize = 320 + 512;
+const UNIFORM_BYTES: usize = 320 + 512 + 32;
 const CHUNK_PARAM_BYTES: usize = 64;
 pub const ACCUM_FORMAT: &str = "rg16float";
 
@@ -134,6 +134,7 @@ pub struct FrameParams {
     /// coordinates, then `[view depth in metres, 1, 0, 0]`. Scan splats beside or behind a figure
     /// may not hide it (see `figure_clear`).
     pub figures: Vec<[f32; 8]>,
+    pub fire_light: crate::battle::FireLight,
 }
 
 struct Layouts {
@@ -754,6 +755,8 @@ impl SplatEngine {
         for index in 0..crate::battle::figure_clear::MAX_FIGURES {
             data.extend_from_slice(&frame.figures.get(index).copied().unwrap_or([0.0; 8]));
         }
+        data.extend_from_slice(&frame.fire_light.position_radius);
+        data.extend_from_slice(&frame.fire_light.colour_strength);
         self.core
             .queue
             .write_buffer(&self.uniform, 0.0, &float_array(&data));

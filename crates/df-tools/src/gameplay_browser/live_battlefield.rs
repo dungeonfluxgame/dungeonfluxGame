@@ -21,7 +21,7 @@ use df_render::battle::{
     Side, StageOptions, Status, Token, TokenId,
 };
 use gloo_timers::future::TimeoutFuture;
-use std::cell::Cell as StdCell;
+use std::{cell::Cell as StdCell, time::Duration};
 
 const STYLE: &str = include_str!("live_battlefield.css");
 const STYLE_ATTRIBUTE: &str = "data-battlefield-style";
@@ -40,6 +40,8 @@ const CARD_LOG_CAP: usize = 40;
 
 thread_local! {
     static PREVIEW: RefCell<Option<BattleStage>> = const { RefCell::new(None) };
+    static CAMERA_OVERRIDE: RefCell<Option<rpc::BattleCameraOverride>> = const { RefCell::new(None) };
+    static CAMERA_APPLIED: RefCell<Option<(u64, String)>> = const { RefCell::new(None) };
 }
 
 /// Adds the battlefield rules once per page.
@@ -68,9 +70,10 @@ pub(super) fn install_style(document: &Document) -> Result<(), JsValue> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PreviewMode {
     Fight,
+    Techniques,
     Statuses,
     Sheet(usize),
-    /// The heroes and the goblin standing on the layout under the wide shot, for layout review.
+    /// The heroes and the bandit standing on the layout under the wide shot, for layout review.
     Still,
 }
 
@@ -96,6 +99,7 @@ struct PreviewRequest {
     shot: Option<battle::ShotName>,
     /// `&cam=tx,ty,tz,distance,yaw,pitch,fov`: cut to a free camera.
     free_camera: Option<battle::CameraPose>,
+    home_camera: Option<battle::CameraPose>,
     /// `&fps=24|30`: the presentation rate (30 when absent or invalid).
     fps: battle::BattleFps,
     /// `&beat=graze|heavy|critical|miss|finish`: stage one attack of that kind after the camera
@@ -120,6 +124,25 @@ struct PreviewRequest {
     reach: bool,
     /// `&grid=1`: draw the cell grid (off by default, as on the TV).
     grid: bool,
+}
+
+fn preview_home_camera(text: &str) -> Option<battle::CameraPose> {
+    let values: Vec<f32> = text
+        .split(',')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let [pitch_deg, yaw_deg, distance, fov_deg] = values[..] else {
+        return None;
+    };
+    let pose = battle::CameraPose {
+        target: battle::Vec3::ZERO,
+        pitch_deg,
+        yaw_deg,
+        distance,
+        fov_deg,
+    };
+    pose.validate().ok().map(|()| pose)
 }
 
 fn free_camera(text: &str) -> Option<battle::CameraPose> {
@@ -165,6 +188,7 @@ fn preview_request() -> Option<PreviewRequest> {
         orbit: false,
         shot: None,
         free_camera: None,
+        home_camera: None,
         fps: battle::BattleFps::DEFAULT,
         feel_off: false,
         tempo: None,
@@ -244,7 +268,10 @@ fn preview_request() -> Option<PreviewRequest> {
             other if other.starts_with("shot=") => {
                 request.shot = battle::ShotName::from_key(&other[5..]);
             }
-            other if other.starts_with("cam=") => request.free_camera = free_camera(&other[4..]),
+            other if other.starts_with("cam=") => {
+                request.home_camera = preview_home_camera(&other[4..]);
+                request.free_camera = free_camera(&other[4..]);
+            }
             "feel=off" => request.feel_off = true,
             other if other.starts_with("beat=") && plain_name(&other[5..]) => {
                 request.demo = Some(other[5..].to_owned());
@@ -270,6 +297,7 @@ fn preview_request() -> Option<PreviewRequest> {
             "restrained" => request.restrained = true,
             "reach" => request.reach = true,
             "grid=1" => request.grid = true,
+            "techniques" => request.mode = PreviewMode::Techniques,
             "statuses" => request.mode = PreviewMode::Statuses,
             "still" => request.mode = PreviewMode::Still,
             "close" => request.close = true,
@@ -349,17 +377,19 @@ fn combatant(
 }
 
 /// Legacy/preview attack style fallback; tactical figures use the server attack_style field.
+/// The preview cast is Tobin the javelin thrower, Sylvie the archer, Nimrael in melee.
 fn attack_style_for(figure: &str) -> AttackStyle {
     match figure {
         "figure-hero-3" => AttackStyle::Ranged,
+        "figure-hero-1" => AttackStyle::Thrown,
         _ => AttackStyle::Melee,
     }
 }
 
-const GOBLIN: (&str, &str, &str) = (
-    "goblin",
-    "figure-ant-goblin-warrior",
-    "portrait-ant-goblin-warrior",
+const PREVIEW_FOE: (&str, &str, &str) = (
+    "bandit",
+    "sprite-bandit-documentary-photo",
+    "sprite-bandit-documentary-photo",
 );
 
 /// How many figures per side a preview can stand on `layout`: what it seats, never fewer than one.
@@ -372,7 +402,7 @@ fn preview_limit(layout: Option<&battle::Layout>) -> usize {
 }
 
 /// The preview's heroes (Tobin the fighter, Sylvie the archer, Nimrael, then more of the same
-/// figures) and goblins on a layout's spawn cells (or the derived formation when the scene has no
+/// figures) and bandits on a layout's spawn cells (or the derived formation when the scene has no
 /// layouts). `heroes` and `enemies` are clamped to what the layout seats.
 fn preview_tokens(
     grid: &battle::Grid,
@@ -415,11 +445,11 @@ fn preview_tokens(
     }
     for (index, cell) in seats.enemies.iter().enumerate() {
         let (id, name) = if index == 0 {
-            (GOBLIN.0.to_owned(), "Goblin Warrior".to_owned())
+            (PREVIEW_FOE.0.to_owned(), "Bandit".to_owned())
         } else {
             (
-                format!("{}-{}", GOBLIN.0, index + 1),
-                format!("Goblin Warrior {}", index + 1),
+                format!("{}-{}", PREVIEW_FOE.0, index + 1),
+                format!("Bandit {}", index + 1),
             )
         };
         tokens.push(combatant(
@@ -427,9 +457,9 @@ fn preview_tokens(
             &name,
             Side::Enemy,
             *cell,
-            GOBLIN.1,
-            GOBLIN.2,
-            1.0,
+            PREVIEW_FOE.1,
+            PREVIEW_FOE.2,
+            PERSON_HEIGHT_M,
         ));
     }
     Ok(tokens)
@@ -482,6 +512,209 @@ fn generated_initiative(tokens: &[Token]) -> Vec<battle::InitiativeRoll> {
 
 /// A fight for any head count: every enemy strikes a hero, every hero strikes an enemy, then each
 /// enemy in turn is brought down.
+/// Fixed display fixtures, independent of live rules. The cast never drops, so a complete
+/// technique cycle can be watched on either a collider-backed world or an external scan.
+fn technique_script(tokens: &[Token]) -> Vec<(&'static str, AttackStyle, Beat, RollCard)> {
+    let Some(caster) = tokens.first() else {
+        return Vec::new();
+    };
+    let Some(target) = tokens.iter().find(|token| token.side != caster.side) else {
+        return Vec::new();
+    };
+    let card = |value: &str, label: String, explanation: &str, verdict: &str| RollCard {
+        value: value.to_owned(),
+        label,
+        explanation: explanation.to_owned(),
+        verdict: verdict.to_owned(),
+        tone: "hit".to_owned(),
+    };
+    let resolved = |target: &Token,
+                    damage,
+                    face,
+                    damage_faces: Vec<u32>,
+                    attack_card: RollCard,
+                    final_card: RollCard| battle::StrikeDisplay {
+        target: target.id.clone(),
+        result: AttackResult::Hit {
+            damage,
+            critical: false,
+            downed: false,
+        },
+        target_hit_points_after: None,
+        card: Some(final_card),
+        roll: Some(battle::ResolvedRoll {
+            d20: face,
+            damage_faces,
+            attack_card: face.map(|_| attack_card),
+        }),
+    };
+    let swing = |index| {
+        resolved(
+            target,
+            8,
+            Some(12),
+            vec![5],
+            card(
+                "19",
+                format!("{} | Longsword {index}", caster.name),
+                "Melee | d20 12 + ability 4 + proficiency 3 = 19 vs AC 15",
+                "HIT",
+            ),
+            card(
+                "19",
+                format!("{} | Longsword {index}", caster.name),
+                "d20 12 + ability 4 + proficiency 3 = 19 vs AC 15 | damage 5 + 3 = 8 slashing",
+                "HIT",
+            ),
+        )
+    };
+    let flurry = |count, surge| Beat::Flurry {
+        attacker: caster.id.clone(),
+        strikes: (1..=count).map(swing).collect(),
+        action_surge_at: surge,
+    };
+    let heading = card("", String::new(), "", "");
+    let bolt = resolved(
+        target,
+        13,
+        Some(14),
+        vec![6, 7],
+        card(
+            "21",
+            format!("{} | Fire Bolt", caster.name),
+            "Ranged spell | d20 14 + ability 4 + proficiency 3 = 21 vs AC 15",
+            "HIT",
+        ),
+        card(
+            "21",
+            format!("{} | Fire Bolt", caster.name),
+            "d20 14 + 7 = 21 vs AC 15 | damage 6 + 7 = 13 fire",
+            "HIT",
+        ),
+    );
+    let mut script = vec![
+        (
+            "Extra Attack",
+            AttackStyle::Melee,
+            flurry(2, None),
+            heading.clone(),
+        ),
+        (
+            "Action Surge",
+            AttackStyle::Melee,
+            flurry(4, Some(2)),
+            heading.clone(),
+        ),
+        (
+            "Fire Bolt",
+            AttackStyle::Bolt,
+            Beat::Flurry {
+                attacker: caster.id.clone(),
+                strikes: vec![bolt],
+                action_surge_at: None,
+            },
+            heading.clone(),
+        ),
+    ];
+    let marks: Vec<_> = tokens
+        .iter()
+        .filter(|token| token.id != caster.id)
+        .collect();
+    let darts = (0..3)
+        .map(|index| {
+            let mark = marks[index % marks.len()];
+            let final_card = card(
+                "4",
+                format!(
+                    "{} to {} | Magic Missile dart {}",
+                    caster.name,
+                    mark.name,
+                    index + 1
+                ),
+                "damage 3 + 1 = 4 force",
+                "AUTOMATIC HIT",
+            );
+            resolved(mark, 4, None, vec![3], heading.clone(), final_card)
+        })
+        .collect();
+    script.push((
+        "Magic Missile",
+        AttackStyle::Missiles,
+        Beat::Missiles {
+            caster: caster.id.clone(),
+            darts,
+        },
+        heading.clone(),
+    ));
+    let targets = marks
+        .iter()
+        .enumerate()
+        .map(|(index, mark)| {
+            let saved = index % 2 == 0;
+            resolved(
+                mark,
+                if saved { 14 } else { 28 },
+                Some(if saved { 15 } else { 6 }),
+                vec![3, 4, 5, 2, 6, 1, 3, 4],
+                card(
+                    if saved { "18" } else { "9" },
+                    format!("{} | Dexterity save", mark.name),
+                    "d20 + Dexterity 3 vs DC 15",
+                    if saved { "SAVED" } else { "FAILED" },
+                ),
+                card(
+                    if saved { "14" } else { "28" },
+                    format!("{} | Fireball", mark.name),
+                    "3 + 4 + 5 + 2 + 6 + 1 + 3 + 4 = 28 fire",
+                    if saved {
+                        "SAVED | HALF DAMAGE 14"
+                    } else {
+                        "FAILED | DAMAGE 28"
+                    },
+                ),
+            )
+        })
+        .collect();
+    script.push((
+        "Fireball",
+        AttackStyle::Burst,
+        Beat::AreaEffect {
+            caster: caster.id.clone(),
+            centre: target.cell,
+            radius_m: 6.1,
+            targets,
+        },
+        heading.clone(),
+    ));
+    let shield = battle::StrikeDisplay {
+        target: target.id.clone(),
+        result: AttackResult::Miss,
+        target_hit_points_after: None,
+        card: Some(card(
+            "19",
+            format!("{} | Shield", target.name),
+            "d20 12 + 7 = 19 vs Shield AC 20",
+            "MISS | TURNED ASIDE",
+        )),
+        roll: Some(battle::ResolvedRoll {
+            d20: Some(12),
+            damage_faces: Vec::new(),
+            attack_card: None,
+        }),
+    };
+    script.push((
+        "Shield",
+        AttackStyle::Melee,
+        Beat::Shield {
+            attacker: caster.id.clone(),
+            defender: target.id.clone(),
+            display: Some(Box::new(shield)),
+        },
+        heading,
+    ));
+    script
+}
+
 fn generated_script(tokens: &[Token]) -> Vec<(u32, Beat)> {
     let heroes: Vec<&Token> = tokens.iter().filter(|t| t.side == Side::Hero).collect();
     let enemies: Vec<&Token> = tokens.iter().filter(|t| t.side == Side::Enemy).collect();
@@ -521,13 +754,15 @@ fn preview_initiative() -> Vec<battle::InitiativeRoll> {
     vec![
         roll("sylvie", 17, 3),
         roll("tobin", 14, 1),
-        roll("goblin", 11, 2),
+        roll("bandit", 11, 2),
         roll("nimrael", 10, 3),
     ]
 }
 
-/// The looping preview fight: a miss, hits both ways, a ranged hit and miss, a heal, then a
-/// finishing blow.
+/// The looping preview fight, staged at range so distance reads: Tobin throws a
+/// javelin (miss, then a hit, then the finishing throw), Sylvie looses bow shots
+/// (a hit and a miss that flies past), Nimrael and the bandit trade melee blows,
+/// and a heal. Thrown and bow flights scale with the gap between the figures.
 fn preview_script() -> Vec<(u32, Beat)> {
     let attack = |attacker: &str, target: &str, result, after| Beat::Attack {
         attacker: TokenId::new(attacker),
@@ -541,10 +776,10 @@ fn preview_script() -> Vec<(u32, Beat)> {
         downed,
     };
     vec![
-        (1, attack("tobin", "goblin", AttackResult::Miss, None)),
-        (1, attack("goblin", "nimrael", hit(3, false), Some(9))),
-        (2, attack("sylvie", "goblin", hit(4, false), Some(8))),
-        (2, attack("nimrael", "goblin", hit(5, false), Some(3))),
+        (1, attack("tobin", "bandit", AttackResult::Miss, None)),
+        (1, attack("bandit", "nimrael", hit(3, false), Some(9))),
+        (2, attack("sylvie", "bandit", hit(4, false), Some(8))),
+        (2, attack("nimrael", "bandit", hit(5, false), Some(3))),
         (
             2,
             Beat::Heal {
@@ -554,9 +789,9 @@ fn preview_script() -> Vec<(u32, Beat)> {
                 target_hit_points_after: Some(12),
             },
         ),
-        (3, attack("goblin", "tobin", hit(2, false), Some(10))),
-        (3, attack("sylvie", "goblin", AttackResult::Miss, None)),
-        (3, attack("tobin", "goblin", hit(3, true), Some(0))),
+        (3, attack("bandit", "tobin", hit(2, false), Some(10))),
+        (3, attack("sylvie", "bandit", AttackResult::Miss, None)),
+        (3, attack("tobin", "bandit", hit(3, true), Some(0))),
     ]
 }
 
@@ -935,6 +1170,14 @@ async fn run_preview(host: Element, request: PreviewRequest) {
     }));
     PREVIEW.with(|slot| *slot.borrow_mut() = Some(stage));
     with_preview(|stage| {
+        if let Some(pose) = request.home_camera {
+            let pose = pose.aimed_at(stage.scene().home.target);
+            if let Err(error) = stage.set_home_override(Some(pose)) {
+                web_sys::console::error_1(&JsValue::from_str(&format!(
+                    "invalid preview home: {error:?}"
+                )));
+            }
+        }
         stage.set_restrained(
             request.restrained || content_rating() == battle::ContentRating::Restrained,
         )
@@ -964,7 +1207,10 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             }
             let layout = stage.layout().cloned();
             let tokens = match request.mode {
-                PreviewMode::Fight | PreviewMode::Statuses | PreviewMode::Still => preview_tokens(
+                PreviewMode::Fight
+                | PreviewMode::Techniques
+                | PreviewMode::Statuses
+                | PreviewMode::Still => preview_tokens(
                     stage.grid(),
                     layout.as_ref(),
                     request.heroes,
@@ -1075,7 +1321,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                 with_preview(|stage| {
                     let _ = stage.stage(Beat::Attack {
                         attacker: TokenId::new("sylvie"),
-                        target: TokenId::new("goblin"),
+                        target: TokenId::new("bandit"),
                         result: AttackResult::Hit {
                             damage: 4,
                             critical: false,
@@ -1096,7 +1342,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
                 // The enemy's turn: the goblin hits the hero.
                 with_preview(|stage| {
                     let _ = stage.stage(Beat::Attack {
-                        attacker: TokenId::new("goblin"),
+                        attacker: TokenId::new("bandit"),
                         target: TokenId::new("tobin"),
                         result: AttackResult::Hit {
                             damage: 3,
@@ -1152,7 +1398,7 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             with_preview(|stage| {
                 let _ = stage.stage(Beat::Attack {
                     attacker: TokenId::new("tobin"),
-                    target: TokenId::new("goblin"),
+                    target: TokenId::new("bandit"),
                     result,
                     target_hit_points_after: after,
                 });
@@ -1195,6 +1441,46 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             }
         }
         match request.mode {
+            PreviewMode::Techniques => {
+                with_preview(|stage| stage.establish());
+                TimeoutFuture::new(1500).await;
+                let tokens = with_preview(|stage| stage.tokens().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                for (name, style, beat, card) in technique_script(&tokens) {
+                    mark(&host, "data-battlefield-phase", "techniques");
+                    mark(&host, "data-battlefield-technique", name);
+                    let id = super::presentation_timing::next_component_id();
+                    battle_component(
+                        Some(&host),
+                        df_observe::presentation::PresentationComponent::Battlefield,
+                        id,
+                        &request.scene_id,
+                        df_observe::presentation::ComponentPhase::Opened,
+                        "technique_preview",
+                    );
+                    let queued = with_preview(|stage| {
+                        if let Some(actor) = tokens.first() {
+                            stage.set_attack_style(&actor.id, style);
+                        }
+                        // The director owns the contact timing. Its timeline inserts the committed
+                        // card after the effect lands; opening it here would spoil the result.
+                        let _ = card;
+                        stage.stage(beat).is_ok()
+                    });
+                    if queued != Some(true) || !wait_idle().await {
+                        return;
+                    }
+                    battle_component(
+                        Some(&host),
+                        df_observe::presentation::PresentationComponent::Battlefield,
+                        id,
+                        &request.scene_id,
+                        df_observe::presentation::ComponentPhase::Hidden,
+                        "technique_preview_complete",
+                    );
+                    TimeoutFuture::new(1200).await;
+                }
+            }
             PreviewMode::Fight => {
                 with_preview(|stage| stage.establish());
                 TimeoutFuture::new(1500).await;
@@ -1466,8 +1752,8 @@ fn sheet_tokens(
             "",
             Side::Enemy,
             seats.enemies[0],
-            "figure-ant-goblin-warrior",
-            "portrait-ant-goblin-warrior",
+            "sprite-bandit-documentary-photo",
+            "sprite-bandit-documentary-photo",
             1.0,
         ),
         combatant(
@@ -1571,6 +1857,7 @@ use df_render::battle::{CombatFeed, CombatSnapshot, FeedMode, Member, Outcome, R
 use std::collections::VecDeque;
 
 /// What the cue director knows about a roll, copied from its own detail.
+#[derive(Clone)]
 pub(super) struct RollSummary {
     pub(super) sequence: u64,
     pub(super) attacker: String,
@@ -1619,6 +1906,7 @@ struct Live {
     banner_component_id: Option<u64>,
     turn_component_id: Option<u64>,
     last_turn_key: Option<String>,
+    techniques: std::collections::BTreeMap<u64, rpc::BattleTechnique>,
     feed: CombatFeed,
     latest: Option<CombatSnapshot>,
     /// The fight began in front of the display and its first feed has not run yet.
@@ -1668,6 +1956,10 @@ struct Live {
     battlefield_beat_log: VecDeque<String>,
     card_values: std::collections::HashMap<String, u32>,
     card_log: VecDeque<String>,
+    outcomes: std::collections::HashMap<u64, rpc::CombatOutcome>,
+    presenting_sequence: Option<u64>,
+    damage_readable_sequence: Option<u64>,
+    pending_impact: Option<RollSummary>,
 }
 
 thread_local! {
@@ -1679,6 +1971,7 @@ thread_local! {
         banner_component_id: None,
         turn_component_id: None,
         last_turn_key: None,
+        techniques: std::collections::BTreeMap::new(),
         feed: CombatFeed::new(FeedMode::HoldForCues),
         latest: None,
         begun_live: false,
@@ -1705,6 +1998,10 @@ thread_local! {
         battlefield_beat_log: VecDeque::new(),
         card_values: std::collections::HashMap::new(),
         card_log: VecDeque::new(),
+        outcomes: std::collections::HashMap::new(),
+        presenting_sequence: None,
+        damage_readable_sequence: None,
+        pending_impact: None,
     });
 }
 
@@ -1829,11 +2126,17 @@ fn participant_live_art(
             .find(|face| face.name == member.name)
             .and_then(|face| crate::presentation::imagery_url(&face.battle_sprite))
     } else {
-        scene
-            .cast
+        live_faces
             .iter()
-            .find(|actor| actor.name == member.name && actor.portrait == member.portrait)
-            .and_then(|actor| crate::presentation::imagery_url(&actor.live_sprite))
+            .find(|face| face.name == member.name)
+            .and_then(|face| crate::presentation::imagery_url(&face.battle_sprite))
+            .or_else(|| {
+                scene
+                    .cast
+                    .iter()
+                    .find(|actor| actor.name == member.name && actor.portrait == member.portrait)
+                    .and_then(|actor| crate::presentation::imagery_url(&actor.live_sprite))
+            })
     }
 }
 
@@ -1861,19 +2164,19 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
             // Seats wear the hero art in this order: the dwarf fighter, then the archer (the
             // owner asked for a female long-range player in the party), then the second fighter.
             let hero_art = [1, 3, 2][index % 3];
-            let portrait = if authoritative {
+            let creature = Some(member.creature_id.as_str())
+                .filter(|id| !id.is_empty())
+                .unwrap_or("bandit");
+            let portrait = if authoritative && !member.portrait.is_empty() {
                 member.portrait.clone()
             } else if hero {
                 format!("portrait-hero-{hero_art}")
             } else {
                 // The preview path has no authoritative portrait: the creature id the server
                 // sent names the family, the bandit when it sent none.
-                let creature = Some(member.creature_id.as_str())
-                    .filter(|id| !id.is_empty())
-                    .unwrap_or("bandit");
                 format!("portrait-ant-{creature}")
             };
-            let figure = if authoritative {
+            let figure = if authoritative && !portrait.is_empty() {
                 portrait.replacen("portrait-", "figure-", 1)
             } else if hero {
                 format!("figure-hero-{hero_art}")
@@ -2022,6 +2325,19 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     if client.borrow().role == "player" {
         return;
     }
+    // The current view initializes the command on mount. The receive hook also delivers
+    // same-game-revision camera edits, before an older retained view can be redrawn.
+    if CAMERA_OVERRIDE.with(|slot| slot.borrow().is_none()) {
+        let current = client
+            .borrow()
+            .views
+            .as_ref()
+            .and_then(|views| views.current().cloned());
+        if let Some(current) = current {
+            camera_view(client, &current);
+        }
+    }
+    apply_live_camera();
     let Some(snapshot) = snapshot_of(view) else {
         return;
     };
@@ -2044,6 +2360,31 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
     let phase_idle = LIVE.with(|live| {
         let mut live = live.borrow_mut();
         if let Some(combat) = &view.journey.combat {
+            let presenting = live
+                .presenting_sequence
+                .and_then(|sequence| live.outcomes.get(&sequence).cloned());
+            live.outcomes = combat
+                .outcomes
+                .iter()
+                .rev()
+                .take(BATTLEFIELD_BEAT_LOG_CAP)
+                .map(|outcome| (outcome.sequence, outcome.clone()))
+                .collect();
+            if let Some(outcome) = presenting {
+                live.outcomes.entry(outcome.sequence).or_insert(outcome);
+            }
+            live.techniques = combat
+                .outcomes
+                .iter()
+                .rev()
+                .take(BATTLEFIELD_BEAT_LOG_CAP)
+                .filter_map(|outcome| {
+                    outcome
+                        .presentation
+                        .clone()
+                        .map(|effect| (outcome.sequence, effect))
+                })
+                .collect();
             live.latest_seq = combat.latest_sequence;
             live.reaction_seconds_remaining = Some(combat.reaction_seconds_remaining);
             live.reaction = (!combat.reaction_participant_id.is_empty())
@@ -2233,6 +2574,8 @@ fn start_mount(
         .get_attribute("data-battle-scene")
         .and_then(|id| battle::load_embedded(&id))
         .and_then(Result::ok);
+    // Even a retained/older projection cannot replace a forced scan with a generated world.
+    let world = world.filter(|_| forced.is_none());
     let painted = |scene: &BattleScene| Some((scene.ground.clone(), scene.backdrop.clone()));
     let (mut scene, mut fallback_layers) = match forced {
         Some(forced) => (forced, painted(&location_scene)),
@@ -2280,6 +2623,8 @@ fn start_mount(
         return;
     }
     let mount = Rc::new(());
+    CAMERA_APPLIED.with(|slot| *slot.borrow_mut() = None);
+    let camera_client = Rc::downgrade(client);
     LIVE.with(|live| {
         let mut live = live.borrow_mut();
         live.phase = Phase::Mounting;
@@ -2413,8 +2758,135 @@ fn start_mount(
                 }
             });
             sync("view");
+            apply_live_camera();
+            camera_readbacks(camera_client, mount).await;
         }
     });
+}
+
+/// Accepts an authenticated display view, including a duplicate gameplay revision.
+/// The caller must first validate its connection generation and session scope.
+pub(super) fn camera_view(_client: &Rc<RefCell<Client>>, view: &rpc::ViewMessage) {
+    let Some(rpc::view_message::Audience::Display(display)) = &view.audience else {
+        return;
+    };
+    CAMERA_OVERRIDE.with(|slot| {
+        let mut stored = slot.borrow_mut();
+        if display.camera_override.as_ref().is_some_and(|new| {
+            stored
+                .as_ref()
+                .is_none_or(|old| new.revision >= old.revision)
+        }) {
+            stored.clone_from(&display.camera_override);
+        }
+    });
+    apply_live_camera();
+}
+
+fn apply_live_camera() {
+    let command = CAMERA_OVERRIDE.with(|slot| slot.borrow().clone());
+    let Some(command) = command else {
+        return;
+    };
+    LIVE.with(|live| {
+        let live = live.borrow();
+        let Some(stage) = live.stage.as_ref() else {
+            return;
+        };
+        stage.with_stage(|stage| {
+            let key = (command.revision, stage.scene().location_id.clone());
+            if CAMERA_APPLIED.with(|slot| slot.borrow().as_ref() == Some(&key)) {
+                return;
+            }
+            let pose = command.home.as_ref().map(|home| battle::CameraPose {
+                target: stage.scene().home.target,
+                pitch_deg: home.pitch_deg,
+                yaw_deg: home.yaw_deg,
+                distance: home.distance,
+                fov_deg: home.fov_deg,
+            });
+            if let Err(error) = stage.set_home_override(pose) {
+                web_sys::console::error_1(&JsValue::from_str(&format!(
+                    "camera override rejected: {error:?}"
+                )));
+                return;
+            }
+            if let Some(shot) = battle::ShotName::from_key(&command.shot) {
+                stage.set_camera_shot(shot);
+            }
+            CAMERA_APPLIED.with(|slot| *slot.borrow_mut() = Some(key));
+        });
+    });
+}
+
+fn camera_pose_json(pose: battle::CameraPose) -> serde_json::Value {
+    serde_json::json!({"target":[pose.target.x,pose.target.y,pose.target.z],
+        "distance":pose.distance,"yaw_deg":pose.yaw_deg,"pitch_deg":pose.pitch_deg,"fov_deg":pose.fov_deg})
+}
+
+fn camera_report(stage: &mut battle::Stage) -> Option<String> {
+    let revision =
+        CAMERA_APPLIED.with(|slot| slot.borrow().as_ref().map(|(revision, _)| *revision))?;
+    let live = stage.frame().camera;
+    let home = stage.home_pose();
+    let report = serde_json::json!({"battle_camera": {
+        "revision":revision,"scene":stage.scene().location_id,
+        "live":camera_pose_json(live),"home":camera_pose_json(home),
+        "authored_home":camera_pose_json(stage.scene().home),
+        "at_home":live.is_at_home(&home),"sample_time_ms":now_ms()
+    }});
+    Some(report.to_string())
+}
+
+/// One bounded report at a time, owned by the current battlefield mount; retirement stops it.
+async fn camera_readbacks(client: std::rc::Weak<RefCell<Client>>, mount: Rc<()>) {
+    loop {
+        TimeoutFuture::new(1000).await;
+        if !world_mount_is_current(Some(&mount)) {
+            return;
+        }
+        let Some(client) = client.upgrade() else {
+            return;
+        };
+        if !CAMERA_OVERRIDE.with(|slot| slot.borrow().is_some()) {
+            continue;
+        }
+        let report = LIVE.with(|live| {
+            let live = live.borrow();
+            let stage = live.stage.as_ref()?;
+            stage.with_stage(camera_report).flatten()
+        });
+        let Some(text) = report else {
+            continue;
+        };
+        let (sessions, credential) = {
+            let state = client.borrow();
+            (state.sessions.clone(), state.credential.clone())
+        };
+        drop(client);
+        let Some(mut sessions) = sessions else {
+            continue;
+        };
+        let message = rpc::PresentedRequest {
+            sequence: 0,
+            display_instance: super::live_motion::display_instance(),
+            layout_readback_json: text,
+        };
+        let outcome = match super::request(message, &credential) {
+            Ok(mut call) => {
+                call.set_timeout(Duration::from_secs(2));
+                sessions
+                    .report_presented(call)
+                    .await
+                    .map(|_| ())
+                    .map_err(|_| "camera report refused")
+            }
+            Err(_) => Err("camera report encoding failed"),
+        };
+        if let Err(error) = outcome {
+            web_sys::console::error_1(&JsValue::from_str(error));
+        }
+    }
 }
 
 /// Applies the latest snapshot; notices a stage that went unavailable (device lost).
@@ -2638,6 +3110,104 @@ pub(super) fn set_tempo(intensity: u16) {
     });
 }
 
+/// Converts only the server's display envelope. No inferred area membership, saves, attack
+/// counts or damage; unsupported variants use the existing ordinary-outcome presentation.
+fn technique_from_wire(
+    display: &rpc::BattleTechnique,
+    actor: &TokenId,
+    target: &TokenId,
+) -> Option<(AttackStyle, Beat)> {
+    let strikes: Vec<_> = display
+        .strikes
+        .iter()
+        .map(|strike| battle::StrikeDisplay {
+            target: TokenId::new(hex(&strike.target_id)),
+            result: if strike.hit {
+                AttackResult::Hit {
+                    damage: strike.damage,
+                    critical: strike.critical,
+                    downed: strike.downed,
+                }
+            } else {
+                AttackResult::Miss
+            },
+            target_hit_points_after: strike.hit_points_after,
+            roll: strike.roll.as_ref().map(|roll| battle::ResolvedRoll {
+                d20: roll.d20,
+                damage_faces: roll.damage_faces.clone(),
+                attack_card: roll.attack_card.as_ref().map(|card| RollCard {
+                    value: card.value.clone(),
+                    label: card.label.clone(),
+                    explanation: card.explanation.clone(),
+                    verdict: card.verdict.clone(),
+                    tone: card.tone.clone(),
+                }),
+            }),
+            card: strike.card.as_ref().map(|card| RollCard {
+                value: card.value.clone(),
+                label: card.label.clone(),
+                explanation: card.explanation.clone(),
+                verdict: card.verdict.clone(),
+                tone: card.tone.clone(),
+            }),
+        })
+        .collect();
+    match rpc::BattleTechniqueKind::try_from(display.kind).ok()? {
+        rpc::BattleTechniqueKind::BattleTechniqueFireBolt => {
+            let [strike] = strikes.as_slice() else {
+                return None;
+            };
+            Some((
+                AttackStyle::Bolt,
+                Beat::Flurry {
+                    attacker: actor.clone(),
+                    strikes: vec![strike.clone()],
+                    action_surge_at: None,
+                },
+            ))
+        }
+        rpc::BattleTechniqueKind::BattleTechniqueMagicMissile => Some((
+            AttackStyle::Missiles,
+            Beat::Missiles {
+                caster: actor.clone(),
+                darts: strikes,
+            },
+        )),
+        rpc::BattleTechniqueKind::BattleTechniqueFireball => {
+            let centre = display.centre.as_ref()?;
+            Some((
+                AttackStyle::Burst,
+                Beat::AreaEffect {
+                    caster: actor.clone(),
+                    centre: Cell::new(
+                        i32::try_from(centre.col).ok()?,
+                        i32::try_from(centre.row).ok()?,
+                    ),
+                    radius_m: display.radius_m?,
+                    targets: strikes,
+                },
+            ))
+        }
+        rpc::BattleTechniqueKind::BattleTechniqueShield => Some((
+            AttackStyle::Melee,
+            Beat::Shield {
+                attacker: actor.clone(),
+                defender: target.clone(),
+                display: strikes.first().cloned().map(Box::new),
+            },
+        )),
+        rpc::BattleTechniqueKind::BattleTechniqueFlurry => Some((
+            AttackStyle::Melee,
+            Beat::Flurry {
+                attacker: actor.clone(),
+                strikes,
+                action_surge_at: display.action_surge_at,
+            },
+        )),
+        rpc::BattleTechniqueKind::BattleTechniqueUnspecified => None,
+    }
+}
+
 /// The cue director entered a state: stage the matching half of the attack.
 pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     let Some(roll) = roll else {
@@ -2646,6 +3216,24 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     // The mover's hold ends as its turn is staged; an outcome is no longer waiting once its blow
     // is. The label is released when none is left.
     let mut drained = false;
+    if state == "impact" && !roll.check && ordinary_presentation_active(roll.sequence) {
+        let waiting = LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            if live.damage_readable_sequence == Some(roll.sequence) {
+                return false;
+            }
+            live.pending_impact = Some(roll.clone());
+            true
+        });
+        if waiting {
+            return;
+        }
+    }
+    let state = if state == "present-impact" {
+        "impact"
+    } else {
+        state
+    };
     LIVE.with(|live| {
         let mut live = live.borrow_mut();
         match state {
@@ -2758,21 +3346,49 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
                         return;
                     }
                     if roll.check {
-                        // The card alone: no approach, no strike.
-                        if let Some(card) = roll.card.clone() {
-                            stage.show_roll_card(card);
-                        }
+                        // The die settles before its committed card is opened.
+                        return;
+                    }
+                    if guard.techniques.contains_key(&roll.sequence) {
+                        // Technique timelines own their card timing after contact.
                         return;
                     }
                     stage.set_attack_style(&attacker, roll.attack_style);
                     let _ = stage.stage(Beat::Approach { attacker, target });
-                    // The card waits for the camera to arrive on the two fighters.
-                    if let Some(card) = roll.card.clone() {
-                        stage.show_roll_card(card);
+                }
+                "impact" if roll.check => {
+                    if let Some(card) = &roll.card {
+                        stage.show_roll_card(card.clone());
                     }
                 }
-                "impact" if roll.check => {}
                 "impact" => {
+                    if let Some(presentation) = guard.techniques.get(&roll.sequence) {
+                        match technique_from_wire(presentation, &attacker, &target) {
+                            Some((style, beat)) => {
+                                stage.set_attack_style(&attacker, style);
+                                if let Err(error) = stage.stage(beat)
+                                    && let Some(host) = &guard.host
+                                {
+                                    mark(
+                                        host,
+                                        "data-battlefield-technique-error",
+                                        &format!("{error:?}"),
+                                    );
+                                }
+                                return;
+                            }
+                            None => {
+                                if let Some(host) = &guard.host {
+                                    mark(
+                                        host,
+                                        "data-battlefield-technique-error",
+                                        "invalid_display_envelope",
+                                    );
+                                }
+                                // An unknown optional display variant retains the ordinary outcome.
+                            }
+                        }
+                    }
                     if let Some(label) = &roll.attack_label {
                         stage.set_attack_label(&attacker, label, &roll.damage_type);
                     }
@@ -2861,6 +3477,95 @@ pub(super) fn on_cue(state: &str, roll: Option<&RollSummary>) {
     if drained {
         sync("director");
     }
+}
+
+/// A queued cue can outlive the accepted view's recent-outcome window.
+pub(super) fn attack_outcome(sequence: u64) -> Option<rpc::CombatOutcome> {
+    LIVE.with(|live| live.borrow().outcomes.get(&sequence).cloned())
+}
+
+/// Opens or refreshes the card from the committed outcome. It is called by the delayed dice
+/// presenter, so the card cannot appear at the same instant as the d20 tumble.
+pub(super) fn show_attack_card(sequence: u64, card: RollCard) -> bool {
+    LIVE.with(|live| {
+        let live = live.borrow();
+        if live.presenting_sequence != Some(sequence) {
+            return false;
+        }
+        let Some(stage) = &live.stage else {
+            return false;
+        };
+        stage.with_stage(|stage| {
+            stage.open_attack_card(card);
+        });
+        true
+    })
+}
+
+pub(super) fn begin_attack_presentation(outcome: rpc::CombatOutcome) {
+    let sequence = outcome.sequence;
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        live.presenting_sequence = Some(sequence);
+        live.damage_readable_sequence = None;
+        live.pending_impact = None;
+        live.outcomes.insert(sequence, outcome);
+        if let Some(stage) = &live.stage {
+            stage.with_stage(|stage| {
+                // The live attack owns the dice seat even before the next feed redraw.
+                stage.skip_initiative();
+                stage.close_attack_card();
+            });
+        }
+    });
+}
+
+/// Releases impact/HP/floating damage only after the actual damage dice have settled.
+/// This is a presentation barrier, independent of the server cue's arrival time.
+pub(super) fn damage_readable(sequence: u64) {
+    let pending = LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        if live.presenting_sequence != Some(sequence) {
+            return None;
+        }
+        live.damage_readable_sequence = Some(sequence);
+        live.pending_impact
+            .take()
+            .filter(|roll| roll.sequence == sequence)
+    });
+    if let Some(roll) = pending {
+        on_cue("present-impact", Some(&roll));
+    }
+}
+
+pub(super) fn finish_attack_presentation(sequence: u64) {
+    LIVE.with(|live| {
+        let mut live = live.borrow_mut();
+        if live.presenting_sequence != Some(sequence) {
+            return;
+        }
+        if let Some(stage) = &live.stage {
+            stage.with_stage(|stage| stage.close_attack_card());
+        }
+        live.presenting_sequence = None;
+        live.damage_readable_sequence = None;
+        live.pending_impact = None;
+    });
+}
+
+pub(super) fn ordinary_presentation_active(sequence: u64) -> bool {
+    LIVE.with(|live| live.borrow().presenting_sequence == Some(sequence))
+}
+
+pub(super) fn close_attack_card(sequence: u64) {
+    LIVE.with(|live| {
+        let live = live.borrow();
+        if live.presenting_sequence == Some(sequence)
+            && let Some(stage) = &live.stage
+        {
+            stage.with_stage(|stage| stage.close_attack_card());
+        }
+    });
 }
 
 /// How far the battlefield is with a fight's entrance, read by the display's battle machine:
@@ -3017,11 +3722,12 @@ pub(super) fn is_busy() -> bool {
     LIVE.with(|live| {
         let live = live.borrow();
         matches!(live.phase, Phase::Active)
-            && live
-                .stage
-                .as_ref()
-                .and_then(|stage| stage.with_stage(|stage| stage.is_busy()))
-                .unwrap_or(false)
+            && (live.presenting_sequence.is_some()
+                || live
+                    .stage
+                    .as_ref()
+                    .and_then(|stage| stage.with_stage(|stage| stage.is_busy()))
+                    .unwrap_or(false))
     })
 }
 
@@ -3239,6 +3945,29 @@ mod tests {
     }
 
     #[test]
+    fn attack_card_and_float_layout_fit_compact_and_tv_viewports() {
+        let css = include_str!("live_battlefield.css");
+        assert!(css.contains(
+            "[data-attack-card=open] .combat-roll-panel .combat-roll{visibility:visible!important}"
+        ));
+        assert!(css.contains("width:min(92vw,calc(var(--u)*76))"));
+        assert!(css.contains("left:50%;right:auto"));
+        assert!(css.contains("max-width:min(51%,calc(100vw - 2 * clamp(12px,3vw,40px)))"));
+
+        for (viewport_width, viewport_height) in [(800.0_f32, 574.0_f32), (1920.0, 1080.0)] {
+            let unit = (viewport_width * 0.01).min(viewport_height * 0.017_778);
+            let card_width = (viewport_width * 0.92).min(unit * 76.0);
+            let card_left = (viewport_width - card_width) * 0.5;
+            let safe_gutter = (viewport_width * 0.03).clamp(12.0, 40.0);
+            let float_max_width = (viewport_width * 0.51).min(viewport_width - safe_gutter * 2.0);
+
+            assert!(card_left >= safe_gutter);
+            assert!(card_left + card_width <= viewport_width - safe_gutter);
+            assert!(float_max_width <= viewport_width - safe_gutter * 2.0);
+        }
+    }
+
+    #[test]
     fn tv_roll_hides_stale_dm_caption_while_the_card_is_visible() {
         let css = include_str!("live_tv.css");
 
@@ -3410,6 +4139,10 @@ fn reset_fight(live: &mut Live) {
     live.battlefield_beat_log.clear();
     live.card_values.clear();
     live.card_log.clear();
+    live.outcomes.clear();
+    live.presenting_sequence = None;
+    live.damage_readable_sequence = None;
+    live.pending_impact = None;
     live.feed = CombatFeed::new(FeedMode::HoldForCues);
 }
 

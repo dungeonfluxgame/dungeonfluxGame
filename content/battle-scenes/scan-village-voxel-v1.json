@@ -1704,5 +1704,16 @@
   "theme": {
     "name": "neutral"
   },
-  "title": "Osada Slavotovo (scan)"
+  "title": "Osada Slavotovo (scan)",
+  "home": {
+    "target": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "distance": 10.0,
+    "yaw_deg": 10,
+    "pitch_deg": 16,
+    "fov_deg": 36
+  }
 }

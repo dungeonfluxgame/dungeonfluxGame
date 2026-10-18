@@ -231,6 +231,9 @@ pub(super) fn initial() -> Result<Checkpoint, RepositoryError> {
     model::checkpoint(model::basis()?, state)
 }
 pub(super) fn phase(current: &Checkpoint) -> Result<rpc::JourneyPhase, RepositoryError> {
+    if let Some(phase) = tactical::development_phase(current)? {
+        return Ok(phase);
+    }
     if let Some(phase) = super::beat_script::with_script(|script| {
         if script.uses_encounter() {
             None
@@ -401,6 +404,7 @@ fn fighter_progression(
 pub(super) fn resources_for(state: &GameState) -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let mut inventory = resources()?;
     inventory.extend(scene_fight::created_resources(state)?);
+    inventory.extend(tactical::development_resources(state)?);
     for character in &state.characters {
         let progression = fighter_progression(state, character.entity)?;
         if progression.level() == 1 {
@@ -552,6 +556,9 @@ fn set(
     Ok(())
 }
 pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, RepositoryError> {
+    if let Some(name) = tactical::development_name(state, who) {
+        return Ok(name);
+    }
     if tactical::enabled()
         && let Some((index, (_, source_id, _))) = tactical::enemies()?
             .iter()
@@ -1162,6 +1169,9 @@ pub(super) fn offered(
     current: &Checkpoint,
     member: MemberId,
 ) -> Result<Vec<(rpc::GameplayActionKind, String)>, RepositoryError> {
+    if tactical::development_mode(current.state()) && tactical::present(current.state()) {
+        return tactical::offered(current, member);
+    }
     // The machine's state decides which kinds of offer may be built; each
     // branch below only builds labels and inputs for kinds it accepts.
     let state = session_machine::SessionState::of(current)?;
@@ -1503,6 +1513,9 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
 pub(super) fn accepted(
     decision: &AcceptedDecision,
 ) -> Result<rpc::AcceptedAction, RepositoryError> {
+    if let Some(accepted) = tactical::development_receipt(decision)? {
+        return Ok(accepted);
+    }
     if let Some(accepted) = scene_fight::opening_receipt(decision)? {
         return Ok(accepted);
     }
@@ -2567,7 +2580,8 @@ fn choice<'a>(
 type DiceSource<'a> = &'a mut dyn FnMut(u32) -> Result<u32, RepositoryError>;
 fn sample_face(sides: u32) -> Result<u32, RepositoryError> {
     if sides != 20
-        && !(tactical::enabled() && [4, 6, 8, 10, 12].contains(&sides))
+        && !((tactical::enabled() || tactical::scene_assault_only())
+            && [4, 6, 8, 10, 12].contains(&sides))
         && ![
             u32::from(pack::hero_weapon().damage_sides),
             u32::from(pack::bandit().weapon.damage_sides),
@@ -3901,6 +3915,9 @@ fn stage_using(
     input: &GameInput,
     supplier: DiceSource<'_>,
 ) -> Result<Checkpoint, RepositoryError> {
+    if let Some(staged) = tactical::development_stage(current, input, supplier)? {
+        return Ok(staged);
+    }
     super::beat_script::validate_resume(current).map_err(|error| {
         if short_rest_started(current.state()) && !short_rest_completed(current.state()) {
             refusal_detail::note("short-rest-resume-validation");
@@ -4718,6 +4735,12 @@ pub(super) fn stage_with_supplier(
         &source,
     )
     .map_err(|error| {
+        if tactical::development_mode(current.state()) {
+            super::actor::record_audit_line(
+                "gameplay.dev.action_refused",
+                format!("DEV-BATTLE registered-action refused error={error:?}"),
+            );
+        }
         refusal_detail::note("decide-command");
         bad(error)
     })

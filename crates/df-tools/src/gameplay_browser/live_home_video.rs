@@ -1,17 +1,18 @@
 //! PLAY-V10: the home screen's looping video, over the still. Two muted inline `<video>` elements
 //! stack in one layer. The first fades in once it can play through; near its end the second starts
-//! from the beginning and the two cross-fade, so the wrap has no jump and no `loop` attribute is
-//! used. Any error, a refused play, or leaving the lobby releases both elements and the still
-//! stays on screen. Nothing here waits on the video, and no motion setting is consulted.
+//! from the beginning and fades in on top of it, while the outgoing clip stays fully opaque
+//! underneath until the incoming one is fully opaque (HOME-01, see `swap`); only then does the
+//! outgoing clip rest, so no wrap ever shows the layer underneath. Any error, a refused play, or
+//! leaving the lobby releases both elements and the still stays on screen. Nothing here waits on
+//! the video, and no motion setting is consulted.
 use super::*;
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::JsCast;
 use web_sys::HtmlVideoElement;
 
-/// The next clip starts this many seconds before the current one ends.
-const SWAP_BEFORE_END: f64 = 0.5;
-/// The incoming clip has run this long, so the outgoing one can rest.
-const SWAP_SETTLED: f64 = 0.6;
+#[path = "live_home_swap.rs"]
+mod swap;
+use swap::{Swap, SwapStep};
 
 /// The loop layer of one lobby: its elements, the path it plays, and its frame callback.
 pub(super) struct HomeLoop {
@@ -23,11 +24,12 @@ struct Playback {
     /// The layer the clips sit in; it is hidden whenever nothing is playing.
     layer: Element,
     path: Option<String>,
+    /// The still the current loop was made from, for the DISPLAY records; empty for the
+    /// scene-plate loops that share this player and keep their own records.
+    still_key: String,
     clips: [HtmlVideoElement; 2],
-    /// The clip on top: the one that is playing as the picture.
-    front: usize,
-    /// The clip that has started for a cross-fade and not yet taken over.
-    swap: Option<usize>,
+    /// The A/B swap decisions: which clip is the picture, which is fading in over it.
+    swap: Swap,
     running: bool,
     /// Kept for the page's life, so a frame already requested never calls a dropped closure.
     frame: Option<Closure<dyn FnMut()>>,
@@ -42,9 +44,9 @@ impl HomeLoop {
         let playback = Rc::new(RefCell::new(Playback {
             layer: layer.clone(),
             path: None,
+            still_key: String::new(),
             clips: [first.clone(), second.clone()],
-            front: 0,
-            swap: None,
+            swap: Swap::new(),
             running: false,
             frame: None,
             listeners: Vec::new(),
@@ -103,6 +105,12 @@ impl HomeLoop {
         }
     }
 
+    /// Names the still the lobby's loop was made from, so its DISPLAY records carry the
+    /// loop's source still key. The scene-plate loops never call this and stay silent.
+    pub(super) fn note_still(&self, still_key: &str) {
+        self.playback.borrow_mut().still_key = still_key.to_owned();
+    }
+
     /// Stops and releases both clips; the still is the picture again.
     pub(super) fn release(&self) {
         release(&self.playback);
@@ -142,19 +150,41 @@ fn clip(document: &Document, layer: &Element) -> Result<HtmlVideoElement, JsValu
     Ok(video)
 }
 
+/// A DISPLAY record of the home loop opening, wrapping or being released, keyed by the
+/// still its loop was made from, so a flicker can be measured from the logs. The shared
+/// media path hashes the still and the path; no picture bytes or text are recorded.
+fn record_loop(playback: &Playback, kind: &'static str, reason: &'static str, crossfade_ms: u32) {
+    if playback.still_key.is_empty() {
+        return;
+    }
+    let Some(path) = playback.path.as_deref() else {
+        return;
+    };
+    super::presentation_timing::media(kind, &playback.still_key, path, reason, crossfade_ms);
+}
+
 /// The first clip fades in once it can play through, and only once it is playing.
 fn on_ready(state: &Rc<RefCell<Playback>>, index: usize) {
     let video = {
-        let playback = state.borrow();
-        if !playback.running || index != 0 || playback.front != 0 || playback.swap.is_some() {
+        let mut playback = state.borrow_mut();
+        if !playback.running
+            || index != 0
+            || playback.swap.front() != 0
+            || playback.swap.incoming().is_some()
+        {
             return;
         }
+        playback.swap.mark_shown(0);
         playback.clips[0].clone()
     };
     if video.set_attribute("data-first", "").is_err() || video.set_attribute("data-on", "").is_err()
     {
         release(state);
         return;
+    }
+    {
+        let playback = state.borrow();
+        record_loop(&playback, "clip-shown", "ready", 900);
     }
     let layer = state.borrow().layer.clone();
     let _state = layer.set_attribute("data-state", "playing");
@@ -176,51 +206,58 @@ fn start(state: &Rc<RefCell<Playback>>, video: &HtmlVideoElement) {
     }
 }
 
-/// One frame of the loop: start the other clip near the end of the front one, then let the front
-/// one rest once the other has run long enough to take over.
+/// One frame of the loop: near the front clip's end, start the other clip from its
+/// beginning, fading in on top while the outgoing clip stays fully opaque; once the
+/// incoming clip reports full opacity, rest the outgoing one (HOME-01).
 fn step(state: &Rc<RefCell<Playback>>) {
-    let (front_index, front, incoming, swap) = {
-        let playback = state.borrow();
+    let (action, front, incoming, incoming_on, incoming_top) = {
+        let mut playback = state.borrow_mut();
         if !playback.running {
             return;
         }
-        let front_index = playback.front;
+        let front_index = playback.swap.front();
         let incoming_index = 1 - front_index;
-        (
-            front_index,
-            playback.clips[front_index].clone(),
-            playback.clips[incoming_index].clone(),
-            playback.swap,
-        )
+        let front = playback.clips[front_index].clone();
+        let incoming = playback.clips[incoming_index].clone();
+        let action = if playback.swap.incoming().is_some() {
+            playback.swap.settle(incoming.current_time())
+        } else {
+            playback
+                .swap
+                .begin(front.current_time(), front.duration(), front.paused())
+        };
+        // The DOM mirrors the machine: the incoming clip is on, stacked on top, while
+        // the outgoing one stays on underneath at full opacity.
+        let incoming_on = playback.swap.is_on(incoming_index);
+        let incoming_top = playback.swap.top() == incoming_index;
+        (action, front, incoming, incoming_on, incoming_top)
     };
-    if swap.is_some() {
-        // The incoming clip has been playing since the swap began; once it has run long enough
-        // the outgoing one rests at its start, ready for the next wrap.
-        if incoming.current_time() >= SWAP_SETTLED {
+    match action {
+        SwapStep::StartIncoming(_) => {
+            // The incoming clip fades in on top; the outgoing one keeps `data-on` at
+            // full opacity underneath until the incoming one is fully opaque.
+            let _removed = incoming.remove_attribute("data-first");
+            incoming.set_current_time(0.0);
+            if !incoming_on
+                || !incoming_top
+                || incoming.set_attribute("data-on", "").is_err()
+                || incoming.set_attribute("data-top", "").is_err()
+            {
+                release(state);
+                return;
+            }
+            start(state, &incoming);
+        }
+        SwapStep::RestOutgoing(_) => {
             let _rested = front.pause();
             front.set_current_time(0.0);
             let _removed = front.remove_attribute("data-on");
             let _removed = front.remove_attribute("data-first");
-            let mut playback = state.borrow_mut();
-            playback.front = 1 - front_index;
-            playback.swap = None;
+            let _removed = incoming.remove_attribute("data-top");
+            let playback = state.borrow();
+            record_loop(&playback, "clip-shown", "changed", 500);
         }
-    } else {
-        let duration = front.duration();
-        let near_end = duration.is_finite() && front.current_time() >= duration - SWAP_BEFORE_END;
-        if near_end && !front.paused() {
-            // The incoming clip starts from its beginning and fades in over the outgoing one.
-            let _removed = incoming.remove_attribute("data-first");
-            incoming.set_current_time(0.0);
-            if incoming.set_attribute("data-on", "").is_err() {
-                release(state);
-                return;
-            }
-            let _removed = front.remove_attribute("data-on");
-            let _removed = front.remove_attribute("data-first");
-            state.borrow_mut().swap = Some(1 - front_index);
-            start(state, &incoming);
-        }
+        SwapStep::Idle => {}
     }
     request_frame(state);
 }
@@ -241,10 +278,12 @@ fn release(state: &Rc<RefCell<Playback>>) {
 }
 
 fn release_locked(playback: &mut Playback) {
+    if playback.path.is_some() {
+        record_loop(playback, "clip-ended", "disposed", 0);
+    }
     playback.running = false;
     playback.path = None;
-    playback.front = 0;
-    playback.swap = None;
+    playback.swap.release();
     let _hidden = playback.layer.set_attribute("hidden", "");
     let _state = playback.layer.set_attribute("data-state", "released");
     for video in &playback.clips {
@@ -252,6 +291,7 @@ fn release_locked(playback: &mut Playback) {
         let _removed = video.remove_attribute("src");
         let _removed = video.remove_attribute("data-on");
         let _removed = video.remove_attribute("data-first");
+        let _removed = video.remove_attribute("data-top");
         video.load();
     }
 }

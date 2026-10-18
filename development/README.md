@@ -145,6 +145,12 @@ one `DEV CONTROL on url=... token_file=...` line; the client reads the bearer
 token from that file (`--token-file`, or `DF_DEV_CONTROL_TOKEN_FILE`) and the
 server URL (`--server`, or `DF_DEV_CONTROL_URL`). Ten-line session:
 
+Every `dev override` kind (including budget), state-changing `fight` command,
+and `npc say|act|hold` command requires the separate opt-in
+`DF_GAMEPLAY_DEV_OVERRIDES=on` (off by default). The authenticated control
+surface remains available for read commands when this setting is off; mutation
+refusals name the setting.
+
 ```sh
 dev script setup-two-heroes.txt   # join 1, join 2, create 1 Brynn, create 2 Neris
 dev act Brynn begin
@@ -157,6 +163,12 @@ dev view --as tv                   # exactly the TV view (no offers, no private 
 dev view --as Neris                # exactly her phone view (offers, own sheet)
 dev log                            # the table log; dev checkpoint save <name> names a point
 ```
+
+The battle phase can also be driven directly for deterministic native runs: `dev fight start --foe <srd-id> --count 1..4 [--level 1|5] [--scene <id>] [--layout <id>]`, `dev fight end victory|defeat|flee`, `dev fight restore <person>`, `dev fight add <srd-id> [--cell c2r3]`, `dev fight remove <name>`, `dev fight scene <id> [--layout <id>]`, `dev fight log [--last n]`, `dev fight offers <hero>`, and `dev fight initiative`. Combatant edits use `dev override hp|condition|cell|resource|turn|initiative ...`; NPC policy turns can be held with `dev npc hold all on|off`. Presentation is display-only and uses `dev present pause|resume|step|replay`, `dev present speed <0.25-4>`, and `dev present timing <name> <ms>|reset`. The timing names are `DICE_TUMBLE`, `DICE_READ`, `DAMAGE_DICE_TUMBLE`, `ROLL_CARD_MISS_HOLD` and `ROLL_CARD_HIT_HOLD` (lowercase hyphenated forms also work), bounded to 1..60000 ms. Scene configuration is an edited, durable owner decision for the next fight. `--level` stages source-pinned level 1/5 hero resources, and omitted level keeps the current level. NPC actions also expose `stand`, `drop-prone`, `nimble-disengage`, `doff-shield`, `death-save`, `opportunity`, `decline-reaction` and `policy`. The display queue resumes with a recorded capacity event if a developer holds more than 128 pending plans; committed beats are then released to the normal conductor.
+
+Scene-person restoration currently updates canonical health/location and persists typed restoration metadata. The scene journal owner must reconcile that metadata before its public projection; until that integration lands, a restored fled/down person can retain the old journal description or visibility. An existing scene inventory projection also refuses after an owner flees because it resolves identity from a filtered model. These are pending scene-owner integration, tracked by native regression tests.
+
+The presentation controls currently hold newly arriving display plans and scale the conductor and ordinary dice/card durations. Already queued conductor beats continue after pause, and replay currently selects the last submitted plan, which can still be waiting behind a backlog. Complete queue pause/step and replay of the last actually presented beat require the conductor integration API. The renderer still needs a runtime clock/timing API for its 3D technique timelines, and the shared 20-second director watchdog must account for large timing overrides; these remain pending renderer integration.
 
 If `/dev/state` finds that a browser reclaimed a hero and the CLI's cached seat binding was
 revoked, it still returns the public table state and marks that seat `rejoin_required`; that

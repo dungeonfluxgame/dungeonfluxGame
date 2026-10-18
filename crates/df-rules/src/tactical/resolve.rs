@@ -1609,6 +1609,16 @@ fn death_save(
     })
 }
 fn end_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
+    finish_turn(battle, id)?;
+    battle.active += 1;
+    if battle.active == battle.order.len() {
+        battle.active = 0;
+        battle.round = battle.round.checked_add(1).ok_or(RuleError::Capacity)?;
+    }
+    let next = battle.active_actor().ok_or(RuleError::UnknownActor)?;
+    begin_turn(battle, next)
+}
+pub(super) fn finish_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
     let actor = battle.actor_mut(id)?;
     actor.vex.retain(|(_, expiry)| actor.turn_count < *expiry);
     actor.extra_attacks = 0;
@@ -1618,12 +1628,9 @@ fn end_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
     for actor in &mut battle.actors {
         actor.savage_used = false;
     }
-    battle.active += 1;
-    if battle.active == battle.order.len() {
-        battle.active = 0;
-        battle.round = battle.round.checked_add(1).ok_or(RuleError::Capacity)?;
-    }
-    let next = battle.active_actor().ok_or(RuleError::UnknownActor)?;
+    Ok(())
+}
+pub(super) fn begin_turn(battle: &mut Battle, next: u32) -> Result<(), RuleError> {
     let actor = battle.actor_mut(next)?;
     actor.turn_count = actor.turn_count.checked_add(1).ok_or(RuleError::Capacity)?;
     let turn = actor.turn_count;

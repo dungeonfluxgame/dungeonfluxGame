@@ -546,6 +546,83 @@ mod tests {
         assert_eq!(fixture.calls(), 1, "cache hit must not pay twice");
     }
 
+    #[tokio::test]
+    async fn combat_creature_missing_pending_and_late_ready_share_real_cached_art() {
+        // The cache is written during the test, so it is a scratch copy of the committed art.
+        let source =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/gameplay/fixtures/creature-art");
+        let cache = std::env::temp_dir().join(format!(
+            "df-creature-art-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&cache).unwrap();
+        for entry in std::fs::read_dir(&source).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), cache.join(entry.file_name())).unwrap();
+        }
+        let fixture = DirectionFixture::new(&cache);
+        let canonical = references("combat-creature-run");
+        let inner = Arc::new(inner(fixture.imagery.clone(), canonical));
+        let mut journey = rpc::JourneyView {
+            combat: Some(rpc::CombatView {
+                participants: vec![
+                    rpc::PartyMemberView {
+                        name: "Skeleton 1".to_owned(),
+                        creature_id: "skeleton".to_owned(),
+                        side: 2,
+                        ..Default::default()
+                    },
+                    rpc::PartyMemberView {
+                        name: "Skeleton 2".to_owned(),
+                        creature_id: "skeleton".to_owned(),
+                        side: 2,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let jobs = {
+            let mut state = locked(&inner.state);
+            apply_creature_faces(&mut state.canonical, Some(&mut journey));
+            assert!(
+                journey.live_faces.is_empty(),
+                "pending art cannot fabricate a URL"
+            );
+            let jobs = state.canonical.take_jobs();
+            assert_eq!(jobs.len(), 1, "one request per creature identity");
+            apply_creature_faces(&mut state.canonical, Some(&mut journey));
+            assert!(state.canonical.take_jobs().is_empty());
+            jobs
+        };
+        let mut tasks = JoinSet::new();
+        for job in jobs {
+            inner.spawn(&mut tasks, job);
+        }
+        inner.finish(tasks.join_next().await.unwrap().unwrap());
+        apply_creature_faces(&mut locked(&inner.state).canonical, Some(&mut journey));
+        assert_eq!(journey.live_faces.len(), 2);
+        let key = locked(&inner.state)
+            .canonical
+            .npc("combat-creature:skeleton")
+            .unwrap();
+        assert!(matches!(
+            fixture.imagery.image(key.as_str()).await,
+            Lookup::Image { .. }
+        ));
+        assert!(
+            journey
+                .live_faces
+                .iter()
+                .all(|face| face.sprite == key.path() && face.battle_sprite == key.path())
+        );
+    }
+
     #[test]
     fn same_place_authored_layouts_coexist_and_select_the_exact_current_room() {
         let mut canonical = references("same-run-pack");

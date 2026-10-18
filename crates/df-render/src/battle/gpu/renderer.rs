@@ -109,6 +109,7 @@ struct Pipelines {
     effects: GpuRenderPipeline,
     bolt: GpuRenderPipeline,
     particle: GpuRenderPipeline,
+    technique: GpuRenderPipeline,
     post: GpuRenderPipeline,
 }
 
@@ -195,6 +196,7 @@ pub struct Renderer {
     figure_buffer: GpuBuffer,
     bolt_buffer: GpuBuffer,
     particle_buffer: GpuBuffer,
+    technique_buffer: GpuBuffer,
     targets: Option<Targets>,
     cache: Cache,
     /// What each figure's picture was last drawn from, and the one it is fading out of.
@@ -522,6 +524,18 @@ impl Renderer {
                     blend: true,
                 },
             ),
+            technique: pipeline(
+                &core,
+                PipelineSpec {
+                    wgsl: &shaders::technique(),
+                    layout: &frame_layout,
+                    buffers: vec![instance_layout(8, 2)],
+                    topology: "triangle-list",
+                    depth: Some((false, "less-equal")),
+                    target_format: COLOUR_FORMAT,
+                    blend: true,
+                },
+            ),
             particle: pipeline(
                 &core,
                 PipelineSpec {
@@ -562,7 +576,7 @@ impl Renderer {
                 },
             ),
         };
-        let frame_buffer = buffer(&core, 256, BUFFER_UNIFORM | BUFFER_COPY_DST);
+        let frame_buffer = buffer(&core, 288, BUFFER_UNIFORM | BUFFER_COPY_DST);
         let post_buffer = buffer(&core, 192, BUFFER_UNIFORM | BUFFER_COPY_DST);
         let decal_buffer = buffer(
             &core,
@@ -572,6 +586,11 @@ impl Renderer {
         let figure_buffer = buffer(
             &core,
             MAX_BILLBOARDS * FIGURE_STRIDE * 4,
+            BUFFER_VERTEX | BUFFER_COPY_DST,
+        );
+        let technique_buffer = buffer(
+            &core,
+            crate::battle::techniques::MAX_EFFECTS * 8 * 4,
             BUFFER_VERTEX | BUFFER_COPY_DST,
         );
         let particle_buffer = buffer(
@@ -651,6 +670,7 @@ impl Renderer {
             figure_buffer,
             bolt_buffer,
             particle_buffer,
+            technique_buffer,
             targets: None,
             cache: Rc::new(RefCell::new(HashMap::new())),
             art_fades: HashMap::new(),
@@ -1045,6 +1065,8 @@ impl Renderer {
         } else {
             0.0
         };
+        data.extend_from_slice(&frame.fire_light.position_radius);
+        data.extend_from_slice(&frame.fire_light.colour_strength);
         data.extend_from_slice(&[scene.grid.play_plane_y(), ground_margin, 0.0, 0.0]);
         self.core
             .queue
@@ -1780,6 +1802,49 @@ impl Renderer {
             pass.set_vertex_buffer(0, &self.bolt_buffer, 0.0, (bolt_data.len() * 4) as f64);
             pass.draw(12, bolt_count as u32, 0, 0);
         }
+        let mut technique_data = Vec::with_capacity(frame.techniques.len() * 8);
+        for effect in frame
+            .techniques
+            .iter()
+            .take(crate::battle::techniques::MAX_EFFECTS)
+        {
+            use crate::battle::EffectKind;
+            let kind = match effect.kind {
+                EffectKind::Bolt => 0.0,
+                EffectKind::Dart => 1.0,
+                EffectKind::Bead => 2.0,
+                EffectKind::Flare => 3.0,
+                EffectKind::Burst => 4.0,
+                EffectKind::Ward => 5.0,
+                EffectKind::Surge => 6.0,
+            };
+            technique_data.extend_from_slice(&[
+                effect.position.x,
+                effect.position.y,
+                effect.position.z,
+                effect.radius_m,
+                kind,
+                effect.age_s,
+                effect.opacity,
+                0.0,
+            ]);
+        }
+        if !technique_data.is_empty() {
+            self.core.queue.write_buffer(
+                &self.technique_buffer,
+                0.0,
+                &float_array(&technique_data),
+            );
+            pass.set_pipeline(&self.pipelines.technique);
+            pass.set_bind_group(0, &self.frame_group);
+            pass.set_vertex_buffer(
+                0,
+                &self.technique_buffer,
+                0.0,
+                (technique_data.len() * 4) as f64,
+            );
+            pass.draw(6, (technique_data.len() / 8) as u32, 0, 0);
+        }
         let particle_count = frame.particles.len() / crate::battle::particles::INSTANCE_FLOATS;
         if particle_count > 0 {
             self.core.queue.write_buffer(
@@ -1904,6 +1969,7 @@ impl Renderer {
             clip: layer.clip.map_or([0.0; 4], |(height, radius)| {
                 [height, radius * radius, centre.x, centre.z]
             }),
+            fire_light: frame.fire_light,
             full_size: (size.0 as f32, size.1 as f32),
             figures: frame
                 .figures
@@ -2100,6 +2166,7 @@ impl Drop for Renderer {
             targets.scene.destroy_texture();
             targets.depth.destroy_texture();
         }
+        self.technique_buffer.destroy_buffer();
         self.grid_buffer.destroy_buffer();
         self.count_readback.destroy_buffer();
         self.splat.take();

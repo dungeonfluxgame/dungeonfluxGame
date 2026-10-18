@@ -26,11 +26,13 @@ const INVENTORY_LIFETIME: Duration = Duration::from_secs(15);
 #[derive(Clone)]
 pub(crate) struct LayoutState {
     state: Arc<Mutex<LayoutInner>>,
+    pub(super) camera: Arc<Mutex<super::camera::CameraState>>,
     enabled: Arc<AtomicBool>,
     changed: watch::Sender<u64>,
 }
 struct LayoutInner {
     document: LayoutDocument,
+    presentation: super::presentation::PresentationState,
     clients: BTreeMap<u64, ClientReadback>,
     assemblies: BTreeMap<u64, Assembly>,
 }
@@ -53,8 +55,10 @@ impl LayoutState {
     pub(crate) fn new() -> Self {
         let (changed, _) = watch::channel(0);
         Self {
+            camera: Arc::new(Mutex::new(super::camera::CameraState::default())),
             state: Arc::new(Mutex::new(LayoutInner {
                 document: LayoutDocument::default(),
+                presentation: super::presentation::PresentationState::default(),
                 clients: BTreeMap::new(),
                 assemblies: BTreeMap::new(),
             })),
@@ -64,6 +68,10 @@ impl LayoutState {
     }
     pub(super) fn enable(&self) {
         self.enabled.store(true, Ordering::Release);
+    }
+    pub(super) fn camera_changed(&self) {
+        self.changed
+            .send_modify(|revision| *revision = revision.saturating_add(1));
     }
     pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
@@ -79,14 +87,34 @@ impl LayoutState {
             message.audience.as_mut()
         {
             let state = self.state.lock().await;
+            display.camera_override = Some(self.camera.lock().await.command.clone());
             display.layout_revision = state.document.revision;
+            let mut document =
+                serde_json::to_value(&state.document).map_err(|_| LayoutError::Shape)?;
+            document["development_presentation"] =
+                serde_json::to_value(&state.presentation).map_err(|_| LayoutError::Shape)?;
             display.layout_json =
-                serde_json::to_string(&state.document).map_err(|_| LayoutError::Shape)?;
+                serde_json::to_string(&document).map_err(|_| LayoutError::Shape)?;
             if display.layout_json.len() > contract::MAX_DOCUMENT_BYTES {
                 return Err(LayoutError::Limit);
             }
         }
         Ok(())
+    }
+    pub(super) async fn presentation(&self, body: &Value) -> Result<Value, String> {
+        if !self.enabled.load(Ordering::Acquire) {
+            return Err("development controls are disabled".to_owned());
+        }
+        let mut state = self.state.lock().await;
+        state.presentation.apply(body)?;
+        state.document.revision = state
+            .document
+            .revision
+            .checked_add(1)
+            .ok_or("layout revision exhausted")?;
+        self.changed.send_replace(state.document.revision);
+        serde_json::to_value(&state.presentation)
+            .map_err(|_| "presentation serialization failed".to_owned())
     }
     async fn snapshot(&self, id: Option<&str>) -> Result<Value, LayoutError> {
         if let Some(id) = id {
@@ -132,6 +160,9 @@ impl LayoutState {
         }
         if instance == 0 {
             return Err(LayoutError::Id);
+        }
+        if text.starts_with("{\"battle_camera\":") {
+            return self.camera.lock().await.readback(instance, text);
         }
         let page = LayoutPage::parse(text)?;
         let report = {
@@ -650,6 +681,40 @@ mod tests {
                 .await?;
         }
         Ok(())
+    }
+    #[tokio::test]
+    async fn development_presentation_wakes_and_attaches_without_a_game_revision_or_player_data() {
+        let state = LayoutState::new();
+        state.enable();
+        let mut wake = state.subscribe();
+        let mut message = df_protocol::common::ViewMessage {
+            audience: Some(df_protocol::common::view_message::Audience::Display(
+                Default::default(),
+            )),
+            ..Default::default()
+        };
+        state.attach(&mut message).await.unwrap();
+        let Some(df_protocol::common::view_message::Audience::Display(initial)) =
+            message.audience.as_ref()
+        else {
+            panic!("display")
+        };
+        let initial: Value = serde_json::from_str(&initial.layout_json).unwrap();
+        assert_eq!(initial["development_presentation"]["revision"], 0);
+        state.presentation(&json!({"op":"step"})).await.unwrap();
+        assert!(wake.has_changed().unwrap());
+        wake.borrow_and_update();
+        state.attach(&mut message).await.unwrap();
+        let Some(df_protocol::common::view_message::Audience::Display(display)) =
+            message.audience.as_ref()
+        else {
+            panic!("display")
+        };
+        let document: Value = serde_json::from_str(&display.layout_json).unwrap();
+        assert_eq!(document["development_presentation"]["steps"], 1);
+        assert_eq!(document["development_presentation"]["paused"], true);
+        assert!(document["development_presentation"].get("heroes").is_none());
+        assert!(document["development_presentation"].get("rules").is_none());
     }
     #[tokio::test]
     async fn inventory_admission_partial_updates_and_exact_revision_ack() {

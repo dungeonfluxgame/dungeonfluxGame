@@ -195,6 +195,7 @@ fn print_help() {
          \n\
          usage: df-transport-fixture dev [--server <url> --token-file <path>] [--pretty] [--timeout <s>] <command> [args]\n\
          \n\
+         camera [home|shot|reset|save]  live TV/home pose; home --pitch N --yaw N --distance N --fov N; shot <name>\n\
          health                       server liveness and current revision\n\
          photo-check <path>           --kind canonical_room|scene_plate|character; re-judge a saved image\n\
          join <seat>                  join the room as seat 1 or 2; a refusal says why\n\
@@ -223,10 +224,15 @@ fn print_help() {
          social <npc> [--hero <name>] attitude, trust, emotion and grievances with their causes\n\
          social edit <npc> <hero> attitude friendly|indifferent|hostile | trust <-1..1>  set one standing (marks edited)\n\
          npc say <npc> <text>         the NPC speaks one line on the table; it must be on stage\n\
-         npc act <npc> <action> [--target <foe>] [--weapon <name>] [--to <col,row>]  the NPC's fight turn: attack move dash dodge disengage end-turn\n\
-         npc hold <npc> on|off        hold the NPC's fight turns for the CLI; off lets the policy take a turn that waits\n\
+         npc act <npc> <action> [--target <foe>] [--weapon <name>] [--to <col,row>]  the NPC's fight action: attack move dash dodge disengage end-turn stand drop-prone nimble-disengage doff-shield death-save opportunity decline-reaction policy\n\
+         npc hold <npc>|all on|off    hold NPC fight turns for the CLI; off lets the policy take a turn that waits\n\
          fight                        the open scene fight, its people and the latest roster\n\
-         fight restore <person> | end unsupported here: answers unavailable\n\
+         clips <name>                 character clip resources, states, costs, timings and file paths\n\
+         clips request <name> [idle|attack|last-hit]  force one clip or all three\n\
+         fight start --foe <srd id> --count <1-4> [--level 1|5] [--scene <id>] [--layout <id>]\n\
+         fight end victory|defeat|flee | restore <person> | add <srd id> [--cell c5r6] | remove <name>\n\
+         fight scene <id> [--layout <id>] | log [--last n] | offers <hero> | initiative\n\
+         present pause|resume|step|replay | speed <0.25-4> | timing <name> <1-60000>|reset  display-only; pause holds new plans, queued beats continue; replay selects last submitted plan; 3D timing pending\n\
          scene-changes [--last <n>]   committed scene changes with their receipts\n\
          economy purse|coin <name> --cp <n> | offer add|remove|restock <offer>  unsupported here\n\
          audit [--type <KIND>] [--last <n>]  recent audit lines (IMAGERY, SCENE-FIGHT, ...)\n\
@@ -253,11 +259,12 @@ fn print_help() {
          back [n]                     state before the last n decisions\n\
          forward [n]                  re-apply stepped-over states\n\
          override hp <hero> <n>       set hit points within bounds (marks edited)\n\
+         override condition <name> add|remove <condition> | cell <name> <cell>\n\
+         override resource <name> second-wind|action-surge|ammo <n> | turn <name> | initiative <name> <n>\n\
          override budget <n>          set narrative budget within pack cap\n\
          shutdown                     clean stop; the database resumes immediately\n\
          describe                     every command, its arguments and output shapes\n\
          \n\
-         override is temporarily disabled server-side\n\
          (direct edits need the milestone 3 proof); see dev describe.\n\
          \n\
          actions: begin ask escort defend scene-assault move attack second-wind end-turn dash dodge\n\
@@ -297,6 +304,34 @@ fn read_token(path: &str) -> Result<String, String> {
     Ok(token)
 }
 
+fn camera_body(
+    positional: &[String],
+    options: &[(String, String)],
+) -> Result<Option<Value>, String> {
+    let command = positional.get(1).map(String::as_str);
+    match command {
+        None if positional.len() == 1 => Ok(None),
+        Some("home") if positional.len() == 2 => {
+            let mut body = json!({"command":"home"});
+            for key in ["pitch", "yaw", "distance", "fov"] {
+                let flag = format!("--{key}");
+                let text = &options.iter().rev().find(|(name, _)| name == &flag)
+                    .ok_or_else(|| format!("camera home needs {flag}"))?.1;
+                let value = text.parse::<f32>()
+                    .map_err(|_| format!("{flag} must be a finite number"))?;
+                if !value.is_finite() {
+                    return Err(format!("{flag} must be a finite number"));
+                }
+                body[key] = json!(value);
+            }
+            Ok(Some(body))
+        }
+        Some("shot") if positional.len() == 3 => Ok(Some(json!({"command":"shot","shot":positional[2]}))),
+        Some(command @ ("reset" | "save")) if positional.len() == 2 => Ok(Some(json!({"command":command}))),
+        _ => Err("usage: dev camera [home --pitch N --yaw N --distance N --fov N | shot <name> | reset | save]".to_owned()),
+    }
+}
+
 async fn dispatch(
     client: &Client,
     positional: &[String],
@@ -310,6 +345,11 @@ async fn dispatch(
             .map(|(_, value)| value.clone())
     };
     match positional.first().map(String::as_str).unwrap_or("") {
+        "camera" => match camera_body(positional, options) {
+            Ok(None) => get(client, "/dev/camera").await,
+            Ok(Some(body)) => post(client, "/dev/camera", &body).await,
+            Err(message) => client.print_error(message),
+        },
         "health" => get(client, "/dev/health").await,
         "photo-check" => match photo_check_path(positional, options) {
             Ok(path) => get(client, &path).await,
@@ -436,10 +476,12 @@ async fn dispatch(
         "ledger" => get(client, "/dev/ledger").await,
         "lore" => lore(client, positional, options).await,
         "social" => social(client, positional, options).await,
-        "fight" => fight(client, positional).await,
+        "fight" => fight(client, positional, options).await,
+        "present" => present(client, positional, options).await,
         "npc" => npc(client, positional, options).await,
         "economy" => economy(client, positional, options).await,
         "art" => art(client, positional).await,
+        "clips" => clips(client, positional).await,
         "fx" => fx(client, positional).await,
         "dice" => dice::run(client, positional, options).await,
         "place" => place::run(client, positional, options).await,
@@ -507,18 +549,10 @@ async fn dispatch(
             }
         }
         "override" => {
-            let kind = positional.get(1).cloned().unwrap_or_default();
-            let mut body = json!({"kind": kind});
-            if let Some(hero) = positional.get(2) {
-                body["hero"] = Value::String(hero.clone());
+            match override_body(positional) {
+                Ok(body) => post(client, "/dev/override", &body).await,
+                Err(reason) => client.print_error(reason),
             }
-            if let Some(value) = flag("--value").or_else(|| positional.get(3).cloned()) {
-                match value.parse::<i64>() {
-                    Ok(value) => body["value"] = json!(value),
-                    Err(_) => return client.print_error("override value must be a number"),
-                }
-            }
-            post(client, "/dev/override", &body).await
         }
         "shutdown" => post(client, "/dev/shutdown", &json!({})).await,
         "describe" => get(client, "/dev/describe").await,
@@ -940,22 +974,147 @@ async fn social(
     get(client, &path).await
 }
 
-async fn fight(client: &Client, positional: &[String]) -> CommandResult {
-    match positional.get(1).map(String::as_str) {
-        None => get(client, "/dev/fight").await,
-        Some("restore") => match positional.get(2) {
-            Some(person) => {
-                post(
-                    client,
-                    "/dev/fight/edit",
-                    &json!({"op": "restore", "person": person}),
-                )
-                .await
+async fn fight(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    match fight_request(positional, options) {
+        Ok((path, Some(body))) => post(client, &path, &body).await,
+        Ok((path, None)) => get(client, &path).await,
+        Err(reason) => client.print_error(reason),
+    }
+}
+fn fight_request(
+    positional: &[String],
+    options: &[(String, String)],
+) -> Result<(String, Option<Value>), String> {
+    let flag = |name: &str| option_value(options, name);
+    let required = |index: usize, message: &str| {
+        positional
+            .get(index)
+            .cloned()
+            .ok_or_else(|| message.to_owned())
+    };
+    let body = match positional.get(1).map(String::as_str) {
+        None => return Ok(("/dev/fight".to_owned(), None)),
+        Some("start") => {
+            let foe = flag("--foe").ok_or("fight start needs --foe <srd id>")?;
+            let count = flag("--count")
+                .and_then(|text| text.parse::<u8>().ok())
+                .filter(|count| (1..=4).contains(count))
+                .ok_or("fight start --count must be 1..=4")?;
+            let level = flag("--level")
+                .map(|text| {
+                    text.parse::<u8>()
+                        .map_err(|_| "fight start --level must be 1 or 5")
+                })
+                .transpose()?;
+            if level.is_some_and(|level| !matches!(level, 1 | 5)) {
+                return Err("fight start --level must be 1 or 5".to_owned());
             }
-            None => client.print_error("fight restore needs <person>"),
+            json!({"op":"start","foe":foe,"count":count,"level":level,"scene":flag("--scene"),"layout":flag("--layout")})
+        }
+        Some("end") => {
+            let outcome = required(2, "fight end needs victory, defeat or flee")?;
+            if !matches!(outcome.as_str(), "victory" | "defeat" | "flee") {
+                return Err("fight end needs victory, defeat or flee".to_owned());
+            }
+            json!({"op":"end","outcome":outcome})
+        }
+        Some("restore") => {
+            json!({"op":"restore","person":required(2,"fight restore needs <person>")?})
+        }
+        Some("add") => {
+            json!({"op":"add","foe":required(2,"fight add needs <srd id>")?,"cell":flag("--cell")})
+        }
+        Some("remove") => json!({"op":"remove","name":required(2,"fight remove needs <name>")?}),
+        Some("scene") => {
+            json!({"op":"scene","scene":required(2,"fight scene needs <battle scene id>")?,"layout":flag("--layout")})
+        }
+        Some("initiative") => return Ok(("/dev/fight/initiative".to_owned(), None)),
+        Some("log") => {
+            return Ok((
+                format!(
+                    "/dev/fight/log?last={}",
+                    url_escape(&flag("--last").unwrap_or_else(|| "50".to_owned()))
+                ),
+                None,
+            ));
+        }
+        Some("offers") => {
+            return Ok((
+                format!(
+                    "/dev/fight/offers?hero={}",
+                    url_escape(&required(2, "fight offers needs <hero>")?)
+                ),
+                None,
+            ));
+        }
+        _ => {
+            return Err(
+                "fight takes start, end, restore, add, remove, scene, log, offers or initiative"
+                    .to_owned(),
+            );
+        }
+    };
+    Ok(("/dev/fight/edit".to_owned(), Some(body)))
+}
+
+fn override_body(positional: &[String]) -> Result<Value, String> {
+    let words = positional.iter().map(String::as_str).collect::<Vec<_>>();
+    let number = |text: &str| {
+        text.parse::<i64>()
+            .map_err(|_| "override value must be a whole number".to_owned())
+    };
+    match words.as_slice() {
+        ["override", "hp", name, value] => Ok(json!({"kind":"hp","hero":name,"value":number(value)?})),
+        ["override", "budget", value] => Ok(json!({"kind":"budget","value":number(value)?})),
+        ["override", "condition", name, mode, condition] if matches!(*mode,"add"|"remove") => Ok(json!({"kind":"condition","hero":name,"condition":condition,"present":*mode=="add"})),
+        ["override", "cell", name, cell] => Ok(json!({"kind":"cell","hero":name,"cell":cell})),
+        ["override", "resource", name, resource, value] => Ok(json!({"kind":"resource","hero":name,"resource":resource,"value":number(value)?})),
+        ["override", "turn", name] => Ok(json!({"kind":"turn","hero":name})),
+        ["override", "initiative", name, value] => Ok(json!({"kind":"initiative","hero":name,"value":number(value)?})),
+        _ => Err("override takes hp <name> <n>, condition <name> add|remove <condition>, cell <name> <cell>, resource <name> <resource> <n>, turn <name>, initiative <name> <n>, or budget <n>".to_owned()),
+    }
+}
+
+async fn present(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    match presentation_body(positional, options) {
+        Ok(body) => post(client, "/dev/presentation", &body).await,
+        Err(error) => client.print_error(error),
+    }
+}
+fn presentation_body(positional: &[String], options: &[(String, String)]) -> Result<Value, String> {
+    match positional.get(1).map(String::as_str) {
+        Some(op @ ("pause" | "resume" | "step" | "replay")) => Ok(json!({"op":op})),
+        Some("speed") => {
+            let value = positional
+                .get(2)
+                .and_then(|value| value.parse::<f32>().ok())
+                .filter(|value| (0.25..=4.0).contains(value))
+                .ok_or("present speed needs a value from 0.25 to 4")?;
+            Ok(json!({"op":"speed","value":value}))
+        }
+        Some("timing") => match positional.get(2).map(String::as_str) {
+            Some("reset") => Ok(json!({"op":"timing-reset"})),
+            Some(name) => {
+                let ms = positional
+                    .get(3)
+                    .cloned()
+                    .or_else(|| option_value(options, "--ms"))
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|ms| (1..=60000).contains(ms))
+                    .ok_or("present timing needs <name> <ms> from 1 to 60000")?;
+                Ok(json!({"op":"timing","name":name,"ms":ms}))
+            }
+            None => Err("present timing needs <name> <ms> or reset".to_owned()),
         },
-        Some("end") => post(client, "/dev/fight/edit", &json!({"op": "end"})).await,
-        Some(_) => client.print_error("fight takes no word to read, or restore <person> | end"),
+        _ => Err("present takes pause, resume, step, replay, speed or timing".to_owned()),
     }
 }
 
@@ -1035,6 +1194,58 @@ async fn art(client: &Client, positional: &[String]) -> CommandResult {
         Some(_) => client.print_error(
             "art takes list [subject-prefix], or regenerate|clear character:<id>|place:<id>",
         ),
+    }
+}
+
+fn clips_request_body(positional: &[String]) -> Result<Value, &'static str> {
+    let name = positional
+        .get(2)
+        .filter(|name| !name.is_empty())
+        .ok_or("clips request needs <name> [idle|attack|last-hit]")?;
+    let kind = positional.get(3);
+    if positional.len() > 4
+        || kind.is_some_and(|kind| !matches!(kind.as_str(), "idle" | "attack" | "last-hit"))
+    {
+        return Err("clips request takes <name> [idle|attack|last-hit]");
+    }
+    Ok(json!({"name": name, "kind": kind}))
+}
+
+async fn clips(client: &Client, positional: &[String]) -> CommandResult {
+    match positional.get(1).map(String::as_str) {
+        Some("request") => match clips_request_body(positional) {
+            Ok(body) => post(client, "/dev/clips/request", &body).await,
+            Err(message) => client.print_error(message),
+        },
+        Some(name) if positional.len() == 2 => {
+            get(client, &format!("/dev/clips?name={}", url_escape(name))).await
+        }
+        _ => client.print_error("clips takes <name>, or request <name> [idle|attack|last-hit]"),
+    }
+}
+
+#[cfg(test)]
+mod clips_command_tests {
+    use super::*;
+
+    #[test]
+    fn clips_request_sends_the_name_and_optional_closed_kind() {
+        let words = |text: &str| {
+            text.split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            clips_request_body(&words("clips request Brakka")).unwrap(),
+            json!({"name": "Brakka", "kind": null})
+        );
+        for kind in ["idle", "attack", "last-hit"] {
+            let body = clips_request_body(&words(&format!("clips request Brakka {kind}"))).unwrap();
+            assert_eq!(body["kind"], kind);
+        }
+        assert!(clips_request_body(&words("clips request")).is_err());
+        assert!(clips_request_body(&words("clips request Brakka jump")).is_err());
+        assert!(clips_request_body(&words("clips request Brakka idle extra")).is_err());
     }
 }
 
@@ -1517,5 +1728,160 @@ mod table_setting_flag_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod battle_command_parse_tests {
+    use super::*;
+
+    #[test]
+    fn fight_flags_use_the_same_split_options_as_dispatch() {
+        let options = vec![
+            ("--foe".to_owned(), "srd.bandit".to_owned()),
+            ("--count".to_owned(), "2".to_owned()),
+            ("--level".to_owned(), "5".to_owned()),
+            ("--scene".to_owned(), "salt-quay".to_owned()),
+        ];
+        let (path, body) = fight_request(&split_words("fight start"), &options).unwrap();
+        assert_eq!(path, "/dev/fight/edit");
+        let body = body.unwrap();
+        assert_eq!(body["count"], 2);
+        assert_eq!(body["level"], 5);
+        assert_eq!(body["op"], "start");
+        for text in [
+            "fight end victory",
+            "fight end defeat",
+            "fight end flee",
+            "fight restore Brynn",
+            "fight add wolf",
+            "fight remove wolf",
+            "fight scene salt-quay",
+        ] {
+            let (path, body) = fight_request(&split_words(text), &[]).unwrap();
+            assert_eq!(path, "/dev/fight/edit");
+            assert!(body.unwrap()["op"].is_string());
+        }
+        for (text, path) in [
+            ("fight", "/dev/fight"),
+            ("fight log", "/dev/fight/log?last=50"),
+            ("fight offers Brynn", "/dev/fight/offers?hero=Brynn"),
+            ("fight initiative", "/dev/fight/initiative"),
+        ] {
+            assert_eq!(
+                fight_request(&split_words(text), &[]).unwrap(),
+                (path.to_owned(), None)
+            );
+        }
+        assert!(fight_request(&split_words("fight start"), &[]).is_err());
+        let (_, body) = fight_request(
+            &split_words("fight scene merchant-shop"),
+            &[("--layout".to_owned(), "rack-aisle".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(body.unwrap()["layout"], "rack-aisle");
+        let (_, body) = fight_request(
+            &split_words("fight add wolf"),
+            &[("--cell".to_owned(), "c3r4".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(body.unwrap()["cell"], "c3r4");
+        assert_eq!(
+            fight_request(
+                &split_words("fight log"),
+                &[("--last".to_owned(), "7".to_owned())]
+            )
+            .unwrap()
+            .0,
+            "/dev/fight/log?last=7"
+        );
+    }
+    #[test]
+    fn combat_overrides_parse_typed_values_without_treating_conditions_or_cells_as_numbers() {
+        for (text, kind) in [
+            ("override hp Brynn 3", "hp"),
+            ("override budget 10", "budget"),
+            ("override condition Brynn add prone", "condition"),
+            ("override condition Brynn remove prone", "condition"),
+            ("override cell Brynn c2r3", "cell"),
+            ("override resource Brynn ammo 20", "resource"),
+            ("override turn Brynn", "turn"),
+            ("override initiative Brynn 15", "initiative"),
+        ] {
+            assert_eq!(override_body(&split_words(text)).unwrap()["kind"], kind);
+        }
+    }
+
+    #[test]
+    fn presentation_commands_use_the_dispatch_body() {
+        for op in ["pause", "resume", "step", "replay"] {
+            assert_eq!(
+                presentation_body(&split_words(&format!("present {op}")), &[]).unwrap()["op"],
+                op
+            );
+        }
+        assert_eq!(
+            presentation_body(&split_words("present speed 0.25"), &[]).unwrap()["value"],
+            0.25
+        );
+        assert!(presentation_body(&split_words("present speed NaN"), &[]).is_err());
+        assert_eq!(
+            presentation_body(&split_words("present timing DICE_READ 500"), &[]).unwrap()["ms"],
+            500
+        );
+        assert_eq!(
+            presentation_body(&split_words("present timing reset"), &[]).unwrap()["op"],
+            "timing-reset"
+        );
+    }
+    #[test]
+    fn npc_hold_all_is_a_table_scope_request() {
+        let body = npc_hold_body(&split_words("npc hold all on")).unwrap();
+        assert_eq!(body["npc"], "all");
+        assert!(body.get("all").is_none());
+        assert_eq!(body["on"], true);
+    }
+}
+
+#[cfg(test)]
+mod camera_command_tests {
+    use super::*;
+    fn words(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+    #[test]
+    fn camera_commands_parse_read_home_named_shot_save_and_reset() {
+        assert!(camera_body(&words(&["camera"]), &[]).unwrap().is_none());
+        let flags = [
+            ("--pitch", "15"),
+            ("--yaw", "-25"),
+            ("--distance", "8"),
+            ("--fov", "38"),
+        ]
+        .map(|(key, value)| (key.to_owned(), value.to_owned()));
+        assert_eq!(
+            camera_body(&words(&["camera", "home"]), &flags)
+                .unwrap()
+                .unwrap(),
+            json!({"command":"home","pitch":15.0,"yaw":-25.0,"distance":8.0,"fov":38.0})
+        );
+        assert_eq!(
+            camera_body(&words(&["camera", "shot", "combat_est"]), &[])
+                .unwrap()
+                .unwrap()["shot"],
+            "combat_est"
+        );
+        for command in ["save", "reset"] {
+            assert_eq!(
+                camera_body(&words(&["camera", command]), &[])
+                    .unwrap()
+                    .unwrap()["command"],
+                command
+            );
+        }
+        assert!(camera_body(&words(&["camera", "home"]), &[]).is_err());
+        assert!(camera_body(&words(&["camera", "shot"]), &[]).is_err());
+        let invalid = [("--pitch".to_owned(), "NaN".to_owned())];
+        assert!(camera_body(&words(&["camera", "home"]), &invalid).is_err());
     }
 }

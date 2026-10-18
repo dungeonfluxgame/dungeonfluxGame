@@ -32,7 +32,9 @@ use crate::BUILD_ID;
 
 mod actions;
 mod audit_log;
+mod camera;
 pub(super) mod candidate;
+mod clips;
 pub(crate) mod commands;
 pub(super) mod config;
 mod dice;
@@ -40,7 +42,7 @@ pub(super) mod direct;
 pub(super) mod directions;
 mod art;
 mod economy;
-mod fight;
+pub(crate) mod fight;
 mod fx;
 pub(crate) mod history;
 mod jumps;
@@ -52,6 +54,7 @@ mod notebook;
 pub(super) mod npc;
 mod parse;
 mod place;
+mod presentation;
 mod reads;
 mod social_view;
 pub(super) mod timeline;
@@ -228,9 +231,14 @@ pub(super) fn setup(
         .route("/dev/npc/act", post(npc::act))
         .route("/dev/npc/hold", post(npc::hold))
         .route("/dev/fight", get(fight::read))
-        .route("/dev/fight/edit", post(fight::unsupported_edit))
+        .route("/dev/fight/edit", post(fight::edit))
+        .route("/dev/fight/log", get(fight::log))
+        .route("/dev/fight/offers", get(fight::offers))
+        .route("/dev/fight/initiative", get(fight::initiative))
+        .route("/dev/presentation", post(presentation_edit))
         .route("/dev/decisions", get(audit_log::decisions))
         .route("/dev/audit", get(audit_log::audit))
+        .route("/dev/camera", get(camera::read).post(camera::edit))
         .route("/dev/fx", get(fx::read))
         .route("/dev/fx/edit", post(fx::edit))
         .route("/dev/dice", get(dice::read))
@@ -241,6 +249,8 @@ pub(super) fn setup(
         .route("/dev/place/go", post(place::go))
         .route("/dev/art", get(art::list))
         .route("/dev/art/edit", post(art::edit))
+        .route("/dev/clips", get(clips::list))
+        .route("/dev/clips/request", post(clips::request))
         .route("/dev/music", get(music::read))
         .route("/dev/music/edit", post(music::unsupported_edit))
         .route("/dev/memory", get(memory::status))
@@ -287,6 +297,32 @@ pub(super) fn setup(
             token_file.display(),
         )),
     })
+}
+
+/// Development presentation controls are display-only state. The browser's existing view path
+/// remains authoritative for game state; this acknowledgement is deliberately explicit until
+/// the presentation director owns the queue.
+async fn presentation_edit(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let document = state
+        .layout
+        .presentation(&body)
+        .await
+        .map_err(bad_request)?;
+    super::actor::record_audit_line(
+        "gameplay.dev.presentation",
+        format!("DEV-PRESENT command={body} state={document}"),
+    );
+    Ok((
+        StatusCode::OK,
+        Json(
+            json!({"status":"accepted","presentation":document,"edited":false,"display_only":true}),
+        ),
+    ))
 }
 
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -376,6 +412,26 @@ fn bad_request(message: impl Into<String>) -> (StatusCode, Json<Value>) {
         Json(json!({"error": message.into()})),
     )
 }
+
+/// Refuses authenticated battle and NPC mutations unless the developer opts in
+/// explicitly for this process. Reads and ordinary player actions do not use it.
+pub(super) fn require_gameplay_overrides() -> Result<(), (StatusCode, Json<Value>)> {
+    if config::overrides_enabled(std::env::var("DF_GAMEPLAY_DEV_OVERRIDES")) {
+        return Ok(());
+    }
+    Err((
+        StatusCode::OK,
+        Json(json!({
+            "status": "refused",
+            "edited": false,
+            "reason": "development gameplay overrides are off; set DF_GAMEPLAY_DEV_OVERRIDES=on",
+            "setting": "DF_GAMEPLAY_DEV_OVERRIDES",
+        })),
+    ))
+}
+
+#[cfg(test)]
+mod override_tests;
 
 fn failed(message: impl Into<String>) -> (StatusCode, Json<Value>) {
     (

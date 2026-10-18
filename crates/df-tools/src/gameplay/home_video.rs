@@ -86,9 +86,6 @@ const HEIGHT: u32 = 1080;
 /// the URL twice is the follow-up, and needs a pinned storage host (see the report).
 const STILL_QUALITY: u8 = 85;
 const DEFAULT_CACHE: &str = "artifacts/tmp/play/home-video-cache";
-/// The landing's one generic plate: the reviewed photograph of the harbour quay, a served asset
-/// under `assets/ui/` (the owner's choice of a cached generic landing plate, 2026-10-17).
-const LANDING_PLATE: &str = "assets/ui/generated/scene-salt-quay-arrival-documentary-photo";
 /// The fal media hosts the download is pinned to. The adapter refuses any other host.
 const CDN_HOSTS: [&str; 2] = ["v3.fal.media", "v3b.fal.media"];
 const MAXIMUM_CLIP_BYTES: usize = 16 * 1024 * 1024;
@@ -701,23 +698,44 @@ fn audit_kill(status: &str, killer: &str, victim: &str, elapsed_ms: u128, reason
     );
 }
 
+/// The still a lobby view will show: the scene's own asset, which is what the display
+/// draws, with the view's asset as its fallback. The home loop is paired with this still
+/// and no other (HOME-01).
+fn shown_still(display: &rpc::DisplayGameplayView) -> String {
+    display
+        .scene
+        .as_ref()
+        .map(|scene| scene.scene_asset.clone())
+        .filter(|asset| !asset.is_empty())
+        .unwrap_or_else(|| display.scene_asset.clone())
+}
+
 /// Sets the home loop on a view: the state and the served path, for the display's lobby only. It
 /// runs on every view the service hands out, so a loop that lands is seen by the next view, and
 /// the journey projection cached by revision does not hold a stale state.
+///
+/// HOME-01: a loop belongs to the one still it was made from. The view carries a loop path
+/// only for the still it actually shows, and only once that still's own loop is ready;
+/// while the shown still has no ready loop of its own — including right after the still
+/// changes to the adventure's own opening picture — the view carries no path, the still
+/// shows alone, and `observe` has already asked for that still's loop through the home
+/// video path. A loop made from another picture is never sent over this still.
 pub(crate) fn apply(message: &mut rpc::ViewMessage) {
     let Some(rpc::view_message::Audience::Display(display)) = message.audience.as_mut() else {
         return;
     };
+    let lobby = display
+        .journey
+        .as_ref()
+        .is_some_and(|journey| journey.phase == rpc::JourneyPhase::Room as i32);
+    let painting = if lobby {
+        shown_still(display)
+    } else {
+        String::new()
+    };
     let Some(journey) = display.journey.as_mut() else {
         return;
     };
-    let lobby = journey.phase == rpc::JourneyPhase::Room as i32;
-    // The landing shows one generic photographic plate whatever the adventure, so its loop is
-    // made once and reused across runs; the stage draws the same plate the loop starts from.
-    if lobby {
-        display.scene_asset = LANDING_PLATE.to_owned();
-    }
-    let painting = display.scene_asset.clone();
     let loop_view = if lobby && !painting.is_empty() {
         observe(&painting)
     } else {
