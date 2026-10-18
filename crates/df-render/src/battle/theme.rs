@@ -137,6 +137,22 @@ pub struct ColorGrade {
 }
 
 impl ColorGrade {
+    /// The grade for the flat (painted photograph, no splat world) battlefield: the same
+    /// theme grade lifted so the room photograph reads as the photographed place on a TV
+    /// instead of a near-black void. Exposure is raised, contrast and saturation are eased
+    /// a third of the way back toward neutral, and a disabled grade is switched on at the
+    /// lifted exposure so even a neutral theme is not left under the backdrop's own dimming.
+    pub fn lifted_for_flat(self) -> Self {
+        Self {
+            enabled: true,
+            exposure: self.exposure + 0.55,
+            contrast: 1.0 + (self.contrast - 1.0) * 0.65,
+            saturation: 1.0 + (self.saturation - 1.0) * 0.65,
+            shadow: self.shadow,
+            highlight: self.highlight,
+        }
+    }
+
     /// The CPU twin of the shader grade, for tests and for tinting overlay colours.
     pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
         if !self.enabled {
@@ -192,6 +208,22 @@ mod tests {
         let graded = Theme::Swamp.grade(None).apply([0.9, 0.6, 0.3]);
         let luma = |c: [f32; 3]| c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
         assert!(luma(graded) < luma([0.9, 0.6, 0.3]));
+    }
+
+    #[test]
+    fn flat_lift_brightens_a_dark_theme_grade_for_the_tv() {
+        let dark = Theme::Swamp.grade(None);
+        let flat = dark.lifted_for_flat();
+        assert!(flat.enabled);
+        assert!((flat.exposure - (dark.exposure + 0.55)).abs() < 1e-6);
+        assert!(flat.contrast < dark.contrast && flat.contrast > 1.0);
+        assert!(flat.saturation > dark.saturation && flat.saturation < 1.0);
+        let luma = |c: [f32; 3]| c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+        assert!(luma(flat.apply([0.5, 0.4, 0.3])) > luma(dark.apply([0.5, 0.4, 0.3])));
+        // A neutral (disabled) grade is switched on by the lift, not left dark.
+        let neutral = Theme::Neutral.grade(None).lifted_for_flat();
+        assert!(neutral.enabled);
+        assert!(luma(neutral.apply([0.4, 0.4, 0.4])) > 0.4);
     }
 
     #[test]

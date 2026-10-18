@@ -970,6 +970,13 @@ impl Renderer {
         });
     }
 
+    /// True when the painted photograph (ground and backdrop pictures), not a splat
+    /// world, is what the frame will show: the scene carries no scan, or its scan was
+    /// given up or failed and the painted fallback took over.
+    fn flat_present(&self, scene: &BattleScene) -> bool {
+        scene.splat.is_none() || self.splat_unusable()
+    }
+
     fn write_frame(
         &self,
         spot: (f32, f32, f32),
@@ -1005,10 +1012,17 @@ impl Renderer {
             0.0
         };
         data.extend_from_slice(&[size.0 as f32, size.1 as f32, focal, decal_lift]);
+        // On the flat photograph the lit pool covers the whole field, so the room
+        // picture stays visible to its edges instead of falling into a dark void.
+        let light_radius = if self.flat_present(scene) {
+            (scene.grid.cols().max(scene.grid.rows()) as f32 * scene.grid.cell_m() * 0.85).max(12.0)
+        } else {
+            8.5
+        };
         data.extend_from_slice(&[
             centre.x,
             centre.z,
-            8.5,
+            light_radius,
             if frame.restrained { 1.0 } else { 0.0 },
         ]);
         data.extend_from_slice(&[
@@ -1037,7 +1051,15 @@ impl Renderer {
     }
 
     fn write_post(&self, frame: &FrameView<'_>, scene: &BattleScene, size: (u32, u32)) {
-        let grade = scene.theme.grade(scene.grade_strength);
+        let flat = self.flat_present(scene);
+        let graded = scene.theme.grade(scene.grade_strength);
+        // The flat photograph is graded like the scene view, not left under the dark
+        // cinematic grade that suits a splat world: lift it (see `lifted_for_flat`).
+        let grade = if flat {
+            graded.lifted_for_flat()
+        } else {
+            graded
+        };
         let (flash_rgb, flash_strength) = match frame.flash {
             Some(flash) => (
                 match flash.tone {
@@ -1108,7 +1130,9 @@ impl Renderer {
             rest_px + 3.2 * crate::battle::feel::FOCUS_PULL_BLUR_FACTOR * pull,
         ]);
         data.extend_from_slice(&[
-            0.62,
+            // A gentler vignette on the flat photograph, so its edges stay part of
+            // the room instead of closing into a black frame.
+            if flat { 0.34 } else { 0.62 },
             flash_strength,
             0.0,
             if self.quality.tilt_shift { 1.0 } else { 0.0 },
@@ -1182,10 +1206,13 @@ impl Renderer {
                             [6.0, 0.0, 0.0],
                         );
                     } else {
-                        let width = half * 0.95;
+                        // The obstacle's footprint on the floor: a soft, full-cell
+                        // shadow where the thing stands, with no cube above it when
+                        // its art is missing (see `billboards`).
+                        let width = half * 0.98;
                         push(
-                            [at.x, at.z + 0.05, width, width * 0.55],
-                            [0.0, 0.0, 0.0, 0.6],
+                            [at.x, at.z + 0.05, width, width * 0.62],
+                            [0.0, 0.0, 0.0, 0.55],
                             [3.0, 0.0, 0.0],
                         );
                     }
@@ -1323,7 +1350,6 @@ impl Renderer {
         let flat = Vec3::new(right.x, 0.0, right.z).normalized();
         let mut list: Vec<Billboard> = Vec::new();
         if let Some(layout) = frame.layout {
-            let cell_m = frame.grid.cell_m();
             for obstacle in &layout.obstacles {
                 if obstacle.sprite == "none" || obstacle.sprite == SCAN_SPRITE {
                     continue;
@@ -1371,21 +1397,12 @@ impl Renderer {
                                 effects: false,
                             });
                         }
-                        Some(None) => list.push(Billboard {
-                            data: instance(
-                                [at.x, at.y, at.z, height],
-                                [0.0, 1.0, 0.0, 0.0],
-                                [1.0, 1.0, 1.0, 1.0],
-                                [cell_m * 0.42, 2.0, 0.0, 0.0],
-                                [0.0; 4],
-                                [0.0; 4],
-                                [0.0; 4],
-                                [0.0; 4],
-                            ),
-                            texture: self.clear_pixel.clone(),
-                            depth,
-                            effects: false,
-                        }),
+                        // Prop art that failed to load draws no billboard at all: a
+                        // flat grey cube floating over the photographed floor reads
+                        // as a bug, not as furniture. The obstacle still shows as
+                        // the subtle footprint decal `decals` lays on its cells,
+                        // and its cells stay blocked on the grid.
+                        Some(None) => {}
                         None => {}
                     }
                 }

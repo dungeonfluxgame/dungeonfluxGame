@@ -207,6 +207,22 @@ pub fn initiative_line(die: u32, modifier: i32, total: i32, order: u32) -> Strin
     )
 }
 
+/// The picture every HUD surface shows for one figure: the health variant (the same
+/// picture the HP plate uses) first, then the portrait picture. `None` only when the
+/// figure has no picture at all, which is the only case that may fall back to an initial.
+/// The variant is already a served URL; the portrait is resolved by the caller through
+/// the art contract, so this stays free of any fetching rule.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn hud_picture(variant: Option<&str>, portrait: Option<String>) -> Option<String> {
+    let variant = variant.filter(|text| {
+        !text.is_empty()
+            && text
+                .bytes()
+                .all(|byte| !byte.is_ascii_whitespace() && !b"\")';".contains(&byte))
+    });
+    variant.map(str::to_owned).or(portrait)
+}
+
 /// A die above a figure during the initiative roll. It tumbles for `tumble_s` seconds after it
 /// appears and then shows its total.
 #[derive(Clone, Debug, PartialEq)]
@@ -472,6 +488,31 @@ mod tests {
         assert!(hold_server_turn(false, 11, 10));
         assert_eq!(hit_points_at_sequence(1, 11, &brakka), 1);
         assert!(!hold_server_turn(false, 11, 11));
+    }
+
+    #[test]
+    fn hud_picture_prefers_the_health_variant_the_plate_uses() {
+        // Jessa and Corin: a health variant exists, the portrait stem resolves to
+        // nothing the chip can use, yet the chip must show the plate's picture.
+        assert_eq!(
+            hud_picture(
+                Some("/gameplay/imagery/health-jessa.png"),
+                Some("/assets/portrait.png".to_owned())
+            ),
+            Some("/gameplay/imagery/health-jessa.png".to_owned())
+        );
+        assert_eq!(
+            hud_picture(Some("/gameplay/imagery/health-corin.png"), None),
+            Some("/gameplay/imagery/health-corin.png".to_owned())
+        );
+        // No variant: the portrait picture stands. No picture at all: an initial may show.
+        assert_eq!(
+            hud_picture(None, Some("/assets/portrait.png".to_owned())),
+            Some("/assets/portrait.png".to_owned())
+        );
+        assert_eq!(hud_picture(None, None), None);
+        assert_eq!(hud_picture(Some(""), None), None);
+        assert_eq!(hud_picture(Some("bad url).png"), None), None);
     }
 
     #[test]

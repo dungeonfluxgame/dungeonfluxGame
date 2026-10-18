@@ -32,6 +32,9 @@ const DEFAULT_PREVIEW_HEROES: usize = 3;
 const DEFAULT_PREVIEW_ENEMIES: usize = 1;
 /// The most figures per side the preview stands without a layout to seat them.
 const PREVIEW_MAX_PER_SIDE: usize = 6;
+/// Standing height of a person-sized hero as staged for the TV, so a person reads
+/// across a room; small creatures keep their own smaller heights.
+const PERSON_HEIGHT_M: f32 = 1.72;
 const BATTLEFIELD_BEAT_LOG_CAP: usize = 32;
 const CARD_LOG_CAP: usize = 40;
 
@@ -407,7 +410,7 @@ fn preview_tokens(
             *cell,
             figure,
             portrait,
-            1.35,
+            PERSON_HEIGHT_M,
         ));
     }
     for (index, cell) in seats.enemies.iter().enumerate() {
@@ -1176,7 +1179,7 @@ fn sheet_tokens(
             seats.heroes[0],
             "figure-hero-1",
             "portrait-hero-1",
-            1.35,
+            PERSON_HEIGHT_M,
         ),
         combatant(
             "s1",
@@ -1185,7 +1188,7 @@ fn sheet_tokens(
             seats.heroes[1],
             "figure-hero-3",
             "portrait-hero-3",
-            1.35,
+            PERSON_HEIGHT_M,
         ),
         combatant(
             "s2",
@@ -1194,7 +1197,7 @@ fn sheet_tokens(
             seats.heroes[2],
             "figure-hero-2",
             "portrait-hero-2",
-            1.35,
+            PERSON_HEIGHT_M,
         ),
         combatant(
             "s3",
@@ -1591,7 +1594,7 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
                 hit_points: member.hit_points,
                 maximum_hit_points: member_maximum_hit_points(member, &view.journey.party),
                 height_m: if hero {
-                    1.35
+                    PERSON_HEIGHT_M
                 } else {
                     enemy_height_m(member.size())
                 },

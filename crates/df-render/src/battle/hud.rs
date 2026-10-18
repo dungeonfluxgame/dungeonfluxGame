@@ -12,7 +12,7 @@ use web_sys::{Document, Element};
 use super::{
     float_text,
     math::Vec3,
-    model::{FloatTone, Side, TokenId, ordinal},
+    model::{FloatTone, Side, TokenId, hud_picture, ordinal},
     speech::Rect,
     stage::{FigureView, FrameView, Stage},
     status::{Status, icon_statuses},
@@ -275,6 +275,10 @@ impl Hud {
         let roll_label = element(document, &roll_words, "h2", "bf-roll-label", "")?;
         let roll_verdict = element(document, &roll_words, "p", "bf-roll-verdict", "")?;
         let roll_text = element(document, &roll_words, "p", "bf-roll-text", "")?;
+        // The detail line (the dice, the mode and the sum) must read across a room on a
+        // TV; the stylesheet's default for it is phone-sized. `--u` is the battlefield's
+        // own TV unit, inherited from its container.
+        roll_text.set_attribute("style", "font-size:calc(var(--u)*1.95);line-height:1.35")?;
         element(document, &root, "div", "bf-bar bf-bar-top", "")?;
         element(document, &root, "div", "bf-bar bf-bar-bottom", "")?;
         let finish = element(document, &root, "section", "bf-finish", "")?;
@@ -400,7 +404,16 @@ impl Hud {
         };
         let signature: String = chip_order
             .iter()
-            .map(|figure| format!("{}:{}:{}|", figure.id.0, figure.active, figure.downed))
+            .map(|figure| {
+                format!(
+                    "{}:{}:{}:{}:{}|",
+                    figure.id.0,
+                    figure.active,
+                    figure.downed,
+                    figure.variant.as_deref().unwrap_or_default(),
+                    figure.portrait.as_deref().unwrap_or_default()
+                )
+            })
             .collect();
         if signature != self.chip_signature {
             self.chips.set_text_content(None);
@@ -432,17 +445,24 @@ impl Hud {
                 if figure.downed {
                     chip.set_attribute("data-down", "")?;
                 }
-                chip.set_attribute("style", &portrait_style(figure.portrait.as_deref()))?;
-                if figure.downed {
-                    element(&self.document, &chip, "span", "bf-chip-initial", "↓")?;
-                } else if portrait_url(figure.portrait.as_deref()).is_none() {
-                    element(
-                        &self.document,
-                        &chip,
-                        "span",
-                        "bf-chip-initial",
-                        &initial(&figure.name),
-                    )?;
+                // The same picture as the HP plate: the health variant first, then the
+                // portrait. An initial (or the down marker) only when there is no picture
+                // at all, so a photographed fighter never reads as a letter tile.
+                let picture = hud_picture(
+                    figure.variant.as_deref(),
+                    portrait_url(figure.portrait.as_deref()),
+                );
+                let style = picture
+                    .as_ref()
+                    .map_or_else(String::new, |url| format!("background-image:url({url})"));
+                chip.set_attribute("style", &style)?;
+                if picture.is_none() {
+                    let glyph = if figure.downed {
+                        "↓".to_owned()
+                    } else {
+                        initial(&figure.name)
+                    };
+                    element(&self.document, &chip, "span", "bf-chip-initial", &glyph)?;
                 }
             }
             self.chip_signature = signature;
@@ -483,7 +503,12 @@ impl Hud {
                     plate.portrait.remove_attribute("data-crop")?;
                 }
             }
-            let glyph = if portrait_url(figure.portrait.as_deref()).is_some() {
+            let glyph = if hud_picture(
+                figure.variant.as_deref(),
+                portrait_url(figure.portrait.as_deref()),
+            )
+            .is_some()
+            {
                 String::new()
             } else {
                 initial(&figure.name)
