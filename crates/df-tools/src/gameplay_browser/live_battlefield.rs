@@ -2747,6 +2747,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tv_status_badges_spell_out_unconscious_and_bloodied() {
+        let css = include_str!("live_battlefield.css");
+
+        assert!(css.contains("content:\"Unconscious\""));
+        assert!(css.contains("content:\"Bloodied\""));
+    }
+
+    #[test]
+    fn tv_roll_hides_stale_dm_caption_while_the_card_is_visible() {
+        let css = include_str!("live_tv.css");
+
+        assert!(css.contains(".live-screen[data-role=display]:has(.tv-roll) .tv-dm{display:none}"));
+    }
+
     /// SRD 5.2.1 p. 177 (Attack [Action]); this test covers display ordering only.
     #[test]
     fn held_enemy_move_keeps_the_beat_unpresented_until_its_attack() {

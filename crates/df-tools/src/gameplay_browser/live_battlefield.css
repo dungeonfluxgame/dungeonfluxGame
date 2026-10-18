@@ -101,6 +101,16 @@ above it; the HUD (z 2) paints above the dice, so a die never covers a card or a
 .bf-badge-name{font-size:calc(var(--u)*1.9);color:var(--ivory)}
 @keyframes bf-slam{from{transform:translate(calc(var(--u)*2.6),-50%) scale(2.2);opacity:0}to{transform:translate(calc(var(--u)*2.6),-50%) scale(1);opacity:1}}
 
+/* These two combat states need words at TV distance, including on the compact health plates. */
+.bf-pip[data-status=unconscious],.bf-pip[data-status=bloodied]{position:relative;display:flex;align-items:center;justify-content:flex-end;width:max-content;height:calc(var(--u)*2.9);min-width:calc(var(--u)*7.4);padding:0 calc(var(--u)*.45) 0 calc(var(--u)*2.9);border-radius:calc(var(--u)*.5);overflow:visible}
+.bf-pip[data-status=unconscious] img,.bf-pip[data-status=bloodied] img{position:absolute;left:0;top:0;width:calc(var(--u)*2.6);height:100%;object-fit:contain}
+.bf-pip[data-status=unconscious] .bf-pip-label,.bf-pip[data-status=bloodied] .bf-pip-label{position:static;transform:none;padding:0;background:transparent;font-size:0;line-height:1.1}
+.bf-pip[data-status=unconscious] .bf-pip-label::after{content:"Unconscious";font-size:calc(var(--u)*1.15)}
+.bf-pip[data-status=bloodied] .bf-pip-label::after{content:"Bloodied";font-size:calc(var(--u)*1.15)}
+.bf-plate-status .bf-pip[data-status=unconscious],.bf-plate-status .bf-pip[data-status=bloodied]{height:calc(var(--u)*2.1);min-width:calc(var(--u)*6.8);padding-left:calc(var(--u)*2.1)}
+.bf-plate-status .bf-pip[data-status=unconscious] img,.bf-plate-status .bf-pip[data-status=bloodied] img{width:calc(var(--u)*2.1)}
+.bf-plate-status .bf-pip[data-status=unconscious] .bf-pip-label::after,.bf-plate-status .bf-pip[data-status=bloodied] .bf-pip-label::after{font-size:calc(var(--u)*.9)}
+
 
 /* Fight-loading splash: covers the battlefield until the scan is resolved, then fades out over the finished scene. */
 .bf-splash{position:fixed;inset:0;z-index:41;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(1.4*var(--u,1vw));background:radial-gradient(ellipse at 50% 42%,#14202e 0%,#070c13 62%,#030508 100%);color:#e8cb94;font-family:var(--serif,Georgia,'Times New Roman',serif);text-shadow:0 2px 12px #000c;opacity:1;transition:opacity .7s ease}

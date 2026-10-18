@@ -135,6 +135,8 @@ DC or AC, verdict), held for its reading time and faded by the line machine. */
 .tv-roll-verdict:empty{display:none}
 .tv-roll-verdict[data-verdict=success]{color:#bfe0b4}
 .tv-roll-verdict[data-verdict=failure]{color:#e7a39a}
+/* A stale narrator line must not appear to explain a hero's active roll. */
+.live-screen[data-role=display]:has(.tv-roll) .tv-dm{display:none}
 /* FIGHT-001: on the flat stage the dice join the roll panel in flow, so they never cover
 its text and never hide behind it. The panel is a flex column; the dice ride centered
 above its entries. */
