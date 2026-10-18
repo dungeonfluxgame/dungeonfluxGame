@@ -223,6 +223,32 @@ fn private_clue_refusal(turn: &Turn) -> (String, String) {
         })
 }
 
+/// Capitalises a sentence's first letter without changing text inside quotation marks.
+fn capitalise_sentence_starts(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut sentence_start = true;
+    let mut quoted = false;
+    for character in text.chars() {
+        if matches!(character, '"' | '\u{201c}') {
+            quoted = true;
+        } else if matches!(character, '\u{201d}') {
+            quoted = false;
+        }
+        if sentence_start && !quoted && character.is_alphabetic() {
+            output.extend(character.to_uppercase());
+            sentence_start = false;
+        } else {
+            output.push(character);
+            if matches!(character, '.' | '!' | '?') {
+                sentence_start = true;
+            } else if !character.is_whitespace() && !quoted {
+                sentence_start = false;
+            }
+        }
+    }
+    output
+}
+
 fn revision_key(view: &rpc::ViewMessage) -> String {
     let Some(revision) = view.revision.as_ref() else {
         return "0:0".to_owned();
@@ -1933,6 +1959,7 @@ impl NpcVoice {
                 ),
             }
         };
+        let text = capitalise_sentence_starts(&text);
         if !context.publication_current() {
             return None;
         }
@@ -2548,6 +2575,7 @@ impl NpcVoice {
                 (answer, Some(reason))
             }
         };
+        let text = capitalise_sentence_starts(&text);
         let from_model = bounded_answer.is_none() && fallback.is_none();
         let outcome = if text.is_empty()
             && bounded_answer
@@ -2980,6 +3008,27 @@ mod tests {
     use super::super::adventure::dossier::Attitude;
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn published_npc_reply_capitalises_sentence_starts() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(json!({
+            "reply": "Take your time with it. the fur lining is soft."
+        }))]);
+        let (voice, cache) = voice(&endpoint, "npc-sentence-capitalisation");
+        let log = TableLog::new();
+
+        let exchange = voice
+            .reply_in_public_report(question("Can I try it on?"), &log)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            exchange.text,
+            "Take your time with it. The fur lining is soft."
+        );
+        assert_eq!(log.lines().last().unwrap().text, exchange.text);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
 
     #[test]
     fn a_hesitant_persuasion_check_publishes_its_roll_row() {

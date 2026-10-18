@@ -393,7 +393,7 @@ fn a_purchase_spends_exact_copper_and_cannot_overdraw_the_heros_purse() {
             living_scene::last_line(bought.state())
                 .unwrap()
                 .unwrap()
-                .contains(&format!("{} CP", offer.cost_cp))
+                .ends_with(&format!(" {}.", living_scene::coin_phrase(offer.cost_cp)))
         );
         let bought_card = living_scene::item_for(bought.state(), &scene, "Brynn")
             .unwrap()
@@ -674,7 +674,7 @@ fn a_named_npc_gift_spends_owned_gold_and_an_unaffordable_gift_transfers_nothing
             living_scene::last_line(paid.state())
                 .unwrap()
                 .unwrap()
-                .contains("5 GP")
+                .contains("five gold pieces")
         );
         let refused = stage_with_supplier(&paid, &make(&paid, 81, 1000), &mut |_| {
             panic!("an unaffordable gift cannot roll")
@@ -1169,7 +1169,7 @@ fn a_purchase_line_names_the_item_and_not_its_description() {
         let after = interact(&current, member, 42, &offer.id, "buy");
         let line = living_scene::last_line(after.state()).unwrap().unwrap();
         assert!(
-            line.contains(&format!("{} for Brynn", offer.name)),
+            line.contains(&format!("Brynn the {}", offer.name)),
             "{line}"
         );
         assert!(
@@ -1993,7 +1993,26 @@ fn buying_for_another_hero_sets_owner_and_holder_and_the_buyer_pays() {
             npc_cp(&bought, &offer.seller_id),
             seller_before + u64::from(offer.cost_cp)
         );
+        let line = living_scene::last_line(bought.state()).unwrap().unwrap();
+        assert!(line.contains(" Vale the "), "{line}");
+        assert!(line.contains("Brynn pays "), "{line}");
+        assert!(
+            line.ends_with(&format!(" {}.", living_scene::coin_phrase(offer.cost_cp))),
+            "{line}"
+        );
     });
+}
+
+#[test]
+fn coin_narration_names_copper_silver_and_gold_coins() {
+    assert_eq!(living_scene::coin_phrase(10), "one silver piece");
+    assert_eq!(living_scene::coin_phrase(4), "four copper pieces");
+    assert_eq!(living_scene::coin_phrase(40), "four silver pieces");
+    assert_eq!(
+        living_scene::coin_phrase(790),
+        "seven gold pieces and nine silver pieces"
+    );
+    assert_eq!(living_scene::coin_phrase(1_000), "ten gold pieces");
 }
 
 #[test]

@@ -2321,23 +2321,41 @@ fn count_word(token: &str) -> Option<u32> {
 }
 
 /// Coin as narration: whole gold as GP, whole silver as silver pieces, and any other amount as CP.
-fn coin_phrase(cp: u32) -> String {
-    if cp > 0 && cp % 100 == 0 {
-        format!("{} GP", cp / 100)
-    } else if cp > 0 && cp % 10 == 0 {
-        let count = cp / 10;
-        let noun = if count == 1 { "piece" } else { "pieces" };
-        let number = match count {
-            1 => "one".to_owned(),
-            2 => "two".to_owned(),
-            3 => "three".to_owned(),
-            4 => "four".to_owned(),
-            5 => "five".to_owned(),
-            _ => count.to_string(),
-        };
-        format!("{number} silver {noun}")
-    } else {
-        format!("{cp} CP")
+pub(super) fn coin_phrase(cp: u32) -> String {
+    // Coins as a person counts them: gold, then silver, then copper (10 cp = 1 sp, 100 cp = 1 gp).
+    let mut parts = Vec::new();
+    for (count, metal) in [
+        (cp / 100, "gold"),
+        ((cp % 100) / 10, "silver"),
+        (cp % 10, "copper"),
+    ] {
+        if count > 0 {
+            let noun = if count == 1 { "piece" } else { "pieces" };
+            parts.push(format!("{} {metal} {noun}", number_word(count)));
+        }
+    }
+    match parts.as_slice() {
+        [] => "nothing".to_owned(),
+        [only] => only.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [first, second, third] => format!("{first}, {second} and {third}"),
+        _ => unreachable!("three denominations at most"),
+    }
+}
+
+fn number_word(number: u32) -> String {
+    match number {
+        1 => "one".to_owned(),
+        2 => "two".to_owned(),
+        3 => "three".to_owned(),
+        4 => "four".to_owned(),
+        5 => "five".to_owned(),
+        6 => "six".to_owned(),
+        7 => "seven".to_owned(),
+        8 => "eight".to_owned(),
+        9 => "nine".to_owned(),
+        10 => "ten".to_owned(),
+        _ => number.to_string(),
     }
 }
 
@@ -3687,13 +3705,13 @@ fn stage_inner(
                     } else {
                         seller
                     };
-                    let serving = if ale { "pours" } else { "hands over" };
+                    let serving = if ale { "pours" } else { "hands" };
                     format!(
-                        "{} {serving} {} for {hero}, who pays {} {} CP.",
+                        "{} {serving} {buyer} {}. {hero} pays {} {}.",
                         server.name,
                         the_phrase(&offer.name),
                         seller.name,
-                        cost_cp
+                        coin_phrase(cost_cp)
                     )
                 }
             }
@@ -3744,8 +3762,9 @@ fn stage_inner(
                     )
                 } else {
                     let line = format!(
-                        "{provider} does {} for {hero}, who pays {} CP.",
-                        service.name, service.price_cp
+                        "{provider} does {} for {hero}; {hero} pays {}.",
+                        service.name,
+                        coin_phrase(service.price_cp)
                     );
                     paid_cp = service.price_cp;
                     change = Some(SceneChange {

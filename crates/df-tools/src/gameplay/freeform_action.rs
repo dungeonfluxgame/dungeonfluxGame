@@ -997,6 +997,28 @@ pub(super) struct CheckRecord {
     pub(super) success: bool,
 }
 
+#[cfg(test)]
+#[test]
+fn check_record_table_line_keeps_the_article_and_difficulty_class() {
+    let record = CheckRecord {
+        kind: rpc::RollKind::Check,
+        subject: "Brakka studies the folded paper label".to_owned(),
+        label: "Intelligence (Investigation)".to_owned(),
+        die: 18,
+        modifier: 0,
+        total: 18,
+        against: "DC",
+        number: 10,
+        result: "success",
+        success: true,
+    };
+
+    assert_eq!(
+        record.line(),
+        "Brakka studies the folded paper label: Intelligence (Investigation) 18 + 0 = 18 vs DC 10 — success."
+    );
+}
+
 impl CheckRecord {
     /// The roll row text, in the same shape as the other "Roll" rows.
     pub(super) fn line(&self) -> String {
