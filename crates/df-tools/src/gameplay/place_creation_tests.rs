@@ -57,6 +57,18 @@ pub(in crate::gameplay) fn place_slot() -> Value {
         "narration": "You step out onto Market Street. Carts crowd the cobbles, and merchants load wagons for the northern road.",
         "greeting": "Mind the wheels, friends!",
         "speaker": "Hobb",
+        "wares": [{
+            "seller": "Wenna",
+            "name": "saffron pinch",
+            "description": "A paper twist of saffron for a pot of stew.",
+            "price_cp": 10,
+        }],
+        "services": [{
+            "provider": "Hobb",
+            "name": "wagon directions",
+            "description": "Hobb points out the northern road and its toll gate.",
+            "price_cp": 10,
+        }],
         "exits": [{
             "name": "north alley",
             "position": "between two stalls",
@@ -133,6 +145,17 @@ fn a_valid_answer_becomes_a_place_with_a_way_back_that_expands_to_a_valid_scene_
     assert!(record.stored_bytes() <= place::MAXIMUM_PLACE_BYTES);
     let expanded = record.expand().expect("expands");
     assert!(expanded.model.validate_structure().is_ok());
+    assert_eq!(expanded.model.offers.len(), 1);
+    assert_eq!(expanded.model.offers[0].seller_id, "market-street-wenna");
+    assert_eq!(expanded.model.offers[0].name, "saffron pinch");
+    assert_eq!(expanded.model.offers[0].cost_cp, 10);
+    assert!(expanded.model.inventory().iter().any(|item| {
+        item.location == crate::gameplay::adventure::scene_model::SceneInventoryLocation::Stock
+            && item.cost_cp == Some(10)
+    }));
+    assert_eq!(expanded.model.services.len(), 1);
+    assert_eq!(expanded.model.services[0].provider_id, "market-street-hobb");
+    assert_eq!(expanded.model.services[0].price_cp, 10);
     let ways: Vec<&str> = expanded
         .model
         .ways_out
@@ -162,6 +185,40 @@ fn a_valid_answer_becomes_a_place_with_a_way_back_that_expands_to_a_valid_scene_
     );
     // The expansion is deterministic: the same record always reads back the same place.
     assert_eq!(record.expand().unwrap().model, expanded.model);
+}
+
+#[test]
+fn trade_entries_must_name_a_created_person_and_have_bounded_positive_copper_prices() {
+    assert_eq!(
+        with(|place, _, _| place["wares"] = json!([{
+            "seller": "Nobody",
+            "name": "saffron pinch",
+            "description": "A small twist of saffron.",
+            "price_cp": 10,
+        }]))
+        .unwrap_err(),
+        CreationError::Invalid("invalid_place")
+    );
+    assert_eq!(
+        with(|place, _, _| place["services"] = json!([{
+            "provider": "Hobb",
+            "name": "directions",
+            "description": "Points out the northern road.",
+            "price_cp": 0,
+        }]))
+        .unwrap_err(),
+        CreationError::Invalid("invalid_place")
+    );
+    assert_eq!(
+        with(|place, _, _| place["wares"] = json!([{
+            "seller": "Wenna",
+            "name": "saffron pinch",
+            "description": "A small twist of saffron.",
+            "price_cp": 100_001,
+        }]))
+        .unwrap_err(),
+        CreationError::Invalid("invalid_place")
+    );
 }
 
 fn with<F: FnOnce(&mut Value, &mut Value, &mut Value)>(
@@ -389,6 +446,8 @@ async fn creation_gives_the_storyteller_the_canon_and_the_table_and_retries_once
     assert!(first.contains("Merchants heading north gather at the market before dawn"));
     assert!(first.contains("Merchants heading north gather at the market."));
     assert!(first.contains("Brynn") && first.contains("street door"));
+    assert!(first.contains("wares") && first.contains("services"));
+    assert!(first.contains("price_cp") && first.contains("100000 copper pieces"));
     assert!(!first.contains("previous_answer_problem"));
     assert!(second.contains("previous_answer_problem"));
     assert!(second.contains("invalid_place"));

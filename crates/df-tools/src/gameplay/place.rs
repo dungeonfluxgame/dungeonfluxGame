@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     adventure::{
         scene_model::{
-            SceneItemProvenance, SceneItemProvenanceKind, SceneKnowledge, SceneModel, ScenePerson,
-            SceneThing, SceneWayOut, StartingAttitude,
+            SceneItemProvenance, SceneItemProvenanceKind, SceneKnowledge, SceneModel, SceneOffer,
+            ScenePerson, SceneService, SceneThing, SceneWayOut, StartingAttitude,
         },
         setting::{SceneSetting, SettingKind},
     },
@@ -72,6 +72,10 @@ pub(in crate::gameplay) struct PlaceRecord {
     pub(in crate::gameplay) greeting: String,
     pub(in crate::gameplay) exits: Vec<ExitDraft>,
     pub(in crate::gameplay) people: Vec<PersonDraft>,
+    #[serde(default)]
+    pub(in crate::gameplay) wares: Vec<WareDraft>,
+    #[serde(default)]
+    pub(in crate::gameplay) services: Vec<ServiceDraft>,
     pub(in crate::gameplay) things: Vec<ThingDraft>,
 }
 
@@ -105,6 +109,24 @@ pub(in crate::gameplay) struct PersonDraft {
     pub(in crate::gameplay) wants: String,
     pub(in crate::gameplay) attitude: String,
     pub(in crate::gameplay) knowledge: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::gameplay) struct WareDraft {
+    pub(in crate::gameplay) seller: String,
+    pub(in crate::gameplay) name: String,
+    pub(in crate::gameplay) description: String,
+    pub(in crate::gameplay) price_cp: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::gameplay) struct ServiceDraft {
+    pub(in crate::gameplay) provider: String,
+    pub(in crate::gameplay) name: String,
+    pub(in crate::gameplay) description: String,
+    pub(in crate::gameplay) price_cp: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -180,6 +202,8 @@ impl PlaceRecord {
         let prefix = self.prefix();
         let mut people = Vec::with_capacity(self.people.len());
         let mut cast = Vec::with_capacity(self.people.len());
+        let mut offers = Vec::new();
+        let mut services = Vec::new();
         for person in &self.people {
             let id = format!("{prefix}-{}", slug(&person.name));
             let attitude = match person.attitude.as_str() {
@@ -231,6 +255,30 @@ impl PlaceRecord {
                 gender: Some(gender),
                 age: Some(Age::Adult),
                 stat_block: None,
+            });
+        }
+        for ware in &self.wares {
+            let seller_id = format!("{prefix}-{}", slug(&ware.seller));
+            let offer_id = format!("{seller_id}-ware-{}", slug(&ware.name));
+            offers.push(SceneOffer {
+                id: offer_id.clone(),
+                item_id: format!("item-{offer_id}"),
+                seller_id,
+                name: ware.name.trim().to_owned(),
+                aliases: vec![ware.name.trim().to_owned()],
+                description: ware.description.trim().to_owned(),
+                cost_cp: ware.price_cp,
+            });
+        }
+        for service in &self.services {
+            let provider_id = format!("{prefix}-{}", slug(&service.provider));
+            services.push(SceneService {
+                id: format!("{provider_id}-service-{}", slug(&service.name)),
+                provider_id,
+                name: service.name.trim().to_owned(),
+                aliases: vec![service.name.trim().to_owned()],
+                description: service.description.trim().to_owned(),
+                price_cp: service.price_cp,
             });
         }
         let things = self
@@ -290,8 +338,8 @@ impl PlaceRecord {
                 people,
                 things,
                 ways_out,
-                offers: Vec::new(),
-                services: Vec::new(),
+                offers,
+                services,
                 witnessed_thefts: Vec::new(),
             },
             cast,
@@ -320,6 +368,11 @@ impl PlaceRecord {
         }
         let prefix = self.prefix();
         let mut ids: Vec<String> = Vec::new();
+        let person_names: Vec<String> = self
+            .people
+            .iter()
+            .map(|person| person.name.trim().to_lowercase())
+            .collect();
         for person in &self.people {
             if !within(&person.name, 32)
                 || !within(&person.role, 32)
@@ -337,6 +390,50 @@ impl PlaceRecord {
                 return Err(invalid);
             }
             ids.push(id);
+        }
+        let mut trade_ids = Vec::new();
+        for ware in &self.wares {
+            if !within(&ware.seller, 32)
+                || !person_names.contains(&ware.seller.trim().to_lowercase())
+                || !within(&ware.name, 32)
+                || !within(&ware.description, 100)
+                || ware.price_cp == 0
+                || ware.price_cp > 100_000
+                || slug(&ware.name).is_empty()
+            {
+                return Err(invalid);
+            }
+            let trade_id = format!("{}-ware-{}", slug(&ware.seller), slug(&ware.name));
+            let offer_id = format!("{prefix}-{trade_id}");
+            if trade_ids.contains(&trade_id) || offer_id.len() + "item-".len() > 96 {
+                return Err(invalid);
+            }
+            trade_ids.push(trade_id);
+        }
+        for service in &self.services {
+            if !within(&service.provider, 32)
+                || !person_names.contains(&service.provider.trim().to_lowercase())
+                || !within(&service.name, 32)
+                || !within(&service.description, 100)
+                || service.price_cp == 0
+                || service.price_cp > 100_000
+                || slug(&service.name).is_empty()
+            {
+                return Err(invalid);
+            }
+            let trade_id = format!(
+                "{}-service-{}",
+                slug(&service.provider),
+                slug(&service.name)
+            );
+            let service_id = format!("{prefix}-{trade_id}");
+            if trade_ids.contains(&trade_id) || service_id.len() > 96 {
+                return Err(invalid);
+            }
+            trade_ids.push(trade_id);
+        }
+        if self.wares.len() > 12 || self.services.len() > 8 {
+            return Err(invalid);
         }
         for thing in &self.things {
             if !within(&thing.name, 32)

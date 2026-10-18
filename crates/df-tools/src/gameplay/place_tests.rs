@@ -186,6 +186,12 @@ fn leaving_through_the_door_moves_the_party_and_the_display_view_names_the_new_s
         let model = model_of(&moved);
         assert!(model.people.iter().any(|person| person.name == "Brynn"));
         assert!(model.people.iter().any(|person| person.name == "Vale"));
+        assert_eq!(model.offers.len(), 1);
+        assert_eq!(model.offers[0].seller_id, "market-street-wenna");
+        assert_eq!(model.offers[0].cost_cp, 10);
+        assert_eq!(model.services.len(), 1);
+        assert_eq!(model.services[0].provider_id, "market-street-hobb");
+        assert_eq!(model.services[0].price_cp, 10);
         assert_eq!(model.ways_out[0].id, "way-back");
         assert_eq!(model.ways_out[0].beyond_place_id, HOME);
         assert_eq!(report(&moved).unwrap()["place"]["created"], true);
@@ -228,6 +234,8 @@ fn a_created_place_is_reused_on_return_and_the_shop_stays_in_the_world() {
         let again = commit(&back, 43, "street-door", STREET, None).unwrap();
         assert_eq!(display_scene(&again).title, "Market Street");
         assert_eq!(names(&display_scene(&again)), ["Hobb", "Wenna"]);
+        assert_eq!(model_of(&again).offers, model_of(&out).offers);
+        assert_eq!(model_of(&again).services, model_of(&out).services);
         assert_eq!(place::created(again.state()).unwrap().len(), 1);
         let moves = place::entries(again.state()).unwrap();
         assert_eq!(moves.len(), 3);
