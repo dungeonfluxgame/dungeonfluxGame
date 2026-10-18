@@ -132,6 +132,45 @@ impl LineIntent {
             Self::Examine | Self::WatchPerson | Self::KeepWatch | Self::Track | Self::StudyRecall
         )
     }
+
+    /// The closed intent label Jev chose, for the audit line. A physical intent's label names its
+    /// verb, so `LineReading::label` gives it.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::CharacterSpeech => "character-speech",
+            Self::HeroSpeech => "hero-speech",
+            Self::Examine => "examine",
+            Self::WatchPerson => "watch-person",
+            Self::KeepWatch => "keep-watch",
+            Self::Track => "track",
+            Self::StudyRecall => "study-recall",
+            Self::PartyNote => "party-note",
+            Self::GameQuestion => "game-question",
+            Self::PhysicalAction => "physical",
+            Self::FreeformAct => "freeform-act",
+        }
+    }
+}
+
+impl LineReading {
+    /// The exact closed label Jev chose for this line, including a physical label's verb.
+    pub(super) fn label(&self) -> &'static str {
+        match self.physical_kind {
+            Some(PhysicalActionKind::Attack) => "physical-attack",
+            Some(PhysicalActionKind::Take) => "physical-item",
+            Some(PhysicalActionKind::Give) => "physical-transfer",
+            Some(PhysicalActionKind::Trade) => "physical-trade",
+            None => self.intent.label(),
+        }
+    }
+}
+
+/// One closed thing choice Jev reads for a typed line: a scene target's canonical name and its
+/// other listed names. Jev chooses the target; the names only describe it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ListedThing {
+    pub(super) name: String,
+    pub(super) aliases: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -865,11 +904,32 @@ impl ApproachModel {
     /// physical act the listed thing it concerns. Every answer is Jev's. When Jev cannot answer,
     /// the line is neutral speech to the focus NPC, audited as `source=unavailable`; no word of the
     /// line is read for its meaning.
+    #[allow(dead_code)] // Reached through npc_reply's NpcVoice wrapper and the tests.
     pub(super) async fn classify_input(
         &self,
         words: &str,
         public_scene: &str,
         available_things: &[String],
+    ) -> LineReading {
+        let listed = available_things
+            .iter()
+            .map(|thing| ListedThing {
+                name: thing.clone(),
+                aliases: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        self.classify_input_listed(words, public_scene, &listed)
+            .await
+    }
+
+    /// `classify_input` over closed thing choices that carry each target's other listed names, so
+    /// Jev can choose "folded paper label" for a line that says only "the label". One choice per
+    /// target: a target's aliases never crowd other targets out of the bounded choice list.
+    pub(super) async fn classify_input_listed(
+        &self,
+        words: &str,
+        public_scene: &str,
+        listed: &[ListedThing],
     ) -> LineReading {
         let started = Instant::now();
         let result = match &self.provider {
@@ -879,9 +939,9 @@ impl ApproachModel {
                 let state = json!({
                     "player_words": words.chars().take(2_000).collect::<String>(),
                     "public_scene": public_scene.chars().take(1_000).collect::<String>(),
-                    "available_things": available_things.iter().take(8).map(|thing| thing.chars().take(96).collect::<String>()).collect::<Vec<_>>(),
+                    "available_things": listed.iter().take(8).map(|thing| thing.name.chars().take(96).collect::<String>()).collect::<Vec<_>>(),
                 });
-                read_line(provider, &state, available_things).await
+                read_line(provider, &state, listed).await
             }
         };
         let elapsed_ms = started.elapsed().as_millis();
@@ -1088,7 +1148,7 @@ pub(super) fn hero_public_facts(name: &str, account: &serde_json::Value) -> Stri
 async fn read_line(
     provider: &SystemOneChoiceProvider,
     state: &serde_json::Value,
-    available_things: &[String],
+    available_things: &[ListedThing],
 ) -> Result<LineReading, &'static str> {
     let criteria: Vec<String> = INTENTS
         .iter()
@@ -1128,15 +1188,25 @@ async fn read_line(
 async fn choose_listed_thing(
     provider: &SystemOneChoiceProvider,
     state: &serde_json::Value,
-    available_things: &[String],
+    available_things: &[ListedThing],
 ) -> Result<String, &'static str> {
-    let things: Vec<&String> = available_things.iter().take(24).collect();
+    let things: Vec<&ListedThing> = available_things.iter().take(24).collect();
     if things.is_empty() {
         return Ok(String::new());
     }
     let mut criteria: Vec<String> = things
         .iter()
-        .map(|thing| format!("{thing}: a listed thing or person in the scene"))
+        .map(|thing| {
+            if thing.aliases.is_empty() {
+                format!("{}: a listed thing or person in the scene", thing.name)
+            } else {
+                format!(
+                    "{}: a listed thing or person in the scene, also called {}",
+                    thing.name,
+                    thing.aliases.join(", ")
+                )
+            }
+        })
         .collect();
     criteria.push("none: the line concerns none of the listed things or people".to_owned());
     match tokio::time::timeout(
@@ -1145,7 +1215,7 @@ async fn choose_listed_thing(
     )
     .await
     {
-        Ok(Ok(index)) if index < things.len() => Ok(things[index].to_string()),
+        Ok(Ok(index)) if index < things.len() => Ok(things[index].name.clone()),
         Ok(Ok(index)) if index == things.len() => Ok(String::new()),
         Ok(Ok(_)) => Err("unknown-label"),
         Err(_) | Ok(Err(SystemOneError::Timeout)) => Err("timeout"),

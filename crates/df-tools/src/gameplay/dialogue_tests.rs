@@ -2553,3 +2553,586 @@ fn an_unavailable_authority_is_a_retryable_status_for_the_phone() {
     let status = super::actor::unavailable(RepositoryError::UnresolvedCommit);
     assert_eq!(status.code(), tonic::Code::Unavailable);
 }
+
+// Typed-line routing regressions (lane ROUTE). Each test feeds the reading live Jev most plausibly
+// returns for the exact live line through a fake Jev endpoint, in the merchant shop's authored
+// room, then checks every routing decision the server makes from that reading.
+mod typed_line_routes {
+    use super::super::approach_model::tests::{answer, model};
+    use super::super::approach_model::{LineIntent, LineReading, ListedThing};
+    use super::super::dialogue::{
+        AddresseeRoute, InteractionGate, RouteAudit, addressee_route, explicit_npc_addressee,
+        freeform_social_target, interaction_gate, jev_target_interaction, listed_things,
+        scene_interaction_target,
+    };
+    use super::super::freeform_action::{
+        self, ActKind, FreeformPlan, HeroSheet, PersonFact, Situation, ThingFact,
+    };
+    use super::super::journey::living_scene::{
+        INTERACTION_INSTRUCTIONS, InteractionMeaning, interaction_from_judgement,
+    };
+    use super::super::{investigation, pack, wire};
+    use crate::gameplay::storyteller::tests::FakeEndpoint;
+    use df_protocol::common as rpc;
+
+    const PACK: &[u8] = include_bytes!("../../../../content/merchant-shop/pack.json");
+    const TUNING: &[u8] = include_bytes!("../../../../content/merchant-shop/tuning.json");
+    const MODEL: &[u8] = include_bytes!("../../../../content/merchant-shop/scene-model.json");
+
+    /// The merchant shop's room scene with its authored scene model, as live play runs it.
+    fn shop_room() -> pack::Scene {
+        let loaded = pack::load_from_bytes(PACK, TUNING).expect("the merchant shop pack loads");
+        let model = serde_json::from_slice(MODEL).expect("the merchant shop scene model");
+        let mut scene = loaded
+            .pack
+            .scenes
+            .into_iter()
+            .find(|scene| scene.key == pack::SceneKey::Room)
+            .expect("the shop has a room scene");
+        scene
+            .setting
+            .as_mut()
+            .expect("the room has a setting")
+            .model = Some(model);
+        scene
+    }
+
+    fn catalog(scene: &pack::Scene) -> Vec<investigation::Target> {
+        investigation::targets(scene, &[])
+    }
+
+    /// Jev's 1-based option for the listed thing named `name`.
+    fn thing_option(listed: &[ListedThing], name: &str) -> String {
+        let index = listed
+            .iter()
+            .position(|thing| thing.name == name)
+            .unwrap_or_else(|| panic!("{name} is a listed thing"));
+        assert!(
+            index < 24,
+            "{name} must be inside Jev's bounded choice list"
+        );
+        format!("o{}", index + 1)
+    }
+
+    /// Jev's 1-based "none" option of the bounded thing list.
+    fn no_thing_option(listed: &[ListedThing]) -> String {
+        format!("o{}", listed.len().min(24) + 1)
+    }
+
+    /// Jev's 1-based PRESENT option for the cast member `id`; options 1-3 are ABSENT, AMBIGUOUS
+    /// and NO EXPLICIT ADDRESSEE.
+    fn present_option(cast: &[rpc::SceneActor], id: &str) -> String {
+        let index = cast
+            .iter()
+            .position(|actor| actor.id == id)
+            .unwrap_or_else(|| panic!("{id} is in the cast"));
+        format!("o{}", index + 4)
+    }
+
+    const NO_EXPLICIT_ADDRESSEE: &str = "o3";
+
+    async fn read(answers: Vec<&str>, words: &str, scene: &pack::Scene) -> LineReading {
+        let listed = listed_things(&catalog(scene));
+        let endpoint = FakeEndpoint::start(answers.into_iter().map(answer).collect());
+        let mut reading = model(&endpoint)
+            .classify_input_listed(words, &scene.narration, &listed)
+            .await;
+        assert_eq!(reading.source, "jev", "the fake Jev answered every choice");
+        reading.elapsed_ms = 0;
+        reading
+    }
+
+    async fn addressee(
+        option: &str,
+        words: &str,
+        scene: &pack::Scene,
+    ) -> (super::super::npc_target::Decision, Option<String>) {
+        let cast = wire::scene_cast(scene);
+        let endpoint = FakeEndpoint::start(vec![answer(option)]);
+        let decision = model(&endpoint)
+            .resolve_addressee(words, &cast, &scene.speaker)
+            .await;
+        let explicit = explicit_npc_addressee(&decision, &cast, &[]);
+        (decision, explicit)
+    }
+
+    async fn interaction(
+        option: &str,
+        words: &str,
+        scene: &pack::Scene,
+    ) -> (
+        Result<&'static str, super::super::approach_model::JevUnavailable>,
+        Option<(String, &'static str)>,
+    ) {
+        let endpoint = FakeEndpoint::start(vec![answer(option)]);
+        let choice = model(&endpoint)
+            .choose_label(
+                &serde_json::json!({"hero_line": words}),
+                INTERACTION_INSTRUCTIONS,
+                &InteractionMeaning::CHOICES,
+            )
+            .await;
+        let (judged, _) = interaction_from_judgement(scene, words, choice);
+        (choice, judged)
+    }
+
+    /// The shop as the freeform planner sees it: Sigrun with rope and coin, Marek and Corin
+    /// present, the scene's things and Marek's gloves for sale.
+    fn shop_situation() -> Situation {
+        let thing =
+            |id: &str, name: &str, portable: bool, held: bool, owner: Option<&str>| ThingFact {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                detail: format!("The {name}."),
+                portable,
+                held_by_hero: held,
+                holder_name: None,
+                owner_id: owner.map(str::to_owned),
+            };
+        Situation {
+            hero: HeroSheet {
+                name: "Sigrun".to_owned(),
+                strength_modifier: 1,
+                proficiency_bonus: 2,
+                known_spells: Vec::new(),
+                pronouns: None,
+                appearance: None,
+            },
+            things: vec![
+                thing("fitting-mirror", "fitting mirror", false, false, None),
+                thing(
+                    "blue-linen",
+                    "blue linen bolt",
+                    true,
+                    false,
+                    Some("merchant"),
+                ),
+                thing(
+                    "item-bolt-of-wool",
+                    "bolt of wool",
+                    true,
+                    false,
+                    Some("merchant"),
+                ),
+                thing(
+                    "item-gloves",
+                    "pair of gloves",
+                    true,
+                    false,
+                    Some("merchant"),
+                ),
+                thing("pack-rope", "hempen rope", true, true, None),
+            ],
+            people: vec![
+                PersonFact {
+                    id: "merchant".to_owned(),
+                    name: "Marek".to_owned(),
+                    role: rpc::SceneRole::Patron,
+                    passive_perception: 11,
+                },
+                PersonFact {
+                    id: "shop-adventurer".to_owned(),
+                    name: "Corin".to_owned(),
+                    role: rpc::SceneRole::Bystander,
+                    passive_perception: 12,
+                },
+            ],
+            other_heroes: Vec::new(),
+            place: "A small cloth shop.".to_owned(),
+            coin_gp: 6,
+        }
+    }
+
+    /// Jev's 1-based option for the freeform target `id`.
+    fn target_option(situation: &Situation, id: &str) -> String {
+        let index = situation
+            .options()
+            .iter()
+            .position(|target| target.id == id)
+            .unwrap_or_else(|| panic!("{id} is a freeform target"));
+        format!("o{}", index + 1)
+    }
+
+    fn act_option(act: ActKind) -> String {
+        let index = [
+            ActKind::Sense,
+            ActKind::Manipulate,
+            ActKind::Wear,
+            ActKind::Conceal,
+            ActKind::Throw,
+            ActKind::Break,
+            ActKind::Light,
+            ActKind::Consume,
+            ActKind::Perform,
+            ActKind::Worship,
+            ActKind::Cast,
+            ActKind::ContactFriendly,
+            ActKind::ContactRough,
+            ActKind::Strike,
+            ActKind::Move,
+        ]
+        .iter()
+        .position(|kind| *kind == act)
+        .expect("a listed act kind");
+        format!("o{}", index + 1)
+    }
+
+    async fn plan(answers: Vec<String>, words: &str, situation: &Situation) -> FreeformPlan {
+        let endpoint = FakeEndpoint::start(answers.iter().map(|option| answer(option)).collect());
+        freeform_action::plan(&model(&endpoint), words, situation)
+            .await
+            .expect("Jev judges the freeform plan")
+    }
+
+    /// Repro 1: a recall is Jev's study-recall with History. Jev's "no explicit addressee" falls
+    /// back to the focus, Marek, which used to make the line a Meta knowledge turn with an empty
+    /// reply. It is a recall check now, and an empty Meta reply always gets a message.
+    #[tokio::test(flavor = "current_thread")]
+    async fn recall_is_a_knowledge_check_not_a_silent_meta_turn() {
+        let scene = shop_room();
+        let listed = listed_things(&catalog(&scene));
+        let words = "I try to remember what I've heard about bandits on the north road.";
+        let none = no_thing_option(&listed);
+        let reading = read(vec!["o7", "o7", &none], words, &scene).await;
+        assert_eq!(reading.intent, LineIntent::StudyRecall);
+        assert_eq!(reading.skill, Some("history"));
+        assert!(reading.thing.is_empty());
+
+        let (decision, explicit) = addressee(NO_EXPLICIT_ADDRESSEE, words, &scene).await;
+        let cast = wire::scene_cast(&scene);
+        assert_eq!(
+            addressee_route(&decision, &cast, &[]),
+            AddresseeRoute::Npc(Some("merchant".to_owned())),
+            "the focus fallback names Marek"
+        );
+        assert_eq!(explicit, None, "but Marek was not addressed");
+
+        let recall = investigation::Recall {
+            hero: "Sigrun".to_owned(),
+            skill: "history".to_owned(),
+            succeeded: Some(false),
+            words: words.to_owned(),
+            subject: None,
+            place: scene.narration.clone(),
+            background: "name: Sigrun".to_owned(),
+        };
+        assert_eq!(recall.facts()["hero_words"], words);
+        assert!(!recall.fallback().is_empty());
+
+        let mut meta = rpc::DialogueResponse {
+            disposition: rpc::DialogueDisposition::Meta as i32,
+            ..Default::default()
+        };
+        assert!(super::super::dialogue::ensure_meta_message(&mut meta));
+        assert!(!meta.npc_reply.is_empty());
+    }
+
+    /// The recall narration never comes back empty, even when the storyteller fails.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_recall_narration_falls_back_to_rules_text_when_the_storyteller_fails() {
+        use crate::gameplay::storyteller::tests::{Reply, cache_directory, teller};
+        let endpoint = FakeEndpoint::start(vec![Reply::Status(500, serde_json::json!({}))]);
+        let cache = cache_directory("route-recall-fallback");
+        let storyteller = teller(
+            endpoint.address,
+            0,
+            std::time::Duration::from_secs(2),
+            &cache,
+        );
+        let recall = investigation::Recall {
+            hero: "Sigrun".to_owned(),
+            skill: "history".to_owned(),
+            succeeded: Some(true),
+            words: "I try to remember what I've heard about bandits on the north road.".to_owned(),
+            subject: None,
+            place: "A cloth shop.".to_owned(),
+            background: "name: Sigrun".to_owned(),
+        };
+        let line = investigation::describe_recall(&storyteller, &recall).await;
+        assert_eq!(line, recall.fallback());
+        let _ = std::fs::remove_dir_all(cache);
+    }
+
+    /// Repro 2: "the label" names the folded paper label. Flattening every alias into its own
+    /// choice put the shop's items past Jev's 24-choice bound; one choice per target keeps the
+    /// label listed, and Jev's choice names the interaction target the words do not.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_short_item_reference_reaches_the_present_scene_item() {
+        let scene = shop_room();
+        let catalog = catalog(&scene);
+        let flattened = catalog
+            .iter()
+            .flat_map(|target| std::iter::once(&target.name).chain(target.aliases.iter()))
+            .position(|name| name == "folded paper label")
+            .expect("the label is in the catalog");
+        assert!(
+            flattened >= 24,
+            "the old flattened list dropped the label past the bound"
+        );
+        let listed = listed_things(&catalog);
+        let words = "I pick up the label and read it.";
+        let label = thing_option(&listed, "folded paper label");
+        let reading = read(vec!["o11", &label], words, &scene).await;
+        assert_eq!(reading.thing, "folded paper label");
+
+        // Jev reads the line as examining the item; the words alone do not name it exactly.
+        let (choice, judged) = interaction("o12", words, &scene).await;
+        assert_eq!(judged, None);
+        let target = catalog
+            .iter()
+            .find(|target| target.name == reading.thing)
+            .expect("the chosen thing is a catalog target");
+        let scene_id = scene_interaction_target(&scene, target);
+        assert_eq!(scene_id.as_deref(), Some("folded-label"));
+        assert_eq!(
+            jev_target_interaction(choice, scene_id.as_deref()),
+            Some(("folded-label".to_owned(), "examine"))
+        );
+        assert_eq!(
+            interaction_gate(false, reading.intent, false, Some("examine"), false),
+            InteractionGate::Keep
+        );
+    }
+
+    /// Repro 3: a covert theft that names Marek is Jev's freeform conceal of his gloves. It stays
+    /// an action (Sleight of Hand, theft record) whether Jev reads Marek as addressed or not.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_covert_theft_naming_the_merchant_stays_an_action() {
+        let scene = shop_room();
+        let words = "While Marek turns away, I slip the pair of gloves into my pack.";
+        let reading = read(vec!["o14"], words, &scene).await;
+        assert_eq!(reading.intent, LineIntent::FreeformAct);
+        let (_, judged) = interaction("o4", words, &scene).await;
+        let (_, option) = judged.expect("Jev's steal names the gloves");
+        assert_eq!(option, "steal");
+        assert!(
+            !freeform_action::keeps_scene_interaction(option),
+            "the adjudicator owns a freeform theft"
+        );
+        let cast = wire::scene_cast(&scene);
+        let (_, explicit) = addressee(&present_option(&cast, "merchant"), words, &scene).await;
+        assert_eq!(explicit.as_deref(), Some("merchant"));
+
+        let situation = shop_situation();
+        let judged = plan(
+            vec![
+                act_option(ActKind::Conceal),
+                target_option(&situation, "item-gloves"),
+                "o3".to_owned(),
+            ],
+            words,
+            &situation,
+        )
+        .await;
+        assert_eq!(judged.act, ActKind::Conceal);
+        assert_eq!(freeform_social_target(&judged, explicit.as_deref()), None);
+        assert_eq!(freeform_social_target(&judged, None), None);
+    }
+
+    /// Repro 4: a spoken excuse is Jev's character speech. Jev may still label it an examine of
+    /// Marek, whom the words name; speech is never that examine, so Marek hears the line.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_spoken_excuse_reaches_the_person_not_an_examine() {
+        let scene = shop_room();
+        let cast = wire::scene_cast(&scene);
+        let words = "Marek, it's not what it looks like. I was only checking the stitching.";
+        let reading = read(vec!["o1"], words, &scene).await;
+        assert_eq!(reading.intent, LineIntent::CharacterSpeech);
+        let (_, judged) = interaction("o12", words, &scene).await;
+        assert_eq!(judged, Some(("merchant".to_owned(), "examine")));
+        assert_eq!(
+            interaction_gate(false, reading.intent, false, Some("examine"), true),
+            InteractionGate::Drop
+        );
+        let (decision, _) = addressee(&present_option(&cast, "merchant"), words, &scene).await;
+        assert_eq!(
+            addressee_route(&decision, &cast, &[]),
+            AddresseeRoute::Npc(Some("merchant".to_owned()))
+        );
+
+        // The same line read as an examine attempt that Jev says is addressed to Marek.
+        let marek = thing_option(&listed_things(&catalog(&scene)), "Marek");
+        let attempt = read(vec!["o3", "o2", &marek], words, &scene).await;
+        assert_eq!(attempt.intent, LineIntent::Examine);
+        let (_, explicit) = addressee(&present_option(&cast, "merchant"), words, &scene).await;
+        assert_eq!(explicit.as_deref(), Some("merchant"));
+        assert_eq!(
+            interaction_gate(false, attempt.intent, true, Some("examine"), true),
+            InteractionGate::Drop
+        );
+    }
+
+    /// Repro 5: reading Marek's bluff is Jev's watch-person with Insight on Marek. It is an
+    /// observation, never the plain description of an examine interaction, and the DC is
+    /// Marek's passive Deception (commoner, Charisma 10).
+    #[tokio::test(flavor = "current_thread")]
+    async fn reading_a_bluff_is_an_insight_check_against_deception() {
+        let scene = shop_room();
+        let catalog = catalog(&scene);
+        let words = "I study Marek's face to see whether he's bluffing about that price.";
+        let marek = thing_option(&listed_things(&catalog), "Marek");
+        let reading = read(vec!["o4", "o3", &marek], words, &scene).await;
+        assert_eq!(reading.intent, LineIntent::WatchPerson);
+        assert_eq!(reading.skill, Some("insight"));
+        assert_eq!(reading.thing, "Marek");
+        let (_, explicit) = addressee(NO_EXPLICIT_ADDRESSEE, words, &scene).await;
+        assert_eq!(explicit, None);
+        assert_eq!(
+            interaction_gate(true, reading.intent, false, None, false),
+            InteractionGate::Observe
+        );
+        // L33's reading (examine) with Jev's examine interaction of Marek is an observation too.
+        assert_eq!(
+            interaction_gate(true, LineIntent::Examine, false, Some("examine"), true),
+            InteractionGate::Observe
+        );
+        let target = catalog
+            .iter()
+            .find(|target| target.name == "Marek")
+            .expect("Marek is a catalog target");
+        assert_eq!(investigation::passive_deception(&scene, target), Some(10));
+        let read = investigation::state_of_mind(&scene, target, None)
+            .expect("Marek's state of mind is modelled");
+        assert!(read.starts_with("Marek seems friendly"), "{read}");
+        assert!(read.contains("fair price"), "{read}");
+    }
+
+    /// Acts on the hero's own belongings, senses and walking out have no addressee. Jev's focus
+    /// fallback named Marek, and L29/L38 then gave every non-strike act to his dialogue. These
+    /// lines are freeform acts again: the sheet, the ledger and place_move answer them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn unaddressed_acts_never_become_the_default_speakers_dialogue() {
+        let scene = shop_room();
+        let cast = wire::scene_cast(&scene);
+        let situation = shop_situation();
+        let cases: [(&str, Vec<String>); 5] = [
+            (
+                "I count the coins in my purse.",
+                vec![
+                    act_option(ActKind::Sense),
+                    "o4".to_owned(), // Touch.
+                    target_option(&situation, "coin"),
+                    "o1".to_owned(),
+                ],
+            ),
+            (
+                "I check how much rope I'm carrying.",
+                vec![
+                    act_option(ActKind::Sense),
+                    "o1".to_owned(), // Sight.
+                    target_option(&situation, "pack-rope"),
+                    "o1".to_owned(),
+                ],
+            ),
+            (
+                "I study my reflection in the fitting mirror.",
+                vec![
+                    act_option(ActKind::Sense),
+                    "o1".to_owned(), // Sight.
+                    target_option(&situation, "Sigrun"),
+                    "o1".to_owned(),
+                ],
+            ),
+            (
+                "I sniff the bolts of wool on the shelf.",
+                vec![
+                    act_option(ActKind::Sense),
+                    "o3".to_owned(), // Smell.
+                    target_option(&situation, "item-bolt-of-wool"),
+                    "o1".to_owned(),
+                ],
+            ),
+            (
+                "I walk out through the door into the market street.",
+                vec![
+                    act_option(ActKind::Move),
+                    target_option(&situation, "place"),
+                    "o1".to_owned(),
+                ],
+            ),
+        ];
+        for (words, plan_answers) in cases {
+            let reading = read(vec!["o14"], words, &scene).await;
+            assert_eq!(reading.intent, LineIntent::FreeformAct, "{words}");
+            let (_, judged) = interaction("o15", words, &scene).await;
+            assert_eq!(judged, None, "{words}");
+            let (decision, explicit) = addressee(NO_EXPLICIT_ADDRESSEE, words, &scene).await;
+            assert_eq!(
+                addressee_route(&decision, &cast, &[]),
+                AddresseeRoute::Npc(Some("merchant".to_owned())),
+                "{words}: the focus fallback is Marek"
+            );
+            assert_eq!(explicit, None, "{words}: nobody is addressed");
+            let judged = plan(plan_answers, words, &situation).await;
+            assert!(!freeform_action::assaults_person(&judged), "{words}");
+            assert_eq!(
+                freeform_social_target(&judged, explicit.as_deref()),
+                None,
+                "{words}: the act stays a freeform action"
+            );
+        }
+    }
+
+    /// Social contact with a present person is still that person's turn (L29, L38); a strike is
+    /// still an action.
+    #[tokio::test(flavor = "current_thread")]
+    async fn social_contact_is_the_persons_turn_and_a_strike_is_not() {
+        let situation = shop_situation();
+        let words = "I laugh and clap Corin on the back. Cheer up, friend.";
+        let contact = plan(
+            vec![
+                act_option(ActKind::ContactFriendly),
+                target_option(&situation, "shop-adventurer"),
+                "o1".to_owned(),
+            ],
+            words,
+            &situation,
+        )
+        .await;
+        assert_eq!(
+            freeform_social_target(&contact, None).as_deref(),
+            Some("shop-adventurer")
+        );
+        let strike = plan(
+            vec![
+                act_option(ActKind::Strike),
+                target_option(&situation, "shop-adventurer"),
+                "o1".to_owned(),
+                "o1".to_owned(),
+            ],
+            "That's it. I punch Corin square in the jaw!",
+            &situation,
+        )
+        .await;
+        assert_eq!(
+            freeform_social_target(&strike, Some("shop-adventurer")),
+            None
+        );
+    }
+
+    /// The ROUTE audit line carries Jev's whole reading and the chosen route.
+    #[test]
+    fn the_route_audit_line_names_the_reading_and_the_route() {
+        let request = rpc::RawDialogueRequest {
+            input_id: Some(rpc::OperationId {
+                value: Some(vec![7; 16]),
+            }),
+            ..Default::default()
+        };
+        let mut audit = RouteAudit::new(&request);
+        audit.read(&LineReading {
+            intent: LineIntent::WatchPerson,
+            skill: Some("insight"),
+            thing: "Marek".to_owned(),
+            physical_kind: None,
+            source: "jev",
+            elapsed_ms: 0,
+        });
+        audit.act("none");
+        let line = audit.line("investigation", "observation_intent");
+        assert_eq!(
+            line,
+            "ROUTE line=07070707070707070707070707070707 intent=watch-person skill=insight act=none addressee=none target=\"Marek\" route=investigation reason=observation_intent"
+        );
+    }
+}

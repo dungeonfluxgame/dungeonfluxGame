@@ -992,6 +992,267 @@ fn is_observation_submission(
         ))
 }
 
+/// The line's audit record: Jev's whole reading and the route it took, one `ROUTE` line per typed
+/// line, so a live misroute can be read from the log (dev CLI rule: every system logs).
+pub(super) struct RouteAudit {
+    line: String,
+    intent: &'static str,
+    skill: &'static str,
+    act: String,
+    addressee: String,
+    target: String,
+}
+
+impl RouteAudit {
+    pub(super) fn new(request: &rpc::RawDialogueRequest) -> Self {
+        Self {
+            line: request
+                .input_id
+                .as_ref()
+                .and_then(|id| id.value.as_ref())
+                .filter(|value| value.len() == 16)
+                .map(|value| journey::hex(value))
+                .unwrap_or_else(|| "invalid".to_owned()),
+            intent: "unread",
+            skill: "none",
+            act: "none".to_owned(),
+            addressee: "none".to_owned(),
+            target: String::new(),
+        }
+    }
+
+    pub(super) fn read(&mut self, reading: &super::approach_model::LineReading) {
+        self.intent = reading.label();
+        self.skill = reading.skill.unwrap_or("none");
+        self.target = reading.thing.clone();
+    }
+
+    pub(super) fn act(&mut self, act: impl Into<String>) {
+        self.act = act.into();
+    }
+
+    pub(super) fn addressee(
+        &mut self,
+        decision: &super::npc_target::Decision,
+        actor_id: Option<&str>,
+    ) {
+        self.addressee = format!(
+            "{}:{}:{}",
+            decision.source,
+            decision.reason,
+            actor_id.unwrap_or("none")
+        );
+    }
+
+    /// `route` is one of dialogue, freeform, investigation, recall, fight, interaction, physical,
+    /// trade, service or meta.
+    pub(super) fn line(&self, route: &str, reason: &str) -> String {
+        format!(
+            "ROUTE line={} intent={} skill={} act={} addressee={} target={:?} route={route} reason={reason}",
+            self.line, self.intent, self.skill, self.act, self.addressee, self.target
+        )
+    }
+
+    fn record(&self, route: &str, reason: &str) {
+        actor::record_audit_line("gameplay.line_route", self.line(route, reason));
+    }
+}
+
+/// The present NPC Jev explicitly chose as the line's addressee. Jev's "no explicit addressee"
+/// falls back to the scene focus for ordinary speech, but that fallback is not an address: a line
+/// that only mentions or watches the focus is not spoken to them.
+pub(super) fn explicit_npc_addressee(
+    decision: &super::npc_target::Decision,
+    cast: &[rpc::SceneActor],
+    party: &[super::npc_target::PartyHero],
+) -> Option<String> {
+    if decision.source != "jev" || decision.reason != "selected" {
+        return None;
+    }
+    match addressee_route(decision, cast, party) {
+        AddresseeRoute::Npc(Some(actor_id)) => Some(actor_id),
+        _ => None,
+    }
+}
+
+/// The present person a freeform act is social contact with, so their dialogue turn answers it.
+/// Only Jev's plan decides: harmless contact, an expression, a performance, or showing or handing
+/// a thing to a person. A covert act (concealing, hiding), a strike, rough contact and any act on
+/// a thing stays a freeform action, even when the line names or addresses a person.
+pub(super) fn freeform_social_target(
+    plan: &freeform_action::FreeformPlan,
+    explicit_addressee: Option<&str>,
+) -> Option<String> {
+    use freeform_action::{ActKind, TargetKind};
+    let person = |target: &Option<freeform_action::Target>| {
+        target
+            .as_ref()
+            .filter(|target| target.kind == TargetKind::Person)
+            .map(|target| target.id.clone())
+    };
+    let chosen = match plan.act {
+        ActKind::ContactFriendly | ActKind::Express | ActKind::Perform => person(&plan.target),
+        ActKind::Show | ActKind::Give => person(&plan.recipient).or_else(|| person(&plan.target)),
+        _ => return None,
+    };
+    chosen.or_else(|| explicit_addressee.map(str::to_owned))
+}
+
+/// What a line's Jev intent does with the scene interaction Jev judged for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InteractionGate {
+    /// The scene interaction runs as judged.
+    Keep,
+    /// The interaction is not this line's act: the line keeps its own route.
+    Drop,
+    /// The line is an observation attempt and goes to investigation.
+    Observe,
+}
+
+/// Intent decides the path. An observation intent (examine, watch a person, keep watch, track)
+/// goes to investigation, except an examine whose judged interaction acts on a scene thing rather
+/// than a person (reading an item keeps the item's examine interaction). Speech, or an attempt
+/// spoken to a present person, is never an examine of that person or thing: the line is said, not
+/// looked at.
+pub(super) fn interaction_gate(
+    observation: bool,
+    intent: super::approach_model::LineIntent,
+    addressed: bool,
+    option: Option<&str>,
+    names_person: bool,
+) -> InteractionGate {
+    use super::approach_model::LineIntent;
+    if observation {
+        return if intent == LineIntent::Examine && option.is_some() && !names_person {
+            InteractionGate::Keep
+        } else {
+            InteractionGate::Observe
+        };
+    }
+    let spoken =
+        addressed || matches!(intent, LineIntent::CharacterSpeech | LineIntent::HeroSpeech);
+    if spoken && option == Some("examine") {
+        InteractionGate::Drop
+    } else {
+        InteractionGate::Keep
+    }
+}
+
+/// Jev's closed thing choices for a typed line: one choice per catalog target, present targets
+/// first, each with its other listed names. Flattening every alias into its own choice let a few
+/// people's names and pronouns fill the bounded list before any scene item was offered.
+pub(super) fn listed_things(
+    catalog: &[super::investigation::Target],
+) -> Vec<super::approach_model::ListedThing> {
+    let mut listed: Vec<super::approach_model::ListedThing> = Vec::new();
+    let ordered = catalog
+        .iter()
+        .filter(|target| target.present)
+        .chain(catalog.iter().filter(|target| !target.present));
+    for target in ordered {
+        if listed.iter().any(|thing| thing.name == target.name) {
+            continue;
+        }
+        let mut aliases: Vec<String> = Vec::new();
+        for alias in &target.aliases {
+            if !alias.eq_ignore_ascii_case(&target.name)
+                && !aliases
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(alias))
+                && aliases.len() < 6
+            {
+                aliases.push(alias.clone());
+            }
+        }
+        listed.push(super::approach_model::ListedThing {
+            name: target.name.clone(),
+            aliases,
+        });
+    }
+    listed
+}
+
+/// The scene-model id a catalog target names, as a scene interaction validates it: a present
+/// thing's or a way's own id, an offer's canonical item id, or a person's id. Exact id mapping.
+pub(super) fn scene_interaction_target(
+    scene: &super::pack::Scene,
+    target: &super::investigation::Target,
+) -> Option<String> {
+    let model = scene.setting.as_ref()?.model.as_ref()?.for_scene(scene.key);
+    if let Some(thing) = model
+        .things
+        .iter()
+        .find(|thing| target.id == format!("thing-{}", thing.id))
+    {
+        return thing.in_scene.then(|| thing.id.clone());
+    }
+    if let Some(offer) = model
+        .offers
+        .iter()
+        .find(|offer| target.id == format!("offer-{}", offer.id))
+    {
+        return Some(offer.canonical_item_id());
+    }
+    if let Some(way) = model
+        .ways_out
+        .iter()
+        .find(|way| target.id == format!("way-{}", way.id))
+    {
+        return Some(way.id.clone());
+    }
+    model
+        .people
+        .iter()
+        .find(|person| target.id == super::investigation::person_target_id(&person.id))
+        .map(|person| person.id.clone())
+}
+
+/// The scene interaction Jev's meaning label names on the listed thing Jev chose for the line,
+/// used when the line's own words do not name the scene item exactly. The label is one of the
+/// closed `InteractionMeaning::CHOICES`, whose labels are the interaction options themselves; no
+/// interaction is made for "none" or without a Jev target, and the server validates the target.
+pub(super) fn jev_target_interaction(
+    choice: Result<&'static str, super::approach_model::JevUnavailable>,
+    jev_target: Option<&str>,
+) -> Option<(String, &'static str)> {
+    let label = choice.ok()?;
+    let meaning = journey::living_scene::InteractionMeaning::from_label(label)?;
+    if meaning == journey::living_scene::InteractionMeaning::NotInteraction {
+        return None;
+    }
+    Some((jev_target?.to_owned(), label))
+}
+
+/// Whether a scene interaction's target id is a person in the scene model.
+fn interaction_names_person(scene: &super::pack::Scene, target_id: &str) -> bool {
+    scene
+        .setting
+        .as_ref()
+        .and_then(|setting| setting.model.as_ref())
+        .is_some_and(|model| {
+            model
+                .for_scene(scene.key)
+                .people
+                .iter()
+                .any(|person| person.id == target_id)
+        })
+}
+
+/// A Meta reply always carries a player-facing message; an empty one is never sent.
+pub(super) const EMPTY_META_NARRATION: &str =
+    "Nothing happens in the scene. Describe what your hero does, or ask about something here.";
+
+/// Fills an empty Meta reply with `EMPTY_META_NARRATION`. Returns whether it was empty.
+pub(super) fn ensure_meta_message(response: &mut rpc::DialogueResponse) -> bool {
+    if response.disposition == rpc::DialogueDisposition::Meta as i32
+        && response.npc_reply.trim().is_empty()
+    {
+        response.npc_reply = EMPTY_META_NARRATION.to_owned();
+        return true;
+    }
+    false
+}
+
 fn canonical_target_name<'a>(
     selected: &str,
     catalog: &'a [super::investigation::Target],
@@ -1694,6 +1955,7 @@ impl Service {
         words: &str,
         scene: &super::pack::Scene,
         available_things: &[String],
+        jev_target: Option<&str>,
     ) -> Option<(String, &'static str)> {
         let (_, approach_model) = self.npc_voice.hero_identity_models();
         let state = serde_json::json!({
@@ -1713,6 +1975,7 @@ impl Service {
             .await;
         let (interaction, judgement) =
             journey::living_scene::interaction_from_judgement(scene, words, choice);
+        let interaction = interaction.or_else(|| jev_target_interaction(choice, jev_target));
         record_line_judgement(
             "scene_interaction",
             interaction.as_ref().map_or("none", |(_, option)| *option),
@@ -1866,9 +2129,11 @@ impl Service {
                 "bounded dialogue fields required",
             ));
         }
+        let mut audit = RouteAudit::new(&request);
         // A notebook command the player declared as Meta is written as declared: no intent
         // reading or scene route may rewrite its context and drop the note.
         if is_notebook_submission(declared, finality(request.finality)?, &request.text) {
+            audit.record("meta", "notebook_command");
             return self
                 .dialogue_call(
                     credential,
@@ -1958,6 +2223,8 @@ impl Service {
                 ) {
                     (Some(purchase), QuoteDecision::Accept) => {
                         let item_id = purchase.item_id.clone();
+                        audit.act("trade");
+                        audit.record("trade", "accepted_quote");
                         return self
                             .interaction_call(
                                 credential,
@@ -2009,6 +2276,8 @@ impl Service {
                             picked.as_deref(),
                         )
                     {
+                        audit.act("buy");
+                        audit.record("trade", "fixed_price_purchase");
                         return self
                             .interaction_call(
                                 credential,
@@ -2031,11 +2300,12 @@ impl Service {
             &scene,
             &super::investigation::party_targets(current.state()).map_err(actor::unavailable)?,
         );
-        let available_things = catalog
+        // One closed choice per scene target, with its other names, so an alias never crowds the
+        // scene's items out of Jev's bounded thing list.
+        let listed = listed_things(&catalog);
+        let available_things = listed
             .iter()
-            .flat_map(|target| {
-                std::iter::once(target.name.clone()).chain(target.aliases.iter().cloned())
-            })
+            .map(|thing| thing.name.clone())
             .collect::<Vec<_>>();
         let recent_public = self
             .table_log
@@ -2054,14 +2324,18 @@ impl Service {
             "{} {} Recent public table lines: {}",
             scene.title, scene.narration, recent_public
         );
-        let mut reading = self
-            .npc_voice
-            .classify_input(&request.text, &public_scene, &available_things)
+        let (_, line_model) = self.npc_voice.hero_identity_models();
+        let mut reading = line_model
+            .classify_input_listed(&request.text, &public_scene, &listed)
             .await;
         if let Some(target_name) = canonical_target_name(&reading.thing, &catalog) {
             reading.thing = target_name.to_owned();
         }
-        let addressed_present_person = if finality(request.finality)? == InputFinality::Final
+        audit.read(&reading);
+        // An attempt is spoken to a present person only when Jev explicitly chose that person as
+        // its addressee. Jev's focus fallback for an unaddressed line is not an address: "I study
+        // Marek's face" watches Marek, it does not speak to him.
+        let addressed_actor = if finality(request.finality)? == InputFinality::Final
             && reading.intent.is_attempt()
             && matches!(
                 context(request.context)?,
@@ -2075,16 +2349,17 @@ impl Service {
             let decision = approach_model
                 .resolve_addressee_with_party(&request.text, &cast, &party, &scene.speaker)
                 .await;
-            matches!(
-                addressee_route(&decision, &cast, &party),
-                AddresseeRoute::Npc(Some(_))
-            )
+            let addressed = explicit_npc_addressee(&decision, &cast, &party);
+            audit.addressee(&decision, addressed.as_deref());
+            addressed
         } else {
-            false
+            None
         };
+        let addressed_present_person = addressed_actor.is_some();
         if addressed_present_person {
             request.context = rpc::DialogueContext::Social as i32;
         }
+        let observation = is_observation_submission(&request, &reading, addressed_present_person)?;
         // A line that may be spoken to an NPC starts its tidy-up now, so the model's wait overlaps
         // the routing below. Any other route drops it, which cancels the call.
         let mut speech_cleanup = None;
@@ -2144,11 +2419,51 @@ impl Service {
         // scene model opens or closes: that keeps the scene interaction, as it always did.
         let freeform =
             scene_turn && reading.intent == super::approach_model::LineIntent::FreeformAct;
-        let scene_interaction = if scene_turn {
-            self.judge_scene_interaction(&request.text, &party_scene, &available_things)
-                .await
+        // Watching, keeping watch and tracking never act through a scene interaction, so Jev is not
+        // asked for one; an examine may still read a scene item.
+        let scene_interaction = if scene_turn
+            && !(observation && reading.intent != super::approach_model::LineIntent::Examine)
+        {
+            // The listed thing Jev chose for the line names the interaction's target when the
+            // line's own words do not name the scene item exactly ("the label").
+            let jev_target = catalog
+                .iter()
+                .find(|target| !reading.thing.is_empty() && target.name == reading.thing)
+                .and_then(|target| scene_interaction_target(&party_scene, target));
+            self.judge_scene_interaction(
+                &request.text,
+                &party_scene,
+                &available_things,
+                jev_target.as_deref(),
+            )
+            .await
         } else {
             None
+        };
+        let scene_interaction = match interaction_gate(
+            observation,
+            reading.intent,
+            addressed_present_person,
+            scene_interaction.as_ref().map(|(_, option)| *option),
+            scene_interaction
+                .as_ref()
+                .is_some_and(|(target, _)| interaction_names_person(&party_scene, target)),
+        ) {
+            InteractionGate::Keep => scene_interaction,
+            InteractionGate::Drop => {
+                if let Some((_, option)) = &scene_interaction {
+                    audit.act(format!("dropped-{option}"));
+                }
+                None
+            }
+            InteractionGate::Observe => {
+                audit.record("investigation", "observation_intent");
+                return Ok(DialogueReply::Raw(
+                    self.observation_call(credential, &request, &reading, &scene)
+                        .await?,
+                    None,
+                ));
+            }
         };
         if scene_turn
             && finality(request.finality)? == InputFinality::Final
@@ -2157,6 +2472,8 @@ impl Service {
                 .await?
         {
             let (service_id, price_cp, provider_id) = service;
+            audit.act("buy");
+            audit.record("service", "listed_service");
             let committed = self
                 .interaction_call(
                     credential,
@@ -2212,9 +2529,13 @@ impl Service {
         let mut freeform = freeform || hand_over;
         let scene_interaction = scene_interaction
             .filter(|(_, option)| !freeform || freeform_action::keeps_scene_interaction(option));
-        let mut freeform_speech_target = None;
+        let mut freeform_speech_target = addressed_actor.clone();
         let mut pending_freeform_plan = None;
+        // Jev's freeform plan decides whether a person-directed act is answered by that person:
+        // only social contact is (`freeform_social_target`). A theft, a strike or an act on a thing
+        // stays an action even when the line names the person, and the same plan is adjudicated.
         if freeform
+            && scene_interaction.is_none()
             && finality(request.finality)? == InputFinality::Final
             && matches!(
                 context(request.context)?,
@@ -2229,55 +2550,80 @@ impl Service {
             let decision = approach_model
                 .resolve_addressee_with_party(&request.text, &cast, &party, &scene.speaker)
                 .await;
-            if let AddresseeRoute::Npc(Some(actor_id)) = addressee_route(&decision, &cast, &party) {
-                let plan = self
-                    .judged_freeform_plan(credential, &request, &scene)
-                    .await?;
-                let hostile_assault = plan.as_ref().is_some_and(freeform_action::assaults_person);
-                if !hostile_assault {
-                    if plan.is_some() {
-                        freeform = false;
-                        freeform_speech_target = Some(actor_id.clone());
-                        request.context = rpc::DialogueContext::Social as i32;
-                        if let Some(npc_name) = cast
-                            .iter()
-                            .find(|character| character.id == actor_id)
-                            .map(|character| character.name.as_str())
-                        {
-                            let (_, approach_model) = self.npc_voice.hero_identity_models();
-                            match approach_model
-                                .judge_coin_handover(&request.text, npc_name, &public_scene)
-                                .await
-                            {
-                                Ok(Some(handover)) => {
-                                    if let Some(amount_cp) = handover.amount_cp {
-                                        hero_trade = HeroTradeIntent::coin_gift(amount_cp);
-                                    }
-                                }
-                                Ok(None) => {}
-                                Err(reason) => actor::record_audit_line(
-                                    "gameplay.coin_handover",
-                                    format!("COIN_HANDOVER source=unavailable reason={reason:?}"),
-                                ),
+            let explicit = explicit_npc_addressee(&decision, &cast, &party);
+            let plan = self
+                .judged_freeform_plan(credential, &request, &scene)
+                .await?;
+            let social = plan
+                .as_ref()
+                .and_then(|plan| freeform_social_target(plan, explicit.as_deref()))
+                .filter(|actor_id| cast.iter().any(|actor| actor.id == *actor_id));
+            audit.addressee(&decision, social.as_deref().or(explicit.as_deref()));
+            if let Some(plan) = &plan {
+                audit.act(format!("{:?}", plan.act));
+            }
+            if let Some(actor_id) = social {
+                freeform = false;
+                freeform_speech_target = Some(actor_id.clone());
+                request.context = rpc::DialogueContext::Social as i32;
+                if let Some(npc_name) = cast
+                    .iter()
+                    .find(|character| character.id == actor_id)
+                    .map(|character| character.name.as_str())
+                {
+                    let (_, approach_model) = self.npc_voice.hero_identity_models();
+                    match approach_model
+                        .judge_coin_handover(&request.text, npc_name, &public_scene)
+                        .await
+                    {
+                        Ok(Some(handover)) => {
+                            if let Some(amount_cp) = handover.amount_cp {
+                                hero_trade = HeroTradeIntent::coin_gift(amount_cp);
                             }
                         }
+                        Ok(None) => {}
+                        Err(reason) => actor::record_audit_line(
+                            "gameplay.coin_handover",
+                            format!("COIN_HANDOVER source=unavailable reason={reason:?}"),
+                        ),
                     }
-                } else {
-                    pending_freeform_plan = plan;
                 }
+            } else {
+                pending_freeform_plan = plan;
             }
         }
         if freeform && scene_interaction.is_none() {
+            if pending_freeform_plan
+                .as_ref()
+                .is_some_and(freeform_action::assaults_person)
+            {
+                audit.record("fight", "strike_on_person");
+            } else {
+                audit.record("freeform", "freeform_act");
+            }
             return self
                 .freeform_action_call(credential, &request, &scene, pending_freeform_plan)
                 .await;
         }
         if scene_turn && reading.intent == super::approach_model::LineIntent::PhysicalAction {
+            if let Some((_, option)) = &scene_interaction {
+                audit.act(*option);
+                audit.record("interaction", "physical_scene_interaction");
+            } else if reading.physical_kind
+                == Some(super::approach_model::PhysicalActionKind::Attack)
+            {
+                audit.act("attack");
+                audit.record("fight", "physical_attack");
+            } else {
+                audit.record("physical", "physical_action");
+            }
             return self
                 .physical_action_call(credential, &request, &reading, scene_interaction)
                 .await;
         }
         if let Some((target, option)) = scene_interaction {
+            audit.act(option);
+            audit.record("interaction", "scene_interaction");
             return self
                 .interaction_call(credential, &request, &target, option, None, None)
                 .await;
@@ -2287,6 +2633,8 @@ impl Service {
                 .judge_demand(&request.text, &party_scene, &current)
                 .await;
             if let Some(demand) = demand {
+                audit.act(demand.option);
+                audit.record("interaction", "demand");
                 return self
                     .interaction_call(
                         credential,
@@ -2304,6 +2652,7 @@ impl Service {
             && reading.intent == super::approach_model::LineIntent::GameQuestion
             && !merchant_trade_request
         {
+            audit.record("meta", "game_question");
             let response = self
                 .dialogue_call(
                     credential,
@@ -2324,16 +2673,53 @@ impl Service {
             }
             return Err(Status::internal("game question response binding invalid"));
         }
-        if is_observation_submission(&request, &reading, addressed_present_person)? {
+        // Recalling knowledge is an Intelligence check the hero makes (SRD 5.2.1 Study), narrated
+        // from common knowledge and the hero's background; it never searches the scene.
+        if input_finality == InputFinality::Final
+            && reading.intent == super::approach_model::LineIntent::StudyRecall
+            && !addressed_present_person
+        {
+            audit.record("recall", "study_recall");
+            return Ok(DialogueReply::Raw(
+                self.recall_call(credential, &request, &reading, &scene, &catalog)
+                    .await?,
+                None,
+            ));
+        }
+        if observation {
+            audit.record("investigation", "observation_intent");
             return Ok(DialogueReply::Raw(
                 self.observation_call(credential, &request, &reading, &scene)
                     .await?,
                 None,
             ));
         }
+        // An act Jev read as freeform or physical is never answered by whoever happens to be the
+        // scene's default speaker: a declared question that still performs an act is that act.
+        if input_finality == InputFinality::Final
+            && !merchant_trade_request
+            && context(request.context)? == DiscourseContext::Question
+        {
+            if reading.intent == super::approach_model::LineIntent::FreeformAct {
+                audit.record("freeform", "freeform_act_in_question");
+                return self
+                    .freeform_action_call(credential, &request, &scene, None)
+                    .await;
+            }
+            if reading.intent == super::approach_model::LineIntent::PhysicalAction {
+                audit.record("physical", "physical_action_in_question");
+                return self
+                    .physical_action_call(credential, &request, &reading, None)
+                    .await;
+            }
+        }
         request.context = match context_intent {
             super::approach_model::LineIntent::PartyNote => rpc::DialogueContext::Meta as i32,
-            super::approach_model::LineIntent::StudyRecall => rpc::DialogueContext::Meta as i32,
+            // A recall spoken to a present person stays that person's turn; any other recall took
+            // the recall route above.
+            super::approach_model::LineIntent::StudyRecall if !addressed_present_person => {
+                rpc::DialogueContext::Meta as i32
+            }
             super::approach_model::LineIntent::HeroSpeech => {
                 // Jev decides whether the hero line addresses a party hero; no name is matched here.
                 let cast = wire::scene_cast(&scene);
@@ -2412,13 +2798,18 @@ impl Service {
                     private_aside: true,
                     ..
                 } => {
+                    audit.record("meta", "private_aside");
                     return Ok(self
                         .narrated_addressee_reply(&request, PRIVATE_ASIDE_UNAVAILABLE_NARRATION));
                 }
                 AddresseeRoute::Hero { .. } => {
                     request.context = rpc::DialogueContext::PlanOnly as i32;
                 }
-                AddresseeRoute::Unmatched { narration, .. } => {
+                AddresseeRoute::Unmatched {
+                    validation,
+                    narration,
+                } => {
+                    audit.record("meta", validation);
                     return Ok(self.narrated_addressee_reply(&request, narration));
                 }
                 AddresseeRoute::Ambiguous => {
@@ -2456,6 +2847,25 @@ impl Service {
             }
             _ => (None, Vec::new()),
         };
+        if audit.addressee == "none"
+            && let Some(actor_id) = target.as_deref()
+        {
+            audit.addressee = format!("route:{actor_id}");
+        }
+        let dialogue_route = match rpc::DialogueContext::try_from(request.context) {
+            Ok(rpc::DialogueContext::Meta) => "meta",
+            _ => "dialogue",
+        };
+        audit.record(
+            dialogue_route,
+            if merchant_trade_request {
+                "merchant_trade"
+            } else if quote_followup.is_some() {
+                "quote_followup"
+            } else {
+                context_intent.label()
+            },
+        );
         let bytes =
             RawDialogueBytes::new(encode(&request)?, hero_trade).with_picks(trade_pick, bulk_picks);
         let request = match target {
@@ -2581,7 +2991,28 @@ impl Service {
             .check
             .as_ref()
             .ok_or_else(|| Status::internal("observation check receipt absent"))?;
-        let line = if let Some(observation) = super::investigation::observation(scene, check) {
+        let line = if let Some(mut observation) = super::investigation::observation(scene, check) {
+            // A successful Insight read of a person (against their passive Deception) shows their
+            // state of mind: their manner toward this hero and what they want here.
+            if observation.skill == "insight"
+                && observation.succeeded
+                && !observation.repeated
+                && observation.finding.is_none()
+            {
+                let attitude = scene
+                    .cast
+                    .iter()
+                    .find(|person| {
+                        super::investigation::person_target_id(&person.id) == observation.target.id
+                    })
+                    .and_then(|person| {
+                        self.social
+                            .dossier_of(watched_role(person.role), &person.id)
+                    })
+                    .map(|dossier| self.social.standing(member, dossier).attitude.label());
+                observation.finding =
+                    super::investigation::state_of_mind(scene, &observation.target, attitude);
+            }
             let public = observation.public_view();
             let line = self.npc_voice.describe_observation(&public).await;
             let hero = journey::name(
@@ -2635,6 +3066,168 @@ impl Service {
             npc_actor_id: String::new(),
             npc_speaker: String::new(),
         })
+    }
+
+    /// Recalls knowledge: an Intelligence check with the skill Jev chose (SRD 5.2.1 Study: Arcana,
+    /// History, Nature or Religion), committed through the scene's observation offer on the listed
+    /// thing Jev chose or the room, then narrated from common knowledge and the hero's background.
+    /// A scene without an observation offer narrates the background alone. Never empty.
+    async fn recall_call(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        reading: &super::approach_model::LineReading,
+        scene: &super::pack::Scene,
+        catalog: &[super::investigation::Target],
+    ) -> Result<rpc::DialogueResponse, Status> {
+        let member = self.speech_member(credential).await?;
+        let current = self.updates.borrow().clone();
+        let hero_entity = journey::player_entity(member, &current).map_err(actor::unavailable)?;
+        let (hero, hero_index) = table_speaker(current.state(), hero_entity)?;
+        let skill = reading
+            .skill
+            .ok_or_else(|| Status::internal("recall skill missing from Jev reading"))?;
+        let subject = catalog
+            .iter()
+            .find(|target| {
+                target.present && !reading.thing.is_empty() && target.name == reading.thing
+            })
+            .filter(|target| target.id != "room");
+        let target = subject.or_else(|| catalog.iter().find(|target| target.id == "room"));
+        let offers = super::beat_script_runtime::view_offers(&current, member)
+            .map_err(actor::unavailable)?;
+        let mut observation_offer = None;
+        for (kind, _, offer_id) in &offers {
+            if *kind == rpc::GameplayActionKind::ExamineHarborSeal
+                && super::beat_script_runtime::is_observation_offer(&current, offer_id)
+                    .map_err(actor::unavailable)?
+            {
+                observation_offer = Some(offer_id.clone());
+                break;
+            }
+        }
+        freeform_action::publish_hero_line(&self.table_log, &hero, hero_index, &request.text);
+        let mut revision = Some(wire::revision(current.basis().revision));
+        let succeeded = match (observation_offer, target) {
+            (Some(offer_id), Some(target)) => {
+                let action = rpc::SubmitActionRequest {
+                    session_id: request.session_id.clone(),
+                    run_id: request.run_id.clone(),
+                    observed_revision: request.observed_revision.clone(),
+                    operation_id: request.input_id.clone(),
+                    offer_id,
+                    action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
+                    action_choices: vec![
+                        rpc::JourneyChoice {
+                            group_id: "attempt-skill".to_owned(),
+                            option_id: skill.to_owned(),
+                        },
+                        rpc::JourneyChoice {
+                            group_id: "attempt-thing".to_owned(),
+                            option_id: target.id.clone(),
+                        },
+                    ],
+                    ..Default::default()
+                };
+                let (reply, wait) = oneshot::channel();
+                self.actor
+                    .try_submit(actor::Call::Submit {
+                        credential,
+                        request: action,
+                        reply,
+                    })
+                    .map_err(|_| Status::resource_exhausted("gameplay actor queue full"))?;
+                let result = tokio::time::timeout(super::timing::active().reply, wait)
+                    .await
+                    .map_err(|_| {
+                        Status::deadline_exceeded("retain the check operation for lookup")
+                    })?
+                    .map_err(|_| Status::unavailable("gameplay actor stopped"))??;
+                let Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) =
+                    result.outcome
+                else {
+                    return Err(Status::failed_precondition("recall was not committed"));
+                };
+                let Some(rpc::decision_receipt::Outcome::Accepted(accepted)) = receipt.outcome
+                else {
+                    return Err(Status::failed_precondition("recall was refused"));
+                };
+                revision = receipt.revision;
+                let check = accepted
+                    .check
+                    .as_ref()
+                    .ok_or_else(|| Status::internal("recall check receipt absent"))?;
+                Some(check.succeeded)
+            }
+            _ => None,
+        };
+        actor::record_audit_line(
+            "gameplay.recall_attempt",
+            format!(
+                "RECALL source={} skill={skill} subject={:?} check={}",
+                reading.source,
+                subject.map_or("none", |target| target.name.as_str()),
+                match succeeded {
+                    Some(true) => "succeeded",
+                    Some(false) => "failed",
+                    None => "no_offer",
+                },
+            ),
+        );
+        let recall = super::investigation::Recall {
+            hero: hero.clone(),
+            skill: skill.to_owned(),
+            succeeded,
+            words: request.text.clone(),
+            subject: subject.map(|target| target.name.clone()),
+            place: format!("{} {}", scene.title, scene.narration),
+            background: self.hero_background(&current, member, &hero),
+        };
+        let (storyteller, _) = self.npc_voice.hero_identity_models();
+        let line = super::investigation::describe_recall(storyteller, &recall).await;
+        Ok(rpc::DialogueResponse {
+            input_id: request.input_id.clone(),
+            disposition: rpc::DialogueDisposition::Action as i32,
+            confirmation_required: false,
+            confirmation_token: Vec::new(),
+            revision,
+            npc_reply: line,
+            npc_actor_id: String::new(),
+            npc_speaker: String::new(),
+        })
+    }
+
+    /// The speaking hero's public identity text, from the projected sheet. Empty when the sheet
+    /// carries no identity; the recall narration then uses common knowledge alone.
+    fn hero_background(
+        &self,
+        current: &df_model::checkpoint::Checkpoint,
+        member: MemberId,
+        hero: &str,
+    ) -> String {
+        let identity = wire::project_journey(current, LocalDemoRole::Player, member)
+            .map_err(|error| actor::record_unavailable("recall-hero-sheet", &format!("{error:?}")))
+            .ok()
+            .and_then(|projection| match projection.view.audience {
+                Some(rpc::view_message::Audience::Player(player)) => player
+                    .journey
+                    .and_then(|journey| journey.own_character)
+                    .and_then(|character| character.identity),
+                _ => None,
+            });
+        match identity {
+            Some(identity) => super::approach_model::hero_public_facts(
+                hero,
+                &serde_json::json!({
+                    "origin": identity.origin,
+                    "occupation": identity.occupation,
+                    "motivation": identity.motivation,
+                    "backstory": identity.backstory,
+                    "facts": identity.facts,
+                }),
+            ),
+            None => super::approach_model::hero_public_facts(hero, &serde_json::Value::Null),
+        }
     }
 
     /// Puts the hero's typed line on the table as an action row before the interaction resolves,
@@ -3956,6 +4549,21 @@ impl Service {
             }
         }
 
+        if ensure_meta_message(&mut response) {
+            actor::record_audit_line(
+                "gameplay.line_route",
+                format!(
+                    "ROUTE line={} route=meta reason=empty_meta_reply_filled",
+                    response
+                        .input_id
+                        .as_ref()
+                        .and_then(|id| id.value.as_ref())
+                        .filter(|value| value.len() == 16)
+                        .map(|value| journey::hex(value))
+                        .unwrap_or_else(|| "invalid".to_owned())
+                ),
+            );
+        }
         Ok(DialogueCompletion {
             response,
             npc_outcome,
