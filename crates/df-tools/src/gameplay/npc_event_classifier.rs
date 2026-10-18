@@ -193,7 +193,7 @@ pub(super) fn item_choices(room: &SceneNow) -> Vec<(String, String)> {
         room.model
             .offers
             .iter()
-            .map(|offer| (offer.item_id.clone(), offer.name.clone())),
+            .map(|offer| (offer.canonical_item_id(), offer.name.clone())),
     );
     choices.sort_by(|left, right| left.0.cmp(&right.0));
     choices.dedup_by(|left, right| left.0 == right.0);
@@ -216,7 +216,7 @@ fn item_anchors(room: &SceneNow, item_id: &str) -> Vec<String> {
     room.model
         .offers
         .iter()
-        .find(|offer| offer.item_id == item_id)
+        .find(|offer| offer.canonical_item_id() == item_id)
         .map(|offer| {
             std::iter::once(offer.name.clone())
                 .chain(offer.aliases.iter().cloned())
@@ -646,6 +646,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.item_id.as_deref(), Some("item-warm-cloak-lined"));
+    }
+
+    #[test]
+    fn a_legacy_offer_without_an_item_id_uses_its_canonical_item_id_for_consent() {
+        let mut room = room();
+        room.model.offers = vec![super::super::adventure::scene_model::SceneOffer {
+            id: "warm-cloak-lined".to_owned(),
+            item_id: String::new(),
+            seller_id: "merchant".to_owned(),
+            name: "fur-lined cloak".to_owned(),
+            aliases: vec!["lined cloak".to_owned()],
+            description: "A warm fur-lined cloak.".to_owned(),
+            cost_cp: 1_000,
+        }];
+        let choices = items(&room);
+        assert!(choices.iter().any(|(id, _)| id == "item-warm-cloak-lined"));
+        assert!(
+            choice_labels(&choices).contains(&"try_on_permission:item-warm-cloak-lined".to_owned())
+        );
+        assert_eq!(
+            try_on_consent_from_choice(
+                "try_on_permission:item-warm-cloak-lined",
+                "merchant",
+                "marek"
+            ),
+            Some(TryOnConsentEvent {
+                owner_actor_id: "merchant".to_owned(),
+                npc_id: "marek".to_owned(),
+                item_id: "item-warm-cloak-lined".to_owned(),
+            })
+        );
     }
 
     #[test]

@@ -267,7 +267,7 @@ fn a_missing_target_says_so_in_the_world() {
     assert_eq!(resolution.verdict, Verdict::Refused(Refusal::MissingTarget));
     assert_eq!(
         fallback_line(&resolution),
-        "There's nothing like that here to light."
+        "Marek finds nothing like that here to light."
     );
 }
 
@@ -524,8 +524,14 @@ fn checking_my_own_gear_and_counting_coin_use_the_real_inventory() {
     let counted = run(&situation, &coin, "I count the coins in my purse.", 12);
     assert_eq!(
         performance(&counted).revealed.as_deref(),
-        Some("Your purse holds 6 gold pieces.")
+        Some("Marek's purse holds 6 gold pieces.")
     );
+    let line = fallback_line(&counted);
+    assert_eq!(
+        line,
+        "Marek looks at Marek's coin purse. Marek's purse holds 6 gold pieces."
+    );
+    assert!(!line.to_lowercase().contains("your"), "{line}");
     let edge = FreeformPlan {
         sense: Some(Sense::Sight),
         ..plan(
@@ -1505,4 +1511,112 @@ fn a_dungeoneers_pack_kit_row_holds_its_waterskin_and_stacks_are_named_with_thei
     .expect("the catalog is readable");
     assert_eq!(plain.len(), 1);
     assert_eq!(plain[0].id, "pack-chain-mail");
+}
+
+#[test]
+fn wearing_a_cloak_the_owner_permitted_this_hero_to_try_on_is_no_offence() {
+    let mut situation = market_street();
+    situation.things.push(ThingFact {
+        owner_id: Some("marek".to_owned()),
+        ..thing_fact(
+            "item-warm-cloak-wool",
+            "warm wool cloak",
+            "A warm wool cloak for sale from Marek.",
+            true,
+            false,
+        )
+    });
+    let wear = plan(
+        ActKind::Wear,
+        Some(target(&situation, "item-warm-cloak-wool")),
+        Difficulty::None,
+    );
+    // Without consent the owner takes offence, as before.
+    let unconsented = run(
+        &situation,
+        &wear,
+        "I step behind the curtain and try on the warm wool cloak.",
+        12,
+    );
+    assert_eq!(unconsented.consequences.len(), 1);
+    assert_eq!(unconsented.consequences[0].kind, ConsequenceKind::Offence);
+    // With this hero's consent for this exact item, wearing it is permitted.
+    let consented = adjudicate_with_try_on_consents(
+        &situation,
+        &wear,
+        12,
+        fair(3),
+        &["item-warm-cloak-wool".to_owned()],
+    );
+    assert!(matches!(consented.verdict, Verdict::Performed(_)));
+    assert!(consented.consequences.is_empty());
+    assert_eq!(
+        fallback_line(&consented),
+        "Sigrun puts on the warm wool cloak."
+    );
+    // Consent for a different item does not cover the cloak.
+    let other_item = adjudicate_with_try_on_consents(
+        &situation,
+        &wear,
+        12,
+        fair(3),
+        &["item-gloves".to_owned()],
+    );
+    assert_eq!(other_item.consequences.len(), 1);
+    assert_eq!(other_item.consequences[0].kind, ConsequenceKind::Offence);
+}
+
+#[test]
+fn a_greeting_with_no_person_chosen_says_no_one_is_here_to_greet() {
+    let situation = shop();
+    let resolution = run(
+        &situation,
+        &plan(ActKind::ContactFriendly, None, Difficulty::None),
+        "I wave to the nearest stallholder.",
+        12,
+    );
+    assert_eq!(resolution.verdict, Verdict::Refused(Refusal::MissingTarget));
+    assert_eq!(
+        fallback_line(&resolution),
+        "Marek finds no one here to greet."
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jev_target_choices_describe_people_by_role_and_the_hero_by_reflection() {
+    use crate::gameplay::approach_model::tests::{answer, model};
+
+    let situation = market_street();
+    let self_choice = situation
+        .options()
+        .iter()
+        .position(|option| option.id == "Sigrun")
+        .expect("the hero themself is a listed target")
+        + 1;
+    let endpoint = FakeEndpoint::start(vec![
+        answer("o1"), // Sense.
+        answer("o1"), // Sight.
+        answer(&format!("o{self_choice}")),
+        answer("o1"), // No difficulty.
+    ]);
+    let judged = super::plan(
+        &model(&endpoint),
+        "I study my reflection in the fitting mirror.",
+        &situation,
+    )
+    .await
+    .expect("Jev judges the typed line");
+    assert_eq!(judged.act, ActKind::Sense);
+    assert_eq!(
+        judged.target.as_ref().map(|target| target.id.as_str()),
+        Some("Sigrun")
+    );
+    let bodies = endpoint.bodies();
+    let target_criteria = bodies[2]["questions"]["q1"]["criteria"].to_string();
+    assert!(target_criteria.contains("reflection"), "{target_criteria}");
+    assert!(
+        target_criteria.contains("a contact in this place"),
+        "{target_criteria}"
+    );
+    assert!(bodies[0].to_string().contains("hero_appearance"));
 }

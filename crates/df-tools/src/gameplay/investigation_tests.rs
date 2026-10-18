@@ -1075,6 +1075,66 @@ async fn jev_absent_answer_gives_the_absent_target_named_by_the_words() {
     assert_eq!(selected, absent_target(words));
 }
 
+fn merchant_shop_room() -> pack::Scene {
+    let loaded = pack::load_from_bytes(
+        include_bytes!("../../../../content/merchant-shop/pack.json"),
+        include_bytes!("../../../../content/merchant-shop/tuning.json"),
+    )
+    .expect("the merchant shop pack loads");
+    let model = serde_json::from_slice(include_bytes!(
+        "../../../../content/merchant-shop/scene-model.json"
+    ))
+    .expect("the merchant shop scene model");
+    let mut scene = loaded
+        .pack
+        .scenes
+        .into_iter()
+        .find(|scene| scene.key == pack::SceneKey::Room)
+        .expect("the shop has a room scene");
+    scene
+        .setting
+        .as_mut()
+        .expect("the room has a setting")
+        .model = Some(model);
+    scene
+}
+
+#[test]
+fn an_insight_read_names_the_acting_hero_instead_of_the_hero() {
+    let scene = merchant_shop_room();
+    let catalog = targets(&scene, &[]);
+    let marek = catalog
+        .iter()
+        .find(|target| target.name == "Marek")
+        .expect("Marek is a catalog target");
+    let read = state_of_mind_for(&scene, marek, None, "Brakka")
+        .expect("Marek's state of mind is modelled");
+    assert!(read.starts_with("Marek seems friendly"), "{read}");
+    assert!(read.contains("toward Brakka"), "{read}");
+    assert!(!read.contains("the hero"), "{read}");
+}
+
+#[test]
+fn a_present_person_is_choosable_by_role_as_well_as_by_name() {
+    let scene = merchant_shop_room();
+    let catalog = targets(&scene, &[]);
+    let marek = catalog
+        .iter()
+        .find(|target| target.name == "Marek")
+        .expect("Marek is a catalog target");
+    assert!(marek.person);
+    assert!(
+        marek.description.contains("cloth merchant"),
+        "{}",
+        marek.description
+    );
+    assert!(
+        marek.aliases.iter().any(|alias| alias == "cloth merchant"),
+        "{:?}",
+        marek.aliases
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn without_jev_the_target_is_absent_even_when_the_words_name_a_present_thing() {
     use crate::gameplay::approach_model::ApproachModel;
