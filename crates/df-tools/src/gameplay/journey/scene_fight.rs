@@ -1298,7 +1298,7 @@ pub(super) fn close(state: &mut GameState, battle: &Battle) -> Result<(), Reposi
     for actor in battle.combatants() {
         let who = tactical::canonical(state, actor.id())?;
         let health = actor.health();
-        if health.dead && actor.side() == Side::Heroes {
+        if health.dead {
             let label = model::label(DEAD)?;
             if state
                 .resources
@@ -1318,6 +1318,201 @@ pub(super) fn close(state: &mut GameState, battle: &Battle) -> Result<(), Reposi
     }
     state.encounters.clear();
     Ok(())
+}
+
+/// Outcome changes for the current room, derived from committed health, location and the
+/// opening roster. The pre-close state supplies the roster because close removes the tactical
+/// encounter; final health and locations come from state. The scene journal owner records these
+/// before later custody changes. `possessions` contains accepted source inventory by person id.
+pub(in crate::gameplay) fn outcome_changes(
+    before: &GameState,
+    state: &GameState,
+    model: &crate::gameplay::adventure::scene_model::SceneModel,
+    possessions: &std::collections::BTreeMap<
+        String,
+        Vec<crate::gameplay::adventure::scene_model::CarriedPossession>,
+    >,
+) -> Result<Vec<crate::gameplay::adventure::scene_model::SceneChange>, RepositoryError> {
+    use crate::gameplay::adventure::scene_model::{
+        SceneChange, SceneChangeKind, SceneFightOutcome,
+    };
+    if !open(before) || open(state) || !fought(state) {
+        return Ok(Vec::new());
+    }
+    if opening_decision(before).map(|decision| decision.operation)
+        != opening_decision(state).map(|decision| decision.operation)
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    // Only the room that held this fight is affected, never a later room's unrelated cast.
+    if !model.people.iter().any(|person| {
+        person_entity(&person.id).is_ok_and(|id| state.entities.iter().any(|world| world.id == id))
+    }) {
+        return Ok(Vec::new());
+    }
+    let scene_key = super::super::beat_script::with_script(|script| {
+        script.current(state).map(|beat| beat.scene)
+    })?;
+    let present_model = model.for_scene(scene_key);
+    let battle = tactical::read(before)?;
+    let participants = battle
+        .combatants()
+        .iter()
+        .map(|actor| tactical::canonical(before, actor.id()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let heroes = state
+        .characters
+        .iter()
+        .map(|hero| name(state, hero.entity).map(|name| (name, hero.entity)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut changes = Vec::new();
+    for person in &present_model.people {
+        let outcome = if person.role == "hero" {
+            let (_, actor) = heroes
+                .iter()
+                .find(|(name, _)| *name == person.id)
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            if hero_dead(state, *actor) {
+                SceneFightOutcome::Dead
+            } else if value(state, *actor, "unconscious")? != 0
+                || value(state, *actor, "hit-points")? == 0
+            {
+                SceneFightOutcome::Unconscious
+            } else {
+                SceneFightOutcome::Stood
+            }
+        } else {
+            let presence = presence(state, &person.id)?;
+            // A corpse from an earlier fight already had its outcome and inventory committed.
+            if matches!(presence, Presence::Down { .. })
+                && !participants.contains(&person_entity(&person.id)?)
+            {
+                continue;
+            }
+            match presence {
+                Presence::Down { dead: true } => SceneFightOutcome::Dead,
+                Presence::Down { dead: false } => SceneFightOutcome::Unconscious,
+                Presence::Gone => SceneFightOutcome::Fled,
+                Presence::Standing => SceneFightOutcome::Stood,
+            }
+        };
+        // Heroes already own canonical starting-kit inventory; do not create NPC-style copies.
+        let carried = if person.role != "hero"
+            && matches!(
+                outcome,
+                SceneFightOutcome::Dead | SceneFightOutcome::Unconscious
+            ) {
+            possessions
+                .get(&person.id)
+                .cloned()
+                .ok_or(RepositoryError::InvalidCandidate)?
+        } else {
+            Vec::new()
+        };
+        changes.push(SceneChange {
+            entity_id: person.id.clone(),
+            description: format!("{}: fight outcome {:?}.", person.name, outcome),
+            kind: SceneChangeKind::FightEnded {
+                outcome,
+                possessions: carried,
+            },
+        });
+    }
+    Ok(changes)
+}
+
+/// What actual on-stage nonparticipants saw. Killer attribution comes from accepted tactical
+/// outcomes, never the initiating aggressor, the narrator or a guess from the final hit points.
+pub(in crate::gameplay) fn witness_observation(
+    before: &GameState,
+    after: &GameState,
+) -> Result<Option<crate::gameplay::social::fight_witness::Observation>, RepositoryError> {
+    use crate::gameplay::social::fight_witness::{Death, Observation};
+    if !open(before) || open(after) {
+        return Ok(None);
+    }
+    let battle = tactical::read(before)?;
+    let participants = battle
+        .combatants()
+        .iter()
+        .map(|actor| tactical::canonical(before, actor.id()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let witnesses = scene_cast(before)?
+        .into_iter()
+        .filter_map(|person| {
+            match person_entity(&person.id).and_then(|entity| {
+                Ok(!participants.contains(&entity)
+                    && presence(before, &person.id)? == Presence::Standing)
+            }) {
+                Ok(true) => Some(Ok(person.id)),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let opening = opening_decision(after).ok_or(RepositoryError::InvalidCandidate)?;
+    let heroes = after
+        .characters
+        .iter()
+        .filter(|hero| participants.contains(&hero.entity))
+        .map(|hero| hex(hero.owner.as_bytes()))
+        .collect::<Vec<_>>();
+    let mut deaths = Vec::new();
+    for person in scene_cast(before)? {
+        let target = person_entity(&person.id)?;
+        if !participants.contains(&target)
+            || presence(after, &person.id)? != (Presence::Down { dead: true })
+        {
+            continue;
+        }
+        let mut killer = None;
+        for decision in after
+            .decisions
+            .iter()
+            .filter(|decision| decision.revision >= opening.revision)
+        {
+            for outcome in super::accepted(decision)?.combat {
+                if outcome.target_id == target.as_bytes()
+                    && outcome.target_hit_points == 0
+                    && !outcome.knocked_out
+                    && outcome.damage > 0
+                {
+                    killer = after
+                        .characters
+                        .iter()
+                        .find(|hero| outcome.actor_id == hero.entity.as_bytes())
+                        .map(|hero| (hex(hero.owner.as_bytes()), outcome.actor_name));
+                }
+            }
+        }
+        let (killer_member_id, killer_name) = killer.ok_or(RepositoryError::InvalidCandidate)?;
+        deaths.push(Death {
+            person_id: person.id,
+            person_name: person.name,
+            killer_member_id,
+            killer_name,
+        });
+    }
+    let cause = if deaths.is_empty() {
+        aftermath_narration(after)?
+    } else {
+        deaths
+            .iter()
+            .map(|death| format!("{} killed {}.", death.killer_name, death.person_name))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    Ok(Some(Observation {
+        fight_id: hex(opening.operation.as_bytes()),
+        scene: format!(
+            "{:?}",
+            super::super::beat_script_runtime::scene(before)?.key
+        ),
+        cause,
+        heroes,
+        witnesses,
+        deaths,
+    }))
 }
 
 /// The decision entry of a scene fight its foes ended by standing down: the scene-assault action
@@ -1850,7 +2045,7 @@ mod tests {
     }
 
     /// Plays the heroes' turns (attack when they can, otherwise close in) until the fight ends.
-    fn play_out(mut current: Checkpoint, first_operation: u8) -> Checkpoint {
+    pub(super) fn play_out(mut current: Checkpoint, first_operation: u8) -> Checkpoint {
         for operation in first_operation..first_operation + 100 {
             if phase(&current).unwrap() != rpc::JourneyPhase::Combat {
                 return current;

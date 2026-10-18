@@ -117,6 +117,24 @@ pub(crate) struct SceneTheftWitness {
     pub(crate) noticer_id: String,
 }
 
+/// A person's committed state after a scene fight. Mechanics and roster decisions own it.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SceneFightOutcome {
+    Dead,
+    Unconscious,
+    Fled,
+    Stood,
+}
+
+/// One carried object with its exact identity or SRD equipment source. No random treasure.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CarriedPossession {
+    pub(crate) name: String,
+    pub(crate) source: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ScenePerson {
@@ -401,6 +419,11 @@ fn valid_sleight_adjudication(
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum SceneChangeKind {
+    /// A fight's canonical result, including its source-grounded carried objects.
+    FightEnded {
+        outcome: SceneFightOutcome,
+        possessions: Vec<CarriedPossession>,
+    },
     /// Converts one finite catalog offer into a durable, held scene thing.
     /// The offer id remains the ledger key so replay is deterministic.
     Purchased {
@@ -1252,6 +1275,112 @@ impl SceneModel {
         model
     }
 
+    /// Apply an outcome journal entry before later item-custody changes. Reapplying an outcome
+    /// never restores an already taken item or manufactures another instance.
+    fn apply_fight_end(
+        &mut self,
+        person_id: &str,
+        outcome: SceneFightOutcome,
+        possessions: &[CarriedPossession],
+    ) -> Result<(), SceneModelError> {
+        use sha2::{Digest, Sha256};
+        if possessions.len() > 16
+            || possessions
+                .iter()
+                .any(|item| !valid_text(&item.name, 64) || !valid_text(&item.source, 180))
+            || !matches!(
+                outcome,
+                SceneFightOutcome::Dead | SceneFightOutcome::Unconscious
+            ) && !possessions.is_empty()
+        {
+            return Err(SceneModelError::InvalidBounds);
+        }
+        let person = self
+            .people
+            .iter_mut()
+            .find(|person| person.id == person_id)
+            .ok_or(SceneModelError::UnknownPerson)?;
+        person.description = match outcome {
+            SceneFightOutcome::Dead => format!("{} lies dead {}.", person.name, person.position),
+            SceneFightOutcome::Unconscious => {
+                format!("{} lies unconscious {}.", person.name, person.position)
+            }
+            SceneFightOutcome::Fled => format!("{} fled the scene.", person.name),
+            SceneFightOutcome::Stood => {
+                format!(
+                    "{} stands {} after the fight.",
+                    person.name, person.position
+                )
+            }
+        };
+        if outcome == SceneFightOutcome::Fled {
+            // Retain the canonical identity for ownership; for_scene omits it everywhere.
+            person.present_in = vec!["absent".into()];
+        }
+        let position = person.position.clone();
+        let person_name = person.name.clone();
+        if matches!(
+            outcome,
+            SceneFightOutcome::Dead | SceneFightOutcome::Unconscious
+        ) {
+            for thing in &mut self.things {
+                if thing.holder_id.as_deref() == Some(person_id) {
+                    thing.in_use = false;
+                }
+            }
+        }
+        for possession in possessions {
+            let digest = Sha256::digest(format!(
+                "{person_id}\0{}\0{}",
+                possession.source, possession.name
+            ));
+            let id = format!("body-{:x}", digest);
+            if self.things.iter().any(|thing| {
+                thing.id == id
+                    || thing.owner_id.as_deref() == Some(person_id)
+                        && thing.name.eq_ignore_ascii_case(&possession.name)
+            }) {
+                continue;
+            }
+            let detail = format!(
+                "{} carried this {}. It lies {}.",
+                person_name, possession.name, position
+            );
+            self.things.push(SceneThing {
+                id: id.clone(),
+                name: possession.name.clone(),
+                short: possession.name.clone(),
+                detail: detail.clone(),
+                picture_description: possession.name.clone(),
+                closer_look: format!("{} carried this {}.", person_name, possession.name),
+                skill: FindingSkill::Investigation,
+                dc: 10,
+                finding_id: None,
+                clue_fact_id: None,
+                portable: true,
+                value_cp: None,
+                use_effect: "Carry or use the item.".into(),
+                position: position.clone(),
+                owner_id: Some(person_id.into()),
+                in_use: false,
+                in_scene: true,
+                publicly_visible: true,
+                holder_id: None,
+                open: false,
+                lit: false,
+                broken: false,
+                searched_by: Vec::new(),
+                aliases: vec![possession.name.clone()],
+                provenance: SceneItemProvenance {
+                    kind: SceneItemProvenanceKind::AuthoredLocation,
+                    source_id: id,
+                    seller_id: None,
+                },
+            });
+        }
+        Ok(())
+    }
+
     /// The single prompt projection for the immutable model plus every accepted state change.
     pub(crate) fn as_it_is_now(
         &self,
@@ -1438,6 +1567,13 @@ impl SceneModel {
     }
 
     fn apply(&mut self, change: &SceneChange) -> Result<(), SceneModelError> {
+        if let SceneChangeKind::FightEnded {
+            outcome,
+            possessions,
+        } = &change.kind
+        {
+            return self.apply_fight_end(&change.entity_id, *outcome, possessions);
+        }
         if let Some(service) = self
             .services
             .iter()
@@ -1457,7 +1593,9 @@ impl SceneModel {
             .find(|thing| thing.id == change.entity_id)
         {
             match &change.kind {
-                SceneChangeKind::Purchased { .. } | SceneChangeKind::NpcPurchased { .. } => {
+                SceneChangeKind::Purchased { .. }
+                | SceneChangeKind::NpcPurchased { .. }
+                | SceneChangeKind::FightEnded { .. } => {
                     return Err(SceneModelError::Contradiction);
                 }
                 SceneChangeKind::Sold {

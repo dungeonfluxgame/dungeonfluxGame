@@ -46,6 +46,9 @@ use super::adventure::dossier::{
 
 use super::adventure::scene_model::SceneTheftWitness;
 
+#[path = "fight_witness.rs"]
+pub(in crate::gameplay) mod fight_witness;
+
 #[path = "social_scene.rs"]
 mod scene_state;
 
@@ -599,6 +602,9 @@ struct Relationship {
     /// Operation IDs of theft attempts already recorded against this hero.
     #[serde(default)]
     witnessed_thefts: Vec<String>,
+    /// Accepted once per completed fight; retained for replay and the next reply context.
+    #[serde(default)]
+    fight_witnesses: Vec<fight_witness::WitnessRecord>,
     /// Items this NPC, as owner/keeper, has consented for this hero to try on or handle.
     #[serde(default)]
     try_on_consents: Vec<TryOnConsent>,
@@ -636,6 +642,7 @@ impl Relationship {
             influence_failed: false,
             grievances: Vec::new(),
             witnessed_thefts: Vec::new(),
+            fight_witnesses: Vec::new(),
             try_on_consents: Vec::new(),
             mended: 0,
             threat_applied: false,
@@ -951,6 +958,15 @@ impl SocialSnapshot {
             for grievance in &relationship.grievances {
                 bytes = bytes.checked_add(grievance.words.capacity())?;
             }
+            bytes = bytes.checked_add(
+                relationship
+                    .fight_witnesses
+                    .capacity()
+                    .checked_mul(size_of::<fight_witness::WitnessRecord>())?,
+            )?;
+            for record in &relationship.fight_witnesses {
+                bytes = bytes.checked_add(record.retained_heap_bytes()?)?;
+            }
         }
         Some(bytes)
     }
@@ -1017,6 +1033,20 @@ impl SocialLedger {
                             || relationship.grievances.iter().any(|grievance| {
                                 grievance.words.chars().count() > GRIEVANCE_CHARACTERS
                             })
+                            || relationship.fight_witnesses.len() > MAXIMUM_WITNESSED_THEFTS
+                            || relationship.fight_witnesses.iter().any(|record| {
+                                !record.validate()
+                                    || dossier.npc_id.rsplit_once(':').map(|(_, id)| id)
+                                        != Some(record.witness_id.as_str())
+                                    || !record.observation.heroes.contains(&entry.member)
+                            })
+                            || relationship
+                                .fight_witnesses
+                                .iter()
+                                .map(|record| &record.observation.fight_id)
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .len()
+                                != relationship.fight_witnesses.len()
                             || relationship.mended > MENDING_EXCHANGES
                             || relationship.try_on_consents.len() > MAXIMUM_TRY_ON_CONSENTS
                             || relationship.last_subject.len() > 512
@@ -1148,6 +1178,24 @@ impl SocialLedger {
                     .grievances
                     .iter()
                     .map(Grievance::recollection)
+                    .collect()
+            })
+    }
+
+    /// Observed fights are memories, independently of whether this hero wronged the witness.
+    /// Reply composition must place them in witnessed_fights, never in the list of grievances.
+    pub(in crate::gameplay) fn fight_witness_lines(
+        &self,
+        member: MemberId,
+        dossier: &Dossier,
+    ) -> Vec<String> {
+        self.lock()
+            .get(&(member, dossier.npc_id.clone()))
+            .map_or_else(Vec::new, |relationship| {
+                relationship
+                    .fight_witnesses
+                    .iter()
+                    .map(fight_witness::WitnessRecord::recollection)
                     .collect()
             })
     }
@@ -1878,6 +1926,120 @@ impl SocialLedger {
                 });
             }
         }
+    }
+
+    /// Reads the already committed judgement before dispatching Jev during retry/recovery.
+    pub(in crate::gameplay) fn fight_witness_record(
+        &self,
+        fight_id: &str,
+        witness_id: &str,
+    ) -> Option<fight_witness::WitnessRecord> {
+        self.lock()
+            .values()
+            .flat_map(|relationship| &relationship.fight_witnesses)
+            .find(|record| {
+                record.observation.fight_id == fight_id && record.witness_id == witness_id
+            })
+            .cloned()
+    }
+
+    /// Commits one Jev judgement for an actual nonparticipant, shared by every hero who was
+    /// present. A bond grievance attaches only to the identified killer. Replays must match the
+    /// entire saved observation and judgement, and cannot duplicate or rewrite the reaction.
+    pub(in crate::gameplay) fn record_fight_witness(
+        &self,
+        record: &fight_witness::WitnessRecord,
+    ) -> Result<bool, SocialError> {
+        use fight_witness::Reaction;
+        if !record.validate() {
+            return Err(SocialError::Invalid("fight witness record"));
+        }
+        let dossier = self
+            .dossier_for_person(&record.witness_id)
+            .ok_or(SocialError::Invalid("fight witness dossier"))?;
+        let members = record
+            .observation
+            .heroes
+            .iter()
+            .map(|member| {
+                member_from_hex(member).ok_or(SocialError::Invalid("fight witness member"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut relationships = self.lock();
+        // Check every standing before mutating any, including on partial recovery/retry.
+        for member in &members {
+            if let Some(relationship) = relationships.get(&(*member, dossier.npc_id.clone())) {
+                if let Some(saved) = relationship
+                    .fight_witnesses
+                    .iter()
+                    .find(|saved| saved.observation.fight_id == record.observation.fight_id)
+                {
+                    if saved != record {
+                        return Err(SocialError::Invalid("conflicting fight witness replay"));
+                    }
+                } else if relationship.fight_witnesses.len() >= MAXIMUM_WITNESSED_THEFTS {
+                    return Err(SocialError::Invalid("fight witness capacity"));
+                }
+            }
+        }
+        let mut changed = false;
+        for member in members {
+            let relationship = relationships
+                .entry((member, dossier.npc_id.clone()))
+                .or_insert_with(|| Relationship::new(dossier));
+            if relationship
+                .fight_witnesses
+                .iter()
+                .any(|saved| saved.observation.fight_id == record.observation.fight_id)
+            {
+                continue;
+            }
+            relationship.begin_scene(&record.observation.scene);
+            match record.reaction {
+                Reaction::Afraid => relationship.emotional.afraid = EmotionLevel::Much,
+                Reaction::Wary => relationship.emotional.wary = EmotionLevel::Much,
+                Reaction::Resentful => relationship.emotional.resentful = EmotionLevel::Much,
+                // Grief is explicitly retained in the judgement/context, not mislabelled as fear.
+                Reaction::Grieving | Reaction::Unmoved => {}
+            }
+            if let Some(death) = record.grievance_victim.as_ref().and_then(|victim| {
+                record
+                    .observation
+                    .deaths
+                    .iter()
+                    .find(|death| death.person_id == *victim)
+            }) && member_from_hex(&death.killer_member_id) == Some(member)
+            {
+                relationship.record_grievance(
+                    Grievance {
+                        act: GrievanceAct::Wrong,
+                        words: format!("You killed {}, someone I was bound to.", death.person_name)
+                            .chars()
+                            .take(GRIEVANCE_CHARACTERS)
+                            .collect(),
+                    },
+                    false,
+                );
+            }
+            relationship.fight_witnesses.push(record.clone());
+            changed = true;
+        }
+        drop(relationships);
+        // Retry the durable write even when an earlier failed save left this record in memory.
+        self.save()?;
+        if changed {
+            crate::gameplay::actor::record_audit_line(
+                "gameplay.fight_witness",
+                format!(
+                    "FIGHT_WITNESS fight={} witness={} reaction={:?} grievance={} status=committed",
+                    record.observation.fight_id,
+                    record.witness_id,
+                    record.reaction,
+                    record.grievance_victim.is_some()
+                ),
+            );
+        }
+        Ok(changed)
     }
 
     /// Records a hero's assault on this NPC: the NPC keeps it as a wrong in its own recollection,

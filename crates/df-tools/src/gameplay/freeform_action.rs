@@ -2366,6 +2366,52 @@ pub(super) fn apply_consequences(
     recorded
 }
 
+/// A search of a fallen person's carried objects is certain. The caller journals these
+/// ordinary custody changes; neither a die nor narration can create an item.
+pub(super) fn search_body(
+    state: &GameState,
+    model: &SceneModel,
+    person_id: &str,
+    hero_id: &str,
+) -> Result<Vec<super::adventure::scene_model::SceneChange>, RepositoryError> {
+    use super::adventure::scene_model::{SceneChange, SceneChangeKind};
+    if !matches!(
+        journey::scene_fight::presence(state, person_id)?,
+        journey::scene_fight::Presence::Down { .. }
+    ) || journey::scene_fight::open(state)
+        || !model
+            .people
+            .iter()
+            .any(|person| person.id == person_id && person.role != "hero")
+        || !model
+            .people
+            .iter()
+            .any(|person| person.id == hero_id && person.role == "hero")
+    {
+        return Err(RepositoryError::InvalidCandidate);
+    }
+    Ok(model
+        .things
+        .iter()
+        .filter(|thing| {
+            thing.portable
+                && !thing.in_use
+                && (thing.holder_id.as_deref() == Some(person_id)
+                    || thing.in_scene
+                        && thing.owner_id.as_deref() == Some(person_id)
+                        && thing.holder_id.is_none())
+        })
+        .map(|thing| SceneChange {
+            entity_id: thing.id.clone(),
+            description: format!("{hero_id} finds and takes {}.", thing.name),
+            kind: SceneChangeKind::Given {
+                holder_id: hero_id.into(),
+                owner_id: None,
+            },
+        })
+        .collect())
+}
+
 #[cfg(test)]
 #[path = "freeform_action_tests.rs"]
 mod tests;
