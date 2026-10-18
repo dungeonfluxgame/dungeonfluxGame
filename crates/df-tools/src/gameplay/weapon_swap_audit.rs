@@ -79,7 +79,8 @@ fn encounter(archer: bool) -> Battle {
         kind: CreatureKind::Hero,
         abilities,
         armor_class,
-        hit_points: 13,
+        // Orcs have no Dwarven Toughness: 10 Fighter HP + 2 Constitution (67d54be1).
+        hit_points: 12,
         speed_ft: 30,
         weapons,
         masteries,

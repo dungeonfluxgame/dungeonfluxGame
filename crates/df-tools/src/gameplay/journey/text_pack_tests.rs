@@ -122,11 +122,66 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
                 .iter()
                 .find(|scene| scene.key == *key)
                 .unwrap();
+            // a2327cdd and 613839eb replaced the old art and attached authored geography.
+            // Preserve complete parity for the other fields, and pin the new metadata below.
+            let mut expected_view = expected_view.clone();
+            let expected_scene = expected_view.scene.as_mut().unwrap();
+            expected_scene.scene_asset = shipped_scene.asset.clone();
+            if let Some(setting) = &shipped_scene.setting {
+                expected_scene.place = setting.name.clone();
+                expected_scene.location_id = setting.place_id.clone();
+                expected_scene.interior = !setting.exterior;
+                if *key == SceneKey::Inn {
+                    expected_scene.floor = Some(rpc::StageFloor {
+                        feet_mid: 88,
+                        feet_far: 75,
+                        key_from_left: true,
+                        wet: true,
+                    });
+                }
+                if let Some(home) = expected_view
+                    .journey
+                    .as_mut()
+                    .and_then(|journey| journey.home.as_mut())
+                {
+                    home.location_id = setting.place_id.clone();
+                }
+            }
+            if matches!(
+                key,
+                SceneKey::Opening | SceneKey::DialogueSeal | SceneKey::DialogueEscort
+            ) {
+                // 6299d7f2 added source-bound observations of the shipped scene's cast.
+                expected_view.offers.push(rpc::GameplayActionOffer {
+                    offer_id: "journey-1-1".to_owned(),
+                    action_kind: rpc::GameplayActionKind::ExamineHarborSeal as i32,
+                    label: "Look around".to_owned(),
+                    destinations: Vec::new(),
+                    input_groups: vec![rpc::JourneyGroup {
+                        group_id: "finding".to_owned(),
+                        label: "Look around".to_owned(),
+                        options: shipped_scene
+                            .cast
+                            .iter()
+                            .map(|person| rpc::JourneyOption {
+                                option_id: format!("watch-{}", person.id),
+                                label: format!("Watch {}", person.name),
+                                description: format!(
+                                    "Watch {} for a change in expression or manner.",
+                                    person.name
+                                ),
+                                requires_group: String::new(),
+                                requires_options: Vec::new(),
+                            })
+                            .collect(),
+                    }],
+                });
+            }
             let split = !shipped_scene.rules_note.is_empty() && !*rested;
             let tactical_text_changed =
                 matches!(key, SceneKey::Combat | SceneKey::Victory | SceneKey::Defeat);
             if !split && !tactical_text_changed {
-                assert_eq!(&actual, expected_view, "complete view parity for {key:?}");
+                assert_eq!(actual, expected_view, "complete view parity for {key:?}");
             }
             let fixture = previous
                 .pack
@@ -136,7 +191,7 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
                 .unwrap();
             let scene = actual.scene.as_ref().unwrap();
             assert_eq!(scene.title, fixture.title);
-            assert_eq!(scene.scene_asset, fixture.asset);
+            assert_eq!(scene.scene_asset, shipped_scene.asset);
             let journey = actual.journey.as_ref().unwrap();
             assert_eq!(journey.speaker, fixture.speaker);
             assert_eq!(journey.dialogue, fixture.dialogue);
@@ -163,26 +218,29 @@ fn shipped_views_match_previous_text_fixtures_for_every_scene() {
                 text.clone()
             };
             if tactical_text_changed {
-                let expected_text = if *rested {
-                    shipped_scene.narration_rested.as_ref().unwrap()
+                // c6d72482 projects the stored rest prose as separate story/rules fields.
+                // The pack's parser qualifies that legacy text before the view consumes it.
+                let (expected_text, rested_rules) = if *rested {
+                    let (story, rules) = pack::rested_story_and_rules(shipped_scene).unwrap();
+                    (story, Some(rules))
                 } else {
-                    &shipped_scene.narration
+                    (shipped_scene.narration.clone(), None)
                 };
-                assert!(actual.narration.starts_with(expected_text));
+                assert!(actual.narration.starts_with(&expected_text));
                 if *key == SceneKey::Combat && tactical::present(checkpoint.state()) {
                     assert!(scene.rules_note.starts_with(&shipped_scene.rules_note));
                     assert!(scene.rules_note.contains("tactical.cover-centre-line"));
                     assert!(!actual.narration.contains("tactical.cover-centre-line"));
                 } else {
                     assert!(!scene.rules_note.contains("tactical.cover-centre-line"));
-                    assert_eq!(
-                        scene.rules_note,
-                        if *rested {
-                            ""
-                        } else {
-                            &shipped_scene.rules_note
+                    let mut expected_note = shipped_scene.rules_note.clone();
+                    if let Some(rested_rules) = rested_rules {
+                        if !expected_note.is_empty() {
+                            expected_note.push(' ');
                         }
-                    );
+                        expected_note.push_str(&rested_rules);
+                    }
+                    assert_eq!(scene.rules_note, expected_note);
                 }
                 continue;
             }
@@ -427,8 +485,8 @@ fn the_display_lists_the_pack_offer_labels_and_nothing_private() {
         ]
         .map(pack::offer_label)
         .into_iter()
-        // The ending step of a chapter without its own text.
-        .chain(["Settle the errand".to_owned()])
+        // 6299d7f2 added observation offers alongside the authored story choices.
+        .chain(["Settle the errand".to_owned(), "Look around".to_owned()])
         .collect::<Vec<_>>();
         let mut listed = 0;
         for (key, _, checkpoint) in scenes() {
@@ -460,7 +518,8 @@ fn the_display_lists_the_pack_offer_labels_and_nothing_private() {
                     shown,
                     [
                         pack::offer_label(rpc::GameplayActionKind::AskCourier),
-                        pack::offer_label(rpc::GameplayActionKind::EscortCourier)
+                        pack::offer_label(rpc::GameplayActionKind::EscortCourier),
+                        "Look around".to_owned(),
                     ]
                 ),
                 SceneKey::Combat => assert!(shown.is_empty(), "a fight turn is one hero's"),

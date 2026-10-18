@@ -713,12 +713,12 @@ fn an_absent_scene_target_is_described_without_drawing_a_die() {
         let after = interact(&current, member, 30, &target.id, "examine");
         let receipt = accepted(after.state().decisions.last().unwrap()).unwrap();
         assert!(receipt.check.is_none());
-        assert!(
-            living_scene::last_line(after.state())
-                .unwrap()
-                .unwrap()
-                .contains("Nothing like that is here.")
+        // ab1865ef changed the replayed absence line to third-person observation wording.
+        assert_eq!(
+            living_scene::last_line(after.state()).unwrap().unwrap(),
+            "Nothing of that is visible here."
         );
+        assert_eq!(after.state().draws, current.state().draws);
         assert_eq!(phase(&after).unwrap(), phase(&current).unwrap());
         assert_eq!(
             living_scene::snapshot(after.state(), &scene).unwrap(),
@@ -1005,9 +1005,26 @@ fn first_player_projection_contains_committed_room_state_without_a_display_obser
         let Some(rpc::view_message::Audience::Player(player)) = view.audience else {
             panic!("player view");
         };
-        let contents = player.scene.unwrap().scene_contents_json;
+        let projected_scene = player.scene.unwrap();
+        let item = projected_scene.item.as_ref().unwrap();
+        assert_eq!(item.thing_id, model.things[0].id);
+        assert_eq!(item.holder, "Brynn");
+        assert_eq!(
+            item.holder_id,
+            canonical_actor_ref(current.state(), player_entity(member, &current).unwrap()).unwrap()
+        );
+        let contents = projected_scene.scene_contents_json;
         let public: serde_json::Value = serde_json::from_str(&contents).unwrap();
-        assert_eq!(public["things"][0]["holder"], "Brynn");
+        // 7bac72cb moved custody out of the art's thing rows into canonical inventory.
+        let held = public["inventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["item_id"] == model.things[0].id)
+            .unwrap();
+        assert_eq!(held["holder_id"], "Brynn");
+        assert_eq!(held["location"]["held"]["holder_id"], "Brynn");
+        assert_eq!(held["available"], false);
         assert_eq!(public["ways_out"][0]["open"], true);
         assert!(!contents.contains("knowledge"));
         assert!(!contents.contains("finding_id"));

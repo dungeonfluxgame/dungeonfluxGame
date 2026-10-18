@@ -3220,8 +3220,7 @@ fn start_combat(
         return Err(RepositoryError::InvalidCandidate);
     }
     let monster = scene_binding.map_or(entity(BANDIT)?, |binding| binding.entity);
-    let creature =
-        scene_binding.map_or(&df_rules::SRD_521_CREATURES[0], |binding| binding.creature);
+    let enemy_rules = scene_binding.map_or_else(pack::bandit, |binding| binding.creature.rules);
     if scene_binding.is_some() {
         let courier = state
             .entities
@@ -3240,14 +3239,14 @@ fn start_combat(
         });
     }
     for (key, value) in [
-        ("hit-points", i64::from(creature.rules.hit_points)),
-        ("armor-class", i64::from(creature.rules.armor_class)),
-        ("strength", i64::from(creature.rules.abilities[0])),
-        ("dexterity", i64::from(creature.rules.abilities[1])),
-        ("constitution", i64::from(creature.rules.abilities[2])),
-        ("intelligence", i64::from(creature.rules.abilities[3])),
-        ("wisdom", i64::from(creature.rules.abilities[4])),
-        ("charisma", i64::from(creature.rules.abilities[5])),
+        ("hit-points", i64::from(enemy_rules.hit_points)),
+        ("armor-class", i64::from(enemy_rules.armor_class)),
+        ("strength", i64::from(enemy_rules.abilities[0])),
+        ("dexterity", i64::from(enemy_rules.abilities[1])),
+        ("constitution", i64::from(enemy_rules.abilities[2])),
+        ("intelligence", i64::from(enemy_rules.abilities[3])),
+        ("wisdom", i64::from(enemy_rules.abilities[4])),
+        ("charisma", i64::from(enemy_rules.abilities[5])),
         ("second-wind", 0),
         ("unconscious", 0),
         ("prone", 0),
@@ -4631,6 +4630,33 @@ mod tests {
         })
         .collect()
     }
+    fn finish_rest_keeping_dice(mut current: Checkpoint) -> Checkpoint {
+        // b44a9198 made an eligible hero's spend-or-keep decision part of completing a rest.
+        for (index, bytes) in MEMBERS.into_iter().enumerate() {
+            let member = MemberId::from_bytes(&bytes).unwrap();
+            if hit_point_die_offered(current.state(), player_entity(member, &current).unwrap())
+                .unwrap()
+            {
+                current = stage_with_supplier(
+                    &current,
+                    &input(
+                        &current,
+                        member,
+                        210 + index as u8,
+                        "short-rest",
+                        vec![(
+                            model::label("hit-point-die").unwrap(),
+                            model::label("keep").unwrap(),
+                        )],
+                    ),
+                    &mut |_| panic!("keeping a Hit Point Die cannot draw"),
+                )
+                .unwrap();
+            }
+        }
+        assert!(short_rest_completed(current.state()));
+        current
+    }
     pub(super) fn tuning_journey() -> Vec<Checkpoint> {
         if tactical::enabled() {
             let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
@@ -4644,6 +4670,7 @@ mod tests {
                 &mut |_| panic!("rest dice"),
             )
             .unwrap();
+            let rested = finish_rest_keeping_dice(rested);
             let arrived =
                 stage_with_supplier(&rested, &inn_command(&rested, first, 202), &mut |_| {
                     panic!("inn dice")
@@ -4667,7 +4694,9 @@ mod tests {
                         &input(current, member, operation, action, choices),
                         faces,
                     )
-                    .unwrap(),
+                    .unwrap_or_else(|error| {
+                        panic!("{action}: {error:?}; step={:?}", refusal_detail::take())
+                    }),
                 );
             };
         apply(first, 6, "escort-courier", vec![], &mut |_| {
@@ -4706,6 +4735,8 @@ mod tests {
         apply(first, 12, "short-rest", vec![], &mut |_| {
             panic!("rest dice")
         });
+        let rest = checkpoints.pop().unwrap();
+        checkpoints.push(finish_rest_keeping_dice(rest));
         let current = checkpoints.last().unwrap();
         checkpoints.push(
             stage_with_supplier(current, &inn_command(current, first, 13), &mut |_| {
@@ -5107,15 +5138,18 @@ mod tests {
     }
 
     #[test]
-    fn shipped_tuning_reproduces_full_compiled_baseline_journey() {
+    fn baseline_tuning_reproduces_full_compiled_baseline_journey() {
         let baseline = tuning_journey();
         let loaded = pack::load_from_bytes(
-            include_bytes!("../../../../content/harbor-journey/pack.json"),
+            // 613839eb changed the shipped inn asset; tuning parity uses one frozen pack.
+            include_bytes!("fixtures/harbor-journey-pack-baseline.json"),
             include_bytes!("fixtures/harbor-journey-tuning-baseline.json"),
         )
         .unwrap();
         pack::with_test_pack(loaded, || {
-            for (actual, expected) in tuning_journey().iter().zip(&baseline) {
+            let actual = tuning_journey();
+            assert_eq!(actual.len(), baseline.len());
+            for (actual, expected) in actual.iter().zip(&baseline) {
                 assert_eq!(actual.state(), expected.state());
                 assert_eq!(actual.basis(), expected.basis());
             }
@@ -5898,12 +5932,14 @@ mod tests {
         assert!(!combat_victory(defeated.state()).unwrap());
         let completion = super::super::adventure::campaign_completion::terminal_outcome;
         assert!(completion(&defeated).unwrap().is_none());
-        let rested = stage_with_supplier(
+        let started = stage_with_supplier(
             &defeated,
             &input(&defeated, first, 9, "short-rest", vec![]),
             &mut |_| panic!("rest dice"),
         )
         .unwrap();
+        assert!(completion(&started).unwrap().is_none());
+        let rested = finish_rest_keeping_dice(started.clone());
         let outcome = completion(&rested).unwrap().unwrap();
         assert_eq!(
             outcome.result,
@@ -5920,8 +5956,10 @@ mod tests {
 
         let original = defeated.clone();
         let command = input(&defeated, first, 9, "short-rest", vec![]);
-        let rested =
-            stage_with_supplier(&defeated, &command, &mut |_| panic!("rest cannot draw")).unwrap();
+        assert_eq!(
+            stage_with_supplier(&defeated, &command, &mut |_| panic!("rest cannot draw")),
+            Ok(started.clone())
+        );
         assert_rest_preserves_battle(&defeated, &rested);
         for bytes in ENTITIES {
             let who = entity(bytes).unwrap();
@@ -5943,7 +5981,7 @@ mod tests {
         assert_eq!(defeated, original);
         assert_eq!(
             stage_with_supplier(&defeated, &command, &mut |_| panic!("deterministic rest")),
-            Ok(rested.clone())
+            Ok(started)
         );
         assert!(stage_with_supplier(&rested, &command, &mut |_| panic!("stale rest")).is_err());
         // One rest per aftermath: a second rest in the same aftermath is
@@ -7252,6 +7290,14 @@ mod tests {
             })
             .unwrap();
         inn_preserves(&victory, &arrived);
+        // 613839eb added the declared stage floor at the wire projection boundary.
+        let mut expected_scene = inn_scene();
+        expected_scene.floor = Some(rpc::StageFloor {
+            feet_mid: 90,
+            feet_far: 78,
+            key_from_left: false,
+            wet: true,
+        });
         for (role, principal) in [
             (LocalDemoRole::Player, first),
             (LocalDemoRole::Player, second),
@@ -7260,14 +7306,14 @@ mod tests {
             let projected = wire::journey_view(&arrived, role, principal).unwrap();
             match projected.audience.unwrap() {
                 rpc::view_message::Audience::Player(view) => {
-                    assert_eq!(view.scene, Some(inn_scene()));
+                    assert_eq!(view.scene, Some(expected_scene.clone()));
                     assert_eq!(view.journey.unwrap().party.len(), 2);
                     assert!(!view.narration.contains("Vell"));
                     assert!(!view.offers.iter().any(|offer| offer.action_kind
                         == rpc::GameplayActionKind::ChooseHarborScene as i32));
                 }
                 rpc::view_message::Audience::Display(view) => {
-                    assert_eq!(view.scene, Some(inn_scene()));
+                    assert_eq!(view.scene, Some(expected_scene.clone()));
                     assert!(!view.narration.contains("Vell"));
                 }
             }
@@ -7588,6 +7634,7 @@ mod tests {
                         &mut |_| panic!("rest dice"),
                     )
                     .unwrap();
+                    let rested = finish_rest_keeping_dice(rested);
                     for (checkpoint, key) in
                         [(&defeated, "defeat_mech"), (&rested, "defeat_rested")]
                     {
@@ -7612,9 +7659,7 @@ mod tests {
                         let mandatory = prose["tables"][key]["variants"][0]["text"]
                             .as_str()
                             .unwrap();
-                        // Before the rest the rules wording is the scene's own rules note and is
-                        // never joined into the narration; the rested text carries its wording
-                        // inside the story itself.
+                        // 59ee1eba/c6d72482 separate the rested story from its mechanical note.
                         let note = view.scene.as_ref().unwrap().rules_note.as_str();
                         let mut expected = if key == "defeat_mech" {
                             let rules = mandatory.replace("{story}", "");
@@ -7622,8 +7667,14 @@ mod tests {
                             assert_eq!(note, rules);
                             ending.defeat.clone()
                         } else {
-                            assert_eq!(note, "");
-                            format!("{} {mandatory}", ending.defeat)
+                            assert_eq!(
+                                note,
+                                "The party has been defeated. Heroes at 0 HP follow timed death saves; defeat does not restore hit points or held weapons. During the Short Rest each eligible hero chooses whether to spend Hit Point Dice to heal. Eligible heroes regain one use of Second Wind. A stable creature that isn't healed regains 1 Hit Point after 1d4 hours; a dead creature remains dead."
+                            );
+                            format!(
+                                "{} The party was defeated. The party spends an hour catching its breath. That rest does not change the original defeat.",
+                                ending.defeat
+                            )
                         };
                         if approach == "escort-courier" {
                             expected.push(' ');

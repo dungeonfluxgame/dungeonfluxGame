@@ -455,13 +455,12 @@ mod tests {
 
     #[test]
     fn identical_replacement_missing_symlink_and_drop_stay_ambiguous() {
-        // The symlink swap and the root swap (a directory rename while the
-        // record file is open) are Unix-only cases; the other swaps keep
-        // running on Windows.
+        // Windows cannot rename the root while the record is open. Symlinks are tested
+        // there too, unless creating the link itself requires an unavailable privilege.
         #[cfg(unix)]
         let kinds = ["replacement", "missing", "symlink", "drop", "root"];
         #[cfg(not(unix))]
-        let kinds = ["replacement", "missing", "drop"];
+        let kinds = ["replacement", "missing", "symlink", "drop"];
         for kind in kinds {
             let root = root();
             let owner = registration(&root);
@@ -485,11 +484,21 @@ mod tests {
                 if kind == "replacement" {
                     fs::write(&path, &record).unwrap();
                 }
-                #[cfg(unix)]
                 if kind == "symlink" {
                     let target = root.join("foreign");
                     fs::write(&target, &record).unwrap();
+                    #[cfg(unix)]
                     symlink(&target, &path).unwrap();
+                    #[cfg(windows)]
+                    if let Err(error) = std::os::windows::fs::symlink_file(&target, &path) {
+                        if error.kind() == io::ErrorKind::PermissionDenied
+                            || error.raw_os_error() == Some(1314)
+                        {
+                            eprintln!("symlink subcase skipped: creation refused: {error}");
+                            continue;
+                        }
+                        panic!("symlink creation failed: {error}");
+                    }
                 }
             }
             let result = owner.release_file();
