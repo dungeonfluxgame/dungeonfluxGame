@@ -200,7 +200,7 @@ fn print_help() {
          reclaim <seat>               take back the away hero of a seat, including one a phone joined (silent 30 s)\n\
          create <seat> <name>         --choice group=id (repeatable), --identity <JSON>, --identity-choice group=id\n\
          preview <seat>              --appearance <text> --backstory <text>; review returned identity JSON\n\
-         act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id>\n\
+         act <hero> <action> [...]    play one action: --cell c5r6 --target <foe> --weapon <name> --option <id> --knockout yes|no\n\
                                       help-attack: --ally <hero> --target <foe> (SRD 2024 Help, Attack)\n\
                                       scene-assault: --target <scene person> starts a fight in a freeplay scene\n\
          say <hero> <text>            speak one line; [--context question|social|plan|meta|joke]\n\
@@ -548,6 +548,9 @@ fn act_body(positional: &[String], options: &[(String, String)]) -> Result<Value
             .get(3)
             .is_some_and(|choice| choice.eq_ignore_ascii_case("take"))
         && flag("--option").is_none()
+    if let Some(knockout) = flag("--knockout") {
+        body["knockout"] = Value::String(knockout);
+    }
         && let Some(weapon) = flag("--weapon")
     {
         body["option"] = Value::String(weapon);
@@ -1380,6 +1383,19 @@ mod dev_write_request_tests {
         assert_eq!(edit["npc"], "merchant");
         assert_eq!(edit["hero"], "Brynn");
         assert_eq!(edit["value"], "friendly");
+    #[test]
+    fn act_body_includes_knockout_only_when_the_flag_is_given() {
+        let body = act_body(
+            &split_words("act Brakka attack"),
+            &[("--knockout".to_owned(), "no".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(body["knockout"], "no");
+
+        let body = act_body(&split_words("act Brakka attack"), &[]).unwrap();
+        assert!(body.get("knockout").is_none());
+    }
+
         assert!(social_edit_body(&words("social edit merchant Brynn attitude")).is_err());
         assert!(social_edit_body(&words("social edit merchant")).is_err());
 
