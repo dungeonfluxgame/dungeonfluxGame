@@ -89,8 +89,9 @@ pub(in crate::gameplay) fn publish_fight_close(
         return;
     }
     match super::journey::scene_fight::aftermath_narration(after) {
+        // One row per line: the outcome first, then each fate, never one wall of text.
         Ok(line) if !line.is_empty() => {
-            table_log.push(
+            table_log.push_lines(
                 "Narrator",
                 rpc::TableRole::Narrator,
                 0,

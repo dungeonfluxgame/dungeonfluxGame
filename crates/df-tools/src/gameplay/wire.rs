@@ -1343,6 +1343,14 @@ pub(super) fn project_journey(
     if !aftermath.is_empty() {
         narration = aftermath;
     }
+    // While a fight is open the intro and the scene text tell how it began, not the room (B-03).
+    let opening = stage(
+        "view-scene-fight-opening",
+        journey::scene_fight::opening_narration(state),
+    )?;
+    if !opening.is_empty() {
+        narration = opening.replace('\n', " ");
+    }
     let encounter_xp = stage(
         "view-encounter-experience",
         journey::rewards::encounter_experience(state),

@@ -4249,6 +4249,10 @@ impl Service {
             ],
             ..Default::default()
         };
+        // How the fight began is told before anyone acts: its rows are reserved ahead of the
+        // combat rows the owner publishes while it commits, and dropped if the fight is refused.
+        let (lines, audit) = journey::scene_fight::announce(&hero, &plan);
+        let held = self.table_log.reserve_lines(lines.len());
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Submit {
@@ -4288,10 +4292,10 @@ impl Service {
                 actor::record_unavailable("scene-fight-social-save", &format!("{saved:?}"));
             }
         }
-        let (lines, audit) = journey::scene_fight::announce(&hero, &plan);
         actor::record_audit_line("gameplay.scene_fight", audit);
-        for line in &lines {
-            self.table_log.push(
+        for (reservation, line) in held.into_iter().zip(&lines) {
+            self.table_log.push_reserved(
+                reservation,
                 "Narrator",
                 rpc::TableRole::Narrator,
                 0,

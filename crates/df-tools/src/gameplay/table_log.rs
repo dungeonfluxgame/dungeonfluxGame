@@ -482,6 +482,14 @@ impl TableLog {
         }
     }
 
+    /// Reserves the next sequences for the narration lines of an act that is about to be
+    /// submitted (a fight's start, told by its caller off the actor thread): the lines fill the
+    /// reserved sequences afterwards, so they stand on the table before the combat rows the
+    /// submission itself publishes. Dropping a reservation leaves only an empty gap.
+    pub(super) fn reserve_lines(&self, count: usize) -> Vec<TableLogReservation> {
+        (0..count).map(|_| self.reserve()).collect()
+    }
+
     /// Reserves the next sequence before a durable action can publish its checkpoint. If the
     /// action is rejected, replayed or fails, dropping the reservation leaves only a gap.
     pub(super) fn reserve(&self) -> TableLogReservation {
@@ -522,6 +530,21 @@ impl TableLog {
         text: &str,
     ) -> Option<u64> {
         self.push_line(None, (speaker, ""), role, hero_index, kind, (text, None))
+    }
+
+    /// Appends one public row for each non-empty line of a short narration.
+    pub(super) fn push_lines(
+        &self,
+        speaker: &str,
+        role: rpc::TableRole,
+        hero_index: u32,
+        kind: rpc::TableKind,
+        text: &str,
+    ) -> Vec<Option<u64>> {
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| self.push(speaker, role, hero_index, kind, line))
+            .collect()
     }
 
     pub(super) fn push_actor(
@@ -1400,12 +1423,20 @@ pub(super) fn action_lines(
     // keeps its own line even when the same submit carries a reaction's blow.
     let attacking = matches!(kind, Kind::GreatswordAttack | Kind::OpportunityAttack);
     let phrase = if let Some(outcome) = own.filter(|_| attacking) {
+        // An unarmed strike is the attack itself, not a thing held: "makes an unarmed strike",
+        // never "strikes with the unarmed strike".
+        let unarmed = used == "unarmed strike";
         let attack = match attack_action_verb(outcome) {
             AttackActionVerb::Throw => format!("throws the {used}"),
             AttackActionVerb::Shoot => format!("shoots the {used}"),
             AttackActionVerb::Strike if outcome.grazed || !outcome.hit => {
-                format!("swings the {used}")
+                if unarmed {
+                    "swings an unarmed strike".to_owned()
+                } else {
+                    format!("swings the {used}")
+                }
             }
+            AttackActionVerb::Strike if unarmed => "makes an unarmed strike".to_owned(),
             AttackActionVerb::Strike => format!("strikes with the {used}"),
         };
         let result = if outcome.grazed {
@@ -1441,6 +1472,9 @@ pub(super) fn action_lines(
         }
     } else {
         match kind {
+            Kind::GreatswordAttack if used == "unarmed strike" => {
+                "makes an unarmed strike".to_owned()
+            }
             Kind::GreatswordAttack => format!("strikes with the {used}"),
             Kind::SecondWind => "catches a second wind".to_owned(),
             Kind::EndTurn => "ends the turn".to_owned(),
@@ -1470,11 +1504,18 @@ pub(super) fn action_lines(
     let phrase_roll = stabilisation
         .filter(|_| !(attacking && own.is_some()))
         .and_then(crate::table_roll::outcome_roll);
-    let mut phrase_line = Some(ActionLine {
-        speaker: hero.to_owned(),
-        text: phrase,
-        roll: phrase_roll,
-    });
+    // Starting a fight has no hero phrase of its own: the offer's label ("Start a fight") is a
+    // button caption, not the hero's words. The hero's typed line (published by the dialogue
+    // route) or the narrator's fight-start lines tell the act; only the combat rows stand here.
+    let mut phrase_line = if kind == Kind::SceneAssault {
+        None
+    } else {
+        Some(ActionLine {
+            speaker: hero.to_owned(),
+            text: phrase,
+            roll: phrase_roll,
+        })
+    };
     // Lines follow the server's resolution order: the hero's own line stands where the hero's
     // first outcome stands, so a reaction that came before the hero's move is told before it.
     let anchor = combat
@@ -2975,6 +3016,141 @@ mod tests {
                     "Corin",
                     "makes an opportunity attack on Brakka \u{2014} hit, 7 piercing damage, Brakka is down"
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unarmed_strike_is_made_not_struck_with() {
+        let hit = rpc::CombatOutcome {
+            weapon: "unarmed-strike".to_owned(),
+            damage_type: "bludgeoning".to_owned(),
+            ..outcome("Brakka", "Corin", true, 4)
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[hit],
+            "unarmed strike",
+            "",
+            "Attack",
+        );
+        assert_eq!(
+            lines[0].text,
+            "makes an unarmed strike \u{2014} hit, 4 bludgeoning damage"
+        );
+        let missed = rpc::CombatOutcome {
+            weapon: "unarmed-strike".to_owned(),
+            ..outcome("Brakka", "Corin", false, 0)
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[missed],
+            "unarmed strike",
+            "",
+            "Attack",
+        );
+        assert_eq!(lines[0].text, "swings an unarmed strike \u{2014} miss");
+    }
+
+    #[test]
+    fn a_fight_start_carries_no_offer_label_hero_row() {
+        let combat = [
+            rpc::CombatOutcome {
+                kind: rpc::OutcomeKind::Move as i32,
+                actor_name: "Jessa".to_owned(),
+                path: vec![rpc::GridCell { col: 0, row: 0 }],
+                cost_ft: 5,
+                ..Default::default()
+            },
+            outcome("Jessa", "Brakka", false, 0),
+        ];
+        let lines = action_lines(
+            rpc::GameplayActionKind::SceneAssault,
+            "Brakka",
+            &combat,
+            "greatsword",
+            "",
+            "Start a fight",
+        );
+        assert!(
+            lines.iter().all(|line| line.speaker != "Brakka"),
+            "no hero row from the offer label"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.text.contains("starts a fight")),
+            "the offer label is never the hero's line"
+        );
+        // A single-square move is one square, for heroes and foes alike.
+        assert_eq!(lines[0].text, "moves 1 square (5 ft)");
+        assert_eq!(lines[1].text, "misses Brakka");
+    }
+
+    #[test]
+    fn fight_start_narration_reserved_before_the_submission_precedes_its_combat_rows() {
+        let log = TableLog::new();
+        let held = log.reserve_lines(2);
+        // The submission's own combat rows land first in time...
+        log.push(
+            "Jessa",
+            rpc::TableRole::Npc,
+            0,
+            rpc::TableKind::Action,
+            "moves 1 square (5 ft)",
+        );
+        // ...but the narration reserved before it fills the earlier sequences.
+        for (line, reservation) in [
+            "Brakka attacks Corin.",
+            "Jessa joins the fight against Brakka.",
+        ]
+        .into_iter()
+        .zip(held)
+        {
+            log.push_reserved(
+                reservation,
+                "Narrator",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Action,
+                line,
+            );
+        }
+        let rows = log.lines();
+        let texts: Vec<&str> = rows.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Brakka attacks Corin.",
+                "Jessa joins the fight against Brakka.",
+                "moves 1 square (5 ft)",
+            ]
+        );
+    }
+
+    #[test]
+    fn multiline_fight_narration_uses_separate_table_rows() {
+        let log = TableLog::new();
+        let sequences = log.push_lines(
+            "Narrator",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            "The fight is over.\nMarek fled the shop.\nCorin stayed out of the fight.",
+        );
+
+        assert_eq!(sequences.len(), 3);
+        assert_eq!(sequences[1], sequences[0].map(|sequence| sequence + 1));
+        assert_eq!(sequences[2], sequences[1].map(|sequence| sequence + 1));
+        let rows = log.lines();
+        assert_eq!(
+            rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>(),
+            [
+                "The fight is over.",
+                "Marek fled the shop.",
+                "Corin stayed out of the fight.",
             ]
         );
     }

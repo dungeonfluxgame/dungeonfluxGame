@@ -1035,26 +1035,54 @@ pub(in crate::gameplay) fn aftermath_narration(
             every_hero_down = false;
         }
     }
-    let mut narration = if outcomes.is_empty() {
-        "The fight is over.".to_owned()
+    // The outcome leads, briefly, and each fate gets its own line: no wall of text and no
+    // room description (the scene text belongs to the room, not to the fight's end).
+    let summary = if every_hero_down && !outcomes.is_empty() {
+        "The fight is over. Every hero is down."
     } else {
-        format!("{}. The fight is over.", outcomes.join("; "))
+        "The fight is over."
     };
+    let mut lines = vec![summary.to_owned()];
+    lines.extend(outcomes.iter().map(|outcome| format!("{outcome}.")));
     if every_hero_down && !outcomes.is_empty() {
-        let care = if anyone_fled {
-            "The watch arrives and stands guard over the fallen heroes."
+        if anyone_fled {
+            lines.push("The watch arrives and stands guard over the fallen heroes.".to_owned());
         } else if standing_people.is_empty() {
-            "No one is left standing."
+            lines.push("No one is left standing.".to_owned());
         } else {
-            return Ok(format!(
-                "{narration} {} leave the heroes where they fell.",
+            lines.push(format!(
+                "{} leave the heroes where they fell.",
                 standing_people.join(" and ")
             ));
-        };
-        narration.push(' ');
-        narration.push_str(care);
+        }
     }
-    Ok(narration)
+    Ok(lines.join("\n"))
+}
+
+/// The fight-start narration for the open scene fight, rebuilt from the committed state so
+/// every view tells the same start: who turned on the heroes and who fled. Empty when no
+/// scene fight is open. The battle intro shows this, never the room description.
+pub(in crate::gameplay) fn opening_narration(state: &GameState) -> Result<String, RepositoryError> {
+    if !open(state) {
+        return Ok(String::new());
+    }
+    let foes = standing_foes(state)?;
+    let mut lines = if foes.is_empty() {
+        vec!["A fight begins.".to_owned()]
+    } else {
+        let names = foes
+            .iter()
+            .map(|person| person.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        vec![format!("A fight begins: {names} turn on the heroes.")]
+    };
+    for member in pack_cast() {
+        if presence(state, &member.id)? == Presence::Gone {
+            lines.push(format!("{} flees, shouting for the watch.", member.name));
+        }
+    }
+    Ok(lines.join("\n"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1809,7 +1837,7 @@ mod tests {
             let told = aftermath_narration(state).unwrap();
             assert!(told.contains("Marek lies dead"), "{told}");
             assert!(told.contains("Jessa lies dead"), "{told}");
-            assert!(told.ends_with("The fight is over."), "{told}");
+            assert!(told.starts_with("The fight is over."), "{told}");
             let view = wire::journey_view(
                 &over,
                 df_persistence::local_demo_scope::LocalDemoRole::Display,
@@ -1840,7 +1868,7 @@ mod tests {
             assert!(told.contains("Marek fled the shop"), "{told}");
             assert!(told.contains("Corin stayed out of the fight"), "{told}");
             assert!(told.contains("Jessa lies dead"), "{told}");
-            assert!(told.ends_with("The fight is over."), "{told}");
+            assert!(told.starts_with("The fight is over."), "{told}");
             assert!(told.split(". ").count() <= 3, "{told}");
             assert!(!told.contains("compares warm cloaks"), "{told}");
 
@@ -1862,12 +1890,13 @@ mod tests {
             crate::gameplay::actor::publish_fight_close(&log, &active_state, over.state());
             // A replay starts from the already closed checkpoint and cannot republish the line.
             crate::gameplay::actor::publish_fight_close(&log, over.state(), over.state());
+            // The close is told once, one table row per line.
             let close_lines = log
                 .lines()
                 .into_iter()
-                .filter(|line| line.text == told)
+                .map(|line| line.text)
                 .collect::<Vec<_>>();
-            assert_eq!(close_lines.len(), 1);
+            assert_eq!(close_lines, told.lines().collect::<Vec<_>>());
 
             let mut knocked_out_state = over.state().clone();
             let jessa = person_entity("shop-soldier").unwrap();
@@ -1878,7 +1907,37 @@ mod tests {
                 knocked_out.contains("Jessa lies knocked out where they fell"),
                 "{knocked_out}"
             );
-            assert!(knocked_out.ends_with("The fight is over."), "{knocked_out}");
+            assert!(
+                knocked_out.starts_with("The fight is over."),
+                "{knocked_out}"
+            );
+        });
+    }
+
+    #[test]
+    fn the_intro_tells_the_fight_start_and_the_ending_leads_with_the_outcome_in_short_lines() {
+        with_shop(|| {
+            let story = opening();
+            let fight = start(&story, 6, "shop-adventurer", None);
+            let intro = opening_narration(fight.state()).unwrap();
+            assert!(intro.starts_with("A fight begins:"), "{intro}");
+            assert!(intro.contains("Corin"), "{intro}");
+            assert!(intro.contains("Jessa"), "{intro}");
+            assert!(
+                intro.contains("Marek flees, shouting for the watch."),
+                "{intro}"
+            );
+            assert!(!intro.contains("You are inside"), "{intro}");
+
+            let over = play_out(fight, 7);
+            let told = aftermath_narration(over.state()).unwrap();
+            assert!(told.starts_with("The fight is over."), "{told}");
+            assert!(told.lines().count() >= 3, "{told}");
+            assert!(told.lines().all(|line| line.len() <= 70), "{told}");
+            assert!(!told.contains(';'), "{told}");
+            assert!(!told.contains("You are inside"), "{told}");
+            // No fight open and none fought: neither narration exists.
+            assert_eq!(opening_narration(story.state()).unwrap(), "");
         });
     }
 
@@ -1936,16 +1995,16 @@ mod tests {
             let told = aftermath_narration(state).unwrap();
             assert!(told.contains("Marek remains standing"), "{told}");
             assert!(told.contains("Jessa remains standing"), "{told}");
-            assert!(told.ends_with("The fight is over."), "{told}");
+            assert!(told.starts_with("The fight is over."), "{told}");
             let log = crate::gameplay::table_log::TableLog::new();
             crate::gameplay::actor::publish_fight_close(&log, fight.state(), state);
             crate::gameplay::actor::publish_fight_close(&log, state, state);
             assert_eq!(
                 log.lines()
                     .into_iter()
-                    .filter(|line| line.text == told)
-                    .count(),
-                1
+                    .map(|line| line.text)
+                    .collect::<Vec<_>>(),
+                told.lines().collect::<Vec<_>>()
             );
 
             // The replay accepts the closed fight, and nothing is left to stand down.
@@ -2151,7 +2210,10 @@ mod tests {
             }
             // Marek fled to call the watch, so the watch arrives; the heroes stay where they fell.
             let told = aftermath_narration(&state).unwrap();
-            assert!(told.contains("Marek fled the shop;"), "{told}");
+            assert!(
+                told.lines().any(|line| line == "Marek fled the shop."),
+                "{told}"
+            );
             assert!(
                 told.contains("lies unconscious and stable where they fell"),
                 "{told}"
@@ -2164,9 +2226,12 @@ mod tests {
             assert!(told.contains("Vale lies unconscious and stable"), "{told}");
             let log = crate::gameplay::table_log::TableLog::new();
             crate::gameplay::actor::publish_fight_close(&log, fight.state(), &state);
-            let lines = log.lines();
-            assert_eq!(lines.len(), 1);
-            assert_eq!(lines[0].text, told);
+            let lines = log
+                .lines()
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>();
+            assert_eq!(lines, told.lines().collect::<Vec<_>>());
         });
     }
 
@@ -2235,3 +2300,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "scene_fight_tests.rs"]
+mod scene_fight_tests;
