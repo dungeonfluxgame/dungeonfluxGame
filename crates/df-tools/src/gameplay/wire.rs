@@ -792,26 +792,89 @@ fn witnessed_courier_support(
 /// The characters on stage in a scene besides the heroes. `speaking` marks the one whose line
 /// is the scene's current speaker line.
 pub(super) fn scene_cast(scene: &super::pack::Scene) -> Vec<rpc::SceneActor> {
-    use super::pack::CastRole;
     scene
         .cast
         .iter()
-        .map(|actor| rpc::SceneActor {
-            id: actor.id.clone(),
-            name: actor.name.clone(),
-            role: match actor.role {
-                CastRole::Patron => rpc::SceneRole::Patron,
-                CastRole::Antagonist => rpc::SceneRole::Antagonist,
-                CastRole::Contact => rpc::SceneRole::Contact,
-                CastRole::Bystander => rpc::SceneRole::Bystander,
-            } as i32,
-            sprite: actor.sprite.clone(),
-            portrait: actor.portrait.clone(),
-            speaking: !scene.dialogue.is_empty() && actor.name == scene.speaker,
-            live_sprite: String::new(),
+        .map(|actor| {
+            scene_actor(
+                actor,
+                !scene.dialogue.is_empty() && actor.name == scene.speaker,
+            )
         })
         .collect()
 }
+
+fn scene_actor(actor: &super::pack::SceneCastMember, speaking: bool) -> rpc::SceneActor {
+    use super::pack::CastRole;
+    rpc::SceneActor {
+        id: actor.id.clone(),
+        name: actor.name.clone(),
+        role: match actor.role {
+            CastRole::Patron => rpc::SceneRole::Patron,
+            CastRole::Antagonist => rpc::SceneRole::Antagonist,
+            CastRole::Contact => rpc::SceneRole::Contact,
+            CastRole::Bystander => rpc::SceneRole::Bystander,
+        } as i32,
+        sprite: actor.sprite.clone(),
+        portrait: actor.portrait.clone(),
+        speaking,
+        live_sprite: String::new(),
+    }
+}
+
+/// Fighters retain their own depictions when an arena move replaces the place's local cast.
+fn combat_cast(
+    state: &GameState,
+    authored: &super::pack::Scene,
+    combat: Option<&mut rpc::CombatView>,
+) -> Result<Vec<rpc::SceneActor>, RepositoryError> {
+    let mut cast = scene_cast(authored);
+    let Some(combat) = combat.filter(|_| super::journey::scene_fight::open(state)) else {
+        return Ok(cast);
+    };
+    let mut known = super::pack::with_content(|content| {
+        content
+            .scenes
+            .iter()
+            .chain(
+                content
+                    .beat_script
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|script| script.scenes.values()),
+            )
+            .flat_map(|scene| &scene.cast)
+            .map(|actor| scene_actor(actor, false))
+            .collect::<Vec<_>>()
+    });
+    for place in super::place::created(state)?.into_values() {
+        known.extend(
+            place
+                .expand()
+                .map_err(|_| refused("view-combat-cast"))?
+                .cast
+                .iter()
+                .map(|actor| scene_actor(actor, false)),
+        );
+    }
+    for actor in known {
+        let who = super::journey::scene_fight::person_entity(&actor.id)?;
+        let Some(participant) = combat
+            .participants
+            .iter_mut()
+            .find(|participant| participant.participant_id.as_slice() == who.as_bytes())
+        else {
+            continue;
+        };
+        // Creature kind selects mechanics, not the identity of a scene person.
+        participant.portrait.clone_from(&actor.portrait);
+        if !cast.iter().any(|present| present.id == actor.id) {
+            cast.push(actor);
+        }
+    }
+    Ok(cast)
+}
+
 /// Typed semantics of the public scene selected by this same audience projection.
 /// These contain no private clue or mechanical statistics; editable prose is not a contract.
 pub(super) struct PublicJourneyProjection {
@@ -1284,9 +1347,14 @@ pub(super) fn project_journey(
     }
     use super::pack::{self, SceneKey};
     let authored = stage("view-scene", super::beat_script_runtime::scene(state))?;
+    let arena_place = if combat.is_some() && journey::scene_fight::open(state) {
+        stage("view-fight-arena", journey::scene_fight::world_place(state))?
+    } else {
+        None
+    };
     if let Some(view) = combat.as_mut() {
         let world_place = if journey::scene_fight::open(state) {
-            stage("view-fight-arena", journey::scene_fight::world_place(state))?
+            arena_place.clone()
         } else {
             authored
                 .setting
@@ -1496,7 +1564,10 @@ pub(super) fn project_journey(
             floor: None,
         }
     };
-    scene.cast = scene_cast(&authored);
+    scene.cast = combat_cast(state, &authored, journey.combat.as_mut())?;
+    if let Some(place) = arena_place.as_deref() {
+        scene.title = stage("view-fight-title", super::place::name_of(state, place))?;
+    }
     scene.rules_note = rules_note;
     // A chapter's closing scenes are story scenes, not the aftermath of its fight: the screens
     // draw them as the peaceful chapters' resolution, epilogue and end card.
@@ -1900,3 +1971,7 @@ pub(super) fn action_offer_rejection(
     }
     Ok(None)
 }
+
+#[cfg(test)]
+#[path = "wire_combat_tests.rs"]
+mod combat_tests;

@@ -1817,6 +1817,26 @@ fn reaction_prompt(mover: &str, reactor: &str, seconds_remaining: Option<u32>) -
     format!("{reactor} decides: Opportunity attack as {mover} moves{countdown}")
 }
 
+fn participant_live_art(
+    member: &rpc::PartyMemberView,
+    hero: bool,
+    scene: &rpc::GameplayScene,
+    live_faces: &[rpc::LiveFace],
+) -> Option<String> {
+    if hero {
+        live_faces
+            .iter()
+            .find(|face| face.name == member.name)
+            .and_then(|face| crate::presentation::imagery_url(&face.battle_sprite))
+    } else {
+        scene
+            .cast
+            .iter()
+            .find(|actor| actor.name == member.name && actor.portrait == member.portrait)
+            .and_then(|actor| crate::presentation::imagery_url(&actor.live_sprite))
+    }
+}
+
 fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
     let combat = view.journey.combat.as_ref()?;
     let party = view.journey.party.len();
@@ -1862,16 +1882,10 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
             };
             // A hero wears their own picture: the live battle face the server publishes (their
             // canonical cut-out, or its health variant when hurt); the stock seat art only until
-            // one exists (B-08).
-            let live_face = hero
-                .then(|| {
-                    view.journey
-                        .live_faces
-                        .iter()
-                        .find(|face| face.name == member.name)
-                        .and_then(|face| crate::presentation::imagery_url(&face.battle_sprite))
-                })
-                .flatten();
+            // one exists (B-08). Scene fighters likewise receive their own canonical picture on
+            // every view, including art that became ready after the stage mounted (B-17).
+            let live_face =
+                participant_live_art(member, hero, view.scene, &view.journey.live_faces);
             let (figure, portrait) = match live_face {
                 Some(path) => (path.clone(), path),
                 None => (figure, portrait),
@@ -3072,6 +3086,85 @@ fn cell_of((col, row): GridCell) -> Option<Cell> {
 mod tests {
     use super::{Cell, LIVE, has_pending, now_ms};
     use df_protocol::common as rpc;
+
+    #[test]
+    fn a_late_scene_fighter_depiction_reaches_the_next_snapshot() {
+        let member = rpc::PartyMemberView {
+            name: "Jessa".to_owned(),
+            portrait: "portrait-shop-soldier".to_owned(),
+            ..Default::default()
+        };
+        let mut scene = rpc::GameplayScene {
+            cast: vec![rpc::SceneActor {
+                name: member.name.clone(),
+                portrait: member.portrait.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            super::participant_live_art(&member, false, &scene, &[]),
+            None
+        );
+
+        let ready = format!("/gameplay/imagery/{}", "a".repeat(64));
+        scene.cast[0].live_sprite = ready.clone();
+        assert_eq!(
+            super::participant_live_art(&member, false, &scene, &[]),
+            Some(ready)
+        );
+        let mut stage = df_render::battle::Stage::new(
+            df_render::battle::load_embedded("salt-quay")
+                .unwrap()
+                .unwrap(),
+        );
+        let fighter = df_render::battle::Member {
+            id: "jessa".to_owned(),
+            name: member.name.clone(),
+            side: super::Side::Enemy,
+            hit_points: 11,
+            maximum_hit_points: 11,
+            height_m: super::PERSON_HEIGHT_M,
+            figure: None,
+            portrait: None,
+            attack: super::AttackStyle::Melee,
+            voice: None,
+            cell: None,
+            position_sequence: 0,
+            statuses: Vec::new(),
+        };
+        let mut hero = fighter.clone();
+        hero.id = "hero".to_owned();
+        hero.name = "Brakka".to_owned();
+        hero.side = super::Side::Hero;
+        let mut snapshot = df_render::battle::CombatSnapshot {
+            members: vec![hero, fighter],
+            ..Default::default()
+        };
+        let mut feed = df_render::battle::CombatFeed::default();
+        assert!(feed.apply(&mut stage, &snapshot).is_some());
+        stage.skip_to_idle();
+        let cell = stage
+            .tokens()
+            .find(|token| token.name == "Jessa")
+            .unwrap()
+            .cell;
+        let ready = super::participant_live_art(&member, false, &scene, &[]).unwrap();
+        snapshot.members[1].figure = Some(ready.clone());
+        snapshot.members[1].portrait = Some(ready.clone());
+        assert!(feed.apply(&mut stage, &snapshot).is_some());
+        let token = stage.tokens().find(|token| token.name == "Jessa").unwrap();
+        assert_eq!(token.figure.as_deref(), Some(ready.as_str()));
+        assert_eq!(token.portrait.as_deref(), Some(ready.as_str()));
+        assert_eq!(token.cell, cell);
+        assert_eq!(stage.tokens().count(), 2);
+        // A different person's art cannot answer this participant.
+        scene.cast[0].portrait = "portrait-shop-adventurer".to_owned();
+        assert_eq!(
+            super::participant_live_art(&member, false, &scene, &[]),
+            None
+        );
+    }
 
     #[test]
     fn world_floor_centre_is_open_in_the_largest_connected_area() {
