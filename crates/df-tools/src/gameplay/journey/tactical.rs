@@ -9,6 +9,35 @@ use tactical_rules::{
 };
 
 const ENEMY_ENTITIES: [[u8; 16]; 4] = [[0x65; 16], [0x71; 16], [0x72; 16], [0x73; 16]];
+
+/// Created people have canonical, checkpoint-derived bounds in addition to the pack inventory.
+fn add_resource(
+    state: &mut GameState,
+    who: EntityId,
+    name: &str,
+    value: i64,
+) -> Result<(), RepositoryError> {
+    let label = model::label(name)?;
+    if let Some(constraint) = super::scene_fight::created_resources(state)?
+        .into_iter()
+        .find(|constraint| constraint.owner == who && constraint.resource == label)
+    {
+        if value < constraint.minimum || value > constraint.maximum {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        state.resources.push(ResourceState {
+            owner: who,
+            resource: label,
+            value,
+            minimum: constraint.minimum,
+            maximum: constraint.maximum,
+            source: constraint.source,
+        });
+        Ok(())
+    } else {
+        super::add_resource(state, who, name, value)
+    }
+}
 // This persisted revision also pins the enemy reaction policy for deterministic fight replay.
 const TACTICAL_SOURCE_REVISION_LEGACY_POLICY: &str = tactical_rules::SOURCE_REVISION;
 const TACTICAL_SOURCE_REVISION_OPPORTUNITY_POLICY: &str =
@@ -2027,9 +2056,14 @@ fn default_knockout(state: &GameState, battle: &Battle, target: u32, usage: &Att
         return false;
     }
     (usage.weapon == Weapon::UnarmedStrike && declared_target(state, battle) == Some(target))
-        || battle
-            .actor(target)
-            .is_ok_and(|target| person_kind(target.spec().kind))
+        || battle.actor(target).is_ok_and(|target| {
+            person_kind(target.spec().kind)
+                || (matches!(
+                    target.spec().kind,
+                    CreatureKind::Bandit | CreatureKind::Cultist
+                ) && canonical(state, target.id())
+                    .is_ok_and(|who| super::scene_fight::is_person(state, who)))
+        })
 }
 /// The declared target of a scene assault that has just started: the first foe
 /// (the person the fight was started against), while no hero has acted yet.
@@ -6814,6 +6848,20 @@ pub(super) mod tests {
             assert!(person_kind(CreatureKind::Scout));
             assert!(person_kind(CreatureKind::Commoner));
             assert!(!person_kind(CreatureKind::Cultist));
+            // A scene person keeps the person default even when their selected SRD profile
+            // is Bandit. A generated encounter creature keeps its existing default above.
+            let who = canonical(&state, bandit).unwrap();
+            let person = state
+                .entities
+                .iter_mut()
+                .find(|entity| entity.id == who)
+                .unwrap();
+            person.definition = model::content(super::super::scene_fight::PERSON).unwrap();
+            person.identity_revision = model::label("scene-person-market-street-wenna-1").unwrap();
+            unarmed.weapon = Weapon::Greatsword;
+            assert!(default_knockout(&state, &brawl, bandit, &unarmed));
+            unarmed.ranged = true;
+            assert!(!default_knockout(&state, &brawl, bandit, &unarmed));
         });
     }
 

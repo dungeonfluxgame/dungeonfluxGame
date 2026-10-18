@@ -99,6 +99,7 @@ pub(in crate::gameplay) fn people_slot() -> Value {
             "gender": "he",
             "wants": "Load the wagon before dusk.",
             "attitude": "friendly",
+            "stat_block": "commoner",
             "knowledge": [
                 "The northern wagons leave from this street.",
                 "Merchants gather here before dawn.",
@@ -113,6 +114,7 @@ pub(in crate::gameplay) fn people_slot() -> Value {
             "gender": "she",
             "wants": "Sell the saffron before it spoils.",
             "attitude": "indifferent",
+            "stat_block": "commoner",
             "knowledge": [
                 "Spice stalls line the east side.",
                 "The watch walks the street at noon.",
@@ -201,6 +203,67 @@ fn a_valid_answer_becomes_a_place_with_a_way_back_that_expands_to_a_valid_scene_
     );
     // The expansion is deterministic: the same record always reads back the same place.
     assert_eq!(record.expand().unwrap().model, expanded.model);
+}
+
+#[test]
+fn created_people_choose_only_supported_srd_person_blocks_and_old_records_default_to_commoners() {
+    use crate::gameplay::place::PersonStatBlock;
+    use df_rules::tactical::{Cell, CombatantSpec};
+
+    let allowed = output_schema()["people"]["items"]["properties"]["stat_block"]["enum"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(allowed.len(), PersonStatBlock::ALL.len());
+    for block in PersonStatBlock::ALL {
+        let id = block.srd_id();
+        assert!(allowed.contains(&json!(id)));
+        let record = with(|_, people, _| people[0]["stat_block"] = json!(id)).unwrap();
+        let cast = record.expand().unwrap().cast;
+        assert_eq!(cast[0].stat_block.as_deref(), Some(id));
+        let spec = CombatantSpec::creature(3, id, Cell(0, 0), 0).unwrap();
+        assert_eq!(spec.kind.srd_id(), Some(id));
+    }
+    for unsupported in ["noble", "veteran", "wolf", "invented-guard", "Guard", ""] {
+        assert_eq!(
+            with(|_, people, _| people[0]["stat_block"] = json!(unsupported)).unwrap_err(),
+            CreationError::Invalid("people_json"),
+            "{unsupported} cannot enter the person schema"
+        );
+    }
+    for missing in [Value::Null, json!(false), json!(15)] {
+        assert!(with(|_, people, _| people[0]["stat_block"] = missing).is_err());
+    }
+    assert_eq!(
+        with(|_, people, _| {
+            people[0].as_object_mut().unwrap().remove("stat_block");
+        })
+        .unwrap_err(),
+        CreationError::Invalid("stat_block")
+    );
+
+    // Recovery reads the original record shape, without asking a model to supply new rules.
+    let mut old = serde_json::to_value(built()).unwrap();
+    for person in old["people"].as_array_mut().unwrap() {
+        person.as_object_mut().unwrap().remove("stat_block");
+    }
+    let record: PlaceRecord = serde_json::from_value(old.clone()).unwrap();
+    record.validate().unwrap();
+    assert!(
+        record
+            .people
+            .iter()
+            .all(|person| person.stat_block.is_none())
+    );
+    assert!(
+        record
+            .expand()
+            .unwrap()
+            .cast
+            .iter()
+            .all(|person| { person.stat_block.as_deref() == Some("commoner") })
+    );
+    assert_eq!(serde_json::to_value(record).unwrap(), old);
 }
 
 #[test]

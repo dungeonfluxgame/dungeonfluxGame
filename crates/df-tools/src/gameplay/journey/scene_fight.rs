@@ -57,6 +57,47 @@ fn pack_cast() -> Vec<pack::SceneCastMember> {
     })
 }
 
+/// Canonical created people, including people in places the party has since left. Their combat
+/// resources must remain admissible after travel and recovery, without a live scene registry.
+fn created_cast(state: &GameState) -> Result<Vec<pack::SceneCastMember>, RepositoryError> {
+    use crate::gameplay::place;
+    let places = place::created(state)?;
+    if places.len() > place::MAXIMUM_CREATED_PLACES {
+        return Err(RepositoryError::Capacity);
+    }
+    let mut known = pack_cast();
+    let mut created = Vec::new();
+    for record in places.into_values() {
+        record.validate().map_err(bad)?;
+        for person in record.expand().map_err(bad)?.cast {
+            if known.iter().any(|member| member.id == person.id) {
+                return Err(RepositoryError::InvalidCandidate);
+            }
+            known.push(person.clone());
+            created.push(person);
+        }
+    }
+    Ok(created)
+}
+
+fn cast_in(state: &GameState) -> Result<Vec<pack::SceneCastMember>, RepositoryError> {
+    let mut cast = pack_cast();
+    cast.extend(created_cast(state)?);
+    Ok(cast)
+}
+
+/// The current place's original cast, including people who fled or fell. The runtime scene
+/// filters those people out for conversation, but fight narration/validation still needs them.
+fn scene_cast(state: &GameState) -> Result<Vec<pack::SceneCastMember>, RepositoryError> {
+    let scene = super::super::beat_script_runtime::scene(state)?;
+    if let Some(setting) = scene.setting
+        && let Some(record) = crate::gameplay::place::created(state)?.remove(&setting.place_id)
+    {
+        return Ok(record.expand().map_err(bad)?.cast);
+    }
+    Ok(pack::scene(scene.key).cast)
+}
+
 /// The SRD 5.2.1 creature a stat block id names.
 pub(in crate::gameplay) fn creature_for(
     stat_block: Option<&str>,
@@ -68,8 +109,8 @@ pub(in crate::gameplay) fn creature_for(
         .find(|creature| creature.id == id)
 }
 
-/// Every scene person who can be fought, with the creature they fight as. The resource bounds of
-/// their entities derive from this list, so it is the same for every checkpoint of a pack.
+/// Authored people and their SRD profiles, for the pack's static resource inventory. Call
+/// `combatants_in` for the full checkpoint inventory, including created places.
 pub(super) fn combatants() -> Vec<(String, &'static df_rules::SrdCreature)> {
     pack_cast()
         .into_iter()
@@ -77,6 +118,71 @@ pub(super) fn combatants() -> Vec<(String, &'static df_rules::SrdCreature)> {
             creature_for(member.stat_block.as_deref()).map(|creature| (member.id, creature))
         })
         .collect()
+}
+
+/// All fightable identities of this checkpoint, in stable pack/created-place order. Roster
+/// selection still uses only the current scene; this inventory also retains past combatants.
+pub(super) fn combatants_in(
+    state: &GameState,
+) -> Result<Vec<(String, &'static df_rules::SrdCreature)>, RepositoryError> {
+    Ok(cast_in(state)?
+        .into_iter()
+        .filter_map(|member| {
+            creature_for(member.stat_block.as_deref()).map(|creature| (member.id, creature))
+        })
+        .collect())
+}
+
+/// Additional inventory derived from bounded, validated place records, never from stored resource
+/// values. Checkpoint/command/recovery inventories must include these beside authored resources.
+pub(super) fn created_resources(
+    state: &GameState,
+) -> Result<Vec<ResourceConstraint>, RepositoryError> {
+    let authored = combatants();
+    let mut resources = Vec::new();
+    for (person, creature) in combatants_in(state)? {
+        if authored.iter().any(|(id, _)| *id == person) {
+            continue;
+        }
+        let owner = person_entity(&person)?;
+        let spec =
+            tactical_rules::CombatantSpec::creature(3, creature.id, tactical_rules::Cell(0, 0), 0)
+                .map_err(bad)?;
+        for (name, minimum, maximum) in [
+            ("hit-points", 0, i64::from(spec.hit_points)),
+            (
+                "armor-class",
+                i64::from(spec.armor_class.saturating_sub(2)),
+                i64::from(spec.armor_class),
+            ),
+            ("strength", 1, 20),
+            ("dexterity", 1, 20),
+            ("constitution", 1, 20),
+            ("intelligence", 1, 20),
+            ("wisdom", 1, 20),
+            ("charisma", 1, 20),
+            ("second-wind", 0, i64::from(pack::second_wind().uses_max)),
+            ("hit-point-dice", 0, 0),
+            ("short-rest-choice", 0, 0),
+            ("short-rest-die-roll", 0, 0),
+            ("healer-kit-uses", 0, 0),
+            ("unconscious", 0, 1),
+            ("prone", 0, 1),
+            ("held-weapon", 0, 1),
+            ("action-used", 0, 1),
+            ("bonus-used", 0, 1),
+            ("dead", 0, 1),
+        ] {
+            resources.push(ResourceConstraint {
+                owner,
+                resource: model::label(name)?,
+                minimum,
+                maximum,
+                source: rule()?,
+            });
+        }
+    }
+    Ok(resources)
 }
 
 /// The stable world entity of a scene person.
@@ -103,7 +209,8 @@ fn person_of(world: &WorldEntity) -> Option<&str> {
 /// The name of a scene person's entity, for logs and views.
 pub(super) fn person_name(state: &GameState, who: EntityId) -> Option<String> {
     let id = person_of(state.entities.iter().find(|world| world.id == who)?)?;
-    pack_cast()
+    cast_in(state)
+        .ok()?
         .into_iter()
         .find(|member| member.id == id)
         .map(|member| member.name)
@@ -178,7 +285,7 @@ pub(in crate::gameplay) fn standing_foes(
         return Ok(Vec::new());
     }
     let battle = tactical::read(state)?;
-    let cast = pack_cast();
+    let cast = cast_in(state)?;
     let mut foes = Vec::new();
     for id in battle.initiative_order() {
         let actor = battle.actor(*id).map_err(bad)?;
@@ -997,11 +1104,20 @@ pub(in crate::gameplay) fn aftermath_narration(
     let mut outcomes = Vec::new();
     let mut anyone_fled = false;
     let mut standing_people = Vec::new();
-    for member in pack_cast() {
+    let scene = super::super::beat_script_runtime::scene(state)?;
+    for member in scene_cast(state)? {
         match presence(state, &member.id)? {
             Presence::Gone => {
                 anyone_fled = true;
-                outcomes.push(format!("{} fled the shop", member.name));
+                outcomes.push(
+                    if scene.setting.as_ref().is_some_and(|setting| {
+                        setting.kind == crate::gameplay::adventure::setting::SettingKind::Shop
+                    }) {
+                        format!("{} fled the shop", member.name)
+                    } else {
+                        format!("{} fled the scene", member.name)
+                    },
+                );
             }
             Presence::Down { dead: true } => outcomes.push(format!("{} lies dead", member.name)),
             Presence::Down { dead: false } => {
@@ -1077,7 +1193,7 @@ pub(in crate::gameplay) fn opening_narration(state: &GameState) -> Result<String
             .join(", ");
         vec![format!("A fight begins: {names} turn on the heroes.")]
     };
-    for member in pack_cast() {
+    for member in scene_cast(state)? {
         if presence(state, &member.id)? == Presence::Gone {
             lines.push(format!("{} flees, shouting for the watch.", member.name));
         }
@@ -1148,7 +1264,7 @@ pub(in crate::gameplay) fn encounters_admissible(
         refusal_detail::note("scene-fight-battle");
         return Ok(false);
     }
-    let known = pack_cast();
+    let known = scene_cast(state)?;
     for participant in &state.encounters[0].participants {
         if state
             .characters
@@ -1491,6 +1607,337 @@ mod tests {
             .filter(|item| item.origin.entry.as_str() == "gold-piece")
             .map(|item| item.quantity)
             .collect()
+    }
+
+    fn with_created_shop(run: impl FnOnce()) {
+        use crate::gameplay::{
+            adventure::{RulesMode, record, shop},
+            startup_configuration::ContentRating,
+        };
+        let generated = shop::generate(42, RulesMode::Standard, ContentRating::default()).unwrap();
+        let documents = generated.documents(true).unwrap();
+        let (loaded, _) = record::reload(&documents).unwrap();
+        pack::with_test_pack(loaded, run);
+    }
+
+    fn created_street(legacy: bool) -> Checkpoint {
+        use crate::gameplay::{place, place_creation};
+        let story = opening();
+        let scene = beat_script_runtime::scene(story.state()).unwrap();
+        let setting = scene.setting.as_ref().unwrap();
+        let mut request = place_creation::tests::request();
+        request.origin_id = setting.place_id.clone();
+        request.origin_name = setting.name.clone();
+        request.time_of_day = setting.model.as_ref().unwrap().time_of_day.clone();
+        request.weather = setting.model.as_ref().unwrap().weather.clone();
+        let mut record = place_creation::build(
+            &request,
+            &place_creation::tests::place_slot().to_string(),
+            &place_creation::tests::people_slot().to_string(),
+            &place_creation::tests::things_slot().to_string(),
+        )
+        .unwrap();
+        if legacy {
+            let mut old = serde_json::to_value(&record).unwrap();
+            for person in old["people"].as_array_mut().unwrap() {
+                person.as_object_mut().unwrap().remove("stat_block");
+            }
+            record = serde_json::from_value(old).unwrap();
+        } else {
+            record.people[1].stat_block = Some(place::PersonStatBlock::Guard);
+        }
+        place::plan(
+            &story,
+            "Brynn",
+            OperationId::from_bytes(&[40; 16]).unwrap(),
+            &setting.place_id,
+            place::JOURNEY_EXIT,
+            &record.place_id,
+            Some(&record),
+        )
+        .map(|planned| planned.candidate)
+        .unwrap_or_else(|error| match error {
+            place::PlaceFailure::Refused(reason) => panic!("created street refused: {reason:?}"),
+            place::PlaceFailure::State(error) => panic!("created street state: {error:?}"),
+        })
+    }
+
+    /// Exercise the staged roster through the real rules boundary. Enemies pass in this fixture;
+    /// hero moves and blows use legal SRD actions, with every draw retained for exact replay.
+    fn resolve_created_battle(
+        mut battle: Battle,
+        replay: Option<&[Vec<ActualDraw>]>,
+    ) -> (Battle, Vec<Vec<ActualDraw>>) {
+        use tactical_rules::{Action, AttackSpend, AttackUse, DrawBinding, RuleError, Weapon};
+        let source = rule().unwrap();
+        let mut recorded = Vec::new();
+        for sequence in 50..150 {
+            if battle.finished() {
+                return (battle, recorded);
+            }
+            let id = battle
+                .reaction_offers()
+                .first()
+                .copied()
+                .unwrap_or_else(|| battle.active_actor().unwrap());
+            let actor = battle.actor(id).unwrap();
+            let usage = AttackUse {
+                weapon: Weapon::Greatsword,
+                ranged: false,
+                hands: 2,
+                finesse_dexterity: false,
+                knockout: true,
+                savage_attacker: false,
+                use_mastery: false,
+            };
+            let action = if !battle.reaction_offers().is_empty() {
+                Action::Opportunity { attack: None }
+            } else if actor.side() == Side::Enemies || actor.budget().action_used {
+                Action::EndTurn
+            } else if let Some(target) = battle.legal_targets(id, usage).unwrap().first() {
+                Action::Attack {
+                    target: *target,
+                    weapon: usage,
+                    spend: AttackSpend::Action,
+                }
+            } else {
+                let foe = battle
+                    .combatants()
+                    .iter()
+                    .find(|actor| actor.side() == Side::Enemies && !actor.health().incapacitated())
+                    .unwrap();
+                let nearest = battle
+                    .reachable_cells(id)
+                    .unwrap()
+                    .into_iter()
+                    .min_by_key(|cell| cell.distance(foe.cell()))
+                    .unwrap();
+                if nearest == actor.cell() {
+                    Action::EndTurn
+                } else {
+                    Action::Move(battle.shortest_path(id, nearest, None).unwrap())
+                }
+            };
+            let operation = OperationId::from_bytes(&[sequence; 16]).unwrap();
+            let mut draws = replay.map_or_else(Vec::new, |recorded_actions| {
+                recorded_actions
+                    .get(recorded.len())
+                    .expect("recorded action draws")
+                    .clone()
+            });
+            loop {
+                let binding = DrawBinding {
+                    operation,
+                    resolution: ResolutionId::from_bytes(operation.as_bytes()).unwrap(),
+                    window: WindowId::from_bytes(operation.as_bytes()).unwrap(),
+                    source: &source,
+                    next_ordinal: 0,
+                };
+                match tactical_rules::resolve(&battle, id, &action, binding, &draws) {
+                    Ok(resolution) => {
+                        battle = resolution.battle;
+                        break;
+                    }
+                    Err(RuleError::MissingDraw { sides }) => {
+                        assert!(replay.is_none(), "a replay must not roll fresh dice");
+                        draw(operation, sides, &mut draws, &mut |sides| {
+                            Ok(if sides == 20 { 18 } else { sides })
+                        })
+                        .unwrap();
+                    }
+                    Err(error) => panic!("created person combat action {action:?}: {error:?}"),
+                }
+            }
+            recorded.push(draws);
+        }
+        panic!("the created-place fight did not resolve in a hundred rules actions");
+    }
+
+    #[test]
+    fn created_place_people_have_canonical_assault_offers_rosters_and_srd_resource_bounds() {
+        with_created_shop(|| {
+            let street = created_street(false);
+            let state = street.state();
+            let scene = beat_script_runtime::scene(state).unwrap();
+            assert_eq!(
+                offered_targets(&street, native::first()).unwrap(),
+                [
+                    ("market-street-hobb".to_owned(), "Hobb".to_owned()),
+                    ("market-street-wenna".to_owned(), "Wenna".to_owned()),
+                ]
+            );
+            assert!(attackable(state, &scene, "Perrin").unwrap().is_none());
+            assert!(attackable(state, &scene, "Marek").unwrap().is_none());
+            let hobb = attackable(state, &scene, "Hobb").unwrap().unwrap();
+            assert_eq!(hobb.stat_block.as_deref(), Some("commoner"));
+            let plan = plan_with(state, &scene, "Hobb", &|_| Attitude::Indifferent).unwrap();
+            assert_eq!(ids(&plan.joiners), ["market-street-wenna"]);
+            let friendly = plan_with(state, &scene, "Hobb", &|_| Attitude::Friendly).unwrap();
+            assert_eq!(ids(&friendly.out), ["market-street-wenna"]);
+            let other = plan_with(state, &scene, "Wenna", &|_| Attitude::Hostile).unwrap();
+            assert_eq!(ids(&other.fleers), ["market-street-hobb"]);
+            let people = combatants_in(state).unwrap();
+            assert!(
+                people
+                    .iter()
+                    .any(|(id, source)| id == &hobb.id && source.id == "commoner")
+            );
+            let bounds = created_resources(state).unwrap();
+            assert_eq!(bounds.len(), 2 * 19);
+            for (id, block) in [
+                ("market-street-hobb", "commoner"),
+                ("market-street-wenna", "guard"),
+            ] {
+                let entity = person_entity(id).unwrap();
+                let source = creature_for(Some(block)).unwrap();
+                assert_eq!(
+                    bounds
+                        .iter()
+                        .find(|bound| bound.owner == entity
+                            && bound.resource.as_str() == "hit-points")
+                        .unwrap()
+                        .maximum,
+                    i64::from(source.rules.hit_points)
+                );
+            }
+            // The same committed place and choices create the same plan without a provider.
+            let recovered = native::persisted(&street);
+            assert_eq!(created_resources(recovered.state()).unwrap(), bounds);
+            assert_eq!(
+                plan_with(
+                    recovered.state(),
+                    &beat_script_runtime::scene(recovered.state()).unwrap(),
+                    "Hobb",
+                    &|_| Attitude::Indifferent
+                )
+                .unwrap(),
+                plan,
+            );
+        });
+    }
+
+    #[test]
+    fn legacy_created_people_stage_commoner_combat_with_deterministic_snapshots() {
+        with_created_shop(|| {
+            for legacy in [true, false] {
+                let street = created_street(legacy);
+                let scene = beat_script_runtime::scene(street.state()).unwrap();
+                let plan =
+                    plan_with(street.state(), &scene, "Wenna", &|_| Attitude::Indifferent).unwrap();
+                assert_eq!(ids(&plan.fleers), ["market-street-hobb"]);
+                let request = assault_request(&street, 41, &plan.target.id, Some(&plan.roster()));
+                let GameInput::Game(command) =
+                    wire::journey_input(&request, native::first(), &street).unwrap()
+                else {
+                    panic!("an assault is a game command");
+                };
+                let fight = fight_of(&street, &command).unwrap().unwrap();
+                assert_eq!(
+                    fight.foes[0].creature.id,
+                    if legacy { "commoner" } else { "guard" }
+                );
+                let staged = || {
+                    let mut state = street.state().clone();
+                    bring_on_stage(&mut state, &fight).unwrap();
+                    let mut draws = Vec::new();
+                    let mut outcomes = Vec::new();
+                    let mut initiative = [20_u32, 19, 1].into_iter();
+                    tactical::start_scene(
+                        &street,
+                        &command,
+                        &mut state,
+                        &mut draws,
+                        &mut outcomes,
+                        &mut |sides| {
+                            Ok(if sides == 20 {
+                                initiative.next().unwrap()
+                            } else {
+                                1
+                            })
+                        },
+                        "merchant-shop",
+                        &fight,
+                    )
+                    .unwrap();
+                    (state, draws, outcomes)
+                };
+                let (state, draws, outcomes) = staged();
+                let replayed = staged();
+                assert_eq!(state, replayed.0);
+                assert_eq!(draws, replayed.1);
+                assert_eq!(outcomes, replayed.2);
+                let target = person_entity("market-street-wenna").unwrap();
+                assert_eq!(person_name(&state, target).as_deref(), Some("Wenna"));
+                assert_eq!(standing_foes(&state).unwrap(), [Person::of(&scene.cast[1])]);
+                assert_eq!(
+                    presence(&state, "market-street-hobb").unwrap(),
+                    Presence::Gone
+                );
+                let battle = tactical::read(&state).unwrap();
+                assert_eq!(battle.combatants().len(), 3);
+                assert_eq!(
+                    battle
+                        .actor(tactical::actor_id(&state, target).unwrap())
+                        .unwrap()
+                        .spec()
+                        .kind
+                        .srd_id(),
+                    Some(if legacy { "commoner" } else { "guard" })
+                );
+                assert!(opening_narration(&state).unwrap().contains("Hobb flees"));
+                assert!(!opening_narration(&state).unwrap().contains("Marek"));
+                // Checkpoint/recovery owners must supply this same canonical inventory. This
+                // exercises that boundary without pretending their static inventory is wired.
+                let mut inventory = model::recovery().unwrap();
+                inventory
+                    .resources
+                    .extend(created_resources(&state).unwrap());
+                let frozen = Checkpoint::new(
+                    street.schema(),
+                    street.basis(),
+                    street.pins().clone(),
+                    state.clone(),
+                    ReferenceInventory {
+                        rules: &inventory.rules,
+                        content: &inventory.content,
+                        resources: &inventory.resources,
+                        assets: &inventory.assets,
+                    },
+                    inventory.limits,
+                )
+                .unwrap();
+                assert!(encounters_admissible(&frozen).unwrap());
+                let limits = df_persistence::NativeCodecLimits {
+                    maximum_document_bytes: 1024 * 1024,
+                    maximum_allocated_bytes: 2 * 1024 * 1024,
+                    maximum_collection_items: 4096,
+                    maximum_text_bytes: model::limits().maximum_text_bytes,
+                };
+                let encoded =
+                    df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&frozen, limits)
+                        .unwrap();
+                let recovered = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+                    &encoded,
+                    frozen.basis(),
+                    frozen.pins(),
+                    &inventory,
+                    limits,
+                )
+                .unwrap();
+                assert_eq!(recovered, frozen);
+                assert!(encounters_admissible(&recovered).unwrap());
+                let (finished, action_draws) = resolve_created_battle(battle.clone(), None);
+                let (replayed, replay_draws) = resolve_created_battle(battle, Some(&action_draws));
+                assert!(finished.finished());
+                assert_eq!(finished.snapshot().unwrap(), replayed.snapshot().unwrap());
+                assert_eq!(action_draws, replay_draws);
+                let foe = finished
+                    .actor(tactical::actor_id(&state, target).unwrap())
+                    .unwrap();
+                assert!(foe.health().knocked_out);
+                assert!(!foe.health().dead);
+            }
+        });
     }
 
     #[test]

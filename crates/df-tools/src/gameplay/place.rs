@@ -42,6 +42,8 @@ const PREFIX: &str = "place-move-1:";
 pub(in crate::gameplay) const UNNAMED: &str = "none";
 /// Places one run may create. A full run refuses a new place and keeps the party where it is.
 pub(in crate::gameplay) const MAXIMUM_CREATED_PLACES: usize = 8;
+/// A created place's bounded cast, retained in its canonical record.
+pub(in crate::gameplay) const MAXIMUM_PEOPLE: usize = 3;
 /// The exit every created place has back to the place it was entered from.
 pub(in crate::gameplay) const WAY_BACK: &str = "way-back";
 /// The exit name of a development move that goes straight to a place the run has.
@@ -128,7 +130,42 @@ pub(in crate::gameplay) struct PersonDraft {
     pub(in crate::gameplay) gender: String,
     pub(in crate::gameplay) wants: String,
     pub(in crate::gameplay) attitude: String,
+    /// Missing only in records written before created people had combat statistics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::gameplay) stat_block: Option<PersonStatBlock>,
     pub(in crate::gameplay) knowledge: Vec<String>,
+}
+
+/// Person stat blocks implemented by the SRD 5.2.1 tactical rules. The storyteller chooses
+/// identity here; statistics and actions always come from `df_rules`.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub(in crate::gameplay) enum PersonStatBlock {
+    Commoner,
+    Bandit,
+    Cultist,
+    Guard,
+    Scout,
+}
+
+impl PersonStatBlock {
+    pub(in crate::gameplay) const ALL: [Self; 5] = [
+        Self::Commoner,
+        Self::Bandit,
+        Self::Cultist,
+        Self::Guard,
+        Self::Scout,
+    ];
+
+    pub(in crate::gameplay) const fn srd_id(self) -> &'static str {
+        match self {
+            Self::Commoner => "commoner",
+            Self::Bandit => "bandit",
+            Self::Cultist => "cultist",
+            Self::Guard => "guard",
+            Self::Scout => "scout",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -283,7 +320,13 @@ impl PlaceRecord {
                 voice: "an even, plain adult voice".to_owned(),
                 gender: Some(gender),
                 age: Some(Age::Adult),
-                stat_block: None,
+                stat_block: Some(
+                    person
+                        .stat_block
+                        .unwrap_or(PersonStatBlock::Commoner)
+                        .srd_id()
+                        .to_owned(),
+                ),
             });
         }
         for ware in &self.wares {
@@ -391,7 +434,7 @@ impl PlaceRecord {
             || !within(&self.origin.weather, 72)
             || self.exits.len() > MAXIMUM_ONWARD_EXITS
             || self.landmarks.len() > MAXIMUM_LANDMARKS
-            || !(2..=3).contains(&self.people.len())
+            || !(2..=MAXIMUM_PEOPLE).contains(&self.people.len())
             || !(4..=5).contains(&self.things.len())
         {
             return Err(invalid);

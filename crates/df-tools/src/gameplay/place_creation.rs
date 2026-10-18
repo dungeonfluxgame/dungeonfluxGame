@@ -305,7 +305,31 @@ fn output_schema() -> Value {
             "wares": "zero to twelve finite goods across this place, each {seller, name, description, price_cp}; seller exactly names a person, name at most 32, description at most 100, price_cp an integer from 1 to 100000 copper pieces",
             "services": "zero to eight paid services across this place, each {provider, name, description, price_cp}; provider exactly names a person, name at most 32, description at most 100, price_cp an integer from 1 to 100000 copper pieces",
         },
-        "people": "a JSON array of two or three adults, each {name, role, description, position, gender, wants, attitude, knowledge}: name at most 32, role at most 32, description at most 110 (looks and what they are doing), position at most 32 (where they stand), gender he or she or they, wants at most 60, attitude friendly or indifferent or hostile, knowledge exactly three strings of at most 80 characters each (about this place, about the town naming one of the landmarks, about themself)",
+        "people": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": place::MAXIMUM_PEOPLE,
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "role", "description", "position", "gender", "wants", "attitude", "stat_block", "knowledge"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 32},
+                    "role": {"type": "string", "minLength": 1, "maxLength": 32},
+                    "description": {"type": "string", "minLength": 1, "maxLength": 110},
+                    "position": {"type": "string", "minLength": 1, "maxLength": 32},
+                    "gender": {"enum": ["he", "she", "they"]},
+                    "wants": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "attitude": {"enum": ["friendly", "indifferent", "hostile"]},
+                    "stat_block": {"enum": place::PersonStatBlock::ALL.map(|block| block.srd_id())},
+                    "knowledge": {
+                        "type": "array", "minItems": 3, "maxItems": 3,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "description": "about this place, about the town naming one of the landmarks, and about themself",
+                    },
+                },
+            },
+        },
         "things": "a JSON array of four or five physical objects, each {name, detail, position, portable}: name at most 32, detail two to three sentences and at most 220 characters saying what a camera sees and what it is for, position at most 32, portable true or false",
     })
 }
@@ -320,7 +344,7 @@ const GUIDANCE: &str = concat!(
     // Why: a new place must agree with what the people of the town have already said.
     "c. facts.canon, facts.recent_table and facts.recalled_memory are true things this table has already heard. Use them and never contradict them. When they say where something or someone can be found, that is here if this place can plausibly hold it.\n",
     // Why: the cast must be new people the server can add without clashing with existing identities.
-    "d. Every person is an adult with a job or a reason to be here and a position in the place. Never reuse a name, or the first name, of anyone in facts.names_in_use: those people live elsewhere. Never give the place a name in facts.place_names_in_use: those places already exist.\n",
+    "d. Every person is an adult with a job or a reason to be here and a position in the place. Choose their stat_block from the closed SRD list in the schema according to who they are: commoner is the ordinary townsperson; use a trained person's supported block only when appropriate. Never invent statistics. Never reuse a name, or the first name, of anyone in facts.names_in_use: those people live elsewhere. Never give the place a name in facts.place_names_in_use: those places already exist.\n",
     // Why: the room picture and the scene model are made from these descriptions alone.
     "e. Things are physical objects a camera sees in the place; write only what is visible. Write nothing in the slots that is out of sight.\n",
     // Why: the server owns every rule and outcome; a place only describes a setting.
@@ -407,6 +431,10 @@ pub(in crate::gameplay) fn build(
 ) -> Result<PlaceRecord, CreationError> {
     let slot: PlaceSlot = parse(place_text, "place_json")?;
     let mut people: Vec<PersonDraft> = parse(people_text, "people_json")?;
+    // Old stored records may omit the block; newly authored people must make the choice.
+    if people.iter().any(|person| person.stat_block.is_none()) {
+        return Err(CreationError::Invalid("stat_block"));
+    }
     let mut things: Vec<ThingDraft> = parse(things_text, "things_json")?;
     let kind: SettingKind = serde_json::from_value(Value::String(slot.kind.clone()))
         .ok()
