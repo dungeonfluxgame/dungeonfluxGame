@@ -200,10 +200,11 @@ pub fn slowmo_scale(age_s: f32) -> f32 {
 // ---- blur, split, flash, pulse --------------------------------------------------------------
 
 /// Directional blur: pixels of blur per degree per second of camera yaw/pitch speed, and its cap.
-pub const MOTION_BLUR_PX_PER_DEG_S: f32 = 0.22;
-pub const MOTION_BLUR_MAX_PX: f32 = 26.0;
+/// Kept light: at 26 px every fighter smeared for half a second of each attack on a TV (B-13).
+pub const MOTION_BLUR_PX_PER_DEG_S: f32 = 0.1;
+pub const MOTION_BLUR_MAX_PX: f32 = 10.0;
 /// Camera speed (degrees per second) below which there is no motion blur at all.
-pub const MOTION_BLUR_FLOOR_DEG_S: f32 = 6.0;
+pub const MOTION_BLUR_FLOOR_DEG_S: f32 = 12.0;
 /// The critical's zoom-blur punch-in: strength (share of the frame radius) and duration.
 pub const RADIAL_PUNCH: f32 = 0.085;
 pub const RADIAL_PUNCH_S: f32 = 0.32;
@@ -710,7 +711,8 @@ mod tests {
             state.observe_camera_speed(120.0, 0.0, 1.0 / 30.0);
         }
         let view = state.view();
-        assert!(view.motion_blur_px > 10.0);
+        // A fast pan blurs strongly, up to the cap.
+        assert!(view.motion_blur_px > MOTION_BLUR_MAX_PX * 0.5);
         assert!(view.motion_blur_dir.0 > 0.99 && view.motion_blur_dir.1.abs() < 0.01);
         for _ in 0..90 {
             state.observe_camera_speed(0.0, 0.0, 1.0 / 30.0);
