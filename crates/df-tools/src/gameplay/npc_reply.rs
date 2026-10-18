@@ -1570,7 +1570,13 @@ impl NpcReplyContext {
                 .as_ref()
                 .map(|scene| format!("{}|{}", scene.title, scene.scene_asset))
                 .unwrap_or_default(),
-            npc_id: String::new(),
+            // No dossier: a person of a created place answers to their scene binding, so an
+            // offer they make can still be committed by the owner (P6-179).
+            npc_id: if actor_id.is_empty() {
+                String::new()
+            } else {
+                super::npc_event_classifier::scene_person_binding(actor_id)
+            },
             hero_id: hero.name.clone(),
             pending_quote: None,
             merchant_reply_bounds: None,

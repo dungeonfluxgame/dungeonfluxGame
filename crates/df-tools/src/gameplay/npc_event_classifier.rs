@@ -111,6 +111,23 @@ pub(super) fn try_on_consent_from_choice(
     })
 }
 
+/// The binding a speaker with no dossier answers to: their scene person id. A person a created
+/// place made has no dossier, and without a binding no offer of theirs could commit (P6-179).
+pub(super) fn scene_person_binding(actor_id: &str) -> String {
+    format!("person:{actor_id}")
+}
+
+/// Whether `npc_id` binds the speaker `actor_id`: one of their dossier ids when they have any,
+/// otherwise only their scene person binding. A speaker with a dossier never answers to the
+/// scene binding, so it cannot stand in for a dossier the owner holds.
+pub(super) fn binds_speaker(dossier_ids: &[&str], actor_id: &str, npc_id: &str) -> bool {
+    if dossier_ids.is_empty() {
+        npc_id == scene_person_binding(actor_id)
+    } else {
+        dossier_ids.contains(&npc_id)
+    }
+}
+
 impl Proposal {
     pub(super) fn source_line_id(
         actor_id: &str,
@@ -415,6 +432,37 @@ pub(super) fn provider_state(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_speaker_without_a_dossier_binds_by_scene_person_and_one_with_a_dossier_does_not() {
+        let tovin = "market-street-stalls-tovin";
+        assert!(super::binds_speaker(
+            &[],
+            tovin,
+            &super::scene_person_binding(tovin)
+        ));
+        assert!(!super::binds_speaker(&[], tovin, ""));
+        assert!(!super::binds_speaker(
+            &[],
+            tovin,
+            &super::scene_person_binding("market-street-stalls-nella")
+        ));
+        assert!(super::binds_speaker(
+            &["patron:merchant"],
+            "merchant",
+            "patron:merchant"
+        ));
+        assert!(!super::binds_speaker(
+            &["patron:merchant"],
+            "merchant",
+            &super::scene_person_binding("merchant")
+        ));
+        assert!(!super::binds_speaker(
+            &["patron:merchant"],
+            "merchant",
+            "bystander:merchant"
+        ));
+    }
+
     use super::*;
     use crate::gameplay::{adventure::scene_model::*, pack::FindingSkill};
 

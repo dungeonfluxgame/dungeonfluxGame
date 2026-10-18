@@ -1966,7 +1966,7 @@ impl Actor {
                 revision_key(current.basis().revision),
             ));
         };
-        let dossier_matches_actor = [
+        let dossier_ids: Vec<String> = [
             rpc::SceneRole::Patron,
             rpc::SceneRole::Contact,
             rpc::SceneRole::Antagonist,
@@ -1974,7 +1974,14 @@ impl Actor {
         ]
         .into_iter()
         .filter_map(|role| self.social.dossier_of(role, &canonical_actor.id))
-        .any(|dossier| dossier.npc_id == proposal.npc_id);
+        .map(|dossier| dossier.npc_id.clone())
+        .collect();
+        let dossier_ids: Vec<&str> = dossier_ids.iter().map(String::as_str).collect();
+        let dossier_matches_actor = super::npc_event_classifier::binds_speaker(
+            &dossier_ids,
+            &canonical_actor.id,
+            &proposal.npc_id,
+        );
         if !dossier_matches_actor {
             record_npc_event_status(
                 &proposal,
