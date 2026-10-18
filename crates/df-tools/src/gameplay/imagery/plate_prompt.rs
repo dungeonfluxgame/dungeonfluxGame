@@ -21,7 +21,7 @@ use super::{
         startup_configuration::ContentRating,
     },
     prompt::{
-        AssembledPrompt, FILM_LOOK, HeroVisualIdentity, LifeStage, Part, PlaceFacts,
+        AssembledPrompt, FILM_LOOK, HeroVisualIdentity, LifeStage, Part, PlaceFacts, SINGLE_FRAME,
         expression_phrase, health_face_phrase, health_look_phrase,
     },
 };
@@ -136,8 +136,9 @@ const HEROES_INTRO: [&str; 4] = [
      three-quarter back, all turned toward the speaker, none looking at the camera, not in a \
      row, each busy with something that fits the place.",
 ];
-const HEROES_IDENTITY: &str = "Image 1 is the party sheet (the heroes on plain grey): keep each hero's exact face, \
-    hair, build, costume and weapon, in new poses and viewpoint.";
+const HEROES_IDENTITY: &str = "Image 1 is the party sheet: separate full-body identity photographs side by side on \
+    neutral grey, one hero per photograph. Keep each hero's exact face, hair, build, costume and \
+    weapon, in new poses and viewpoint; never copy the sheet's side-by-side layout into the frame.";
 const HEROES_WITHOUT_REFERENCE: &str = "No photographic hero reference is available: show the heroes only as small, \
     anonymous figures from behind or in profile, following the staged slots and activities.";
 const HERO_SCALE: &str = "Keep each hero no wider than a quarter of the frame.";
@@ -190,10 +191,11 @@ const CALM_LEFT: &str = "Directly left of the head: a calm area of dark, soft, o
     head-widths wide, no faces, no bright details, for a speech bubble.";
 const CALM_RIGHT: &str = "Directly right of the head: a calm area of dark, soft, out-of-focus background about two \
     head-widths wide, no faces, no bright details, for a speech bubble.";
-const NEGATIVE: &str = "No outlines or cut-out look, no floating figures, no plastic or waxy skin, no glossy metal, no \
-    speckle on mail or cloth. No text, letters, numbers, signs, logos, borders, frames, \
-    interface or speech bubbles. No recognizable real person or celebrity. Every person is clearly an \
-    adult.";
+const NEGATIVE: &str = "Everyone stands in the place itself, in its light and shadow: no grid, panels, contact \
+    sheet or split screen, no floating or pasted figures, no plastic or waxy skin, no \
+    glossy metal, no speckle on mail or cloth. No text, letters, numbers, signage, signs, logos, \
+    borders, frames, interface or speech bubbles; every banner, board, cloth and wall surface is \
+    plain and blank. No recognizable real person or celebrity. Every person is clearly an adult.";
 const MATURE_STANCE: &str = "Mature content rating: violence, horror and desire are shown as \
     the story demands, not softened.";
 const RESTRAINED_LIMITS: &str = "No gore, no nudity, no sexual content.";
@@ -405,6 +407,7 @@ fn scene_plate_with(
     }
     let mut parts = vec![
         Part::Fixed(FILM_LOOK),
+        Part::Fixed(SINGLE_FRAME),
         Part::Fixed(PERIOD_CLOTHING),
         Part::Fixed(REFERENCE_STYLE),
         Part::Fixed(camera_phrase(spec.camera)),
@@ -550,16 +553,19 @@ pub(in crate::gameplay) const FLUX_MAXIMUM_PROMPT_CHARACTERS: usize = 1800;
 const FLUX_FACTS: &str = "The scene as it is now (JSON):";
 /// Facts shorter than this are left out rather than cut to a stub.
 const FLUX_MINIMUM_FACTS: usize = 40;
-const FLUX_APPEARANCE_CHARACTERS: usize = 180;
+/// Appearance text is state, not art direction: it is cut first so the photographic direction
+/// that leads the lean prompt always fits inside the adapter cap.
+const FLUX_APPEARANCE_CHARACTERS: usize = 120;
 const PERIOD_CLOTHING: &str =
-    "Pre-industrial fantasy world: period clothing, no modern dress, no suits, no modern objects.";
-const FLUX_PLACE_IMAGE: &str = "Image 1 is the place photograph: keep its architecture, props and palette, seen from the new camera position.";
-const FLUX_SHEET_IMAGE: &str = "Image 2 is an identity photo sheet, one numbered cell per person. Match faces and costumes only; render one full-frame photograph, never its grid, panels or labels.";
-const FLUX_KEEP_FACE: &str = "keep this exact face, hair and clothing.";
+    "Pre-industrial fantasy world: period clothing only, no modern dress or objects.";
+const FLUX_PLACE_IMAGE: &str = "Image 1 is the place photograph: keep its architecture, props and palette from the new camera position.";
+const FLUX_SHEET_IMAGE: &str = "Image 2 shows separate identity photographs, one person per photograph in the order below. Match faces and costumes only; never copy their layout, grid or panels.";
+const ONE_FRAME_EDIT: &str = "Keep it ONE single continuous photographic camera frame.";
+const FLUX_KEEP_FACE: &str = "keep this exact face and clothing.";
 const FLUX_ACTION: &str =
     "Only the listed people and things exist. The people face the speaker, not the camera.";
 const FLUX_FACE_SHOWS: &str = "The speaker's face shows";
-const FLUX_LOOK: &str = "Photographic still from a live-action fantasy TV drama, real adult performers in practical costume on a dressed location, natural practical light, depth of field and fine film grain. No illustration, painting, CGI, glamour or text.";
+const FLUX_LOOK: &str = "Photographic still from a live-action fantasy TV drama, shot on a real camera with a prime lens: real adult performers, real skin pores and woven fabric texture, practical costume, real dressed location, natural practical light, fine film grain. ONE single continuous camera frame only. No grid, panels, numbers, text, signage, letters or glamour.";
 
 /// One person a plate names: the name the scene record gives and, when the record has one, a
 /// one-line appearance and what they are doing.
@@ -621,14 +627,14 @@ fn flux_appearance(person: &FluxPerson) -> Option<String> {
 fn flux_identity_line(cell: usize, person: &FluxPerson) -> String {
     match flux_appearance(person) {
         Some(text) if text.starts_with(&person.name) => {
-            format!("Image 2, cell {cell}: {text} \u{2014} {FLUX_KEEP_FACE}")
+            format!("Image 2, photograph {cell}: {text} \u{2014} {FLUX_KEEP_FACE}")
         }
         Some(text) => format!(
-            "Image 2, cell {cell}: {}, {text} \u{2014} {FLUX_KEEP_FACE}",
+            "Image 2, photograph {cell}: {}, {text} \u{2014} {FLUX_KEEP_FACE}",
             person.name
         ),
         None => format!(
-            "Image 2, cell {cell}: {} \u{2014} {FLUX_KEEP_FACE}",
+            "Image 2, photograph {cell}: {} \u{2014} {FLUX_KEEP_FACE}",
             person.name
         ),
     }
@@ -647,7 +653,9 @@ pub(in crate::gameplay) fn flux_scene_plate(
     face: Option<(FaceExpression, HealthTier)>,
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
     let shot = flux_shot_phrase(camera);
+    // The photographic direction comes first and is never trimmed; the JSON facts are.
     let mut parts = vec![
+        Part::Fixed(FLUX_LOOK),
         Part::Fact(match &cast.speaker {
             Some(speaker) => format!(
                 "{shot} on {}, the speaker, in the lit mid-ground.",
@@ -687,7 +695,6 @@ pub(in crate::gameplay) fn flux_scene_plate(
             parts.push(Part::Fixed(look));
         }
     }
-    parts.push(Part::Fixed(FLUX_LOOK));
     parts.push(Part::Fixed(rating_stance(rating)));
     flux_finish(parts, facts)
 }
@@ -721,8 +728,9 @@ pub(in crate::gameplay) fn plate_moment(
     speaker_reference: bool,
 ) -> Result<AssembledPrompt, PlatePromptRefusal> {
     let mut parts = vec![
-        Part::Fixed(MOMENT_FIRST),
         Part::Fixed(FILM_LOOK),
+        Part::Fixed(ONE_FRAME_EDIT),
+        Part::Fixed(MOMENT_FIRST),
         Part::Fixed(if speaker_reference {
             MOMENT_SPEAKER_WITH_REFERENCE
         } else {
@@ -756,6 +764,8 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
     use super::super::shot::{TimeOfDay as Time, vocabulary_lights};
     let mut phrases = vec![
         FILM_LOOK,
+        SINGLE_FRAME,
+        ONE_FRAME_EDIT,
         PERIOD_CLOTHING,
         REFERENCE_STYLE,
         camera_phrase(Camera::WideEstablishing),

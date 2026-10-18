@@ -140,7 +140,9 @@ mod tests {
         assert!(prompt.contains("camera completely still"));
         assert!(prompt.contains("Documentary color photograph"));
         assert!(prompt.contains("fine film grain"));
-        assert!(prompt.contains("CGI, 3D render, painting or illustration"));
+        for style_word in crate::gameplay::imagery::NON_PHOTOGRAPHIC_WORDS {
+            assert!(!prompt.contains(style_word), "{style_word:?} in {prompt}");
+        }
         assert!(prompt.contains("face, hair, clothing"));
         assert!(prompt.contains("No one enters or leaves"));
         assert!(prompt.contains("breathe, blink, and shift their weight"));

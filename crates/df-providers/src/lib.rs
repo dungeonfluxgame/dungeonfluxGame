@@ -144,5 +144,7 @@ pub use fal_segment::{
 mod plate_judge;
 #[cfg(not(target_arch = "wasm32"))]
 pub use plate_judge::{
-    JudgeAnswer, JudgePicture, NativePlateJudge, PlateJudgeConfig, PlateJudgeError,
+    JudgeAnswer, JudgePicture, NativePlateJudge, PhotoDress, PhotoFrame, PhotoJudgeKind,
+    PhotoMedium, PhotoPeopleCount, PhotoQualityAnswer, PhotoText, PlateJudgeConfig,
+    PlateJudgeError,
 };

@@ -228,7 +228,7 @@ fn a_merchant_flux_plate_names_each_person_in_reference_order_before_the_action(
     let first_part = &text[..action];
     let mut last = 0;
     for (cell, person) in sheet.iter().enumerate() {
-        let line = format!("Image 2, cell {}: {}", cell + 1, person.name);
+        let line = format!("Image 2, photograph {}: {}", cell + 1, person.name);
         let at = first_part
             .find(&line)
             .unwrap_or_else(|| panic!("{line} names the person before the action"));
@@ -236,11 +236,12 @@ fn a_merchant_flux_plate_names_each_person_in_reference_order_before_the_action(
         last = at;
     }
     assert!(first_part.contains("Image 3 is a close portrait of Jessa"));
-    assert!(first_part.starts_with("Medium shot on a 50mm lens at eye level on Jessa"));
+    assert!(text.starts_with("Photographic still from a live-action fantasy TV drama"));
+    assert!(first_part.contains("Medium shot on a 50mm lens at eye level on Jessa"));
 }
 
 #[test]
-fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration() {
+fn every_image_prompt_uses_the_shared_film_look_and_names_no_other_medium() {
     let location = place();
     let generated = adventure(41);
     let model = generated
@@ -320,10 +321,54 @@ fn every_image_prompt_uses_the_shared_film_look_without_requesting_illustration(
         ] {
             assert!(text.contains(marker), "missing {marker:?} in {text}");
         }
-        assert!(!text.contains("illustration of"), "{text}");
-        assert!(!text.contains("painting of"), "{text}");
         assert!(!text.contains("repaint"), "{text}");
+        // The prompt names only what the photograph is; naming another medium, even to forbid
+        // it, steers the model toward it (owner, 2026-10-17).
+        for style_word in super::NON_PHOTOGRAPHIC_WORDS {
+            assert!(
+                !text.contains(&style_word.to_ascii_lowercase()),
+                "{style_word:?} in {text}"
+            );
+        }
     }
+}
+
+#[test]
+fn cast_sheet_appendix_and_refresh_lead_photographic_and_forbid_copying_the_sheet() {
+    let location = place();
+    let refresh = scene_refresh(ContentRating::Mature, &location, Look::of(Mood::Calm));
+    assert!(
+        refresh
+            .as_str()
+            .starts_with("A still frame from a live-action fantasy TV drama")
+    );
+    assert!(
+        refresh
+            .as_str()
+            .contains("ONE single continuous photographic camera frame")
+    );
+    let expression = cast_expression(
+        ContentRating::Mature,
+        CharacterFacts {
+            role: CharacterRole::Patron,
+            life_stage: LifeStage::Adult,
+        },
+        Expression::Neutral,
+        HealthTier::Healthy,
+        false,
+    )
+    .expect("a portrait prompt");
+    assert!(
+        expression
+            .as_str()
+            .starts_with("A still frame from a live-action fantasy TV drama")
+    );
+    let sheet = expression.with_cast_sheet(2, "slot 1 = merchant; identity revision 1");
+    let text = sheet.as_str();
+    assert!(text.contains("separate identity photographs, one person per photograph"));
+    assert!(text.contains("ONE single continuous photographic camera frame"));
+    assert!(text.contains("never copy the sheet's side-by-side layout, grid, panels, numbers, labels, backdrop or cut-out look"));
+    assert!(!text.contains("one numbered cell"));
 }
 
 #[test]
@@ -362,6 +407,7 @@ fn hero_portrait_cutout_and_expression_prompts_use_only_the_checked_identity_and
 
     for prompt in &prompts {
         let text = prompt.as_str();
+        assert!(text.starts_with("A still frame from a live-action fantasy TV drama"));
         for detail in [
             "dwarf",
             "feminine presentation",
@@ -1877,7 +1923,10 @@ fn both_ratings_keep_every_person_an_adult_and_name_no_real_person() {
             assert!(
                 text.contains("Fictional identities; no recognizable real person or celebrity.")
             );
-            assert!(text.contains("No text, letters, numbers, logos or watermarks."));
+            assert!(text.contains(
+                "No text, letters, numbers, signage, signs, logos or watermarks anywhere"
+            ));
+            assert!(text.contains("any such surface is plain and blank"));
             if life_stage == LifeStage::YoungAdult {
                 assert!(text.contains("young adult, clearly over eighteen"));
             }

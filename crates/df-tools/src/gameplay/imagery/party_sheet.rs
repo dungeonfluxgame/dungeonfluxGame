@@ -17,6 +17,8 @@ use image::{
 use super::references::ReferenceImage;
 
 const GREY: u8 = 128;
+/// Neutral grey between the photographs: they read as separate photographs, not one group pose.
+const GAP: u32 = 24;
 const JPEG_QUALITY: u8 = 90;
 /// Each figure is scaled to this height; the sheet is as wide as the figures side by side.
 const FIGURE_HEIGHT: u32 = 1024;
@@ -83,7 +85,8 @@ pub(in crate::gameplay) fn party_sheet(
             imageops::FilterType::Triangle,
         ));
     }
-    let total: u32 = scaled.iter().map(RgbImage::width).sum();
+    let total: u32 = scaled.iter().map(RgbImage::width).sum::<u32>()
+        + GAP * u32::try_from(scaled.len().saturating_sub(1)).unwrap_or(0);
     if total > MAXIMUM_SHEET_WIDTH {
         return Err(SheetError::Encode);
     }
@@ -91,7 +94,7 @@ pub(in crate::gameplay) fn party_sheet(
     let mut left = 0;
     for figure in &scaled {
         imageops::replace(&mut sheet, figure, i64::from(left), 0);
-        left += figure.width();
+        left += figure.width() + GAP;
     }
     let mut encoded = Vec::new();
     JpegEncoder::new_with_quality(&mut Cursor::new(&mut encoded), JPEG_QUALITY)
@@ -152,9 +155,17 @@ mod tests {
         let decoded = image::load_from_memory_with_format(&sheet.bytes, Container::Jpeg)
             .unwrap()
             .to_rgb8();
-        assert_eq!((decoded.width(), decoded.height()), (1024, FIGURE_HEIGHT));
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (1024 + GAP, FIGURE_HEIGHT)
+        );
         let left = decoded.get_pixel(256, 512).0;
-        let right = decoded.get_pixel(768, 512).0;
+        let gap = decoded.get_pixel(512 + GAP / 2, 512).0;
+        assert!(
+            gap.iter().all(|channel| channel.abs_diff(GREY) < 12),
+            "separate photographs are divided by neutral grey: {gap:?}"
+        );
+        let right = decoded.get_pixel(512 + GAP + 256, 512).0;
         assert!(
             left[0] > 150 && left[1] < 60,
             "the first figure is red: {left:?}"

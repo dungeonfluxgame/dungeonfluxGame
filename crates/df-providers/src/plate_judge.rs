@@ -25,6 +25,56 @@ const MAXIMUM_PICTURE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_TOTAL_PICTURE_BYTES: usize = 8 * 1024 * 1024;
 const MAXIMUM_INSTRUCTION_CHARACTERS: usize = 6000;
 const MAXIMUM_RESPONSE_BYTES: usize = 256 * 1024;
+const PHOTO_QUALITY_INSTRUCTION: &str = "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are pasted/composited together. medium is photograph only for a convincing photographic capture, painting_or_illustration for drawn or painterly art, and cgi_or_render for synthetic rendered imagery. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhotoJudgeKind {
+    ScenePlate,
+    CanonicalRoom,
+    CanonicalCharacter,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhotoFrame {
+    SinglePhotograph,
+    GridOrCollage,
+    CutoutComposite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhotoMedium {
+    Photograph,
+    PaintingOrIllustration,
+    CgiOrRender,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhotoText {
+    None,
+    VisibleText,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhotoDress {
+    Period,
+    ModernClothing,
+    NoPeople,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhotoPeopleCount {
+    ExactlyOne,
+    NotOne,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PhotoQualityAnswer {
+    pub frame: PhotoFrame,
+    pub medium: PhotoMedium,
+    pub text: PhotoText,
+    pub dress: PhotoDress,
+    pub people_count: Option<PhotoPeopleCount>,
+}
 
 /// One picture of a judgement: a short plain label the instruction refers to, and a JPEG.
 #[derive(Clone, Copy, Debug)]
@@ -195,6 +245,114 @@ impl NativePlateJudge {
             output_tokens: tokens("completion_tokens"),
         })
     }
+
+    /// Judges one generated image with closed labels. Character calls also ask for a people
+    /// count. This is one bounded vision request; provider errors are returned without logging.
+    pub async fn judge_photo_quality(
+        &self,
+        image_jpeg: &[u8],
+        kind: PhotoJudgeKind,
+        deadline: Duration,
+    ) -> Result<PhotoQualityAnswer, PlateJudgeError> {
+        let character = kind == PhotoJudgeKind::CanonicalCharacter;
+        let mut properties = json!({
+            "frame": {"type": "string", "enum": ["single_photograph", "grid_or_collage", "cutout_composite"]},
+            "medium": {"type": "string", "enum": ["photograph", "painting_or_illustration", "cgi_or_render"]},
+            "text": {"type": "string", "enum": ["none", "visible_text"]},
+            "dress": {"type": "string", "enum": ["period", "modern_clothing", "no_people"]},
+        });
+        let mut required = vec!["frame", "medium", "text", "dress"];
+        if character {
+            properties["people_count"] = json!({
+                "type": "string",
+                "enum": ["exactly_one", "not_one"],
+            });
+            required.push("people_count");
+        }
+        let schema = json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        });
+        let picture = [JudgePicture {
+            label: "candidate-1",
+            jpeg: image_jpeg,
+        }];
+        let answer = self
+            .judge(
+                PHOTO_QUALITY_INSTRUCTION,
+                &picture,
+                "photo-quality",
+                &schema,
+                deadline,
+            )
+            .await?;
+        parse_photo_answer(answer.value, character)
+    }
+}
+
+fn parse_photo_answer(
+    value: Value,
+    character: bool,
+) -> Result<PhotoQualityAnswer, PlateJudgeError> {
+    let object = value.as_object().ok_or(PlateJudgeError::Output)?;
+    let expected_fields = if character { 5 } else { 4 };
+    if object.len() != expected_fields
+        || object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "frame" | "medium" | "text" | "dress" | "people_count"
+            ) || (key == "people_count" && !character)
+        })
+    {
+        return Err(PlateJudgeError::Output);
+    }
+    let label = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .ok_or(PlateJudgeError::Output)
+    };
+    let frame = match label("frame")? {
+        "single_photograph" => PhotoFrame::SinglePhotograph,
+        "grid_or_collage" => PhotoFrame::GridOrCollage,
+        "cutout_composite" => PhotoFrame::CutoutComposite,
+        _ => return Err(PlateJudgeError::Output),
+    };
+    let medium = match label("medium")? {
+        "photograph" => PhotoMedium::Photograph,
+        "painting_or_illustration" => PhotoMedium::PaintingOrIllustration,
+        "cgi_or_render" => PhotoMedium::CgiOrRender,
+        _ => return Err(PlateJudgeError::Output),
+    };
+    let text = match label("text")? {
+        "none" => PhotoText::None,
+        "visible_text" => PhotoText::VisibleText,
+        _ => return Err(PlateJudgeError::Output),
+    };
+    let dress = match label("dress")? {
+        "period" => PhotoDress::Period,
+        "modern_clothing" => PhotoDress::ModernClothing,
+        "no_people" => PhotoDress::NoPeople,
+        _ => return Err(PlateJudgeError::Output),
+    };
+    let people_count = if character {
+        Some(match label("people_count")? {
+            "exactly_one" => PhotoPeopleCount::ExactlyOne,
+            "not_one" => PhotoPeopleCount::NotOne,
+            _ => return Err(PlateJudgeError::Output),
+        })
+    } else {
+        None
+    };
+    Ok(PhotoQualityAnswer {
+        frame,
+        medium,
+        text,
+        dress,
+        people_count,
+    })
 }
 
 fn plain_label(label: &str) -> bool {

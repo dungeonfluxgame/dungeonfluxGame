@@ -20,6 +20,7 @@ mod canonical_prompt;
 mod cast_sheet;
 pub(super) mod narrative_focus;
 mod party_sheet;
+mod photo_check;
 mod photo_edit;
 mod plate_prompt;
 mod prompt;
@@ -54,8 +55,8 @@ use df_observe::OperationContext;
 use df_providers::{
     HeadLocateConfig, ImageBackground, ImageEdit, ImageEditConfig, ImageEditError, ImageEditModel,
     ImageFormat, ImageModeration, ImageQuality, ImageUsage, LocateTarget, LocatedHead,
-    NativeHeadLocator, NativeHttpRefusal, NativeImageEditProvider,
-    ReferenceImage as ProviderReference,
+    NativeHeadLocator, NativeHttpRefusal, NativeImageEditProvider, NativePlateJudge,
+    PlateJudgeConfig, ReferenceImage as ProviderReference,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -100,6 +101,28 @@ pub(super) use references::{ReferenceImage, ReferenceStore};
 use super::startup_configuration::{
     ContentRating, ImageryConfiguration, ImageryOff, ImagerySettings,
 };
+
+/// Words for a medium other than photography. No image or video prompt names one, even to forbid
+/// it: naming another medium steers the model toward it (owner, 2026-10-17).
+pub(super) const NON_PHOTOGRAPHIC_WORDS: &[&str] = &[
+    "painting",
+    "painted",
+    "painterly",
+    "illustration",
+    "illustrated",
+    "illustrative",
+    "drawing",
+    "sketch",
+    "cartoon",
+    "anime",
+    "CGI",
+    "3D render",
+    "concept art",
+    "game art",
+    "matte painting",
+    "key art",
+    "artwork",
+];
 
 const ROUTE: &str = "/gameplay/imagery";
 const MANIFEST_NAME: &str = "imagery.jsonl";
@@ -353,7 +376,13 @@ struct Engine {
     /// PLAY-V09: finds the speaker's head in a finished plate; absent in tests and when the
     /// production provider could not be built.
     locator: std::sync::OnceLock<NativeHeadLocator>,
+    /// ART-01: judges each new plate and empty room before it is stored; absent in tests and
+    /// when the production judge could not be built.
+    judge: std::sync::OnceLock<NativePlateJudge>,
 }
+
+/// Bounds one photo-quality judgement of a finished image.
+const PHOTO_CHECK_DEADLINE: Duration = Duration::from_secs(30);
 
 enum Mode {
     Off(ImageryOff),
@@ -496,10 +525,21 @@ impl Imagery {
             configuration.deadline,
         )
         .ok();
+        let judge = NativePlateJudge::new(
+            PlateJudgeConfig::live(),
+            configuration.credential.expose(),
+            PHOTO_CHECK_DEADLINE,
+        )
+        .ok();
         let imagery = Self::new(configuration, provider, manifest_directory)?;
-        if let (Mode::On { engine, .. }, Some(locator)) = (&imagery.inner.mode, locator) {
+        if let Mode::On { engine, .. } = &imagery.inner.mode {
             // Set once, here; a second call cannot happen.
-            let _first = engine.locator.set(locator);
+            if let Some(locator) = locator {
+                let _first = engine.locator.set(locator);
+            }
+            if let Some(judge) = judge {
+                let _first = engine.judge.set(judge);
+            }
         }
         Ok(imagery)
     }
@@ -635,6 +675,7 @@ impl Imagery {
             permits: Arc::new(Semaphore::new(MAXIMUM_IN_FLIGHT)),
             in_flight: Mutex::new(HashMap::new()),
             locator: std::sync::OnceLock::new(),
+            judge: std::sync::OnceLock::new(),
         };
         let mut registry = Registry::default();
         engine.register_from_manifest(&mut registry);
@@ -977,14 +1018,60 @@ impl Engine {
             .acquire()
             .await
             .map_err(|_| ImageFailure::Interrupted)?;
-        self.charge();
         let started = std::time::Instant::now();
+        let (mut stored_format, mut bytes, mut micro_dollars) =
+            self.generate(&edit, format).await?;
+        // ART-01: a plate or empty room is judged before it is stored; one that fails is made
+        // once more with the defect named, and a second failure stores nothing.
+        let gate = match request.kind {
+            ImageKind::ScenePlate | ImageKind::ScenePlateEdit => {
+                Some(photo_check::PhotoCheckKind::ScenePlate)
+            }
+            ImageKind::CanonicalRoom => Some(photo_check::PhotoCheckKind::CanonicalRoom),
+            _ => None,
+        };
+        if let (Some(kind), Some(judge)) = (gate, self.judge.get())
+            && let Some(failure) = photo_failure(judge, kind, &bytes, stored_format).await
+        {
+            let corrected = format!("{} {}", failure.correction(), request.prompt.as_str());
+            let retry = ImageEdit {
+                prompt: &corrected,
+                ..edit
+            };
+            retry.validate().map_err(|_| ImageFailure::BadOutput)?;
+            let (retry_format, retry_bytes, retry_cost) = self.generate(&retry, format).await?;
+            micro_dollars = micro_dollars.saturating_add(retry_cost);
+            if photo_failure(judge, kind, &retry_bytes, retry_format)
+                .await
+                .is_some()
+            {
+                return Err(ImageFailure::BadOutput);
+            }
+            (stored_format, bytes) = (retry_format, retry_bytes);
+        }
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let stored = self.store(key, stored_format, bytes.clone()).await.is_ok();
+        if stored {
+            self.record(key, &request, bytes.len() as u64, micro_dollars, elapsed_ms)
+                .await;
+        }
+        // A result that could not be cached is still served from memory for this key's first
+        // requester only through the cache, so a failed write is a failed render.
+        stored.then_some(()).ok_or(ImageFailure::Provider)
+    }
+
+    /// One provider call for `edit`: the bytes in a format the request accepts and their cost.
+    async fn generate(
+        &self,
+        edit: &ImageEdit<'_>,
+        format: ImageFormat,
+    ) -> Result<(ImageFormat, Bytes, u64), ImageFailure> {
+        self.charge();
         let generated = self
             .provider
-            .edit(&edit, self.deadline)
+            .edit(edit, self.deadline)
             .await
             .map_err(failure_of)?;
-        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if generated.bytes.is_empty() || generated.bytes.len() as u64 > MAXIMUM_IMAGE_BYTES {
             return Err(ImageFailure::BadOutput);
         }
@@ -995,16 +1082,11 @@ impl Engine {
         if !Self::stored_formats(format).contains(&generated.format) {
             return Err(ImageFailure::BadOutput);
         }
-        let stored_format = generated.format;
-        let bytes = Bytes::from(generated.bytes);
-        let stored = self.store(key, stored_format, bytes.clone()).await.is_ok();
-        if stored {
-            self.record(key, &request, bytes.len() as u64, micro_dollars, elapsed_ms)
-                .await;
-        }
-        // A result that could not be cached is still served from memory for this key's first
-        // requester only through the cache, so a failed write is a failed render.
-        stored.then_some(()).ok_or(ImageFailure::Provider)
+        Ok((
+            generated.format,
+            Bytes::from(generated.bytes),
+            micro_dollars,
+        ))
     }
 
     /// Spend is committed before the call and kept whatever the outcome: a call whose result is
@@ -1154,6 +1236,35 @@ impl Engine {
             }
         }
     }
+}
+
+/// ART-01: the defect a finished image shows, or `None` when it passes. A judge that cannot answer
+/// lets the image through: the check is a quality gate, and the audit line records the gap.
+async fn photo_failure(
+    judge: &NativePlateJudge,
+    kind: photo_check::PhotoCheckKind,
+    bytes: &[u8],
+    format: ImageFormat,
+) -> Option<photo_check::PhotoCheckFailure> {
+    let (result, reason, failure) =
+        match photo_check::check_photo(judge, kind, bytes, format, PHOTO_CHECK_DEADLINE).await {
+            Ok(photo_check::PhotoCheckOutcome::Pass) => ("pass", "none", None),
+            Ok(photo_check::PhotoCheckOutcome::Fail(failure)) => {
+                ("fail", failure.label(), Some(failure))
+            }
+            Err(error) => ("unjudged", error.label(), None),
+        };
+    let line = format!(
+        "PHOTO_CHECK kind={} result={result} reason={reason}",
+        kind.label()
+    );
+    let fields = serde_json::Map::from_iter([
+        ("kind".to_owned(), serde_json::json!(kind.label())),
+        ("result".to_owned(), serde_json::json!(result)),
+        ("reason".to_owned(), serde_json::json!(reason)),
+    ]);
+    super::actor::record_audit_diagnostic("gameplay.imagery.photo_check", line, fields, &[]);
+    failure
 }
 
 fn failure_of(error: ImageEditError) -> ImageFailure {

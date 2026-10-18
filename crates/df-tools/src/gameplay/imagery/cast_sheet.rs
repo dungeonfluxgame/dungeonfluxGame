@@ -1,4 +1,9 @@
-//! Deterministic photographic identity contact sheets. Labels are reference slots, never scene text.
+//! Deterministic photographic identity sheets: separate photographs in slot order, never scene text.
+//!
+//! Each photograph keeps its own picture, composited onto neutral photographic grey where its
+//! source is transparent. No numbers or labels are drawn on the sheet: a numbered grid is the
+//! collage look the plate model copied, so slot order is positional only (left to right, then
+//! top to bottom) and the legend names that order in text outside the image.
 use super::{ReferenceImage, party_sheet::SheetError};
 use bytes::Bytes;
 use df_providers::ImageFormat;
@@ -16,22 +21,10 @@ pub(in crate::gameplay) struct CastIdentity {
 
 const CELL_WIDTH: u32 = 512;
 const CELL_HEIGHT: u32 = 768;
-const LABEL_HEIGHT: u32 = 48;
 const MAXIMUM_CAST: usize = 24;
-const DIGITS: [[u8; 5]; 10] = [
-    [7, 5, 5, 5, 7],
-    [2, 6, 2, 2, 7],
-    [7, 1, 7, 4, 7],
-    [7, 1, 7, 1, 7],
-    [5, 5, 7, 1, 1],
-    [7, 4, 7, 1, 7],
-    [7, 4, 7, 5, 7],
-    [7, 1, 1, 1, 1],
-    [7, 5, 7, 5, 7],
-    [7, 5, 7, 1, 7],
-];
-
-/// Cells are sorted by canonical ID, labelled 1..N. The legend contains source digests so a
+/// Neutral photographic grey behind a transparent source, never black: black reads as a cut-out.
+const NEUTRAL_GREY: u8 = 128;
+/// Photographs are sorted by canonical ID; slot N is the Nth photograph in reading order. The legend contains source digests so a
 /// replacement photograph or identity mapping invalidates the request even for identical pixels.
 pub(in crate::gameplay) fn cast_sheet(
     mut cast: Vec<CastIdentity>,
@@ -45,8 +38,11 @@ pub(in crate::gameplay) fn cast_sheet(
     }
     let columns = cast.len().min(4) as u32;
     let rows = (cast.len() as u32).div_ceil(columns);
-    let mut sheet =
-        RgbImage::from_pixel(columns * CELL_WIDTH, rows * CELL_HEIGHT, Rgb([36, 36, 36]));
+    let mut sheet = RgbImage::from_pixel(
+        columns * CELL_WIDTH,
+        rows * CELL_HEIGHT,
+        Rgb([NEUTRAL_GREY; 3]),
+    );
     let mut legend = Vec::new();
     let mut sources = Sha256::new();
     for (index, identity) in cast.iter().enumerate() {
@@ -57,34 +53,27 @@ pub(in crate::gameplay) fn cast_sheet(
         };
         let source = image::load_from_memory_with_format(&identity.figure.bytes, container)
             .map_err(|_| SheetError::Decode)?;
-        let picture = source
-            .thumbnail(CELL_WIDTH, CELL_HEIGHT - LABEL_HEIGHT)
-            .to_rgb8();
+        // Composite onto neutral grey, never black: to_rgb8 alone drops alpha onto black and
+        // the photograph reads as a cut-out pasted on a black panel.
+        let rgba = source.thumbnail(CELL_WIDTH, CELL_HEIGHT).to_rgba8();
+        let mut picture = RgbImage::from_pixel(rgba.width(), rgba.height(), Rgb([NEUTRAL_GREY; 3]));
+        for (target, pixel) in picture.pixels_mut().zip(rgba.pixels()) {
+            let alpha = u16::from(pixel.0[3]);
+            for channel in 0..3 {
+                let blended = (u16::from(pixel.0[channel]) * alpha
+                    + u16::from(NEUTRAL_GREY) * (255 - alpha))
+                    / 255;
+                target.0[channel] = u8::try_from(blended).unwrap_or(u8::MAX);
+            }
+        }
         let left = index as u32 % columns * CELL_WIDTH;
         let top = index as u32 / columns * CELL_HEIGHT;
         imageops::replace(
             &mut sheet,
             &picture,
             i64::from(left + (CELL_WIDTH - picture.width()) / 2),
-            i64::from(top + LABEL_HEIGHT),
+            i64::from(top + (CELL_HEIGHT - picture.height()) / 2),
         );
-        for (place, digit) in (index + 1).to_string().bytes().enumerate() {
-            for (row, bits) in DIGITS[usize::from(digit - b'0')].iter().enumerate() {
-                for column in 0..3 {
-                    if bits & (1 << (2 - column)) != 0 {
-                        for y in 0..6 {
-                            for x in 0..6 {
-                                sheet.put_pixel(
-                                    left + 16 + place as u32 * 24 + column * 6 + x,
-                                    top + 8 + row as u32 * 6 + y,
-                                    Rgb([240, 240, 240]),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
         sources.update(identity.id.as_bytes());
         sources.update([0]);
         sources.update(identity.figure.sha256.as_bytes());
@@ -152,6 +141,34 @@ mod tests {
             image::load_from_memory(&sheet.bytes).unwrap().width(),
             CELL_WIDTH * 4
         );
+    }
+    #[test]
+    fn a_transparent_source_reads_as_a_photograph_on_neutral_grey_with_no_drawn_number() {
+        // A transparent canonical figure must not land on black (a cut-out panel), and no
+        // digit is drawn on the sheet for the plate model to copy.
+        let picture = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([200, 30, 30, 0]),
+        ));
+        let mut bytes = Cursor::new(Vec::new());
+        picture.write_to(&mut bytes, Container::Png).unwrap();
+        let (sheet, legend) = cast_sheet(vec![CastIdentity {
+            id: "hero:1".to_owned(),
+            figure: ReferenceImage::new(ImageFormat::Png, Bytes::from(bytes.into_inner())),
+        }])
+        .unwrap();
+        assert!(legend.starts_with("slot 1 = hero:1"));
+        let decoded = image::load_from_memory(&sheet.bytes).unwrap().to_rgb8();
+        for at in [(4, 4), (256, 24), (500, 700)] {
+            let pixel = decoded.get_pixel(at.0, at.1).0;
+            assert!(
+                pixel
+                    .iter()
+                    .all(|channel| channel.abs_diff(NEUTRAL_GREY) < 12),
+                "transparent source on neutral grey, no drawn number at {at:?}: {pixel:?}"
+            );
+        }
     }
     #[test]
     fn duplicate_or_missing_cast_cannot_be_silently_omitted() {

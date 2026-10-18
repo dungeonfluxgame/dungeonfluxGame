@@ -21,14 +21,22 @@ use super::super::{
 const MAXIMUM_FACT_CHARACTERS: usize = 80;
 
 // The owner's direction (2026-10-17): it must read like living in a D&D world, shot like a
-// realistic live-action TV drama ("photographic cinema"), never like an illustration.
+// realistic live-action TV drama ("photographic cinema"). The look names only what the photograph
+// is: naming another medium, even to forbid it, steers the model toward it (owner, 2026-10-17).
 pub(in crate::gameplay) const FILM_LOOK: &str = "A still frame from a live-action fantasy TV drama set in a lived-in Dungeons & \
-    Dragons world. Documentary color photograph: real adult performers in practical costume on a \
-    real dressed location, worn real props, captured by a real camera and prime lens under \
-    natural practical light; skin pores, uneven woven fabric, natural depth of field, fine film \
-    grain. No glamour, HDR, heroic posing, fantasy key art, CGI, 3D render, painting or \
-    illustration.";
-const NO_TEXT: &str = "No text, letters, numbers, logos or watermarks.";
+    Dragons world, shot on a real camera with a prime lens. Documentary color photograph: real \
+    adult performers with real skin pores and natural skin texture, practical costumes in uneven \
+    woven fabric with visible weave, worn real props on a real dressed location, natural \
+    practical light, natural depth of field and fine film grain. One continuous camera frame of \
+    one real place: no grid, no panels, no numbers, no text, no signage, no letters, \
+    no logos, no glamour, no HDR, no heroic posing.";
+/// The output is one frame, never a sheet: identity references are several photographs, and a
+/// model that copies their layout produces the collage the owner rejected.
+pub(super) const SINGLE_FRAME: &str = "The output is ONE single continuous photographic camera frame, one uninterrupted \
+    view of one place at one moment: never a grid, collage, contact sheet, split screen, panels, \
+    diptych or montage, and never subjects pasted onto a background.";
+const NO_TEXT: &str = "No text, letters, numbers, signage, signs, logos or watermarks anywhere, \
+    including on cloth, boards, banners and walls; any such surface is plain and blank.";
 const NO_REAL_PEOPLE: &str = "Fictional identities; no recognizable real person or celebrity.";
 const ADULTS_ONLY: &str = "Every person shown is an adult.";
 const RESTRAINED_LIMITS: &str = "No gore, no nudity, no sexual content.";
@@ -60,16 +68,21 @@ const HERO_PORTRAIT_REFERENCE: &str = "Image 1 is a neutral pose and lighting re
     dead_code,
     reason = "T02 stage rendering must consume the checked hero portrait prompt"
 )]
-const HERO_PORTRAIT: &str = "Photograph one adult fantasy hero full-body from head to boots, in a \
-    clear three-quarter view, isolated on a true transparent background, with the face, hair, \
-    clothing and held gear plainly visible.";
+const HERO_PORTRAIT: &str = "Photograph exactly one adult fantasy hero (count: 1, alone, no other person, animal or \
+    figure) full-body from head to boots, in a clear three-quarter view, with the face, hair, \
+    clothing and held gear plainly visible. The performer was photographed against a plain \
+    neutral grey photographic backdrop with real skin and fabric texture and natural \
+    photographic edges; the background is delivered transparent only because downstream \
+    layered compositing requires alpha, and the figure keeps the light, skin and fabric of that \
+    photograph.";
 #[allow(
     dead_code,
     reason = "T02 stage rendering must consume the checked hero cut-out prompt"
 )]
-const HERO_SHEET_REFERENCE: &str = "Image 1 is the party sheet. Isolate only its selected figure as a \
-    full-body transparent cut-out; use the sheet for pose and scale only, and rebuild identity \
-    from the selected details below.";
+const HERO_SHEET_REFERENCE: &str = "Image 1 is the party identity reference: separate full-body photographs side by \
+    side, one hero per photograph. Isolate only its selected figure as a full-body transparent \
+    cut-out for downstream compositing; use the reference for pose and scale only, never copy \
+    its side-by-side layout, and rebuild identity from the selected details below.";
 #[allow(
     dead_code,
     reason = "T02 stage rendering must consume the checked hero image prompts"
@@ -149,7 +162,7 @@ impl AssembledPrompt {
         legend: &str,
     ) -> Self {
         self.text.push_str(&format!(
-            "\nImage {image_number} is the canonical photographic identity contact sheet. {legend}. Match each named person's exact face, age, hair, hood, clothes and equipment on every rebuild and edit. The sheet identifies performers only: include only canonical scene participants, never copy its grid, numbers or labels into the photograph. Preserve the medieval live-action documentary medium."
+            "\nImage {image_number} is the canonical photographic identity contact sheet. {legend}. It shows separate identity photographs, one person per photograph in slot order, each photographed against a neutral backdrop. Match each named person's exact face, age, hair, hood, clothes and equipment on every rebuild and edit. The photographs identify performers only: include only canonical scene participants. The output is ONE single continuous photographic camera frame: never copy the sheet's side-by-side layout, grid, panels, numbers, labels, backdrop or cut-out look into the photograph, and never paste figures onto a background. Preserve the medieval live-action documentary photograph: real skin and woven fabric texture."
         ));
         self
     }
@@ -429,11 +442,12 @@ pub(in crate::gameplay) fn hero_portrait(
     // No pose carrier is sent any more (editing a blank carrier made the result read as
     // painted), so the portrait opens with its direction rather than a reference description.
     let mut parts = vec![
+        Part::Fixed(FILM_LOOK),
         Part::Fixed(HERO_PORTRAIT),
         Part::Fixed(HERO_SELECTED_IDENTITY),
         Part::Fact(hero.description()?),
     ];
-    parts.extend(rating_parts(rating));
+    parts.extend(rating_tail(rating));
     Ok(AssembledPrompt::from_parts(parts))
 }
 
@@ -450,6 +464,7 @@ pub(in crate::gameplay) fn hero_cutout(
     figure_count: usize,
 ) -> Result<AssembledPrompt, IdentityError> {
     let mut parts = vec![
+        Part::Fixed(FILM_LOOK),
         Part::Fixed(HERO_SHEET_REFERENCE),
         Part::Fixed(HERO_NUMBERED_FIGURE),
         Part::Fact(figure_index.saturating_add(1).to_string()),
@@ -460,7 +475,7 @@ pub(in crate::gameplay) fn hero_cutout(
         Part::Fixed(HERO_SELECTED_IDENTITY),
         Part::Fact(hero.description()?),
     ];
-    parts.extend(rating_parts(rating));
+    parts.extend(rating_tail(rating));
     Ok(AssembledPrompt::from_parts(parts))
 }
 
@@ -476,6 +491,7 @@ pub(in crate::gameplay) fn hero_expression(
     tier: HealthTier,
 ) -> Result<AssembledPrompt, IdentityError> {
     let mut parts = vec![
+        Part::Fixed(FILM_LOOK),
         Part::Fixed(KEEP_PERSON),
         Part::Fixed(KEEP_TRANSPARENT),
         Part::Fixed(HERO_EXPRESSION_IDENTITY),
@@ -494,7 +510,7 @@ pub(in crate::gameplay) fn hero_expression(
         }
         None => parts.push(Part::Fixed(expression_phrase(expression, rating))),
     }
-    parts.extend(rating_parts(rating));
+    parts.extend(rating_tail(rating));
     Ok(AssembledPrompt::from_parts(parts))
 }
 
@@ -699,6 +715,18 @@ pub(super) fn rating_parts(rating: ContentRating) -> Vec<Part> {
     parts
 }
 
+/// The same tail without FILM_LOOK, for builders in this module that put FILM_LOOK first.
+fn rating_tail(rating: ContentRating) -> Vec<Part> {
+    let mut parts = vec![Part::Fixed(NO_TEXT)];
+    parts.push(Part::Fixed(NO_REAL_PEOPLE));
+    parts.push(Part::Fixed(ADULTS_ONLY));
+    parts.push(Part::Fixed(match rating {
+        ContentRating::Mature => MATURE_STANCE,
+        ContentRating::Restrained => RESTRAINED_LIMITS,
+    }));
+    parts
+}
+
 pub(super) fn place_parts(place: &PlaceFacts) -> Vec<Part> {
     let mut parts = vec![
         Part::Fixed(SCENE_SETTING),
@@ -720,7 +748,11 @@ pub(in crate::gameplay) fn scene_refresh(
     place: &PlaceFacts,
     look: Look,
 ) -> AssembledPrompt {
-    let mut parts = vec![Part::Fixed(RECAMERA)];
+    let mut parts = vec![
+        Part::Fixed(FILM_LOOK),
+        Part::Fixed(SINGLE_FRAME),
+        Part::Fixed(RECAMERA),
+    ];
     parts.extend(place_parts(place));
     parts.extend([
         Part::Fixed(KEEP_PLACE),
@@ -734,7 +766,7 @@ pub(in crate::gameplay) fn scene_refresh(
         Part::Fixed("The mood of the room:"),
         Part::Fixed(mood_phrase(look.mood, rating)),
     ]);
-    parts.extend(rating_parts(rating));
+    parts.extend(rating_tail(rating));
     AssembledPrompt::from_parts(parts)
 }
 
@@ -752,6 +784,7 @@ pub(in crate::gameplay) fn cast_expression(
         return Err(PromptRefusal::RealLikenessIntimate);
     }
     let mut parts = vec![
+        Part::Fixed(FILM_LOOK),
         Part::Fixed(KEEP_PERSON),
         Part::Fixed(KEEP_TRANSPARENT),
         Part::Fixed(CHARACTER_IS),
@@ -772,7 +805,7 @@ pub(in crate::gameplay) fn cast_expression(
         }
         None => parts.push(Part::Fixed(expression_phrase(expression, rating))),
     }
-    parts.extend(rating_parts(rating));
+    parts.extend(rating_tail(rating));
     Ok(AssembledPrompt::from_parts(parts))
 }
 
@@ -782,6 +815,7 @@ pub(in crate::gameplay) fn closed_vocabulary(rating: ContentRating) -> Vec<&'sta
     let mut phrases = super::artifact::FIXED_PHRASES.to_vec();
     phrases.extend([
         FILM_LOOK,
+        SINGLE_FRAME,
         NO_TEXT,
         NO_REAL_PEOPLE,
         ADULTS_ONLY,

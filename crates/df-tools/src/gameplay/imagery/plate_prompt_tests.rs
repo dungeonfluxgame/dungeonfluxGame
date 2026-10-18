@@ -326,7 +326,7 @@ fn a_party_plate_does_not_impose_the_stock_dwarf_appearances() {
     .as_str()
     .to_owned();
 
-    assert!(text.contains("keep each hero's exact face, hair, build, costume and weapon"));
+    assert!(text.contains("Keep each hero's exact face, hair, build, costume and weapon"));
     assert!(!text.contains("red-bearded"));
     assert!(!text.contains("red-haired adult dwarf"));
     assert!(!text.contains("blonde-braided adult dwarf"));
@@ -439,7 +439,10 @@ fn a_mood_edit_names_the_previous_plate_the_change_and_what_stays_in_both_rating
                 assert!(text.contains("Documentary color photograph"));
                 assert!(text.contains("fine film grain"));
                 assert!(!text.contains("repaint"));
-                assert!(text.starts_with("Image 1 is the previous film still"));
+                // The photographic direction and the one-frame rule lead an edit, too.
+                assert!(text.starts_with("A still frame from a live-action fantasy TV drama"));
+                assert!(text.contains("ONE single continuous photographic camera frame"));
+                assert!(text.contains("Image 1 is the previous film still"));
                 assert!(text.contains("poses and small actions move on naturally"));
                 assert!(text.contains(
                     "same place, cast, faces, hair, clothing, weapons and photographic art style"
@@ -448,7 +451,10 @@ fn a_mood_edit_names_the_previous_plate_the_change_and_what_stays_in_both_rating
                     "camera position, framing, light, props, extras and all people exactly"
                 ));
                 assert!(text.contains("speaker's head stays roughly in"));
-                assert!(text.chars().count() < 1500);
+                // The bound grew with the strengthened photographic direction and the
+                // one-frame rule; the adapter limit remains the hard cap.
+                assert!(text.chars().count() < 2000, "{}", text.chars().count());
+                assert!(text.chars().count() <= MAXIMUM_PROMPT_CHARACTERS);
             }
         }
     }
@@ -517,12 +523,15 @@ fn a_flux_plate_names_its_people_in_order_and_trims_long_text_to_the_limit() {
     .expect("the FLUX plate prompt");
     let text = prompt.as_str();
     assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
-    assert!(text.starts_with("Close shot on a 75mm lens at eye level on Jessa, the speaker"));
+    // The photographic direction leads the lean prompt; the JSON facts are what gets trimmed.
+    assert!(text.starts_with("Photographic still from a live-action fantasy TV drama"));
+    assert!(text.contains("ONE single continuous camera frame only"));
+    assert!(text.contains("Close shot on a 75mm lens at eye level on Jessa, the speaker"));
     let order = [
         "Image 1 is the place photograph",
-        "Image 2, cell 1: Marek,",
-        "Image 2, cell 2: Jessa,",
-        "Image 2, cell 3: Corin \u{2014}",
+        "Image 2, photograph 1: Marek,",
+        "Image 2, photograph 2: Jessa,",
+        "Image 2, photograph 3: Corin \u{2014}",
         "Image 3 is a close portrait of Jessa",
         "The place is The Heron Shrine.",
         "Only the listed people and things exist.",
@@ -586,23 +595,98 @@ fn a_lean_flux_plate_keeps_complete_cast_identities_and_preindustrial_setting() 
     let text = prompt.as_str();
 
     assert!(prompt.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
-    assert!(text.starts_with("Wide establishing shot on a 28mm lens"));
+    assert!(text.starts_with("Photographic still from a live-action fantasy TV drama"));
+    assert!(text.contains("Wide establishing shot on a 28mm lens"));
     assert!(text.contains(
-        "Pre-industrial fantasy world: period clothing, no modern dress, no suits, no modern objects."
+        "Pre-industrial fantasy world: period clothing only, no modern dress or objects."
     ));
     for (cell, name) in ["Brakka", "Sigrun", "Marek", "Corin", "Jessa"]
         .into_iter()
         .enumerate()
     {
-        assert!(text.contains(&format!("Image 2, cell {}: {name}", cell + 1)));
+        assert!(text.contains(&format!("Image 2, photograph {}: {name}", cell + 1)));
     }
     assert!(text.contains("The place is The Heron Shrine."));
-    assert!(text.contains(
-        "Marek, a short, round middle-aged man with a neatly trimmed beard, wears a rich velvet cap and a measuring ribbon around his neck as he folds blue linen behind the counter."
-    ));
+    // Appearance state is shortened before the art direction: Marek keeps his opening clause.
+    assert!(text.contains("Marek, a short, round middle-aged man with a neatly trimmed beard."));
+    assert!(!text.contains("measuring ribbon"));
+    assert!(text.contains("The speaker's face shows a calm, neutral expression."));
+    assert!(!text.contains("cell "));
+}
+
+#[test]
+fn every_plate_prompt_leads_with_the_photographic_direction_and_one_frame_rule() {
+    let spec = spec_for("inn", SceneKey::Opening, SPEAKERS[2], &[1, 2], "T").unwrap();
+    let plate = scene_plate(
+        ContentRating::Mature,
+        &spec,
+        Some(&place()),
+        references_for(&spec),
+    )
+    .unwrap();
+    let text = plate.as_str();
+    assert!(text.starts_with("A still frame from a live-action fantasy TV drama"));
+    for needle in [
+        "real camera with a prime lens",
+        "skin pores",
+        "woven fabric",
+        "one single continuous photographic camera frame",
+        "one continuous camera frame",
+        "no grid",
+        "no panels",
+        "no numbers",
+        "no text",
+        "signage",
+        "no letters",
+        "separate full-body identity photographs side by side",
+        "never copy the sheet's side-by-side layout",
+    ] {
+        assert!(
+            text.to_ascii_lowercase().contains(needle),
+            "plate missing {needle:?} in {text}"
+        );
+    }
+    let lean = flux_scene_plate(
+        ContentRating::Mature,
+        Camera::DialogueMedium,
+        Some(&place()),
+        &FluxCast {
+            sheet: vec![FluxPerson {
+                name: "Marek".into(),
+                appearance: None,
+            }],
+            speaker: None,
+            portrait: false,
+        },
+        "{}",
+        None,
+    )
+    .unwrap();
+    assert!(lean.character_count() <= FLUX_MAXIMUM_PROMPT_CHARACTERS);
+    assert!(lean.as_str().starts_with("Photographic still"));
     assert!(
-        text.contains(
-            "The speaker's face shows a calm, neutral expression. Photographic still from"
-        )
+        lean.as_str()
+            .contains("ONE single continuous camera frame only")
     );
+}
+
+#[test]
+fn every_fixed_look_names_only_the_photograph_and_no_other_medium() {
+    // Naming another medium, even to forbid it, steers the model toward it (owner, 2026-10-17).
+    for (name, text) in [
+        ("FILM_LOOK", super::FILM_LOOK),
+        ("SINGLE_FRAME", super::SINGLE_FRAME),
+        ("NEGATIVE", NEGATIVE),
+        ("FLUX_LOOK", FLUX_LOOK),
+        ("FLUX_SHEET_IMAGE", FLUX_SHEET_IMAGE),
+        ("ONE_FRAME_EDIT", ONE_FRAME_EDIT),
+    ] {
+        let lower = text.to_ascii_lowercase();
+        for style_word in super::super::NON_PHOTOGRAPHIC_WORDS {
+            assert!(
+                !lower.contains(&style_word.to_ascii_lowercase()),
+                "{name} names {style_word:?}: {text}"
+            );
+        }
+    }
 }
