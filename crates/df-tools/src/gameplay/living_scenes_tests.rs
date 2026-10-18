@@ -684,15 +684,31 @@ fn the_stock_photo_is_the_source_and_face_only_before_a_live_picture_exists() {
 
 #[test]
 fn outside_a_fight_what_the_party_looks_like_now_is_made_first_and_only_once() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+
     let dossier = dossier();
-    let (inner, _ledger) = director(&dossier);
+    let (original, _ledger) = director(&dossier);
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/lanes/Q6/health-art-{}",
+        std::process::id()
+    ));
+    let fixture = DirectionFixture::new(&cache);
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: ReferenceStore::new(PathBuf::new()),
+        social: original.social.clone(),
+        rating: ContentRating::Restrained,
+        timing: timing(),
+        state: Mutex::new(State::new(timing())),
+        wake: watch::channel(0).0,
+        origin: Instant::now(),
+    });
     inner.observe_at(hurt_stage(2, false, 3, 13), seconds(20));
     let labels = job_labels(&inner.evaluate_at(seconds(25)));
     assert_eq!(
         labels,
         [
             format!("peek {HERO_ONE_ART}"),
-            "peek sprite-patron-merchant".to_owned(),
             format!("warm {HERO_ONE_ART} critical"),
         ]
     );

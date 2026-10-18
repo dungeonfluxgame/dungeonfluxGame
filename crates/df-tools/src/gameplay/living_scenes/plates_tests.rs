@@ -1767,6 +1767,21 @@ fn shared(capacity: usize) -> (Arc<Shared>, mpsc::Receiver<Job>) {
     )
 }
 
+fn finish_canonical_references(inner: &Inner) {
+    loop {
+        let jobs = locked(&inner.state).canonical.take_jobs();
+        if jobs.is_empty() {
+            return;
+        }
+        for job in jobs {
+            let super::super::Job::Canonical(work) = job else {
+                panic!("canonical queue contains only canonical work");
+            };
+            inner.finish_canonical(work, Ok(key('a')));
+        }
+    }
+}
+
 #[tokio::test]
 async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_base_cached() {
     use crate::gameplay::imagery::tests::DirectionFixture;
@@ -1913,6 +1928,32 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
 }
 
 fn observe(shared: &Shared, current: &pack::Scene, next: &[pack::Scene], heroes: &[u8]) {
+    if let Some(setting) = &current.setting
+        && let Some(model) = &setting.model
+    {
+        let mut model_with_cast = model.clone();
+        for member in &current.cast {
+            if model_with_cast
+                .people
+                .iter()
+                .any(|person| person.id == member.id)
+            {
+                continue;
+            }
+            if let Some(mut person) = model_with_cast.people.first().cloned() {
+                person.id.clone_from(&member.id);
+                person.name.clone_from(&member.name);
+                model_with_cast.people.push(person);
+            }
+        }
+        shared
+            .inner
+            .observe_checkpoint(&crate::gameplay::beat_script_tests::prepared_story());
+        shared
+            .inner
+            .admit_canonical_room(&setting.place_id, &model_with_cast, &current.cast);
+        finish_canonical_references(&shared.inner);
+    }
     shared.observe_with(
         &view(current, heroes, false),
         Some(current.clone()),
