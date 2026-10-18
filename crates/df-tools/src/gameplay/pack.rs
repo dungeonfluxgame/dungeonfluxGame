@@ -1115,6 +1115,7 @@ pub(super) fn load_from_bytes(
     let mut pack: PackFile = parse(SourceFile::Pack, pack_bytes)?;
     require_schema(SourceFile::Pack, &pack.schema, PACK_SCHEMA)?;
     migrate_scene_inventory_models(&mut pack)?;
+    migrate_retained_harbor_cast(&mut pack, Revision::of(pack_bytes));
     let tuning: TuningFile = parse(SourceFile::Tuning, tuning_bytes)?;
     require_schema(SourceFile::Tuning, &tuning.schema, TUNING_SCHEMA)?;
     validate_pack(&pack)?;
@@ -2430,6 +2431,35 @@ pub(super) fn validate_script_scene(content: &PackFile, scene: &Scene) -> Result
         migrate_scene_inventory_model(model, "beat_script.scenes.setting.model")?;
     }
     validate_scenes(&scenes, content.is_freeplay())
+}
+
+/// The retained harbor pack that 62105b7a's stored checkpoints pin by hash still names the cast
+/// art 613839eb retired. Only that exact source is mapped to the current photographic cutouts,
+/// so its checkpoints recover with their pins intact; every other pack still meets the art
+/// contract unchanged.
+fn migrate_retained_harbor_cast(pack: &mut PackFile, revision: Revision) {
+    if revision.to_hex() != "5c9e2ad1344484c5fcdadbaa18a72db23495c392297312580c6aae286554f3d0" {
+        return;
+    }
+    for scene in &mut pack.scenes {
+        for actor in &mut scene.cast {
+            for reference in [&mut actor.sprite, &mut actor.portrait] {
+                let replacement = match reference.as_str() {
+                    "assets/ui/generated/sprite-courier"
+                    | "assets/ui/generated/portrait-courier" => {
+                        Some("assets/ui/generated/sprite-courier-documentary-photo")
+                    }
+                    "assets/ui/generated/sprite-bandit" | "assets/ui/generated/portrait-bandit" => {
+                        Some("assets/ui/generated/sprite-bandit-documentary-photo")
+                    }
+                    _ => None,
+                };
+                if let Some(replacement) = replacement {
+                    *reference = replacement.to_owned();
+                }
+            }
+        }
+    }
 }
 
 fn migrate_scene_inventory_models(pack: &mut PackFile) -> Result<(), PackError> {

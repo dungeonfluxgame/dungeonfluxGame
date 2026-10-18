@@ -560,13 +560,17 @@ pub(super) fn combat_enemy(state: &GameState) -> Result<EntityId, RepositoryErro
     entity(BANDIT)
 }
 
-pub(super) fn combat_creature(state: &GameState, who: EntityId) -> &'static df_rules::SrdCreature {
+pub(super) fn combat_creature(state: &GameState, who: EntityId) -> df_rules::SrdCreature {
     if state.entities.iter().any(|candidate| {
         candidate.id == who && candidate.definition.entry.as_str() == "lantern-wharf-courier"
     }) {
-        &df_rules::SCENE_COMMONER
+        df_rules::SCENE_COMMONER
     } else {
-        &df_rules::SRD_521_CREATURES[0]
+        // The selected pack owns legacy encounter mechanics, including custom tuning.
+        df_rules::SrdCreature {
+            rules: pack::bandit(),
+            ..df_rules::SRD_521_CREATURES[0]
+        }
     }
 }
 

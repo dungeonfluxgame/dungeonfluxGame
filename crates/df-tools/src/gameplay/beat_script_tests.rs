@@ -6,6 +6,9 @@ use df_types::{MemberId, OperationId};
 const MEMBERS: [[u8; 16]; 2] = [[0x61; 16], [0x62; 16]];
 const PACK: &[u8] = include_bytes!("../../../../content/harbor-journey/pack.json");
 const TUNING: &[u8] = include_bytes!("fixtures/harbor-journey-tuning-baseline.json");
+// Exact 62105b7a pack bytes: a41f5c06 and 613839eb deliberately changed the live
+// presentation, but those edits cannot change the content pin of an archived checkpoint.
+const LEGACY_PACK: &[u8] = include_bytes!("fixtures/legacy-beats/pack.json");
 const SHOP_PACK: &[u8] = include_bytes!("../../../../content/merchant-shop/pack.json");
 const SHOP_TUNING: &[u8] = include_bytes!("../../../../content/merchant-shop/tuning.json");
 pub(super) fn input(
@@ -77,6 +80,15 @@ pub(super) fn prepared_story() -> Checkpoint {
         .expect("joined member");
     }
     for (op, bytes, name) in [(3, MEMBERS[0], "Brynn"), (4, MEMBERS[1], "Vale")] {
+        let mut choices = build(name);
+        // Authored scripts require the exact offered choice (62105b7a); these two
+        // scene-projection tests began using the shop's authored script in 43f6fe0c.
+        if !with_script(|script| script.is_canonical()) {
+            choices.push((
+                model::label(super::beat_script_runtime::CHOICE_GROUP).unwrap(),
+                model::label("create-character").unwrap(),
+            ));
+        }
         current = stage_with_supplier(
             &current,
             &input(
@@ -84,17 +96,30 @@ pub(super) fn prepared_story() -> Checkpoint {
                 MemberId::from_bytes(&bytes).unwrap(),
                 op,
                 "create-character",
-                build(name),
+                choices,
             ),
             &mut |_| panic!("creation cannot draw"),
         )
-        .expect("registered character outcome");
+        .unwrap_or_else(|error| {
+            panic!(
+                "registered character outcome: {error:?}, step={:?}",
+                super::refusal_detail::take()
+            )
+        });
     }
     current
 }
 
 fn opening_story() -> Checkpoint {
     let current = prepared_story();
+    let choices = if with_script(|script| script.is_canonical()) {
+        vec![]
+    } else {
+        vec![(
+            model::label(super::beat_script_runtime::CHOICE_GROUP).unwrap(),
+            model::label("begin-story").unwrap(),
+        )]
+    };
     stage_with_supplier(
         &current,
         &input(
@@ -102,7 +127,7 @@ fn opening_story() -> Checkpoint {
             MemberId::from_bytes(&MEMBERS[0]).unwrap(),
             5,
             "begin-story",
-            vec![],
+            choices,
         ),
         &mut |_| panic!("opening cannot draw"),
     )
@@ -431,7 +456,12 @@ fn snapshots(approach: &str, defeat: bool) -> Vec<Checkpoint> {
                     &input(current, member, operation, entry, choices),
                     dice,
                 )
-                .unwrap(),
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "snapshot {entry}: {error:?}, step={:?}",
+                        super::refusal_detail::take()
+                    )
+                }),
             );
         };
         perform(survivor, 8, "second-wind", vec![], &mut |sides| Ok(sides));
@@ -476,27 +506,58 @@ fn snapshots(approach: &str, defeat: bool) -> Vec<Checkpoint> {
             assert!(operation < 40);
         }
     }
-    let mut perform = |member, operation, entry: &str, choices| {
+    let current = history.last().unwrap();
+    history.push(
+        stage_with_supplier(
+            current,
+            &input(current, first, 50, "short-rest", vec![]),
+            &mut |_| panic!("rest cannot draw before a die is chosen"),
+        )
+        .unwrap(),
+    );
+    // b44a9198 requires every eligible hero to choose whether to spend or keep a die.
+    for (index, member) in [first, second].into_iter().enumerate() {
+        let current = history.last().unwrap();
+        if hit_point_die_offered(current.state(), player_entity(member, current).unwrap()).unwrap()
+        {
+            history.push(
+                stage_with_supplier(
+                    current,
+                    &input(
+                        current,
+                        member,
+                        51 + index as u8,
+                        "short-rest",
+                        vec![(
+                            model::label("hit-point-die").unwrap(),
+                            model::label("keep").unwrap(),
+                        )],
+                    ),
+                    &mut |_| panic!("keeping a die cannot draw"),
+                )
+                .unwrap(),
+            );
+        }
+    }
+    assert!(short_rest_completed(history.last().unwrap().state()));
+    if !defeat {
         let current = history.last().unwrap();
         history.push(
             stage_with_supplier(
                 current,
-                &input(current, member, operation, entry, choices),
-                &mut |_| panic!("rest/travel dice"),
+                &input(
+                    current,
+                    first,
+                    12,
+                    "choose-harbor-scene",
+                    vec![(
+                        model::label("harbor-destination").unwrap(),
+                        model::label("harbor-inn").unwrap(),
+                    )],
+                ),
+                &mut |_| panic!("travel cannot draw"),
             )
             .unwrap(),
-        );
-    };
-    perform(first, 50, "short-rest", vec![]);
-    if !defeat {
-        perform(
-            first,
-            12,
-            "choose-harbor-scene",
-            vec![(
-                model::label("harbor-destination").unwrap(),
-                model::label("harbor-inn").unwrap(),
-            )],
         );
     }
     history
@@ -597,11 +658,7 @@ fn codec() -> df_persistence::NativeCodecLimits {
 
 #[test]
 fn stored_game_without_hit_point_dice_loads_with_one_unspent_d10_for_short_rest_srd_p47() {
-    let loaded = pack::load_from_bytes(
-        include_bytes!("fixtures/harbor-journey-pack-integration-baseline.json"),
-        TUNING,
-    )
-    .unwrap();
+    let loaded = pack::load_from_bytes(LEGACY_PACK, TUNING).unwrap();
     pack::with_test_pack(loaded, || {
         let mut basis = model::basis().unwrap();
         for _ in 0..8 {
@@ -626,11 +683,7 @@ fn stored_game_without_hit_point_dice_loads_with_one_unspent_d10_for_short_rest_
 
 #[test]
 fn real_pre_change_checkpoint_bytes_resume_with_exact_pins_and_reencode_unchanged() {
-    let loaded = pack::load_from_bytes(
-        include_bytes!("fixtures/harbor-journey-pack-integration-baseline.json"),
-        TUNING,
-    )
-    .unwrap();
+    let loaded = pack::load_from_bytes(LEGACY_PACK, TUNING).unwrap();
     pack::with_test_pack(loaded, || {
         for (bytes, sequence, expected) in [
             (
