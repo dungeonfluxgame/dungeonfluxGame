@@ -1391,7 +1391,7 @@ pub(super) struct ActionLine {
 }
 
 /// The public lines of an accepted action: the acting hero's short phrase from the offer's
-/// label and visible result, then what the enemy did in answer. Creating a hero says nothing.
+/// label and visible result, then what the enemy did in answer. Some actions have no story phrase.
 pub(super) fn action_lines(
     kind: rpc::GameplayActionKind,
     hero: &str,
@@ -1419,8 +1419,8 @@ pub(super) fn action_lines(
     if matches!(kind, Kind::CreateCharacter | Kind::Unspecified) {
         return Vec::new();
     }
-    // Only an attack action is worded from the attack it resolved: a turn that ends, or a move,
-    // keeps its own line even when the same submit carries a reaction's blow.
+    // Only an attack action is worded from the attack it resolved; moves keep their own line even
+    // when the same submit carries a reaction's blow. Ending a turn has no story phrase.
     let attacking = matches!(kind, Kind::GreatswordAttack | Kind::OpportunityAttack);
     let phrase = if let Some(outcome) = own.filter(|_| attacking) {
         // An unarmed strike is the attack itself, not a thing held: "makes an unarmed strike",
@@ -1477,7 +1477,6 @@ pub(super) fn action_lines(
             }
             Kind::GreatswordAttack => format!("strikes with the {used}"),
             Kind::SecondWind => "catches a second wind".to_owned(),
-            Kind::EndTurn => "ends the turn".to_owned(),
             Kind::ShortRest => "takes a short rest".to_owned(),
             Kind::Move => {
                 let (squares, feet) = combat
@@ -1507,7 +1506,7 @@ pub(super) fn action_lines(
     // Starting a fight has no hero phrase of its own: the offer's label ("Start a fight") is a
     // button caption, not the hero's words. The hero's typed line (published by the dialogue
     // route) or the narrator's fight-start lines tell the act; only the combat rows stand here.
-    let mut phrase_line = if kind == Kind::SceneAssault {
+    let mut phrase_line = if matches!(kind, Kind::BeginStory | Kind::EndTurn | Kind::SceneAssault) {
         None
     } else {
         Some(ActionLine {
@@ -3171,7 +3170,7 @@ mod tests {
             "",
         );
         assert_eq!(
-            lines[1].text,
+            lines[0].text,
             "strikes Perrin \u{2014} hit, 5 piercing damage, Perrin falls unconscious"
         );
     }
@@ -3197,7 +3196,6 @@ mod tests {
         assert_eq!(
             told,
             [
-                ("Sigrun", "ends the turn"),
                 (
                     "Corin",
                     "makes two attacks on Sigrun \u{2014} miss; hit, 5 piercing damage"
@@ -3498,6 +3496,8 @@ mod tests {
             ["questions Ilsa closely"]
         );
         assert!(phrase(Kind::CreateCharacter, "Bring your hero to life").is_empty());
+        assert!(phrase(Kind::BeginStory, "Enter the shop").is_empty());
+        assert!(phrase(Kind::EndTurn, "End turn").is_empty());
     }
 
     #[test]
