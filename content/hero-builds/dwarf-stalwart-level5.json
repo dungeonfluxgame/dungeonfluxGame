@@ -1,0 +1,166 @@
+{
+  "schema": "df-fighter-progression/1",
+  "id": "dwarf-stalwart-level5",
+  "source": {
+    "publisher": "Wizards of the Coast LLC",
+    "title": "System Reference Document 5.2.1",
+    "sha256": "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87",
+    "pages": [
+      23,
+      47,
+      48,
+      49,
+      84,
+      87
+    ],
+    "license": "CC-BY-4.0",
+    "mechanics_revision": "SRD-5.2.1:FIGHTER-1-5:1"
+  },
+  "description": "Level 5 Dwarf Fighter (Champion), Soldier, stalwart. Advance the accepted starting choices below with fixed HP and the fixed ASI; starting equipment is unchanged.",
+  "starting_choices": [
+    [
+      "species",
+      "dwarf"
+    ],
+    [
+      "class",
+      "fighter-1"
+    ],
+    [
+      "background",
+      "soldier"
+    ],
+    [
+      "array",
+      "stalwart"
+    ],
+    [
+      "alignment",
+      "neutral-good"
+    ],
+    [
+      "language-1",
+      "dwarvish"
+    ],
+    [
+      "language-2",
+      "goblin"
+    ],
+    [
+      "skill-1",
+      "perception"
+    ],
+    [
+      "skill-2",
+      "survival"
+    ],
+    [
+      "gaming-set",
+      "dice"
+    ],
+    [
+      "equipment",
+      "fighter-a-soldier-a"
+    ],
+    [
+      "style-masteries",
+      "defense-greatsword-flail-javelin"
+    ],
+    [
+      "allied-ties",
+      "join-order"
+    ]
+  ],
+  "level": 5,
+  "class": "fighter",
+  "subclass": "champion",
+  "advancement": {
+    "fixed_hit_points_after_first": 6,
+    "ability_score_improvement": {
+      "ability": "strength",
+      "increase": 2
+    },
+    "fourth_weapon_mastery": "spear"
+  },
+  "hero": {
+    "abilities": [
+      19,
+      13,
+      15,
+      10,
+      12,
+      8
+    ],
+    "hit_points": 49,
+    "hit_point_dice": 5,
+    "armor_class": 17,
+    "proficiency_bonus": 3,
+    "second_wind": {
+      "uses_max": 3,
+      "die_sides": 10,
+      "flat_bonus": 5,
+      "recharge_per_short_rest": 1
+    },
+    "action_surge": {
+      "uses_max": 1,
+      "recharge": "short-or-long-rest"
+    },
+    "attacks_per_attack_action": 2,
+    "critical_threshold": 19
+  },
+  "equipment": [
+    {
+      "item": "chain-mail",
+      "quantity": 1
+    },
+    {
+      "item": "greatsword",
+      "quantity": 1
+    },
+    {
+      "item": "flail",
+      "quantity": 1
+    },
+    {
+      "item": "javelin",
+      "quantity": 8
+    },
+    {
+      "item": "dungeoneer-pack",
+      "quantity": 1
+    },
+    {
+      "item": "spear",
+      "quantity": 1
+    },
+    {
+      "item": "shortbow",
+      "quantity": 1
+    },
+    {
+      "item": "arrow",
+      "quantity": 20
+    },
+    {
+      "item": "gaming-set",
+      "quantity": 1
+    },
+    {
+      "item": "healers-kit",
+      "quantity": 1
+    },
+    {
+      "item": "quiver",
+      "quantity": 1
+    },
+    {
+      "item": "travelers-clothes",
+      "quantity": 1
+    },
+    {
+      "item": "gold-piece",
+      "quantity": 18
+    }
+  ],
+  "departures": []
+}

@@ -4,6 +4,12 @@ use crate::local_journey::{self, HeroSpecies, LegalCharacter, SpeciesSize};
 /// Creation-group/array data for the follow-up loader; current pack.rs cannot yet accept it.
 pub const ARCHER_CREATION_JSON: &str =
     include_str!("../../../../content/hero-builds/dwarf-archer.json");
+/// Source-pinned progressed forms of the existing three creation archetypes.
+pub const LEVEL_FIVE_BUILDS: [&str; 3] = [
+    include_str!("../../../../content/hero-builds/dwarf-stalwart-level5.json"),
+    include_str!("../../../../content/hero-builds/dwarf-vanguard-level5.json"),
+    include_str!("../../../../content/hero-builds/dwarf-archer-level5.json"),
+];
 /// SRD 5.2.1 p. 47 Fighter starting equipment:
 /// A "Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack, and 4 GP";
 /// B "Studded Leather Armor, Scimitar, Shortsword, Longbow, 20 Arrows, Quiver, Dungeoneer's Pack, and 11 GP";

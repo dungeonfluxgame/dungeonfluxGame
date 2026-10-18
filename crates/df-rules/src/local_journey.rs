@@ -236,6 +236,92 @@ impl LegalCharacter {
         ability_modifier(self.abilities[1])
     }
 }
+/// Fixed supported Fighter/Champion progression (SRD 5.2.1 pp. 23, 47-49, 87).
+/// Level 4 selects +2 STR for melee or +2 DEX for archers; later HP use fixed 6.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FighterProgression {
+    level: u8,
+}
+impl FighterProgression {
+    pub fn new(level: u8) -> Result<Self, JourneyRuleError> {
+        if !(1..=5).contains(&level) {
+            return Err(JourneyRuleError::InvalidChoice);
+        }
+        Ok(Self { level })
+    }
+    pub fn level(self) -> u8 {
+        self.level
+    }
+    pub fn proficiency_bonus(self) -> u8 {
+        if self.level >= 5 { 3 } else { 2 }
+    }
+    pub fn second_wind_maximum(self) -> u8 {
+        if self.level >= 4 { 3 } else { 2 }
+    }
+    pub fn champion(self) -> bool {
+        self.level >= 3
+    }
+    pub fn hit_points(self, constitution: u8, species: HeroSpecies) -> u16 {
+        let per_level = ability_modifier(constitution)
+            + i32::from(species.combat_traits().hit_points_per_level);
+        (10 + 6 * i32::from(self.level - 1) + per_level * i32::from(self.level)) as u16
+    }
+    /// Advance an accepted level-one receipt using this build's fixed source-legal ASI.
+    pub fn apply(self, character: &mut LegalCharacter) -> Result<(), JourneyRuleError> {
+        let species = character
+            .choices
+            .iter()
+            .find(|(key, _)| key == "species")
+            .and_then(|(_, value)| HeroSpecies::from_choice(value))
+            .ok_or(JourneyRuleError::InvalidChoice)?;
+        let archer = character
+            .choices
+            .iter()
+            .any(|(key, value)| key == "array" && value == "dexterous");
+        if self.level >= 4 {
+            let ability = if archer { 1 } else { 0 };
+            if character.abilities[ability] > 18 {
+                return Err(JourneyRuleError::InvalidChoice);
+            }
+            character.abilities[ability] += 2;
+        }
+        character.hit_points = u32::from(self.hit_points(character.abilities[2], species));
+        character.proficiency_bonus = u32::from(self.proficiency_bonus());
+        character.second_wind_uses = u32::from(self.second_wind_maximum());
+        if archer {
+            character.armor_class = u32::try_from(12 + character.dexterity_modifier())
+                .map_err(|_| JourneyRuleError::InvalidRules)?;
+        }
+        Ok(())
+    }
+    /// Tactical Mind follows a failed check; a still-failed check does not spend Second Wind.
+    pub fn tactical_mind(
+        self,
+        total: i32,
+        dc: i32,
+        die: u32,
+        uses: u8,
+    ) -> Result<(i32, u8), JourneyRuleError> {
+        if self.level < 2 || total >= dc {
+            return Err(JourneyRuleError::InvalidChoice);
+        }
+        if uses == 0 || uses > self.second_wind_maximum() {
+            return Err(JourneyRuleError::ResourceMissing);
+        }
+        if !(1..=10).contains(&die) {
+            return Err(JourneyRuleError::InvalidDie);
+        }
+        let improved = total
+            .checked_add(die as i32)
+            .ok_or(JourneyRuleError::InvalidRules)?;
+        Ok((improved, uses - u8::from(improved >= dc)))
+    }
+    /// Champion has Advantage on Strength (Athletics) checks (p.49).
+    pub fn athletics_advantage(self) -> bool {
+        self.champion()
+    }
+}
+
 pub const FIGHTER_SKILLS: &[&str] = &[
     "acrobatics",
     "animal-handling",

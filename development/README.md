@@ -467,6 +467,15 @@ leads straight to a tactical fight against `n` enemies.
   4. Any other value refuses startup. After the opening's first choice (ask or escort) the server
   submits the courier defence for the same player at once, so the fight begins without the
   dialogue step; every rule, check and revision is the ordinary one.
+- `DF_GAMEPLAY_TEST_LEVEL=<1|5>`: creates new test-fight heroes at level 1 (default) or
+  level 5. Requires `DF_GAMEPLAY_TEST_FIGHT`; other values refuse character creation. The
+  accepted level persists in checkpoints, so restarting without this setting preserves it.
+  Level 5 uses Champion, fixed HP (6 per level after first), +2 Strength for the melee
+  archetypes or +2 Dexterity for the archer at level 4, and the fourth mastery Spear or
+  Javelin respectively. Select Action Surge in the Second Wind / Action Surge technique
+  panel, or use `dev act <hero> action-surge`; each Attack action then offers two separate
+  target selections and rolls. For example, set `DF_GAMEPLAY_TEST_FIGHT=4`,
+  `DF_GAMEPLAY_TEST_FOE=skeleton`, and `DF_GAMEPLAY_TEST_LEVEL=5` before creating heroes.
 - `DF_GAMEPLAY_TEST_FOE=<creature id>` (or `--test-foe <id>`): the creature, from the compiled
   rules table (`bandit`, `cultist`, `guard`, `goblin-warrior`, `kobold-warrior`, `skeleton`,
   `zombie`, `wolf`, `giant-rat`, `giant-weasel`, `mastiff`, `scout`). Default: the adventure's

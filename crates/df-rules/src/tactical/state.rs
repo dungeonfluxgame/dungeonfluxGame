@@ -109,6 +109,49 @@ impl CreatureKind {
     }
 }
 impl CombatantSpec {
+    /// The supported fixed-HP Fighter profiles identify their level without changing legacy
+    /// caller construction or snapshot schemas. Source validation checks every derived field.
+    pub fn fighter_level(&self) -> Option<crate::local_journey::FighterProgression> {
+        if self.kind != CreatureKind::Hero {
+            return None;
+        }
+        let species = self.species?;
+        (1..=5)
+            .filter_map(|level| crate::local_journey::FighterProgression::new(level).ok())
+            .find(|progression| {
+                progression.hit_points(self.abilities[2], species) == self.hit_points
+            })
+    }
+    /// Upgrade an admitted level-one profile, retaining equipment and species.
+    pub fn at_fighter_level(mut self, level: u8) -> Result<Self, RuleError> {
+        validate_source_profile(&self)?;
+        if self
+            .fighter_level()
+            .is_none_or(|progression| progression.level() != 1)
+        {
+            return Err(RuleError::InvalidBuild);
+        }
+        let progression = crate::local_journey::FighterProgression::new(level)
+            .map_err(|_| RuleError::InvalidBuild)?;
+        if level >= 4 {
+            self.abilities[if self.archery { 1 } else { 0 }] += 2;
+            self.masteries.push(if self.archery {
+                Weapon::Javelin
+            } else {
+                Weapon::Spear
+            });
+            if self.archery {
+                self.armor_class += 1;
+            }
+        }
+        self.hit_points = progression.hit_points(
+            self.abilities[2],
+            self.species.ok_or(RuleError::InvalidBuild)?,
+        );
+        self.second_wind_uses = progression.second_wind_maximum();
+        validate_source_profile(&self)?;
+        Ok(self)
+    }
     pub fn species_traits(&self) -> Option<SpeciesCombatTraits> {
         self.species.map(HeroSpecies::combat_traits)
     }
@@ -142,7 +185,11 @@ impl CombatantSpec {
         let damage = crate::local_journey::ability_modifier(self.abilities[ability]) as i16;
         Ok((
             damage
-                + 2
+                + i16::from(
+                    self.fighter_level()
+                        .ok_or(RuleError::InvalidBuild)?
+                        .proficiency_bonus(),
+                )
                 + if ranged && weapon.ranged_weapon() && self.archery {
                     2
                 } else {
@@ -400,6 +447,14 @@ pub struct Combatant {
     pub(crate) light_used: bool,
     pub(crate) savage_used: bool,
     pub(crate) extra_attacks: u8,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) action_surge_spent: bool,
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub(crate) additional_actions: u8,
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub(crate) feature_movement_ft: u16,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) additional_dash: bool,
     pub(crate) ammunition_used: u16,
     pub(crate) recovered: bool,
     pub(crate) bolts_used: u16,
@@ -408,7 +463,35 @@ pub struct Combatant {
     pub(crate) held: Vec<Weapon>,
     pub(crate) shield_equipped: bool,
 }
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
+}
+fn is_zero_u16(value: &u16) -> bool {
+    *value == 0
+}
 impl Combatant {
+    pub fn action_surge_available(&self) -> bool {
+        self.spec
+            .fighter_level()
+            .is_some_and(|progression| progression.level() >= 2)
+            && !self.action_surge_spent
+    }
+    pub fn additional_actions(&self) -> u8 {
+        self.additional_actions
+    }
+    pub fn feature_movement_ft(&self) -> u16 {
+        self.feature_movement_ft
+    }
+    pub(crate) fn spend_action(&mut self) -> Result<(), RuleError> {
+        if !self.budget.action_used {
+            self.budget.action_used = true;
+        } else if self.additional_actions > 0 {
+            self.additional_actions -= 1;
+        } else {
+            return Err(RuleError::ActionSpent);
+        }
+        Ok(())
+    }
     pub fn id(&self) -> u32 {
         self.spec.id
     }
@@ -461,8 +544,9 @@ impl Combatant {
             .saturating_sub(if self.slow.is_empty() { 0 } else { 10 })
     }
     pub fn movement_remaining_ft(&self) -> u16 {
-        (self.speed_ft() * if self.budget.dash { 2 } else { 1 })
+        (self.speed_ft() * (1 + u16::from(self.budget.dash) + u16::from(self.additional_dash)))
             .saturating_sub(self.budget.movement_spent_ft)
+            + self.feature_movement_ft
     }
     pub fn extra_attacks_available(&self) -> bool {
         self.extra_attacks > 0
@@ -538,6 +622,19 @@ impl Battle {
         actor.health.hit_points = hit_points;
         actor.spec.arrows = arrows;
         actor.spec.second_wind_uses = second_wind;
+        Ok(self)
+    }
+    /// Carry a Fighter's once-per-rest Action Surge across encounters.
+    pub fn with_hero_action_surge(mut self, id: u32, available: bool) -> Result<Self, RuleError> {
+        let actor = self.actor_mut(id)?;
+        if actor
+            .spec
+            .fighter_level()
+            .is_none_or(|progression| progression.level() < 2)
+        {
+            return Err(RuleError::InvalidBuild);
+        }
+        actor.action_surge_spent = !available;
         Ok(self)
     }
     /// Carry remaining Healer's Kit uses and Orc Relentless Endurance into a new encounter.
@@ -893,9 +990,9 @@ fn begin_faces(
             || spec.abilities.iter().any(|value| !(1..=30).contains(value))
             || spec.weapons.is_empty()
             || spec.weapons.len() > 12
-            || spec.masteries.len() > 3
+            || spec.masteries.len() > 4
             || (spec.shield && spec.armor_class < 3)
-            || spec.second_wind_uses > 2
+            || spec.second_wind_uses > 3
             || spec.healers_kit_uses > 10
             || spec.arrows > 1000
             || spec.bolts > 1000
@@ -905,7 +1002,7 @@ fn begin_faces(
                 .enumerate()
                 .any(|(i, weapon)| spec.weapons[..i].contains(weapon))
             || spec.masteries.iter().enumerate().any(|(i, weapon)| {
-                !spec.weapons.contains(weapon)
+                (spec.kind != CreatureKind::Hero && !spec.weapons.contains(weapon))
                     || weapon.mastery().is_none()
                     || spec.masteries[..i].contains(weapon)
             })
@@ -1004,6 +1101,10 @@ fn begin_faces(
             light_used: false,
             savage_used: false,
             extra_attacks: 0,
+            action_surge_spent: false,
+            additional_actions: 0,
+            feature_movement_ft: 0,
+            additional_dash: false,
             ammunition_used: 0,
             bolts_used: 0,
             recovered: false,
@@ -1069,6 +1170,18 @@ pub fn begin(
                 &mut rerolls,
             )?);
         }
+        if actor
+            .fighter_level()
+            .is_some_and(|progression| progression.champion())
+        {
+            face = face.max(super::resolve::take_d20(
+                actor,
+                actor.id,
+                super::D20Test::Initiative,
+                &mut draws,
+                &mut rerolls,
+            )?);
+        }
         initiatives.push(face);
     }
     let battle = begin_faces(map, specs, &initiatives)?;
@@ -1097,11 +1210,27 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             SpeciesSize::Small => Size::Small,
             SpeciesSize::Medium => Size::Medium,
         };
-        let expected_hit_points = 10_i32
-            + crate::local_journey::ability_modifier(spec.abilities[2])
-            + i32::from(species_traits.hit_points_per_level);
+        let progression = spec.fighter_level().ok_or(RuleError::InvalidBuild)?;
+        let mut base_abilities = spec.abilities;
+        let mut base_masteries = spec.masteries.clone();
+        if progression.level() >= 4 {
+            let ability = if spec.archery { 1 } else { 0 };
+            base_abilities[ability] = base_abilities[ability]
+                .checked_sub(2)
+                .ok_or(RuleError::InvalidBuild)?;
+            if base_masteries.pop()
+                != Some(if spec.archery {
+                    Weapon::Javelin
+                } else {
+                    Weapon::Spear
+                })
+            {
+                return Err(RuleError::InvalidBuild);
+            }
+        }
+        let expected_hit_points = i32::from(progression.hit_points(spec.abilities[2], species));
         let standard_melee = matches!(
-            spec.abilities,
+            base_abilities,
             [17, 13, 15, 10, 12, 8] | [17, 14, 14, 8, 10, 12]
         ) && spec.armor_class == 17
             && !spec.archery
@@ -1113,12 +1242,12 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
                     Weapon::Spear,
                     Weapon::Shortbow,
                 ]
-            && spec.masteries == [Weapon::Greatsword, Weapon::Flail, Weapon::Javelin];
-        let standard_archer = spec.abilities == [13, 17, 15, 10, 12, 8]
-            && spec.armor_class == 15
+            && base_masteries == [Weapon::Greatsword, Weapon::Flail, Weapon::Javelin];
+        let standard_archer = base_abilities == [13, 17, 15, 10, 12, 8]
+            && spec.armor_class == if progression.level() >= 4 { 16 } else { 15 }
             && spec.archery
             && spec.weapons == [Weapon::Longbow, Weapon::Scimitar, Weapon::Shortsword]
-            && spec.masteries == spec.weapons;
+            && base_masteries == spec.weapons;
         if spec.side != Side::Heroes
             || !supported_species
             || spec.size != expected_size
@@ -1126,7 +1255,7 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             || i32::from(spec.hit_points) != expected_hit_points
             || spec.speed_ft != species_traits.speed_ft
             || !spec.savage_attacker
-            || spec.second_wind_uses != 2
+            || spec.second_wind_uses != progression.second_wind_maximum()
             || spec.healers_kit_uses > 10
             || (spec.relentless_endurance_available && !species_traits.relentless_endurance)
             || spec.shield

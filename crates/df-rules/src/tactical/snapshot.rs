@@ -31,7 +31,17 @@ impl Battle {
     pub fn snapshot(&self) -> Result<Vec<u8>, RuleError> {
         let bytes = serde_json::to_vec(&Snapshot {
             version: VERSION,
-            source: super::SOURCE_REVISION.to_owned(),
+            source: if self.actors.iter().any(|actor| {
+                actor
+                    .spec
+                    .fighter_level()
+                    .is_some_and(|progression| progression.level() > 1)
+            }) {
+                super::FIGHTER_SOURCE_REVISION
+            } else {
+                super::SOURCE_REVISION
+            }
+            .to_owned(),
             layout: self.map.id().to_owned(),
             actors: self.actors.clone(),
             order: self.order.clone(),
@@ -56,7 +66,17 @@ impl Battle {
         }
         let state: Snapshot = serde_json::from_slice(bytes).map_err(|_| RuleError::SnapshotData)?;
         if state.version != VERSION
-            || state.source != super::SOURCE_REVISION
+            || state.source
+                != if state.actors.iter().any(|actor| {
+                    actor
+                        .spec
+                        .fighter_level()
+                        .is_some_and(|progression| progression.level() > 1)
+                }) {
+                    super::FIGHTER_SOURCE_REVISION
+                } else {
+                    super::SOURCE_REVISION
+                }
             || state.layout != map.id()
             || state.round == 0
             || !(2..=64).contains(&state.actors.len())
@@ -84,13 +104,43 @@ impl Battle {
                 || actor.health.hit_points > actor.health.maximum
                 || actor.health.death_successes > 3
                 || actor.health.death_failures > 3
-                || actor.spec.second_wind_uses > 2
+                || actor.spec.second_wind_uses
+                    > actor
+                        .spec
+                        .fighter_level()
+                        .map_or(0, |progression| progression.second_wind_maximum())
                 || actor.spec.arrows > 1000
                 || actor.spec.bolts > 1000
                 || actor.held.len() > 2
                 || actor.dropped.len() > 12
                 || actor.weapon_counts.len() > 12
-                || actor.extra_attacks > 1
+                || actor.extra_attacks
+                    > if actor
+                        .spec
+                        .fighter_level()
+                        .is_some_and(|progression| progression.level() >= 5)
+                    {
+                        if actor.action_surge_spent { 2 } else { 1 }
+                    } else if actor.spec.kind == super::CreatureKind::Scout {
+                        1
+                    } else {
+                        0
+                    }
+                || (actor.extra_attacks > 0 && !actor.budget.action_used)
+                || actor.additional_actions > 1
+                || (actor.additional_actions > 0 && !actor.action_surge_spent)
+                || (actor.action_surge_spent
+                    && actor
+                        .spec
+                        .fighter_level()
+                        .is_none_or(|progression| progression.level() < 2))
+                || actor.feature_movement_ft > actor.spec.speed_ft / 2
+                || (actor.feature_movement_ft > 0
+                    && actor
+                        .spec
+                        .fighter_level()
+                        .is_none_or(|progression| !progression.champion()))
+                || (actor.additional_dash && (!actor.action_surge_spent || !actor.budget.dash))
                 || (!actor.health.dead && !in_transit && !living_cells.insert(actor.cell()))
                 || actor.budget.movement_spent_ft > 240
                 || (actor.budget.dash && !actor.budget.action_used)
@@ -139,7 +189,10 @@ impl Battle {
             // Source creation is fixed; resources can only decrease/recover through resolve.
             if original.kind == super::CreatureKind::Hero {
                 original.arrows = 20;
-                original.second_wind_uses = 2;
+                original.second_wind_uses = original
+                    .fighter_level()
+                    .ok_or(RuleError::SnapshotData)?
+                    .second_wind_maximum();
             }
             if actor.spec.shield && !actor.shield_equipped {
                 original.armor_class = original

@@ -154,7 +154,7 @@ pub(crate) fn accepted_quickstart_identity(
 /// Name and story identity metadata are outside pack validation; portrait remains because the
 /// pack validates that the selected appearance matches the accepted build's equipment.
 pub(crate) fn is_character_pack_validation_choice(group: &str) -> bool {
-    group != "name" && !group.starts_with("identity-appearance:")
+    group != "name" && group != "test-fighter-level" && !group.starts_with("identity-appearance:")
 }
 
 impl AcceptedVisualDossier {

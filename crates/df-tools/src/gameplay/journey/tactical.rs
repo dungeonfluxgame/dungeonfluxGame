@@ -313,6 +313,27 @@ thread_local! {
     static TEST_SCENE_OVERRIDE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
 }
 
+#[cfg(test)]
+thread_local! { static TEST_LEVEL_OVERRIDE: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) }; }
+/// Only test-fight creation reads this development setting. Accepted choices pin it thereafter.
+pub(super) fn test_fighter_level() -> Result<u8, RepositoryError> {
+    #[cfg(test)]
+    if let Some(level) = TEST_LEVEL_OVERRIDE.with(|own| own.get()) {
+        return Ok(level);
+    }
+    if !test_fight_enabled() {
+        return Ok(1);
+    }
+    match std::env::var("DF_GAMEPLAY_TEST_LEVEL") {
+        Err(std::env::VarError::NotPresent) => Ok(1),
+        Ok(value) if value == "1" => Ok(1),
+        Ok(value) if value == "5" => Ok(5),
+        _ => {
+            crate::gameplay::refusal_detail::note("DF_GAMEPLAY_TEST_LEVEL-must-be-1-or-5");
+            Err(RepositoryError::InvalidCandidate)
+        }
+    }
+}
 fn test_fight() -> Option<TestFight> {
     #[cfg(test)]
     if let Some(own) = TEST_FIGHT_OVERRIDE.with(|own| own.borrow().clone()) {
@@ -494,6 +515,18 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
             set(state, who, key, value)?;
         }
         if actor.side() == Side::Heroes {
+            if actor
+                .spec()
+                .fighter_level()
+                .is_some_and(|progression| progression.level() >= 2)
+            {
+                set(
+                    state,
+                    who,
+                    "action-surge",
+                    u32::from(actor.action_surge_available()),
+                )?;
+            }
             if carries_healers_kit(state, who) {
                 set(
                     state,
@@ -1147,6 +1180,17 @@ fn apply(
         outcomes,
     )?;
     store(state, &result.battle)?;
+    if matches!(action, Action::ActionSurge) {
+        super::super::actor::record_audit_line(
+            "gameplay.action_surge",
+            format!(
+                "COMBAT action-surge actor={} operation={} source={} additional_actions=1",
+                name(state, canonical(state, actor)?)?,
+                hex(operation.as_bytes()),
+                tactical_rules::FIGHTER_SOURCE_REVISION
+            ),
+        );
+    }
     Ok(result.battle)
 }
 fn finish_if_done(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> {
@@ -1343,6 +1387,8 @@ fn enemy_action_description(action: &Action) -> (&'static str, &'static str) {
         Action::NimbleDisengage => ("nimble-disengage", "leave threatened reach"),
         Action::Opportunity { .. } => ("opportunity", "resolve a reaction offer"),
         Action::SecondWind => ("second-wind", "recover hit points"),
+        Action::ActionSurge => ("action-surge", "gain one additional action"),
+        Action::LongRest { .. } => ("long-rest", "resolve a rest"),
         Action::DeathSave => ("death-save", "resolve a dying creature's turn"),
         Action::ShortRest { .. } => ("short-rest", "resolve a rest"),
         Action::RecoverAmmunition { .. } => ("recover-ammunition", "recover spent ammunition"),
@@ -1787,7 +1833,7 @@ fn start_on(
             .filter(|choice| {
                 super::super::hero_identity::is_character_pack_validation_choice(
                     choice.offer.as_str(),
-                )
+                ) && choice.offer.as_str() != "test-fighter-level"
             })
             .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
             .collect::<Vec<_>>();
@@ -1817,7 +1863,12 @@ fn start_on(
                 CombatantSpec::melee_hero(&legal, id, cell).map_err(bad),
             )?
         };
-        specs.push(spec);
+        let level = super::fighter_progression(state, entity)?.level();
+        specs.push(if level > 1 {
+            spec.at_fighter_level(level).map_err(bad)?
+        } else {
+            spec
+        });
         actors.push((id, entity));
     }
     let enemy_roster = if let Some(binding) = scene_binding {
@@ -1944,6 +1995,12 @@ fn start_on(
                 )
                 .map_err(bad),
         )?;
+        if super::fighter_progression(state, *who)?.level() >= 2 {
+            result.battle = result
+                .battle
+                .with_hero_action_surge(*id, value(state, *who, "action-surge")? != 0)
+                .map_err(bad)?;
+        }
         let relentless_endurance_available = result
             .battle
             .actor(*id)
@@ -2266,6 +2323,11 @@ fn options(
                                     );
                                     for (spend, suffix, spend_label) in [
                                         (AttackSpend::Action, "action", ""),
+                                        (
+                                            AttackSpend::Multiattack,
+                                            "multiattack",
+                                            " · Extra Attack",
+                                        ),
                                         (AttackSpend::LightBonus, "bonus", " · Light bonus attack"),
                                         (AttackSpend::Nick, "nick", " · Nick extra attack"),
                                     ] {
@@ -2382,7 +2444,12 @@ fn options(
                 candidates.push((String::new(), Action::Disengage, "Disengage".to_owned()))
             }
             K::SecondWind => {
-                candidates.push((String::new(), Action::SecondWind, "Second Wind".to_owned()))
+                candidates.push((String::new(), Action::SecondWind, "Second Wind".to_owned()));
+                candidates.push((
+                    "action-surge".to_owned(),
+                    Action::ActionSurge,
+                    "Action Surge".to_owned(),
+                ));
             }
             K::EndTurn => candidates.push((String::new(), Action::EndTurn, "End turn".to_owned())),
             _ => {}
@@ -2511,7 +2578,14 @@ pub(in crate::gameplay) fn groups(
             | rpc::GameplayActionKind::HelpAttack
             | rpc::GameplayActionKind::OpportunityAttack
             | rpc::GameplayActionKind::PickUpWeapon
-    ) {
+    ) && !(kind == rpc::GameplayActionKind::SecondWind
+        && read(current.state())?
+            .actor(actor_id(current.state(), player_entity(member, current)?)?)
+            .map_err(bad)?
+            .spec()
+            .fighter_level()
+            .is_some_and(|progression| progression.level() >= 2))
+    {
         return Ok(Vec::new());
     }
     let actor = actor_id(current.state(), player_entity(member, current)?)?;
@@ -2530,6 +2604,7 @@ pub(in crate::gameplay) fn groups(
         label: match kind {
             rpc::GameplayActionKind::Move => "Reachable cell",
             rpc::GameplayActionKind::HelpAttack => "Ally and target",
+            rpc::GameplayActionKind::SecondWind => "Fighter technique",
             _ => "Weapon and target",
         }
         .to_owned(),
@@ -2543,6 +2618,7 @@ pub(in crate::gameplay) fn groups(
                 weapon,
                 spend,
             } => tactical_attack_id(*target, *weapon, *spend),
+            Action::SecondWind => "second-wind".to_owned(),
             _ => option_id.clone(),
         };
         // P6-83: a move that leaves reach names its opportunity attacks before it is taken.
@@ -2714,6 +2790,11 @@ fn selected_candidate<'a>(
         return None;
     }
     let id = tactical_choice?;
+    if id == "second-wind" {
+        return candidates
+            .iter()
+            .find(|(_, action, _)| matches!(action, Action::SecondWind));
+    }
     if let Some(exact) = candidates
         .iter()
         .find(|(candidate_id, _, _)| candidate_id == id)
@@ -2770,6 +2851,15 @@ pub(super) fn offered(
         if super::session_machine::kind_accepted(state, kind)
             && !options(current.state(), actor, kind)?.is_empty()
         {
+            let label = if kind == K::SecondWind
+                && options(current.state(), actor, kind)?
+                    .iter()
+                    .any(|(_, action, _)| matches!(action, Action::ActionSurge))
+            {
+                "Second Wind / Action Surge"
+            } else {
+                label
+            };
             offers.push((kind, label.to_owned()));
         }
     }
@@ -3405,6 +3495,58 @@ pub(super) fn initiative(
                     && decision.draws.contains(&draw_ordinal)
             })
             .ok_or(RepositoryError::InvalidCandidate)?;
+        let mut initiative_face = draw.value;
+        if actor.side() == Side::Heroes
+            && actor
+                .spec()
+                .species_traits()
+                .is_some_and(|traits| traits.reroll_natural_ones)
+            && initiative_face == 1
+        {
+            initiative_face = state
+                .draws
+                .iter()
+                .find(|draw| {
+                    draw.operation == start.operation && draw.ordinal == ordinal && draw.sides == 20
+                })
+                .ok_or(RepositoryError::InvalidCandidate)?
+                .value;
+            ordinal += 1;
+        }
+        if actor
+            .spec()
+            .fighter_level()
+            .is_some_and(|progression| progression.champion())
+        {
+            let mut second = state
+                .draws
+                .iter()
+                .find(|draw| {
+                    draw.operation == start.operation && draw.ordinal == ordinal && draw.sides == 20
+                })
+                .ok_or(RepositoryError::InvalidCandidate)?
+                .value;
+            ordinal += 1;
+            if second == 1
+                && actor
+                    .spec()
+                    .species_traits()
+                    .is_some_and(|traits| traits.reroll_natural_ones)
+            {
+                second = state
+                    .draws
+                    .iter()
+                    .find(|draw| {
+                        draw.operation == start.operation
+                            && draw.ordinal == ordinal
+                            && draw.sides == 20
+                    })
+                    .ok_or(RepositoryError::InvalidCandidate)?
+                    .value;
+                ordinal += 1;
+            }
+            initiative_face = initiative_face.max(second);
+        }
         let who = canonical(state, actor.id())?;
         let modifier = rules::ability_modifier(actor.spec().abilities[1]);
         let order = battle
@@ -3415,9 +3557,9 @@ pub(super) fn initiative(
         rolls.push(rpc::InitiativeRoll {
             participant_id: who.as_bytes().to_vec(),
             name: name(state, who)?,
-            die: draw.value,
+            die: initiative_face,
             modifier,
-            total: draw.value as i32 + modifier,
+            total: initiative_face as i32 + modifier,
             order: u32::try_from(order + 1).map_err(bad)?,
         });
     }
@@ -3716,7 +3858,7 @@ pub(in crate::gameplay) fn project_combat(
         let budget = actor.budget();
         view.own_budget = Some(rpc::TurnBudget {
             movement_ft: u32::from(actor.movement_remaining_ft()),
-            action: !budget.action_used,
+            action: !budget.action_used || actor.additional_actions() > 0,
             bonus_action: !budget.bonus_action_used,
             reaction: !budget.reaction_used,
         });
@@ -7683,6 +7825,99 @@ pub(super) mod tests {
                     );
                     assert_eq!(phase(&rested).unwrap(), rpc::JourneyPhase::Complete);
                 }
+            }
+        });
+    }
+    #[test]
+    fn fighter_level_five_four_skeletons_offers_surge_and_recovers_pending_action_to_victory() {
+        with_live(|| {
+            for mixed in [false, true] {
+                TEST_LEVEL_OVERRIDE.with(|own| own.set(Some(5)));
+                TEST_FIGHT_OVERRIDE.with(|own| {
+                    *own.borrow_mut() = Some(TestFight {
+                        enemies: 4,
+                        foe: Some("skeleton".to_owned()),
+                    })
+                });
+                let current = fight(mixed);
+                if mixed {
+                    let battle = read(current.state()).unwrap();
+                    let archer = battle.actor(2).unwrap();
+                    assert!(archer.spec().archery);
+                    assert_eq!(archer.spec().armor_class, 16);
+                    assert_eq!(archer.spec().abilities[1], 19);
+                }
+                let battle = read(current.state()).unwrap();
+                assert_eq!(
+                    battle
+                        .combatants()
+                        .iter()
+                        .filter(|actor| actor.side() == Side::Enemies)
+                        .count(),
+                    4
+                );
+                for hero in battle
+                    .combatants()
+                    .iter()
+                    .filter(|actor| actor.side() == Side::Heroes)
+                {
+                    assert_eq!(hero.spec().fighter_level().unwrap().level(), 5);
+                    assert_eq!(hero.health().maximum, 49);
+                }
+                let member = member_offering(&current, rpc::GameplayActionKind::SecondWind);
+                let actor =
+                    actor_id(current.state(), player_entity(member, &current).unwrap()).unwrap();
+                assert!(
+                    groups(&current, member, rpc::GameplayActionKind::SecondWind).unwrap()[0]
+                        .options
+                        .iter()
+                        .any(|option| option.option_id == "action-surge")
+                );
+                let surged = submit(
+                    &current,
+                    member,
+                    &request(
+                        &current,
+                        8,
+                        rpc::GameplayActionKind::SecondWind,
+                        Some("action-surge"),
+                    ),
+                    &mut |_| panic!("surge has no dice"),
+                );
+                assert_eq!(
+                    read(surged.state())
+                        .unwrap()
+                        .actor(actor)
+                        .unwrap()
+                        .additional_actions(),
+                    1
+                );
+                assert!(
+                    !options(surged.state(), actor, rpc::GameplayActionKind::SecondWind)
+                        .unwrap()
+                        .iter()
+                        .any(|(_, action, _)| matches!(action, Action::ActionSurge))
+                );
+                let bytes = df_persistence::local_demo_scope::encode_owned_demo_checkpoint(
+                    &surged,
+                    codec(),
+                )
+                .unwrap();
+                TEST_LEVEL_OVERRIDE.with(|own| own.set(None));
+                let restored = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+                    &bytes,
+                    surged.basis(),
+                    &model::pins().unwrap(),
+                    &model::recovery().unwrap(),
+                    codec(),
+                )
+                .unwrap();
+                assert_eq!(surged, restored);
+                assert_eq!(initiative(&surged).unwrap(), initiative(&restored).unwrap());
+                let (won, _, _) = play_fight(restored, 9, None, None);
+                assert!(victory(won.state()).unwrap());
+                assert!(won.state().draws.iter().any(|draw| draw.sides == 20));
+                TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
             }
         });
     }

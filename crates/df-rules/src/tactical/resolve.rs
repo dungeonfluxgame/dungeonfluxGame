@@ -101,6 +101,12 @@ pub enum Action {
         attack: Option<AttackUse>,
     },
     SecondWind,
+    /// Fighter 2: one additional non-Magic action, once per Short or Long Rest (p.48).
+    ActionSurge,
+    /// Full Long Rest admission stays with the caller; eight uninterrupted hours (p.183).
+    LongRest {
+        elapsed_seconds: u32,
+    },
     EndTurn,
     DeathSave,
     /// SRD Short Rest: this slice spends no Hit Dice; Fighters starting with at least 1 HP recharge one use.
@@ -341,6 +347,26 @@ pub fn resolve(
             return Err(RuleError::PendingReaction);
         }
         match action {
+            Action::LongRest { elapsed_seconds } => {
+                if *elapsed_seconds < 28_800 || !next.finished() {
+                    return Err(RuleError::RecoveryUnavailable);
+                }
+                let combatant = next.actor_mut(actor)?;
+                if combatant.health.dead || combatant.health.hit_points == 0 {
+                    return Err(RuleError::RecoveryUnavailable);
+                }
+                let progression = combatant
+                    .spec
+                    .fighter_level()
+                    .ok_or(RuleError::InvalidCombatant)?;
+                combatant.health.hit_points = combatant.health.maximum;
+                combatant.spec.second_wind_uses = progression.second_wind_maximum();
+                combatant.action_surge_spent = false;
+                combatant.additional_actions = 0;
+                combatant.additional_dash = false;
+                combatant.extra_attacks = 0;
+                combatant.feature_movement_ft = 0;
+            }
             Action::ShortRest { elapsed_seconds } => {
                 if *elapsed_seconds < 3600 {
                     return Err(RuleError::RecoveryUnavailable);
@@ -351,7 +377,18 @@ pub fn resolve(
                 }
                 if combatant.spec.kind == CreatureKind::Hero {
                     combatant.spec.second_wind_uses =
-                        combatant.spec.second_wind_uses.saturating_add(1).min(2);
+                        combatant.spec.second_wind_uses.saturating_add(1).min(
+                            combatant
+                                .spec
+                                .fighter_level()
+                                .ok_or(RuleError::InvalidCombatant)?
+                                .second_wind_maximum(),
+                        );
+                    combatant.action_surge_spent = false;
+                    combatant.additional_actions = 0;
+                    combatant.additional_dash = false;
+                    combatant.extra_attacks = 0;
+                    combatant.feature_movement_ft = 0;
                 }
             }
             Action::RecoverAmmunition { elapsed_seconds } => {
@@ -406,7 +443,18 @@ pub fn resolve(
                 if next.actor(actor)?.health.incapacitated() && *action != Action::EndTurn {
                     return Err(RuleError::Incapacitated);
                 }
+                if !matches!(action, Action::Move(_)) {
+                    next.actor_mut(actor)?.feature_movement_ft = 0;
+                }
                 match action {
+                    Action::ActionSurge => {
+                        let combatant = next.actor_mut(actor)?;
+                        if !combatant.action_surge_available() {
+                            return Err(RuleError::RecoveryUnavailable);
+                        }
+                        combatant.action_surge_spent = true;
+                        combatant.additional_actions = 1;
+                    }
                     Action::Move(path) => {
                         next.validate_path(actor, path)?;
                         next.pending = Some(PendingMove {
@@ -458,15 +506,17 @@ pub fn resolve(
                     }
                     Action::Dash | Action::Disengage | Action::Dodge | Action::DoffShield => {
                         let combatant = next.actor_mut(actor)?;
-                        if combatant.budget.action_used {
-                            return Err(RuleError::ActionSpent);
-                        }
                         if *action == Action::DoffShield && !combatant.shield_equipped {
                             return Err(RuleError::InvalidHands);
                         }
-                        combatant.budget.action_used = true;
+                        combatant.spend_action()?;
                         match action {
-                            Action::Dash => combatant.budget.dash = true,
+                            Action::Dash => {
+                                if combatant.budget.dash {
+                                    combatant.additional_dash = true;
+                                }
+                                combatant.budget.dash = true;
+                            }
                             Action::Disengage => combatant.budget.disengaged = true,
                             Action::Dodge => combatant.budget.dodging = true,
                             Action::DoffShield => {
@@ -519,7 +569,19 @@ pub fn resolve(
                         }
                         let die = draws.take(10)?;
                         let (hp, uses) = crate::local_journey::heal_second_wind(
-                            &crate::local_journey::SecondWindRules::srd_521(),
+                            &crate::local_journey::SecondWindRules {
+                                flat_bonus: combatant
+                                    .spec
+                                    .fighter_level()
+                                    .ok_or(RuleError::InvalidBuild)?
+                                    .level(),
+                                uses_max: combatant
+                                    .spec
+                                    .fighter_level()
+                                    .ok_or(RuleError::InvalidBuild)?
+                                    .second_wind_maximum(),
+                                ..crate::local_journey::SecondWindRules::srd_521()
+                            },
                             die,
                             u32::from(combatant.health.hit_points),
                             u32::from(combatant.health.maximum),
@@ -529,6 +591,13 @@ pub fn resolve(
                         combatant.health.hit_points = hp as u16;
                         combatant.spec.second_wind_uses = uses as u8;
                         combatant.budget.bonus_action_used = true;
+                        if combatant
+                            .spec
+                            .fighter_level()
+                            .is_some_and(|progression| progression.level() >= 5)
+                        {
+                            combatant.feature_movement_ft = combatant.speed_ft() / 2;
+                        }
                     }
                     Action::EndTurn => end_turn(&mut next, actor)?,
                     Action::PickUpWeapon(weapon) => {
@@ -539,10 +608,7 @@ pub fn resolve(
                             .position(|(item, cell)| item == weapon && *cell == combatant.cell())
                             .ok_or(RuleError::WeaponMissing)?;
                         if combatant.budget.object_interaction_used {
-                            if combatant.budget.action_used {
-                                return Err(RuleError::ActionSpent);
-                            }
-                            combatant.budget.action_used = true;
+                            combatant.spend_action()?;
                         }
                         combatant.budget.object_interaction_used = true;
                         if !combatant.held.contains(weapon)
@@ -567,6 +633,7 @@ pub fn resolve(
                     Action::Opportunity { .. }
                     | Action::DeathSave
                     | Action::ShortRest { .. }
+                    | Action::LongRest { .. }
                     | Action::StableRecovery
                     | Action::RecoverAmmunition { .. } => return Err(RuleError::InvalidReaction),
                 }
@@ -607,14 +674,14 @@ fn help_attack(
     if helper_actor.cell().distance(target_actor.cell()) > 5 {
         return Err(RuleError::OutOfRange);
     }
-    if helper_actor.budget().action_used {
+    if helper_actor.budget().action_used && helper_actor.additional_actions == 0 {
         return Err(RuleError::ActionSpent);
     }
     if battle.helped_attacks.len() >= 64 {
         return Err(RuleError::Capacity);
     }
     let helper_turn_count = helper_actor.turn_count;
-    battle.actor_mut(helper)?.budget.action_used = true;
+    battle.actor_mut(helper)?.spend_action()?;
     battle.helped_attacks.push(HelpEffect {
         helper,
         helper_turn_count,
@@ -646,7 +713,7 @@ fn validate_stabilization_target(
     if helper_actor.cell().distance(target_actor.cell()) > 5 {
         return Err(RuleError::OutOfRange);
     }
-    if helper_actor.budget().action_used {
+    if helper_actor.budget().action_used && helper_actor.additional_actions == 0 {
         return Err(RuleError::ActionSpent);
     }
     Ok(())
@@ -668,7 +735,7 @@ fn stabilize_with_medicine(
     let die = take_d20(helper_spec, helper, D20Test::AbilityCheck, draws, rerolls)?;
     let total = die as i16 + modifier;
     let success = total >= 10;
-    battle.actor_mut(helper)?.budget.action_used = true;
+    battle.actor_mut(helper)?.spend_action()?;
     if success {
         battle.actor_mut(target)?.health.stable = true;
     }
@@ -699,7 +766,7 @@ fn stabilize_with_healers_kit(
         .healers_kit_uses
         .checked_sub(1)
         .ok_or(RuleError::HealersKitMissing)?;
-    battle.actor_mut(helper)?.budget.action_used = true;
+    battle.actor_mut(helper)?.spend_action()?;
     battle.actor_mut(helper)?.spec.healers_kit_uses = uses_remaining;
     battle.actor_mut(target)?.health.stable = true;
     Ok(StabilizationSummary {
@@ -912,25 +979,27 @@ fn spend_attack(
     let actor = battle.actor_mut(id)?;
     match spend {
         AttackSpend::Action => {
-            if actor.budget.action_used {
-                return Err(RuleError::ActionSpent);
-            }
-            actor.budget.action_used = true;
-            actor.extra_attacks = if actor.spec.kind == CreatureKind::Scout
-                && matches!(weapon, Weapon::Shortsword | Weapon::Longbow)
-            {
-                1
-            } else {
-                0
-            };
+            actor.spend_action()?;
+            actor.extra_attacks += u8::from(
+                actor
+                    .spec
+                    .fighter_level()
+                    .is_some_and(|progression| progression.level() >= 5)
+                    || (actor.spec.kind == CreatureKind::Scout
+                        && matches!(weapon, Weapon::Shortsword | Weapon::Longbow)),
+            );
             if weapon.light() {
                 actor.light_first = Some(weapon);
             }
         }
         AttackSpend::Multiattack => {
-            if actor.spec.kind != CreatureKind::Scout
-                || actor.extra_attacks == 0
-                || !matches!(weapon, Weapon::Shortsword | Weapon::Longbow)
+            if actor.extra_attacks == 0
+                || !(actor
+                    .spec
+                    .fighter_level()
+                    .is_some_and(|progression| progression.level() >= 5)
+                    || (actor.spec.kind == CreatureKind::Scout
+                        && matches!(weapon, Weapon::Shortsword | Weapon::Longbow)))
             {
                 return Err(RuleError::InvalidExtraAttack);
             }
@@ -1116,9 +1185,20 @@ fn attack(
         .retain(|effect| !(effect.ally == id && effect.target == target));
     let cover = battle.attack_cover(id, target)?;
     let armor_class = battle.actor(target)?.spec.armor_class + cover.bonus() as u16;
-    let hit = selected != 1 && (selected == 20 || selected as i16 + modifier >= armor_class as i16);
+    let critical_roll = selected
+        >= if battle
+            .actor(id)?
+            .spec
+            .fighter_level()
+            .is_some_and(|progression| progression.champion())
+        {
+            19
+        } else {
+            20
+        };
+    let hit = selected != 1 && (critical_roll || selected as i16 + modifier >= armor_class as i16);
     let critical = hit
-        && (selected == 20
+        && (critical_roll
             || (battle.actor(target)?.health.unconscious
                 && battle
                     .actor(id)?
@@ -1315,6 +1395,16 @@ fn attack(
         usage.knockout,
         draws,
     )?;
+    if critical
+        && battle
+            .actor(id)?
+            .spec
+            .fighter_level()
+            .is_some_and(|progression| progression.champion())
+    {
+        let actor = battle.actor_mut(id)?;
+        actor.feature_movement_ft = actor.speed_ft() / 2;
+    }
     let target_actor = battle.actor(target)?;
     Ok(AttackSummary {
         actor: id,
@@ -1521,6 +1611,9 @@ fn death_save(
 fn end_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
     let actor = battle.actor_mut(id)?;
     actor.vex.retain(|(_, expiry)| actor.turn_count < *expiry);
+    actor.extra_attacks = 0;
+    actor.additional_actions = 0;
+    actor.feature_movement_ft = 0;
     // Reset once-per-turn Savage Attacker for every actor, including reactions on others' turns.
     for actor in &mut battle.actors {
         actor.savage_used = false;
@@ -1547,6 +1640,9 @@ fn end_turn(battle: &mut Battle, id: u32) -> Result<(), RuleError> {
     actor.light_first = None;
     actor.light_used = false;
     actor.extra_attacks = 0;
+    actor.additional_actions = 0;
+    actor.feature_movement_ft = 0;
+    actor.additional_dash = false;
     battle
         .helped_attacks
         .retain(|effect| effect.helper != next || effect.helper_turn_count >= turn);
@@ -1577,7 +1673,8 @@ fn continue_move(
         if actor.health.incapacitated() || battle.finished() {
             return Ok(());
         }
-        if !skip_trigger && !actor.budget.disengaged {
+        let cost = battle.step_cost(actor, actor.cell(), to)?;
+        if !skip_trigger && !actor.budget.disengaged && actor.feature_movement_ft < cost {
             for &id in &battle.order {
                 let other = battle.actor(id)?;
                 if other.side() != actor.side()
@@ -1601,7 +1698,9 @@ fn continue_move(
             return Ok(());
         } // a legal Slow hit can shorten remaining movement
         let actor = battle.actor_mut(movement.actor)?;
-        actor.budget.movement_spent_ft += cost;
+        let free = cost.min(actor.feature_movement_ft);
+        actor.feature_movement_ft -= free;
+        actor.budget.movement_spent_ft += cost - free;
         actor.spec.cell = to;
         steps.push((to, cost));
         movement.next += 1;

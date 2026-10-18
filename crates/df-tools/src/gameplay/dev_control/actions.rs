@@ -780,7 +780,11 @@ pub(super) async fn act(
                     "use choose with --option, or an offer label directly",
                 ));
             }
-            body["option"] = json!(action);
+            body["option"] = json!(if action == "action-surge" {
+                "Action Surge"
+            } else {
+                action
+            });
             parse::PlayAction::Choose
         }
     };

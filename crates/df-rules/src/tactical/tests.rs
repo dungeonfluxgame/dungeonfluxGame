@@ -146,6 +146,12 @@ fn battle_with_map(map: BattleMap, specs: Vec<CombatantSpec>) -> Battle {
                 },
             ));
         }
+        if spec
+            .fighter_level()
+            .is_some_and(|progression| progression.champion())
+        {
+            faces.push((20, 20));
+        }
         kinds.push(spec.kind);
     }
     begin(map, specs, binding(&src), &records(&src, &faces))
@@ -2275,4 +2281,315 @@ fn a_scan_fence_refuses_movement_reach_and_attacks_without_spending_a_turn() {
         strike(2, Weapon::Greatsword, false),
         RuleError::TotalCover,
     );
+}
+
+#[test]
+fn fighter_srd_521_pp23_47_49_fixed_progression_and_level_four_asi() {
+    for (level, hp, proficiency, winds) in [
+        (1, 13, 2, 2),
+        (2, 22, 2, 2),
+        (3, 31, 2, 2),
+        (4, 40, 2, 3),
+        (5, 49, 3, 3),
+    ] {
+        let profile = melee(1, Cell(1, 1)).at_fighter_level(level).unwrap();
+        let progression = profile.fighter_level().unwrap();
+        assert_eq!(profile.hit_points, hp);
+        assert_eq!(progression.proficiency_bonus(), proficiency);
+        assert_eq!(profile.second_wind_uses, winds);
+        assert_eq!(profile.abilities[0], if level >= 4 { 19 } else { 17 });
+        assert_eq!(profile.masteries.len(), if level >= 4 { 4 } else { 3 });
+        assert_eq!(progression.athletics_advantage(), level >= 3);
+        assert_eq!(
+            profile
+                .hero_attack_modifiers(Weapon::Greatsword, false, false)
+                .unwrap()
+                .0,
+            (if level >= 4 { 4 } else { 3 }) + i16::from(proficiency)
+        );
+        let bow = archer(2, Cell(2, 2)).at_fighter_level(level).unwrap();
+        assert_eq!(bow.abilities[1], if level >= 4 { 19 } else { 17 });
+        assert_eq!(bow.armor_class, if level >= 4 { 16 } else { 15 });
+        for species in [HeroSpecies::Halfling, HeroSpecies::Orc] {
+            let mut base = melee(1, Cell(1, 1));
+            base.species = Some(species);
+            base.hit_points = 12;
+            if species == HeroSpecies::Halfling {
+                base.size = Size::Small;
+            }
+            let hero = base.at_fighter_level(level).unwrap();
+            assert_eq!(hero.hit_points, 12 + 8 * u16::from(level - 1));
+        }
+    }
+    assert!(melee(1, Cell(1, 1)).at_fighter_level(6).is_err());
+}
+#[test]
+fn fighter_srd_521_p48_tactical_mind_spends_only_if_failed_check_becomes_success() {
+    let progression = crate::local_journey::FighterProgression::new(2).unwrap();
+    assert_eq!(progression.tactical_mind(8, 15, 6, 2), Ok((14, 2)));
+    assert_eq!(progression.tactical_mind(8, 15, 7, 2), Ok((15, 1)));
+    assert!(progression.tactical_mind(15, 15, 7, 2).is_err());
+    assert!(progression.tactical_mind(8, 15, 7, 0).is_err());
+    assert!(progression.tactical_mind(8, 15, 11, 2).is_err());
+}
+#[test]
+fn fighter_srd_521_p48_extra_attack_targets_and_rolls_are_independent() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)).at_fighter_level(5).unwrap(),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "skeleton", Cell(1, 2), 0).unwrap(),
+    ]);
+    let action = |target, spend| Action::Attack {
+        target,
+        weapon: usage(Weapon::Greatsword, false),
+        spend,
+    };
+    let first = step(
+        &state,
+        1,
+        action(3, AttackSpend::Action),
+        &[(20, 12), (6, 1), (6, 2)],
+    );
+    assert_eq!(first.attacks[0].target, 3);
+    assert!(first.battle.actor(1).unwrap().extra_attacks_available());
+    let second = step(
+        &first.battle,
+        1,
+        action(4, AttackSpend::Multiattack),
+        &[(20, 2)],
+    );
+    assert_eq!(second.attacks[0].target, 4);
+    assert_eq!(second.attacks[0].selected, 2);
+    assert!(!second.attacks[0].hit);
+    assert!(!second.battle.actor(1).unwrap().extra_attacks_available());
+    rejects(
+        &second.battle,
+        1,
+        action(4, AttackSpend::Multiattack),
+        RuleError::InvalidExtraAttack,
+    );
+}
+#[test]
+fn fighter_srd_521_p48_action_surge_survives_pending_checkpoint_and_recharges_on_both_rests() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)).at_fighter_level(5).unwrap(),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 0).unwrap(),
+    ]);
+    state = step(&state, 1, Action::Dodge, &[]).battle;
+    state = step(&state, 1, Action::ActionSurge, &[]).battle;
+    assert_eq!(state.actor(1).unwrap().additional_actions(), 1);
+    rejects(
+        &state,
+        1,
+        Action::ActionSurge,
+        RuleError::RecoveryUnavailable,
+    );
+    let bytes = state.snapshot().unwrap();
+    let restored = Battle::from_snapshot(state.map().clone(), &bytes).unwrap();
+    assert_eq!(state, restored);
+    assert_eq!(bytes, restored.snapshot().unwrap());
+    let struck = step(
+        &restored,
+        1,
+        Action::Attack {
+            target: 3,
+            weapon: usage(Weapon::Greatsword, false),
+            spend: AttackSpend::Action,
+        },
+        &[(20, 19), (6, 4), (6, 4), (6, 4), (6, 4)],
+    );
+    assert!(struck.attacks[0].critical);
+    assert_eq!(struck.battle.actor(1).unwrap().additional_actions(), 0);
+    let rested = step(
+        &struck.battle,
+        1,
+        Action::ShortRest {
+            elapsed_seconds: 3600,
+        },
+        &[],
+    )
+    .battle;
+    assert!(rested.actor(1).unwrap().action_surge_available());
+    let mut spent = rested.clone();
+    spent.actor_mut(1).unwrap().action_surge_spent = true;
+    let rested = step(
+        &spent,
+        1,
+        Action::LongRest {
+            elapsed_seconds: 28800,
+        },
+        &[],
+    )
+    .battle;
+    assert!(rested.actor(1).unwrap().action_surge_available());
+}
+#[test]
+fn fighter_srd_521_p49_champion_nineteen_is_critical_and_grants_safe_half_speed_move() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)).at_fighter_level(3).unwrap(),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "skeleton", Cell(5, 5), 0).unwrap(),
+    ]);
+    let struck = step(
+        &state,
+        1,
+        Action::Attack {
+            target: 3,
+            weapon: usage(Weapon::Greatsword, false),
+            spend: AttackSpend::Action,
+        },
+        &[(20, 19), (6, 1), (6, 1), (6, 1), (6, 1)],
+    );
+    assert!(struck.attacks[0].critical);
+    assert_eq!(struck.attacks[0].damage_faces.len(), 4);
+    assert_eq!(struck.battle.actor(1).unwrap().feature_movement_ft(), 15);
+    let moved = step(&struck.battle, 1, Action::Move(vec![Cell(0, 1)]), &[]);
+    assert!(moved.battle.reaction_offers().is_empty());
+    assert_eq!(moved.battle.actor(1).unwrap().budget().movement_spent_ft, 0);
+    assert_eq!(moved.battle.actor(1).unwrap().feature_movement_ft(), 10);
+}
+#[test]
+fn fighter_srd_521_p48_second_wind_heals_level_and_tactical_shift_does_not_spend_speed() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)).at_fighter_level(5).unwrap(),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 0).unwrap(),
+    ]);
+    state.actor_mut(1).unwrap().health.hit_points = 10;
+    let wind = step(&state, 1, Action::SecondWind, &[(10, 4)]);
+    assert_eq!(wind.battle.actor(1).unwrap().health().hit_points, 19);
+    assert_eq!(wind.battle.actor(1).unwrap().spec().second_wind_uses, 2);
+    let moved = step(&wind.battle, 1, Action::Move(vec![Cell(0, 1)]), &[]);
+    assert!(moved.battle.reaction_offers().is_empty());
+    assert_eq!(moved.battle.actor(1).unwrap().budget().movement_spent_ft, 0);
+}
+#[test]
+fn fighter_srd_521_action_surge_dash_and_end_turn_consume_only_their_own_budgets() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)).at_fighter_level(5).unwrap(),
+        CombatantSpec::creature(3, "skeleton", Cell(5, 5), 0).unwrap(),
+    ]);
+    let state = step(&state, 1, Action::Dash, &[]).battle;
+    let state = step(&state, 1, Action::ActionSurge, &[]).battle;
+    let state = step(&state, 1, Action::Dash, &[]).battle;
+    assert_eq!(state.actor(1).unwrap().movement_remaining_ft(), 90);
+    assert!(!state.actor(1).unwrap().budget().bonus_action_used);
+    assert_eq!(
+        state,
+        Battle::from_snapshot(state.map().clone(), &state.snapshot().unwrap()).unwrap()
+    );
+    let state = step(&state, 1, Action::EndTurn, &[]).battle;
+    assert_eq!(state.actor(1).unwrap().additional_actions(), 0);
+}
+
+#[test]
+fn fighter_srd_521_level_five_content_pins_the_exact_compiled_builds() {
+    for bytes in LEVEL_FIVE_BUILDS {
+        let content: serde_json::Value = serde_json::from_str(bytes).unwrap();
+        assert_eq!(
+            content["source"]["mechanics_revision"],
+            FIGHTER_SOURCE_REVISION
+        );
+        assert_eq!(
+            content["source"]["sha256"],
+            "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+        );
+        let pairs = content["starting_choices"].as_array().unwrap();
+        let choices = pairs
+            .iter()
+            .map(|pair| (pair[0].as_str().unwrap(), pair[1].as_str().unwrap()))
+            .collect::<Vec<_>>();
+        let mut legal = if content["id"] == "dwarf-archer-level5" {
+            validate_archer("Brynn", &choices)
+                .unwrap()
+                .character()
+                .clone()
+        } else {
+            crate::local_journey::validate_character(
+                &crate::local_journey::CreationRules::srd_521(),
+                "Brynn",
+                &choices,
+            )
+            .unwrap()
+        };
+        crate::local_journey::FighterProgression::new(5)
+            .unwrap()
+            .apply(&mut legal)
+            .unwrap();
+        assert_eq!(
+            serde_json::json!(legal.abilities),
+            content["hero"]["abilities"]
+        );
+        assert_eq!(
+            serde_json::json!(legal.hit_points),
+            content["hero"]["hit_points"]
+        );
+        assert_eq!(
+            serde_json::json!(legal.armor_class),
+            content["hero"]["armor_class"]
+        );
+        assert_eq!(
+            serde_json::json!(legal.proficiency_bonus),
+            content["hero"]["proficiency_bonus"]
+        );
+        assert_eq!(
+            serde_json::json!(legal.second_wind_uses),
+            content["hero"]["second_wind"]["uses_max"]
+        );
+    }
+}
+#[test]
+fn fighter_srd_521_p48_two_attack_actions_from_surge_make_four_and_never_five_attacks() {
+    let state = battle(vec![
+        melee(1, Cell(1, 1)).at_fighter_level(5).unwrap(),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "skeleton", Cell(1, 2), 0).unwrap(),
+    ]);
+    let mut state = step(&state, 1, Action::ActionSurge, &[]).battle;
+    for (target, spend) in [
+        (3, AttackSpend::Action),
+        (3, AttackSpend::Multiattack),
+        (4, AttackSpend::Action),
+        (4, AttackSpend::Multiattack),
+    ] {
+        let hit = step(
+            &state,
+            1,
+            Action::Attack {
+                target,
+                weapon: usage(Weapon::Greatsword, false),
+                spend,
+            },
+            &[(20, 12), (6, 1), (6, 1)],
+        );
+        assert_eq!(hit.attacks.len(), 1);
+        state = hit.battle;
+    }
+    rejects(
+        &state,
+        1,
+        Action::Attack {
+            target: 4,
+            weapon: usage(Weapon::Greatsword, false),
+            spend: AttackSpend::Action,
+        },
+        RuleError::ActionSpent,
+    );
+    assert!(!state.actor(1).unwrap().extra_attacks_available());
+}
+#[test]
+fn fighter_srd_521_p49_champion_initiative_consumes_two_independent_d20s() {
+    let src = source();
+    let specs = vec![
+        melee(1, Cell(1, 1)).at_fighter_level(3).unwrap(),
+        CombatantSpec::creature(3, "skeleton", Cell(2, 1), 0).unwrap(),
+    ];
+    let result = begin(
+        map("open-court"),
+        specs,
+        binding(&src),
+        &records(&src, &[(20, 3), (20, 18), (20, 12)]),
+    )
+    .unwrap();
+    assert_eq!(result.draws.len(), 3);
+    assert_eq!(result.battle.active_actor(), Some(1));
 }

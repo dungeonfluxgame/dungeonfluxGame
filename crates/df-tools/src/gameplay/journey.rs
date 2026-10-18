@@ -375,9 +375,68 @@ fn carries_healers_kit(state: &GameState, who: EntityId) -> bool {
         item.owner == who && item.origin.entry.as_str() == "healers-kit" && item.quantity > 0
     })
 }
+/// The test level is pinned in accepted creation choices; recovery never reads startup settings.
+fn fighter_progression(
+    state: &GameState,
+    who: EntityId,
+) -> Result<rules::FighterProgression, RepositoryError> {
+    let level = state
+        .characters
+        .iter()
+        .find(|character| character.entity == who)
+        .and_then(|character| {
+            character
+                .choices
+                .iter()
+                .find(|choice| choice.offer.as_str() == "test-fighter-level")
+        })
+        .map(|choice| match choice.selected.as_str() {
+            "fighter-5" => Ok(5),
+            _ => Err(RepositoryError::InvalidCandidate),
+        })
+        .transpose()?
+        .unwrap_or(1);
+    rules::FighterProgression::new(level).map_err(bad)
+}
 pub(super) fn resources_for(state: &GameState) -> Result<Vec<ResourceConstraint>, RepositoryError> {
     let mut inventory = resources()?;
     inventory.extend(scene_fight::created_resources(state)?);
+    for character in &state.characters {
+        let progression = fighter_progression(state, character.entity)?;
+        if progression.level() == 1 {
+            continue;
+        }
+        inventory.push(ResourceConstraint {
+            owner: character.entity,
+            resource: model::label("action-surge")?,
+            minimum: 0,
+            maximum: 1,
+            source: rule()?,
+        });
+        let selected = character
+            .choices
+            .iter()
+            .filter(|choice| {
+                super::hero_identity::is_character_pack_validation_choice(choice.offer.as_str())
+                    && choice.offer.as_str() != "test-fighter-level"
+            })
+            .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
+            .collect::<Vec<_>>();
+        let mut build =
+            pack::validate_character(&name(state, character.entity)?, &selected).map_err(bad)?;
+        progression.apply(&mut build).map_err(bad)?;
+        for constraint in inventory
+            .iter_mut()
+            .filter(|constraint| constraint.owner == character.entity)
+        {
+            match constraint.resource.as_str() {
+                "hit-points" => constraint.maximum = i64::from(build.hit_points),
+                "second-wind" => constraint.maximum = i64::from(build.second_wind_uses),
+                "hit-point-dice" => constraint.maximum = i64::from(progression.level()),
+                _ => {}
+            }
+        }
+    }
     Ok(inventory)
 }
 
@@ -599,6 +658,7 @@ pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32
         ));
     }
     let constitution = value(state, who, "constitution")?;
+    let progression = fighter_progression(state, who)?;
     let base = pack::with_creation(|rules| rules.base_hit_points);
     let species = state
         .characters
@@ -615,6 +675,11 @@ pub(super) fn maximum_hit_points(state: &GameState, who: EntityId) -> Result<u32
             refusal_detail::note("sheet-species-hit-points");
             RepositoryError::InvalidCandidate
         })?;
+    if progression.level() > 1 {
+        return Ok(u32::from(
+            progression.hit_points(u8::try_from(constitution).map_err(bad)?, species),
+        ));
+    }
     // SRD 5.2.1 p. 84: apply the accepted species' Toughness, not a shared Dwarf assumption.
     u32::try_from(
         i32::from(base)
@@ -653,10 +718,15 @@ pub(super) fn character_sheet(
         .iter()
         .filter(|choice| {
             super::hero_identity::is_character_pack_validation_choice(choice.offer.as_str())
+                && choice.offer.as_str() != "test-fighter-level"
         })
         .map(|choice| (choice.offer.as_str(), choice.selected.as_str()))
         .collect::<Vec<_>>();
-    let build = pack::validate_character(&name(state, who)?, &selected).map_err(bad)?;
+    let mut build = pack::validate_character(&name(state, who)?, &selected).map_err(bad)?;
+    let progression = fighter_progression(state, who)?;
+    if progression.level() > 1 {
+        progression.apply(&mut build).map_err(bad)?;
+    }
     let archer = build
         .choices
         .iter()
@@ -774,11 +844,45 @@ pub(super) fn character_sheet(
     facts.push(rpc::SheetFact {
         label: "Hit Point Dice".to_owned(),
         value: format!(
-            "{}/1 (d{})",
+            "{}/{} (d{})",
             value(state, who, "hit-point-dice")?,
+            progression.level(),
             rules::LEVEL_ONE_FIGHTER_HIT_POINT_DIE_SIDES
         ),
     });
+    if progression.level() > 1 {
+        for (label, value) in [
+            (
+                "Class",
+                format!("Fighter · Champion · level {}", progression.level()),
+            ),
+            (
+                "Ability Score Improvement",
+                if archer {
+                    "+2 Dexterity".to_owned()
+                } else {
+                    "+2 Strength".to_owned()
+                },
+            ),
+            (
+                "Masteries",
+                if archer {
+                    "Longbow, Scimitar, Shortsword, Javelin".to_owned()
+                } else {
+                    "Greatsword, Flail, Javelin, Spear".to_owned()
+                },
+            ),
+        ] {
+            if let Some(fact) = facts.iter_mut().find(|fact| fact.label == label) {
+                fact.value = value;
+            } else {
+                facts.push(rpc::SheetFact {
+                    label: label.to_owned(),
+                    value,
+                });
+            }
+        }
+    }
     let hit_point_die_roll = value(state, who, "short-rest-die-roll")?;
     if hit_point_die_roll != 0 {
         let constitution = u8::try_from(value(state, who, "constitution")?).map_err(bad)?;
@@ -823,6 +927,11 @@ pub(super) fn character_sheet(
         let profile = df_rules::tactical::validate_archer(&build.name, &choices)
             .map_err(bad)?
             .combatant(1, df_rules::tactical::Cell(0, 0));
+        let profile = if progression.level() > 1 {
+            profile.at_fighter_level(progression.level()).map_err(bad)?
+        } else {
+            profile
+        };
         for weapon in &profile.weapons {
             let (attack, damage) = profile
                 .hero_attack_modifiers(*weapon, weapon.ranged_weapon(), weapon.finesse())
@@ -870,7 +979,7 @@ pub(super) fn character_sheet(
     for (label, value) in [
         ("Soldier skill proficiencies", "Athletics, Intimidation".to_owned()),
         ("Saving throw proficiencies", "Strength, Constitution".to_owned()),
-        ("Proficiency Bonus", format!("+{}", pack::with_creation(|creation| creation.proficiency_bonus))),
+        ("Proficiency Bonus", format!("+{}", if progression.level() > 1 { progression.proficiency_bonus() } else { pack::with_creation(|creation| creation.proficiency_bonus) })),
         ("Speed", "30 ft".to_owned()),
         ("Initiative", format!("{:+}", rules::ability_modifier(value(state, who, "dexterity")? as u8))),
         ("Armor training", "Light, Medium, Heavy, Shields".to_owned()),
@@ -882,7 +991,11 @@ pub(super) fn character_sheet(
         facts.push(rpc::SheetFact { label: label.to_owned(), value });
     }
     // SRD 5.2.1 pp. 6, 7, 47: accepted ability modifiers and Fighter save proficiencies.
-    let proficiency = i32::from(pack::with_creation(|creation| creation.proficiency_bonus));
+    let proficiency = i32::from(if progression.level() > 1 {
+        progression.proficiency_bonus()
+    } else {
+        pack::with_creation(|creation| creation.proficiency_bonus)
+    });
     for (label, ability) in [
         ("Strength saving throw", "strength"),
         ("Dexterity saving throw", "dexterity"),
@@ -3371,6 +3484,15 @@ fn accept_character(
     member: MemberId,
     choices: &[(df_types::RevisionLabel, df_types::RevisionLabel)],
 ) -> Result<(), RepositoryError> {
+    accept_character_at_level(state, who, member, choices, tactical::test_fighter_level()?)
+}
+fn accept_character_at_level(
+    state: &mut GameState,
+    who: EntityId,
+    member: MemberId,
+    choices: &[(df_types::RevisionLabel, df_types::RevisionLabel)],
+    test_level: u8,
+) -> Result<(), RepositoryError> {
     let encoded = choice(choices, "name")?;
     let encoded_name = if encoded == "empty-name" {
         Vec::new()
@@ -3385,7 +3507,12 @@ fn accept_character(
         })
         .map(|(group, option)| (group.as_str(), option.as_str()))
         .collect::<Vec<_>>();
-    let build = pack::validate_character(name, &options).map_err(bad)?;
+    let mut build = pack::validate_character(name, &options).map_err(bad)?;
+    if test_level > 1 {
+        rules::FighterProgression::new(test_level)
+            .and_then(|progression| progression.apply(&mut build))
+            .map_err(bad)?;
+    }
     if state
         .characters
         .iter()
@@ -3395,7 +3522,7 @@ fn accept_character(
     }
     let source = rule()?;
     let name_label = model::label(name)?;
-    let selected = choices
+    let mut selected = choices
         .iter()
         .map(|(offer, selected)| AcceptedChoice {
             participant: member,
@@ -3408,6 +3535,14 @@ fn accept_character(
             source: source.clone(),
         })
         .collect::<Vec<_>>();
+    if test_level > 1 {
+        selected.push(AcceptedChoice {
+            participant: member,
+            offer: model::label("test-fighter-level")?,
+            selected: model::label("fighter-5")?,
+            source: source.clone(),
+        });
+    }
     state.characters.push(CharacterState {
         entity: who,
         build: model::content("dwarf-fighter-soldier")?,
@@ -3433,7 +3568,7 @@ fn accept_character(
         ("wisdom", u32::from(build.abilities[4])),
         ("charisma", u32::from(build.abilities[5])),
         ("second-wind", build.second_wind_uses),
-        ("hit-point-dice", 1),
+        ("hit-point-dice", u32::from(test_level)),
         ("short-rest-choice", 0),
         ("short-rest-die-roll", 0),
         ("unconscious", 0),
@@ -3443,6 +3578,9 @@ fn accept_character(
         ("bonus-used", 0),
     ] {
         add_resource(state, who, key, i64::from(value))?;
+    }
+    if test_level > 1 {
+        add_resource(state, who, "action-surge", 1)?;
     }
     // The source-selected bundles are inventory, not cosmetic rewards or generated loot.
     let equipment = if build
@@ -4387,6 +4525,7 @@ pub(super) fn recreated_heroes(state: &GameState) -> Result<GameState, Repositor
         let choices = character
             .choices
             .iter()
+            .filter(|choice| choice.offer.as_str() != "test-fighter-level")
             .map(|choice| {
                 let value = if choice.offer.as_str() == "name" {
                     model::label(&hex(choice.selected.as_str().as_bytes()))?
@@ -4396,7 +4535,13 @@ pub(super) fn recreated_heroes(state: &GameState) -> Result<GameState, Repositor
                 Ok((choice.offer.clone(), value))
             })
             .collect::<Result<Vec<_>, RepositoryError>>()?;
-        accept_character(&mut expected, character.entity, character.owner, &choices)?;
+        accept_character_at_level(
+            &mut expected,
+            character.entity,
+            character.owner,
+            &choices,
+            fighter_progression(state, character.entity)?.level(),
+        )?;
     }
     Ok(expected)
 }
