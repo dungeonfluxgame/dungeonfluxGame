@@ -731,6 +731,10 @@ struct Current {
     request_started: Option<std::time::Instant>,
     first_projection_ms: Option<u128>,
     last_projection: Option<PlateProjection>,
+    /// The plate the scene showed before this one was asked for, with its graph revision: it
+    /// stays on screen until the new plate is ready, so a new speaker never drops the TV back to
+    /// the empty room photograph while their plate renders (P6-181).
+    held: Option<(ImageKey, Option<PlatePlacement>, u64)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1797,6 +1801,17 @@ impl Shared {
         // 2026-10-14: "changes background too often where all the characters disappear").
         // Visible changes to a modelled scene's state are settled edits (state_images).
         if scene_changed || party_changed || speaker_changed || canonical_changed {
+            let held = if scene_changed {
+                None
+            } else {
+                let revision = book
+                    .current
+                    .as_ref()
+                    .map_or(0, |current| current.graph_revision);
+                book.shown()
+                    .map(|(key, placement)| (key, placement, revision))
+                    .or_else(|| book.current.as_ref().and_then(|current| current.held.clone()))
+            };
             let mut scene = located
                 .as_ref()
                 .and_then(|scene| PlateScene::for_view(view, scene))
@@ -1865,6 +1880,7 @@ impl Shared {
                 request_started,
                 first_projection_ms: None,
                 last_projection: None,
+                held,
             });
             // The lobby has no plate; the opening plate is requested when that scene becomes current.
             if !view.in_combat {
@@ -2205,6 +2221,12 @@ impl Shared {
             // A planned scene whose request is not in the book yet is pending too: the display
             // never mistakes a plate that is on its way for a scene without one.
             Some(Entry::Pending) | None => {
+                if let Some((key, placement, revision)) = &current.held {
+                    scene.live_plate = key.path();
+                    scene.plate_layout = placement.as_ref().map(wire_layout);
+                    scene.plate_state = rpc::PlateState::Ready as i32;
+                    return Some(*revision);
+                }
                 if current.scene.is_some() {
                     scene.plate_state = rpc::PlateState::Pending as i32;
                 } else if current.unplated {
