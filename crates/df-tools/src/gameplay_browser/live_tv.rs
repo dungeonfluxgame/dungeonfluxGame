@@ -337,7 +337,11 @@ fn plate_loading_visible(plate_ready: bool, server_pending: bool, client_pending
     !plate_ready && (server_pending || client_pending)
 }
 
-fn can_retain_plate_for_scene(scene_matches: bool, has_active_plate: bool, plate_loaded: bool) -> bool {
+fn can_retain_plate_for_scene(
+    scene_matches: bool,
+    has_active_plate: bool,
+    plate_loaded: bool,
+) -> bool {
     scene_matches && has_active_plate && plate_loaded
 }
 
@@ -2824,7 +2828,10 @@ impl TvStage {
         self.title.set_text_content(Some(lobby_title));
         self.place.set_text_content(Some(&model.place));
         // A scene titled after its place does not repeat the place beneath the title.
-        set_hidden(&self.place, model.place.is_empty() || model.place == *lobby_title)?;
+        set_hidden(
+            &self.place,
+            model.place.is_empty() || model.place == *lobby_title,
+        )?;
         self.lede.set_text_content(Some(&model.lede));
         self.rules_text.set_text_content(Some(&model.rules_note));
         set_hidden(&self.rules, model.rules_note.is_empty() || lobby)?;
@@ -3714,8 +3721,8 @@ impl TvStage {
 mod tests {
     use super::super::rpc;
     use super::{
-        PlateState, PlateView, TvStage, check_display, first_art_asset, is_loopback_join_host,
-        can_retain_plate_for_scene, plate_asset_key, plate_loading_visible, roll_intention,
+        PlateState, PlateView, TvStage, can_retain_plate_for_scene, check_display, first_art_asset,
+        is_loopback_join_host, plate_asset_key, plate_loading_visible, roll_intention,
         scene_clip_needs_frame_swap, scene_plate_media_ready, scene_video_url,
     };
     use crate::stage_machines::LineState;

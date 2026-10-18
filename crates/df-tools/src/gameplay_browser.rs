@@ -2098,6 +2098,40 @@ fn receive_view(
     scope: ViewScope,
     view: rpc::ViewMessage,
 ) -> Result<(), JsValue> {
+    let display_timeline_reset = if client.borrow().role == "display" {
+        let previous_view = client
+            .borrow()
+            .views
+            .as_ref()
+            .and_then(GameplayViews::current)
+            .cloned();
+        let previous = previous_view
+            .as_ref()
+            .and_then(|current| match current.audience.as_ref() {
+                Some(rpc::view_message::Audience::Display(display)) => display.journey.as_ref(),
+                _ => None,
+            });
+        let incoming = match view.audience.as_ref() {
+            Some(rpc::view_message::Audience::Display(display)) => display.journey.as_ref(),
+            _ => None,
+        };
+        previous.zip(incoming).is_some_and(|(previous, incoming)| {
+            let combat_disappeared = previous.combat.is_some() && incoming.combat.is_none();
+            let restore_notice = incoming
+                .table_log
+                .iter()
+                .find(|line| line.text.starts_with("Development dev:restore:back "));
+            let notice_is_new = restore_notice.is_some_and(|notice| {
+                !previous.table_log.iter().any(|line| {
+                    line.sequence == notice.sequence
+                        && line.text.starts_with("Development dev:restore:back ")
+                })
+            });
+            combat_disappeared || notice_is_new
+        })
+    } else {
+        false
+    };
     // PLAY-V09: the plate picture a display view names is fetched at once, usually while the
     // scene before it is still being spoken. A refused fetch only means the cut to the plate waits
     // for the picture to load.
@@ -2166,6 +2200,9 @@ fn receive_view(
         auto_confirm(client);
     }
     if acceptance == ConnectionViewAcceptance::View(ViewAcceptance::Applied) {
+        if display_timeline_reset {
+            crate::stage_conductor::request_timeline_reset();
+        }
         let mut state = client.borrow_mut();
         state.revision = state
             .views
@@ -2176,6 +2213,7 @@ fn receive_view(
         feedback(&client.borrow(), "");
         if client.borrow().role == "display" {
             // The display draws through the presentation director, which orders the change.
+            live_voice::observe(client);
             let waiting_for_sound = client
                 .borrow()
                 .live

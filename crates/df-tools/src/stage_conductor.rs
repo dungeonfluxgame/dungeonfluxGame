@@ -30,6 +30,16 @@ use crate::{
         SceneState, actor_next, battle_next, clip_next, line_next, scene_next,
     },
 };
+use std::cell::Cell;
+
+thread_local! {
+    static TIMELINE_RESET_PENDING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Requests that the next view start a fresh presentation timeline after a restore.
+pub(crate) fn request_timeline_reset() {
+    TIMELINE_RESET_PENDING.with(|pending| pending.set(true));
+}
 
 pub(crate) type LineId = u64;
 
@@ -506,6 +516,8 @@ impl<D: Clone> Conductor<D> {
         self.held.clear();
         self.held_exit = None;
         self.finishing = false;
+        self.turn_pending = false;
+        self.exit_waiting_since_ms = None;
         self.beat_since_ms = None;
         self.move_battle(now_ms, BattleEvent::Abandon, &mut out);
         for command in self.director.restart() {
@@ -530,6 +542,12 @@ impl<D: Clone> Conductor<D> {
 
     /// Takes a newly accepted view. A scene change only sets the pending successor.
     pub(crate) fn on_view(&mut self, now_ms: u64, plan: ViewPlan<D>) -> Vec<Command<D>> {
+        let reset = TIMELINE_RESET_PENDING.with(|pending| pending.replace(false));
+        if reset {
+            self.battle_progress_ms = 0;
+            self.battlefield = Battlefield::Pending;
+            return self.restart(now_ms, plan);
+        }
         if self.scene == SceneState::Hidden {
             return self.restart(now_ms, plan);
         }
@@ -2757,6 +2775,46 @@ mod tests {
                 .contains(&gap),
             "{gap}"
         );
+    }
+
+    #[test]
+    fn restore_restarts_the_timeline_and_keeps_unlocked_sound() {
+        let mut harness = Harness::new(Voice::working(1_000), true, Vec::new(), vec![0, 2]);
+        harness.view(fight_start());
+        harness.run_to(6_000);
+        harness.view(ViewPlan {
+            diff: ViewDiff {
+                roll: Some("abandoned fight beat"),
+                impact: Some("abandoned fight beat"),
+                ..ViewDiff::default()
+            },
+            script: Vec::new(),
+            cast: vec![0, 2],
+        });
+
+        request_timeline_reset();
+        harness.view(plain(
+            vec![line("restored reply", true, Some(2))],
+            vec![0, 2],
+        ));
+        harness.run_to(harness.now + 20_000);
+
+        assert!(
+            harness
+                .log
+                .iter()
+                .any(|(_, command)| matches!(command, Command::Battle(BattleState::Absent)))
+        );
+        assert!(harness.log.iter().any(|(_, command)| matches!(
+            command,
+            Command::Clip {
+                op: ClipOp::Request,
+                detail: "restored reply",
+                ..
+            }
+        )));
+        assert!(harness.opened("restored reply").is_some());
+        assert_eq!(harness.conductor.battle_state(), BattleState::Absent);
     }
 
     #[test]
