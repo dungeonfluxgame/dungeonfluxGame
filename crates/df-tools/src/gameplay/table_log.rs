@@ -1789,7 +1789,19 @@ fn enemy_attack_text(group: &[&rpc::CombatOutcome]) -> String {
             damage_words(outcome)
         )
     } else {
-        format!("misses {}", outcome.target_name)
+        let weapon = outcome.weapon.replace('-', " ");
+        let attack = match attack_action_verb(outcome) {
+            AttackActionVerb::Throw if !weapon.is_empty() => {
+                format!("throws the {weapon} at {}", outcome.target_name)
+            }
+            AttackActionVerb::Throw => format!("throws at {}", outcome.target_name),
+            AttackActionVerb::Shoot if !weapon.is_empty() => {
+                format!("shoots at {} with the {weapon}", outcome.target_name)
+            }
+            AttackActionVerb::Shoot => format!("shoots at {}", outcome.target_name),
+            AttackActionVerb::Strike => format!("strikes at {}", outcome.target_name),
+        };
+        format!("{attack} \u{2014} miss")
     }
 }
 
@@ -3016,6 +3028,61 @@ mod tests {
     }
 
     #[test]
+    fn a_missed_strike_names_the_target_and_result() {
+        let miss = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[outcome("Snag", "Brakka", false, 0)],
+            "greatsword",
+            "",
+            "Attack",
+        );
+
+        assert_eq!(miss[1].text, "strikes at Brakka \u{2014} miss");
+    }
+
+    #[test]
+    fn a_missed_throw_names_the_weapon_target_and_result() {
+        let miss = rpc::CombatOutcome {
+            attack_style: 2,
+            weapon: "javelin".to_owned(),
+            ..outcome("Snag", "Brakka", false, 0)
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[miss],
+            "greatsword",
+            "",
+            "Attack",
+        );
+
+        assert_eq!(lines[1].text, "throws the javelin at Brakka \u{2014} miss");
+    }
+
+    #[test]
+    fn a_missed_shot_names_the_target_weapon_and_result() {
+        let miss = rpc::CombatOutcome {
+            attack_style: 2,
+            weapon: "light-crossbow".to_owned(),
+            ..outcome("Snag", "Brakka", false, 0)
+        };
+        let lines = action_lines(
+            rpc::GameplayActionKind::GreatswordAttack,
+            "Brakka",
+            &[miss],
+            "greatsword",
+            "",
+            "Attack",
+        );
+
+        assert_eq!(
+            lines[1].text,
+            "shoots at Brakka with the light crossbow \u{2014} miss"
+        );
+    }
+
+    #[test]
     fn an_attack_is_a_phrase_with_its_visible_result_and_the_enemys_answer_follows() {
         let combat = [
             outcome("Brakka", "Snag", true, 9),
@@ -3037,7 +3104,7 @@ mod tests {
             "strikes with the greatsword \u{2014} hit, 9 damage"
         );
         assert_eq!(lines[1].speaker, "Snag");
-        assert_eq!(lines[1].text, "misses Brakka");
+        assert_eq!(lines[1].text, "strikes at Brakka \u{2014} miss");
         let miss = action_lines(
             rpc::GameplayActionKind::GreatswordAttack,
             "Brakka",
@@ -3178,7 +3245,7 @@ mod tests {
         );
         // A single-square move is one square, for heroes and foes alike.
         assert_eq!(lines[0].text, "moves 1 square (5 ft)");
-        assert_eq!(lines[1].text, "misses Brakka");
+        assert_eq!(lines[1].text, "strikes at Brakka \u{2014} miss");
     }
 
     #[test]
