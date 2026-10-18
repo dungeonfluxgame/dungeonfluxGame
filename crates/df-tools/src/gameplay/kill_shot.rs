@@ -113,6 +113,27 @@ pub(in crate::gameplay) fn committed_blow(
     }
 }
 
+/// Assign the one-based committed-history sequence used by the combat view to
+/// outcomes from the just-committed action.
+pub(in crate::gameplay) fn sequence_committed_outcomes(
+    history: &[super::super::rpc::CombatOutcome],
+    outcomes: &[super::super::rpc::CombatOutcome],
+) -> Option<Vec<super::super::rpc::CombatOutcome>> {
+    let sequence_start = u64::try_from(history.len().checked_sub(outcomes.len())?).ok()?;
+    outcomes
+        .iter()
+        .enumerate()
+        .map(|(index, outcome)| {
+            let sequence = sequence_start
+                .checked_add(u64::try_from(index).ok()?)?
+                .checked_add(1)?;
+            let mut sequenced = outcome.clone();
+            sequenced.sequence = sequence;
+            Some(sequenced)
+        })
+        .collect()
+}
+
 /// A final dead flag must not credit an earlier downing hit when a later attack
 /// or Death Saving Throw in the same committed turn actually caused the death.
 pub(in crate::gameplay) fn hero_death_at_blow(

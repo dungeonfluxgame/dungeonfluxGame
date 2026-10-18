@@ -3285,25 +3285,31 @@ impl Actor {
                 return;
             }
         };
-        // Receipts leave sequence at zero. Use the same committed history clock as
-        // the TV projection, including moves and saves before these new attacks.
-        let Some(combat) = after
+        // Receipts leave sequence at zero. The TV projection counts every
+        // committed combat outcome, including moves and saves, from decisions.
+        // Read that same history directly because a finished fight has no live
+        // player combat view.
+        let committed_history = after
             .state()
-            .characters
-            .first()
-            .and_then(|hero| audit_combat_view(after, hero.owner))
-        else {
-            record_unavailable("kill-shot-sequence", "committed combat view unavailable");
+            .decisions
+            .iter()
+            .filter(|decision| decision.source_policy.as_str() == super::journey::THREAD_POLICY)
+            .map(super::journey::accepted)
+            .collect::<Result<Vec<_>, _>>();
+        let Ok(committed_history) = committed_history else {
+            record_unavailable("kill-shot-sequence", "committed combat history unavailable");
             return;
         };
-        let Some(sequence_start) = u64::try_from(outcomes.len())
-            .ok()
-            .and_then(|count| combat.latest_sequence.checked_sub(count))
+        let history = committed_history
+            .iter()
+            .flat_map(|accepted| accepted.combat.iter().cloned())
+            .collect::<Vec<_>>();
+        let Some(sequenced_outcomes) = kill_shot::sequence_committed_outcomes(&history, outcomes)
         else {
             record_unavailable("kill-shot-sequence", "committed combat history incomplete");
             return;
         };
-        for (index, outcome) in outcomes.iter().enumerate() {
+        for (index, (outcome, sequenced)) in outcomes.iter().zip(&sequenced_outcomes).enumerate() {
             if !matches!(
                 rpc::OutcomeKind::try_from(outcome.kind),
                 Ok(rpc::OutcomeKind::Attack | rpc::OutcomeKind::OpportunityAttack)
@@ -3331,10 +3337,7 @@ impl Actor {
                 }
                 None => None,
             };
-            let mut sequenced = outcome.clone();
-            // The checked history length above proves this index fits and cannot overflow.
-            sequenced.sequence = sequence_start + index as u64 + 1;
-            let blow = kill_shot::committed_blow(&sequenced, &scene.title, hero_dead);
+            let blow = kill_shot::committed_blow(sequenced, &scene.title, hero_dead);
             match kill_shot::decide(&blow, after.basis().revision.epoch().get()) {
                 Ok(request) => super::home_video::request_kill_shot_still(request, before, outcome),
                 Err(reason) => record_audit_line(

@@ -8,7 +8,7 @@ use super::super::startup_configuration::ContentRating;
 use super::clip_spec::{ClipInput, ClipRecipe, KillShotSpec};
 use super::kill_shot::{
     CommittedBlow, KillShotRequest, ShownShots, Skip, audit_line, decide, kill_id, motion_prompt,
-    still_plan, still_prompt,
+    sequence_committed_outcomes, still_plan, still_prompt,
 };
 use crate::gameplay::imagery::NON_PHOTOGRAPHIC_WORDS;
 
@@ -273,6 +273,72 @@ fn kill_shot_committed_outcomes_use_rules_death_for_heroes_and_lethality_for_foe
     assert_eq!(
         decide(&committed_blow(&miss, "Market street", None), 3),
         Err(Skip::NotAHit)
+    );
+}
+
+#[test]
+fn a_finishing_attack_uses_the_committed_history_sequence_for_its_kill_shot() {
+    let mut history = vec![rpc::CombatOutcome::default(); 8];
+    let finishing_attack = rpc::CombatOutcome {
+        actor_name: "Sigrun".into(),
+        target_name: "Jessa".into(),
+        weapon: "javelin".into(),
+        damage_type: "piercing".into(),
+        kind: rpc::OutcomeKind::Attack as i32,
+        hit: true,
+        damage: 8,
+        target_hit_points: 0,
+        ..Default::default()
+    };
+    history.push(finishing_attack.clone());
+
+    let sequenced = sequence_committed_outcomes(&history, &[finishing_attack])
+        .expect("the finished encounter retains its committed history");
+    assert_eq!(sequenced[0].sequence, 9, "the TV's latest_sequence");
+    let blow = super::kill_shot::committed_blow(&sequenced[0], "Harbor", Some(true));
+    let request = decide(&blow, 5).expect("the finishing attack is a kill shot");
+    assert_eq!(request.sequence, 9);
+}
+
+#[test]
+fn non_finishing_and_knockout_attacks_keep_their_existing_kill_shot_decisions() {
+    let attack = rpc::CombatOutcome {
+        actor_name: "Sigrun".into(),
+        target_name: "Bandit".into(),
+        weapon: "javelin".into(),
+        damage_type: "piercing".into(),
+        kind: rpc::OutcomeKind::Attack as i32,
+        hit: true,
+        damage: 8,
+        target_hit_points: 0,
+        ..Default::default()
+    };
+    let mut history = vec![rpc::CombatOutcome::default(); 3];
+    history.push(attack.clone());
+    let sequenced = sequence_committed_outcomes(&history, &[attack.clone()])
+        .expect("the committed history includes this non-finishing attack");
+    assert_eq!(
+        decide(
+            &super::kill_shot::committed_blow(&sequenced[0], "Harbor", None),
+            5
+        )
+        .expect("non-finishing kill remains eligible")
+        .sequence,
+        4
+    );
+
+    let mut knockout = attack;
+    knockout.knocked_out = true;
+    let mut finished_history = history;
+    finished_history.push(knockout.clone());
+    let sequenced = sequence_committed_outcomes(&finished_history, &[knockout])
+        .expect("the knockout is committed to the finished history");
+    assert_eq!(
+        decide(
+            &super::kill_shot::committed_blow(&sequenced[0], "Harbor", None),
+            5
+        ),
+        Err(Skip::KnockedOut)
     );
 }
 
