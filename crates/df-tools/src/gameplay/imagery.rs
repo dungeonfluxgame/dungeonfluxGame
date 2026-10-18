@@ -1041,11 +1041,14 @@ impl Engine {
             retry.validate().map_err(|_| ImageFailure::BadOutput)?;
             let (retry_format, retry_bytes, retry_cost) = self.generate(&retry, format).await?;
             micro_dollars = micro_dollars.saturating_add(retry_cost);
-            if photo_failure(judge, kind, &retry_bytes, retry_format)
-                .await
-                .is_some()
-            {
-                return Err(ImageFailure::BadOutput);
+            // Lettering is the one defect a retry may keep: a place with a little stray text on a
+            // sign beats a place with no picture at all, where the cast stands on black (P6-183).
+            match photo_failure(judge, kind, &retry_bytes, retry_format).await {
+                None => {}
+                Some(photo_check::PhotoCheckFailure::VisibleText) => {
+                    record_photo_check(kind, "kept", "visible_text");
+                }
+                Some(_) => return Err(ImageFailure::BadOutput),
             }
             (stored_format, bytes) = (retry_format, retry_bytes);
         }
@@ -1254,6 +1257,11 @@ async fn photo_failure(
             }
             Err(error) => ("unjudged", error.label(), None),
         };
+    record_photo_check(kind, result, reason);
+    failure
+}
+
+fn record_photo_check(kind: photo_check::PhotoCheckKind, result: &str, reason: &str) {
     let line = format!(
         "PHOTO_CHECK kind={} result={result} reason={reason}",
         kind.label()
@@ -1264,7 +1272,6 @@ async fn photo_failure(
         ("reason".to_owned(), serde_json::json!(reason)),
     ]);
     super::actor::record_audit_diagnostic("gameplay.imagery.photo_check", line, fields, &[]);
-    failure
 }
 
 fn failure_of(error: ImageEditError) -> ImageFailure {
