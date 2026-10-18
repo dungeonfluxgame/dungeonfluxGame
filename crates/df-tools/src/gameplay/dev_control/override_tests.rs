@@ -578,6 +578,8 @@ async fn enabled(fixture: &Fixture, hero: &str) {
 
 #[test]
 fn gameplay_override_handlers_obey_the_process_opt_in() {
+    let _process_state =
+        crate::gameplay::journey::tactical::development_tests::process_state_test_scope();
     if std::env::var_os(CHILD).is_none() {
         for setting in [None, Some("off"), Some("on")] {
             let mut child = Command::new(std::env::current_exe().unwrap());
@@ -625,6 +627,8 @@ fn gameplay_override_handlers_obey_the_process_opt_in() {
 
 #[test]
 fn development_fight_start_and_end_keep_state_fight_and_display_reads_responsive() {
+    let _process_state =
+        crate::gameplay::journey::tactical::development_tests::process_state_test_scope();
     const CHILD: &str = "DF_K2_FIGHT_READ_TEST_CHILD";
     const TEST: &str = "gameplay::dev_control::override_tests::development_fight_start_and_end_keep_state_fight_and_display_reads_responsive";
     if std::env::var_os(CHILD).is_none() {

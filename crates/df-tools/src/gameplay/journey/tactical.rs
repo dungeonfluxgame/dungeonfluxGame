@@ -9747,7 +9747,7 @@ pub(super) fn development_stage(
 }
 
 #[cfg(test)]
-mod development_tests {
+pub(crate) mod development_tests {
     use super::*;
     use crate::gameplay::{
         adventure::{RulesMode, record, shop},
@@ -9755,6 +9755,49 @@ mod development_tests {
         dev_control::{candidate, fight::BattleCommand},
         startup_configuration::ContentRating,
     };
+    use std::{
+        ffi::OsString,
+        sync::{Mutex, MutexGuard, PoisonError},
+    };
+
+    static PROCESS_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Serializes tests that use process-wide gameplay controls and restores their prior state.
+    pub(crate) struct ProcessStateTestScope {
+        _lock: MutexGuard<'static, ()>,
+        queued_faces: Vec<(u32, Vec<u32>)>,
+        dev_overrides: Option<OsString>,
+    }
+
+    pub(crate) fn process_state_test_scope() -> ProcessStateTestScope {
+        let lock = PROCESS_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let queued_faces = crate::gameplay::dice::snapshot();
+        crate::gameplay::dice::clear();
+        let dev_overrides = std::env::var_os("DF_GAMEPLAY_DEV_OVERRIDES");
+        ProcessStateTestScope {
+            _lock: lock,
+            queued_faces,
+            dev_overrides,
+        }
+    }
+
+    impl Drop for ProcessStateTestScope {
+        fn drop(&mut self) {
+            crate::gameplay::dice::clear();
+            for (sides, faces) in &self.queued_faces {
+                crate::gameplay::dice::enqueue(*sides, faces)
+                    .expect("a previously queued die face remains valid");
+            }
+            if let Some(value) = &self.dev_overrides {
+                unsafe { std::env::set_var("DF_GAMEPLAY_DEV_OVERRIDES", value) };
+            } else {
+                unsafe { std::env::remove_var("DF_GAMEPLAY_DEV_OVERRIDES") };
+            }
+        }
+    }
+
     fn commit(current: &Checkpoint, command: BattleCommand, tag: u8) -> Checkpoint {
         let operation = OperationId::from_bytes(&[tag; 16]).unwrap();
         let turn = npc_turn(current, "battle", &NpcAct::Development(command), operation).unwrap();
@@ -9832,6 +9875,7 @@ mod development_tests {
     }
     #[test]
     fn development_start_runs_unheld_enemy_first_policy() {
+        let _process_state = process_state_test_scope();
         let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
         let documents = generated.documents(true).unwrap();
         let (loaded, _) = record::reload(&documents).unwrap();
@@ -9874,6 +9918,7 @@ mod development_tests {
     }
     #[test]
     fn development_commands_start_edit_restore_add_remove_end_and_project_each_commit() {
+        let _process_state = process_state_test_scope();
         let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
         let documents = generated.documents(true).unwrap();
         let (loaded, _) = record::reload(&documents).unwrap();

@@ -3243,6 +3243,8 @@ mod tests {
         development_authored_terminal(true);
     }
     fn development_authored_terminal(restore_projection: bool) {
+        let _process_state =
+            crate::gameplay::journey::tactical::development_tests::process_state_test_scope();
         use crate::gameplay::dev_control::{
             candidate,
             fight::BattleCommand,

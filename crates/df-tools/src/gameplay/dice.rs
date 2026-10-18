@@ -233,6 +233,8 @@ mod tests {
 
     #[test]
     fn a_queued_d100_face_replaces_the_random_draw_then_the_draw_falls_back() {
+        let _process_state =
+            crate::gameplay::journey::tactical::development_tests::process_state_test_scope();
         // d100 is never drawn by game code, so this test cannot consume another test's faces.
         clear();
         assert_eq!(enqueue(100, &[42, 7]), Ok(2));

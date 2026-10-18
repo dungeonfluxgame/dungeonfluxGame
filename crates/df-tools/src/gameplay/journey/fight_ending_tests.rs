@@ -529,6 +529,7 @@ fn lost_fight() -> Checkpoint {
 
 #[test]
 fn a_total_party_defeat_waits_for_the_death_saves_then_ends_without_reviving_anyone() {
+    let _process_state = tactical::development_tests::process_state_test_scope();
     live(|| {
         let mut current = lost_fight();
         assert!(!combat_victory(current.state()).unwrap());
@@ -768,6 +769,7 @@ fn a_conversation_cannot_be_entered_from_a_fight_and_a_fight_cannot_be_reentered
 /// path or carries a written internal reason in the table.
 #[test]
 fn every_listed_player_offer_is_accepted_when_taken_across_the_played_path() {
+    let _process_state = tactical::development_tests::process_state_test_scope();
     use session_machine::{Event, SessionState};
     live(|| {
         let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
