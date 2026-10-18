@@ -21,12 +21,114 @@ use crate::gameplay::resources::{
 fn scratch(label: &str) -> PathBuf {
     let lane = std::env::current_dir()
         .unwrap()
-        .join("artifacts/tmp/lanes/W2");
+        .join("artifacts/tmp/lanes/W3");
     std::fs::create_dir_all(&lane).unwrap();
     let directory = lane.join(format!("splat-{label}-{}", std::process::id()));
     let _removed = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).unwrap();
     directory
+}
+
+#[test]
+fn battle_view_world_is_present_only_for_an_open_fight_with_ready_metric_assets() {
+    let ready = ReadyWorld {
+        ply_url: "/assets/splat/worlds/test/world.ply".to_owned(),
+        collider_url: "/assets/splat/worlds/test/collider.glb".to_owned(),
+        metric_scale_factor: Some(1.5014322),
+        ground_plane_offset: Some(1.2088797),
+    };
+    assert!(battle_world(true, None).is_none());
+    assert!(battle_world(false, Some(ready.clone())).is_none());
+    let view = battle_world(true, Some(ready.clone())).unwrap();
+    assert_eq!(view.ply_url, ready.ply_url);
+    assert_eq!(view.collider_url, ready.collider_url);
+    assert_eq!(view.metric_scale_factor, 1.5014322);
+    assert_eq!(view.ground_plane_offset, 1.2088797);
+    assert!(
+        battle_world(
+            true,
+            Some(ReadyWorld {
+                metric_scale_factor: None,
+                ..ready.clone()
+            })
+        )
+        .is_none()
+    );
+    assert!(
+        battle_world(
+            true,
+            Some(ReadyWorld {
+                metric_scale_factor: Some(f64::NAN),
+                ..ready
+            })
+        )
+        .is_none()
+    );
+}
+
+/// This is the exact pure transform used by the browser's world loader.
+#[test]
+fn battle_world_opencv_transform_scales_axes_sizes_and_aligns_the_floor() {
+    use df_render::battle::{Vec3, marble_world_transform};
+    let transform = marble_world_transform(1.501_432_2, 1.208_879_7).unwrap();
+    let floor_raw_y = 1.208_879_7 / 1.501_432_2;
+    let point = transform.to_world(Vec3::new(2.0, floor_raw_y, 3.0));
+    assert!(point.y.abs() < 0.00001);
+    assert!((point.x - 3.002_864_4).abs() < 0.00001);
+    assert!((point.z + 4.504_297).abs() < 0.00001);
+    assert!(transform.to_world(Vec3::new(0.0, floor_raw_y - 1.0, 0.0)).y > 0.0);
+    assert_eq!(transform.to_world(Vec3::ZERO).y, 1.208_879_7);
+    let placed = df_render::battle::SplatTransform {
+        translate: Vec3::new(5.0, 0.0, -7.0),
+        ..transform
+    };
+    let shifted = placed.to_world(Vec3::new(2.0, floor_raw_y, 3.0));
+    assert!((shifted - point - Vec3::new(5.0, 0.0, -7.0)).length() < 0.00001);
+    assert_eq!(placed.scale, transform.scale); // Floor and placement never offset Gaussian sizes.
+}
+
+#[tokio::test]
+async fn cached_worlds_remain_available_without_a_worldlabs_maker() {
+    let directory = scratch("cached-only");
+    let spec = SplatWorldSpec::new("saved-shop", vec!["Shop".to_owned()], SplatWorldFormat::Ply);
+    let result = WorldResult {
+        world_id: "stored-shop".to_owned(),
+        collider_url: String::new(),
+        caption: "A photographic shop".to_owned(),
+        metric_scale_factor: Some(1.5),
+        ground_plane_offset: Some(1.2),
+        credits: 0,
+    };
+    store_world(
+        &directory,
+        &ResourceKey::of(&spec),
+        &result,
+        &ply_fixture(1),
+        b"glTF",
+    )
+    .unwrap();
+    let service = SplatWorlds::cached(
+        Hub::new(),
+        Arc::new(|_| Box::pin(async { None })),
+        directory.clone(),
+    );
+    service.request_world(&spec);
+    assert!(service.ready_world("saved-shop").is_some());
+    service.run_queued().await;
+    assert_eq!(
+        service.hub().ledger().snapshot(Unit::SplatCredit).committed,
+        0
+    );
+    let restarted = SplatWorlds::cached(
+        Hub::new(),
+        Arc::new(|_| Box::pin(async { None })),
+        directory.clone(),
+    );
+    assert_eq!(
+        restarted.ready_world("saved-shop"),
+        service.ready_world("saved-shop")
+    );
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 fn ply_fixture(splats: u64) -> Vec<u8> {

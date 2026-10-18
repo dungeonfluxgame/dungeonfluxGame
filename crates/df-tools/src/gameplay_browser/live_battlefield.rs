@@ -615,6 +615,259 @@ async fn wait_idle() -> bool {
     }
 }
 
+/// Bounded same-origin asset load; timeout aborts the browser request as well as its waiter.
+async fn world_bytes(url: &str, maximum: u32) -> Option<Vec<u8>> {
+    use wasm_bindgen_futures::JsFuture;
+    let controller = web_sys::AbortController::new().ok()?;
+    let options = web_sys::RequestInit::new();
+    options.set_signal(Some(&controller.signal()));
+    let request = web_sys::Request::new_with_str_and_init(url, &options).ok()?;
+    let fetch = async {
+        let response: web_sys::Response =
+            JsFuture::from(web_sys::window()?.fetch_with_request(&request))
+                .await
+                .ok()?
+                .dyn_into()
+                .ok()?;
+        if !response.ok() {
+            return None;
+        }
+        let length = response
+            .headers()
+            .get("content-length")
+            .ok()??
+            .parse::<u32>()
+            .ok()?;
+        if length == 0 || length > maximum {
+            return None;
+        }
+        let buffer = JsFuture::from(response.array_buffer().ok()?).await.ok()?;
+        let bytes = js_sys::Uint8Array::new(&buffer);
+        (bytes.length() > 0 && bytes.length() <= maximum).then(|| bytes.to_vec())
+    };
+    let result = match futures::future::select(
+        Box::pin(fetch),
+        Box::pin(TimeoutFuture::new(10_000)),
+    )
+    .await
+    {
+        futures::future::Either::Left((bytes, _)) => bytes,
+        futures::future::Either::Right(_) => None,
+    };
+    controller.abort();
+    result
+}
+
+async fn preview_world() -> Option<rpc::BattleWorld> {
+    let bytes = world_bytes("/assets/splat/battle-preview.json", 4096).await?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    Some(rpc::BattleWorld {
+        ply_url: value.get("ply_url")?.as_str()?.to_owned(),
+        collider_url: value.get("collider_url")?.as_str()?.to_owned(),
+        metric_scale_factor: value.get("metric_scale_factor")?.as_f64()?,
+        ground_plane_offset: value.get("ground_plane_offset")?.as_f64()?,
+    })
+}
+
+/// An open square nearest the centre of the largest edge-connected open area. Ties are stable.
+fn open_floor_centre(grid: &battle::WorldGrid) -> Option<[f32; 2]> {
+    let mut seen = std::collections::HashSet::new();
+    let mut largest = Vec::new();
+    for row in 0..grid.rows() {
+        for col in 0..grid.cols() {
+            if grid.cell(col, row) != Some(battle::WorldCell::Open) || !seen.insert((col, row)) {
+                continue;
+            }
+            let mut area = Vec::new();
+            let mut stack = vec![(col, row)];
+            while let Some((col, row)) = stack.pop() {
+                area.push((col, row));
+                for next in [
+                    col.checked_sub(1).map(|c| (c, row)),
+                    row.checked_sub(1).map(|r| (col, r)),
+                    col.checked_add(1)
+                        .filter(|c| *c < grid.cols())
+                        .map(|c| (c, row)),
+                    row.checked_add(1)
+                        .filter(|r| *r < grid.rows())
+                        .map(|r| (col, r)),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if grid.cell(next.0, next.1) == Some(battle::WorldCell::Open)
+                        && seen.insert(next)
+                    {
+                        stack.push(next);
+                    }
+                }
+            }
+            if area.len() > largest.len() {
+                largest = area;
+            }
+        }
+    }
+    let sum = largest.iter().fold([0.0, 0.0], |sum, &(col, row)| {
+        [sum[0] + col as f32, sum[1] + row as f32]
+    });
+    let count = largest.len() as f32;
+    let (col, row) = largest.into_iter().min_by(|a, b| {
+        let distance = |&(col, row): &(u32, u32)| {
+            (col as f32 - sum[0] / count).powi(2) + (row as f32 - sum[1] / count).powi(2)
+        };
+        distance(a)
+            .total_cmp(&distance(b))
+            .then_with(|| (a.1, a.0).cmp(&(b.1, b.0)))
+    })?;
+    grid.cell_centre(col, row)
+}
+
+fn world_mount_is_current(mount: Option<&Rc<()>>) -> bool {
+    mount.is_none_or(|mount| {
+        LIVE.with(|live| {
+            let live = live.borrow();
+            matches!(live.phase, Phase::Mounting)
+                && live
+                    .world_mount
+                    .as_ref()
+                    .is_some_and(|current| Rc::ptr_eq(current, mount))
+        })
+    })
+}
+
+async fn load_battle_world(
+    host: &Element,
+    scene: &mut BattleScene,
+    world: &rpc::BattleWorld,
+    layout_id: Option<&str>,
+    mount: Option<&Rc<()>>,
+) {
+    mark(host, "data-battle-world", "loading");
+    let result = async {
+        if !world.ply_url.starts_with("/assets/splat/worlds/")
+            || !world.ply_url.ends_with(".ply")
+            || !world.collider_url.starts_with("/assets/splat/worlds/")
+            || !world.collider_url.ends_with(".glb")
+        {
+            return Err("asset-path");
+        }
+        let mut transform = battle::marble_world_transform(
+            world.metric_scale_factor as f32,
+            world.ground_plane_offset as f32,
+        )
+        .map_err(|_| "coordinate-frame")?;
+        let bytes = world_bytes(&world.collider_url, 32 * 1024 * 1024)
+            .await
+            .ok_or("collider-load")?;
+        if !world_mount_is_current(mount) {
+            return Err("cancelled");
+        }
+        let mesh = battle::ColliderMesh::from_glb(&bytes).map_err(|_| "collider-decode")?;
+        let grid = battle::world_grid(
+            &mesh,
+            &transform,
+            &battle::WorldGridSettings {
+                cell_m: 0.5,
+                ..Default::default()
+            },
+            None,
+        )
+        .map_err(|_| "collider-grid")?;
+        let centre = open_floor_centre(&grid).ok_or("no-open-floor")?;
+        let stage_centre = scene.grid.centre();
+        transform.translate =
+            battle::Vec3::new(stage_centre.x - centre[0], 0.0, stage_centre.z - centre[1]);
+        let origin = scene.grid.origin();
+        let comparison_grid = battle::world_grid(
+            &mesh,
+            &transform,
+            &battle::WorldGridSettings {
+                cell_m: scene.grid.cell_m(),
+                footprint: Some(battle::WorldBounds {
+                    min: origin,
+                    max: [
+                        origin[0] + scene.grid.cols() as f32 * scene.grid.cell_m(),
+                        origin[1] + scene.grid.rows() as f32 * scene.grid.cell_m(),
+                    ],
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .map_err(|_| "comparison-grid")?;
+        let authored = scene
+            .layouts
+            .iter()
+            .find(|layout| Some(layout.id.as_str()) == layout_id);
+        let mut disagreement = 0;
+        let mut compared = 0;
+        let mut no_floor = 0;
+        for row in 0..scene.grid.rows() {
+            for col in 0..scene.grid.cols() {
+                let cell = Cell::new(col as i32, row as i32);
+                let scanned = comparison_grid.cell(col, row);
+                let blocked = !scene.grid.is_walkable(cell)
+                    || authored.is_some_and(|layout| {
+                        layout.obstacles.iter().any(|obstacle| {
+                            obstacle.blocks_movement && obstacle.cells.contains(&cell)
+                        })
+                    });
+                match scanned {
+                    Some(battle::WorldCell::Open | battle::WorldCell::Blocked) => {
+                        compared += 1;
+                        disagreement +=
+                            u32::from(blocked != (scanned == Some(battle::WorldCell::Blocked)));
+                    }
+                    _ => no_floor += 1,
+                }
+            }
+        }
+        mark(
+            host,
+            "data-battle-world-layout",
+            &format!("disagree={disagreement} compared={compared} no_floor={no_floor}"),
+        );
+        mark(
+            host,
+            "data-battle-world-placement",
+            &format!(
+                "x={} z={} scale={} floor={}",
+                transform.translate.x, transform.translate.z, transform.scale, transform.offset_y
+            ),
+        );
+        Ok(battle::SplatLayer {
+            url: world.ply_url.clone(),
+            format: battle::SplatFormat::Ply,
+            scale: transform.scale,
+            offset_y: transform.offset_y,
+            rot_y_deg: transform.rot_y_deg,
+            translate: transform.translate,
+            orient: transform.orient,
+            max_splats: None,
+            levels: None,
+            detail_radius_m: None,
+            grade: battle::SplatGrade::NEUTRAL,
+            depth_bias_m: 0.15,
+            clip: None,
+            rim_m: None,
+        })
+    }
+    .await;
+    if !world_mount_is_current(mount) {
+        return;
+    }
+    match result {
+        Ok(layer) => {
+            scene.splat = Some(layer);
+            mark(host, "data-battle-world", "placed");
+        }
+        Err(reason) => {
+            scene.splat = None;
+            mark(host, "data-battle-world", reason);
+        }
+    }
+}
+
 async fn run_preview(host: Element, request: PreviewRequest) {
     let mut scene = match battle::load_embedded(&request.scene_id) {
         Some(Ok(scene)) => scene,
@@ -638,13 +891,22 @@ async fn run_preview(host: Element, request: PreviewRequest) {
             rim_m: None,
         });
     }
+    if request.procedural_splats {
+        match preview_world().await {
+            Some(world) => {
+                let layout = pick_layout(&scene, request.layout_id.as_deref(), 0);
+                load_battle_world(&host, &mut scene, &world, layout.as_deref(), None).await;
+            }
+            None => mark(&host, "data-battle-world", "unavailable"),
+        }
+    }
     let scene_for_choice = scene.clone();
     mark(&host, "data-battlefield-scene", &request.scene_id);
     let stage = BattleStage::mount(
         &host,
         scene,
         StageOptions {
-            procedural_splats: request.procedural_splats,
+            procedural_splats: false,
             fixed_quality: request.fixed,
             fps: request.fps,
             feel_off: request.feel_off,
@@ -1349,6 +1611,8 @@ enum Phase {
 
 struct Live {
     phase: Phase,
+    /// Identity of the current world/mount request; release invalidates stale asynchronous loads.
+    world_mount: Option<Rc<()>>,
     host: Option<Element>,
     stage: Option<BattleStage>,
     feed: CombatFeed,
@@ -1411,6 +1675,7 @@ thread_local! {
         latest: None,
         begun_live: false,
         expects_splat: false,
+        world_mount: None,
         initiative_pending: false,
         initiative_seen: false,
         reachable: Vec::new(),
@@ -1900,6 +2165,10 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 .map(|combat| combat.layout_id.clone())
                 .filter(|id| !id.is_empty()),
             &view.scene.location_id,
+            view.journey
+                .combat
+                .as_ref()
+                .and_then(|combat| combat.battle_world.clone()),
         );
     } else {
         sync("view");
@@ -1913,6 +2182,7 @@ fn start_mount(
     key: &str,
     server_layout: Option<String>,
     story_location: &str,
+    world: Option<rpc::BattleWorld>,
 ) {
     let (document, host) = {
         let state = client.borrow();
@@ -1990,13 +2260,36 @@ fn start_mount(
         LIVE.with(|live| live.borrow_mut().phase = Phase::Unavailable);
         return;
     }
+    let mount = Rc::new(());
     LIVE.with(|live| {
         let mut live = live.borrow_mut();
         live.phase = Phase::Mounting;
+        live.world_mount = Some(mount.clone());
         live.host = Some(host.clone());
         live.expects_splat = expects_splat;
     });
     wasm_bindgen_futures::spawn_local(async move {
+        if let Some(world) = world {
+            if fallback_layers.is_none() {
+                fallback_layers = Some((scene.ground.clone(), scene.backdrop.clone()));
+            }
+            load_battle_world(&host, &mut scene, &world, layout.as_deref(), Some(&mount)).await;
+            let current = LIVE.with(|live| {
+                let mut live = live.borrow_mut();
+                let current = matches!(live.phase, Phase::Mounting)
+                    && live
+                        .world_mount
+                        .as_ref()
+                        .is_some_and(|current| Rc::ptr_eq(current, &mount));
+                if current {
+                    live.expects_splat = scene.splat.is_some();
+                }
+                current
+            });
+            if !current {
+                return;
+            }
+        }
         let stage = BattleStage::mount(
             &host,
             scene,
@@ -2012,6 +2305,9 @@ fn start_mount(
             },
         )
         .await;
+        if !world_mount_is_current(Some(&mount)) {
+            return;
+        }
         let available = matches!(stage.availability(), Availability::Available);
         if available {
             stage.set_sound_sink(Rc::new(|event| {
@@ -2739,6 +3035,45 @@ mod tests {
     use df_protocol::common as rpc;
 
     #[test]
+    fn world_floor_centre_is_open_in_the_largest_connected_area() {
+        use df_render::battle::{self, Vec3};
+        let mut vertices = Vec::new();
+        let mut triangles = Vec::new();
+        for (col, row) in (0..3)
+            .flat_map(|row| (0..3).map(move |col| (col, row)))
+            .filter(|cell| *cell != (1, 1))
+            .chain([(10, 10)])
+        {
+            let offset = vertices.len() as u32;
+            let (x, z) = (col as f32, row as f32);
+            vertices.extend([
+                Vec3::new(x, 0.0, z),
+                Vec3::new(x, 0.0, z + 1.0),
+                Vec3::new(x + 1.0, 0.0, z),
+                Vec3::new(x + 1.0, 0.0, z + 1.0),
+            ]);
+            triangles.extend([
+                [offset, offset + 1, offset + 2],
+                [offset + 2, offset + 1, offset + 3],
+            ]);
+        }
+        let mesh = battle::ColliderMesh::from_triangles(vertices, triangles).unwrap();
+        let grid = battle::world_grid(
+            &mesh,
+            &battle::SplatTransform::IDENTITY,
+            &battle::WorldGridSettings {
+                cell_m: 1.0,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(grid.largest_open_area().unwrap().squares, 8);
+        // The centre of this ring has no floor. Choose the nearest open square, with a stable tie.
+        assert_eq!(super::open_floor_centre(&grid), Some([1.5, 0.5]));
+    }
+
+    #[test]
     fn battlefield_uses_the_party_maximum_for_a_hero_health_bar() {
         let party = [rpc::PartyMemberView {
             name: "Brakka".to_owned(),
@@ -2918,6 +3253,7 @@ pub(super) fn splash_caption(label: &str, text: &str, showing: bool) {
 }
 
 fn reset_fight(live: &mut Live) {
+    live.world_mount = None;
     live.accepted_cells.clear();
     live.reaction = None;
     live.reaction_seconds_remaining = None;

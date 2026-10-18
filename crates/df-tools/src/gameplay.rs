@@ -24,6 +24,7 @@ mod freeform_action;
 mod dialogue_tests;
 // DEVCTL-001: development-only agent control surface (off by default).
 mod dev_control;
+mod fight_foresight;
 mod fight_lines;
 mod health_faces;
 #[cfg(test)]
@@ -1579,6 +1580,63 @@ async fn serve_run(
         plates_enabled,
         receiver.clone(),
     );
+    let splat_cache = std::env::current_dir()?.join("artifacts/cache");
+    splat_world::register_stored_worlds(&splat_cache);
+    splat_world::seed_proof_world(
+        &splat_cache,
+        &std::env::current_dir()?.join("artifacts/tmp/worldlabs/out/m11"),
+    )?;
+    let room_photograph: splat_world::RoomPhotograph = {
+        let living = living.clone();
+        let imagery = imagery.clone();
+        Arc::new(move |place| {
+            let living = living.clone();
+            let imagery = imagery.clone();
+            let place = place.to_owned();
+            Box::pin(async move {
+                let depiction = living.describe_depiction(
+                    df_render::art_contract::Role::GenerationReference,
+                    "",
+                    &df_render::art_contract::Subject::place(&place),
+                )?;
+                let key = depiction.asset.strip_prefix("/gameplay/imagery/")?;
+                match imagery.image(key).await {
+                    imagery::Lookup::Image { bytes, .. } => Some(bytes.to_vec()),
+                    imagery::Lookup::Unregistered | imagery::Lookup::NotReady => None,
+                }
+            })
+        })
+    };
+    let splat_worlds = match std::env::var("WORLDLABS_API_KEY") {
+        Ok(key) if interactive && !key.is_empty() => {
+            let maker = df_providers::NativeWorldLabs::new(
+                df_providers::WorldLabsConfig::live(),
+                &key,
+                Duration::from_secs(180),
+            )
+            .map_err(|_| std::io::Error::other("World Labs configuration invalid"))?;
+            splat_world::SplatWorlds::new(
+                imagery.hub().clone(),
+                Arc::new(maker),
+                room_photograph,
+                splat_cache,
+            )
+        }
+        _ => splat_world::SplatWorlds::cached(imagery.hub().clone(), room_photograph, splat_cache),
+    };
+    splat_world::install(splat_worlds);
+    let _fight_foresight_worker = fight_foresight::start(
+        approach_model::ApproachModel::configured(if interactive {
+            startup_configuration::approach_settings(
+                std::env::var("DF_JEV_API_KEY"),
+                std::env::var("DF_JEV_BASE_URL"),
+            )?
+        } else {
+            None
+        }),
+        table_log.clone(),
+        receiver.clone(),
+    );
     // PLAY-V10: the home screen's looping video, made from the still just in time.
     let home_video_line = home_video::install(
         home_video::home_video_settings(
@@ -1903,6 +1961,7 @@ async fn serve_run(
             &std::path::Path::new(&asset_root).join("../music"),
         )?)
         .merge(splat_assets::router(&splat_directory)?)
+        .merge(splat_world::router())
         .merge(voice::router(voice.clone()))
         .merge(imagery::router(imagery.clone()))
         .merge(music_routes)

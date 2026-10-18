@@ -1284,6 +1284,14 @@ pub(super) fn project_journey(
     }
     use super::pack::{self, SceneKey};
     let authored = stage("view-scene", super::beat_script_runtime::scene(state))?;
+    if let Some(view) = combat.as_mut() {
+        view.battle_world = authored.setting.as_ref().and_then(|place| {
+            super::splat_world::battle_world(
+                role == LocalDemoRole::Display && !view.finished,
+                super::splat_world::ready_world(&place.place_id),
+            )
+        });
+    }
     let key = authored.key;
     let rested = state
         .narrative

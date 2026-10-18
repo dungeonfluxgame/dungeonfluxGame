@@ -286,6 +286,65 @@ pub(in crate::gameplay) struct StoredWorld {
     pub(in crate::gameplay) created_unix: u64,
 }
 
+#[derive(Deserialize, Serialize)]
+struct StoredPlace {
+    place_id: String,
+    prompt_facts: Vec<String>,
+}
+
+fn store_place(cache_dir: &Path, spec: &SplatWorldSpec) -> io::Result<()> {
+    let binding = StoredPlace {
+        place_id: spec.place_id().to_owned(),
+        prompt_facts: spec.prompt_facts().to_vec(),
+    };
+    let bytes = serde_json::to_vec(&binding).map_err(io::Error::other)?;
+    write_atomic(
+        &world_directory(cache_dir, &ResourceKey::of(spec)),
+        "place.json",
+        &bytes,
+    )
+}
+
+fn stored_places(cache_dir: &Path) -> HashMap<String, ResourceKey> {
+    let mut places = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(cache_dir.join(SPLAT_WORLDS_DIRECTORY)) {
+        for entry in entries.flatten() {
+            let path = entry.path().join("place.json");
+            if !path.is_file() {
+                continue;
+            }
+            let binding = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<StoredPlace>(&bytes).ok());
+            let Some(binding) = binding else {
+                super::actor::record_audit_line(
+                    "gameplay.splat_world",
+                    "SPLAT_WORLD status=failed place=unknown reason=stored_place_unreadable"
+                        .to_owned(),
+                );
+                continue;
+            };
+            let spec = SplatWorldSpec::new(
+                &binding.place_id,
+                binding.prompt_facts,
+                SplatWorldFormat::Ply,
+            );
+            let key = ResourceKey::of(&spec);
+            if entry.file_name().to_str() == Some(key.as_str())
+                && read_stored_world(cache_dir, &key).is_some()
+            {
+                places.insert(binding.place_id, key);
+            }
+        }
+    }
+    let proof_spec = SplatWorldSpec::new(PROOF_PLACE_ID, Vec::new(), SplatWorldFormat::Ply);
+    let proof_key = ResourceKey::of(&proof_spec);
+    if read_stored_world(cache_dir, &proof_key).is_some() {
+        places.insert(PROOF_PLACE_ID.to_owned(), proof_key);
+    }
+    places
+}
+
 fn audit(place_id: &str, key: &ResourceKey, status: &str, elapsed_ms: u128, reason: &str) {
     super::actor::record_audit_line(
         "gameplay.splat_world",
@@ -532,7 +591,7 @@ pub(in crate::gameplay) type RoomPhotograph =
 /// The installed splat-world service: one hub, one maker, one photograph source.
 pub(in crate::gameplay) struct SplatWorlds {
     hub: Hub,
-    maker: Arc<dyn WorldMaker>,
+    maker: Option<Arc<dyn WorldMaker>>,
     photograph: RoomPhotograph,
     cache_dir: PathBuf,
     timing: PollTiming,
@@ -540,6 +599,23 @@ pub(in crate::gameplay) struct SplatWorlds {
 }
 
 impl SplatWorlds {
+    /// Serves stored worlds without admitting paid work when the maker is not configured.
+    pub(in crate::gameplay) fn cached(
+        hub: Hub,
+        photograph: RoomPhotograph,
+        cache_dir: PathBuf,
+    ) -> Self {
+        let places = stored_places(&cache_dir);
+        Self {
+            hub,
+            maker: None,
+            photograph,
+            cache_dir,
+            timing: PollTiming::default(),
+            places: Mutex::new(places),
+        }
+    }
+
     pub(in crate::gameplay) fn new(
         hub: Hub,
         maker: Arc<dyn WorldMaker>,
@@ -556,16 +632,10 @@ impl SplatWorlds {
         cache_dir: PathBuf,
         timing: PollTiming,
     ) -> Self {
-        let proof_spec = SplatWorldSpec::new(PROOF_PLACE_ID, Vec::new(), SplatWorldFormat::Ply);
-        let proof_key = ResourceKey::of(&proof_spec);
-        let mut places = HashMap::new();
-        if read_stored_world(&cache_dir, &proof_key).is_some() {
-            register_stored_world(&proof_key, &world_directory(&cache_dir, &proof_key));
-            places.insert(PROOF_PLACE_ID.to_owned(), proof_key);
-        }
+        let places = stored_places(&cache_dir);
         Self {
             hub,
-            maker,
+            maker: Some(maker),
             photograph,
             cache_dir,
             timing,
@@ -603,6 +673,9 @@ impl SplatWorlds {
         drop(places);
         if read_stored_world(&self.cache_dir, &key).is_some() {
             register_stored_world(&key, &world_directory(&self.cache_dir, &key));
+            if store_place(&self.cache_dir, spec).is_err() {
+                audit(spec.place_id(), &key, "failed", 0, "world_binding_failed");
+            }
         }
         let maker: super::resources::Maker = {
             let service = self.clone_handle();
@@ -620,7 +693,7 @@ impl SplatWorlds {
     fn clone_handle(&self) -> ServiceHandle {
         ServiceHandle {
             hub: self.hub.clone(),
-            maker: Arc::clone(&self.maker),
+            maker: self.maker.clone(),
             photograph: Arc::clone(&self.photograph),
             cache_dir: self.cache_dir.clone(),
             timing: self.timing,
@@ -643,7 +716,7 @@ impl SplatWorlds {
 #[derive(Clone)]
 struct ServiceHandle {
     hub: Hub,
-    maker: Arc<dyn WorldMaker>,
+    maker: Option<Arc<dyn WorldMaker>>,
     photograph: RoomPhotograph,
     cache_dir: PathBuf,
     timing: PollTiming,
@@ -684,6 +757,10 @@ impl ServiceHandle {
         spec: &SplatWorldSpec,
         key: &ResourceKey,
     ) -> Result<Generated, ResourceFailure> {
+        let maker = self
+            .maker
+            .as_ref()
+            .ok_or(ResourceFailure::Permanent("world_maker_unavailable"))?;
         let place_id = spec.place_id();
         let started = Instant::now();
         let photograph = (self.photograph)(place_id)
@@ -696,8 +773,7 @@ impl ServiceHandle {
             model: MarbleModel::Marble11,
             display_name: format!("dungeonflux-{}", &key.as_str()[..16]),
         };
-        let operation = self
-            .maker
+        let operation = maker
             .submit(&request)
             .await
             .map_err(|error| error.failure())?;
@@ -714,21 +790,18 @@ impl ServiceHandle {
             .ledger()
             .reserve(Unit::SplatCredit, result.credits)
             .commit(result.credits);
-        let ply_url = self
-            .maker
+        let ply_url = maker
             .export_ply(&result.world_id, PlyResolution::FiveHundredK)
             .await
             .map_err(|error| error.failure())?;
-        let ply = self
-            .maker
+        let ply = maker
             .download(&ply_url, MAXIMUM_PLY_BYTES)
             .await
             .map_err(|error| error.failure())?;
         if ply_splat_count(&ply).is_none() {
             return Err(ResourceFailure::Permanent("ply_unreadable"));
         }
-        let collider = self
-            .maker
+        let collider = maker
             .download(&result.collider_url, MAXIMUM_COLLIDER_BYTES)
             .await
             .map_err(|error| error.failure())?;
@@ -736,6 +809,8 @@ impl ServiceHandle {
             return Err(ResourceFailure::Permanent("collider_unreadable"));
         }
         let stored = store_world(&self.cache_dir, key, &result, &ply, &collider)?;
+        store_place(&self.cache_dir, spec)
+            .map_err(|_| ResourceFailure::Transient("world_binding_failed"))?;
         Ok(Generated {
             handle: stored.world_id,
             note: result.caption,
@@ -746,10 +821,14 @@ impl ServiceHandle {
         &self,
         operation: &OperationId,
     ) -> Result<WorldResult, ResourceFailure> {
+        let maker = self
+            .maker
+            .as_ref()
+            .ok_or(ResourceFailure::Permanent("world_maker_unavailable"))?;
         tokio::time::timeout(self.timing.timeout, async {
             loop {
                 tokio::time::sleep(self.timing.interval).await;
-                match self.maker.poll(operation).await {
+                match maker.poll(operation).await {
                     Ok(WorldPoll::Done(result)) => return Ok(result),
                     Ok(WorldPoll::Failed(_reason)) => {
                         return Err(ResourceFailure::Permanent("generation_failed"));
@@ -764,28 +843,74 @@ impl ServiceHandle {
     }
 }
 
-static SERVICE: OnceLock<SplatWorlds> = OnceLock::new();
+static SERVICE: OnceLock<Mutex<Option<Arc<SplatWorlds>>>> = OnceLock::new();
 
-/// Installs the one splat-world service at startup. A second call keeps the first.
-pub(in crate::gameplay) fn install(service: SplatWorlds) -> bool {
-    SERVICE.set(service).is_ok()
+/// Installs the current run's service; a development restart replaces the old run's hub.
+pub(in crate::gameplay) fn install(service: SplatWorlds) {
+    *locked(SERVICE.get_or_init(Default::default)) = Some(Arc::new(service));
 }
 
 /// The installed service, if startup wired one.
-pub(in crate::gameplay) fn service() -> Option<&'static SplatWorlds> {
-    SERVICE.get()
+pub(in crate::gameplay) fn service() -> Option<Arc<SplatWorlds>> {
+    locked(SERVICE.get()?).clone()
 }
 
 /// The ready world for a place, for the battle lanes: `None` while it is being made
 /// (the flat photographic battlefield stands) or when no service is installed.
 pub(in crate::gameplay) fn ready_world(place_id: &str) -> Option<ReadyWorld> {
-    SERVICE.get()?.ready_world(place_id)
+    service()?.ready_world(place_id)
 }
 
 /// Asks the hub for a place's world (idempotent per place). Does nothing when no
 /// service is installed; the narrative engine's judgement is the only caller.
 pub(in crate::gameplay) fn request_world(spec: &SplatWorldSpec) -> Option<ResourceKey> {
-    SERVICE.get().map(|service| service.request_world(spec))
+    let service = service()?;
+    if service.maker.is_none()
+        && service.ready_world(spec.place_id()).is_none()
+        && read_stored_world(&service.cache_dir, &ResourceKey::of(spec)).is_none()
+    {
+        return None;
+    }
+    Some(service.request_world(spec))
+}
+
+/// An open fight may carry only a metrically aligned, ready photographic world.
+pub(in crate::gameplay) fn battle_world(
+    open: bool,
+    ready: Option<ReadyWorld>,
+) -> Option<df_protocol::common::BattleWorld> {
+    if !open {
+        return None;
+    }
+    let ready = ready?;
+    let scale = ready.metric_scale_factor?;
+    let offset = ready.ground_plane_offset?;
+    df_render::battle::marble_world_transform(scale as f32, offset as f32).ok()?;
+    Some(df_protocol::common::BattleWorld {
+        ply_url: ready.ply_url,
+        collider_url: ready.collider_url,
+        metric_scale_factor: scale,
+        ground_plane_offset: offset,
+    })
+}
+
+/// Read-only proof metadata for the standalone battle preview; never requests generation.
+pub(in crate::gameplay) fn router() -> axum::Router {
+    axum::Router::new().route(
+        "/assets/splat/battle-preview.json",
+        axum::routing::get(|| async {
+            battle_world(true, ready_world(PROOF_PLACE_ID))
+                .map(|world| {
+                    axum::Json(serde_json::json!({
+                        "ply_url": world.ply_url,
+                        "collider_url": world.collider_url,
+                        "metric_scale_factor": world.metric_scale_factor,
+                        "ground_plane_offset": world.ground_plane_offset,
+                    }))
+                })
+                .ok_or(axum::http::StatusCode::NOT_FOUND)
+        }),
+    )
 }
 
 /// Dev-only seed: copies the proof world on disk in as the stored world for
