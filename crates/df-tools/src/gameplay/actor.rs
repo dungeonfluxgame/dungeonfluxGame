@@ -229,6 +229,14 @@ pub(super) enum Call {
         request: rpc::SubmitActionRequest,
         reply: oneshot::Sender<Result<rpc::SubmitActionResponse, tonic::Status>>,
     },
+    /// Save source-bound equipment before combat, or resume the close's durable witness work.
+    FightAftermath {
+        credential: [u8; 32],
+        expected_basis: df_model::checkpoint::Basis,
+        preparation: Option<Box<super::journey::living_scene::FightPreparation>>,
+        voice: std::sync::Arc<super::npc_reply::NpcVoice>,
+        reply: oneshot::Sender<Result<Checkpoint, tonic::Status>>,
+    },
     /// A Jev classification of a committed NPC reply. The actor validates the proposal against
     /// the current scene and revision before creating one durable scene journal entry.
     NpcEvent {
@@ -381,6 +389,11 @@ impl ActorInput for Call {
             value.as_ref().map_or(0, Vec::capacity)
         }
         match self {
+            Self::FightAftermath { preparation, .. } => {
+                preparation.as_ref().map_or(Some(0), |value| {
+                    serde_json::to_vec(value).ok().map(|bytes| bytes.len())
+                })
+            }
             Self::AwaySeats { room_code, .. } => Some(room_code.capacity()),
             Self::Reclaim { request, .. } => Some(request.room_code.capacity()),
             Self::Join { request, .. } => request
@@ -583,6 +596,9 @@ impl df_session::submission::SessionEngine<NativeScope<LocalDemoAuthority>> for 
             input,
         )
         .map(with_reaction_window)
+        .and_then(|candidate| {
+            super::journey::living_scene::stage_fight_completion(current, candidate)
+        })
     }
     fn validate_recovery(&mut self, checkpoint: &Checkpoint) -> Result<(), RepositoryError> {
         df_session::submission::SessionEngine::<NativeScope<LocalDemoAuthority>>::validate_recovery(
@@ -704,6 +720,9 @@ pub(super) struct SessionState {
     pub(super) seat_clock: super::room::SeatClock,
     /// Times hero reaction offers and declines one whose window runs out (P6-80).
     pub(super) reaction: ReactionTimer,
+    /// Kept by the owner through combat; a recovered service registers its configured voice
+    /// before dialogue. The durable observation, rather than this handle, owns pending work.
+    fight_voice: Option<std::sync::Arc<super::npc_reply::NpcVoice>>,
 }
 
 impl Default for SessionState {
@@ -711,6 +730,7 @@ impl Default for SessionState {
         Self {
             seat_clock: super::room::SeatClock::default(),
             reaction: ReactionTimer::default(),
+            fight_voice: None,
             attempt: None,
             commit_millis: 0,
             fence: None,
@@ -1384,6 +1404,137 @@ pub(super) fn require_readable(fenced: bool) -> Result<(), tonic::Status> {
 }
 
 impl Actor {
+    pub(super) fn resume_fight_reactions(&self) -> Result<(), tonic::Status> {
+        let Some(voice) = &self.session.fight_voice else {
+            return Err(tonic::Status::unavailable(
+                "fight witness work awaits the configured voice",
+            ));
+        };
+        let (_, jev) = voice.hero_identity_models();
+        let state = self.owner.checkpoint().state();
+        let social = &self.social;
+        // The synchronous owner has no transaction open here. Own and join this bounded runtime
+        // so native and async test callers cannot nest runtimes or detach accepted work.
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|_| {
+                            tonic::Status::unavailable("fight witness executor unavailable")
+                        })?;
+                    runtime.block_on(async {
+                        let result = tokio::time::timeout(
+                            Duration::from_secs(8),
+                            super::journey::living_scene::resume_fight_reactions(
+                                state, social, jev,
+                            ),
+                        )
+                        .await;
+                        match result {
+                            Ok(Ok(_)) => Ok(()),
+                            other => {
+                                record_unavailable("fight-witness-pending", &format!("{other:?}"));
+                                Err(tonic::Status::unavailable(
+                                    "fight witness reactions remain pending; retry before speaking",
+                                ))
+                            }
+                        }
+                    })
+                })
+                .join()
+                .map_err(|_| tonic::Status::unavailable("fight witness executor stopped"))?
+        })
+    }
+
+    fn fight_aftermath(
+        &mut self,
+        credential: [u8; 32],
+        expected_basis: df_model::checkpoint::Basis,
+        preparation: Option<Box<super::journey::living_scene::FightPreparation>>,
+        voice: std::sync::Arc<super::npc_reply::NpcVoice>,
+    ) -> Result<Checkpoint, tonic::Status> {
+        let member = self.dialogue_member(&credential)?;
+        if self.fenced || self.owner.has_uncertain_operation() {
+            return Err(tonic::Status::unavailable(
+                "resolve the retained fight operation first",
+            ));
+        }
+        self.session.fight_voice = Some(voice);
+        if let Some(preparation) = preparation {
+            let before = self.owner.checkpoint().clone();
+            if super::journey::living_scene::prepared_fight(before.state(), &preparation.fight_id)
+                .map_err(unavailable)?
+                .is_some()
+            {
+                return Ok(before);
+            }
+            if before.basis() != expected_basis {
+                return Err(tonic::Status::failed_precondition(
+                    "fight equipment source changed",
+                ));
+            }
+            let bytes = serde_json::to_vec(&preparation)
+                .map_err(|_| tonic::Status::internal("fight equipment serialization"))?;
+            let fingerprint: [u8; 32] = Sha256::digest(&bytes).into();
+            let digest =
+                Sha256::digest(format!("fight-preparation:{}", preparation.fight_id).as_bytes());
+            let operation = df_types::OperationId::from_bytes(&digest[..16])
+                .map_err(|_| tonic::Status::internal("fight preparation operation"))?;
+            let candidate = super::journey::living_scene::commit_fight_preparation(
+                &before,
+                operation,
+                *preparation,
+            )
+            .map_err(unavailable)?;
+            let input = GameInput::Game(CommandInput {
+                basis: before.basis(),
+                observed_revision: before.basis().revision,
+                operation,
+                member,
+                command: GameCommand::Speak {
+                    speaker: super::journey::player_entity(member, &before).map_err(unavailable)?,
+                    text: super::journey::hex(&fingerprint),
+                    conversation: None,
+                },
+            });
+            let scope = self
+                .issuer
+                .issue(
+                    &credential,
+                    model::random().map_err(unavailable)?,
+                    fingerprint,
+                    input,
+                    model::pins().map_err(unavailable)?,
+                )
+                .map_err(unavailable)?;
+            let context = OperationContext {
+                trace_parent: String::new(),
+                build: crate::BUILD_ID.to_owned(),
+            };
+            match self
+                .owner
+                .commit_owner_candidate(&scope, &candidate, &context)
+            {
+                SubmissionOutcome::Confirmed(_) => {}
+                SubmissionOutcome::Refused(error) => return Err(unavailable(error)),
+                SubmissionOutcome::OperationConflict => {
+                    return Err(tonic::Status::aborted("fight preparation conflict"));
+                }
+                SubmissionOutcome::LookupRequired | SubmissionOutcome::ExpiredOrIndeterminate => {
+                    self.fenced = true;
+                    return Err(tonic::Status::unavailable(
+                        "fight preparation requires recovery",
+                    ));
+                }
+            }
+        } else {
+            self.resume_fight_reactions()?;
+        }
+        Ok(self.owner.checkpoint().clone())
+    }
+
     fn observe_campaign(&self) {
         if let Some(observer) = &self.campaign_observer {
             observer.observe(self.owner.checkpoint());
@@ -2658,7 +2809,7 @@ impl Actor {
             resources: &order.inventory.resources,
             assets: &order.inventory.assets,
         };
-        let built = candidate::build(
+        let mut built = candidate::build(
             &current,
             &change,
             next,
@@ -2669,6 +2820,11 @@ impl Actor {
             order.inventory.limits,
         )
         .map_err(tonic::Status::failed_precondition)?;
+        if matches!(change, candidate::Change::NpcTurn { .. }) {
+            built.candidate =
+                super::journey::living_scene::stage_fight_completion(&current, built.candidate)
+                    .map_err(unavailable)?;
+        }
         let speaker = current
             .state()
             .characters
@@ -2737,6 +2893,20 @@ impl Actor {
                     }
                 }
                 if let candidate::Change::NpcTurn { turn } = &change {
+                    if super::journey::scene_fight::open(current.state())
+                        && !super::journey::scene_fight::open(built.candidate.state())
+                    {
+                        if let Err(error) = self.resume_fight_reactions() {
+                            record_unavailable("fight-witness-pending", error.message());
+                        }
+                        super::journey::living_scene::publish(&built.candidate)
+                            .map_err(unavailable)?;
+                        publish_fight_close(
+                            &self.table_log,
+                            current.state(),
+                            built.candidate.state(),
+                        );
+                    }
                     match super::journey::unhex(&turn.receipt)
                         .ok()
                         .and_then(|bytes| rpc::AcceptedAction::decode(bytes.as_slice()).ok())
@@ -3098,6 +3268,14 @@ impl Actor {
                 })?;
                 let replayed = replaying_uncertain || committed.basis().revision <= prior_revision;
                 if !replayed {
+                    if super::journey::scene_fight::open(before.state())
+                        && !super::journey::scene_fight::open(self.owner.checkpoint().state())
+                        && let Err(error) = self.resume_fight_reactions()
+                    {
+                        // The close is durable. Never replace a failed judgement with "unmoved";
+                        // the saved observation is resumed before the next NPC reply.
+                        record_unavailable("fight-witness-pending", error.message());
+                    }
                     if let Err(error) =
                         super::journey::living_scene::publish(self.owner.checkpoint())
                     {
@@ -4156,6 +4334,11 @@ impl Reducer<Call> for Actor {
                         "finite demonstration call budget exhausted",
                     )));
                 }
+                Call::FightAftermath { reply, .. } => {
+                    let _ = reply.send(Err(tonic::Status::resource_exhausted(
+                        "finite fight work budget exhausted",
+                    )));
+                }
                 Call::NpcEvent { reply, .. } => {
                     let _ = reply.send(Err(tonic::Status::resource_exhausted(
                         "finite demonstration call budget exhausted",
@@ -4211,6 +4394,17 @@ impl Reducer<Call> for Actor {
             _ => self.issuer.reconnect_if_closed(),
         };
         let delivered = match call {
+            Call::FightAftermath {
+                credential,
+                expected_basis,
+                preparation,
+                voice,
+                reply,
+            } => reply
+                .send(after_grant_reconnect(reconnected, || {
+                    self.fight_aftermath(credential, expected_basis, preparation, voice)
+                }))
+                .is_ok(),
             Call::PublicSceneAsset { reply } => reply.send(self.public_scene_asset()).is_ok(),
             Call::QualificationInputs { reply } => reply
                 .send(

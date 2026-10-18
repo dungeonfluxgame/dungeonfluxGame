@@ -37,6 +37,25 @@ impl Reducer<actor::Call> for FightOwner {
             actor::Call::SpeechMember { reply, .. } => {
                 let _ = reply.send(Ok(native::first()));
             }
+            actor::Call::FightAftermath {
+                expected_basis,
+                preparation: Some(preparation),
+                reply,
+                ..
+            } => {
+                assert_eq!(expected_basis, self.checkpoint.basis());
+                let saved = journey::living_scene::prepared_fight(
+                    self.checkpoint.state(),
+                    &preparation.fight_id,
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(
+                    serde_json::to_value(saved).unwrap(),
+                    serde_json::to_value(preparation).unwrap(),
+                );
+                let _ = reply.send(Ok(self.checkpoint.clone()));
+            }
             actor::Call::Submit { request, reply, .. } => {
                 let operation = OperationId::from_bytes(
                     request
@@ -141,6 +160,30 @@ fn fight_table(
 
 fn check_publication(choice: usize, replayed: bool, refused: bool, creation_fails: bool) {
     with_shop(|opening, loaded| {
+        // Pin the prerequisite before the baseline used for the single assault decision.
+        let scene = runtime::scene(opening.state()).unwrap();
+        let possessions = scene
+            .cast
+            .iter()
+            .filter_map(|person| person.stat_block.as_ref().map(|profile| (person, profile)))
+            .map(|(person, profile)| {
+                (
+                    person.id.clone(),
+                    crate::gameplay::social::fight_witness::stat_block_possessions(profile)
+                        .unwrap(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let preparation = serde_json::from_value(json!({
+            "fight_id": journey::hex(&[0x77; 16]),
+            "place": scene.setting.as_ref().unwrap().place_id,
+            "scene": scene.key,
+            "possessions": possessions,
+        }))
+        .unwrap();
+        let opening =
+            journey::living_scene::commit_fight_preparation(&opening, operation(0x76), preparation)
+                .unwrap();
         let director = Arc::new(fight_foresight::FightForesight::new(Box::new(ArenaJev(
             choice,
         ))));

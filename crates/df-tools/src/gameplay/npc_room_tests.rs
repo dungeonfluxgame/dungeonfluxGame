@@ -367,6 +367,7 @@ fn compact_records_hydrate_runtime_scene_models_without_changing_document_pins()
 #[tokio::test]
 async fn a_named_hosts_followup_knows_her_coworker_instead_of_repeating_the_errand() {
     let (adventure, ledger) = room();
+    let original_room = ledger.scene_now("Opening").unwrap();
     let endpoint = jev(vec![
         JevLine::new(
             "Ilsa, who is the woman with the tray?",
@@ -396,6 +397,7 @@ async fn a_named_hosts_followup_knows_her_coworker_instead_of_repeating_the_erra
         .await
         .unwrap();
     assert!(answer.text.contains("works alongside"), "{}", answer.text);
+    assert_eq!(ledger.scene_now("Opening").unwrap(), original_room);
 }
 
 #[tokio::test]

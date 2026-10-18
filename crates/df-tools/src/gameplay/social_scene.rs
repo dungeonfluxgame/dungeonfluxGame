@@ -41,17 +41,18 @@ impl SocialLedger {
         // have no NPC knowledge/aliases and owners may be off stage. Bound its payload while
         // retaining canonical fact validation in install_cached_rooms/record::reload.
         if snapshot.model.people.len() > 20
-            || snapshot.model.things.len() > 24
+            || snapshot.model.things.len()
+                > crate::gameplay::journey::living_scene::MAXIMUM_ROOM_THINGS
             || snapshot.model.ways_out.len() > 8
             || snapshot.model.offers.len() > 12
             || serde_json::to_vec(&snapshot)
                 .map_err(|_| SocialError::Invalid("scene serialization"))?
                 .len()
-                > 64 * 1024
+                > crate::gameplay::journey::living_scene::MAXIMUM_ROOM_BYTES
         {
             return Err(SocialError::Invalid("scene snapshot bounds"));
         }
-        if snapshot.changes.len() > 64
+        if snapshot.changes.len() > crate::gameplay::journey::living_scene::MAXIMUM_ROOM_CHANGES
             || snapshot
                 .changes
                 .iter()

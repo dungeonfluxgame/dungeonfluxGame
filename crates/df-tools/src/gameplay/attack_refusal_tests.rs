@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Semaphore, watch};
 
 struct RefusingOwner {
+    checkpoint: Checkpoint,
     revision: rpc::SessionRevision,
     submissions: Arc<AtomicUsize>,
 }
@@ -20,6 +21,25 @@ impl Reducer<actor::Call> for RefusingOwner {
         match call {
             actor::Call::SpeechMember { reply, .. } => {
                 reply.send(Ok(native::first())).unwrap();
+            }
+            actor::Call::FightAftermath {
+                expected_basis,
+                preparation: Some(preparation),
+                reply,
+                ..
+            } => {
+                assert_eq!(expected_basis, self.checkpoint.basis());
+                let saved = journey::living_scene::prepared_fight(
+                    self.checkpoint.state(),
+                    &preparation.fight_id,
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(
+                    serde_json::to_value(saved).unwrap(),
+                    serde_json::to_value(preparation).unwrap(),
+                );
+                reply.send(Ok(self.checkpoint.clone())).unwrap();
             }
             actor::Call::Submit { request, reply, .. } => {
                 assert_eq!(
@@ -54,6 +74,7 @@ fn refuse(current: Checkpoint, target: &str, expected_reason: &str, submissions:
     let table = TableLog::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let mut owner = RefusingOwner {
+        checkpoint: current.clone(),
         revision: wire::revision(current.basis().revision),
         submissions: calls.clone(),
     };
@@ -163,6 +184,33 @@ fn c2_attack_already_down_target_is_refused_once_at_the_same_revision() {
 #[test]
 fn c2_attack_rejected_scene_submission_is_refused_once_at_the_same_revision() {
     with_created_place(|_, street, _| {
+        // This refusal fixture starts after the separate, durable equipment preparation.
+        let scene = crate::gameplay::beat_script_runtime::scene(street.state()).unwrap();
+        let possessions = scene
+            .cast
+            .iter()
+            .filter_map(|person| person.stat_block.as_ref().map(|profile| (person, profile)))
+            .map(|(person, profile)| {
+                (
+                    person.id.clone(),
+                    crate::gameplay::social::fight_witness::stat_block_possessions(profile)
+                        .unwrap(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let preparation = serde_json::from_value(serde_json::json!({
+            "fight_id": journey::hex(&[90; 16]),
+            "place": scene.setting.as_ref().unwrap().place_id,
+            "scene": scene.key,
+            "possessions": possessions,
+        }))
+        .unwrap();
+        let street = journey::living_scene::commit_fight_preparation(
+            &street,
+            OperationId::from_bytes(&[89; 16]).unwrap(),
+            preparation,
+        )
+        .unwrap();
         refuse(street, "Wenna", "attack was refused", 1);
     });
 }

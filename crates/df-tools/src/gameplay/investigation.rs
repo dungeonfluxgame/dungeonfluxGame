@@ -881,6 +881,34 @@ pub(super) fn person_target_id(person_id: &str) -> String {
     format!("person-{}", person_id.replace(':', "-"))
 }
 
+/// Resolve only Jev's selected canonical person row. Player words never route corpse custody.
+pub(super) fn fallen_search_target(
+    state: &df_model::checkpoint::GameState,
+    scene: &pack::Scene,
+    target: &Target,
+) -> Result<Option<String>, df_session::submission::RepositoryError> {
+    use crate::gameplay::journey::{living_scene, scene_fight};
+    if !target.person || !target.present || scene_fight::open(state) {
+        return Ok(None);
+    }
+    let Some(full) = living_scene::full_snapshot(state, scene)? else {
+        return Ok(None);
+    };
+    let Some(person) = full
+        .model
+        .people
+        .iter()
+        .find(|person| person.role != "hero" && person_target_id(&person.id) == target.id)
+    else {
+        return Ok(None);
+    };
+    Ok(matches!(
+        scene_fight::presence(state, &person.id)?,
+        scene_fight::Presence::Down { .. }
+    )
+    .then(|| person.id.clone()))
+}
+
 /// What a successful Insight read of a present person shows: their manner toward the hero and
 /// what they want here, from the scene model's own record of that person. `attitude` is the social
 /// ledger's current attitude when the person has a dossier; otherwise the scene's starting attitude

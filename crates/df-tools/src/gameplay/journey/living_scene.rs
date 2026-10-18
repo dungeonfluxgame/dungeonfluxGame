@@ -10,6 +10,10 @@ use crate::gameplay::investigation::{sentence_the, the_phrase};
 use crate::gameplay::journey::merchant_bargaining::TradeJudgement;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+#[path = "living_scene_aftermath_tests.rs"]
+mod aftermath_tests;
+
 const PREFIX: &str = "living-scene-2:";
 const LEGACY_PREFIX: &str = "living-scene-1:";
 const POLICY: &str = "living-scene-1";
@@ -99,12 +103,18 @@ pub(in crate::gameplay) fn clear() {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Interaction {
     place: String,
     hero: String,
     change: Option<SceneChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    changes: Vec<SceneChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fight_preparation: Option<FightPreparation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fight_observation: Option<crate::gameplay::social::fight_witness::Observation>,
     paid_cp: u32,
     #[serde(default)]
     actor: String,
@@ -138,6 +148,235 @@ struct Interaction {
     quote_attempt: Option<MerchantQuoteAttempt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     quote_closure: Option<MerchantQuoteClosureRecord>,
+}
+
+/// Accepted identity extraction and the actual room before an assault can spill elsewhere.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::gameplay) struct FightPreparation {
+    pub(in crate::gameplay) fight_id: String,
+    place: String,
+    scene: pack::SceneKey,
+    possessions: std::collections::BTreeMap<
+        String,
+        Vec<crate::gameplay::adventure::scene_model::CarriedPossession>,
+    >,
+}
+
+fn fight_source_scene(state: &GameState, place: &str) -> Result<pack::Scene, RepositoryError> {
+    if let Some(scene) = pack::with_content(|content| {
+        content
+            .scenes
+            .iter()
+            .chain(
+                content
+                    .beat_script
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|script| script.scenes.values()),
+            )
+            .find(|scene| {
+                scene
+                    .setting
+                    .as_ref()
+                    .is_some_and(|setting| setting.place_id == place)
+            })
+            .cloned()
+    }) {
+        return Ok(scene);
+    }
+    let record = crate::gameplay::place::created(state)?
+        .remove(place)
+        .ok_or_else(invalid)?;
+    let template = crate::gameplay::beat_script_runtime::scene(state)?;
+    crate::gameplay::place::scene_of(&record, &template)
+}
+
+pub(in crate::gameplay) fn prepared_fight(
+    state: &GameState,
+    fight_id: &str,
+) -> Result<Option<FightPreparation>, RepositoryError> {
+    for decision in state.decisions.iter().rev() {
+        if let Some(preparation) = read(decision)?.and_then(|entry| entry.fight_preparation)
+            && preparation.fight_id == fight_id
+        {
+            return Ok(Some(preparation));
+        }
+    }
+    Ok(None)
+}
+
+pub(in crate::gameplay) async fn prepare_fight(
+    current: &Checkpoint,
+    operation: OperationId,
+    storyteller: &crate::gameplay::storyteller::Storyteller,
+) -> Result<FightPreparation, RepositoryError> {
+    let fight_id = hex(operation.as_bytes());
+    if let Some(preparation) = prepared_fight(current.state(), &fight_id)? {
+        return Ok(preparation);
+    }
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+    let place = scene.setting.as_ref().ok_or_else(invalid)?.place_id.clone();
+    let source = fight_source_scene(current.state(), &place)?;
+    let base = source
+        .setting
+        .as_ref()
+        .and_then(|setting| setting.model.as_ref())
+        .ok_or_else(invalid)?;
+    let mut possessions = std::collections::BTreeMap::new();
+    for person in &scene.cast {
+        let Some(profile) = person.stat_block.as_deref() else {
+            continue;
+        };
+        let mut carried = crate::gameplay::social::fight_witness::stat_block_possessions(profile)
+            .map_err(|_| invalid())?;
+        // Read immutable identity, never the projected dead/standing activity description.
+        let identity = base
+            .people
+            .iter()
+            .find(|row| row.id == person.id)
+            .ok_or_else(invalid)?;
+        carried.extend(
+            crate::gameplay::social::fight_witness::identity_possessions(
+                storyteller,
+                &identity.description,
+            )
+            .await
+            .map_err(|_| invalid())?,
+        );
+        possessions.insert(person.id.clone(), carried);
+    }
+    Ok(FightPreparation {
+        fight_id,
+        place,
+        scene: scene.key,
+        possessions,
+    })
+}
+
+pub(in crate::gameplay) fn commit_fight_preparation(
+    current: &Checkpoint,
+    operation: OperationId,
+    preparation: FightPreparation,
+) -> Result<Checkpoint, RepositoryError> {
+    let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
+    if super::scene_fight::open(current.state())
+        || preparation.scene != scene.key
+        || scene
+            .setting
+            .as_ref()
+            .is_none_or(|setting| preparation.place != setting.place_id)
+        || prepared_fight(current.state(), &preparation.fight_id)?.is_some()
+    {
+        return Err(invalid());
+    }
+    let interaction = Interaction {
+        place: scene.setting.as_ref().ok_or_else(invalid)?.place_id.clone(),
+        line: "The scene's carried possessions are recorded before the fight.".into(),
+        accepted: hex(&rpc::AcceptedAction {
+            phase: phase(current)? as i32,
+            ..Default::default()
+        }
+        .encode_to_vec()),
+        fight_preparation: Some(preparation),
+        ..Interaction::default()
+    };
+    finish_interaction(current, operation, interaction)
+}
+
+/// Fold the close into its own accepted operation, retaining its combat receipt, facts and dice.
+/// No second decision/revision or detached projection can race ahead of this batch.
+pub(in crate::gameplay) fn stage_fight_completion(
+    before: &Checkpoint,
+    candidate: Checkpoint,
+) -> Result<Checkpoint, RepositoryError> {
+    if !super::scene_fight::open(before.state()) || super::scene_fight::open(candidate.state()) {
+        return Ok(candidate);
+    }
+    let opening = before
+        .state()
+        .decisions
+        .iter()
+        .rev()
+        .find(|decision| {
+            decision.facts.iter().any(|id| {
+                before.state().facts.iter().any(|fact| {
+                    fact.id == *id
+                        && matches!(&fact.value, FactValue::ContentEvent { definition, .. }
+                if definition.entry.as_str() == super::scene_fight::OBJECTIVE)
+                })
+            })
+        })
+        .ok_or_else(invalid)?;
+    let preparation = prepared_fight(before.state(), &hex(opening.operation.as_bytes()))?
+        .ok_or_else(|| {
+            refusal_detail::note("fight-possessions-not-prepared");
+            invalid()
+        })?;
+    let mut source = fight_source_scene(before.state(), &preparation.place)?;
+    source.key = preparation.scene;
+    let full = full_snapshot(before.state(), &source)?.ok_or_else(invalid)?;
+    let changes = super::scene_fight::outcome_changes(
+        before.state(),
+        candidate.state(),
+        &full.model,
+        &preparation.possessions,
+    )?;
+    if changes.is_empty() {
+        return Err(invalid());
+    }
+    let observation = super::scene_fight::witness_observation(before.state(), candidate.state())?;
+    let mut state = candidate.state().clone();
+    let decision = state.decisions.last_mut().ok_or_else(invalid)?;
+    let accepted = super::accepted(decision)?;
+    let interaction = Interaction {
+        place: preparation.place.clone(),
+        line: super::scene_fight::aftermath_narration(candidate.state())?,
+        accepted: hex(&accepted.encode_to_vec()),
+        changes,
+        fight_observation: observation,
+        ..Interaction::default()
+    };
+    decision.semantic_output = Some(format!(
+        "{PREFIX}{}",
+        serde_json::to_string(&interaction).map_err(|_| invalid())?
+    ));
+    let completed = model::checkpoint(candidate.basis(), state)?;
+    // Validate the complete canonical batch before the owner can acknowledge it.
+    full_snapshot(completed.state(), &source)?.ok_or_else(invalid)?;
+    Ok(completed)
+}
+
+/// The observation is saved with the close. Partial social saves remain retryable, and saved
+/// witness choices are reused without Jev after a crash or a lost reply.
+pub(in crate::gameplay) async fn resume_fight_reactions(
+    state: &GameState,
+    social: &crate::gameplay::social::SocialLedger,
+    jev: &impl crate::gameplay::social::fight_witness::Jev,
+) -> Result<usize, crate::gameplay::social::fight_witness::WitnessError> {
+    let mut count = 0;
+    for decision in &state.decisions {
+        let entry = read(decision).map_err(|_| {
+            crate::gameplay::social::fight_witness::WitnessError::Ledger(
+                crate::gameplay::social::SocialError::Invalid("fight outcome journal"),
+            )
+        })?;
+        if let Some(observation) = entry.and_then(|entry| entry.fight_observation) {
+            count += social.react_to_fight(jev, &observation).await?;
+        }
+    }
+    Ok(count)
+}
+
+pub(in crate::gameplay) fn has_fight_observations(
+    state: &GameState,
+) -> Result<bool, RepositoryError> {
+    for decision in &state.decisions {
+        if read(decision)?.is_some_and(|entry| entry.fight_observation.is_some()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// A server-authorized action proposed by the narrative/interaction layer for a named NPC.
@@ -570,6 +809,7 @@ pub(crate) fn commit_npc_inventory_action(
         quote_id: None,
         quote_attempt: None,
         quote_closure: None,
+        ..Interaction::default()
     };
     finish(
         current,
@@ -791,6 +1031,7 @@ pub(crate) fn commit_npc_trade_quote(
         quote_id: None,
         quote_attempt: None,
         quote_closure: None,
+        ..Interaction::default()
     };
     finish_interaction(current, proposal.operation, interaction)
 }
@@ -930,6 +1171,7 @@ pub(crate) fn close_merchant_quote(
         quote_id: Some(proposal.quote_id),
         quote_attempt: None,
         quote_closure: Some(closure),
+        ..Interaction::default()
     };
     finish_interaction(current, proposal.operation, interaction)
 }
@@ -1405,7 +1647,12 @@ fn invalid() -> RepositoryError {
 }
 
 fn read(decision: &AcceptedDecision) -> Result<Option<Interaction>, RepositoryError> {
-    if decision.source_policy.as_str() != POLICY {
+    let fight_close = decision.source_policy.as_str() == THREAD_POLICY
+        && decision
+            .semantic_output
+            .as_deref()
+            .is_some_and(|text| text.starts_with(PREFIX));
+    if decision.source_policy.as_str() != POLICY && !fight_close {
         return Ok(None);
     }
     let Some(text) = decision.semantic_output.as_deref().and_then(|text| {
@@ -1447,16 +1694,15 @@ pub(in crate::gameplay) fn scene_change_journal(
         let Some(entry) = read(decision)? else {
             continue;
         };
-        let Some(change) = entry.change else {
-            continue;
-        };
-        changes.push(JournalSceneChange {
-            revision: decision.revision,
-            place: entry.place,
-            hero: entry.hero,
-            paid_cp: entry.paid_cp,
-            change,
-        });
+        for change in entry.change.into_iter().chain(entry.changes) {
+            changes.push(JournalSceneChange {
+                revision: decision.revision,
+                place: entry.place.clone(),
+                hero: entry.hero.clone(),
+                paid_cp: entry.paid_cp,
+                change,
+            });
+        }
     }
     Ok(changes)
 }
@@ -1464,6 +1710,27 @@ pub(in crate::gameplay) fn scene_change_journal(
 pub(in crate::gameplay) fn snapshot(
     state: &GameState,
     scene: &pack::Scene,
+) -> Result<Option<SceneNow>, RepositoryError> {
+    snapshot_with_scope(state, scene, false)
+}
+
+pub(in crate::gameplay) fn full_snapshot(
+    state: &GameState,
+    scene: &pack::Scene,
+) -> Result<Option<SceneNow>, RepositoryError> {
+    snapshot_with_scope(state, scene, true)
+}
+
+// These are trusted runtime projection bounds, independent of authored room dressing. Four
+// bodies can add 64 source possessions. Overflow refuses the candidate, never drops custody.
+pub(in crate::gameplay) const MAXIMUM_ROOM_THINGS: usize = 256;
+pub(in crate::gameplay) const MAXIMUM_ROOM_CHANGES: usize = 512;
+pub(in crate::gameplay) const MAXIMUM_ROOM_BYTES: usize = 512 * 1024;
+
+fn snapshot_with_scope(
+    state: &GameState,
+    scene: &pack::Scene,
+    full: bool,
 ) -> Result<Option<SceneNow>, RepositoryError> {
     let Some(setting) = &scene.setting else {
         return Ok(None);
@@ -1551,9 +1818,17 @@ pub(in crate::gameplay) fn snapshot(
     // is checked against the owner, observers and DC that held when that action was accepted.
     let mut replay = model.clone();
     for decision in &state.decisions {
-        if let Some(interaction) = read(decision)?
-            && interaction.place == setting.place_id
-            && let Some(mut change) = interaction.change
+        let Some(interaction) = read(decision)? else {
+            continue;
+        };
+        if interaction.place != setting.place_id {
+            continue;
+        }
+        for mut change in interaction
+            .change
+            .iter()
+            .chain(&interaction.changes)
+            .cloned()
         {
             if let Some((receipt, attempt_noticer)) = sleight_receipt(&change.kind) {
                 let (target_key, expected) =
@@ -1601,25 +1876,43 @@ pub(in crate::gameplay) fn snapshot(
                 *cost_cp = interaction.paid_cp;
             }
             replay.apply_change(&change).map_err(|_| invalid())?;
+            // Movement prose belongs at its journal position. Applying old movement text after
+            // the whole replay would overwrite a later death/unconscious outcome.
+            if matches!(change.kind, SceneChangeKind::PersonMoved { .. })
+                && let Some(person) = replay
+                    .people
+                    .iter_mut()
+                    .find(|person| person.id == change.entity_id)
+            {
+                person.description = change.description.clone();
+            }
             changes.push(change);
         }
     }
-    let encoded = model
-        .as_it_is_now(scene.key, &changes)
-        .map_err(|_| invalid())?;
-    let mut snapshot: SceneNow = serde_json::from_str(&encoded).map_err(|_| invalid())?;
-    snapshot.model.witnessed_thefts = witnessed;
-    for change in &changes {
-        if matches!(change.kind, SceneChangeKind::PersonMoved { .. })
-            && let Some(person) = snapshot
-                .model
-                .people
-                .iter_mut()
-                .find(|person| person.id == change.entity_id)
-        {
-            person.description = change.description.clone();
-        }
+    replay.validate_state_structure().map_err(|_| invalid())?;
+    if replay.things.len() > MAXIMUM_ROOM_THINGS
+        || changes.len() > MAXIMUM_ROOM_CHANGES
+        || changes.iter().any(|change| {
+            change.description.trim().is_empty() || change.description.chars().count() > 180
+        })
+    {
+        return Err(RepositoryError::Capacity);
     }
+    let mut snapshot = SceneNow {
+        model: if full {
+            replay
+        } else {
+            replay.for_scene(scene.key)
+        },
+        changes: changes
+            .iter()
+            .map(|change| change.description.clone())
+            .collect(),
+    };
+    if serde_json::to_vec(&snapshot).map_err(|_| invalid())?.len() > MAXIMUM_ROOM_BYTES {
+        return Err(RepositoryError::Capacity);
+    }
+    snapshot.model.witnessed_thefts = witnessed;
     Ok(Some(snapshot))
 }
 
@@ -1939,6 +2232,9 @@ pub(in crate::gameplay) fn last_line(state: &GameState) -> Result<Option<String>
     state
         .decisions
         .last()
+        // The close retains its combat receipt and table ordering. Its appended journal batch
+        // must not send the combat action through the scene-interaction early return.
+        .filter(|decision| decision.source_policy.as_str() == POLICY)
         .map(read)
         .transpose()
         .map(|entry| entry.flatten().map(|entry| entry.line))
@@ -3053,6 +3349,55 @@ fn stage_inner(
     let scene = crate::gameplay::beat_script_runtime::scene(current.state())?;
     let snapshot = snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
     let hero = name(current.state(), *who)?;
+    if option == "search-body" {
+        if choices.len() != 2 || !draws.is_empty() {
+            return Err(invalid());
+        }
+        let full = full_snapshot(current.state(), &scene)?.ok_or_else(invalid)?;
+        let person = full
+            .model
+            .people
+            .iter()
+            .find(|person| person.id == target)
+            .ok_or_else(invalid)?;
+        let changes = crate::gameplay::freeform_action::search_body(
+            current.state(),
+            &full.model,
+            target,
+            &hero,
+        )?;
+        let line = if changes.is_empty() {
+            format!(
+                "{hero} searches {}. There is nothing left to take.",
+                person.name
+            )
+        } else {
+            changes
+                .iter()
+                .map(|change| change.description.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let interaction = Interaction {
+            place: scene.setting.as_ref().ok_or_else(invalid)?.place_id.clone(),
+            hero: hero.clone(),
+            actor: hex(who.as_bytes()),
+            target: target.into(),
+            option: option.into(),
+            line,
+            changes,
+            accepted: hex(&rpc::AcceptedAction {
+                phase: phase(current)? as i32,
+                ..Default::default()
+            }
+            .encode_to_vec()),
+            principal_id: Some(hero),
+            ..Interaction::default()
+        };
+        let candidate = finish_interaction(current, command.operation, interaction)?;
+        full_snapshot(candidate.state(), &scene)?.ok_or_else(invalid)?;
+        return Ok(candidate);
+    }
     // Taking an owned item in front of its owner is the same attempted theft as `steal`.
     let option = effective_option(&snapshot.model, target, option, &hero);
     let stored_quote = quoted_id
@@ -3961,6 +4306,7 @@ fn stage_inner(
         quote_id: accepted_quote_id,
         quote_attempt,
         quote_closure: None,
+        ..Interaction::default()
     };
     finish_interaction_with_draws(current, command.operation, interaction, draws)
 }

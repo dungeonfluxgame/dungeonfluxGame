@@ -1605,6 +1605,35 @@ fn stand_down_evidence(
 }
 
 impl Service {
+    async fn fight_aftermath_call(
+        &self,
+        credential: [u8; 32],
+        expected_basis: df_model::checkpoint::Basis,
+        preparation: Option<journey::living_scene::FightPreparation>,
+    ) -> Result<df_model::checkpoint::Checkpoint, Status> {
+        let current = self.updates.borrow().clone();
+        if preparation.is_none()
+            && !journey::living_scene::has_fight_observations(current.state())
+                .map_err(actor::unavailable)?
+        {
+            return Ok(current);
+        }
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::FightAftermath {
+                credential,
+                expected_basis,
+                preparation: preparation.map(Box::new),
+                voice: self.npc_voice.clone(),
+                reply,
+            })
+            .map_err(|_| Status::resource_exhausted("fight aftermath owner queue full"))?;
+        tokio::time::timeout(super::timing::active().reply, wait)
+            .await
+            .map_err(|_| Status::deadline_exceeded("fight aftermath remains pending"))?
+            .map_err(|_| Status::unavailable("fight aftermath owner stopped"))?
+    }
+
     async fn judged_freeform_plan(
         &self,
         credential: [u8; 32],
@@ -2420,6 +2449,8 @@ impl Service {
         credential: [u8; 32],
         mut request: rpc::RawDialogueRequest,
     ) -> Result<DialogueReply, Status> {
+        let basis = self.updates.borrow().basis();
+        self.fight_aftermath_call(credential, basis, None).await?;
         let declared = context(request.context)?;
         if request.text.len() > maximum_request_text_bytes(declared) || request.offer_id.len() > 96
         {
@@ -3334,6 +3365,18 @@ impl Service {
             .npc_voice
             .resolve_investigation_target(&request.text, &catalog)
             .await;
+        if let Some(person_id) =
+            super::investigation::fallen_search_target(current.state(), scene, &target)
+                .map_err(actor::unavailable)?
+        {
+            return match self
+                .interaction_call(credential, request, &person_id, "search-body", None, None)
+                .await?
+            {
+                DialogueReply::Raw(response, _) => Ok(response),
+                _ => Err(Status::internal("body search response binding invalid")),
+            };
+        }
         // Jev names a skill for every attempt reading (approach_model::read_line), so a missing
         // skill is an internal invariant failure, not a line to guess from.
         let skill = reading
@@ -4457,7 +4500,7 @@ impl Service {
     pub(super) async fn start_scene_fight(
         &self,
         credential: [u8; 32],
-        origin: SceneFightOrigin,
+        mut origin: SceneFightOrigin,
         target_person_id: &str,
         hero_line: &str,
     ) -> Result<SceneFightStart, Status> {
@@ -4472,7 +4515,7 @@ impl Service {
             .await
             .map_err(|_| Status::deadline_exceeded("dialogue owner did not resolve the player"))?
             .map_err(|_| Status::unavailable("dialogue actor stopped"))??;
-        let current = self.updates.borrow().clone();
+        let mut current = self.updates.borrow().clone();
         let scene =
             super::beat_script_runtime::scene(current.state()).map_err(actor::unavailable)?;
         let hero = journey::name(
@@ -4487,6 +4530,20 @@ impl Service {
             .map_err(|_| {
                 Status::failed_precondition("scene assault unavailable: nobody to fight")
             })?;
+        let operation = origin
+            .operation_id
+            .as_ref()
+            .and_then(|id| id.value.as_deref())
+            .and_then(|bytes| OperationId::from_bytes(bytes).ok())
+            .ok_or_else(|| Status::invalid_argument("fight operation required"))?;
+        let (storyteller, _) = self.npc_voice.hero_identity_models();
+        let preparation = journey::living_scene::prepare_fight(&current, operation, storyteller)
+            .await
+            .map_err(actor::unavailable)?;
+        current = self
+            .fight_aftermath_call(credential, current.basis(), Some(preparation))
+            .await?;
+        origin.observed_revision = Some(wire::revision(current.basis().revision));
         super::fight_foresight::prepare_opening(&current).await;
         if self.updates.borrow().basis() != current.basis() {
             return Err(Status::failed_precondition(
@@ -4733,6 +4790,10 @@ impl Service {
         mut response: rpc::DialogueResponse,
         npc: Option<SpokenTurn>,
     ) -> Result<DialogueCompletion, Status> {
+        if npc.is_some() {
+            let basis = self.updates.borrow().basis();
+            self.fight_aftermath_call(credential, basis, None).await?;
+        }
         let spoken_turn = npc.is_some();
         let mut npc_outcome = None;
         let mut npc_fallback = None;
@@ -5855,8 +5916,11 @@ impl actor::Actor {
         operation_bytes.copy_from_slice(&operation_digest[..16]);
         let operation = OperationId::from_bytes(&operation_bytes)
             .map_err(|_| Status::failed_precondition("stand-down operation invalid"))?;
-        let candidate =
-            journey::scene_fight::stand_down(&before, operation).map_err(actor::unavailable)?;
+        let candidate = journey::living_scene::stage_fight_completion(
+            &before,
+            journey::scene_fight::stand_down(&before, operation).map_err(actor::unavailable)?,
+        )
+        .map_err(actor::unavailable)?;
         let speaker = journey::player_entity(member, &before).map_err(actor::unavailable)?;
         let input = GameInput::Game(CommandInput {
             basis: before.basis(),
@@ -5889,6 +5953,10 @@ impl actor::Actor {
             .commit_owner_candidate(&scope, &candidate, &operation_context)
         {
             SubmissionOutcome::Confirmed(receipt) => {
+                if let Err(error) = self.resume_fight_reactions() {
+                    actor::record_unavailable("fight-witness-pending", error.message());
+                }
+                journey::living_scene::publish(&candidate).map_err(actor::unavailable)?;
                 actor::publish_fight_close(&self.table_log, before.state(), candidate.state());
                 actor::record_audit_line(
                     "gameplay.scene_fight",
