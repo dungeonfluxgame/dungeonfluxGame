@@ -3254,7 +3254,13 @@ mod tests {
         let hud = figures.root.query_selector(".tv-hud").unwrap().unwrap();
 
         figures
-            .update(&[], "scene", "inn", SceneFamily::Interior, StageMode::Scene)
+            .update(
+                &[],
+                "scene",
+                crate::stage_depth::DEFAULT,
+                SceneFamily::Interior,
+                StageMode::Scene,
+            )
             .unwrap();
         assert_eq!(
             hud.get_attribute("data-party-hud").as_deref(),
@@ -3264,7 +3270,7 @@ mod tests {
             .update(
                 &[],
                 "combat",
-                "inn",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Interior,
                 StageMode::Combat,
             )
@@ -3274,7 +3280,13 @@ mod tests {
             Some("visible")
         );
         figures
-            .update(&[], "scene", "inn", SceneFamily::Interior, StageMode::Scene)
+            .update(
+                &[],
+                "scene",
+                crate::stage_depth::DEFAULT,
+                SceneFamily::Interior,
+                StageMode::Scene,
+            )
             .unwrap();
         assert_eq!(
             hud.get_attribute("data-party-hud").as_deref(),
@@ -3296,7 +3308,7 @@ mod tests {
             .update(
                 &[],
                 "combat",
-                "inn",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Interior,
                 StageMode::Combat,
             )
@@ -3308,7 +3320,7 @@ mod tests {
             .update(
                 &[],
                 "combat",
-                "inn",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Interior,
                 StageMode::Combat,
             )
@@ -3334,20 +3346,26 @@ mod tests {
             .update(
                 &[],
                 "combat",
-                "inn",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Interior,
                 StageMode::Combat,
             )
             .unwrap();
         let first_id = figures.party_hud_transition_id.get();
         figures
-            .update(&[], "scene", "inn", SceneFamily::Interior, StageMode::Scene)
+            .update(
+                &[],
+                "scene",
+                crate::stage_depth::DEFAULT,
+                SceneFamily::Interior,
+                StageMode::Scene,
+            )
             .unwrap();
         figures
             .update(
                 &[],
                 "combat",
-                "inn",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Interior,
                 StageMode::Combat,
             )
@@ -3377,7 +3395,7 @@ mod tests {
             .update(
                 &[],
                 "combat",
-                "inn",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Interior,
                 StageMode::Combat,
             )

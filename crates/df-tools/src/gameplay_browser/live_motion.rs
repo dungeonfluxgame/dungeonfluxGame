@@ -3043,7 +3043,7 @@ mod tests {
                 .update(
                     &cast,
                     "check-scene",
-                    "",
+                    crate::stage_depth::DEFAULT,
                     SceneFamily::Exterior,
                     super::super::live_stage::StageMode::Scene,
                 )

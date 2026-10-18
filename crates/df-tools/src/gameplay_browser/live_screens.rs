@@ -1717,7 +1717,7 @@ mod tests {
                         live_sprite: None,
                     }],
                     "reconnect-scene",
-                    "",
+                    crate::stage_depth::DEFAULT,
                     SceneFamily::Exterior,
                     super::super::live_stage::StageMode::Scene,
                 )

@@ -2025,7 +2025,10 @@ impl TvStage {
         )
     }
 
-    pub(super) fn update_kill_shot_wire(&self, shot: Option<&rpc::KillShot>) -> Result<(), JsValue> {
+    pub(super) fn update_kill_shot_wire(
+        &self,
+        shot: Option<&rpc::KillShot>,
+    ) -> Result<(), JsValue> {
         self.kill_shot.apply(shot)
     }
 
@@ -3811,7 +3814,7 @@ mod tests {
                     live_sprite: None,
                 }],
                 "scene",
-                "",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Exterior,
                 StageMode::Scene,
             )
@@ -3949,7 +3952,7 @@ mod tests {
                     live_sprite: None,
                 }],
                 "scene",
-                "",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Exterior,
                 StageMode::Scene,
             )
@@ -4041,7 +4044,7 @@ mod tests {
             .update(
                 &crate::presentation::scene_cast(&view),
                 "old-scene",
-                "",
+                crate::stage_depth::DEFAULT,
                 SceneFamily::Exterior,
                 StageMode::Scene,
             )
