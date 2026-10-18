@@ -313,6 +313,74 @@ fn draw_d20() -> Result<u8, RepositoryError> {
     u8::try_from(super::dice::draw(20)?).map_err(|_| RepositoryError::Unavailable)
 }
 
+/// A reply spoken by a foe in an open scene fight. The hero's words reach the foe as speech; a
+/// request to stop fighting is an Influence request (SRD 5.2.1 p. 184), and the Influence check is
+/// an action, so it is rolled only when the hero has that action now.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FightParley {
+    /// It is the hero's own turn and the turn's action is unspent.
+    pub(super) action_available: bool,
+}
+
+/// What an Influence request did to the NPC it was made of, as the reply's rules decided it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InfluenceVerdict {
+    /// Willing: the NPC complies without a check.
+    Willing,
+    /// Hesitant, and the Influence check succeeded.
+    Succeeded,
+    /// Hesitant, and the Influence check failed.
+    Failed,
+    /// Unwilling, out of patience, or never forgiving: the NPC refuses without a check.
+    Refused,
+    /// Hesitant, but no check could be rolled (no sheet, or no action to spend in a fight).
+    NotRolled,
+}
+
+impl InfluenceVerdict {
+    /// The NPC does what was asked.
+    pub(super) fn complies(self) -> bool {
+        matches!(self, Self::Willing | Self::Succeeded)
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Willing => "willing",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Refused => "refused",
+            Self::NotRolled => "not_rolled",
+        }
+    }
+}
+
+/// The facts a foe's reply is written from: that a fight is on, whether the hero has the
+/// Influence action to spend, and what the hero's words did to the foe. The reply path selects
+/// its facts again after Jev reads the line, so these are written once the verdict is known.
+fn fight_facts(parley: FightParley, verdict: Option<InfluenceVerdict>) -> Value {
+    json!({
+        "situation": "A fight is under way and you are one of the hero party's foes in it. The hero speaks to you mid-fight; answer in at most two short sentences.",
+        "hero_can_take_influence_action": parley.action_available,
+        "rules": "A request to stop fighting, lower weapons or stand down is an Influence request. Whether you agree is decided by your willingness and, when you are hesitant, by the influence_check facts; outcome says what was decided. Never agree to stop when outcome is keep_fighting, and never keep fighting when it is stand_down.",
+        "outcome": fight_outcome_facts(verdict),
+    })
+}
+
+/// What the hero's words did to the foe, as the reply must say it.
+fn fight_outcome_facts(verdict: Option<InfluenceVerdict>) -> Value {
+    if verdict.is_some_and(InfluenceVerdict::complies) {
+        json!({
+            "outcome": "stand_down",
+            "meaning": "You agree to stop fighting: say in character that you lower your weapon and stand down. The fight ends.",
+        })
+    } else {
+        json!({
+            "outcome": "keep_fighting",
+            "meaning": "You are not persuaded to stop: answer in character and keep fighting. The fight goes on.",
+        })
+    }
+}
+
 /// What the server found for one hesitant Influence request, before the reply is written.
 enum HesitantRoll {
     Rolled(InfluenceResult),
@@ -478,6 +546,10 @@ fn roll_hesitant_influence(
     approach: Approach,
     attitude: Attitude,
 ) -> HesitantRoll {
+    // Influence is an action (SRD 5.2.1 p. 184): mid-fight it waits for the hero's own action.
+    if context.fight.is_some_and(|parley| !parley.action_available) {
+        return HesitantRoll::Unavailable("no-action");
+    }
     let Some(input) = context.influence_check else {
         return HesitantRoll::Unavailable("no-hero-sheet");
     };
@@ -668,7 +740,13 @@ fn roll_lie(input: Option<InfluenceCheckInput>) -> LieRoll {
 }
 
 /// The line spoken only when the model cannot write the reply: it states the check's outcome.
-fn hesitant_fallback_line(hesitant: Option<&HesitantRoll>) -> &'static str {
+fn hesitant_fallback_line(hesitant: Option<&HesitantRoll>, in_fight: bool) -> &'static str {
+    if in_fight {
+        return match hesitant {
+            Some(roll) if roll.succeeded() => "All right. I'm lowering my weapon.",
+            _ => "No. This isn't over.",
+        };
+    }
     match hesitant {
         Some(roll) if roll.succeeded() => "All right, you've made your case. Let's talk terms.",
         Some(HesitantRoll::Rolled(_)) => "No. I won't move on that, and I won't haggle over it.",
@@ -731,6 +809,8 @@ pub(super) struct NpcReplyContext {
     /// A discount ask in this turn's hero line. It runs a Hesitant Influence check, and a success
     /// lets the merchant come down to its offer within the listed bounds.
     pub(super) discount_ask: Option<super::journey::merchant_bargaining::DiscountAsk>,
+    /// Set for a foe of an open scene fight: the reply answers a hero's words mid-fight.
+    pub(super) fight: Option<FightParley>,
 }
 
 impl NpcReplyContext {
@@ -740,6 +820,23 @@ impl NpcReplyContext {
         self.facts["payment_from_hero"] = json!({
             "amount_cp": amount_cp,
             "meaning": "The hero just handed you this coin as a gift, tip, or bribe for information or a favour. Payment never makes you answer, act, or grant anything: you still answer, decline, or refuse as your attitude and willingness allow. Name no price and promise nothing the server does not allow.",
+        });
+    }
+
+    /// Makes this the reply of a foe in an open scene fight. A request to stop fighting is an
+    /// Influence request; the reply's facts say so, and whether the hero has the action to spend.
+    pub(super) fn in_fight(&mut self, parley: FightParley) {
+        self.fight = Some(parley);
+        self.facts["fight"] = fight_facts(parley, None);
+    }
+
+    /// Tells the reply that the hero has just paid this provider the listed price for one listed
+    /// service, so the provider performs it now, in their own words, after the payment line.
+    pub(super) fn perform_paid_service(&mut self, service: &str, description: &str) {
+        self.facts["service_just_paid"] = json!({
+            "service": service,
+            "description": description,
+            "meaning": "The hero has just paid you the listed price for this service, and the coin has changed hands; that is why it is marked done. Perform the service now, in this reply and in your own words: give the directions, the advice or the information concretely, or say what work you do and how it turns out. Do not ask for payment again and do not quote a price.",
         });
     }
 
@@ -819,6 +916,9 @@ pub(super) struct Exchange {
     pub(super) private: bool,
     /// A Jev proposal for the owner; this is never an authoritative scene mutation.
     pub(super) event_proposal: Option<super::npc_event_classifier::Proposal>,
+    /// What an Influence request in the hero's words did to this NPC; `None` when the words made
+    /// no Influence request.
+    pub(super) influence: Option<InfluenceVerdict>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1321,6 +1421,7 @@ impl NpcReplyContext {
             influence_check: None,
             firm_buyback: None,
             discount_ask: None,
+            fight: None,
         })
     }
 
@@ -1505,6 +1606,7 @@ impl NpcReplyContext {
             influence_check: None,
             firm_buyback: None,
             discount_ask: None,
+            fight: None,
         })
     }
 
@@ -2008,6 +2110,7 @@ impl NpcVoice {
             shift: None,
             private,
             event_proposal: None,
+            influence: None,
         };
         exchange.observe();
         Some(exchange)
@@ -2088,9 +2191,11 @@ impl NpcVoice {
             None => AskReading::neutral(),
         };
         // A lie is a statement. A line Jev reads as asking something is a question, never a lie.
+        // Mid-fight a deceiving plea to stop is the Influence check with Deception, not a lie.
         let lie_contest = approach == Approach::Deception
             && context.firm_buyback.is_none()
             && context.discount_ask.is_none()
+            && context.fight.is_none()
             && !ask.asks_something();
         if ask.focus.is_some() {
             context.apply_private_reading(&ask);
@@ -2503,6 +2608,43 @@ impl NpcVoice {
         if let Some(rolled) = &hesitant {
             context.facts["influence_check"] = rolled.facts();
         }
+        let influence = influence_request.then(|| {
+            if done_now || never_forgive_now || unwilling_now {
+                InfluenceVerdict::Refused
+            } else if let Some(rolled) = &hesitant {
+                match rolled {
+                    HesitantRoll::Rolled(_) if rolled.succeeded() => InfluenceVerdict::Succeeded,
+                    HesitantRoll::Rolled(_) => InfluenceVerdict::Failed,
+                    HesitantRoll::Unavailable(_) => InfluenceVerdict::NotRolled,
+                }
+            } else if influence_willingness == Some(InfluenceWillingness::Willing) {
+                InfluenceVerdict::Willing
+            } else {
+                InfluenceVerdict::NotRolled
+            }
+        });
+        if let Some(parley) = context.fight {
+            context.facts["fight"] = fight_facts(parley, influence);
+            // The check decides only whether the foe stops fighting; no terms or prices are in it.
+            if context.facts.get("influence_check").is_some() {
+                context.facts["influence_check"]["meaning"] = json!(
+                    "This check decided whether you stop fighting; fight.outcome says which."
+                );
+            }
+            if let Some(turn) = context.turn.as_ref() {
+                super::actor::record_audit_line(
+                    "gameplay.social.fight_parley",
+                    format!(
+                        "FIGHT_PARLEY npc={} hero={} approach={} verdict={} action_available={}",
+                        turn.dossier.npc_id,
+                        context.hero_name,
+                        approach.label(),
+                        influence.map_or("none", InfluenceVerdict::label),
+                        parley.action_available,
+                    ),
+                );
+            }
+        }
         if let Some(ask) = context.discount_ask.as_ref() {
             let succeeded = matches!(&hesitant, Some(rolled) if rolled.succeeded());
             super::journey::merchant_bargaining::set_discount_offer(
@@ -2549,10 +2691,16 @@ impl NpcVoice {
                         )
                     } else if never_forgive_now {
                         ("I will never forgive you for that.".to_owned(), None)
+                    } else if unwilling_now && context.fight.is_some() {
+                        (hesitant_fallback_line(None, true).to_owned(), None)
                     } else if unwilling_now {
                         ("I will not help you with that.".to_owned(), None)
                     } else if hesitant_now {
-                        (hesitant_fallback_line(hesitant.as_ref()).to_owned(), None)
+                        (
+                            hesitant_fallback_line(hesitant.as_ref(), context.fight.is_some())
+                                .to_owned(),
+                            None,
+                        )
                     } else if private_clue_withheld {
                         let (answer, key) = private_clue_refusal(turn);
                         (answer, Some(key))
@@ -2795,6 +2943,7 @@ impl NpcVoice {
             shift: recorded.shift,
             private,
             event_proposal,
+            influence,
         };
         exchange.observe();
         Some(exchange)
@@ -4940,6 +5089,235 @@ mod tests {
                 .iter()
                 .all(|thing| thing["name"] != name.as_str()),
             "{shown}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod fight_parley_tests {
+    use super::super::approach_model::tests::model;
+    use super::super::npc_dossier_tests::{adventure, member, story, view};
+    use super::super::pack::SceneKey;
+    use super::super::social::SocialLedger;
+    use super::super::storyteller::tests::{FakeEndpoint, Reply, cache_directory, teller};
+    use super::*;
+    use std::time::Duration;
+
+    fn voice(endpoint: &FakeEndpoint, name: &str) -> (NpcVoice, std::path::PathBuf) {
+        let cache = cache_directory(name);
+        let storyteller = teller(endpoint.address, 20_000, Duration::from_secs(5), &cache);
+        (NpcVoice::new(Arc::new(storyteller)), cache)
+    }
+
+    /// Jev's answers for one line: the approach by its label, small talk for every question
+    /// part, the first subject, and the appraisal as a raw option number (o5 is Warmed, Much and
+    /// Hesitant; o4 Warmed, Much and Willing). Every other question gets no answer.
+    fn jev(approach: &'static str, appraisal: &'static str) -> FakeEndpoint {
+        let compute: Arc<dyn Fn(&Value) -> (u16, Value) + Send + Sync> = Arc::new(
+            move |body: &Value| {
+                let criteria: Vec<(String, String)> = body["questions"]["q1"]["criteria"]
+                    .as_object()
+                    .map(|options| {
+                        options
+                            .iter()
+                            .map(|(key, text)| {
+                                (key.clone(), text.as_str().unwrap_or_default().to_owned())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let key_of = |label: &str| {
+                    criteria
+                        .iter()
+                        .find(|(_, criterion)| criterion.starts_with(&format!("{label}:")))
+                        .map(|(key, _)| key.clone())
+                };
+                let choice = if key_of("flirting").is_some() {
+                    key_of(approach)
+                } else if key_of("small_talk").is_some() {
+                    Some("o1".to_owned())
+                } else if key_of("warmed").is_some() {
+                    Some(appraisal.to_owned())
+                } else if key_of("other").is_some() && body["state"].get("player_words").is_some() {
+                    Some("o1".to_owned())
+                } else {
+                    None
+                };
+                match choice {
+                    Some(choice) => (
+                        200,
+                        json!({"answers": {"q1": {"type": "choice", "choice": choice, "confidence": 0.99}}}),
+                    ),
+                    None => (500, json!({"error": "unavailable"})),
+                }
+            },
+        );
+        FakeEndpoint::start(
+            (0..200)
+                .map(|_| Reply::ComputeResponse(compute.clone()))
+                .collect(),
+        )
+    }
+
+    /// A foe who answers a hero mid-fight: the first generated adventure whose opening speaker
+    /// has a dossier, with the hero's Persuasion at +4 and both d20 faces at `face`.
+    fn foe(words: &str, action_available: bool, face: u8) -> NpcReplyContext {
+        for seed in 1..64 {
+            let adventure = adventure(seed);
+            let ledger = SocialLedger::open(adventure.dossiers.clone(), "0x01", None).unwrap();
+            if let Some(mut context) = NpcReplyContext::for_cast(
+                &view(&adventure, SceneKey::Opening, "Sigrun"),
+                member(1),
+                words,
+                &story(&adventure),
+                &ledger,
+                "Opening",
+            ) && context.turn.is_some()
+            {
+                context.influence_check = Some(InfluenceCheckInput {
+                    persuasion: (2, 2),
+                    deception: (2, 2),
+                    intimidation: (2, 0),
+                    performance: (0, 0),
+                    faces: [face, face],
+                });
+                context.in_fight(FightParley { action_available });
+                return context;
+            }
+        }
+        panic!("no generated adventure has a speaker with a dossier");
+    }
+
+    async fn talked_to(
+        context: NpcReplyContext,
+        approach: &'static str,
+        appraisal: &'static str,
+        name: &str,
+    ) -> (Exchange, String) {
+        let decision = jev(approach, appraisal);
+        let replies = FakeEndpoint::start(vec![Reply::Output(json!({
+            "reply": "Fine. We stop here.",
+            "approach": approach,
+            "local_fact": "none",
+        }))]);
+        let (voice, cache) = voice(&replies, name);
+        let voice = voice.with_approach_model(model(&decision));
+        let exchange = voice
+            .converse_in_character(context, &TableLog::new())
+            .await
+            .unwrap();
+        let facts = replies.bodies()[0]["input"].as_str().unwrap().to_owned();
+        std::fs::remove_dir_all(cache).unwrap();
+        (exchange, facts)
+    }
+
+    const PLEA: &str = "Stop! Enough, everyone. Lower your hands. We don't want this.";
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_plea_a_hesitant_foe_accepts_on_a_successful_check_stands_them_down_srd_521_page_184()
+    {
+        // SRD 5.2.1 p. 184 (Influence): a hesitant creature complies when the Charisma
+        // (Persuasion) check meets DC 15; 15 + 2 + 2 = 19 here.
+        let (exchange, facts) = talked_to(
+            foe(PLEA, true, 15),
+            "persuasion",
+            "o5",
+            "fight-parley-success",
+        )
+        .await;
+        assert_eq!(exchange.influence, Some(InfluenceVerdict::Succeeded));
+        assert!(facts.contains("\"skill\":\"Persuasion\""), "{facts}");
+        assert!(facts.contains("\"outcome\":\"stand_down\""), "{facts}");
+        assert!(
+            facts.contains("\"hero_can_take_influence_action\":true"),
+            "{facts}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_check_keeps_the_foe_fighting_srd_521_page_184() {
+        let (exchange, facts) = talked_to(
+            foe(PLEA, true, 2),
+            "persuasion",
+            "o5",
+            "fight-parley-failure",
+        )
+        .await;
+        assert_eq!(exchange.influence, Some(InfluenceVerdict::Failed));
+        assert!(facts.contains("\"outcome\":\"failure\""), "{facts}");
+        assert!(facts.contains("\"outcome\":\"keep_fighting\""), "{facts}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn without_the_heros_action_a_hesitant_foe_is_not_rolled_for_srd_521_page_184() {
+        // Influence is an action: off the hero's turn, or with the action spent, words alone
+        // reach the foe but roll no check, and the foe fights on.
+        let (exchange, facts) = talked_to(
+            foe(PLEA, false, 20),
+            "persuasion",
+            "o5",
+            "fight-parley-no-action",
+        )
+        .await;
+        assert_eq!(exchange.influence, Some(InfluenceVerdict::NotRolled));
+        assert!(facts.contains("\"reason\":\"no-action\""), "{facts}");
+        assert!(!facts.contains("\"skill\":\"Persuasion\""), "{facts}");
+        assert!(facts.contains("\"outcome\":\"keep_fighting\""), "{facts}");
+        assert!(
+            facts.contains("\"hero_can_take_influence_action\":false"),
+            "{facts}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_willing_foe_stands_down_without_a_check_or_the_heros_action_srd_521_page_184() {
+        let (exchange, facts) = talked_to(
+            foe(PLEA, false, 1),
+            "persuasion",
+            "o4",
+            "fight-parley-willing",
+        )
+        .await;
+        assert_eq!(exchange.influence, Some(InfluenceVerdict::Willing));
+        assert!(!facts.contains("\"influence_check\""), "{facts}");
+        assert!(facts.contains("\"outcome\":\"stand_down\""), "{facts}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_deceiving_plea_mid_fight_is_the_influence_check_with_deception_srd_521_page_184() {
+        // Deception is one of the Influence skills (SRD 5.2.1 p. 184); mid-fight it is that check,
+        // not a lie against passive Insight.
+        let (exchange, facts) = talked_to(
+            foe("The watch is right outside. Put it down.", true, 15),
+            "deception",
+            "o5",
+            "fight-parley-deception",
+        )
+        .await;
+        assert_eq!(exchange.influence, Some(InfluenceVerdict::Succeeded));
+        assert!(facts.contains("\"skill\":\"Deception\""), "{facts}");
+        assert!(!facts.contains("\"deception_check\""), "{facts}");
+    }
+
+    #[test]
+    fn only_a_willing_or_persuaded_npc_complies() {
+        assert!(InfluenceVerdict::Willing.complies());
+        assert!(InfluenceVerdict::Succeeded.complies());
+        for verdict in [
+            InfluenceVerdict::Failed,
+            InfluenceVerdict::Refused,
+            InfluenceVerdict::NotRolled,
+        ] {
+            assert!(!verdict.complies(), "{}", verdict.label());
+            assert_eq!(
+                fight_outcome_facts(Some(verdict))["outcome"],
+                "keep_fighting"
+            );
+        }
+        assert_eq!(fight_outcome_facts(None)["outcome"], "keep_fighting");
+        assert_eq!(
+            fight_outcome_facts(Some(InfluenceVerdict::Willing))["outcome"],
+            "stand_down"
         );
     }
 }

@@ -1,8 +1,12 @@
 //! Moving the party between places: the service side.
 //!
 //! `leave_by_freeform` is the hero-line route: a freeform act Jev read as a move, once it has
-//! succeeded, is put to Jev again as a closed choice among the place's open exits. `move_party_*`
-//! are the one path every move takes (a hero line, `dev place go`): they resolve where the exit
+//! succeeded, is put to Jev again as a closed choice of where it goes: an open exit of the place,
+//! a place the run has, a landmark of this place, elsewhere (a destination the hero names), or
+//! nowhere. `hailed_ride` and `take_ride` are the ride route: a line that hails or hires a ride
+//! (a passing carriage and its driver) becomes a journey with a short narrated travel beat, paid
+//! through a listed service of the place when Jev finds one is that ride. `move_party_*` are the
+//! one path every move takes (a hero line, a ride, `dev place go`): they resolve where the move
 //! leads, create the place when the run does not have it yet, and ask the session owner to commit
 //! the move. The table is told about a move only from the committed result.
 
@@ -12,6 +16,7 @@ use df_model::checkpoint::Checkpoint;
 use df_protocol::common as rpc;
 use df_types::OperationId;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 
 use super::{
@@ -27,8 +32,8 @@ use super::{
     journey,
     memory::{self, Audience, recall},
     pack,
-    place::{self, DEV_EXIT, Destination, PlaceRefusal},
-    place_creation::{self, CreationRequest},
+    place::{self, DEV_EXIT, Destination, JOURNEY_EXIT, KnownPlace, LandmarkDraft, PlaceRefusal},
+    place_creation::{self, CreationRequest, Heading, HeadingChoices, ServiceOffer, TravelBeat},
     timing, wire,
 };
 
@@ -95,6 +100,82 @@ fn leads_to(
     )
 }
 
+/// Where a move goes, once Jev has chosen: through an exit, or on a journey to a place the run
+/// has, to a landmark of this place, or to a new place the hero's words name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum MoveTarget {
+    Exit(String),
+    Known(String),
+    Landmark(LandmarkDraft),
+    New,
+}
+
+/// A move that is ready to commit: its destination is resolved and, when it is new, made.
+pub(super) struct PreparedMove {
+    operation: OperationId,
+    from: String,
+    from_name: String,
+    exit: String,
+    to: String,
+    to_short: String,
+    created: Option<place::PlaceRecord>,
+}
+
+/// The paid service a ride goes through, when the place lists one that is the ride.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RideFare {
+    pub(super) service_id: String,
+    pub(super) price_cp: u32,
+    pub(super) name: String,
+    pub(super) provider: String,
+}
+
+/// A ride the hero hailed or hired, ready to go once any fare is paid.
+pub(super) struct Ride {
+    prepared: PreparedMove,
+    pub(super) fare: Option<RideFare>,
+    hero: String,
+    hero_index: u32,
+}
+
+/// What Jev chooses among for a line in the place the party stands in, with each exit's id.
+struct Choices {
+    exits: Vec<SceneWayOut>,
+    known: Vec<KnownPlace>,
+    landmarks: Vec<LandmarkDraft>,
+    place_name: String,
+    place_short: String,
+    here: String,
+}
+
+impl Choices {
+    /// The move target a heading names; `None` when the party stays.
+    fn target(&self, heading: Heading) -> Option<MoveTarget> {
+        match heading {
+            Heading::Exit(index) => self
+                .exits
+                .get(index)
+                .map(|exit| MoveTarget::Exit(exit.id.clone())),
+            Heading::Known(index) => self
+                .known
+                .get(index)
+                .map(|place| MoveTarget::Known(place.id.clone())),
+            Heading::Landmark(index) => {
+                self.landmarks.get(index).cloned().map(MoveTarget::Landmark)
+            }
+            Heading::Elsewhere => Some(MoveTarget::New),
+            Heading::Stay => None,
+        }
+    }
+}
+
+/// A second operation id derived from a line's own, for a move that follows a payment the line
+/// already committed under its id. The same line always derives the same id, so a retry repeats.
+fn following_operation(operation: OperationId) -> Option<OperationId> {
+    let digest = Sha256::digest([b"ride:".as_slice(), operation.as_bytes()].concat());
+    OperationId::from_bytes(&digest[..16]).ok()
+}
+
 impl Service {
     /// The current place, its exits and every place the run knows, for the dev CLI.
     pub(super) fn place_report(&self) -> Result<Value, tonic::Status> {
@@ -102,9 +183,109 @@ impl Service {
         report(&current).map_err(actor::unavailable)
     }
 
-    /// A hero's freeform act that Jev read as a move: when it succeeded and Jev finds an exit the
-    /// line goes through, the party moves there. `None` leaves the act to the ordinary narration:
-    /// nothing moved, so nothing is claimed.
+    /// The speaking hero of a seat and their table index.
+    async fn speaking_hero(&self, credential: [u8; 32]) -> Option<(String, u32)> {
+        let (reply, wait) = oneshot::channel();
+        self.actor
+            .try_submit(actor::Call::SpeechMember { credential, reply })
+            .ok()?;
+        let member = tokio::time::timeout(timing::active().reply, wait)
+            .await
+            .ok()?
+            .ok()?
+            .ok()?;
+        let current = self.updates.borrow().clone();
+        let state = current.state();
+        let entity = journey::player_entity(member, &current).ok()?;
+        let name = journey::name(state, entity).ok()?;
+        let index = state
+            .characters
+            .iter()
+            .position(|character| character.entity == entity)
+            .and_then(|position| u32::try_from(position).ok())?;
+        Some((name, index))
+    }
+
+    /// What Jev chooses among in the place the party stands in now: its open exits, the places
+    /// the run has that no open exit already leads to, and its landmarks not yet made.
+    fn choices(&self, scene: &pack::Scene) -> Option<Choices> {
+        let current = self.updates.borrow().clone();
+        let state = current.state();
+        let snapshot = journey::living_scene::snapshot(state, scene)
+            .ok()
+            .flatten()?;
+        let party = place::whereabouts(state, scene).ok()?;
+        let exits: Vec<SceneWayOut> = snapshot
+            .model
+            .ways_out
+            .iter()
+            .filter(|way| way.open)
+            .cloned()
+            .collect();
+        let reached: Vec<String> = exits
+            .iter()
+            .filter_map(|exit| {
+                match place::destination(state, &party.home, &party.here, exit).ok()? {
+                    Destination::Home => Some(party.home.clone()),
+                    Destination::Created(known) => Some(known.place_id),
+                    _ => None,
+                }
+            })
+            .collect();
+        let known: Vec<KnownPlace> = place::reachable(state, &party)
+            .ok()?
+            .into_iter()
+            .filter(|place| !reached.contains(&place.id))
+            .collect();
+        let landmarks = place::landmarks_here(state, &party.here).ok()?;
+        let setting = scene.setting.as_ref()?;
+        Some(Choices {
+            exits,
+            known,
+            landmarks,
+            place_name: setting.name.clone(),
+            place_short: setting.short.clone(),
+            here: party.here,
+        })
+    }
+
+    /// Jev's choice of where the line takes the party, audited as `PLACE judged`.
+    async fn heading(&self, words: &str, hero: &str, choices: &Choices) -> Option<MoveTarget> {
+        let (_, jev) = self.npc_voice.hero_identity_models();
+        let exits: Vec<&SceneWayOut> = choices.exits.iter().collect();
+        let listed = HeadingChoices {
+            exits: &exits,
+            known: &choices.known,
+            landmarks: &choices.landmarks,
+        };
+        let heading = match place_creation::judge_heading(
+            jev,
+            words,
+            hero,
+            &choices.place_name,
+            &choices.place_short,
+            &listed,
+        )
+        .await
+        {
+            Ok(heading) => heading,
+            Err(reason) => {
+                place::audit_judged(
+                    &choices.here,
+                    "unavailable",
+                    &format!(" reason={}", reason.label()),
+                );
+                return None;
+            }
+        };
+        place::audit_judged(&choices.here, &heading.label(&listed), "");
+        choices.target(heading)
+    }
+
+    /// A hero's freeform act that Jev read as a move: when it succeeded and Jev finds where the
+    /// line goes (an exit, a place the run has, a landmark, or a destination the hero names), the
+    /// party moves there. `None` leaves the act to the ordinary narration: nothing moved, so
+    /// nothing is claimed.
     pub(super) async fn leave_by_freeform(
         &self,
         credential: [u8; 32],
@@ -123,47 +304,11 @@ impl Service {
         if !performance.succeeded {
             return None;
         }
-        let current = self.updates.borrow().clone();
-        let snapshot = journey::living_scene::snapshot(current.state(), scene)
-            .ok()
-            .flatten()?;
-        let exits: Vec<&SceneWayOut> = snapshot
-            .model
-            .ways_out
-            .iter()
-            .filter(|way| way.open)
-            .collect();
-        let short = scene
-            .setting
-            .as_ref()
-            .map(|setting| setting.short.as_str())
-            .unwrap_or_default();
-        let (_, jev) = self.npc_voice.hero_identity_models();
-        let from = scene
-            .setting
-            .as_ref()
-            .map(|setting| setting.place_id.clone())
-            .unwrap_or_default();
-        let chosen =
-            match place_creation::judge_exit(jev, &request.text, hero, &scene.title, short, &exits)
-                .await
-            {
-                Ok(chosen) => chosen,
-                Err(reason) => {
-                    place::audit_judged(
-                        &from,
-                        "unavailable",
-                        &format!(" reason={}", reason.label()),
-                    );
-                    return None;
-                }
-            };
-        let exit = chosen.and_then(|index| exits.get(index).copied());
-        place::audit_judged(&from, exit.map_or("none", |exit| exit.id.as_str()), "");
-        let exit = exit?;
+        let choices = self.choices(scene)?;
+        let target = self.heading(&request.text, hero, &choices).await?;
         let operation = df_api::operation_id(request.input_id.as_ref()).ok()?;
         let moved = match self
-            .move_party_through(credential, operation, &exit.id)
+            .move_party_toward(credential, operation, target, &request.text)
             .await
         {
             Ok(moved) => moved,
@@ -183,6 +328,233 @@ impl Service {
         ))
     }
 
+    /// A line that hails or hires a ride to another place, as Jev reads it: the destination is
+    /// chosen and, when new, made before any fare is paid, so a paid fare is never left without a
+    /// journey. The fare is the listed paid service Jev finds is this ride, when there is one. `None`
+    /// when the line is no ride, names nowhere to go, or the destination cannot be made.
+    pub(super) async fn hailed_ride(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        scene: &pack::Scene,
+    ) -> Option<Ride> {
+        let (hero, hero_index) = self.speaking_hero(credential).await?;
+        let choices = self.choices(scene)?;
+        let (_, jev) = self.npc_voice.hero_identity_models();
+        match place_creation::judge_ride(jev, &request.text, &hero, &choices.place_name, None).await
+        {
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(reason) => {
+                actor::record_audit_line(
+                    "gameplay.place",
+                    format!(
+                        "PLACE ride from={} source=unavailable reason={}",
+                        choices.here,
+                        reason.label()
+                    ),
+                );
+                return None;
+            }
+        }
+        let current = self.updates.borrow().clone();
+        let model = journey::living_scene::snapshot(current.state(), scene)
+            .ok()
+            .flatten()?
+            .model;
+        let provider_name = |id: &str| {
+            model
+                .people
+                .iter()
+                .find(|person| person.id == id)
+                .map_or_else(|| id.to_owned(), |person| person.name.clone())
+        };
+        let providers: Vec<String> = model
+            .services
+            .iter()
+            .map(|service| provider_name(&service.provider_id))
+            .collect();
+        let offers: Vec<ServiceOffer<'_>> = model
+            .services
+            .iter()
+            .zip(&providers)
+            .map(|(service, provider)| ServiceOffer {
+                name: &service.name,
+                description: &service.description,
+                provider,
+            })
+            .collect();
+        let fare = match place_creation::judge_ride_service(jev, &request.text, &offers).await {
+            Ok(Some(index)) => model.services.get(index).map(|service| RideFare {
+                service_id: service.id.clone(),
+                price_cp: service.price_cp,
+                name: service.name.clone(),
+                provider: provider_name(&service.provider_id),
+            }),
+            Ok(None) | Err(_) => None,
+        };
+        actor::record_audit_line(
+            "gameplay.place",
+            format!(
+                "PLACE ride from={} source=jev fare={}",
+                choices.here,
+                fare.as_ref()
+                    .map_or("none", |fare| fare.service_id.as_str())
+            ),
+        );
+        let target = self.heading(&request.text, &hero, &choices).await?;
+        let operation = df_api::operation_id(request.input_id.as_ref()).ok()?;
+        // A paid fare commits under the line's own operation; the move follows under its own.
+        let operation = if fare.is_some() {
+            following_operation(operation)?
+        } else {
+            operation
+        };
+        let prepared = self
+            .prepare_move(operation, target, &request.text)
+            .await
+            .ok()?;
+        Some(Ride {
+            prepared,
+            fare,
+            hero,
+            hero_index,
+        })
+    }
+
+    /// Takes a ride the hero hailed: commits the journey, then tells the table the hero's line
+    /// (unless an interaction already showed it), the travel beat and the arrival, in that order.
+    pub(super) async fn take_ride(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        ride: Ride,
+        line_shown: bool,
+    ) -> Option<DialogueReply> {
+        let from_name = ride.prepared.from_name.clone();
+        let to_short = ride.prepared.to_short.clone();
+        let moved = self.commit_prepared(credential, ride.prepared).await.ok()?;
+        if !line_shown {
+            freeform_action::publish_hero_line(
+                &self.table_log,
+                &ride.hero,
+                ride.hero_index,
+                &request.text,
+            );
+        }
+        let (storyteller, _) = self.npc_voice.hero_identity_models();
+        let beat = place_creation::narrate_travel(
+            storyteller,
+            &TravelBeat {
+                hero: &ride.hero,
+                words: &request.text,
+                from: &from_name,
+                to: &moved.place_name,
+                to_short: &to_short,
+                ride: true,
+                hired: ride
+                    .fare
+                    .as_ref()
+                    .map(|fare| (fare.name.as_str(), fare.provider.as_str())),
+            },
+        )
+        .await;
+        freeform_action::publish_outcome(
+            &self.table_log,
+            ride.hero_index,
+            None::<super::table_log::RollRow>,
+            &beat,
+        );
+        freeform_action::publish_outcome(
+            &self.table_log,
+            ride.hero_index,
+            None::<super::table_log::RollRow>,
+            &moved.line,
+        );
+        Some(DialogueReply::Raw(
+            rpc::DialogueResponse {
+                input_id: request.input_id.clone(),
+                disposition: rpc::DialogueDisposition::Action as i32,
+                revision: Some(wire::revision(moved.revision)),
+                npc_reply: format!("{beat} {}", moved.line),
+                ..Default::default()
+            },
+            None,
+        ))
+    }
+
+    /// After a listed paid service of the place was bought by a hero's line: when Jev finds that
+    /// buying it is taking a ride now (a carriage hire), the journey starts at once and the table
+    /// is told the travel beat and the arrival. Returns what the table was told and the committed
+    /// revision, or `None` when the service is no ride or the journey could not be made (the
+    /// purchase stands either way: it was committed before this was asked).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the service reply calls it once the TRAVEL request lands"
+        )
+    )]
+    pub(super) async fn ride_after_service(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        scene: &pack::Scene,
+        service_id: &str,
+    ) -> Option<(String, df_types::SessionRevision)> {
+        let (hero, hero_index) = self.speaking_hero(credential).await?;
+        let choices = self.choices(scene)?;
+        let current = self.updates.borrow().clone();
+        let model = journey::living_scene::snapshot(current.state(), scene)
+            .ok()
+            .flatten()?
+            .model;
+        let service = model
+            .services
+            .iter()
+            .find(|service| service.id == service_id)?;
+        let provider = model
+            .people
+            .iter()
+            .find(|person| person.id == service.provider_id)
+            .map_or_else(|| service.provider_id.clone(), |person| person.name.clone());
+        let (_, jev) = self.npc_voice.hero_identity_models();
+        let offer = ServiceOffer {
+            name: &service.name,
+            description: &service.description,
+            provider: &provider,
+        };
+        if !place_creation::judge_ride(jev, &request.text, &hero, &choices.place_name, Some(&offer))
+            .await
+            .ok()?
+        {
+            return None;
+        }
+        let target = self.heading(&request.text, &hero, &choices).await?;
+        let operation = following_operation(df_api::operation_id(request.input_id.as_ref()).ok()?)?;
+        let prepared = self
+            .prepare_move(operation, target, &request.text)
+            .await
+            .ok()?;
+        let ride = Ride {
+            prepared,
+            fare: Some(RideFare {
+                service_id: service.id.clone(),
+                price_cp: service.price_cp,
+                name: service.name.clone(),
+                provider,
+            }),
+            hero,
+            hero_index,
+        };
+        match self.take_ride(credential, request, ride, true).await? {
+            DialogueReply::Raw(response, _) => {
+                Some((response.npc_reply, self.updates.borrow().basis().revision))
+            }
+            _ => None,
+        }
+    }
+
     /// Moves the party through `exit_id` of the place it stands in. The place is created first
     /// when the run does not have it yet; the owner then repeats every check and commits.
     pub(super) async fn move_party_through(
@@ -191,6 +563,35 @@ impl Service {
         operation: OperationId,
         exit_id: &str,
     ) -> Result<Box<Moved>, MoveError> {
+        self.move_party_toward(
+            credential,
+            operation,
+            MoveTarget::Exit(exit_id.to_owned()),
+            "",
+        )
+        .await
+    }
+
+    /// Moves the party to `target`: through an exit, or on a journey. `goal` is the hero's own
+    /// line, given to the storyteller as quoted data when the destination is made.
+    pub(super) async fn move_party_toward(
+        &self,
+        credential: [u8; 32],
+        operation: OperationId,
+        target: MoveTarget,
+        goal: &str,
+    ) -> Result<Box<Moved>, MoveError> {
+        let prepared = self.prepare_move(operation, target, goal).await?;
+        self.commit_prepared(credential, prepared).await
+    }
+
+    /// Resolves where a move goes and makes the place when it is new; nothing is committed here.
+    async fn prepare_move(
+        &self,
+        operation: OperationId,
+        target: MoveTarget,
+        goal: &str,
+    ) -> Result<PreparedMove, MoveError> {
         let current = self.updates.borrow().clone();
         let state = current.state();
         let scene = beat_script_runtime::scene(state).map_err(state_failure)?;
@@ -198,35 +599,66 @@ impl Service {
             .map_err(state_failure)?
             .ok_or(PlaceRefusal::NoExit)?;
         let party = place::whereabouts(state, &scene).map_err(state_failure)?;
-        let exit = snapshot
-            .model
-            .ways_out
-            .iter()
-            .find(|way| way.id == exit_id)
-            .cloned()
-            .ok_or(PlaceRefusal::NoExit)?;
-        if !exit.open {
-            audit_refusal(&party.here, &exit.id, PlaceRefusal::Closed.label());
-            return Err(PlaceRefusal::Closed.into());
-        }
-        let (to, created) = match place::destination(state, &party.home, &party.here, &exit)
-            .map_err(state_failure)?
-        {
+        let from_name = scene
+            .setting
+            .as_ref()
+            .map_or_else(|| scene.title.clone(), |setting| setting.name.clone());
+        let (exit, destination, landmark) = match target {
+            MoveTarget::Exit(exit_id) => {
+                let exit = snapshot
+                    .model
+                    .ways_out
+                    .iter()
+                    .find(|way| way.id == exit_id)
+                    .cloned()
+                    .ok_or(PlaceRefusal::NoExit)?;
+                if !exit.open {
+                    audit_refusal(&party.here, &exit.id, PlaceRefusal::Closed.label());
+                    return Err(PlaceRefusal::Closed.into());
+                }
+                let destination = place::destination(state, &party.home, &party.here, &exit)
+                    .map_err(state_failure)?;
+                (Some(exit), destination, None)
+            }
+            MoveTarget::Known(place_id) => {
+                match place::destination_of(state, &party.home, &place_id).map_err(state_failure)? {
+                    // A journey by name reaches only a place the run has; it makes nothing.
+                    Destination::Create { .. } => return Err(PlaceRefusal::InvalidPlace.into()),
+                    destination => (None, destination, None),
+                }
+            }
+            MoveTarget::Landmark(landmark) => {
+                (None, Destination::Create { named: None }, Some(landmark))
+            }
+            MoveTarget::New => (None, Destination::Create { named: None }, None),
+        };
+        let exit_id = exit
+            .as_ref()
+            .map_or_else(|| JOURNEY_EXIT.to_owned(), |exit| exit.id.clone());
+        let (to, created) = match destination {
             Destination::Home => (party.home.clone(), None),
             Destination::Created(known) => (known.place_id, None),
             Destination::Story { .. } => {
-                audit_refusal(&party.here, &exit.id, PlaceRefusal::StoryPlace.label());
+                audit_refusal(&party.here, &exit_id, PlaceRefusal::StoryPlace.label());
                 return Err(PlaceRefusal::StoryPlace.into());
             }
             Destination::Create { named } => {
                 if place::created(state).map_err(state_failure)?.len()
                     >= place::MAXIMUM_CREATED_PLACES
                 {
-                    audit_refusal(&party.here, &exit.id, PlaceRefusal::RunFull.label());
+                    audit_refusal(&party.here, &exit_id, PlaceRefusal::RunFull.label());
                     return Err(PlaceRefusal::RunFull.into());
                 }
                 let request = self
-                    .creation_request(&current, &scene, &snapshot.model, &exit, named)
+                    .creation_request(
+                        &current,
+                        &scene,
+                        &snapshot.model,
+                        exit.as_ref(),
+                        named,
+                        goal,
+                        landmark,
+                    )
                     .await
                     .map_err(state_failure)?;
                 let (storyteller, _) = self.npc_voice.hero_identity_models();
@@ -238,25 +670,49 @@ impl Service {
                 let record = match made {
                     Ok(Ok(record)) => record,
                     Ok(Err(error)) => {
-                        audit_refusal(&party.here, &exit.id, error.label());
+                        audit_refusal(&party.here, &exit_id, error.label());
                         return Err(PlaceRefusal::CreationUnavailable.into());
                     }
                     Err(_) => {
-                        audit_refusal(&party.here, &exit.id, "creation_deadline");
+                        audit_refusal(&party.here, &exit_id, "creation_deadline");
                         return Err(PlaceRefusal::CreationUnavailable.into());
                     }
                 };
                 (record.place_id.clone(), Some(record))
             }
         };
+        let to_short = match &created {
+            Some(record) => record.short.clone(),
+            None => place::created(state)
+                .map_err(state_failure)?
+                .remove(&to)
+                .map(|record| record.short)
+                .unwrap_or_default(),
+        };
+        Ok(PreparedMove {
+            operation,
+            from: party.here,
+            from_name,
+            exit: exit_id,
+            to,
+            to_short,
+            created,
+        })
+    }
+
+    async fn commit_prepared(
+        &self,
+        credential: [u8; 32],
+        prepared: PreparedMove,
+    ) -> Result<Box<Moved>, MoveError> {
         self.commit_move(
             credential,
             MoveProposal {
-                operation,
-                from: party.here,
-                exit: exit.id,
-                to,
-                created,
+                operation: prepared.operation,
+                from: prepared.from,
+                exit: prepared.exit,
+                to: prepared.to,
+                created: prepared.created,
             },
         )
         .await
@@ -309,14 +765,19 @@ impl Service {
         }
     }
 
-    /// What the storyteller is given to create the place beyond `exit`: only public things.
+    /// What the storyteller is given to create the place beyond `exit`, or at the end of a
+    /// journey when there is no exit: only public things, the hero's own line as quoted data, and
+    /// every place and person the run already has, so none is made twice.
+    #[allow(clippy::too_many_arguments)]
     async fn creation_request(
         &self,
         current: &Checkpoint,
         scene: &pack::Scene,
         model: &SceneModel,
-        exit: &SceneWayOut,
+        exit: Option<&SceneWayOut>,
         named: Option<String>,
+        goal: &str,
+        landmark: Option<LandmarkDraft>,
     ) -> Result<CreationRequest, df_session::submission::RepositoryError> {
         let state = current.state();
         let setting = scene
@@ -357,6 +818,8 @@ impl Service {
             .map(|(id, _)| id)
             .collect();
         taken_ids.extend(place::created(state)?.into_keys());
+        let place_names = place::names_in_use(state)?;
+        let people_names = place::people_in_use(state, &heroes)?;
         let scene_label = format!("{:?}", scene.key);
         let game_names: Vec<String> = origin_people.iter().map(|(name, _)| name.clone()).collect();
         let canon = self
@@ -373,14 +836,16 @@ impl Service {
                     .collect()
             })
             .collect();
+        let heading_text = match (exit, &landmark) {
+            (Some(exit), _) => format!("{} {}", exit.name, exit.beyond),
+            (None, Some(landmark)) => format!("{} {}", landmark.name, landmark.direction),
+            (None, None) => goal.chars().take(200).collect(),
+        };
         let recalled_memory = match memory::current() {
             Some(story) => {
-                let text = format!("{} {} {}", exit.name, exit.beyond, setting.name);
-                let entities = [
-                    setting.place_id.as_str(),
-                    exit.id.as_str(),
-                    setting.name.as_str(),
-                ];
+                let text = format!("{heading_text} {}", setting.name);
+                let exit_id = exit.map_or(JOURNEY_EXIT, |exit| exit.id.as_str());
+                let entities = [setting.place_id.as_str(), exit_id, setting.name.as_str()];
                 let asked = recall::RecallRequest::new(
                     recall::Purpose::Storyteller,
                     Audience::Public,
@@ -406,9 +871,13 @@ impl Service {
             origin_people,
             statements,
             heroes,
-            exit: exit.clone(),
+            exit: exit.cloned(),
+            goal: goal.to_owned(),
+            landmark,
             named,
             taken_ids,
+            place_names,
+            people_names,
             canon,
             recent_table,
             recalled_memory,

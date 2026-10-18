@@ -46,6 +46,14 @@ pub(in crate::gameplay) const MAXIMUM_CREATED_PLACES: usize = 8;
 pub(in crate::gameplay) const WAY_BACK: &str = "way-back";
 /// The exit name of a development move that goes straight to a place the run has.
 pub(in crate::gameplay) const DEV_EXIT: &str = "dev";
+/// The exit name of a journey: the party travels to a stated destination that no exit of the
+/// place leads to (a place the run has, a landmark, or a new place), on foot or by a hired ride.
+pub(in crate::gameplay) const JOURNEY_EXIT: &str = "journey";
+/// Onward exits a created place may list besides its way back. The scene model holds at most
+/// three ways out, so a created place has its way back and up to two ways on.
+pub(in crate::gameplay) const MAXIMUM_ONWARD_EXITS: usize = 2;
+/// Named landmarks near a created place: canon its people know and destinations a journey reaches.
+pub(in crate::gameplay) const MAXIMUM_LANDMARKS: usize = 3;
 
 /// The largest serialized journal entry. The checkpoint codec keeps every stored text to 4,096
 /// bytes, so a place is stored as the compact answer that made it and expanded into its scene
@@ -77,6 +85,18 @@ pub(in crate::gameplay) struct PlaceRecord {
     #[serde(default)]
     pub(in crate::gameplay) services: Vec<ServiceDraft>,
     pub(in crate::gameplay) things: Vec<ThingDraft>,
+    /// Named places near this one that its people know of. They are canon and reachable by a
+    /// journey; a place made before landmarks existed has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::gameplay) landmarks: Vec<LandmarkDraft>,
+}
+
+/// A named place near a created place: what it is called and where it lies from here.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::gameplay) struct LandmarkDraft {
+    pub(in crate::gameplay) name: String,
+    pub(in crate::gameplay) direction: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -183,6 +203,15 @@ fn cut(text: &str, maximum: usize) -> String {
     let kept: String = text.chars().take(maximum).collect();
     kept.rsplit_once(' ')
         .map_or_else(|| kept.clone(), |(head, _)| head.to_owned())
+}
+
+/// A name as a comparison key: its letters and digits in lowercase, nothing else, so
+/// "Marek's Cloth Shop", "Marek’s cloth shop" and "mareks cloth-shop" are one name.
+pub(in crate::gameplay) fn name_key(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 impl PlaceRecord {
@@ -360,7 +389,8 @@ impl PlaceRecord {
             || !within(&self.origin.name, 64)
             || !within(&self.origin.time_of_day, 32)
             || !within(&self.origin.weather, 72)
-            || self.exits.len() > 2
+            || self.exits.len() > MAXIMUM_ONWARD_EXITS
+            || self.landmarks.len() > MAXIMUM_LANDMARKS
             || !(2..=3).contains(&self.people.len())
             || !(4..=5).contains(&self.things.len())
         {
@@ -450,7 +480,12 @@ impl PlaceRecord {
             }
             ids.push(id);
         }
-        let mut exits: Vec<String> = vec![WAY_BACK.to_owned()];
+        // The reserved move names are never an exit's id, so a journal entry reads one way only.
+        let mut exits: Vec<String> = vec![
+            WAY_BACK.to_owned(),
+            DEV_EXIT.to_owned(),
+            JOURNEY_EXIT.to_owned(),
+        ];
         for exit in &self.exits {
             let id = slug(&exit.name);
             if !within(&exit.name, 32)
@@ -463,6 +498,19 @@ impl PlaceRecord {
                 return Err(invalid);
             }
             exits.push(id);
+        }
+        let mut landmarks: Vec<String> = Vec::new();
+        for landmark in &self.landmarks {
+            let key = name_key(&landmark.name);
+            if !within(&landmark.name, 40)
+                || !within(&landmark.direction, 60)
+                || key.is_empty()
+                || key == name_key(&self.name)
+                || landmarks.contains(&key)
+            {
+                return Err(invalid);
+            }
+            landmarks.push(key);
         }
         if !self
             .people
@@ -715,6 +763,164 @@ pub(in crate::gameplay) fn whereabouts(
     Ok(Whereabouts { beat, here, home })
 }
 
+/// A place the party could travel to by name: the beat's own place or one the run created.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct KnownPlace {
+    pub(in crate::gameplay) id: String,
+    pub(in crate::gameplay) name: String,
+    pub(in crate::gameplay) short: String,
+}
+
+/// The places a journey from `here` can reach by name: the beat's own place and every place the
+/// run created, except the place the party stands in.
+pub(in crate::gameplay) fn reachable(
+    state: &GameState,
+    party: &Whereabouts,
+) -> Result<Vec<KnownPlace>, RepositoryError> {
+    let mut places = Vec::new();
+    if party.home != party.here {
+        let short = registered_setting(&party.home)
+            .map(|setting| setting.short)
+            .or_else(|| {
+                pack::with_content(|content| {
+                    content
+                        .scenes
+                        .iter()
+                        .filter_map(|scene| scene.setting.as_ref())
+                        .find(|setting| setting.place_id == party.home)
+                        .map(|setting| setting.short.clone())
+                })
+            })
+            .unwrap_or_default();
+        places.push(KnownPlace {
+            id: party.home.clone(),
+            name: name_of(state, &party.home)?,
+            short,
+        });
+    }
+    for (id, record) in created(state)? {
+        if id != party.here && id != party.home {
+            places.push(KnownPlace {
+                id,
+                name: record.name,
+                short: record.short,
+            });
+        }
+    }
+    Ok(places)
+}
+
+/// The landmarks of the place the party stands in that the run has not yet made into a place.
+pub(in crate::gameplay) fn landmarks_here(
+    state: &GameState,
+    here: &str,
+) -> Result<Vec<LandmarkDraft>, RepositoryError> {
+    let made = created(state)?;
+    let Some(record) = made.get(here) else {
+        return Ok(Vec::new());
+    };
+    let mut taken: Vec<String> = story_places()
+        .into_iter()
+        .map(|(_, name)| name_key(&name))
+        .collect();
+    taken.extend(made.values().map(|place| name_key(&place.name)));
+    Ok(record
+        .landmarks
+        .iter()
+        .filter(|landmark| !taken.contains(&name_key(&landmark.name)))
+        .cloned()
+        .collect())
+}
+
+/// Every place name this run knows (the story's places, the places it created and their
+/// landmarks), so a new place never takes one of them by mistake.
+pub(in crate::gameplay) fn names_in_use(state: &GameState) -> Result<Vec<String>, RepositoryError> {
+    let mut names: Vec<String> = story_places().into_iter().map(|(_, name)| name).collect();
+    for record in created(state)?.into_values() {
+        names.push(record.name);
+    }
+    Ok(names)
+}
+
+/// Every person this run knows by name: the story's cast in every scene, the people of every
+/// place it created and the heroes. A created place never brings in a second one of them.
+pub(in crate::gameplay) fn people_in_use(
+    state: &GameState,
+    heroes: &[String],
+) -> Result<Vec<String>, RepositoryError> {
+    let mut names: Vec<String> = pack::with_content(|content| {
+        content
+            .scenes
+            .iter()
+            .chain(
+                content
+                    .beat_script
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|script| script.scenes.values()),
+            )
+            .flat_map(|scene| {
+                scene.cast.iter().map(|member| member.name.clone()).chain(
+                    scene
+                        .setting
+                        .as_ref()
+                        .and_then(|setting| setting.model.as_ref())
+                        .into_iter()
+                        .flat_map(|model| model.people.iter().map(|person| person.name.clone())),
+                )
+            })
+            .collect()
+    });
+    for record in created(state)?.into_values() {
+        names.extend(record.people.into_iter().map(|person| person.name));
+    }
+    names.extend(heroes.iter().cloned());
+    let mut seen = Vec::new();
+    names.retain(|name| {
+        let key = name_key(name);
+        let fresh = !key.is_empty() && !seen.contains(&key);
+        seen.push(key);
+        fresh
+    });
+    Ok(names)
+}
+
+/// The scene a beat's party stood in when the decision at `revision` was made: the beat's own
+/// scene, or the created place of the last move made in this beat before that decision. A replay
+/// of an observation made in a created place reads that place, not the beat's own scene.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the observation replay calls it once the TRAVEL request lands"
+    )
+)]
+pub(in crate::gameplay) fn scene_at(
+    state: &GameState,
+    beat: &str,
+    base: Scene,
+    revision: SessionRevision,
+) -> Result<Scene, RepositoryError> {
+    let Ok(home) = home_id(&base) else {
+        return Ok(base);
+    };
+    let mut standing_in = None;
+    for (moved_at, entry) in entries(state)? {
+        if entry.change.beat == beat && moved_at < revision {
+            standing_in = Some(entry.change.to);
+        }
+    }
+    match standing_in {
+        Some(to) if to != home => {
+            let place = created(state)?
+                .remove(&to)
+                .ok_or(RepositoryError::InvalidCandidate)?;
+            scene_of(&place, &base)
+        }
+        _ => Ok(base),
+    }
+}
+
 /// The name of a place the run knows: one the story owns, or one it created.
 pub(in crate::gameplay) fn name_of(
     state: &GameState,
@@ -813,6 +1019,16 @@ pub(in crate::gameplay) fn arrival_line(hero: &str, exit_name: &str, place_name:
     format!("{hero} leads the party through the {exit_name} to {place_name}.")
 }
 
+/// What the table is told when the party goes back the way it came, from the committed move alone.
+pub(in crate::gameplay) fn return_line(hero: &str, place_name: &str) -> String {
+    format!("{hero} leads the party back to {place_name}.")
+}
+
+/// What the table is told when a journey arrives, from the committed move alone.
+pub(in crate::gameplay) fn journey_line(hero: &str, place_name: &str) -> String {
+    format!("{hero} leads the party on to {place_name}.")
+}
+
 /// A move the owner has checked: the name of the exit used and of the place entered.
 pub(in crate::gameplay) struct Admitted {
     pub(in crate::gameplay) exit_name: String,
@@ -840,8 +1056,9 @@ impl From<RepositoryError> for PlaceFailure {
 /// The owner's checks of a proposed move against its own current state: the exit exists and is
 /// open, the destination is exactly where the exit leads (a place the run has, or one new place
 /// that is not yet in the journal and fits the run), and nothing but the story's own beats own
-/// the destination. `exit` is the id of an exit of the place `party` stands in, or `dev` for a
-/// development move straight to a place the run has.
+/// the destination. `exit` is the id of an exit of the place `party` stands in, `dev` for a
+/// development move straight to a place the run has, or `journey` for travel to a stated
+/// destination: a place the run has, or one new place.
 pub(in crate::gameplay) fn admit(
     state: &GameState,
     model: &SceneModel,
@@ -862,6 +1079,24 @@ pub(in crate::gameplay) fn admit(
             Destination::Story { .. } => return Err(PlaceRefusal::StoryPlace.into()),
         }
         "a development order".to_owned()
+    } else if exit == JOURNEY_EXIT {
+        // A journey reaches a place the run has, by name, or makes the one new place it heads for.
+        if to == party.here {
+            return Err(PlaceRefusal::InvalidPlace.into());
+        }
+        match created_place {
+            None => match destination_of(state, &party.home, to)? {
+                Destination::Home if to == party.home => {}
+                Destination::Created(known) if known.place_id == to => {}
+                Destination::Home | Destination::Created(_) => {
+                    return Err(PlaceRefusal::InvalidPlace.into());
+                }
+                Destination::Create { .. } => return Err(PlaceRefusal::InvalidPlace.into()),
+                Destination::Story { .. } => return Err(PlaceRefusal::StoryPlace.into()),
+            },
+            Some(made) => admit_new(state, party, to, None, made)?,
+        }
+        "the way there".to_owned()
     } else {
         let way = model
             .ways_out
@@ -880,19 +1115,7 @@ pub(in crate::gameplay) fn admit(
             Destination::Story { .. } => return Err(PlaceRefusal::StoryPlace.into()),
             Destination::Create { named } => {
                 let made = created_place.ok_or(PlaceRefusal::InvalidPlace)?;
-                let known = created(state)?;
-                if made.place_id != to
-                    || named.as_ref().is_some_and(|id| *id != made.place_id)
-                    || known.contains_key(&made.place_id)
-                    || made.place_id == party.home
-                    || story_places().iter().any(|(id, _)| *id == made.place_id)
-                {
-                    return Err(PlaceRefusal::AlreadyKnown.into());
-                }
-                if known.len() >= MAXIMUM_CREATED_PLACES {
-                    return Err(PlaceRefusal::RunFull.into());
-                }
-                made.validate()?;
+                admit_new(state, party, to, named.as_deref(), made)?;
             }
         }
         way.name.clone()
@@ -902,6 +1125,35 @@ pub(in crate::gameplay) fn admit(
         None => name_of(state, to)?,
     };
     Ok(Admitted { exit_name, to_name })
+}
+
+/// The checks of a new place a move makes: it is the place the move names, no place the run or
+/// the story has (by id or by name), the run has room for it, and it keeps every rule of a place.
+fn admit_new(
+    state: &GameState,
+    party: &Whereabouts,
+    to: &str,
+    named: Option<&str>,
+    made: &PlaceRecord,
+) -> Result<(), PlaceFailure> {
+    let known = created(state)?;
+    let name = name_key(&made.name);
+    if made.place_id != to
+        || named.is_some_and(|id| id != made.place_id)
+        || known.contains_key(&made.place_id)
+        || made.place_id == party.home
+        || story_places()
+            .iter()
+            .any(|(id, story_name)| *id == made.place_id || name_key(story_name) == name)
+        || known.values().any(|place| name_key(&place.name) == name)
+    {
+        return Err(PlaceRefusal::AlreadyKnown.into());
+    }
+    if known.len() >= MAXIMUM_CREATED_PLACES {
+        return Err(PlaceRefusal::RunFull.into());
+    }
+    made.validate()?;
+    Ok(())
 }
 
 /// A move that passed every check, as a candidate checkpoint the owner can commit.
@@ -942,7 +1194,12 @@ pub(in crate::gameplay) fn plan(
     let admitted = admit(state, &snapshot.model, &party, exit, to, created_place)?;
     let entry = PlaceEntry {
         hero: hero.to_owned(),
-        line: arrival_line(hero, &admitted.exit_name, &admitted.to_name),
+        line: match exit {
+            JOURNEY_EXIT => journey_line(hero, &admitted.to_name),
+            // The way back is named for the place it leads to, so the place is named once.
+            WAY_BACK => return_line(hero, &admitted.to_name),
+            _ => arrival_line(hero, &admitted.exit_name, &admitted.to_name),
+        },
         change: PlaceMove {
             from: from.to_owned(),
             to: to.to_owned(),

@@ -35,9 +35,13 @@ pub(in crate::gameplay) fn request() -> CreationRequest {
         ],
         statements: vec!["Marek: I run this shop and mend clothing.".to_owned()],
         heroes: vec!["Brynn".to_owned(), "Vale".to_owned()],
-        exit: street_door(),
+        exit: Some(street_door()),
+        goal: "I follow Brakka out of the shop into the market street.".to_owned(),
+        landmark: None,
         named: None,
         taken_ids: vec!["place-mareks-cloth-shop".to_owned()],
+        place_names: vec!["Marek's Cloth Shop".to_owned()],
+        people_names: vec!["Tavin Reed".to_owned()],
         canon: json!({"facts": [{
             "kind": "custom",
             "name": "northbound wagons",
@@ -73,7 +77,15 @@ pub(in crate::gameplay) fn place_slot() -> Value {
             "name": "north alley",
             "position": "between two stalls",
             "beyond": "a narrow alley toward the north gate",
+        }, {
+            "name": "Carriage lane",
+            "position": "past the wagons",
+            "beyond": "the carriage stand where coaches leave for the city centre",
         }],
+        "landmarks": [
+            {"name": "the Bell Tower", "direction": "up the hill past the well"},
+            {"name": "Saint Ivo's Temple", "direction": "two streets east"},
+        ],
     })
 }
 
@@ -162,7 +174,11 @@ fn a_valid_answer_becomes_a_place_with_a_way_back_that_expands_to_a_valid_scene_
         .iter()
         .map(|way| way.id.as_str())
         .collect();
-    assert_eq!(ways, ["way-back", "north-alley"]);
+    assert_eq!(ways, ["way-back", "north-alley", "carriage-lane"]);
+    // A sentence-case common noun is stored in lower case, so the narration gives it an article.
+    assert_eq!(expanded.model.ways_out[2].name, "carriage lane");
+    assert_eq!(record.landmarks.len(), 2);
+    assert_eq!(record.landmarks[1].name, "Saint Ivo's Temple");
     let back = &expanded.model.ways_out[0];
     assert_eq!(back.beyond_place_id, "place-mareks-cloth-shop");
     assert!(back.open);
@@ -353,76 +369,330 @@ async fn jev_chooses_an_open_exit_for_a_leaving_line_and_none_when_the_hero_stay
         open: true,
     };
     let exits = [&door, &window];
+    let choices = HeadingChoices {
+        exits: &exits,
+        known: &[],
+        landmarks: &[],
+    };
     let leaves = FakeEndpoint::start(vec![choice("o1")]);
-    let chosen = judge_exit(
+    let chosen = judge_heading(
         &jev(&leaves),
         "I follow Brakka out of the shop into the market street.",
         "Sigrun",
         "Marek's Cloth Shop",
         "a small cloth shop",
-        &exits,
+        &choices,
     )
     .await;
-    assert_eq!(chosen, Ok(Some(0)));
+    assert_eq!(chosen, Ok(Heading::Exit(0)));
     let body = &leaves.bodies()[0];
-    // The line reaches Jev as quoted data, with every exit and a last option for staying.
+    // The line reaches Jev as quoted data, with every exit, a journey elsewhere and staying.
     assert!(body.to_string().contains("I follow Brakka out of the shop"));
     assert_eq!(
         body["questions"]["q1"]["criteria"]
             .as_object()
             .unwrap()
             .len(),
-        3
+        4
     );
 
-    let stays = FakeEndpoint::start(vec![choice("o3")]);
+    let stays = FakeEndpoint::start(vec![choice("o4")]);
     assert_eq!(
-        judge_exit(
+        judge_heading(
             &jev(&stays),
             "I walk up to the counter.",
             "Sigrun",
             "Shop",
             "",
-            &exits
+            &choices
         )
         .await,
-        Ok(None)
+        Ok(Heading::Stay)
     );
     let second = FakeEndpoint::start(vec![choice("o2")]);
     assert_eq!(
-        judge_exit(
+        judge_heading(
             &jev(&second),
             "I climb out of the window.",
             "Sigrun",
             "Shop",
             "",
-            &exits
+            &choices
         )
         .await,
-        Ok(Some(1))
+        Ok(Heading::Exit(1))
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn without_jev_no_exit_is_chosen_and_the_reason_is_returned() {
+async fn a_stated_destination_is_a_known_place_a_landmark_or_a_journey_elsewhere() {
     let door = street_door();
-    let outcome = judge_exit(
+    let exits = [&door];
+    let known = [KnownPlace {
+        id: "place-mareks-cloth-shop".to_owned(),
+        name: "Marek's Cloth Shop".to_owned(),
+        short: "a small cloth shop".to_owned(),
+    }];
+    let landmarks = [LandmarkDraft {
+        name: "the Bell Tower".to_owned(),
+        direction: "up the hill".to_owned(),
+    }];
+    let choices = HeadingChoices {
+        exits: &exits,
+        known: &known,
+        landmarks: &landmarks,
+    };
+    let endpoint = FakeEndpoint::start(vec![choice("o2"), choice("o3"), choice("o4")]);
+    let model = jev(&endpoint);
+    for (words, expected) in [
+        ("We head back to Marek's shop.", Heading::Known(0)),
+        ("We climb up to the bell tower.", Heading::Landmark(0)),
+        (
+            "We follow the street on toward the carriage stand.",
+            Heading::Elsewhere,
+        ),
+    ] {
+        assert_eq!(
+            judge_heading(
+                &model,
+                words,
+                "Brakka",
+                "Market Street",
+                "a street",
+                &choices
+            )
+            .await,
+            Ok(expected),
+            "{words}"
+        );
+    }
+    let bodies = endpoint.bodies();
+    let criteria = bodies[0]["questions"]["q1"]["criteria"].to_string();
+    assert!(criteria.contains("Marek's Cloth Shop") && criteria.contains("the Bell Tower"));
+    assert!(criteria.contains("elsewhere") && criteria.contains("none"));
+    assert_eq!(
+        Heading::Known(0).label(&choices),
+        "journey:place-mareks-cloth-shop"
+    );
+    assert_eq!(Heading::Elsewhere.label(&choices), "journey:new");
+    assert_eq!(Heading::Exit(0).label(&choices), "street-door");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn without_jev_nothing_is_chosen_and_the_reason_is_returned() {
+    let door = street_door();
+    let exits = [&door];
+    let choices = HeadingChoices {
+        exits: &exits,
+        known: &[],
+        landmarks: &[],
+    };
+    let outcome = judge_heading(
         &ApproachModel::default(),
         "I leave.",
         "Sigrun",
         "Shop",
         "",
-        &[&door],
+        &choices,
     )
     .await;
     assert_eq!(outcome, Err(JevUnavailable::ProviderUnavailable));
-    // With nothing to leave by, nothing is asked.
+    assert_eq!(
+        judge_ride(&ApproachModel::default(), "Driver!", "Sigrun", "Shop", None).await,
+        Err(JevUnavailable::ProviderUnavailable)
+    );
+    // With no service to choose among, nothing is asked.
     let endpoint = FakeEndpoint::start(vec![choice("o1")]);
     assert_eq!(
-        judge_exit(&jev(&endpoint), "I leave.", "Sigrun", "Shop", "", &[]).await,
+        judge_ride_service(&jev(&endpoint), "A carriage!", &[]).await,
         Ok(None)
     );
     assert_eq!(endpoint.connections(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jev_says_whether_a_line_hails_a_ride_and_which_listed_service_is_that_ride() {
+    let endpoint =
+        FakeEndpoint::start(vec![choice("o2"), choice("o1"), choice("o2"), choice("o3")]);
+    let model = jev(&endpoint);
+    let hail =
+        "I wave down a passing carriage and ask the driver to take us into the heart of the city.";
+    assert_eq!(
+        judge_ride(&model, hail, "Brakka", "The Market Yard", None).await,
+        Ok(true)
+    );
+    assert_eq!(
+        judge_ride(
+            &model,
+            "Is there a carriage stand nearby?",
+            "Brakka",
+            "The Market Yard",
+            None
+        )
+        .await,
+        Ok(false)
+    );
+    let services = [
+        ServiceOffer {
+            name: "harness mending",
+            description: "Stitches a torn harness.",
+            provider: "Mira Fen",
+        },
+        ServiceOffer {
+            name: "carriage hire",
+            description: "A coach and driver into the city centre.",
+            provider: "Oren Vale",
+        },
+    ];
+    assert_eq!(
+        judge_ride_service(&model, hail, &services).await,
+        Ok(Some(1))
+    );
+    assert_eq!(judge_ride_service(&model, hail, &services).await, Ok(None));
+    let bodies = endpoint.bodies();
+    assert!(
+        bodies[0]
+            .to_string()
+            .contains("wave down a passing carriage")
+    );
+    assert!(bodies[2].to_string().contains("carriage hire"));
+}
+
+#[test]
+fn a_travel_beat_falls_back_to_a_plain_line_that_names_the_hero_and_both_places() {
+    let walk = TravelBeat {
+        hero: "Brakka",
+        words: "We walk to the temple.",
+        from: "Market Street",
+        to: "Saint Ivo's Temple",
+        to_short: "a domed temple",
+        ride: false,
+        hired: None,
+    };
+    assert_eq!(
+        walk.fallback(),
+        "Brakka sets off with the party from Market Street toward Saint Ivo's Temple."
+    );
+    let hailed = TravelBeat { ride: true, ..walk };
+    assert!(hailed.fallback().starts_with("Brakka hails a passing ride"));
+    let hired = TravelBeat {
+        ride: true,
+        hired: Some(("carriage hire", "Oren Vale")),
+        ..walk
+    };
+    assert_eq!(
+        hired.fallback(),
+        "Oren Vale drives Brakka and the party away from Market Street, through the busy streets toward Saint Ivo's Temple."
+    );
+}
+
+#[test]
+fn a_new_place_never_repeats_a_place_or_a_person_the_run_has() {
+    // The real shop under another spelling is not made a second time.
+    assert_eq!(
+        with(|place, _, _| place["name"] = json!("Marek\u{2019}s cloth shop")).unwrap_err(),
+        CreationError::Invalid("place_name")
+    );
+    let mut known = request();
+    known.place_names.push("The Open Market".to_owned());
+    assert_eq!(
+        build(
+            &known,
+            &{
+                let mut place = place_slot();
+                place["name"] = json!("the open market");
+                place
+            }
+            .to_string(),
+            &people_slot().to_string(),
+            &things_slot().to_string(),
+        )
+        .unwrap_err(),
+        CreationError::Invalid("place_name")
+    );
+    // Nor a second Marek, a Marek with a surname, or someone from another made place.
+    for name in ["Marek Dorn", "MAREK", "Tavin", "Tavin Reed"] {
+        assert_eq!(
+            with(|_, people, _| people[0]["name"] = json!(name)).unwrap_err(),
+            CreationError::Invalid("person_name"),
+            "{name}"
+        );
+    }
+    // A landmark that is a place the run has is refused, as is a missing second exit.
+    assert_eq!(
+        with(|place, _, _| place["landmarks"][0]["name"] = json!("Marek's Cloth Shop"))
+            .unwrap_err(),
+        CreationError::Invalid("landmarks")
+    );
+    assert_eq!(
+        with(|place, _, _| {
+            place["landmarks"].as_array_mut().unwrap().pop();
+        })
+        .unwrap_err(),
+        CreationError::Invalid("landmarks")
+    );
+    assert_eq!(
+        with(|place, _, _| {
+            place["exits"].as_array_mut().unwrap().pop();
+        })
+        .unwrap_err(),
+        CreationError::Invalid("exits")
+    );
+    // A journey to a landmark makes that landmark, under its own name.
+    let mut tower = request();
+    tower.exit = None;
+    tower.landmark = Some(LandmarkDraft {
+        name: "the Bell Tower".to_owned(),
+        direction: "up the hill".to_owned(),
+    });
+    let wrong = build(
+        &tower,
+        &place_slot().to_string(),
+        &people_slot().to_string(),
+        &things_slot().to_string(),
+    );
+    assert_eq!(
+        wrong.unwrap_err(),
+        CreationError::Invalid("destination_name")
+    );
+    let mut named = place_slot();
+    named["name"] = json!("The Bell Tower");
+    named["landmarks"][0]["name"] = json!("the Clock Arch");
+    let made = build(
+        &tower,
+        &named.to_string(),
+        &people_slot().to_string(),
+        &things_slot().to_string(),
+    )
+    .expect("the tower");
+    assert_eq!(made.place_id, "place-the-bell-tower");
+}
+
+#[test]
+fn common_nouns_are_stored_in_lower_case_and_proper_names_keep_their_capitals() {
+    let proper = vec!["Wenna".to_owned(), "Saint Ivo's Temple".to_owned()];
+    for (written, stored) in [
+        ("Harnesses", "harnesses"),
+        ("Water trough", "water trough"),
+        ("Travel cloak", "travel cloak"),
+        ("water trough", "water trough"),
+        ("Wenna's scale", "Wenna's scale"),
+        ("Wenna\u{2019}s scale", "Wenna\u{2019}s scale"),
+        ("Saint Ivo's lamp", "Saint Ivo's lamp"),
+        ("Old Quay Crane", "Old Quay Crane"),
+        ("OK sign", "OK sign"),
+    ] {
+        assert_eq!(common_noun(written, &proper), stored, "{written}");
+    }
+    let record = with(|place, _, things| {
+        things[0]["name"] = json!("Handcart");
+        place["wares"][0]["name"] = json!("Saffron pinch");
+        place["services"][0]["name"] = json!("Wagon directions");
+    })
+    .expect("a valid answer");
+    assert_eq!(record.things[0].name, "handcart");
+    assert_eq!(record.wares[0].name, "saffron pinch");
+    assert_eq!(record.services[0].name, "wagon directions");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -448,6 +718,10 @@ async fn creation_gives_the_storyteller_the_canon_and_the_table_and_retries_once
     assert!(first.contains("Brynn") && first.contains("street door"));
     assert!(first.contains("wares") && first.contains("services"));
     assert!(first.contains("price_cp") && first.contains("100000 copper pieces"));
+    // The hero's stated destination and every place and person the run has reach it too.
+    assert!(first.contains("I follow Brakka out of the shop into the market street."));
+    assert!(first.contains("place_names_in_use") && first.contains("Tavin Reed"));
+    assert!(first.contains("landmarks"));
     assert!(!first.contains("previous_answer_problem"));
     assert!(second.contains("previous_answer_problem"));
     assert!(second.contains("invalid_place"));

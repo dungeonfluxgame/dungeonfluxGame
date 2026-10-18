@@ -1387,6 +1387,27 @@ fn a_hero_whose_sheet_records_no_pronouns_is_named_and_never_given_themself() {
 }
 
 #[test]
+fn ordinary_travel_takes_no_check_even_when_jev_calls_it_easy() {
+    // SRD 5.2.1: walking down a street is not an uncertain outcome, so nothing is rolled.
+    let situation = market_street();
+    for difficulty in [Difficulty::Easy, Difficulty::Hard] {
+        let resolution = run(
+            &situation,
+            &plan(ActKind::Move, None, difficulty),
+            "We walk on down the market street.",
+            1,
+        );
+        match resolution.verdict {
+            Verdict::Performed(performance) => {
+                assert!(performance.check.is_none(), "{difficulty:?}");
+                assert!(performance.succeeded);
+            }
+            other => panic!("a walk is performed, not {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn walking_up_to_the_counter_says_where_sigrun_is_now_and_what_is_there() {
     let situation = market_street();
     let resolution = run(

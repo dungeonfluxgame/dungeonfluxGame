@@ -38,6 +38,8 @@ const SCENE_NPC_DEXTERITY_MODIFIER: i32 = 0;
 const SHOVE_DC_BASE: i32 = 8;
 const NARRATION_CHARACTERS: usize = 360;
 const NARRATION_FACT_CHARACTERS: usize = 400;
+/// The place's own facts a sense act at the place may use.
+const PLACE_FACT_CHARACTERS: usize = 800;
 /// Spell offers on the character sheet. The creation pack offers no spell choice today, so no hero
 /// knows a spell and every spell is refused until the sheet records one.
 const SPELL_OFFER_PREFIXES: [&str; 2] = ["cantrip-", "spell-"];
@@ -568,11 +570,17 @@ impl Situation {
             things,
             people,
             other_heroes,
-            place: scene
-                .narration
-                .chars()
-                .take(NARRATION_FACT_CHARACTERS)
-                .collect(),
+            // A place with a scene model is known by its record: what it is, who is there doing
+            // what, and the goods in view, so a look, a listen or a sniff at it has facts to use.
+            place: super::investigation::place_summary(scene, PLACE_FACT_CHARACTERS)
+                .filter(|summary| !summary.is_empty())
+                .unwrap_or_else(|| {
+                    scene
+                        .narration
+                        .chars()
+                        .take(NARRATION_FACT_CHARACTERS)
+                        .collect()
+                }),
             coin_gp,
         })
     }
@@ -1472,15 +1480,9 @@ fn decide(
                 revealed: None,
             }))
         }
-        ActKind::Move => {
-            let roll = difficulty_roll(check, hero, Some("acrobatics"), plan.difficulty, die)?;
-            let succeeded = roll.as_ref().is_none_or(|record| record.success);
-            Ok(Verdict::Performed(Performance {
-                check: roll,
-                succeeded,
-                revealed: None,
-            }))
-        }
+        // SRD 5.2.1: walking, travelling, following or leaving is ordinary movement and its
+        // outcome is not uncertain, so it takes no check. Climbing is its own act with its check.
+        ActKind::Move => performed(None, true),
         ActKind::ContactFriendly => {
             let roll = difficulty_roll(check, hero, Some("persuasion"), plan.difficulty, die)?;
             let succeeded = roll.as_ref().is_none_or(|record| record.success);

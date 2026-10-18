@@ -2561,7 +2561,8 @@ mod typed_line_routes {
     use super::super::approach_model::tests::{answer, model};
     use super::super::approach_model::{LineIntent, LineReading, ListedThing};
     use super::super::dialogue::{
-        AddresseeRoute, InteractionGate, RouteAudit, addressee_route, explicit_npc_addressee,
+        AddresseeRoute, FIGHT_ADDRESSEE_INSTRUCTIONS, InteractionGate, RouteAudit, addressee_route,
+        explicit_npc_addressee, fight_addressee_criteria, fight_addressee_from_judgement,
         freeform_social_target, interaction_gate, jev_target_interaction, listed_things,
         scene_interaction_target,
     };
@@ -3133,6 +3134,75 @@ mod typed_line_routes {
         assert_eq!(
             line,
             "ROUTE line=07070707070707070707070707070707 intent=watch-person skill=insight act=none addressee=none target=\"Marek\" route=investigation reason=observation_intent"
+        );
+    }
+
+    fn shop_foes() -> Vec<super::super::journey::scene_fight::Person> {
+        [("shop-adventurer", "Corin"), ("shop-soldier", "Jessa")]
+            .into_iter()
+            .map(|(id, name)| super::super::journey::scene_fight::Person {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            })
+            .collect()
+    }
+
+    /// Jev's choice of the foe a mid-fight line is spoken to, for `answers`.
+    async fn fight_addressee(answers: Vec<&str>, words: &str) -> (Option<String>, FakeEndpoint) {
+        let foes = shop_foes();
+        let endpoint = FakeEndpoint::start(answers.into_iter().map(answer).collect());
+        let choice = model(&endpoint)
+            .choose_option(
+                &serde_json::json!({
+                    "hero_line": words,
+                    "foes_in_listed_order": ["Corin", "Jessa"],
+                }),
+                FIGHT_ADDRESSEE_INSTRUCTIONS,
+                &fight_addressee_criteria(&foes),
+            )
+            .await;
+        let (foe, _) = fight_addressee_from_judgement(&foes, choice);
+        (foe.map(|foe| foe.id), endpoint)
+    }
+
+    /// P6-69b: a plea to the whole fight reaches the foe Jev chooses, through a closed choice of
+    /// the standing foes; no name in the words is matched.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_plea_mid_fight_reaches_the_foe_jev_chooses_among_the_standing_foes() {
+        let plea = "Stop! Enough, everyone. Corin, Jessa, lower your hands. Brakka, step back. We don't want this.";
+        let (foe, endpoint) = fight_addressee(vec!["o2"], plea).await;
+        assert_eq!(foe.as_deref(), Some("shop-adventurer"));
+        let body = &endpoint.bodies()[0];
+        assert_eq!(body["state"]["hero_line"], plea);
+        let criteria = body["questions"]["q1"]["criteria"].to_string();
+        assert!(
+            criteria.contains("none: the line is spoken to none"),
+            "{criteria}"
+        );
+        assert!(
+            criteria.contains("Corin: the line is spoken to Corin"),
+            "{criteria}"
+        );
+        assert!(
+            criteria.contains("Jessa: the line is spoken to Jessa"),
+            "{criteria}"
+        );
+
+        let (jessa, _) = fight_addressee(vec!["o3"], "Jessa, put it down.").await;
+        assert_eq!(jessa.as_deref(), Some("shop-soldier"));
+        // A line to a companion only, an option out of range or no answer reaches no foe, and the
+        // line keeps its ordinary route.
+        let (none, _) = fight_addressee(vec!["o1"], "Brakka, step back.").await;
+        assert_eq!(none, None);
+        let foes = shop_foes();
+        assert_eq!(fight_addressee_from_judgement(&foes, Ok(9)).0, None);
+        assert_eq!(
+            fight_addressee_from_judgement(
+                &foes,
+                Err(super::super::approach_model::JevUnavailable::Timeout)
+            )
+            .0,
+            None
         );
     }
 }

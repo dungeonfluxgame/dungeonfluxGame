@@ -169,6 +169,58 @@ pub(in crate::gameplay) fn presence(
     Ok(Presence::Standing)
 }
 
+/// The foes still on their feet in the open scene fight, in initiative order: the people a hero's
+/// words reach mid-fight. Empty when no scene fight is open.
+pub(in crate::gameplay) fn standing_foes(
+    state: &GameState,
+) -> Result<Vec<Person>, RepositoryError> {
+    if !open(state) {
+        return Ok(Vec::new());
+    }
+    let battle = tactical::read(state)?;
+    let cast = pack_cast();
+    let mut foes = Vec::new();
+    for id in battle.initiative_order() {
+        let actor = battle.actor(*id).map_err(bad)?;
+        if actor.side() == Side::Heroes || actor.health().incapacitated() {
+            continue;
+        }
+        let who = tactical::canonical(state, *id)?;
+        let Some(person_id) = state
+            .entities
+            .iter()
+            .find(|world| world.id == who)
+            .and_then(person_of)
+        else {
+            continue;
+        };
+        if let Some(member) = cast.iter().find(|member| member.id == person_id) {
+            foes.push(Person::of(member));
+        }
+    }
+    Ok(foes)
+}
+
+/// Whether `member`'s hero can take the Influence action now (SRD 5.2.1 p. 184: Influence is an
+/// action): a scene fight is open, it is that hero's own turn with no reaction pending, the hero
+/// is conscious and the turn's action is unspent. Speaking alone needs none of this.
+pub(in crate::gameplay) fn influence_action_available(
+    current: &Checkpoint,
+    member: MemberId,
+) -> Result<bool, RepositoryError> {
+    let state = current.state();
+    if !open(state) {
+        return Ok(false);
+    }
+    let battle = tactical::read(state)?;
+    let id = tactical::actor_id(state, player_entity(member, current)?)?;
+    let hero = battle.actor(id).map_err(bad)?;
+    Ok(battle.reaction_offers().is_empty()
+        && battle.active_actor() == Some(id)
+        && !hero.budget().action_used
+        && !hero.health().incapacitated())
+}
+
 /// The scene people who can be attacked now: standing, with a stat block.
 fn targets<'a>(
     state: &GameState,
@@ -876,6 +928,65 @@ pub(super) fn close(state: &mut GameState, battle: &Battle) -> Result<(), Reposi
     Ok(())
 }
 
+/// The decision entry of a scene fight its foes ended by standing down: the scene-assault action
+/// entry, which the content inventory already lists and no other decision records (a fight's
+/// start records `OBJECTIVE`). A distinct entry would need a new row in the inventory.
+pub(super) const STAND_DOWN: &str = ACTION;
+
+/// Ends the open scene fight because its foes stood down: the hero's words reached a willing foe,
+/// or the Influence check the foe's reply rolled succeeded (SRD 5.2.1 p. 184, Influence). The
+/// encounter closes through `close`, the same close a won or lost fight takes, in one decision with
+/// no draws; the freeplay beat does not change, and nobody's hit points move.
+pub(in crate::gameplay) fn stand_down(
+    current: &Checkpoint,
+    operation: OperationId,
+) -> Result<Checkpoint, RepositoryError> {
+    use session_machine::SessionState;
+    let refuse = |step: &'static str| {
+        refusal_detail::note(step);
+        RepositoryError::InvalidCandidate
+    };
+    if !open(current.state()) {
+        return Err(refuse("scene-stand-down-open"));
+    }
+    let before = SessionState::of(current)?;
+    let mut state = current.state().clone();
+    let battle = tactical::read(&state)?;
+    close(&mut state, &battle)?;
+    let resting = super::super::beat_script::with_script(|script| {
+        script
+            .current(current.state())
+            .map(super::super::beat_script_runtime::phase_of)
+    })?;
+    let accepted = rpc::AcceptedAction {
+        phase: phase_after(&state, resting) as i32,
+        ..Default::default()
+    };
+    let mut basis = current.basis();
+    basis.revision = basis.revision.next_sequence().map_err(bad)?;
+    let candidate = finish(
+        current,
+        basis,
+        state,
+        operation,
+        Vec::new(),
+        DecisionContent {
+            entry: STAND_DOWN,
+            semantic: Some(hex(&prost::Message::encode_to_vec(&accepted))),
+            policy: THREAD_POLICY,
+            audience: AudienceScope::Shared,
+            reaction: None,
+            escort_target: None,
+            objective_command: None,
+            script_choice: None,
+        },
+    )?;
+    if !session_machine::scene_fight_outcome_legal(before, SessionState::of(&candidate)?) {
+        return Err(refuse("scene-stand-down-machine"));
+    }
+    Ok(candidate)
+}
+
 /// A short closing line after a fight, derived from the committed checkpoint for stable replay.
 pub(in crate::gameplay) fn aftermath_narration(
     state: &GameState,
@@ -972,6 +1083,13 @@ pub(in crate::gameplay) fn replay_step(
             Err(RepositoryError::InvalidCandidate)
         } else {
             Ok(Some(Step::Opens))
+        };
+    }
+    if entry == STAND_DOWN {
+        return if !open || recorded_phase == combat {
+            Err(RepositoryError::InvalidCandidate)
+        } else {
+            Ok(Some(Step::Closes))
         };
     }
     if !open || !wire::action_kind(entry).is_some_and(tactical::combat_action) {
@@ -1762,6 +1880,92 @@ mod tests {
             );
             assert!(knocked_out.ends_with("The fight is over."), "{knocked_out}");
         });
+    }
+
+    #[test]
+    fn foes_who_stand_down_end_the_fight_through_the_same_close_srd_521_page_184() {
+        // SRD 5.2.1 p. 184 (Influence): a willing creature complies without a check, a hesitant
+        // one when the check succeeds. Either way the foes stop fighting and the fight closes.
+        with_shop(|| {
+            let fight = start(&opening(), 6, "merchant", None);
+            let mut foes = ids(&standing_foes(fight.state()).unwrap())
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            foes.sort();
+            assert_eq!(foes, ["merchant", "shop-soldier"]);
+            // Only the hero whose turn it is, with an unspent action, can take the Influence
+            // action; the other hero can still speak.
+            let acting = member_with_turn(&fight);
+            let waiting = [native::first(), native::second()]
+                .into_iter()
+                .find(|member| *member != acting)
+                .unwrap();
+            assert!(influence_action_available(&fight, acting).unwrap());
+            assert!(!influence_action_available(&fight, waiting).unwrap());
+
+            let operation = OperationId::from_bytes(&[77; 16]).unwrap();
+            let _ = refusal_detail::take();
+            let over = stand_down(&fight, operation).unwrap_or_else(|error| {
+                panic!(
+                    "the stand-down was refused: {error:?}; step={:?}",
+                    refusal_detail::take()
+                )
+            });
+            let state = over.state();
+            assert!(state.encounters.is_empty());
+            assert!(!open(state));
+            assert_eq!(phase(&over).unwrap(), rpc::JourneyPhase::Opening);
+            assert_eq!(
+                session_machine::SessionState::of(&over).unwrap(),
+                session_machine::SessionState::Story
+            );
+            assert_eq!(
+                state.narrative.active_beats,
+                fight.state().narrative.active_beats
+            );
+            assert_eq!(presence(state, "merchant").unwrap(), Presence::Standing);
+            assert_eq!(presence(state, "shop-soldier").unwrap(), Presence::Standing);
+            for character in &state.characters {
+                assert_eq!(value(state, character.entity, "action-used").unwrap(), 0);
+            }
+            assert!(standing_foes(state).unwrap().is_empty());
+            assert!(!influence_action_available(&over, acting).unwrap());
+
+            // The table hears the same short close a won fight gets, once.
+            let told = aftermath_narration(state).unwrap();
+            assert!(told.contains("Marek remains standing"), "{told}");
+            assert!(told.contains("Jessa remains standing"), "{told}");
+            assert!(told.ends_with("The fight is over."), "{told}");
+            let log = crate::gameplay::table_log::TableLog::new();
+            crate::gameplay::actor::publish_fight_close(&log, fight.state(), state);
+            crate::gameplay::actor::publish_fight_close(&log, state, state);
+            assert_eq!(
+                log.lines()
+                    .into_iter()
+                    .filter(|line| line.text == told)
+                    .count(),
+                1
+            );
+
+            // The replay accepts the closed fight, and nothing is left to stand down.
+            native::persisted(&over);
+            assert!(stand_down(&over, operation).is_err());
+            let looked = native::act(&over, native::first(), 90, "look-around");
+            assert_eq!(phase(&looked).unwrap(), rpc::JourneyPhase::Opening);
+        });
+    }
+
+    #[test]
+    fn a_stand_down_closes_only_an_open_fight_on_replay() {
+        let opening = rpc::JourneyPhase::Opening as i32;
+        let combat = rpc::JourneyPhase::Combat as i32;
+        assert_eq!(
+            replay_step(STAND_DOWN, opening, true).unwrap(),
+            Some(Step::Closes)
+        );
+        assert!(replay_step(STAND_DOWN, combat, true).is_err());
+        assert!(replay_step(STAND_DOWN, opening, false).is_err());
     }
 
     #[test]

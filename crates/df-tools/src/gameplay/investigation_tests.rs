@@ -1147,3 +1147,35 @@ async fn without_jev_the_target_is_absent_even_when_the_words_name_a_present_thi
     assert!(selected.id.starts_with("absent-"));
     assert_eq!(selected.name, "I examine the tankards");
 }
+
+#[test]
+fn plain_prices_and_lists_read_as_the_table_says_them() {
+    assert_eq!(price_text(10), "1 sp");
+    assert_eq!(price_text(400), "4 gp");
+    assert_eq!(price_text(7), "7 cp");
+    let items = ["a".to_owned(), "b".to_owned(), "c".to_owned()];
+    assert_eq!(listed(&items[..1]), "a");
+    assert_eq!(listed(&items[..2]), "a and b");
+    assert_eq!(listed(&items), "a, b and c");
+    assert_eq!(
+        place_sentence("The Market Yard", "a cobbled yard where coaches wait"),
+        "The Market Yard is a cobbled yard where coaches wait."
+    );
+}
+
+#[test]
+fn a_plain_look_names_the_hero_and_the_place_and_never_says_you() {
+    let look = PlainLook {
+        hero: "Brakka".to_owned(),
+        place: "The Open Market".to_owned(),
+        subject: None,
+        facts: vec!["Tavin, the fruit seller, is at his stall.".to_owned()],
+        atmosphere: "You step into the market.".to_owned(),
+    };
+    let line = look.fallback();
+    assert_eq!(
+        line,
+        "Brakka looks around The Open Market. Tavin, the fruit seller, is at his stall."
+    );
+    assert!(!line.contains("You") && !line.contains("the room"));
+}
