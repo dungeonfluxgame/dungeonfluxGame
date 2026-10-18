@@ -876,34 +876,36 @@ pub(super) fn close(state: &mut GameState, battle: &Battle) -> Result<(), Reposi
     Ok(())
 }
 
-/// What the scene looks like after fights, in the narrator's words; empty when none happened.
-/// Derived from the checkpoint, so every view and every replay tells it the same way.
+/// A short closing line after a fight, derived from the committed checkpoint for stable replay.
 pub(in crate::gameplay) fn aftermath_narration(
     state: &GameState,
 ) -> Result<String, RepositoryError> {
     if open(state) || !fought(state) {
         return Ok(String::new());
     }
-    let mut lines = Vec::new();
+    let mut outcomes = Vec::new();
     let mut anyone_fled = false;
-    let mut survivors = Vec::new();
+    let mut standing_people = Vec::new();
     for member in pack_cast() {
         match presence(state, &member.id)? {
             Presence::Gone => {
                 anyone_fled = true;
-                lines.push(format!("{} fled the shop.", member.name));
+                outcomes.push(format!("{} fled the shop", member.name));
             }
-            Presence::Down { dead: true } => lines.push(format!("{} lies dead.", member.name)),
+            Presence::Down { dead: true } => outcomes.push(format!("{} lies dead", member.name)),
             Presence::Down { dead: false } => {
-                lines.push(format!("{} lies knocked out.", member.name));
+                outcomes.push(format!("{} lies knocked out where they fell", member.name));
             }
             Presence::Standing => {
-                if state
+                let exists = state
                     .entities
                     .iter()
-                    .any(|world| person_of(world) == Some(member.id.as_str()))
-                {
-                    survivors.push(member.name);
+                    .any(|world| person_of(world) == Some(member.id.as_str()));
+                if exists {
+                    outcomes.push(format!("{} remains standing", member.name));
+                    standing_people.push(member.name);
+                } else {
+                    outcomes.push(format!("{} stayed out of the fight", member.name));
                 }
             }
         }
@@ -913,26 +915,35 @@ pub(in crate::gameplay) fn aftermath_narration(
         let who = character.entity;
         let name = name(state, who)?;
         if hero_dead(state, who) {
-            lines.push(format!("{name} is dead."));
+            outcomes.push(format!("{name} is dead"));
         } else if value(state, who, "hit-points")? == 0 {
-            lines.push(format!("{name} lies unconscious and stable."));
+            outcomes.push(format!(
+                "{name} lies unconscious and stable where they fell"
+            ));
         } else {
             every_hero_down = false;
         }
     }
-    if every_hero_down && !lines.is_empty() {
-        lines.push(if anyone_fled {
-            "The watch arrives and stands guard over the fallen heroes.".to_owned()
-        } else if survivors.is_empty() {
-            "No one is left standing.".to_owned()
+    let mut narration = if outcomes.is_empty() {
+        "The fight is over.".to_owned()
+    } else {
+        format!("{}. The fight is over.", outcomes.join("; "))
+    };
+    if every_hero_down && !outcomes.is_empty() {
+        let care = if anyone_fled {
+            "The watch arrives and stands guard over the fallen heroes."
+        } else if standing_people.is_empty() {
+            "No one is left standing."
         } else {
-            format!(
-                "{} leave the heroes where they fell.",
-                survivors.join(" and ")
-            )
-        });
+            return Ok(format!(
+                "{narration} {} leave the heroes where they fell.",
+                standing_people.join(" and ")
+            ));
+        };
+        narration.push(' ');
+        narration.push_str(care);
     }
-    Ok(lines.join(" "))
+    Ok(narration)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1677,8 +1688,10 @@ mod tests {
             assert!(try_start(&over, 90, "merchant", None).is_err());
             assert!(try_start(&over, 91, "shop-soldier", None).is_err());
             // The scene's narration says where they lie, the same way on every view.
-            let told = "Marek lies dead. Jessa lies dead.";
-            assert_eq!(aftermath_narration(state).unwrap(), told);
+            let told = aftermath_narration(state).unwrap();
+            assert!(told.contains("Marek lies dead"), "{told}");
+            assert!(told.contains("Jessa lies dead"), "{told}");
+            assert!(told.ends_with("The fight is over."), "{told}");
             let view = wire::journey_view(
                 &over,
                 df_persistence::local_demo_scope::LocalDemoRole::Display,
@@ -1688,7 +1701,66 @@ mod tests {
             let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
                 panic!("display view")
             };
-            assert!(display.narration.ends_with(told));
+            assert!(display.narration.ends_with(&told));
+        });
+    }
+
+    #[test]
+    fn a_won_fight_closes_with_only_current_scene_outcomes() {
+        with_shop(|| {
+            let story = opening();
+            let fight = start(
+                &story,
+                6,
+                "shop-soldier",
+                Some("out:shop-adventurer/flee:merchant"),
+            );
+            let active_state = fight.state().clone();
+            let over = play_out(fight, 7);
+            let told = aftermath_narration(over.state()).unwrap();
+
+            assert!(told.contains("Marek fled the shop"), "{told}");
+            assert!(told.contains("Corin stayed out of the fight"), "{told}");
+            assert!(told.contains("Jessa lies dead"), "{told}");
+            assert!(told.ends_with("The fight is over."), "{told}");
+            assert!(told.split(". ").count() <= 3, "{told}");
+            assert!(!told.contains("compares warm cloaks"), "{told}");
+
+            let view = wire::journey_view(
+                &over,
+                df_persistence::local_demo_scope::LocalDemoRole::Display,
+                bootstrap_member().unwrap(),
+            )
+            .unwrap();
+            let Some(rpc::view_message::Audience::Display(display)) = view.audience else {
+                panic!("display view")
+            };
+            assert_eq!(display.narration, told);
+            assert!(!display.narration.contains("folds blue linen"));
+            assert!(!display.narration.contains("tests a jacket seam"));
+            assert!(!display.narration.contains("compares two warm cloaks"));
+
+            let log = crate::gameplay::table_log::TableLog::new();
+            crate::gameplay::actor::publish_fight_close(&log, &active_state, over.state());
+            // A replay starts from the already closed checkpoint and cannot republish the line.
+            crate::gameplay::actor::publish_fight_close(&log, over.state(), over.state());
+            let close_lines = log
+                .lines()
+                .into_iter()
+                .filter(|line| line.text == told)
+                .collect::<Vec<_>>();
+            assert_eq!(close_lines.len(), 1);
+
+            let mut knocked_out_state = over.state().clone();
+            let jessa = person_entity("shop-soldier").unwrap();
+            set(&mut knocked_out_state, jessa, "hit-points", 1).unwrap();
+            set(&mut knocked_out_state, jessa, "unconscious", 1).unwrap();
+            let knocked_out = aftermath_narration(&knocked_out_state).unwrap();
+            assert!(
+                knocked_out.contains("Jessa lies knocked out where they fell"),
+                "{knocked_out}"
+            );
+            assert!(knocked_out.ends_with("The fight is over."), "{knocked_out}");
         });
     }
 
@@ -1875,12 +1947,22 @@ mod tests {
             }
             // Marek fled to call the watch, so the watch arrives; the heroes stay where they fell.
             let told = aftermath_narration(&state).unwrap();
-            assert!(told.contains("Marek fled the shop."), "{told}");
-            assert!(told.contains("lies unconscious and stable."), "{told}");
+            assert!(told.contains("Marek fled the shop;"), "{told}");
+            assert!(
+                told.contains("lies unconscious and stable where they fell"),
+                "{told}"
+            );
             assert!(
                 told.ends_with("The watch arrives and stands guard over the fallen heroes."),
                 "{told}"
             );
+            assert!(told.contains("Brynn lies unconscious and stable"), "{told}");
+            assert!(told.contains("Vale lies unconscious and stable"), "{told}");
+            let log = crate::gameplay::table_log::TableLog::new();
+            crate::gameplay::actor::publish_fight_close(&log, fight.state(), &state);
+            let lines = log.lines();
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, told);
         });
     }
 

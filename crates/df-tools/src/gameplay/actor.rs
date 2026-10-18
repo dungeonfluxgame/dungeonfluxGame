@@ -77,6 +77,32 @@ fn accepted_now(result: &Result<rpc::SubmitActionResponse, tonic::Status>) -> bo
     )
 }
 
+/// Publishes the checkpoint-derived scene-fight close after its owning action commits.
+/// A replay observes the already-closed state as both `before` and `after`, so it cannot
+/// append the same public line again.
+pub(in crate::gameplay) fn publish_fight_close(
+    table_log: &super::table_log::TableLog,
+    before: &df_model::checkpoint::GameState,
+    after: &df_model::checkpoint::GameState,
+) {
+    if !super::journey::scene_fight::open(before) || super::journey::scene_fight::open(after) {
+        return;
+    }
+    match super::journey::scene_fight::aftermath_narration(after) {
+        Ok(line) if !line.is_empty() => {
+            table_log.push(
+                "Narrator",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Action,
+                &line,
+            );
+        }
+        Ok(_) => {}
+        Err(error) => record_unavailable("fight-close-table-line", &format!("{error:?}")),
+    }
+}
+
 fn observation_table_line(
     hero: &str,
     scene: &super::pack::Scene,
@@ -3503,6 +3529,7 @@ impl Actor {
                 }
             }
         }
+        publish_fight_close(&self.table_log, before.state(), after.state());
     }
 
     fn record_say_audit(&mut self, credential: &[u8; 32], request: &rpc::RawDialogueRequest) {

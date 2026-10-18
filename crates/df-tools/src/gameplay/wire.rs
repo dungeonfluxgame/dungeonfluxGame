@@ -1337,7 +1337,7 @@ pub(super) fn project_journey(
         journey::scene_fight::aftermath_narration(state),
     )?;
     if !aftermath.is_empty() {
-        narration = format!("{narration} {aftermath}");
+        narration = aftermath;
     }
     let encounter_xp = stage(
         "view-encounter-experience",
