@@ -174,7 +174,7 @@ pub(super) fn focus(cast: &[rpc::SceneActor], focus_name: &str) -> Target {
     }
     match cast {
         [actor] => Target::Actor(actor.id.clone()),
-        [] => Target::Unspecified,
+        [] => Target::Absent,
         _ => Target::Ambiguous,
     }
 }
@@ -334,5 +334,10 @@ mod tests {
         assert!(current(&cast, "bandit").is_none());
         cast.push(cast[0].clone());
         assert!(current(&cast, "courier").is_none());
+    }
+
+    #[test]
+    fn an_empty_committed_cast_has_no_focus_even_when_the_old_speaker_is_named() {
+        assert_eq!(focus(&[], "Marek"), Target::Absent);
     }
 }
