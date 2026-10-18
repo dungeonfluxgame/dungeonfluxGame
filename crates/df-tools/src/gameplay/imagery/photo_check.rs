@@ -1,7 +1,7 @@
 //! Server-side photographic quality gate for generated gameplay images.
 
 use std::{
-    io,
+    io::{self, Read},
     path::{Path, PathBuf},
     sync::{Mutex, PoisonError},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -120,13 +120,6 @@ fn retain_candidate_at(
 pub(super) enum PhotoCheckKind {
     ScenePlate,
     CanonicalRoom,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "canonical characters arrive as transparent cut-outs, which the frame label reads as a composite"
-        )
-    )]
     CanonicalCharacter,
 }
 
@@ -151,7 +144,7 @@ impl From<PhotoCheckKind> for PhotoJudgeKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PhotoCheckFailure {
+pub(in crate::gameplay) enum PhotoCheckFailure {
     GridOrCollage,
     CutoutComposite,
     NotPhotograph,
@@ -189,7 +182,7 @@ impl PhotoCheckFailure {
                 "In the previous result the people looked pasted in; photograph everyone standing in the place itself, in its light and shadow."
             }
             Self::NotPhotograph => {
-                "The previous result did not look like a real camera photograph; make a real photograph of real people in a real place."
+                "The previous result did not have convincing photographic materials and light; photograph the requested subject with natural material textures, coherent camera perspective and physically consistent light and shadows. Keep the requested people count, including exactly zero people for an empty place. Clean surfaces and even daylight are welcome."
             }
             Self::ModernSetting => {
                 "The previous result showed a modern place; show a pre-industrial town of timber, stone, plaster and tile, lit only by daylight, lanterns, candles and fire."
@@ -214,23 +207,82 @@ impl PhotoCheckFailure {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PhotoCheckOutcome {
+pub(in crate::gameplay) enum PhotoCheckOutcome {
     Pass,
     Fail(PhotoCheckFailure),
 }
 
+impl PhotoCheckOutcome {
+    pub(in crate::gameplay) const fn verdict(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail(_) => "fail",
+        }
+    }
+
+    pub(in crate::gameplay) const fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::Pass => None,
+            Self::Fail(reason) => Some(reason.label()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PhotoCheckError {
+pub(in crate::gameplay) enum PhotoCheckError {
     ImagePreparation,
     Judge(PlateJudgeError),
+    FileRead,
+    FileTooLarge,
+    FileTask,
 }
 
 impl PhotoCheckError {
-    pub(super) const fn label(self) -> &'static str {
+    pub(in crate::gameplay) const fn label(self) -> &'static str {
         match self {
             Self::ImagePreparation => "image_preparation",
             Self::Judge(error) => error.label(),
+            Self::FileRead => "file_read",
+            Self::FileTooLarge => "file_too_large",
+            Self::FileTask => "file_task",
         }
+    }
+}
+
+impl super::Imagery {
+    /// Reuses the publication gate for a saved image, without generating or caching anything.
+    pub(in crate::gameplay) async fn check_saved_photo(
+        judge: &NativePlateJudge,
+        kind: PhotoJudgeKind,
+        path: &Path,
+    ) -> Result<PhotoCheckOutcome, PhotoCheckError> {
+        let path = path.to_owned();
+        let bytes = tokio::task::spawn_blocking(move || {
+            const MAXIMUM_FILE_BYTES: u64 = 16 * 1024 * 1024;
+            let file = std::fs::File::open(path).map_err(|_| PhotoCheckError::FileRead)?;
+            let mut bytes = Vec::new();
+            file.take(MAXIMUM_FILE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| PhotoCheckError::FileRead)?;
+            if bytes.len() as u64 > MAXIMUM_FILE_BYTES {
+                return Err(PhotoCheckError::FileTooLarge);
+            }
+            Ok(bytes)
+        })
+        .await
+        .map_err(|_| PhotoCheckError::FileTask)??;
+        let format = match image::guess_format(&bytes) {
+            Ok(image::ImageFormat::Jpeg) => ImageFormat::Jpeg,
+            Ok(image::ImageFormat::Png) => ImageFormat::Png,
+            Ok(image::ImageFormat::WebP) => ImageFormat::Webp,
+            _ => return Err(PhotoCheckError::ImagePreparation),
+        };
+        let kind = match kind {
+            PhotoJudgeKind::CanonicalRoom => PhotoCheckKind::CanonicalRoom,
+            PhotoJudgeKind::ScenePlate => PhotoCheckKind::ScenePlate,
+            PhotoJudgeKind::CanonicalCharacter => PhotoCheckKind::CanonicalCharacter,
+        };
+        check_photo(judge, kind, &bytes, format, super::PHOTO_CHECK_DEADLINE).await
     }
 }
 

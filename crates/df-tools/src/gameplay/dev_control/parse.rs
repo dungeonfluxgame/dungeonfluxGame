@@ -3,6 +3,36 @@
 
 use df_protocol::common as rpc;
 
+/// The closed image kinds accepted by `dev photo-check --kind`.
+pub(super) fn parse_photo_check_kind(text: &str) -> Result<df_providers::PhotoJudgeKind, String> {
+    match text {
+        "canonical_room" => Ok(df_providers::PhotoJudgeKind::CanonicalRoom),
+        "scene_plate" => Ok(df_providers::PhotoJudgeKind::ScenePlate),
+        "character" => Ok(df_providers::PhotoJudgeKind::CanonicalCharacter),
+        _ => Err("kind must be canonical_room, scene_plate or character".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod photo_check_tests {
+    use super::parse_photo_check_kind;
+    use df_providers::PhotoJudgeKind;
+
+    #[test]
+    fn accepts_only_the_three_photo_check_kinds() {
+        for (label, expected) in [
+            ("canonical_room", PhotoJudgeKind::CanonicalRoom),
+            ("scene_plate", PhotoJudgeKind::ScenePlate),
+            ("character", PhotoJudgeKind::CanonicalCharacter),
+        ] {
+            assert_eq!(parse_photo_check_kind(label), Ok(expected));
+        }
+        for invalid in ["", "room", "canonical_character", "unknown"] {
+            assert!(parse_photo_check_kind(invalid).is_err());
+        }
+    }
+}
+
 /// A tactical grid cell named `c<col>r<row>`, both 1-based as shown on the
 /// phone (`Column <col>, row <row>`), converted to the 0-based option id
 /// `<col-1>-<row-1>` the engine offers.

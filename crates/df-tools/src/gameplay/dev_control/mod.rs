@@ -216,6 +216,7 @@ pub(super) fn setup(
         .route("/dev/timeline", get(reads::timeline))
         .route("/dev/merchant-quotes", get(reads::merchant_quotes))
         .route("/dev/ledger", get(reads::ledger))
+        .route("/dev/photo-check", get(reads::photo_check))
         .route("/dev/ledger/edit", post(economy::unsupported_edit))
         .route("/dev/scene-changes", get(economy::scene_changes))
         .route("/dev/lore", get(lore::read).post(lore::add))

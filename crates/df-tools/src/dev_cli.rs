@@ -196,6 +196,7 @@ fn print_help() {
          usage: df-transport-fixture dev [--server <url> --token-file <path>] [--pretty] [--timeout <s>] <command> [args]\n\
          \n\
          health                       server liveness and current revision\n\
+         photo-check <path>           --kind canonical_room|scene_plate|character; re-judge a saved image\n\
          join <seat>                  join the room as seat 1 or 2; a refusal says why\n\
          reclaim <seat>               take back the away hero of a seat, including one a phone joined (silent 30 s)\n\
          create <seat> <name>         --choice group=id (repeatable), --identity <JSON>, --identity-choice group=id\n\
@@ -310,6 +311,10 @@ async fn dispatch(
     };
     match positional.first().map(String::as_str).unwrap_or("") {
         "health" => get(client, "/dev/health").await,
+        "photo-check" => match photo_check_path(positional, options) {
+            Ok(path) => get(client, &path).await,
+            Err(message) => client.print_error(message),
+        },
         "join" => {
             let seat = positional.get(1).cloned().unwrap_or_default();
             post(client, "/dev/join", &json!({"seat": seat})).await
@@ -543,14 +548,14 @@ fn act_body(positional: &[String], options: &[(String, String)]) -> Result<Value
         positional.get(2).cloned().unwrap_or_default()
     };
     let mut body = json!({"hero": hero, "action": action});
+    if let Some(knockout) = flag("--knockout") {
+        body["knockout"] = Value::String(knockout);
+    }
     if reaction_answer
         && positional
             .get(3)
             .is_some_and(|choice| choice.eq_ignore_ascii_case("take"))
         && flag("--option").is_none()
-    if let Some(knockout) = flag("--knockout") {
-        body["knockout"] = Value::String(knockout);
-    }
         && let Some(weapon) = flag("--weapon")
     {
         body["option"] = Value::String(weapon);
@@ -603,6 +608,30 @@ fn selection_flags(body: &mut Value, options: &[(String, String)]) -> Result<(),
         }
     }
     Ok(())
+}
+
+fn photo_check_path(positional: &[String], options: &[(String, String)]) -> Result<String, String> {
+    let path = positional
+        .get(1)
+        .filter(|path| !path.is_empty())
+        .ok_or("photo-check needs a saved image path")?;
+    if positional.len() != 2 {
+        return Err("photo-check takes exactly one saved image path".to_owned());
+    }
+    let kind = options
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "--kind")
+        .map(|(_, value)| value.as_str())
+        .ok_or("photo-check needs --kind canonical_room|scene_plate|character")?;
+    if !matches!(kind, "canonical_room" | "scene_plate" | "character") {
+        return Err("kind must be canonical_room, scene_plate or character".to_owned());
+    }
+    Ok(format!(
+        "/dev/photo-check?path={}&kind={}",
+        url_escape(path),
+        url_escape(kind)
+    ))
 }
 
 fn url_escape(text: &str) -> String {
@@ -1268,6 +1297,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn photo_check_parses_a_saved_path_and_requires_a_closed_kind() {
+        let positional = vec![
+            "photo-check".into(),
+            "C:\\saved images\\candidate.image".into(),
+        ];
+        for kind in ["canonical_room", "scene_plate", "character"] {
+            assert_eq!(
+                photo_check_path(&positional, &[("--kind".into(), kind.into())]).unwrap(),
+                format!(
+                    "/dev/photo-check?path=C%3A%5Csaved%20images%5Ccandidate.image&kind={kind}"
+                )
+            );
+        }
+        assert!(photo_check_path(&positional, &[]).is_err());
+        assert!(photo_check_path(&positional, &[("--kind".into(), "room".into())]).is_err());
+        assert!(photo_check_path(&["photo-check".into()], &[]).is_err());
+    }
+
+    #[test]
     fn server_url_must_be_loopback_http() {
         assert_eq!(
             parse_server("http://127.0.0.1:63359"),
@@ -1336,6 +1384,19 @@ mod act_reaction_tests {
     use super::*;
 
     #[test]
+    fn act_body_includes_knockout_only_when_the_flag_is_given() {
+        let body = act_body(
+            &split_words("act Brakka attack"),
+            &[("--knockout".to_owned(), "no".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(body["knockout"], "no");
+
+        let body = act_body(&split_words("act Brakka attack"), &[]).unwrap();
+        assert!(body.get("knockout").is_none());
+    }
+
+    #[test]
     fn reaction_answers_use_the_existing_player_action_kinds_and_weapon_option() {
         let take = act_body(
             &split_words("act Brakka reaction take"),
@@ -1383,19 +1444,6 @@ mod dev_write_request_tests {
         assert_eq!(edit["npc"], "merchant");
         assert_eq!(edit["hero"], "Brynn");
         assert_eq!(edit["value"], "friendly");
-    #[test]
-    fn act_body_includes_knockout_only_when_the_flag_is_given() {
-        let body = act_body(
-            &split_words("act Brakka attack"),
-            &[("--knockout".to_owned(), "no".to_owned())],
-        )
-        .unwrap();
-        assert_eq!(body["knockout"], "no");
-
-        let body = act_body(&split_words("act Brakka attack"), &[]).unwrap();
-        assert!(body.get("knockout").is_none());
-    }
-
         assert!(social_edit_body(&words("social edit merchant Brynn attitude")).is_err());
         assert!(social_edit_body(&words("social edit merchant")).is_err());
 

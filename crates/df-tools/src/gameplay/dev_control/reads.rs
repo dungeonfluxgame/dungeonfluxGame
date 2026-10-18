@@ -21,6 +21,46 @@ use crate::gameplay::{
     wire,
 };
 
+#[derive(serde::Deserialize)]
+pub(super) struct PhotoCheckQuery {
+    path: String,
+    kind: String,
+}
+
+/// `GET /dev/photo-check?path=...&kind=...`: one fresh judgement of saved bytes.
+/// It neither regenerates an image nor changes the hub/cache or the game's state.
+pub(super) async fn photo_check(
+    State(state): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(query): Query<PhotoCheckQuery>,
+) -> Outcome {
+    authorized(&headers, &state.token)?;
+    let kind = super::parse::parse_photo_check_kind(&query.kind)
+        .map_err(|message| bad_request(&message))?;
+    if query.path.is_empty() {
+        return Err(bad_request("photo-check needs a saved image path"));
+    }
+    let credential = std::env::var("OPENAI_API_KEY")
+        .map_err(|_| super::failed("photo judge credential unavailable"))?;
+    let judge = df_providers::NativePlateJudge::new(
+        df_providers::PlateJudgeConfig::live(),
+        &credential,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| super::failed(error.label()))?;
+    let outcome = crate::gameplay::imagery::Imagery::check_saved_photo(
+        &judge,
+        kind,
+        std::path::Path::new(&query.path),
+    )
+    .await
+    .map_err(|error| super::failed(error.label()))?;
+    Ok((
+        StatusCode::OK,
+        Json(json!({"kind": query.kind, "verdict": outcome.verdict(), "reason": outcome.reason()})),
+    ))
+}
+
 /// `GET /dev/state`: everything a script needs in one document: room, phase,
 /// scene, seats with sheets and offers, the fight, standings, revision and the
 /// edited mark. Per-seat blocks carry that seat's own sheet and offers, never
@@ -1427,6 +1467,7 @@ fn describe_json() -> Value {
 
 fn describe_commands() -> Vec<Value> {
     vec![
+        json!({"command":"photo-check", "method":"GET", "path":"/dev/photo-check?path=<saved-image>&kind=<kind>", "args":{"path":"saved image file on the server, maximum 16 MiB","kind":"canonical_room|scene_plate|character"}, "output":"{kind, verdict: pass|fail, reason: null|closed failure label}; one live judge call, no generation or cache changes"}),
         json!({"command":"confirm", "method":"POST", "path":"/dev/act", "args":"<hero> <action> --input-id <hex> --confirmation-token <hex> [action selections]", "output":"same admitted action receipt; requires a current pending confirmation from say"}),
         json!({"command":"cancel", "method":"POST", "path":"/dev/cancel", "args":"<hero> --input-id <hex> --confirmation-token <hex>", "output":"{status:cancelled,disposition,revision}"}),
         json!({"command":"preview", "method":"POST", "path":"/dev/preview", "args":{"seat":"seat or hero name","appearance_text":"up to 1000 characters","backstory_text":"up to 4000 characters","identity":"optional current identity JSON"}, "output":"{status:previewed, identity, source, warnings}; read-only, review then create --identity"}),

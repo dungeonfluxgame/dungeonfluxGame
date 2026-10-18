@@ -284,6 +284,12 @@ async fn canonical_room_uses_explicit_people_presence_and_high_detail() {
         );
         let request = request_receiver.await.unwrap();
         let content = request["messages"][0]["content"].as_array().unwrap();
+        let instruction = content[0]["text"].as_str().unwrap();
+        assert!(instruction.contains("clean, evenly lit establishing shot of an empty place"));
+        assert!(instruction.contains("are not evidence of rendering"));
+        assert!(instruction.contains("Require positive visible evidence of another medium"));
+        assert!(instruction.contains("brushstrokes, drawn outlines or visibly painted textures"));
+        assert!(instruction.contains("visibly synthetic geometry, plastic-like materials"));
         assert_eq!(content[2]["image_url"]["detail"], "high");
         let schema = &request["response_format"]["json_schema"]["schema"];
         assert_eq!(
@@ -301,9 +307,113 @@ async fn canonical_room_uses_explicit_people_presence_and_high_detail() {
 }
 
 #[test]
+fn photographic_correction_preserves_an_empty_rooms_people_count() {
+    let correction = PhotoCheckFailure::NotPhotograph.correction();
+    assert!(correction.contains("exactly zero people for an empty place"));
+    assert!(correction.contains("Clean surfaces and even daylight are welcome"));
+    assert!(!correction.contains("real people"));
+}
+
+#[tokio::test]
+async fn saved_photo_check_calls_the_judge_once_with_the_files_picture_and_kind() {
+    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/J1/saved-photo-check")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&directory).unwrap();
+    let bytes = image_jpeg();
+    let path = directory.join("saved candidate.image");
+    std::fs::write(&path, &bytes).unwrap();
+    for kind in [
+        PhotoCheckKind::CanonicalRoom,
+        PhotoCheckKind::ScenePlate,
+        PhotoCheckKind::CanonicalCharacter,
+    ] {
+        let mut reply = answer("single_photograph", "photograph", "none", "period", None);
+        match kind {
+            PhotoCheckKind::CanonicalRoom => reply["people_present"] = json!("none"),
+            PhotoCheckKind::CanonicalCharacter => reply["people_count"] = json!("exactly_one"),
+            PhotoCheckKind::ScenePlate => {}
+        }
+        // A fixture accepts exactly one request and then closes its listener. An extra judge
+        // invocation would fail the successful result; the captured body pins bytes and kind.
+        let (saved_judge, saved_request) = fake_judge(reply.clone()).await;
+        assert_eq!(
+            super::super::Imagery::check_saved_photo(&saved_judge, kind.into(), &path)
+                .await
+                .unwrap(),
+            PhotoCheckOutcome::Pass
+        );
+        let (direct_judge, direct_request) = fake_judge(reply).await;
+        assert_eq!(
+            check_photo(
+                &direct_judge,
+                kind,
+                &bytes,
+                ImageFormat::Jpeg,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap(),
+            PhotoCheckOutcome::Pass
+        );
+        assert_eq!(saved_request.await.unwrap(), direct_request.await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn saved_photo_check_reports_the_closed_reason_and_refuses_bad_files_before_judging() {
+    let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/J1/saved-photo-failure")
+        .join(std::process::id().to_string());
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("candidate.image");
+    std::fs::write(&path, image_jpeg()).unwrap();
+    let (judge, _) = fake_judge(room_answer("none", "modern")).await;
+    let outcome =
+        super::super::Imagery::check_saved_photo(&judge, PhotoJudgeKind::CanonicalRoom, &path)
+            .await
+            .unwrap();
+    assert_eq!(
+        outcome,
+        PhotoCheckOutcome::Fail(PhotoCheckFailure::ModernSetting)
+    );
+    assert_eq!(outcome.verdict(), "fail");
+    assert_eq!(outcome.reason(), Some("modern_setting"));
+    let (judge, mut requests) = fake_judge(room_answer("none", "period")).await;
+    assert_eq!(
+        super::super::Imagery::check_saved_photo(
+            &judge,
+            PhotoJudgeKind::CanonicalRoom,
+            &directory.join("missing.image"),
+        )
+        .await,
+        Err(PhotoCheckError::FileRead)
+    );
+    std::fs::write(&path, b"not an image").unwrap();
+    assert_eq!(
+        super::super::Imagery::check_saved_photo(&judge, PhotoJudgeKind::ScenePlate, &path).await,
+        Err(PhotoCheckError::ImagePreparation)
+    );
+    let oversized = directory.join("oversized.image");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+    assert_eq!(
+        super::super::Imagery::check_saved_photo(&judge, PhotoJudgeKind::ScenePlate, &oversized)
+            .await,
+        Err(PhotoCheckError::FileTooLarge)
+    );
+    assert!(matches!(
+        requests.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+}
+
+#[test]
 fn rejected_candidate_keeps_exact_bytes_reason_prompt_and_bounded_history() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/P1/reject-retention-test")
+        .join("../../artifacts/tmp/lanes/J1/reject-retention-test")
         .join(std::process::id().to_string());
     let bytes = image_jpeg();
     let path = retain_candidate_at(
@@ -385,7 +495,7 @@ fn canonical_room_request() -> super::super::ImageRequest {
 async fn failing_then_passing_room_uses_the_judges_reason_in_the_second_generation_prompt() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/P1/room-retry-pass")
+        .join("../../artifacts/tmp/lanes/J1/room-retry-pass")
         .join(std::process::id().to_string());
     let fixture = DirectionFixture::photographic(&root);
     let (judge, _) = fake_judgments(vec![
@@ -421,7 +531,7 @@ async fn failing_then_passing_room_uses_the_judges_reason_in_the_second_generati
 async fn persistently_rejected_room_stops_at_two_generations_until_readmission() {
     use crate::gameplay::imagery::{self, tests::DirectionFixture};
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../artifacts/tmp/lanes/P1/room-retry-bound")
+        .join("../../artifacts/tmp/lanes/J1/room-retry-bound")
         .join(std::process::id().to_string());
     let fixture = DirectionFixture::photographic(&root);
     let (judge, _) = fake_judgments(vec![
