@@ -12,7 +12,7 @@ use web_sys::{Document, Element};
 use super::{
     float_text,
     math::Vec3,
-    model::{FloatTone, Side, TokenId, hud_picture, ordinal},
+    model::{FloatTone, Side, TokenId, dice_side, hud_picture, ordinal},
     speech::Rect,
     stage::{FigureView, FrameView, Stage},
     status::{Status, icon_statuses},
@@ -758,6 +758,20 @@ impl Hud {
                 }
                 None => row.root.set_attribute("style", "display:none")?,
             }
+        }
+        // The die takes whichever side seat is farther from the target and the acting figure, so a
+        // roll never stands on the fighters however the camera has turned (owner, 2026-10-17).
+        let fighters: Vec<f32> = frame
+            .figures
+            .iter()
+            .filter(|figure| figure.targeted || figure.active)
+            .filter_map(|figure| anchor(figure, 0.0).map(|(x, _)| x))
+            .collect();
+        if let Some(side) = dice_side(&fighters)
+            && let Some(container) = self.root.parent_element()
+            && container.get_attribute("data-dice-side").as_deref() != Some(side)
+        {
+            container.set_attribute("data-dice-side", side)?;
         }
         // The name tag on the figure being aimed at.
         match frame.figures.iter().find(|figure| figure.targeted) {

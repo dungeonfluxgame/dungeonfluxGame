@@ -207,6 +207,25 @@ pub fn initiative_line(die: u32, modifier: i32, total: i32, order: u32) -> Strin
     )
 }
 
+/// The side seat for the die, "left" or "right": the one whose centre (21% or 79% across) is
+/// farthest from the nearest fighter's screen x; `None` when no fighter is on screen.
+pub fn dice_side(fighters_x: &[f32]) -> Option<&'static str> {
+    let clearance = |seat: f32| {
+        fighters_x
+            .iter()
+            .map(|x| (x - seat).abs())
+            .fold(f32::INFINITY, f32::min)
+    };
+    if fighters_x.is_empty() {
+        return None;
+    }
+    Some(if clearance(0.21) >= clearance(0.79) {
+        "left"
+    } else {
+        "right"
+    })
+}
+
 /// The picture every HUD surface shows for one figure: the health variant (the same
 /// picture the HP plate uses) first, then the portrait picture. `None` only when the
 /// figure has no picture at all, which is the only case that may fall back to an initial.
@@ -387,6 +406,16 @@ pub fn hit_points_at_sequence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_die_takes_the_side_seat_away_from_the_fighters() {
+        assert_eq!(super::dice_side(&[]), None);
+        // Fighters on the left half: the die goes right, and the other way round.
+        assert_eq!(super::dice_side(&[0.18, 0.4]), Some("right"));
+        assert_eq!(super::dice_side(&[0.62, 0.85]), Some("left"));
+        // One on each side: the seat with more room wins.
+        assert_eq!(super::dice_side(&[0.05, 0.6]), Some("right"));
+    }
 
     #[test]
     fn ranged_attack_style_distinguishes_thrown_weapons_from_bows() {
