@@ -152,6 +152,7 @@ pub(super) async fn check_photo(
         answer.dress,
         answer.setting,
         answer.people_count,
+        answer.people_present,
     ))
 }
 
@@ -163,6 +164,7 @@ fn classify(
     dress: PhotoDress,
     setting: PhotoSetting,
     people_count: Option<PhotoPeopleCount>,
+    people_present: Option<bool>,
 ) -> PhotoCheckOutcome {
     let failure = match frame {
         PhotoFrame::GridOrCollage => Some(PhotoCheckFailure::GridOrCollage),
@@ -183,13 +185,17 @@ fn classify(
         PhotoText::None => None,
         PhotoText::VisibleText => Some(PhotoCheckFailure::VisibleText),
     })
+    .or_else(|| match (kind, people_present) {
+        (PhotoCheckKind::CanonicalRoom, Some(false)) => None,
+        (PhotoCheckKind::CanonicalRoom, Some(true)) => Some(PhotoCheckFailure::PeopleInEmptyRoom),
+        (PhotoCheckKind::CanonicalRoom, None) => Some(PhotoCheckFailure::PeopleInEmptyRoom),
+        _ => None,
+    })
     .or_else(|| match dress {
         PhotoDress::ModernClothing => Some(PhotoCheckFailure::ModernClothing),
         PhotoDress::Period | PhotoDress::NoPeople => None,
     })
     .or_else(|| match (kind, dress, people_count) {
-        (PhotoCheckKind::CanonicalRoom, PhotoDress::NoPeople, _) => None,
-        (PhotoCheckKind::CanonicalRoom, _, _) => Some(PhotoCheckFailure::PeopleInEmptyRoom),
         (PhotoCheckKind::CanonicalCharacter, PhotoDress::NoPeople, _) => {
             Some(PhotoCheckFailure::CharacterHasNoPeople)
         }
@@ -200,6 +206,7 @@ fn classify(
         (PhotoCheckKind::CanonicalCharacter, _, None) => {
             Some(PhotoCheckFailure::CharacterCountNotOne)
         }
+        (PhotoCheckKind::CanonicalRoom, _, _) => None,
         (PhotoCheckKind::ScenePlate, _, _) => None,
     });
     failure.map_or(PhotoCheckOutcome::Pass, PhotoCheckOutcome::Fail)

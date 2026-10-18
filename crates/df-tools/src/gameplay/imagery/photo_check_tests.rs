@@ -32,9 +32,10 @@ fn answer(frame: &str, medium: &str, text: &str, dress: &str, people_count: Opti
     answer
 }
 
-async fn fake_judge(answer: Value) -> NativePlateJudge {
+async fn fake_judge(answer: Value) -> (NativePlateJudge, tokio::sync::oneshot::Receiver<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut request = Vec::new();
@@ -69,6 +70,13 @@ async fn fake_judge(answer: Value) -> NativePlateJudge {
             assert_ne!(read, 0);
             request.extend_from_slice(&chunk[..read]);
         }
+        let header_end = request
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let request_body = serde_json::from_slice(&request[header_end..]).unwrap();
+        let _ = request_sender.send(request_body);
         let outer = json!({
             "choices": [{"message": {"content": answer.to_string()}}],
             "usage": {"prompt_tokens": 12, "completion_tokens": 8},
@@ -82,11 +90,14 @@ async fn fake_judge(answer: Value) -> NativePlateJudge {
         stream.write_all(response.as_bytes()).await.unwrap();
     });
     let config = PlateJudgeConfig::loopback_fixture(address).unwrap();
-    NativePlateJudge::new(config, "test-token", Duration::from_secs(5)).unwrap()
+    (
+        NativePlateJudge::new(config, "test-token", Duration::from_secs(5)).unwrap(),
+        request_receiver,
+    )
 }
 
 async fn rejected(kind: PhotoCheckKind, answer: Value, expected: PhotoCheckFailure) {
-    let judge = fake_judge(answer).await;
+    let (judge, _) = fake_judge(answer).await;
     let result = check_photo(
         &judge,
         kind,
@@ -156,9 +167,11 @@ async fn rejects_visible_text_and_modern_clothing() {
 
 #[tokio::test]
 async fn rejects_people_in_an_empty_canonical_room() {
+    let mut room_answer = answer("single_photograph", "photograph", "none", "period", None);
+    room_answer["people_present"] = json!("some");
     rejected(
         PhotoCheckKind::CanonicalRoom,
-        answer("single_photograph", "photograph", "none", "period", None),
+        room_answer,
         PhotoCheckFailure::PeopleInEmptyRoom,
     )
     .await;
@@ -198,7 +211,7 @@ async fn rejects_a_canonical_character_answered_as_having_no_people() {
 
 #[tokio::test]
 async fn accepts_a_photographic_plate_and_requires_character_count_in_the_schema() {
-    let judge = fake_judge(answer(
+    let (judge, _) = fake_judge(answer(
         "single_photograph",
         "photograph",
         "none",
@@ -224,10 +237,53 @@ async fn accepts_a_photographic_plate_and_requires_character_count_in_the_schema
 async fn rejects_a_modern_place_even_with_period_people() {
     let mut modern = answer("single_photograph", "photograph", "none", "no_people", None);
     modern["setting"] = json!("modern");
+    modern["people_present"] = json!("none");
     rejected(
         PhotoCheckKind::CanonicalRoom,
         modern,
         PhotoCheckFailure::ModernSetting,
     )
     .await;
+}
+
+#[tokio::test]
+async fn canonical_room_uses_explicit_people_presence_and_high_detail() {
+    for (people_present, expected) in [
+        (
+            "some",
+            PhotoCheckOutcome::Fail(PhotoCheckFailure::PeopleInEmptyRoom),
+        ),
+        ("none", PhotoCheckOutcome::Pass),
+    ] {
+        let mut room_answer = answer("single_photograph", "photograph", "none", "period", None);
+        room_answer["people_present"] = json!(people_present);
+        let (judge, request_receiver) = fake_judge(room_answer).await;
+        assert_eq!(
+            check_photo(
+                &judge,
+                PhotoCheckKind::CanonicalRoom,
+                &image_jpeg(),
+                ImageFormat::Jpeg,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+        let request = request_receiver.await.unwrap();
+        let content = request["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content[2]["image_url"]["detail"], "high");
+        let schema = &request["response_format"]["json_schema"]["schema"];
+        assert_eq!(
+            schema["properties"]["people_present"]["enum"],
+            json!(["none", "some"])
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("people_present"))
+        );
+        assert_eq!(schema["additionalProperties"], false);
+    }
 }

@@ -25,7 +25,7 @@ const MAXIMUM_PICTURE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_TOTAL_PICTURE_BYTES: usize = 8 * 1024 * 1024;
 const MAXIMUM_INSTRUCTION_CHARACTERS: usize = 6000;
 const MAXIMUM_RESPONSE_BYTES: usize = 256 * 1024;
-const PHOTO_QUALITY_INSTRUCTION: &str = "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are pasted/composited together. medium is photograph only for a convincing photographic capture, painting_or_illustration for drawn or painterly art, and cgi_or_render for synthetic rendered imagery. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. setting is modern if the architecture, lighting or objects are recognizably modern (electric ceiling lights, plate-glass shopfronts, shopping malls, vehicles, plastic, printed packaging), otherwise period. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content.";
+const PHOTO_QUALITY_INSTRUCTION: &str = "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are pasted/composited together. medium is photograph only for a convincing photographic capture, painting_or_illustration for drawn or painterly art, and cgi_or_render for synthetic rendered imagery. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. setting is modern if the architecture, lighting or objects are recognizably modern (electric ceiling lights, plate-glass shopfronts, shopping malls, vehicles, plastic, printed packaging), otherwise period. For a canonical room only, people_present is some if any human is present anywhere in the room image, including people seen from behind, far away, or partly hidden; otherwise none. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhotoJudgeKind {
@@ -81,6 +81,7 @@ pub struct PhotoQualityAnswer {
     pub dress: PhotoDress,
     pub setting: PhotoSetting,
     pub people_count: Option<PhotoPeopleCount>,
+    pub people_present: Option<bool>,
 }
 
 /// One picture of a judgement: a short plain label the instruction refers to, and a JPEG.
@@ -206,7 +207,75 @@ impl NativePlateJudge {
         schema: &Value,
         deadline: Duration,
     ) -> Result<JudgeAnswer, PlateJudgeError> {
-        let body = request_body(instruction, pictures, schema_name, schema)?;
+        self.judge_with_detail(instruction, pictures, schema_name, schema, deadline, "low")
+            .await
+    }
+
+    /// Judges one generated image with closed labels. Canonical rooms ask whether anyone is
+    /// present, while characters ask for a people count. This is one bounded vision request.
+    pub async fn judge_photo_quality(
+        &self,
+        image_jpeg: &[u8],
+        kind: PhotoJudgeKind,
+        deadline: Duration,
+    ) -> Result<PhotoQualityAnswer, PlateJudgeError> {
+        let character = kind == PhotoJudgeKind::CanonicalCharacter;
+        let room = kind == PhotoJudgeKind::CanonicalRoom;
+        let mut properties = json!({
+            "frame": {"type": "string", "enum": ["single_photograph", "grid_or_collage", "cutout_composite"]},
+            "medium": {"type": "string", "enum": ["photograph", "painting_or_illustration", "cgi_or_render"]},
+            "text": {"type": "string", "enum": ["none", "visible_text"]},
+            "dress": {"type": "string", "enum": ["period", "modern_clothing", "no_people"]},
+            "setting": {"type": "string", "enum": ["period", "modern"]},
+        });
+        let mut required = vec!["frame", "medium", "text", "dress", "setting"];
+        if character {
+            properties["people_count"] = json!({
+                "type": "string",
+                "enum": ["exactly_one", "not_one"],
+            });
+            required.push("people_count");
+        }
+        if room {
+            properties["people_present"] = json!({
+                "type": "string",
+                "enum": ["none", "some"],
+            });
+            required.push("people_present");
+        }
+        let schema = json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        });
+        let picture = [JudgePicture {
+            label: "candidate-1",
+            jpeg: image_jpeg,
+        }];
+        let answer = self
+            .judge_with_detail(
+                PHOTO_QUALITY_INSTRUCTION,
+                &picture,
+                "photo-quality",
+                &schema,
+                deadline,
+                if room || character { "high" } else { "low" },
+            )
+            .await?;
+        parse_photo_answer(answer.value, character, room)
+    }
+
+    async fn judge_with_detail(
+        &self,
+        instruction: &str,
+        pictures: &[JudgePicture<'_>],
+        schema_name: &str,
+        schema: &Value,
+        deadline: Duration,
+        image_detail: &str,
+    ) -> Result<JudgeAnswer, PlateJudgeError> {
+        let body = request_body(instruction, pictures, schema_name, schema, image_detail)?;
         let request = HttpRequest::bearer_native(
             &self.endpoint,
             &self.credential,
@@ -252,66 +321,28 @@ impl NativePlateJudge {
             output_tokens: tokens("completion_tokens"),
         })
     }
-
-    /// Judges one generated image with closed labels. Character calls also ask for a people
-    /// count. This is one bounded vision request; provider errors are returned without logging.
-    pub async fn judge_photo_quality(
-        &self,
-        image_jpeg: &[u8],
-        kind: PhotoJudgeKind,
-        deadline: Duration,
-    ) -> Result<PhotoQualityAnswer, PlateJudgeError> {
-        let character = kind == PhotoJudgeKind::CanonicalCharacter;
-        let mut properties = json!({
-            "frame": {"type": "string", "enum": ["single_photograph", "grid_or_collage", "cutout_composite"]},
-            "medium": {"type": "string", "enum": ["photograph", "painting_or_illustration", "cgi_or_render"]},
-            "text": {"type": "string", "enum": ["none", "visible_text"]},
-            "dress": {"type": "string", "enum": ["period", "modern_clothing", "no_people"]},
-            "setting": {"type": "string", "enum": ["period", "modern"]},
-        });
-        let mut required = vec!["frame", "medium", "text", "dress", "setting"];
-        if character {
-            properties["people_count"] = json!({
-                "type": "string",
-                "enum": ["exactly_one", "not_one"],
-            });
-            required.push("people_count");
-        }
-        let schema = json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false,
-        });
-        let picture = [JudgePicture {
-            label: "candidate-1",
-            jpeg: image_jpeg,
-        }];
-        let answer = self
-            .judge(
-                PHOTO_QUALITY_INSTRUCTION,
-                &picture,
-                "photo-quality",
-                &schema,
-                deadline,
-            )
-            .await?;
-        parse_photo_answer(answer.value, character)
-    }
 }
 
 fn parse_photo_answer(
     value: Value,
     character: bool,
+    room: bool,
 ) -> Result<PhotoQualityAnswer, PlateJudgeError> {
     let object = value.as_object().ok_or(PlateJudgeError::Output)?;
-    let expected_fields = if character { 6 } else { 5 };
+    let expected_fields = 5 + usize::from(character || room);
     if object.len() != expected_fields
         || object.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "frame" | "medium" | "text" | "dress" | "setting" | "people_count"
+                "frame"
+                    | "medium"
+                    | "text"
+                    | "dress"
+                    | "setting"
+                    | "people_count"
+                    | "people_present"
             ) || (key == "people_count" && !character)
+                || (key == "people_present" && !room)
         })
     {
         return Err(PlateJudgeError::Output);
@@ -359,6 +390,15 @@ fn parse_photo_answer(
     } else {
         None
     };
+    let people_present = if room {
+        Some(match label("people_present")? {
+            "none" => false,
+            "some" => true,
+            _ => return Err(PlateJudgeError::Output),
+        })
+    } else {
+        None
+    };
     Ok(PhotoQualityAnswer {
         frame,
         medium,
@@ -366,6 +406,7 @@ fn parse_photo_answer(
         dress,
         setting,
         people_count,
+        people_present,
     })
 }
 
@@ -381,6 +422,7 @@ fn request_body(
     pictures: &[JudgePicture<'_>],
     schema_name: &str,
     schema: &Value,
+    image_detail: &str,
 ) -> Result<Vec<u8>, PlateJudgeError> {
     if instruction.trim().is_empty()
         || instruction.chars().count() > MAXIMUM_INSTRUCTION_CHARACTERS
@@ -408,7 +450,7 @@ fn request_body(
             "type": "image_url",
             "image_url": {
                 "url": format!("data:image/jpeg;base64,{}", STANDARD.encode(picture.jpeg)),
-                "detail": "low",
+                "detail": image_detail,
             },
         }));
     }
@@ -449,7 +491,7 @@ mod tests {
                 jpeg: b"\xff\xd8b",
             },
         ];
-        let body = request_body("Pick one.", &pictures, "choice", &schema()).unwrap();
+        let body = request_body("Pick one.", &pictures, "choice", &schema(), "low").unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["model"], MODEL);
         let content = value["messages"][0]["content"].as_array().unwrap();
@@ -490,13 +532,13 @@ mod tests {
             ("x", &one[..], "choice", json!("not an object")),
         ] {
             assert_eq!(
-                request_body(instruction, pictures, name, &schema),
+                request_body(instruction, pictures, name, &schema, "low"),
                 Err(PlateJudgeError::InvalidRequest)
             );
         }
         let long = "x".repeat(MAXIMUM_INSTRUCTION_CHARACTERS + 1);
         assert_eq!(
-            request_body(&long, &one, "choice", &schema()),
+            request_body(&long, &one, "choice", &schema(), "low"),
             Err(PlateJudgeError::InvalidRequest)
         );
         let big = vec![0u8; MAXIMUM_PICTURE_BYTES];
@@ -507,7 +549,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            request_body("x", &heavy, "choice", &schema()),
+            request_body("x", &heavy, "choice", &schema(), "low"),
             Err(PlateJudgeError::InvalidRequest)
         );
         let many: Vec<JudgePicture<'_>> = (0..=MAXIMUM_PICTURES)
@@ -517,7 +559,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            request_body("x", &many, "choice", &schema()),
+            request_body("x", &many, "choice", &schema(), "low"),
             Err(PlateJudgeError::InvalidRequest)
         );
     }
