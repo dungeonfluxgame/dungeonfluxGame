@@ -1079,7 +1079,9 @@ pub(super) fn project_journey(
             if kind == rpc::GameplayActionKind::ExamineHarborSeal
                 && super::beat_script_runtime::is_observation_offer(current, &offer_id)?
             {
-                if observation_added {
+                // Nothing left to look at (everyone fled or fell, no findings): no offer, rather
+                // than a view that cannot be built (B-11).
+                if observation_added || observation_group(current)?.is_none() {
                     continue;
                 }
                 observation_added = true;
@@ -1132,7 +1134,9 @@ pub(super) fn project_journey(
                 {
                     vec![stage(
                         "view-observation-options",
-                        observation_group(current),
+                        observation_group(current).and_then(|group| {
+                            group.ok_or(RepositoryError::InvalidCandidate)
+                        }),
                     )?]
                 } else {
                     Vec::new()
@@ -1591,7 +1595,9 @@ pub(super) fn project_journey(
     })
 }
 
-fn observation_group(current: &Checkpoint) -> Result<rpc::JourneyGroup, RepositoryError> {
+/// The look-around choices: the scene's findings, then watching each person still on stage, at
+/// most eight; `None` when there is nothing to look at.
+fn observation_group(current: &Checkpoint) -> Result<Option<rpc::JourneyGroup>, RepositoryError> {
     let scene = stage(
         "view-observation-scene",
         super::beat_script_runtime::scene(current.state()),
@@ -1627,15 +1633,15 @@ fn observation_group(current: &Checkpoint) -> Result<rpc::JourneyGroup, Reposito
         requires_group: String::new(),
         requires_options: Vec::new(),
     }));
-    if options.is_empty() || options.len() > 8 {
-        crate::gameplay::refusal_detail::note("view-observation-options");
-        return Err(RepositoryError::InvalidCandidate);
+    if options.is_empty() {
+        return Ok(None);
     }
-    Ok(rpc::JourneyGroup {
+    options.truncate(8);
+    Ok(Some(rpc::JourneyGroup {
         group_id: "finding".to_owned(),
         label: "Look around".to_owned(),
         options,
-    })
+    }))
 }
 
 fn passive_findings(
