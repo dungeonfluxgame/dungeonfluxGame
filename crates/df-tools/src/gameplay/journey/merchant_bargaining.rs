@@ -36,6 +36,99 @@ pub(in crate::gameplay) struct QuoteCandidate {
     pub(in crate::gameplay) price_cp: u32,
 }
 
+/// The exact server term a merchant reply may quote for the hero's selected item.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct MerchantReplyBounds {
+    pub(in crate::gameplay) item_id: String,
+    pub(in crate::gameplay) item_name: String,
+    pub(in crate::gameplay) direction: TradeDirection,
+    pub(in crate::gameplay) minimum_price_cp: u32,
+    pub(in crate::gameplay) maximum_price_cp: u32,
+}
+
+/// Resolve the same item and direction that `quote_candidate_for_reply` uses, before speech is
+/// generated. A live quote fixes both values and is never reselected from the hero's words.
+pub(in crate::gameplay) fn merchant_reply_bounds(
+    terms: &[TradeTerms],
+    authenticated_hero_id: &str,
+    addressed_merchant_id: &str,
+    hero: HeroLine<'_>,
+    picked: Option<&str>,
+    pending_quote: Option<&SceneTradeQuote>,
+) -> Option<MerchantReplyBounds> {
+    let (item_id, direction) = if let Some(quote) = pending_quote {
+        (quote.item_id.as_str(), quote.direction)
+    } else {
+        let item_id = picked?;
+        let item_terms = terms
+            .iter()
+            .filter(|term| {
+                term.item_id == item_id
+                    && authenticated_hero_id == hero_id_for_terms(term)
+                    && addressed_merchant_id == merchant_id_for_terms(term)
+            })
+            .collect::<Vec<_>>();
+        (item_id, resolve_direction(&item_terms, hero.intent)?)
+    };
+    let term = terms.iter().find(|term| {
+        valid_terms(term)
+            && term.item_id == item_id
+            && term.direction == direction
+            && authenticated_hero_id == hero_id_for_terms(term)
+            && addressed_merchant_id == merchant_id_for_terms(term)
+    })?;
+    Some(MerchantReplyBounds {
+        item_id: term.item_id.clone(),
+        item_name: term.item_name.clone(),
+        direction: term.direction,
+        minimum_price_cp: term.minimum_price_cp,
+        maximum_price_cp: term.maximum_price_cp,
+    })
+}
+
+/// Check any exact price the reply states against the selected server term.
+pub(in crate::gameplay) fn reply_price_rejection(
+    reply: &str,
+    bounds: &MerchantReplyBounds,
+) -> Option<QuoteRejection> {
+    match explicit_price_cp(reply) {
+        Ok(price) if (bounds.minimum_price_cp..=bounds.maximum_price_cp).contains(&price) => None,
+        Ok(_) => Some(QuoteRejection::OutOfRange),
+        Err(QuoteRejection::MissingAmount) => None,
+        Err(reason) => Some(reason),
+    }
+}
+
+/// A deterministic in-range statement used when a generated reply fails validation twice.
+pub(in crate::gameplay) fn allowed_price_reply(bounds: &MerchantReplyBounds) -> String {
+    let (price, subject) = match bounds.direction {
+        TradeDirection::HeroBuys => (bounds.minimum_price_cp, "the lowest I can take"),
+        TradeDirection::HeroSells => (bounds.maximum_price_cp, "the most I can offer"),
+    };
+    format!(
+        "For the {}, {subject} is {}.",
+        bounds.item_name,
+        coin_price(price),
+    )
+}
+
+fn coin_price(price_cp: u32) -> String {
+    let gold = price_cp / 100;
+    let silver = (price_cp % 100) / 10;
+    let copper = price_cp % 10;
+    let mut parts = Vec::new();
+    for (amount, name) in [(gold, "gold"), (silver, "silver"), (copper, "copper")] {
+        if amount > 0 {
+            parts.push(format!("{amount} {name}"));
+        }
+    }
+    if parts.is_empty() {
+        "0 copper".to_owned()
+    } else {
+        parts.join(" and ")
+    }
+}
+
 /// Listener-safe, journal-derived context for a merchant buying back the same item from the
 /// hero who purchased it. This carries no dialogue or private character state.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2492,5 +2585,94 @@ fn currency_multiplier(unit: &str) -> Option<u32> {
         "gp" | "gold" | "golds" => Some(100),
         "pp" | "platinum" | "platinums" => Some(1_000),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod selected_reply_term_tests {
+    use super::*;
+
+    fn selected_term() -> TradeTerms {
+        TradeTerms {
+            direction: TradeDirection::HeroBuys,
+            seller_id: "marek".to_owned(),
+            buyer_id: "sigrun".to_owned(),
+            offer_id: Some("padded-jacket-offer".to_owned()),
+            item_id: "padded-jacket".to_owned(),
+            item_name: "padded jacket".to_owned(),
+            aliases: Vec::new(),
+            minimum_price_cp: 50,
+            maximum_price_cp: 100,
+            available: true,
+            stock_units: 1,
+            stock_revision: 3,
+            purse_revision: 4,
+            counterparty_name: "Marek".to_owned(),
+            party_hero_names: vec!["Sigrun".to_owned()],
+        }
+    }
+
+    #[test]
+    fn selected_in_range_counter_becomes_the_exact_pending_purchase_price() {
+        let terms = [selected_term()];
+        let hero = HeroLine {
+            intent: HeroTradeIntent::from_label("offer_price").unwrap(),
+            words: "Would you take five silver?",
+        };
+        let bounds =
+            merchant_reply_bounds(&terms, "sigrun", "marek", hero, Some("padded-jacket"), None)
+                .unwrap();
+        let merchant = MerchantReplyCommitment::from_label("firm_price").unwrap();
+        let exchange = TradeExchange {
+            hero,
+            merchant,
+            merchant_reply: "Six silver for the padded jacket.",
+        };
+
+        assert_eq!(bounds.item_id, "padded-jacket");
+        assert_eq!(bounds.direction, TradeDirection::HeroBuys);
+        assert_eq!(
+            (bounds.minimum_price_cp, bounds.maximum_price_cp),
+            (50, 100)
+        );
+        assert_eq!(
+            reply_price_rejection(exchange.merchant_reply, &bounds),
+            None
+        );
+        let candidate =
+            quote_candidate_for_reply(&terms, "sigrun", "marek", &exchange, Some(&bounds.item_id))
+                .unwrap();
+        assert_eq!(candidate.price_cp, 60);
+
+        let quote = SceneTradeQuote {
+            quote_id: "quote-counter".to_owned(),
+            direction: candidate.direction,
+            place_id: "market".to_owned(),
+            item_id: candidate.item_id,
+            offer_id: candidate.offer_id,
+            seller_id: candidate.seller_id,
+            buyer_id: candidate.buyer_id,
+            price_cp: candidate.price_cp,
+            stock_revision: 3,
+            purse_revision: 4,
+            source_line_id: "npc-line".to_owned(),
+            source_line_sequence: 8,
+            source_revision: "0:2".to_owned(),
+            source_actor_id: "marek".to_owned(),
+        };
+        let accepted = accepted_quote_purchase(
+            &quote,
+            MerchantQuoteStatus::Pending,
+            "sigrun",
+            "marek",
+            "market",
+            HeroLine {
+                intent: HeroTradeIntent::from_label("accept_quote").unwrap(),
+                words: "Done, six silver. I accept the quote.",
+            },
+        )
+        .unwrap();
+        assert_eq!(accepted.price_cp, 60);
+        assert_eq!(accepted.item_id, "padded-jacket");
     }
 }

@@ -686,6 +686,11 @@ pub(super) struct NpcReplyContext {
     /// The unique live quote this exact turn may answer with an acceptance, decline or
     /// counteroffer. Captured by the authoritative actor after source-line validation.
     pub(super) pending_quote: Option<super::journey::living_scene::SceneTradeQuote>,
+    /// Exact authoritative item/direction and amount bounds selected before this reply is written.
+    pub(super) merchant_reply_bounds:
+        Option<super::journey::merchant_bargaining::MerchantReplyBounds>,
+    /// Jev input assembled from the same selected terms used to validate a resulting quote.
+    pub(super) merchant_reply_state: Option<Value>,
     /// Set only after the caller matches canonical terms to this hero and addressed merchant.
     pub(super) merchant_trade_scope: bool,
     publication_guard: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
@@ -1268,6 +1273,8 @@ impl NpcReplyContext {
             npc_id: turn_dossier.npc_id.clone(),
             hero_id: hero.name.clone(),
             pending_quote: None,
+            merchant_reply_bounds: None,
+            merchant_reply_state: None,
             merchant_trade_scope: false,
             publication_guard: None,
             member,
@@ -1465,6 +1472,8 @@ impl NpcReplyContext {
             npc_id: String::new(),
             hero_id: hero.name.clone(),
             pending_quote: None,
+            merchant_reply_bounds: None,
+            merchant_reply_state: None,
             merchant_trade_scope: false,
             publication_guard: None,
             member,
@@ -1958,6 +1967,11 @@ impl NpcVoice {
                     Some(reason),
                 ),
             }
+        };
+        let text = if outcome == ExchangeOutcome::Spoken {
+            self.guard_merchant_reply(&mut context, text, false).await
+        } else {
+            text
         };
         let text = capitalise_sentence_starts(&text);
         if !context.publication_current() {
@@ -2509,74 +2523,81 @@ impl NpcVoice {
         if !context.publication_current() {
             return None;
         }
-        let turn = context.turn.as_ref()?;
-        let proposed_local_fact = modeled.as_ref().ok().and_then(|(_, _, fact)| fact.clone());
-        let (text, fallback) = match modeled {
-            // Jev (or the neutral reading) decided before the reaction and reply.
-            Ok((reply, _, _)) => (reply, None),
-            Err(reason) => {
-                // One server line per fallback, closed vocabulary, never reply text: the
-                // session log is where a coordinator reads why a prepared line spoke.
-                // (DIALOGUE-001 requirement; the OTEL event below carries the same reason.)
-                let detail = match reason {
-                    FallbackReason::RequestInvalid(label) => format!(" detail={label}"),
-                    _ => String::new(),
-                };
-                eprintln!(
-                    "NPC REPLY fallback reason={} npc={}{detail}",
-                    reason.label(),
-                    turn.dossier.npc_id,
-                );
-                let (answer, answer_key): (String, Option<String>) = if done_now {
-                    (
-                        "I've had enough questions. Leave me be for now.".to_owned(),
-                        None,
-                    )
-                } else if never_forgive_now {
-                    ("I will never forgive you for that.".to_owned(), None)
-                } else if unwilling_now {
-                    ("I will not help you with that.".to_owned(), None)
-                } else if hesitant_now {
-                    (hesitant_fallback_line(hesitant.as_ref()).to_owned(), None)
-                } else if private_clue_withheld {
-                    let (answer, key) = private_clue_refusal(turn);
-                    (answer, Some(key))
-                } else if let Some((answer, key)) = subject_answer.clone() {
-                    (answer, Some(key))
-                } else if context.merchant_trade_scope {
-                    (
-                        "I need a moment before I can discuss a price for that.".to_owned(),
-                        None,
-                    )
-                } else {
-                    npc_dossier::fallback(
-                        &turn.dossier,
-                        turn.standing,
-                        ask.fallback_topic(approach),
-                        approach,
-                        &turn.withheld,
-                        &npc_dossier::Memory {
-                            conversation: &turn.conversation,
-                            said: &turn.said,
-                            offered: &turn.offered,
-                        },
-                    )
-                };
-                // A prepared, confided or curt answer counts as said under its memory key.
-                if let Some(key) = answer_key
-                    && subject_answer.is_none()
-                {
-                    turn.ledger.remember_offered(
-                        context.member,
-                        &turn.dossier,
-                        std::slice::from_ref(&key),
+        let (text, fallback, proposed_local_fact) = {
+            let turn = context.turn.as_ref()?;
+            let proposed_local_fact = modeled.as_ref().ok().and_then(|(_, _, fact)| fact.clone());
+            let (text, fallback) = match modeled {
+                // Jev (or the neutral reading) decided before the reaction and reply.
+                Ok((reply, _, _)) => (reply, None),
+                Err(reason) => {
+                    // One server line per fallback, closed vocabulary, never reply text: the
+                    // session log is where a coordinator reads why a prepared line spoke.
+                    // (DIALOGUE-001 requirement; the OTEL event below carries the same reason.)
+                    let detail = match reason {
+                        FallbackReason::RequestInvalid(label) => format!(" detail={label}"),
+                        _ => String::new(),
+                    };
+                    eprintln!(
+                        "NPC REPLY fallback reason={} npc={}{detail}",
+                        reason.label(),
+                        turn.dossier.npc_id,
                     );
+                    let (answer, answer_key): (String, Option<String>) = if done_now {
+                        (
+                            "I've had enough questions. Leave me be for now.".to_owned(),
+                            None,
+                        )
+                    } else if never_forgive_now {
+                        ("I will never forgive you for that.".to_owned(), None)
+                    } else if unwilling_now {
+                        ("I will not help you with that.".to_owned(), None)
+                    } else if hesitant_now {
+                        (hesitant_fallback_line(hesitant.as_ref()).to_owned(), None)
+                    } else if private_clue_withheld {
+                        let (answer, key) = private_clue_refusal(turn);
+                        (answer, Some(key))
+                    } else if let Some((answer, key)) = subject_answer.clone() {
+                        (answer, Some(key))
+                    } else if context.merchant_trade_scope {
+                        (
+                            "I need a moment before I can discuss a price for that.".to_owned(),
+                            None,
+                        )
+                    } else {
+                        npc_dossier::fallback(
+                            &turn.dossier,
+                            turn.standing,
+                            ask.fallback_topic(approach),
+                            approach,
+                            &turn.withheld,
+                            &npc_dossier::Memory {
+                                conversation: &turn.conversation,
+                                said: &turn.said,
+                                offered: &turn.offered,
+                            },
+                        )
+                    };
+                    // A prepared, confided or curt answer counts as said under its memory key.
+                    if let Some(key) = answer_key
+                        && subject_answer.is_none()
+                    {
+                        turn.ledger.remember_offered(
+                            context.member,
+                            &turn.dossier,
+                            std::slice::from_ref(&key),
+                        );
+                    }
+                    (answer, Some(reason))
                 }
-                (answer, Some(reason))
-            }
+            };
+            (text, fallback, proposed_local_fact)
         };
+        let text = self.guard_merchant_reply(&mut context, text, true).await;
         let text = capitalise_sentence_starts(&text);
-        let from_model = bounded_answer.is_none() && fallback.is_none();
+        let turn = context.turn.as_ref()?;
+        let from_model = bounded_answer.is_none()
+            && fallback.is_none()
+            && !context.facts.get("merchant_reply_violation").is_some();
         let outcome = if text.is_empty()
             && bounded_answer
                 .as_ref()
@@ -2843,6 +2864,126 @@ impl NpcVoice {
         .text
     }
 
+    /// Judge each proposed merchant line and enforce its selected authoritative price bounds
+    /// before any reply text reaches the public table log.
+    async fn guard_merchant_reply(
+        &self,
+        context: &mut NpcReplyContext,
+        reply: String,
+        in_character: bool,
+    ) -> String {
+        let Some(bounds) = context.merchant_reply_bounds.as_ref() else {
+            return if context.merchant_trade_scope {
+                "I need a moment before I can discuss a price for that.".to_owned()
+            } else {
+                reply
+            };
+        };
+        let mut state = context
+            .merchant_reply_state
+            .clone()
+            .unwrap_or_else(|| json!({}));
+        state["selected_term"] = json!({
+            "item": bounds.item_name,
+            "direction": match bounds.direction {
+                super::journey::living_scene::SceneTradeDirection::HeroBuys => "merchant_sells",
+                super::journey::living_scene::SceneTradeDirection::HeroSells => "merchant_buys",
+            },
+            "minimum_price_cp": bounds.minimum_price_cp,
+            "maximum_price_cp": bounds.maximum_price_cp,
+        });
+        state["merchant_reply"] = json!(reply.chars().take(2_000).collect::<String>());
+        let choice = self
+            .approach_model
+            .choose_label(
+                &state,
+                super::journey::merchant_bargaining::MERCHANT_REPLY_INSTRUCTIONS,
+                &super::journey::merchant_bargaining::MerchantMeaning::CHOICES,
+            )
+            .await;
+        let commitment =
+            super::journey::merchant_bargaining::merchant_commitment_from_judgement(choice);
+        super::actor::record_audit_line(
+            "gameplay.merchant.trade_judgement",
+            format!(
+                "MERCHANT_TRADE_JUDGEMENT stage=pre_publication source={} meaning={} reason={}",
+                commitment.judgement.source_label(),
+                commitment.meaning.label(),
+                commitment.judgement.reason_label(),
+            ),
+        );
+        let Some(rejection) =
+            super::journey::merchant_bargaining::reply_price_rejection(&reply, bounds)
+        else {
+            return reply;
+        };
+        context.facts["merchant_reply_violation"] = json!({
+            "item": bounds.item_name,
+            "direction": state["selected_term"]["direction"],
+            "minimum_price_cp": bounds.minimum_price_cp,
+            "maximum_price_cp": bounds.maximum_price_cp,
+            "violation": rejection.label(),
+            "meaning": "Your previous reply named an amount outside these server-approved bounds. Regenerate the reply about this same item and state only an allowed amount, or decline briefly; do not repeat the invalid amount.",
+        });
+        super::actor::record_audit_line(
+            "gameplay.merchant.reply_validation",
+            format!(
+                "MERCHANT_REPLY_VALIDATION status=retry reason={} item={:?} minimum_cp={} maximum_cp={}",
+                rejection.label(),
+                bounds.item_id,
+                bounds.minimum_price_cp,
+                bounds.maximum_price_cp,
+            ),
+        );
+        let retry = if in_character {
+            self.model_dialogue(context).await.map(|(text, _, _)| text)
+        } else {
+            self.model_public(context).await
+        };
+        if let Ok(retry) = retry {
+            let mut retry_state = state;
+            retry_state["merchant_reply"] = json!(retry.chars().take(2_000).collect::<String>());
+            let choice = self
+                .approach_model
+                .choose_label(
+                    &retry_state,
+                    super::journey::merchant_bargaining::MERCHANT_REPLY_INSTRUCTIONS,
+                    &super::journey::merchant_bargaining::MerchantMeaning::CHOICES,
+                )
+                .await;
+            let commitment =
+                super::journey::merchant_bargaining::merchant_commitment_from_judgement(choice);
+            super::actor::record_audit_line(
+                "gameplay.merchant.trade_judgement",
+                format!(
+                    "MERCHANT_TRADE_JUDGEMENT stage=pre_publication_retry source={} meaning={} reason={}",
+                    commitment.judgement.source_label(),
+                    commitment.meaning.label(),
+                    commitment.judgement.reason_label(),
+                ),
+            );
+            if super::journey::merchant_bargaining::reply_price_rejection(&retry, bounds).is_none()
+            {
+                super::actor::record_audit_line(
+                    "gameplay.merchant.reply_validation",
+                    format!(
+                        "MERCHANT_REPLY_VALIDATION status=accepted_retry item={:?}",
+                        bounds.item_id
+                    ),
+                );
+                return retry;
+            }
+        }
+        super::actor::record_audit_line(
+            "gameplay.merchant.reply_validation",
+            format!(
+                "MERCHANT_REPLY_VALIDATION status=bounded_fallback item={:?}",
+                bounds.item_id
+            ),
+        );
+        super::journey::merchant_bargaining::allowed_price_reply(bounds)
+    }
+
     /// The text model's in-character reply and its reading of the hero's approach, or why
     /// no model reply speaks: the storyteller is off, the member is over its bounds, the
     /// call failed, or the reply broke a rule on both attempts.
@@ -3027,6 +3168,85 @@ mod tests {
             "Take your time with it. The fur lining is soft."
         );
         assert_eq!(log.lines().last().unwrap().text, exchange.text);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_haggle_never_publishes_a_price_below_the_server_floor() {
+        let endpoint = FakeEndpoint::start(vec![
+            Reply::Output(json!({"reply": "I can let the padded jacket go for four silver."})),
+            Reply::Output(json!({"reply": "Four silver is my price for the jacket."})),
+        ]);
+        let jev = FakeEndpoint::start(
+            jev_legacy_line(&[("I can buy the padded jacket", "o21")])
+                .into_iter()
+                .chain([answer("o1"), answer("o1")])
+                .collect(),
+        );
+        let (voice, cache) = voice(&endpoint, "merchant-reply-floor");
+        let voice = voice.with_approach_model(model(&jev));
+        let mut context = question("I can buy the padded jacket");
+        context.merchant_trade_scope = true;
+        context.merchant_reply_bounds = Some(
+            super::super::journey::merchant_bargaining::MerchantReplyBounds {
+                item_id: "padded-jacket".to_owned(),
+                item_name: "padded jacket".to_owned(),
+                direction: super::super::journey::living_scene::SceneTradeDirection::HeroBuys,
+                minimum_price_cp: 50,
+                maximum_price_cp: 100,
+            },
+        );
+        context.merchant_reply_state = Some(json!({"hero_line": "I can buy the padded jacket"}));
+
+        let exchange = voice
+            .reply_in_public_report(context, &TableLog::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            exchange.text,
+            "For the padded jacket, the lowest I can take is 5 silver."
+        );
+        assert_eq!(endpoint.bodies().len(), 2);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_in_range_counter_is_published_without_regeneration() {
+        let endpoint = FakeEndpoint::start(vec![Reply::Output(
+            json!({"reply": "I can let the padded jacket go for six silver."}),
+        )]);
+        let jev = FakeEndpoint::start(
+            jev_legacy_line(&[("I can buy the padded jacket", "o21")])
+                .into_iter()
+                .chain([answer("o1")])
+                .collect(),
+        );
+        let (voice, cache) = voice(&endpoint, "merchant-reply-in-range");
+        let voice = voice.with_approach_model(model(&jev));
+        let mut context = question("I can buy the padded jacket");
+        context.merchant_trade_scope = true;
+        context.merchant_reply_bounds = Some(
+            super::super::journey::merchant_bargaining::MerchantReplyBounds {
+                item_id: "padded-jacket".to_owned(),
+                item_name: "padded jacket".to_owned(),
+                direction: super::super::journey::living_scene::SceneTradeDirection::HeroBuys,
+                minimum_price_cp: 50,
+                maximum_price_cp: 100,
+            },
+        );
+        context.merchant_reply_state = Some(json!({"hero_line": "I can buy the padded jacket"}));
+
+        let exchange = voice
+            .reply_in_public_report(context, &TableLog::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            exchange.text,
+            "I can let the padded jacket go for six silver."
+        );
+        assert_eq!(endpoint.bodies().len(), 1);
         std::fs::remove_dir_all(cache).unwrap();
     }
 

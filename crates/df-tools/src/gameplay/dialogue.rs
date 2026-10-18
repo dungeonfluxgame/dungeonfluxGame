@@ -4129,6 +4129,7 @@ impl Service {
                 context.typed_words.clone(),
                 context.hero_id.clone(),
                 context.pending_quote.clone(),
+                context.merchant_reply_bounds.clone(),
             );
             context.watch_publication(self.updates.clone());
             // The table sees the hero's line cleaned up (within its deadline), then
@@ -4244,6 +4245,7 @@ impl Service {
                     typed_words,
                     hero_id,
                     pending_quote,
+                    merchant_reply_bounds,
                 ) = bargain_source;
                 if closed_prior_quote {
                     let revision = self.updates.borrow().basis().revision;
@@ -4304,15 +4306,9 @@ impl Service {
                             let item_to_sell = match quoted_item {
                                 Some(item_id) => Some(item_id),
                                 None => {
-                                    let picked = self
-                                        .judged_trade_item(
-                                            &terms,
-                                            &hero_id,
-                                            &actor_id,
-                                            turn.hero.words,
-                                            turn.merchant_reply,
-                                        )
-                                        .await;
+                                    let picked = merchant_reply_bounds
+                                        .as_ref()
+                                        .map(|bounds| bounds.item_id.clone());
                                     journey::merchant_bargaining::referenced_item_id(
                                         &terms,
                                         &hero_id,
@@ -4362,15 +4358,9 @@ impl Service {
                                     &turn,
                                 )
                             } else {
-                                let picked = self
-                                    .judged_trade_item(
-                                        &terms,
-                                        &hero_id,
-                                        &actor_id,
-                                        &typed_words,
-                                        &exchange.text,
-                                    )
-                                    .await;
+                                let picked = merchant_reply_bounds
+                                    .as_ref()
+                                    .map(|bounds| bounds.item_id.clone());
                                 journey::merchant_bargaining::quote_candidate_for_reply(
                                     &terms,
                                     &hero_id,
@@ -5758,6 +5748,35 @@ impl actor::Actor {
                         }
                         reply.facts = trade_facts.clone();
                     }
+                    reply.merchant_reply_bounds =
+                        journey::merchant_bargaining::merchant_reply_bounds(
+                            &terms,
+                            &hero_id,
+                            &reply.actor_id,
+                            line,
+                            picked.as_deref(),
+                            quote_followup.as_ref(),
+                        );
+                    if let Some(bounds) = reply.merchant_reply_bounds.as_ref() {
+                        reply.facts["server_bargaining_bounds"] = serde_json::json!({
+                            "item_id": bounds.item_id,
+                            "item": bounds.item_name,
+                            "direction": match bounds.direction {
+                                journey::living_scene::SceneTradeDirection::HeroBuys => "merchant_sells",
+                                journey::living_scene::SceneTradeDirection::HeroSells => "merchant_buys",
+                            },
+                            "minimum_price_cp": bounds.minimum_price_cp,
+                            "maximum_price_cp": bounds.maximum_price_cp,
+                            "meaning": "This is the exact item and direction selected by the server for this turn. Any price you state for it must stay within these inclusive copper-piece bounds.",
+                        });
+                    }
+                    reply.merchant_reply_state =
+                        Some(journey::merchant_bargaining::merchant_judgement_state(
+                            &line,
+                            "",
+                            quote_followup.as_ref(),
+                            &terms,
+                        ));
                 }
                 Err(error) => {
                     actor::record_unavailable("merchant-dialogue-terms", &format!("{error:?}"))
