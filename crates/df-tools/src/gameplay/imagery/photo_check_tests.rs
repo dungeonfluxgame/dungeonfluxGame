@@ -33,61 +33,73 @@ fn answer(frame: &str, medium: &str, text: &str, dress: &str, people_count: Opti
 }
 
 async fn fake_judge(answer: Value) -> (NativePlateJudge, tokio::sync::oneshot::Receiver<Value>) {
+    fake_judgments(vec![answer]).await
+}
+
+async fn fake_judgments(
+    answers: Vec<Value>,
+) -> (NativePlateJudge, tokio::sync::oneshot::Receiver<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut request = Vec::new();
-        let body_length = loop {
-            let mut chunk = [0_u8; 4096];
-            let read = stream.read(&mut chunk).await.unwrap();
-            assert_ne!(read, 0);
-            request.extend_from_slice(&chunk[..read]);
-            if let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-                let headers = String::from_utf8_lossy(&request[..header_end]);
-                break headers
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse::<usize>().unwrap())
-                    })
-                    .unwrap();
+        let mut request_sender = Some(request_sender);
+        for answer in answers {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let body_length = loop {
+                let mut chunk = [0_u8; 4096];
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&chunk[..read]);
+                if let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    break headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                }
+            };
+            loop {
+                let header_end = request
+                    .windows(4)
+                    .position(|bytes| bytes == b"\r\n\r\n")
+                    .unwrap()
+                    + 4;
+                if request.len() >= header_end + body_length {
+                    break;
+                }
+                let mut chunk = [0_u8; 4096];
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&chunk[..read]);
             }
-        };
-        loop {
             let header_end = request
                 .windows(4)
                 .position(|bytes| bytes == b"\r\n\r\n")
                 .unwrap()
                 + 4;
-            if request.len() >= header_end + body_length {
-                break;
+            let request_body = serde_json::from_slice(&request[header_end..]).unwrap();
+            if let Some(sender) = request_sender.take() {
+                let _ = sender.send(request_body);
             }
-            let mut chunk = [0_u8; 4096];
-            let read = stream.read(&mut chunk).await.unwrap();
-            assert_ne!(read, 0);
-            request.extend_from_slice(&chunk[..read]);
+            let outer = json!({
+                "choices": [{"message": {"content": answer.to_string()}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8},
+            });
+            let body = outer.to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
         }
-        let header_end = request
-            .windows(4)
-            .position(|bytes| bytes == b"\r\n\r\n")
-            .unwrap()
-            + 4;
-        let request_body = serde_json::from_slice(&request[header_end..]).unwrap();
-        let _ = request_sender.send(request_body);
-        let outer = json!({
-            "choices": [{"message": {"content": answer.to_string()}}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 8},
-        });
-        let body = outer.to_string();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream.write_all(response.as_bytes()).await.unwrap();
     });
     let config = PlateJudgeConfig::loopback_fixture(address).unwrap();
     (
@@ -286,4 +298,158 @@ async fn canonical_room_uses_explicit_people_presence_and_high_detail() {
         );
         assert_eq!(schema["additionalProperties"], false);
     }
+}
+
+#[test]
+fn rejected_candidate_keeps_exact_bytes_reason_prompt_and_bounded_history() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/P1/reject-retention-test")
+        .join(std::process::id().to_string());
+    let bytes = image_jpeg();
+    let path = retain_candidate_at(
+        &root,
+        PhotoCheckKind::CanonicalRoom,
+        &bytes,
+        ImageFormat::Jpeg,
+        PhotoCheckFailure::VisibleText,
+        "The exact original room prompt",
+    )
+    .unwrap();
+    let line = record_retention(
+        PhotoCheckKind::CanonicalRoom,
+        PhotoCheckFailure::VisibleText,
+        &Ok(path.clone()),
+    );
+    assert!(line.contains("PHOTO_CHECK kind=canonical_room result=fail reason=visible_text"));
+    assert!(line.contains(&format!("path={:?}", path.display().to_string())));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let metadata: Value =
+        serde_json::from_slice(&std::fs::read(path.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(metadata["reason"], "visible_text");
+    assert_eq!(metadata["prompt"], "The exact original room prompt");
+    assert_eq!(metadata["kind"], "canonical_room");
+    for _ in 0..MAXIMUM_REJECTED_CANDIDATES + 3 {
+        retain_candidate_at(
+            &root,
+            PhotoCheckKind::CanonicalRoom,
+            &bytes,
+            ImageFormat::Jpeg,
+            PhotoCheckFailure::ModernSetting,
+            "corrected room prompt",
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        std::fs::read_dir(root.join("photo-check-rejected"))
+            .unwrap()
+            .count(),
+        MAXIMUM_REJECTED_CANDIDATES * 2
+    );
+}
+
+fn room_answer(text: &str, setting: &str) -> Value {
+    let mut value = answer("single_photograph", "photograph", text, "no_people", None);
+    value["setting"] = json!(setting);
+    value["people_present"] = json!("none");
+    value
+}
+
+fn canonical_room_request() -> super::super::ImageRequest {
+    use crate::gameplay::{
+        adventure::scene_model::SceneModel, imagery, startup_configuration::ContentRating,
+    };
+    let model = SceneModel {
+        services: Vec::new(),
+        witnessed_thefts: Vec::new(),
+        inventory_version: 1,
+        time_of_day: "morning".to_owned(),
+        weather: "clear".to_owned(),
+        people: Vec::new(),
+        things: Vec::new(),
+        ways_out: Vec::new(),
+        offers: Vec::new(),
+    };
+    imagery::ImageRequest {
+        kind: imagery::ImageKind::CanonicalRoom,
+        references: vec![imagery::ReferenceImage::new(
+            ImageFormat::Jpeg,
+            bytes::Bytes::from(image_jpeg()),
+        )],
+        prompt: imagery::canonical_room(ContentRating::Restrained, &model, "test-street", "P1")
+            .unwrap(),
+        output: imagery::OutputSpec::BACKDROP,
+    }
+}
+
+#[tokio::test]
+async fn failing_then_passing_room_uses_the_judges_reason_in_the_second_generation_prompt() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/P1/room-retry-pass")
+        .join(std::process::id().to_string());
+    let fixture = DirectionFixture::photographic(&root);
+    let (judge, _) = fake_judgments(vec![
+        room_answer("visible_text", "period"),
+        room_answer("none", "period"),
+    ])
+    .await;
+    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+        panic!("enabled fixture");
+    };
+    assert!(engine.judge.set(judge).is_ok());
+    let request = canonical_room_request();
+    let original = request.prompt.as_str().to_owned();
+    let key = fixture
+        .imagery
+        .generate("place:test-street", request)
+        .await
+        .unwrap();
+    assert_eq!(fixture.calls(), 2);
+    assert!(
+        fixture
+            .prompt()
+            .contains(PhotoCheckFailure::VisibleText.correction())
+    );
+    assert!(fixture.prompt().contains(&original));
+    assert!(matches!(
+        fixture.imagery.image(key.as_str()).await,
+        imagery::Lookup::Image { .. }
+    ));
+}
+
+#[tokio::test]
+async fn persistently_rejected_room_stops_at_two_generations_until_readmission() {
+    use crate::gameplay::imagery::{self, tests::DirectionFixture};
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/P1/room-retry-bound")
+        .join(std::process::id().to_string());
+    let fixture = DirectionFixture::photographic(&root);
+    let (judge, _) = fake_judgments(vec![
+        room_answer("none", "modern"),
+        room_answer("none", "modern"),
+    ])
+    .await;
+    let imagery::Mode::On { engine, .. } = &fixture.imagery.inner.mode else {
+        panic!("enabled fixture");
+    };
+    assert!(engine.judge.set(judge).is_ok());
+    for _ in 0..2 {
+        assert_eq!(
+            fixture
+                .imagery
+                .generate("place:test-street", canonical_room_request())
+                .await,
+            Err(imagery::ImageFailure::BadOutput)
+        );
+    }
+    assert_eq!(
+        fixture.calls(),
+        2,
+        "a batch has exactly one corrected regeneration"
+    );
+    assert!(
+        fixture
+            .prompt()
+            .contains(PhotoCheckFailure::ModernSetting.correction())
+    );
 }

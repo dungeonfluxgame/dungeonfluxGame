@@ -1,6 +1,11 @@
 //! Server-side photographic quality gate for generated gameplay images.
 
-use std::time::Duration;
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::{Mutex, PoisonError},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use df_providers::{
     NativePlateJudge, PhotoDress, PhotoFrame, PhotoJudgeKind, PhotoMedium, PhotoPeopleCount,
@@ -10,6 +15,106 @@ use df_providers::{
 use super::ImageFormat;
 
 const MAXIMUM_VISION_WIDTH: u32 = 1024;
+
+/// A fixed-size diagnostic ring; rejected bytes never enter the public imagery cache.
+const MAXIMUM_REJECTED_CANDIDATES: usize = 64;
+static REJECTED_CANDIDATE_SLOT: Mutex<usize> = Mutex::new(0);
+
+/// Retains the exact rejected bytes and generation prompt under the development artifact root.
+/// Records the path (or an explicit retention error) on the PHOTO_CHECK failure line.
+pub(super) async fn retain_rejected_candidate(
+    kind: PhotoCheckKind,
+    bytes: &[u8],
+    format: ImageFormat,
+    failure: PhotoCheckFailure,
+    prompt: &str,
+) {
+    let root = std::env::var_os("DUNGEONFLUX_ARTIFACT_ROOT")
+        .map_or_else(|| PathBuf::from("artifacts"), PathBuf::from);
+    let bytes = bytes.to_vec();
+    let prompt = prompt.to_owned();
+    let retained = tokio::task::spawn_blocking(move || {
+        retain_candidate_at(&root, kind, &bytes, format, failure, &prompt)
+    })
+    .await
+    .map_err(|error| io::Error::other(format!("photo reject retention task: {error}")))
+    .and_then(|retained| retained);
+    record_retention(kind, failure, &retained);
+}
+
+fn record_retention(
+    kind: PhotoCheckKind,
+    failure: PhotoCheckFailure,
+    retained: &io::Result<PathBuf>,
+) -> String {
+    let (path, error) = match retained {
+        Ok(path) => (path.display().to_string(), String::new()),
+        Err(error) => ("unavailable".to_owned(), error.to_string()),
+    };
+    let line = format!(
+        "PHOTO_CHECK kind={} result=fail reason={} path={path:?} retention_error={error:?}",
+        kind.label(),
+        failure.label()
+    );
+    crate::gameplay::actor::record_audit_diagnostic(
+        "gameplay.imagery.photo_check",
+        line.clone(),
+        serde_json::Map::from_iter([
+            ("kind".to_owned(), serde_json::json!(kind.label())),
+            ("result".to_owned(), serde_json::json!("fail")),
+            ("reason".to_owned(), serde_json::json!(failure.label())),
+            ("retained_path".to_owned(), serde_json::json!(path)),
+            ("retention_error".to_owned(), serde_json::json!(error)),
+        ]),
+        &[
+            ("photo_check.kind", kind.label().to_owned()),
+            ("photo_check.reason", failure.label().to_owned()),
+            ("photo_check.rejected_path", path),
+            ("audit.line", line.clone()),
+        ],
+    );
+    line
+}
+
+fn retain_candidate_at(
+    root: &Path,
+    kind: PhotoCheckKind,
+    bytes: &[u8],
+    format: ImageFormat,
+    failure: PhotoCheckFailure,
+    prompt: &str,
+) -> io::Result<PathBuf> {
+    // Serialize ring writes across concurrent image jobs, including their metadata sidecars.
+    let mut slot = REJECTED_CANDIDATE_SLOT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let directory = root.join("photo-check-rejected");
+    std::fs::create_dir_all(&directory)?;
+    // Fill unused slots first so separate artifact roots do not consume one another's ring.
+    let selected = (0..MAXIMUM_REJECTED_CANDIDATES)
+        .find(|candidate| {
+            !directory
+                .join(format!("candidate-{candidate:02}.image"))
+                .exists()
+        })
+        .unwrap_or(*slot);
+    let stem = format!("candidate-{selected:02}");
+    *slot = (selected + 1) % MAXIMUM_REJECTED_CANDIDATES;
+    let path = directory.join(format!("{stem}.image"));
+    let metadata = serde_json::json!({
+        "kind": kind.label(),
+        "reason": failure.label(),
+        "correction": failure.correction(),
+        "prompt": prompt,
+        "format": format!("{format:?}"),
+        "created_unix_ms": SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?.as_millis(),
+        "bytes": bytes.len(),
+    });
+    std::fs::write(&path, bytes)?;
+    std::fs::write(directory.join(format!("{stem}.json")), metadata.to_string())?;
+    Ok(path)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PhotoCheckKind {

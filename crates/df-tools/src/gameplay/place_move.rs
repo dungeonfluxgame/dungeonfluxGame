@@ -592,6 +592,9 @@ impl Service {
         current: &Checkpoint,
         operation: OperationId,
     ) -> Result<(), MoveError> {
+        // Forecast and opening share one owned gate; waiting for preparation never commits
+        // movement and cancellation releases the guard automatically.
+        let _preparation = super::fight_foresight::preparation_guard().await;
         let scene = beat_script_runtime::scene(current.state()).map_err(state_failure)?;
         let source = place::whereabouts(current.state(), &scene)
             .map_err(state_failure)?
@@ -599,8 +602,33 @@ impl Service {
         let Some(exit) = super::fight_foresight::proposed_exit(&source) else {
             return Ok(());
         };
-        if self.updates.borrow().basis() != current.basis() {
+        let source_matches = |latest: &Checkpoint| {
+            if latest.basis().run != current.basis().run {
+                return false;
+            }
+            let Ok(scene) = beat_script_runtime::scene(latest.state()) else {
+                return false;
+            };
+            let Ok(Some(snapshot)) = journey::living_scene::snapshot(latest.state(), &scene) else {
+                return false;
+            };
+            scene
+                .setting
+                .as_ref()
+                .is_some_and(|setting| setting.place_id == source)
+                && snapshot
+                    .model
+                    .ways_out
+                    .iter()
+                    .any(|way| way.open && way.id == exit)
+                && super::fight_foresight::proposed_exit(&source).as_deref() == Some(exit.as_str())
+        };
+        if !source_matches(&self.updates.borrow()) {
             return Err(tonic::Status::failed_precondition("fight source changed").into());
+        }
+        if let Some(record) = super::fight_foresight::proposed_destination(&source) {
+            self.living.prepare_arena_photograph(&record)?;
+            return Ok(());
         }
         let prepared = tokio::time::timeout(
             CREATION_DEADLINE,
@@ -611,14 +639,15 @@ impl Service {
             audit_refusal(&source, &exit, "arena_creation_deadline");
             MoveError::Refused(PlaceRefusal::CreationUnavailable)
         })??;
-        if self.updates.borrow().basis() != current.basis() || prepared.from != source {
+        if !source_matches(&self.updates.borrow()) || prepared.from != source {
             return Err(tonic::Status::failed_precondition("fight source changed").into());
         }
-        if let Some(record) = prepared.created
-            && !super::fight_foresight::retain_destination(&source, record)
-        {
-            audit_refusal(&source, &exit, "arena_destination_not_retained");
-            return Err(PlaceRefusal::CreationUnavailable.into());
+        if let Some(record) = prepared.created {
+            if !super::fight_foresight::retain_destination(&source, record.clone()) {
+                audit_refusal(&source, &exit, "arena_destination_not_retained");
+                return Err(PlaceRefusal::CreationUnavailable.into());
+            }
+            self.living.prepare_arena_photograph(&record)?;
         }
         Ok(())
     }

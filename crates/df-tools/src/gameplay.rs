@@ -1868,6 +1868,7 @@ async fn serve_run(
         living,
         layout: dev_control::layout::LayoutState::new(),
     };
+    fight_foresight::bind_service(service.clone());
     // DEVCTL-001: the agent control surface. Off by default: with the setting
     // off this returns no routes and touches nothing (no file, no behaviour).
     let dev_control = dev_control::setup(

@@ -1049,7 +1049,8 @@ impl Engine {
             _ => None,
         };
         if let (Some(kind), Some(judge)) = (gate, self.judge.get())
-            && let Some(failure) = photo_failure(judge, kind, &bytes, stored_format).await
+            && let Some(failure) =
+                photo_failure(judge, kind, &bytes, stored_format, request.prompt.as_str()).await
         {
             let corrected = format!("{} {}", failure.correction(), request.prompt.as_str());
             let retry = ImageEdit {
@@ -1061,7 +1062,7 @@ impl Engine {
             micro_dollars = micro_dollars.saturating_add(retry_cost);
             // Lettering is the one defect a retry may keep: a place with a little stray text on a
             // sign beats a place with no picture at all, where the cast stands on black (P6-183).
-            match photo_failure(judge, kind, &retry_bytes, retry_format).await {
+            match photo_failure(judge, kind, &retry_bytes, retry_format, &corrected).await {
                 None => {}
                 Some(photo_check::PhotoCheckFailure::VisibleText) => {
                     record_photo_check(kind, "kept", "visible_text");
@@ -1266,12 +1267,14 @@ async fn photo_failure(
     kind: photo_check::PhotoCheckKind,
     bytes: &[u8],
     format: ImageFormat,
+    prompt: &str,
 ) -> Option<photo_check::PhotoCheckFailure> {
     let (result, reason, failure) =
         match photo_check::check_photo(judge, kind, bytes, format, PHOTO_CHECK_DEADLINE).await {
             Ok(photo_check::PhotoCheckOutcome::Pass) => ("pass", "none", None),
             Ok(photo_check::PhotoCheckOutcome::Fail(failure)) => {
-                ("fail", failure.label(), Some(failure))
+                photo_check::retain_rejected_candidate(kind, bytes, format, failure, prompt).await;
+                return Some(failure);
             }
             Err(error) => ("unjudged", error.label(), None),
         };

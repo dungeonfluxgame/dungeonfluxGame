@@ -110,7 +110,7 @@ async fn unlikely_unavailable_and_invalid_choices_never_request_worlds() {
 }
 
 #[tokio::test]
-async fn unavailable_resource_service_is_attempted_only_once_per_run() {
+async fn an_unsent_resource_request_remains_retryable_on_a_later_forecast() {
     let foresight = FightForesight::new(Box::new(FakeJev(Ok(1))));
     let mut tries = 0;
     for _ in 0..2 {
@@ -121,8 +121,8 @@ async fn unavailable_resource_service_is_attempted_only_once_per_run() {
             })
             .await;
     }
-    assert_eq!(tries, 1);
-    assert!(foresight.state.lock().unwrap().requested.contains("hall"));
+    assert_eq!(tries, 2);
+    assert!(!foresight.state.lock().unwrap().requested.contains("hall"));
 }
 
 fn hall() -> Place {
@@ -285,4 +285,52 @@ async fn coalesced_table_rows_keep_their_committed_place_after_a_move() {
     );
     drop(updates);
     drop(worker);
+}
+
+#[tokio::test]
+async fn repeated_unnamed_exit_forecasts_keep_the_prepared_destination_for_opening() {
+    let foresight = FightForesight::new(Box::new(FakeJev(Ok(2))));
+    let mut place = shop();
+    place.id = "place-mareks-cloth-shop".to_owned();
+    place.exits[0].place_id = super::super::place::UNNAMED.to_owned();
+    foresight
+        .after_line(&place, &[], |_| panic!("no photo yet"))
+        .await;
+    let destination = super::super::place_creation::build(
+        &super::super::place_creation::tests::request(),
+        &super::super::place_creation::tests::place_slot().to_string(),
+        &super::super::place_creation::tests::people_slot().to_string(),
+        &super::super::place_creation::tests::things_slot().to_string(),
+    )
+    .unwrap();
+    assert!(foresight.retain_destination(&place.id, destination.clone()));
+    let mut flat = place.clone();
+    flat.exits.clear();
+    foresight
+        .after_line(&flat, &[], |_| panic!("flat forecast"))
+        .await;
+    assert!(foresight.proposed_arena(&place.id).is_none());
+
+    for _ in 0..3 {
+        foresight
+            .after_line(&place, &[], |_| panic!("photo completion dispatches"))
+            .await;
+        assert_eq!(
+            foresight.proposed_arena(&place.id),
+            Some(destination.place_id.clone())
+        );
+    }
+    assert_eq!(
+        foresight
+            .opening(&place, |_| panic!("reuse prepared record"))
+            .await,
+        Some(destination.place_id.clone())
+    );
+    let state = foresight.state.lock().unwrap();
+    assert_eq!(state.destinations.len(), 1);
+    assert_eq!(
+        state.destinations[&(place.id.clone(), "door".to_owned())],
+        destination
+    );
+    assert!(state.requested.is_empty());
 }

@@ -1502,3 +1502,147 @@ fn a_replay_reads_the_place_the_party_stood_in_when_a_decision_was_made() {
 
 #[path = "arena_opening_tests.rs"]
 mod arena_opening_tests;
+
+#[test]
+fn likely_exit_prepares_one_destination_and_photo_then_opening_reuses_it_without_moving() {
+    use crate::gameplay::{fight_foresight, imagery, living_scenes};
+    struct LikelyExit;
+    impl fight_foresight::Jev for LikelyExit {
+        fn forecast<'a>(
+            &'a self,
+            _: &'a Value,
+            _: &'a [String],
+        ) -> fight_foresight::ChoiceFuture<'a> {
+            Box::pin(async { Ok(2) })
+        }
+    }
+    with_shop(|opening, loaded| {
+        run(async move {
+            let storyteller = FakeEndpoint::start(vec![Reply::Output(answer(
+                &place_slot(),
+                &people_slot(),
+                &things_slot(),
+            ))]);
+            let lane = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../artifacts/tmp/lanes/P1/arena-preparation-test")
+                .join(std::process::id().to_string());
+            let voice = Arc::new(NpcVoice::new(Arc::new(teller(
+                storyteller.address,
+                0,
+                Duration::from_secs(5),
+                &lane.join("text"),
+            ))));
+            let mut table = Table::start(opening.clone(), loaded, voice);
+            let fixture = imagery::tests::DirectionFixture::photographic(&lane.join("imagery"));
+            table.service.living = LivingScenes::start(
+                fixture.imagery.clone(),
+                imagery::ReferenceStore::new(
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../assets/ui/generated"),
+                ),
+                SocialLedger::none(),
+                ContentRating::Restrained,
+                living_scenes::Timing::from_interval(Duration::from_secs(30)),
+                false,
+                table.updates.clone(),
+            );
+            let world_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let requested = world_requests.clone();
+            let photograph = table.service.living.clone();
+            let director = Arc::new(
+                fight_foresight::FightForesight::new(Box::new(LikelyExit)).with_world_requester(
+                    move |spec| {
+                        assert_eq!(spec.place_id(), STREET);
+                        assert!(
+                            photograph.canonical_room_ready(STREET),
+                            "world must wait for its photograph"
+                        );
+                        requested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        true
+                    },
+                ),
+            );
+            fight_foresight::TEST_DIRECTOR.with(|slot| *slot.borrow_mut() = Some(director.clone()));
+            fight_foresight::bind_service(table.service.clone());
+            let model = model_of(&opening);
+            let exit = model
+                .ways_out
+                .iter()
+                .find(|exit| exit.id == "street-door")
+                .unwrap();
+            let place = crate::gameplay::table_log::LinePlace {
+                id: HOME.to_owned(),
+                facts: vec!["A small cloth shop".to_owned()],
+                exits: vec![crate::gameplay::table_log::LineExit {
+                    id: exit.id.clone(),
+                    place_id: exit.beyond_place_id.clone(),
+                    description: exit.beyond.clone(),
+                }],
+            };
+            for _ in 0..3 {
+                director.after_line(&place, &[], |_| false).await;
+                director.prepare_after_line(&opening, HOME).await;
+            }
+            let destination = fight_foresight::proposed_destination(HOME).expect("prepared street");
+            let mut changes = table.service.living.subscribe().unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if table
+                        .service
+                        .living
+                        .canonical_room_ready(&destination.place_id)
+                    {
+                        break;
+                    }
+                    changes.changed().await.unwrap();
+                }
+            })
+            .await
+            .expect("fake destination photograph becomes ready");
+            assert_eq!(
+                world_requests.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "photo completion requests the world before the fight"
+            );
+            assert_eq!(
+                storyteller.connections(),
+                1,
+                "one place/people/things creation"
+            );
+            assert!(
+                fixture
+                    .imagery
+                    .hub()
+                    .for_subject(&format!("place:{}", destination.place_id))
+                    .iter()
+                    .any(|row| row.state == "ready")
+            );
+            table
+                .service
+                .prepare_fight_arena(&opening, operation(0x78))
+                .await
+                .unwrap_or_else(|_| panic!("opening reuses the prepared arena"));
+            assert_eq!(
+                storyteller.connections(),
+                1,
+                "opening must not create another record"
+            );
+            assert_eq!(
+                world_requests.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "opening must reuse the already requested world"
+            );
+            assert_eq!(
+                fight_foresight::proposed_destination(HOME),
+                Some(destination)
+            );
+            assert_eq!(
+                table.current().basis(),
+                opening.basis(),
+                "preparation never moves the party"
+            );
+            assert!(place::created(table.current().state()).unwrap().is_empty());
+            fight_foresight::TEST_DIRECTOR.with(|slot| *slot.borrow_mut() = None);
+        })
+    });
+}

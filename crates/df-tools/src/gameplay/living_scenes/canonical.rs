@@ -10,6 +10,8 @@ use df_model::checkpoint::{Checkpoint, EntityId};
 use df_render::art_contract;
 use sha2::{Digest, Sha256};
 
+const ROOM_RETRY_COOLDOWN: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Target {
     Hero(EntityId),
@@ -45,6 +47,7 @@ pub(super) struct Work {
     scope: String,
     binding: String,
     source: Source,
+    regenerate: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -59,7 +62,7 @@ enum Status {
 struct Entry {
     work: Work,
     status: Status,
-    /// When the generation was handed to the worker, for the `ART` audit timings.
+    /// Dispatch time while generating; failure completion time during the readmission cooldown.
     started: Option<Instant>,
 }
 
@@ -91,7 +94,7 @@ impl Drop for WorkerLifetime {
     }
 }
 
-/// A failed reference remains terminal for this binding; new authoring creates a new binding.
+/// Failures remain visible until explicit room readmission or a changed binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gameplay::living_scenes) enum ReferenceStatus {
     Missing,
@@ -113,11 +116,21 @@ impl References {
             )
             .as_bytes(),
         );
-        if self
-            .entries
-            .get(&target)
-            .is_some_and(|entry| entry.work.binding == binding)
+        if let Some(entry) = self.entries.get_mut(&target)
+            && entry.work.binding == binding
         {
+            // Re-admission after cooldown is an explicit hub invalidation, not a side retry
+            // loop. Each generation batch still uses the hub/imagery attempt bounds.
+            if matches!(target, Target::Room { .. })
+                && matches!(entry.status, Status::Failed(ImageFailure::BadOutput))
+                && entry
+                    .started
+                    .is_some_and(|finished| finished.elapsed() >= ROOM_RETRY_COOLDOWN)
+            {
+                entry.work.regenerate = true;
+                entry.status = Status::Queued;
+                diagnostic(&entry.work, "queued", None, None);
+            }
             return;
         }
         let work = Work {
@@ -125,6 +138,7 @@ impl References {
             scope: self.scope.clone(),
             binding,
             source,
+            regenerate: false,
         };
         diagnostic(&work, "queued", None, None);
         self.entries.insert(
@@ -721,6 +735,66 @@ mod tests {
             imagery::canonical_npc(ContentRating::Restrained, hobb, false, false, "b").unwrap();
         assert!(person.as_str().contains("broad carter"));
     }
+    #[test]
+    fn rejected_room_can_be_readmitted_after_cooldown_once_without_replacing_its_binding() {
+        let mut canonical = references("room-retry-run");
+        room(&mut canonical, "stable-layout");
+        let binding = selected_room_binding(&canonical).to_owned();
+        let Job::Canonical(work) = canonical.take_jobs().remove(0) else {
+            panic!("room job");
+        };
+        let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
+        inner.finish_canonical(work, Err(ImageFailure::BadOutput));
+        let mut state = locked(&inner.state);
+        room(&mut state.canonical, "stable-layout");
+        assert!(
+            state.canonical.take_jobs().is_empty(),
+            "no immediate paid retry loop"
+        );
+        let target = state.canonical.selected_rooms["same-place"].clone();
+        state.canonical.entries.get_mut(&target).unwrap().started =
+            Some(Instant::now() - ROOM_RETRY_COOLDOWN);
+        room(&mut state.canonical, "stable-layout");
+        room(&mut state.canonical, "stable-layout");
+        let jobs = state.canonical.take_jobs();
+        assert_eq!(jobs.len(), 1);
+        let Job::Canonical(work) = &jobs[0] else {
+            panic!("room job");
+        };
+        assert!(work.regenerate);
+        assert_eq!(work.binding, binding);
+    }
+
+    #[test]
+    fn prepared_room_is_resolvable_without_changing_current_room_or_duplicating_work() {
+        let mut canonical = references("prepared-room-run");
+        canonical.admit_room("shop", &model(), &[], true);
+        let current = canonical.current_room.clone();
+        canonical.admit_room("street", &model(), &[], false);
+        canonical.admit_room("street", &model(), &[], false);
+        assert_eq!(canonical.current_room, current);
+        assert_eq!(canonical.entries.len(), 2);
+        assert!(canonical.selected_rooms.contains_key("street"));
+        let inner = inner(Imagery::disabled(ImageryOff::Qualification), canonical);
+        let jobs = locked(&inner.state).canonical.take_jobs();
+        for job in jobs {
+            let Job::Canonical(work) = job else {
+                panic!("room job");
+            };
+            if matches!(&work.target, Target::Room { place, .. } if place == "street") {
+                // Drop the test's state lock before reporting a completion.
+                let key = ImageKey::parse(&"b".repeat(64)).unwrap();
+                let mut state = locked(&inner.state);
+                state
+                    .canonical
+                    .entries
+                    .get_mut(&work.target)
+                    .unwrap()
+                    .status = Status::Ready(key.clone());
+                assert_eq!(state.canonical.room("street"), Some(key));
+            }
+        }
+    }
 }
 
 /// The art contract's subject of a canonical target: what the `IMAGERY` audit lines name.
@@ -1007,17 +1081,32 @@ impl Inner {
                 OutputSpec::CUTOUT,
             ),
         };
-        self.imagery
-            .generate(
-                &subject(&work.target).key(),
-                ImageRequest {
-                    kind,
-                    references,
-                    prompt,
-                    output,
-                },
-            )
-            .await
+        let request = ImageRequest {
+            kind,
+            references,
+            prompt,
+            output,
+        };
+        let subject_key = subject(&work.target).key();
+        if work.regenerate {
+            use crate::gameplay::resources::{
+                DepictionSpec, Invalidate, ResourceKey, ResourceStatus,
+            };
+            let image_key = self.imagery.key_for(&request);
+            let spec = DepictionSpec::new(
+                &subject_key,
+                image_key.as_str(),
+                art_contract::Neutral::Nothing,
+            );
+            let key = ResourceKey::of(&spec);
+            if matches!(
+                self.imagery.hub().status(&key),
+                ResourceStatus::Failed(_, _)
+            ) {
+                self.imagery.hub().invalidate(Invalidate::Key(&key));
+            }
+        }
+        self.imagery.generate(&subject_key, request).await
     }
 
     pub(super) fn finish_canonical(&self, work: Work, result: Result<ImageKey, ImageFailure>) {
@@ -1039,12 +1128,18 @@ impl Inner {
             result.as_ref().ok(),
             entry.started.map(|started| started.elapsed()),
         );
+        let ready = result.is_ok();
         entry.status = match result {
             Ok(key) => Status::Ready(key),
             Err(failure) => Status::Failed(failure),
         };
+        // Cooldown starts at failure completion, so a slow provider cannot consume it.
+        entry.started = Some(Instant::now());
         // The next watcher projection recomputes the graph from the exact ready identity.
         drop(state);
+        if ready && let Target::Room { place, .. } = &work.target {
+            super::super::fight_foresight::request_prepared_world(place);
+        }
         self.wake.send_modify(|count| *count += 1);
     }
 
@@ -1213,6 +1308,11 @@ impl References {
             place: place.to_owned(),
             revision: revision.clone(),
         };
+        // A prepared destination must be discoverable by the photographic world source before
+        // it becomes current. Lookahead cannot replace an already selected room revision.
+        self.selected_rooms
+            .entry(place.to_owned())
+            .or_insert_with(|| target.clone());
         if select {
             self.selected_rooms.insert(place.to_owned(), target.clone());
             self.current_room = Some(target.clone());
@@ -1275,5 +1375,31 @@ impl References {
                 &revision,
             );
         }
+    }
+}
+
+impl LivingScenes {
+    pub(in crate::gameplay) fn canonical_room_ready(&self, place: &str) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| inner.canonical_room_key(place).is_some())
+    }
+
+    /// Admit the speculative destination through the same canonical worker as a visited room.
+    /// This prepares visual resources only; no checkpoint or party whereabouts are changed.
+    pub(in crate::gameplay) fn prepare_arena_photograph(
+        &self,
+        destination: &crate::gameplay::place::PlaceRecord,
+    ) -> Result<(), crate::gameplay::place::PlaceRefusal> {
+        let Some(inner) = &self.inner else {
+            return Ok(());
+        };
+        let expanded = destination.expand()?;
+        inner.admit_canonical_room(&destination.place_id, &expanded.model, &expanded.cast);
+        if inner.canonical_room_key(&destination.place_id).is_some() {
+            super::super::fight_foresight::request_prepared_world(&destination.place_id);
+        }
+        inner.wake.send_modify(|count| *count += 1);
+        Ok(())
     }
 }
