@@ -3101,7 +3101,7 @@ fn stage_inner(
         .find(|thing| thing.id == target)
     {
         if !thing.in_scene && thing.holder_id.as_deref() != Some(&hero) {
-            format!("You cannot see {} here.", the_phrase(&thing.name))
+            format!("{hero} cannot see {} here.", the_phrase(&thing.name))
         } else {
             match option {
                 "examine" => {
@@ -3112,8 +3112,8 @@ fn stage_inner(
                         "{} {}",
                         thing.detail,
                         owner.map_or_else(
-                            || "You cannot tell who owns it.".to_owned(),
-                            |owner| format!("It belongs to {}.", owner.name)
+                            || format!("Nothing shows who owns {}.", the_phrase(&thing.name)),
+                            |owner| format!("{} owns {}.", owner.name, the_phrase(&thing.name))
                         )
                     );
                     // A loose portable item is handled to be read. Examining it changes no custody:
@@ -3131,7 +3131,7 @@ fn stage_inner(
                     format!("{} cannot be carried away.", sentence_the(&thing.name))
                 }
                 "take" if thing.holder_id.as_deref() == Some(&hero) => {
-                    format!("You already hold {}.", the_phrase(&thing.name))
+                    format!("{hero} already holds {}.", the_phrase(&thing.name))
                 }
                 "take" if thing.in_use || thing.holder_id.is_some() => {
                     format!(

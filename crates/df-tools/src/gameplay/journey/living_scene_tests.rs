@@ -903,7 +903,7 @@ fn a_purchase_names_the_seller_and_keeps_a_card_for_the_buyer() {
             living_scene::last_line(examined.state())
                 .unwrap()
                 .unwrap()
-                .contains("It belongs to Brynn.")
+                .contains("Brynn owns ")
         );
         let attempted_give = interact(&after, member, 33, &owned_id, "give");
         assert!(
