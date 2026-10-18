@@ -346,9 +346,10 @@ fn toast(client: &Rc<RefCell<Client>>) -> Result<Element, JsValue> {
 }
 
 /// Shows a recovery control only while its condition holds. A dialogue confirmation of
-/// unknown outcome has its own retry button inside the dialogue panel.
+/// unknown outcome has its own retry button inside the dialogue panel. The display retries a lost
+/// connection by itself under its one "Reconnecting…" notice, so it shows no second one.
 pub(super) fn prompt(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
-    let (document, needs, dialogue_retry) = {
+    let (document, mut needs, dialogue_retry) = {
         let state = client.borrow();
         (
             state.document.clone(),
@@ -356,6 +357,9 @@ pub(super) fn prompt(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             state.dialogue.has_confirmation(),
         )
     };
+    if client.borrow().role == "display" {
+        needs.lost_connection = false;
+    }
     let toast = toast(client)?;
     if let Some(previous) = toast.query_selector(".recovery-needed")? {
         previous.remove();
