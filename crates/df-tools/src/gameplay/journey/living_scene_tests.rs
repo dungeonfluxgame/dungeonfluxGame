@@ -2072,3 +2072,59 @@ fn a_purchase_that_names_the_seller_as_recipient_leaves_the_item_with_the_hero()
         assert_eq!(card.holder, "Brynn");
     });
 }
+
+#[test]
+fn a_ware_bought_in_a_created_place_replays_once_and_the_scene_still_reads() {
+    use crate::gameplay::{
+        adventure::{RulesMode, record, shop},
+        beat_script_runtime as runtime, beat_script_variety_tests as native,
+        place_creation::tests::{people_slot, place_slot, request, things_slot},
+        startup_configuration::ContentRating,
+    };
+    let generated = shop::generate(42, RulesMode::Standard, ContentRating::default()).unwrap();
+    let (loaded, _) = record::reload(&generated.documents(true).unwrap()).unwrap();
+    pack::with_test_pack(loaded, || {
+        let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+        let made = crate::gameplay::place_creation::build(
+            &request(),
+            &place_slot().to_string(),
+            &people_slot().to_string(),
+            &things_slot().to_string(),
+        )
+        .unwrap();
+        let out = match crate::gameplay::place::plan(
+            &opening,
+            "Brynn",
+            OperationId::from_bytes(&[40; 16]).unwrap(),
+            "place-mareks-cloth-shop",
+            "street-door",
+            &made.place_id,
+            Some(&made),
+        ) {
+            Ok(planned) => planned.candidate,
+            Err(_) => panic!("the move to the street is refused"),
+        };
+        let model_of = |current: &Checkpoint| {
+            let scene = runtime::scene(current.state()).unwrap();
+            living_scene::snapshot(current.state(), &scene)
+                .unwrap()
+                .unwrap()
+                .model
+        };
+        let offer = model_of(&out).offers[0].clone();
+        let bought = interact(&out, native::first(), 41, &offer.id, "buy");
+        // The scene the screens read carries the purchase; reading it again replays the journal
+        // from the place's own record, so the ware is sold once and nothing is refused.
+        let model = model_of(&bought);
+        let held = model
+            .things
+            .iter()
+            .filter(|thing| thing.id == offer.canonical_item_id())
+            .collect::<Vec<_>>();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].holder_id.as_deref(), Some("Brynn"));
+        assert!(!model.offer_available(&offer.id));
+        living_scene::publish(&bought).unwrap();
+        assert_eq!(model_of(&bought).things, model.things);
+    });
+}

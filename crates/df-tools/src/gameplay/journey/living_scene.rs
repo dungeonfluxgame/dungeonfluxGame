@@ -1492,7 +1492,16 @@ pub(in crate::gameplay) fn snapshot(
         }
         Ok(Some(first.clone()))
     })?;
+    // A created place's base is its journal record, never the setting passed in: the projected
+    // scene already carries this journal, and replaying a purchase onto it sells the ware twice.
+    let created = match crate::gameplay::place::created(state)?.remove(&setting.place_id) {
+        Some(place) => crate::gameplay::place::scene_of(&place, scene)?
+            .setting
+            .and_then(|setting| setting.model),
+        None => None,
+    };
     let Some(mut model) = authored
+        .or(created)
         .or_else(|| {
             MODELS
                 .get_or_init(Default::default)
