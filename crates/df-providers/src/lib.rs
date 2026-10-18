@@ -141,6 +141,13 @@ pub use fal_segment::{
     NativeFalSegmenter, PixelBox, SegmentAnswer, SegmentInstance, SegmentModel, SegmentRequest,
 };
 #[cfg(not(target_arch = "wasm32"))]
+mod worldlabs;
+#[cfg(not(target_arch = "wasm32"))]
+pub use worldlabs::{
+    MarbleModel, NativeWorldLabs, OperationId, PlyResolution, WorldLabsConfig, WorldLabsError,
+    WorldPoll, WorldRequest, WorldResult,
+};
+#[cfg(not(target_arch = "wasm32"))]
 mod plate_judge;
 #[cfg(not(target_arch = "wasm32"))]
 pub use plate_judge::{
