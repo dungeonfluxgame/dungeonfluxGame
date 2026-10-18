@@ -24,6 +24,7 @@ fn answer(frame: &str, medium: &str, text: &str, dress: &str, people_count: Opti
         "medium": medium,
         "text": text,
         "dress": dress,
+        "setting": "period",
     });
     if let Some(people_count) = people_count {
         answer["people_count"] = json!(people_count);
@@ -217,4 +218,16 @@ async fn accepts_a_photographic_plate_and_requires_character_count_in_the_schema
         .unwrap(),
         PhotoCheckOutcome::Pass
     );
+}
+
+#[tokio::test]
+async fn rejects_a_modern_place_even_with_period_people() {
+    let mut modern = answer("single_photograph", "photograph", "none", "no_people", None);
+    modern["setting"] = json!("modern");
+    rejected(
+        PhotoCheckKind::CanonicalRoom,
+        modern,
+        PhotoCheckFailure::ModernSetting,
+    )
+    .await;
 }

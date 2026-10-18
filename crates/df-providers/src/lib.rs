@@ -145,6 +145,6 @@ mod plate_judge;
 #[cfg(not(target_arch = "wasm32"))]
 pub use plate_judge::{
     JudgeAnswer, JudgePicture, NativePlateJudge, PhotoDress, PhotoFrame, PhotoJudgeKind,
-    PhotoMedium, PhotoPeopleCount, PhotoQualityAnswer, PhotoText, PlateJudgeConfig,
+    PhotoMedium, PhotoPeopleCount, PhotoQualityAnswer, PhotoSetting, PhotoText, PlateJudgeConfig,
     PlateJudgeError,
 };

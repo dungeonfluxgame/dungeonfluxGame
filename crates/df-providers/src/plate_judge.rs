@@ -25,7 +25,7 @@ const MAXIMUM_PICTURE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_TOTAL_PICTURE_BYTES: usize = 8 * 1024 * 1024;
 const MAXIMUM_INSTRUCTION_CHARACTERS: usize = 6000;
 const MAXIMUM_RESPONSE_BYTES: usize = 256 * 1024;
-const PHOTO_QUALITY_INSTRUCTION: &str = "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are pasted/composited together. medium is photograph only for a convincing photographic capture, painting_or_illustration for drawn or painterly art, and cgi_or_render for synthetic rendered imagery. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content.";
+const PHOTO_QUALITY_INSTRUCTION: &str = "Judge this one generated image for photographic quality. Answer only using the supplied labels. frame is single_photograph when it is one coherent camera photograph, grid_or_collage when it is divided into panels or a contact sheet, and cutout_composite when people or objects are pasted/composited together. medium is photograph only for a convincing photographic capture, painting_or_illustration for drawn or painterly art, and cgi_or_render for synthetic rendered imagery. text is visible_text if any readable or invented lettering/signage appears, otherwise none. dress is modern_clothing if any person wears recognizably modern clothes, period if all visible people wear period-appropriate clothes, and no_people if there are no people. setting is modern if the architecture, lighting or objects are recognizably modern (electric ceiling lights, plate-glass shopfronts, shopping malls, vehicles, plastic, printed packaging), otherwise period. For a canonical character only, people_count is exactly_one only when precisely one human person is present; animals do not count as people. Do not infer image intent; judge only visible content.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhotoJudgeKind {
@@ -55,6 +55,12 @@ pub enum PhotoText {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhotoSetting {
+    Period,
+    Modern,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhotoDress {
     Period,
     ModernClothing,
@@ -73,6 +79,7 @@ pub struct PhotoQualityAnswer {
     pub medium: PhotoMedium,
     pub text: PhotoText,
     pub dress: PhotoDress,
+    pub setting: PhotoSetting,
     pub people_count: Option<PhotoPeopleCount>,
 }
 
@@ -260,8 +267,9 @@ impl NativePlateJudge {
             "medium": {"type": "string", "enum": ["photograph", "painting_or_illustration", "cgi_or_render"]},
             "text": {"type": "string", "enum": ["none", "visible_text"]},
             "dress": {"type": "string", "enum": ["period", "modern_clothing", "no_people"]},
+            "setting": {"type": "string", "enum": ["period", "modern"]},
         });
-        let mut required = vec!["frame", "medium", "text", "dress"];
+        let mut required = vec!["frame", "medium", "text", "dress", "setting"];
         if character {
             properties["people_count"] = json!({
                 "type": "string",
@@ -297,12 +305,12 @@ fn parse_photo_answer(
     character: bool,
 ) -> Result<PhotoQualityAnswer, PlateJudgeError> {
     let object = value.as_object().ok_or(PlateJudgeError::Output)?;
-    let expected_fields = if character { 5 } else { 4 };
+    let expected_fields = if character { 6 } else { 5 };
     if object.len() != expected_fields
         || object.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "frame" | "medium" | "text" | "dress" | "people_count"
+                "frame" | "medium" | "text" | "dress" | "setting" | "people_count"
             ) || (key == "people_count" && !character)
         })
     {
@@ -337,6 +345,11 @@ fn parse_photo_answer(
         "no_people" => PhotoDress::NoPeople,
         _ => return Err(PlateJudgeError::Output),
     };
+    let setting = match label("setting")? {
+        "period" => PhotoSetting::Period,
+        "modern" => PhotoSetting::Modern,
+        _ => return Err(PlateJudgeError::Output),
+    };
     let people_count = if character {
         Some(match label("people_count")? {
             "exactly_one" => PhotoPeopleCount::ExactlyOne,
@@ -351,6 +364,7 @@ fn parse_photo_answer(
         medium,
         text,
         dress,
+        setting,
         people_count,
     })
 }

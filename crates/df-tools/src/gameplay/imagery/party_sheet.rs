@@ -128,6 +128,38 @@ pub(in crate::gameplay) fn vision_picture(
     Ok(encoded)
 }
 
+/// `bytes` re-encoded in its own format at a smaller size so it fits `maximum_bytes`, keeping
+/// any transparency; `None` when it already fits. A canonical cut-out of a tall figure can come
+/// back from the provider just over the edit adapter's reference limit (P6-184).
+pub(in crate::gameplay) fn fit_reference(
+    bytes: &[u8],
+    format: ImageFormat,
+    maximum_bytes: usize,
+) -> Result<Option<Vec<u8>>, SheetError> {
+    if bytes.len() <= maximum_bytes {
+        return Ok(None);
+    }
+    let decoded = image::load_from_memory_with_format(bytes, container_of(format))
+        .map_err(|_| SheetError::Decode)?;
+    let mut size = bytes.len();
+    for _ in 0..4 {
+        // Bytes scale roughly with area: shrink each side by the square root of the excess.
+        let ratio = (maximum_bytes as f64 / size as f64).sqrt() * 0.9;
+        let width = ((f64::from(decoded.width()) * ratio) as u32).max(1);
+        let height = ((f64::from(decoded.height()) * ratio) as u32).max(1);
+        let scaled = decoded.resize_exact(width, height, imageops::FilterType::Triangle);
+        let mut encoded = Vec::new();
+        scaled
+            .write_to(&mut Cursor::new(&mut encoded), container_of(format))
+            .map_err(|_| SheetError::Encode)?;
+        if encoded.len() <= maximum_bytes {
+            return Ok(Some(encoded));
+        }
+        size = encoded.len().max(size);
+    }
+    Err(SheetError::Encode)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +239,31 @@ mod tests {
         );
         let broken = ReferenceImage::new(ImageFormat::Png, Bytes::from_static(b"not an image"));
         assert_eq!(party_sheet(&[broken]).unwrap_err(), SheetError::Decode);
+    }
+
+    #[test]
+    fn an_oversized_transparent_reference_is_sent_smaller_with_its_alpha() {
+        // Noise compresses badly, so a modest picture is already over a small limit.
+        let mut noisy = image::RgbaImage::new(400, 600);
+        for (index, pixel) in noisy.pixels_mut().enumerate() {
+            let value = (index.wrapping_mul(2_654_435_761) >> 7) as u8;
+            *pixel = image::Rgba([value, value.wrapping_mul(3), value.wrapping_mul(7), value]);
+        }
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(noisy)
+            .write_to(&mut Cursor::new(&mut png), Container::Png)
+            .unwrap();
+        let limit = png.len() / 2;
+        assert_eq!(
+            fit_reference(&png, ImageFormat::Png, png.len()).unwrap(),
+            None
+        );
+        let fitted = fit_reference(&png, ImageFormat::Png, limit)
+            .unwrap()
+            .expect("an oversized reference is re-encoded");
+        assert!(fitted.len() <= limit);
+        let decoded = image::load_from_memory_with_format(&fitted, Container::Png).unwrap();
+        assert!(decoded.color().has_alpha());
+        assert!(decoded.width() < 400 && decoded.height() < 600);
     }
 }

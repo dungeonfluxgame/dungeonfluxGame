@@ -83,7 +83,7 @@ pub(super) use prompt::{PromptRefusal, VettedFact};
 // PLAY-V09: the scene plate's party sheet and prompts.
 pub(super) use cast_sheet::{CastIdentity, cast_sheet};
 use party_sheet::SheetError;
-pub(super) use party_sheet::{party_sheet, vision_picture};
+pub(super) use party_sheet::{fit_reference, party_sheet, vision_picture};
 pub(super) use photo_edit::harbor_photo_edit;
 #[cfg(test)]
 pub(super) use plate_prompt::FLUX_MAXIMUM_PROMPT_CHARACTERS;
@@ -383,6 +383,8 @@ struct Engine {
 
 /// Bounds one photo-quality judgement of a finished image.
 const PHOTO_CHECK_DEADLINE: Duration = Duration::from_secs(30);
+/// The edit adapter's limit on one reference image.
+const REFERENCE_BYTES_LIMIT: usize = 4 * 1024 * 1024;
 
 enum Mode {
     Off(ImageryOff),
@@ -986,12 +988,28 @@ impl Engine {
             self.cache_hits.fetch_add(1, Ordering::SeqCst);
             return Ok(());
         }
-        let references: Vec<ProviderReference<'_>> = request
-            .references
+        // A reference over the adapter's limit is sent smaller rather than refusing the edit.
+        let mut fitted = Vec::with_capacity(request.references.len());
+        for reference in &request.references {
+            let bytes = if reference.bytes.len() > REFERENCE_BYTES_LIMIT {
+                let (source, format) = (reference.bytes.clone(), reference.format);
+                tokio::task::spawn_blocking(move || {
+                    fit_reference(&source, format, REFERENCE_BYTES_LIMIT)
+                })
+                .await
+                .map_err(|_| ImageFailure::Interrupted)?
+                .map_err(|_| ImageFailure::InvalidRequest)?
+                .map_or_else(|| reference.bytes.clone(), Bytes::from)
+            } else {
+                reference.bytes.clone()
+            };
+            fitted.push((reference.format, bytes));
+        }
+        let references: Vec<ProviderReference<'_>> = fitted
             .iter()
-            .map(|reference| ProviderReference {
-                format: reference.format,
-                bytes: &reference.bytes,
+            .map(|(format, bytes)| ProviderReference {
+                format: *format,
+                bytes,
             })
             .collect();
         let edit = ImageEdit {

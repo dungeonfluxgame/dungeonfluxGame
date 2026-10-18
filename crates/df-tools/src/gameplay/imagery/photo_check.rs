@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use df_providers::{
     NativePlateJudge, PhotoDress, PhotoFrame, PhotoJudgeKind, PhotoMedium, PhotoPeopleCount,
-    PhotoText, PlateJudgeError,
+    PhotoSetting, PhotoText, PlateJudgeError,
 };
 
 use super::ImageFormat;
@@ -50,6 +50,7 @@ pub(super) enum PhotoCheckFailure {
     GridOrCollage,
     CutoutComposite,
     NotPhotograph,
+    ModernSetting,
     VisibleText,
     ModernClothing,
     PeopleInEmptyRoom,
@@ -63,6 +64,7 @@ impl PhotoCheckFailure {
             Self::GridOrCollage => "grid_or_collage",
             Self::CutoutComposite => "cutout_composite",
             Self::NotPhotograph => "not_photograph",
+            Self::ModernSetting => "modern_setting",
             Self::VisibleText => "visible_text",
             Self::ModernClothing => "modern_clothing",
             Self::PeopleInEmptyRoom => "people_in_empty_room",
@@ -83,6 +85,9 @@ impl PhotoCheckFailure {
             }
             Self::NotPhotograph => {
                 "The previous result did not look like a real camera photograph; make a real photograph of real people in a real place."
+            }
+            Self::ModernSetting => {
+                "The previous result showed a modern place; show a pre-industrial town of timber, stone, plaster and tile, lit only by daylight, lanterns, candles and fire."
             }
             Self::VisibleText => {
                 "The previous result showed lettering; leave every sign, board, cloth and wall surface plain and blank."
@@ -145,6 +150,7 @@ pub(super) async fn check_photo(
         answer.medium,
         answer.text,
         answer.dress,
+        answer.setting,
         answer.people_count,
     ))
 }
@@ -155,6 +161,7 @@ fn classify(
     medium: PhotoMedium,
     text: PhotoText,
     dress: PhotoDress,
+    setting: PhotoSetting,
     people_count: Option<PhotoPeopleCount>,
 ) -> PhotoCheckOutcome {
     let failure = match frame {
@@ -167,6 +174,10 @@ fn classify(
         PhotoMedium::PaintingOrIllustration | PhotoMedium::CgiOrRender => {
             Some(PhotoCheckFailure::NotPhotograph)
         }
+    })
+    .or_else(|| match setting {
+        PhotoSetting::Period => None,
+        PhotoSetting::Modern => Some(PhotoCheckFailure::ModernSetting),
     })
     .or_else(|| match text {
         PhotoText::None => None,

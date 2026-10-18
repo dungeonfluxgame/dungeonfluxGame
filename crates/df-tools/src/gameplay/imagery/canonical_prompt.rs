@@ -17,7 +17,9 @@ const PLACE_LOOK: &str = "An establishing shot from a live-action fantasy televi
     camera with a 35mm lens using only the light already in the place: uneven falloff into darker \
     corners, real dust and wear, scuffed boards, irregular hand-made objects, slight sensor grain \
     and natural lens softness toward the edges. A photographic frame of a real place, as if you \
-    stood in it; not an architectural or real-estate shot, and one continuous frame with no grid \
+    stood in it, in a pre-industrial town of timber, stone, plaster, thatch and tile lit only by \
+    daylight, lanterns, candles and fire; not an architectural or real-estate shot, and one \
+    continuous frame with no grid \
     or panels. Exactly zero people, and no text, signage, letters or numbers anywhere.";
 
 fn assembled(
@@ -195,6 +197,10 @@ mod tests {
         assert!(PLACE_LOOK.contains("Dungeons & Dragons world"));
         assert!(PLACE_LOOK.contains("not an architectural or real-estate shot"));
         assert!(PLACE_LOOK.contains("one continuous frame with no grid or panels"));
+        assert!(
+            PLACE_LOOK
+                .contains("in a pre-industrial town of timber, stone, plaster, thatch and tile")
+        );
         assert!(PLACE_LOOK.contains("no text, signage, letters or numbers"));
         assert!(!PLACE_LOOK.contains("film set"));
     }
