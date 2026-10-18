@@ -506,8 +506,10 @@ pub(super) fn install_battlefield() {
     });
 }
 
-/// Publishes the health variants of this display view for the battlefield, by combatant name:
-/// the heroes' (the art their seat wears in the fight) and the cast's.
+/// Publishes the heroes' and cast's pictures of this display view for the battlefield, by
+/// combatant name: each hero's battle face (their health variant when one exists, otherwise
+/// their own live picture; an empty face publishes nothing, so the battlefield keeps its
+/// authored figure) and the cast's live sprites.
 pub(super) fn publish_battlefield_variants(
     journey: &rpc::JourneyView,
     scene: Option<&rpc::GameplayScene>,

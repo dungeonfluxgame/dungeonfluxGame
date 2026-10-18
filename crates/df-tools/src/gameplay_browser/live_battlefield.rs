@@ -1587,6 +1587,22 @@ fn snapshot_of(view: &LiveView<'_>) -> Option<CombatSnapshot> {
             } else {
                 portrait.replacen("portrait-", "figure-", 1)
             };
+            // A hero wears their own picture: the live battle face the server publishes (their
+            // canonical cut-out, or its health variant when hurt); the stock seat art only until
+            // one exists (B-08).
+            let live_face = hero
+                .then(|| {
+                    view.journey
+                        .live_faces
+                        .iter()
+                        .find(|face| face.name == member.name)
+                        .and_then(|face| crate::presentation::imagery_url(&face.battle_sprite))
+                })
+                .flatten();
+            let (figure, portrait) = match live_face {
+                Some(path) => (path.clone(), path),
+                None => (figure, portrait),
+            };
             Member {
                 id: id_of(index, member),
                 name: member.name.clone(),

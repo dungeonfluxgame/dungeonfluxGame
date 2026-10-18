@@ -33,7 +33,7 @@ use super::{
     health_faces::{Book, Character, GENERATED_TIERS},
     imagery::{
         CharacterFacts, CharacterRole, ImageFailure, ImageKey, ImageKind, ImageRequest, Imagery,
-        LifeStage, OutputSpec, PlaceFacts, ReferenceImage, ReferenceStore, cast_expression,
+        LifeStage, Lookup, OutputSpec, PlaceFacts, ReferenceImage, ReferenceStore, cast_expression,
         party_sheet, scene_refresh,
     },
     pack::{self, SceneKey},
@@ -49,27 +49,80 @@ use super::{
 use super::shot::scene_graph::{ActorInput, SceneGraph, SceneGraphInput};
 use super::{actor, resources};
 
-/// The authored cut-out of the party's hero at this position; the health variants are made from
-/// it.
+/// The authored cut-out of the party's hero at this position. Used only as the source of a
+/// health variant before that hero's live canonical picture exists; once it does, variants are
+/// made from the live picture so a hurt hero still looks like themselves.
 fn hero_art(index: usize) -> String {
-    format!("assets/ui/generated/sprite-hero-{}-documentary-photo", index + 1)
+    format!(
+        "assets/ui/generated/sprite-hero-{}-documentary-photo",
+        index + 1
+    )
 }
 
 /// The cut-out the battlefield dresses the hero at this party position in (the dwarf fighter, the
-/// archer, then the second fighter). SWITCH POINT: this must match `snapshot_of` in
-/// `gameplay_browser/live_battlefield.rs`, so a health variant is made from the art the fight
-/// shows.
+/// archer, then the second fighter) before a live picture exists. SWITCH POINT: this must match
+/// `snapshot_of` in `gameplay_browser/live_battlefield.rs`, so a fallback health variant is made
+/// from the art the fight shows.
 fn battle_hero_art(index: usize) -> String {
     let art = [1, 3, 2][index % 3];
     format!("assets/ui/generated/sprite-hero-{art}-documentary-photo")
 }
 
-/// What a hero's health variants are made from on each screen, and which are cached.
+/// The hero's own live picture, when one exists: the canonical hero at their seat, otherwise
+/// the standing cut-out made from the opening party sheet. This is the picture a hero's battle
+/// face falls back to and the source their health variants are made from.
+fn live_hero_key(state: &State, hero: &StageHero) -> Option<ImageKey> {
+    let canonical = u8::try_from(hero.index + 1).ok().and_then(|seat| {
+        state
+            .canonical
+            .hero_at_seat(seat)
+            .and_then(|(entity, _)| state.canonical.hero(entity))
+    });
+    canonical.or_else(|| state.hero_cutouts.get(&hero.name).cloned())
+}
+
+/// The characters whose art a hero's health variants are made from: one character sourced from
+/// the hero's live picture when it exists (the same variant serves the stage and the
+/// battlefield), otherwise the authored stage and battlefield arts.
+fn hero_characters(hero: &StageHero, live: Option<ImageKey>) -> Vec<Character> {
+    let facts = CharacterFacts {
+        role: CharacterRole::Hero,
+        life_stage: LifeStage::Adult,
+    };
+    if let Some(key) = live {
+        let art = key.path();
+        return vec![Character {
+            id: art.clone(),
+            art,
+            facts,
+        }];
+    }
+    let mut arts = vec![hero_art(hero.index)];
+    let battle = battle_hero_art(hero.index);
+    if !arts.contains(&battle) {
+        arts.push(battle);
+    }
+    arts.into_iter()
+        .map(|art| Character {
+            id: art.clone(),
+            art,
+            facts: CharacterFacts {
+                role: CharacterRole::Hero,
+                life_stage: LifeStage::Adult,
+            },
+        })
+        .collect()
+}
+
+/// The picture a hero shows on each screen now: the health variant of their current tier when
+/// one exists, otherwise their own live picture. `None` on a screen means no live picture
+/// exists yet, so that screen keeps its authored (stock) art.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HeroFace {
-    /// The variant of the exploration stage's art.
+    /// The picture for the exploration stage.
     stage: Option<ImageKey>,
-    /// The variant of the battlefield's art (the same one when the seat wears the same art).
+    /// The picture for the battlefield (the same one when the variant is made from the live
+    /// picture).
     battle: Option<ImageKey>,
 }
 
@@ -548,11 +601,12 @@ fn graph_of(stage: &Stage, state: Option<&State>) -> Option<SceneGraph> {
         };
         let live_art = state.and_then(|state| {
             state
-                .canonical
-                .hero_at_seat(art)
-                .and_then(|(entity, _)| state.canonical.hero(entity))
+                .hero_faces
+                .get(&hero.name)
+                .and_then(|face| face.stage.as_ref())
+                .cloned()
+                .or_else(|| live_hero_key(state, hero))
                 .map(|key| key.path())
-                .or_else(|| state.hero_cutouts.get(&hero.name).map(ImageKey::path))
         });
         owned.push((
             format!("hero-{art}"),
@@ -958,7 +1012,9 @@ pub(super) struct LivingScenes {
     last_graph_revision: Arc<Mutex<Option<u64>>>,
 }
 
-/// The health variants of the heroes, by name, on a view's journey.
+/// The heroes' pictures, by name, on a view's journey. Every hero in `hero_faces` is
+/// published, hurt or not; an empty sprite or battle sprite means no live picture exists yet
+/// and that screen keeps its authored (stock) art.
 fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
     if let Some(journey) = journey {
         journey.live_faces = state
@@ -974,23 +1030,17 @@ fn apply_hero_faces(state: &State, journey: Option<&mut rpc::JourneyView>) {
 }
 
 /// The characters whose art has health variants in this stage: the party's heroes first, then
-/// the scene's cast.
-fn characters_of(stage: &Stage, facts: &SceneFacts) -> Vec<Character> {
-    let heroes = stage.heroes.iter().flat_map(|hero| {
-        let mut arts = vec![hero_art(hero.index)];
-        let battle = battle_hero_art(hero.index);
-        if !arts.contains(&battle) {
-            arts.push(battle);
-        }
-        arts.into_iter().map(|art| Character {
-            id: art.clone(),
-            art,
-            facts: CharacterFacts {
-                role: CharacterRole::Hero,
-                life_stage: LifeStage::Adult,
-            },
-        })
-    });
+/// the scene's cast. A hero with a live picture contributes one character sourced from it;
+/// a hero without one contributes the authored stage and battlefield arts.
+fn characters_of(
+    stage: &Stage,
+    facts: &SceneFacts,
+    hero_live: &[Option<ImageKey>],
+) -> Vec<Character> {
+    let heroes =
+        stage.heroes.iter().enumerate().flat_map(|(index, hero)| {
+            hero_characters(hero, hero_live.get(index).cloned().flatten())
+        });
     let cast = facts
         .members
         .iter()
@@ -1042,12 +1092,14 @@ fn warm_jobs(
     stage: &Stage,
     facts: &SceneFacts,
     characters: &[Character],
+    hero_live: &[Option<ImageKey>],
 ) -> Vec<Job> {
-    let heroes = stage.heroes.iter().flat_map(|hero| {
+    let heroes = stage.heroes.iter().enumerate().flat_map(|(index, hero)| {
         let tier = tier_of(hero.vitals);
-        [hero_art(hero.index), battle_hero_art(hero.index)]
+        let live = hero_live.get(index).cloned().flatten();
+        hero_characters(hero, live)
             .into_iter()
-            .filter_map(move |art| Some((art, tier?)))
+            .filter_map(move |character| Some((character.id, tier?)))
     });
     let cast = facts
         .members
@@ -1073,26 +1125,43 @@ fn warm_jobs(
     jobs
 }
 
-/// Recomputes which health variant every hero and cast member shows from the view's hit points
-/// and the variants known to exist: the variant of the exact tier, otherwise the nearest cached
-/// one, otherwise the authored art. Pure presentation, no provider call; returns whether
-/// anything shown changed.
+/// Recomputes which picture every hero and cast member shows from the view's hit points and
+/// the variants known to exist: the variant of the exact tier, otherwise the nearest cached
+/// one, otherwise (heroes) their own live picture or (everyone) the authored art. Pure
+/// presentation, no provider call; returns whether anything shown changed.
 fn refresh_health(state: &mut State) -> bool {
     let (Some(stage), Some(facts)) = (state.stage.as_ref(), state.facts.as_ref()) else {
         return false;
     };
+    // Every hero is published, hurt or not: the health variant of their tier when one exists,
+    // otherwise their own live picture, otherwise nothing (the screen keeps its stock art).
+    // A hero with a live picture has one variant source, so the stage and the battlefield
+    // show the same variant; a hero without one keeps the separate authored sources.
     let mut hero_faces = BTreeMap::new();
     for hero in &stage.heroes {
-        if let Some(tier) = tier_of(hero.vitals) {
-            let nearest = |art: String| state.book.nearest(&art, tier).map(|(_, key)| key.clone());
-            let face = HeroFace {
-                stage: nearest(hero_art(hero.index)),
-                battle: nearest(battle_hero_art(hero.index)),
-            };
-            if face.stage.is_some() || face.battle.is_some() {
-                hero_faces.insert(hero.name.clone(), face);
+        let live = live_hero_key(state, hero);
+        let tier = tier_of(hero.vitals);
+        let nearest = |id: &str| {
+            tier.and_then(|tier| state.book.nearest(id, tier))
+                .map(|(_, key)| key.clone())
+        };
+        let (stage_variant, battle_variant) = match &live {
+            Some(key) => {
+                let variant = nearest(&key.path());
+                (variant.clone(), variant)
             }
-        }
+            None => (
+                nearest(&hero_art(hero.index)),
+                nearest(&battle_hero_art(hero.index)),
+            ),
+        };
+        hero_faces.insert(
+            hero.name.clone(),
+            HeroFace {
+                stage: stage_variant.or_else(|| live.clone()),
+                battle: battle_variant.or(live),
+            },
+        );
     }
     let mut health_sprites = BTreeMap::new();
     let mut superseded = Vec::new();
@@ -1545,7 +1614,7 @@ impl Inner {
             }
             Job::Warm { character, tier } => {
                 tasks.spawn(async move {
-                    let result = match inner.load_figure(&character.art).await {
+                    let result = match inner.load_health_reference(&character).await {
                         Ok(sprite) => inner.render_health(sprite, character.facts, tier).await,
                         Err(failure) => Err(failure),
                     };
@@ -1563,7 +1632,7 @@ impl Inner {
             Job::Peek { character } => {
                 tasks.spawn(async move {
                     let mut found = Vec::new();
-                    if let Ok(sprite) = inner.load_figure(&character.art).await {
+                    if let Ok(sprite) = inner.load_health_reference(&character).await {
                         for tier in GENERATED_TIERS {
                             if let Some(key) = inner
                                 .peek_health(sprite.clone(), character.facts, tier)
@@ -1663,6 +1732,27 @@ impl Inner {
             return Ok(figure);
         }
         self.load(sprite.to_owned()).await
+    }
+
+    /// The source a health variant is made from: a hero's live picture (named by its served
+    /// path) is read back from the image cache, so the variant is made from the hero
+    /// themselves; any other art is the authored figure on disk. The stock art is therefore
+    /// the source only before a hero's live picture exists.
+    async fn load_health_reference(
+        &self,
+        character: &Character,
+    ) -> Result<ReferenceImage, ImageFailure> {
+        if let Some(key) = character
+            .art
+            .strip_prefix("/gameplay/imagery/")
+            .and_then(ImageKey::parse)
+        {
+            return match self.imagery.image(key.as_str()).await {
+                Lookup::Image { bytes, format } => Ok(ReferenceImage::new(format, bytes)),
+                Lookup::Unregistered | Lookup::NotReady => Err(ImageFailure::InvalidRequest),
+            };
+        }
+        self.load_figure(&character.art).await
     }
 
     async fn render_expression(
@@ -2096,7 +2186,12 @@ impl Inner {
     /// in a fight or out of one, and never ahead of time. A character shows the nearest cached
     /// variant meanwhile.
     fn health_jobs(&self, state: &mut State, stage: &Stage, facts: &SceneFacts) -> Vec<Job> {
-        let characters = characters_of(stage, facts);
+        let hero_live: Vec<Option<ImageKey>> = stage
+            .heroes
+            .iter()
+            .map(|hero| live_hero_key(state, hero))
+            .collect();
+        let characters = characters_of(stage, facts, &hero_live);
         let mut jobs = Vec::new();
         for character in &characters {
             if state.book.needs_peek(&character.id) {
@@ -2110,7 +2205,13 @@ impl Inner {
         if !self.imagery.is_on() {
             return jobs;
         }
-        jobs.extend(warm_jobs(&mut state.book, stage, facts, &characters));
+        jobs.extend(warm_jobs(
+            &mut state.book,
+            stage,
+            facts,
+            &characters,
+            &hero_live,
+        ));
         jobs
     }
 }

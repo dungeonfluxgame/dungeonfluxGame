@@ -36,7 +36,7 @@ fn image_completion_reports_elapsed_milliseconds_for_ready_and_failed_images_wit
     assert!(!ready.contains("prompt="));
 }
 
-const SCENE: &str = "The Heron Shrine|live-room-photo";
+const SCENE: &str = "unknown|The Heron Shrine|live-room-photo";
 
 fn stage(revision: u64) -> Stage {
     Stage {
@@ -409,9 +409,15 @@ fn a_fight_only_looks_in_the_cache_and_asks_for_the_tier_each_character_is_at() 
     );
     // The hero is at Bloodied and the foe at Critical: those are the only variants made.
     let mut book = Book::default();
-    let characters = characters_of(&fight, &scene_facts);
+    let characters = characters_of(&fight, &scene_facts, &[]);
     assert_eq!(
-        job_labels(&warm_jobs(&mut book, &fight, &scene_facts, &characters)),
+        job_labels(&warm_jobs(
+            &mut book,
+            &fight,
+            &scene_facts,
+            &characters,
+            &[],
+        )),
         [
             format!("warm {HERO_ONE_ART} bloodied"),
             "warm sprite-patron-merchant critical".to_owned(),
@@ -422,7 +428,16 @@ fn a_fight_only_looks_in_the_cache_and_asks_for_the_tier_each_character_is_at() 
     let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
         panic!("display view");
     };
-    assert!(display.journey.as_ref().unwrap().live_faces.is_empty());
+    // The hero is always published; with no variant and no live picture both fields are
+    // empty, so every screen keeps its authored (stock) art.
+    assert_eq!(
+        display.journey.as_ref().unwrap().live_faces,
+        [rpc::LiveFace {
+            name: "Rowan".to_owned(),
+            sprite: String::new(),
+            battle_sprite: String::new(),
+        }]
+    );
     assert_eq!(display.scene.as_ref().unwrap().cast[0].live_sprite, "");
 }
 
@@ -432,9 +447,9 @@ fn a_fresh_scene_of_full_health_characters_requests_no_health_faces() {
     let scene_facts = facts(&dossier);
     // Both at full health, nothing cached: the scene makes no health face at all.
     let fresh = hurt_stage(2, false, 13, 13);
-    let characters = characters_of(&fresh, &scene_facts);
+    let characters = characters_of(&fresh, &scene_facts, &[]);
     let mut book = Book::default();
-    assert!(warm_jobs(&mut book, &fresh, &scene_facts, &characters).is_empty());
+    assert!(warm_jobs(&mut book, &fresh, &scene_facts, &characters, &[]).is_empty());
 }
 
 #[test]
@@ -444,16 +459,22 @@ fn a_character_asks_for_the_tier_it_reaches_and_no_other() {
     let mut book = Book::default();
     // Eight of thirteen is Hurt; the foe at full health asks for nothing.
     let hurt = hurt_stage(2, false, 8, 13);
-    let characters = characters_of(&hurt, &scene_facts);
+    let characters = characters_of(&hurt, &scene_facts, &[]);
     assert_eq!(
-        job_labels(&warm_jobs(&mut book, &hurt, &scene_facts, &characters)),
+        job_labels(&warm_jobs(&mut book, &hurt, &scene_facts, &characters, &[],)),
         [format!("warm {HERO_ONE_ART} hurt")]
     );
     // Three of thirteen is Critical: the hero asks for Critical, and nothing else is new.
     let worse = hurt_stage(3, false, 3, 13);
-    let characters = characters_of(&worse, &scene_facts);
+    let characters = characters_of(&worse, &scene_facts, &[]);
     assert_eq!(
-        job_labels(&warm_jobs(&mut book, &worse, &scene_facts, &characters)),
+        job_labels(&warm_jobs(
+            &mut book,
+            &worse,
+            &scene_facts,
+            &characters,
+            &[],
+        )),
         [format!("warm {HERO_ONE_ART} critical")]
     );
 }
@@ -500,14 +521,162 @@ fn a_fight_shows_the_nearest_cached_variant_and_nothing_further() {
         panic!("player view");
     };
     assert_eq!(player.journey.as_ref().unwrap().live_faces.len(), 1);
-    // The hero heals above the Hurt line: the authored art returns on every screen.
+    // The hero heals above the Hurt line and has no live picture: the face stays published
+    // with empty fields, so the authored (stock) art returns on every screen.
     inner.observe_at(hurt_stage(3, true, 12, 1), seconds(30));
     let mut after = display_message(true);
     inner.apply(stage_of(&after).as_ref(), &mut after);
     let Some(rpc::view_message::Audience::Display(display)) = &after.audience else {
         panic!("display view");
     };
-    assert!(display.journey.as_ref().unwrap().live_faces.is_empty());
+    assert_eq!(
+        display.journey.as_ref().unwrap().live_faces,
+        [rpc::LiveFace {
+            name: "Rowan".to_owned(),
+            sprite: String::new(),
+            battle_sprite: String::new(),
+        }]
+    );
+}
+
+fn give_live_picture(inner: &Inner, name: &str, byte: char) {
+    let mut state = locked(&inner.state);
+    state.hero_cutouts.insert(name.to_owned(), key(byte));
+    refresh_health(&mut state);
+}
+
+fn published_face(inner: &Inner) -> rpc::LiveFace {
+    let mut message = display_message(true);
+    let Some(rpc::view_message::Audience::Display(display)) = &mut message.audience else {
+        panic!("display view");
+    };
+    display.journey.as_mut().unwrap().party = vec![rpc::PartyMemberView {
+        name: "Rowan".to_owned(),
+        character_ready: true,
+        hit_points: 13,
+        maximum_hit_points: 13,
+        ..Default::default()
+    }];
+    inner.apply(stage_of(&message).as_ref(), &mut message);
+    let Some(rpc::view_message::Audience::Display(display)) = &message.audience else {
+        panic!("display view");
+    };
+    display.journey.as_ref().unwrap().live_faces[0].clone()
+}
+
+#[test]
+fn an_unhurt_hero_publishes_their_own_live_picture_on_stage_and_battlefield() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    give_live_picture(&inner, "Rowan", 'a');
+    // Full health (13 of 13): no variant exists and none is made, yet the hero's own
+    // picture is published for both screens instead of the stock photo.
+    inner.observe_at(hurt_stage(2, true, 13, 13), seconds(20));
+    assert_eq!(
+        published_face(&inner),
+        rpc::LiveFace {
+            name: "Rowan".to_owned(),
+            sprite: key('a').path(),
+            battle_sprite: key('a').path(),
+        }
+    );
+    // Generation stays on first need: a healthy hero asks for no health variant.
+    let scene_facts = facts(&dossier);
+    let stage = hurt_stage(2, true, 13, 13);
+    let characters = characters_of(&stage, &scene_facts, &[Some(key('a'))]);
+    let mut book = Book::default();
+    let jobs = warm_jobs(
+        &mut book,
+        &stage,
+        &scene_facts,
+        &characters,
+        &[Some(key('a'))],
+    );
+    assert!(jobs.is_empty());
+}
+
+#[test]
+fn a_hurt_heros_variant_is_made_from_their_live_picture_not_the_stock_photo() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    give_live_picture(&inner, "Rowan", 'a');
+    // Bloodied (4 of 13).
+    inner.observe_at(hurt_stage(2, true, 4, 13), seconds(20));
+    // While the variant is being made the hero shows their own live picture, and a variant
+    // cached earlier from the stock art is not shown for them.
+    learn(&inner, HERO_ONE_ART, HealthTier::Bloodied, '5');
+    assert_eq!(published_face(&inner).sprite, key('a').path());
+    assert_eq!(published_face(&inner).battle_sprite, key('a').path());
+    // The one variant asked for is sourced from the live picture, for both screens.
+    let scene_facts = facts(&dossier);
+    let stage = hurt_stage(2, true, 4, 13);
+    let characters = characters_of(&stage, &scene_facts, &[Some(key('a'))]);
+    assert_eq!(
+        characters
+            .iter()
+            .filter(|character| character.facts.role == CharacterRole::Hero)
+            .map(|character| character.art.as_str())
+            .collect::<Vec<_>>(),
+        [key('a').path().as_str()]
+    );
+    let mut book = Book::default();
+    let jobs = warm_jobs(
+        &mut book,
+        &stage,
+        &scene_facts,
+        &characters,
+        &[Some(key('a'))],
+    );
+    assert_eq!(
+        job_labels(&jobs),
+        [format!("warm {} bloodied", key('a').path())]
+    );
+    // Once that variant exists it serves the stage sprite and the battle face alike.
+    learn(&inner, &key('a').path(), HealthTier::Bloodied, 'b');
+    assert_eq!(
+        published_face(&inner),
+        rpc::LiveFace {
+            name: "Rowan".to_owned(),
+            sprite: key('b').path(),
+            battle_sprite: key('b').path(),
+        }
+    );
+}
+
+#[test]
+fn the_stock_photo_is_the_source_and_face_only_before_a_live_picture_exists() {
+    let dossier = dossier();
+    let (inner, _ledger) = director(&dossier);
+    // Bloodied, nothing cached and no live picture yet.
+    inner.observe_at(hurt_stage(2, true, 4, 13), seconds(20));
+    assert_eq!(
+        published_face(&inner),
+        rpc::LiveFace {
+            name: "Rowan".to_owned(),
+            sprite: String::new(),
+            battle_sprite: String::new(),
+        },
+        "empty fields keep the authored (stock) art on every screen"
+    );
+    let scene_facts = facts(&dossier);
+    let stage = hurt_stage(2, true, 4, 13);
+    let characters = characters_of(&stage, &scene_facts, &[]);
+    let mut book = Book::default();
+    assert_eq!(
+        job_labels(&warm_jobs(
+            &mut book,
+            &stage,
+            &scene_facts,
+            &characters,
+            &[],
+        )),
+        [format!("warm {HERO_ONE_ART} bloodied")]
+    );
+    // As soon as the live picture exists the face and the variant source switch to it.
+    give_live_picture(&inner, "Rowan", 'a');
+    assert_eq!(published_face(&inner).sprite, key('a').path());
+    let characters = characters_of(&stage, &scene_facts, &[Some(key('a'))]);
+    assert_eq!(characters[0].art, key('a').path());
 }
 
 #[test]
@@ -654,14 +823,27 @@ fn the_shipped_harbor_scene_builds_a_graph_from_its_painted_backdrop() {
         vitals: Vitals::new(13, 13),
     }];
 
-    let graph = graph_of(&stage, None).expect("painted harbor scene graph");
+    let mut state = State::new(timing());
+    state.hero_faces.insert(
+        "Brakka".to_owned(),
+        HeroFace {
+            stage: Some(key('b')),
+            battle: Some(key('b')),
+        },
+    );
+    let graph = graph_of(&stage, Some(&state)).expect("painted harbor scene graph");
     assert_eq!(graph.set.place_id, "lantern-wharf");
     assert_eq!(graph.set.place_name, "Lantern Wharf");
     assert_eq!(
         graph.set.fallback_asset,
         "/assets/ui/scenes/mara-harbor-v4.png"
     );
-    assert!(graph.actors.iter().any(|actor| actor.id == "hero-1"));
+    assert!(
+        graph
+            .actors
+            .iter()
+            .any(|actor| actor.id == "hero-1" && actor.art == key('b').path())
+    );
     assert!(graph.actors.iter().any(|actor| actor.id == "courier"));
 }
 
@@ -706,7 +888,7 @@ fn the_foes_of_the_adventures_fights_are_looked_for_after_the_party_and_the_stag
         // Already on this stage: listed once, with the stage.
         foe("sprite-patron-merchant"),
     ];
-    let characters = characters_of(&hurt_stage(2, false, 13, 13), &scene_facts);
+    let characters = characters_of(&hurt_stage(2, false, 13, 13), &scene_facts, &[]);
     let arts: Vec<&str> = characters
         .iter()
         .map(|character| character.art.as_str())
