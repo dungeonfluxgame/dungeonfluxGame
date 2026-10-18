@@ -479,7 +479,7 @@ pub(super) fn stage(
     let rules = [model::rule()?, source.clone()];
     let pins = model::pins()?;
     let content = model::contents()?;
-    let resources = super::resources()?;
+    let resources = super::resources_for(candidate.state())?;
     let proposal = propose_objective_transitions(
         &CurrentObjective {
             before,

@@ -282,7 +282,7 @@ fn validate_thread_progress(
             inventory: ReferenceInventory {
                 rules: &[model::rule()?, rule()?],
                 content: &model::contents()?,
-                resources: &super::resources()?,
+                resources: &super::resources_for(before.state())?,
                 assets: &[],
             },
             checkpoint_limits: model::limits(),
@@ -1202,7 +1202,7 @@ mod tests {
             ReferenceInventory {
                 rules: &[model::rule().unwrap(), rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &super::super::resources().unwrap(),
+                resources: &super::super::resources_for(current.state()).unwrap(),
                 assets: &[],
             },
             model::limits(),

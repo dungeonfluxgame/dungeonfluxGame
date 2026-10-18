@@ -387,11 +387,13 @@ pub(super) fn recovery() -> Result<NativeRecoverySource, RepositoryError> {
         rules: vec![rule()?, super::journey::rule()?],
         content: contents()?,
         resources: super::journey::resources()?,
+        resource_resolver: Some(super::journey::resources_for),
         assets: vec![],
         limits: limits(),
     })
 }
 pub(super) fn checkpoint(basis: Basis, state: GameState) -> Result<Checkpoint, RepositoryError> {
+    let resources = super::journey::resources_for(&state)?;
     Checkpoint::new(
         CHECKPOINT_SCHEMA,
         basis,
@@ -400,7 +402,7 @@ pub(super) fn checkpoint(basis: Basis, state: GameState) -> Result<Checkpoint, R
         ReferenceInventory {
             rules: &[rule()?, super::journey::rule()?],
             content: &contents()?,
-            resources: &super::journey::resources()?,
+            resources: &resources,
             assets: &[],
         },
         limits(),
@@ -751,7 +753,7 @@ fn stage_scene(current: &Checkpoint, input: &GameInput) -> Result<Checkpoint, Re
         ReferenceInventory {
             rules: &[rule()?],
             content: &contents()?,
-            resources: &[],
+            resources: &super::journey::resources_for(current.state())?,
             assets: &[],
         },
         CommandLimits {
@@ -874,7 +876,7 @@ impl HarborEngine {
                 inventory: ReferenceInventory {
                     rules: std::slice::from_ref(&source),
                     content: &contents()?,
-                    resources: &[],
+                    resources: &super::journey::resources_for(current.state())?,
                     assets: &[],
                 },
                 limits: CommandEntryLimits {

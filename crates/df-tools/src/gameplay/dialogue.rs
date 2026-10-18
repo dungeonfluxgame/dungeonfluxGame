@@ -3964,14 +3964,29 @@ impl Service {
                 journey::scene_fight::attackable(current.state(), &scene, &action.target)
                     .map_err(actor::unavailable)?
         {
-            let started = self
+            let started = match self
                 .start_scene_fight(
                     credential,
                     SceneFightOrigin::of(request),
                     &person.id,
                     &request.text,
                 )
-                .await?;
+                .await
+            {
+                Ok(started) => started,
+                Err(error) if error.code() == tonic::Code::FailedPrecondition => {
+                    return self
+                        .refused_attack(
+                            credential,
+                            request,
+                            &action.target,
+                            &format!("The fight cannot start: {}.", error.message()),
+                        )
+                        .await;
+                }
+                // An uncertain submission must retain its operation for lookup.
+                Err(error) => return Err(error),
+            };
             record_physical_action_event(
                 "gameplay.physical_action_resolved",
                 "attack",
@@ -4177,6 +4192,45 @@ impl Service {
                 "target is not a registered trade offer"
             }
         };
+        if action.kind == super::approach_model::PhysicalActionKind::Attack {
+            // The speaking cast omits fallen people. Read the current place's canonical cast
+            // to distinguish a fallen target from a name that is not present here.
+            let mut canonical_scene = scene.clone();
+            canonical_scene.cast = match scene.setting.as_ref() {
+                Some(setting) => super::place::created(current.state())
+                    .map_err(actor::unavailable)?
+                    .remove(&setting.place_id)
+                    .map(|record| record.expand().map(|place| place.cast))
+                    .transpose()
+                    .map_err(|_| {
+                        actor::unavailable(
+                            df_session::submission::RepositoryError::InvalidCandidate,
+                        )
+                    })?
+                    .unwrap_or_else(|| super::pack::scene(scene.key).cast),
+                None => super::pack::scene(scene.key).cast,
+            };
+            let reason = match journey::scene_fight::person_named(&canonical_scene, &action.target)
+            {
+                Some(person) => match journey::scene_fight::presence(current.state(), &person.id)
+                    .map_err(actor::unavailable)?
+                {
+                    journey::scene_fight::Presence::Down { .. } => {
+                        format!("{} is already down; no fight starts.", person.name)
+                    }
+                    journey::scene_fight::Presence::Gone => {
+                        format!("{} has left; there is nobody here to fight.", person.name)
+                    }
+                    journey::scene_fight::Presence::Standing => {
+                        format!("No combat attack on {} is available here.", person.name)
+                    }
+                },
+                None => format!("There is no target named {} here to attack.", action.target),
+            };
+            return self
+                .refused_attack(credential, request, &action.target, &reason)
+                .await;
+        }
         record_physical_action_event(
             "gameplay.physical_action_unavailable",
             verb,
@@ -4186,6 +4240,43 @@ impl Service {
             Some(reason),
         );
         self.narrated_no_op(credential, request).await
+    }
+
+    async fn refused_attack(
+        &self,
+        credential: [u8; 32],
+        request: &rpc::RawDialogueRequest,
+        target: &str,
+        reason: &str,
+    ) -> Result<DialogueReply, Status> {
+        // A refused scene starter reserves narrator rows but publishes no hero row.
+        self.publish_hero_action_line(credential, &request.text)
+            .await?;
+        self.table_log.push(
+            "Narrator",
+            rpc::TableRole::Narrator,
+            0,
+            rpc::TableKind::Action,
+            reason,
+        );
+        record_physical_action_event(
+            "gameplay.physical_action_unavailable",
+            "attack",
+            target,
+            "unavailable",
+            "refused",
+            Some(reason),
+        );
+        Ok(DialogueReply::Raw(
+            rpc::DialogueResponse {
+                input_id: request.input_id.clone(),
+                disposition: rpc::DialogueDisposition::Action as i32,
+                revision: Some(wire::revision(self.updates.borrow().basis().revision)),
+                npc_reply: reason.to_owned(),
+                ..Default::default()
+            },
+            None,
+        ))
     }
 
     /// The single entry point that starts a fight with a scene person. Typed attacks, freeform
@@ -6740,3 +6831,7 @@ mod fight_and_service_turn_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "attack_refusal_tests.rs"]
+mod attack_refusal_tests;

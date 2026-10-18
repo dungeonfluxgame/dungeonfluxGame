@@ -10,6 +10,10 @@ use std::time::Duration;
 
 use super::{model, pack, refusal_detail, wire};
 
+#[cfg(test)]
+#[path = "journey_tests.rs"]
+pub(super) mod checkpoint_fight_tests;
+
 pub(super) mod affordance;
 #[cfg(test)]
 mod affordance_tests;
@@ -371,6 +375,12 @@ fn carries_healers_kit(state: &GameState, who: EntityId) -> bool {
         item.owner == who && item.origin.entry.as_str() == "healers-kit" && item.quantity > 0
     })
 }
+pub(super) fn resources_for(state: &GameState) -> Result<Vec<ResourceConstraint>, RepositoryError> {
+    let mut inventory = resources()?;
+    inventory.extend(scene_fight::created_resources(state)?);
+    Ok(inventory)
+}
+
 fn add_resource(
     state: &mut GameState,
     who: EntityId,
@@ -378,7 +388,7 @@ fn add_resource(
     value: i64,
 ) -> Result<(), RepositoryError> {
     let label = model::label(name)?;
-    let constraint = resources()?
+    let constraint = resources_for(state)?
         .into_iter()
         .find(|value| value.owner == who && value.resource == label)
         .ok_or(RepositoryError::InvalidCandidate)?;
@@ -1742,7 +1752,7 @@ pub(super) fn stage_join(
         ReferenceInventory {
             rules: &[model::rule()?, rule()?],
             content: &model::contents()?,
-            resources: &resources()?,
+            resources: &resources_for(current.state())?,
             assets: &[],
         },
         df_model::commands::CommandLimits {
@@ -2373,7 +2383,7 @@ fn stage_authored_threads(
             inventory: ReferenceInventory {
                 rules: &[model::rule()?, source_rule],
                 content: &model::contents()?,
-                resources: &resources()?,
+                resources: &resources_for(candidate.state())?,
                 assets: &[],
             },
             checkpoint_limits: model::limits(),
@@ -3301,7 +3311,7 @@ fn start_combat(
             inventory: ReferenceInventory {
                 rules: &[model::rule()?, source.clone()],
                 content: &model::contents()?,
-                resources: &resources()?,
+                resources: &resources_for(current.state())?,
                 assets: &[],
             },
             limits: df_engine::command_entry::CommandEntryLimits {
@@ -3759,7 +3769,7 @@ fn stage_using(
         ReferenceInventory {
             rules: &[model::rule()?, rule()?],
             content: &model::contents()?,
-            resources: &resources()?,
+            resources: &resources_for(current.state())?,
             assets: &[],
         },
         df_model::commands::CommandLimits {
@@ -4540,7 +4550,7 @@ pub(super) fn stage_with_supplier(
             inventory: ReferenceInventory {
                 rules: &[model::rule()?, source.clone()],
                 content: &model::contents()?,
-                resources: &resources()?,
+                resources: &resources_for(prepared.state())?,
                 assets: &[],
             },
             limits: df_engine::command_entry::CommandEntryLimits {
@@ -5300,7 +5310,7 @@ mod tests {
                     rule().expect("journey rule"),
                 ],
                 content: &model::contents().expect("content"),
-                resources: &resources().expect("resources"),
+                resources: &resources_for(current.state()).expect("resources"),
                 assets: &[],
             },
             df_model::commands::CommandLimits {
@@ -5719,7 +5729,7 @@ mod tests {
             ReferenceInventory {
                 rules: &[model::rule().unwrap(), rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &resources().unwrap(),
+                resources: &resources_for(private.state()).unwrap(),
                 assets: &[],
             },
             model::limits(),
@@ -6875,7 +6885,7 @@ mod tests {
             ReferenceInventory {
                 rules: &[model::rule().unwrap(), rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &resources().unwrap(),
+                resources: &resources_for(current.state()).unwrap(),
                 assets: &[],
             },
             model::limits(),
@@ -7151,7 +7161,7 @@ mod tests {
             ReferenceInventory {
                 rules: &[model::rule().unwrap(), rule().unwrap()],
                 content: &model::contents().unwrap(),
-                resources: &resources().unwrap(),
+                resources: &resources_for(victory.state()).unwrap(),
                 assets: &[],
             },
             model::limits(),

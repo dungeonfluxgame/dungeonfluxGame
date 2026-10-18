@@ -241,7 +241,7 @@ fn select_for(
                 inventory: ReferenceInventory {
                     rules: &[model::rule()?, rule()?],
                     content: &model::contents()?,
-                    resources: &super::resources()?,
+                    resources: &super::resources_for(current.state())?,
                     assets: &[],
                 },
                 checkpoint_limits: model::limits(),
@@ -269,7 +269,7 @@ fn select_for(
                 inventory: ReferenceInventory {
                     rules: &[model::rule()?, rule()?],
                     content: &model::contents()?,
-                    resources: &super::resources()?,
+                    resources: &super::resources_for(current.state())?,
                     assets: &[],
                 },
                 checkpoint_limits: model::limits(),

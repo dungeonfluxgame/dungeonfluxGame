@@ -183,16 +183,15 @@ impl DecisionAdapter {
                         .recovery
                         .as_ref()
                         .ok_or(RepositoryError::InvalidCandidate)?;
-                    crate::decision_rows::load_current(
-                        &transaction,
-                        scope,
-                        recovery.inventory(),
-                        recovery.limits,
-                        self.codec_limits,
-                        current.basis(scope.session()),
-                    )
-                    .await
-                    .map(|value| ReadValue::Checkpoint(Box::new(value)))
+                    recovery
+                        .load_current(
+                            &transaction,
+                            scope,
+                            current.basis(scope.session()),
+                            self.codec_limits,
+                        )
+                        .await
+                        .map(|value| ReadValue::Checkpoint(Box::new(value)))
                 }
             }
         })
@@ -431,15 +430,8 @@ impl DecisionAdapter {
             .recovery
             .as_ref()
             .ok_or(RepositoryError::InvalidCandidate)?;
-        let validated = crate::checkpoint_codec::decode_checkpoint(
-            &document,
-            basis,
-            scope.admitted_pins(),
-            recovery.inventory(),
-            recovery.limits,
-            codec_limits,
-        )
-        .map_err(|_| RepositoryError::InvalidCandidate)?;
+        let validated =
+            recovery.decode_checkpoint(&document, basis, scope.admitted_pins(), codec_limits)?;
         if &validated != checkpoint {
             return Err(RepositoryError::InvalidCandidate);
         }
@@ -490,16 +482,124 @@ impl DecisionAdapter {
     }
 }
 
+/// A trusted native resolver must return the complete, bounded canonical inventory.
+/// It must not use stored resource minima/maxima as source authority.
+pub type ResourceResolver =
+    fn(
+        &df_model::checkpoint::GameState,
+    ) -> Result<Vec<df_model::checkpoint::ResourceConstraint>, RepositoryError>;
+
 /// The native root supplies its admitted canonical inventories; stored bytes cannot admit them.
 #[derive(Clone)]
 pub struct RecoverySource {
     pub rules: Vec<df_model::checkpoint::RuleReference>,
     pub content: Vec<df_model::checkpoint::ContentReference>,
     pub resources: Vec<df_model::checkpoint::ResourceConstraint>,
+    /// Some replaces `resources` after bounded decoding; resolver errors refuse recovery/commit.
+    /// None retains the fixed admitted inventory.
+    pub resource_resolver: Option<ResourceResolver>,
     pub assets: Vec<df_model::checkpoint::AssetReference>,
     pub limits: df_model::checkpoint::CheckpointLimits,
 }
 impl RecoverySource {
+    /// Decode and validate the original canonical state before admitting a checkpoint.
+    /// This performs no I/O and grants no database or session authority.
+    pub fn decode_checkpoint(
+        &self,
+        bytes: &[u8],
+        expected: Basis,
+        pins: &df_model::checkpoint::CheckpointPins,
+        codec_limits: crate::checkpoint_codec::CodecLimits,
+    ) -> Result<Checkpoint, RepositoryError> {
+        crate::checkpoint_codec::decode_checkpoint_with_recovery(
+            bytes,
+            expected,
+            pins,
+            self.inventory(),
+            self.limits,
+            codec_limits,
+            self.resource_resolver,
+        )
+        .map_err(|error| match error {
+            crate::checkpoint_codec::CodecError::ResourceResolution(error) => error,
+            _ => RepositoryError::InvalidCandidate,
+        })
+    }
+
+    async fn load_current<A: df_auth::membership::MembershipAuthority>(
+        &self,
+        transaction: &Transaction<'_>,
+        scope: &NativeScope<A>,
+        current_basis: Basis,
+        codec_limits: crate::checkpoint_codec::CodecLimits,
+    ) -> Result<Checkpoint, RepositoryError> {
+        if self.resource_resolver.is_none() {
+            return crate::decision_rows::load_current(
+                transaction,
+                scope,
+                self.inventory(),
+                self.limits,
+                codec_limits,
+                current_basis,
+            )
+            .await;
+        }
+        let maximum = i64::try_from(codec_limits.maximum_document_bytes)
+            .map_err(|_| RepositoryError::Capacity)?;
+        let row = transaction
+            .query_opt(
+                crate::sql::LOAD_CURRENT,
+                &[
+                    &scope.tenant_bytes(),
+                    &scope.session().as_bytes().as_slice(),
+                    &maximum,
+                ],
+            )
+            .await
+            .map_err(|_| RepositoryError::Unavailable)?
+            .ok_or(RepositoryError::Unavailable)?;
+        self.decode_current_row(&row, current_basis, scope.admitted_pins(), codec_limits)
+    }
+
+    // The fixed-inventory row decoder stays unchanged for existing consumers. The
+    // resolved path applies the same row provenance checks before the shared codec.
+    pub(crate) fn decode_current_row(
+        &self,
+        row: &tokio_postgres::Row,
+        current_basis: Basis,
+        pins: &df_model::checkpoint::CheckpointPins,
+        codec_limits: crate::checkpoint_codec::CodecLimits,
+    ) -> Result<Checkpoint, RepositoryError> {
+        if self.resource_resolver.is_none() {
+            return crate::decision_rows::decode_current_row(
+                row,
+                current_basis.session,
+                current_basis,
+                pins,
+                self.inventory(),
+                self.limits,
+                codec_limits,
+            );
+        }
+        let expected = crate::decision_rows::current_row_basis(row, current_basis.session)?;
+        let schema: i32 = row
+            .try_get("schema_version")
+            .map_err(|_| RepositoryError::InvalidCandidate)?;
+        if expected != current_basis || schema != i32::from(df_model::checkpoint::CHECKPOINT_SCHEMA)
+        {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        let codec: i32 = row
+            .try_get("codec_version")
+            .map_err(|_| RepositoryError::InvalidCandidate)?;
+        let document: Vec<u8> = row
+            .try_get("complete_envelope")
+            .map_err(|_| RepositoryError::InvalidCandidate)?;
+        crate::checkpoint_codec::validate_storage_format(codec, b"DFCP", &document)
+            .map_err(|_| RepositoryError::InvalidCandidate)?;
+        self.decode_checkpoint(&document, expected, pins, codec_limits)
+    }
+
     fn inventory(&self) -> df_model::checkpoint::ReferenceInventory<'_> {
         df_model::checkpoint::ReferenceInventory {
             rules: &self.rules,

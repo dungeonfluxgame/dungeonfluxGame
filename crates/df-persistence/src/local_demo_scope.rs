@@ -790,20 +790,7 @@ pub fn decode_owned_demo_checkpoint(
     recovery: &crate::NativeRecoverySource,
     limits: NativeCodecLimits,
 ) -> Result<Checkpoint, RepositoryError> {
-    crate::checkpoint_codec::decode_checkpoint(
-        document,
-        expected,
-        pins,
-        df_model::checkpoint::ReferenceInventory {
-            rules: &recovery.rules,
-            content: &recovery.content,
-            resources: &recovery.resources,
-            assets: &recovery.assets,
-        },
-        recovery.limits,
-        limits,
-    )
-    .map_err(|_| RepositoryError::InvalidCandidate)
+    recovery.decode_checkpoint(document, expected, pins, limits)
 }
 
 /// Decode a stored receipt for the owned native gameplay qualification only.

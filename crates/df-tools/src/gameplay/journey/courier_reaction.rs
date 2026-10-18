@@ -363,7 +363,7 @@ where
         let entries = [entry()?];
         let rules = [model::rule()?, super::rule()?];
         let content = model::contents()?;
-        let resources = super::resources()?;
+        let resources = super::resources_for(current.state())?;
         let handler = df_engine::relationship_staging::RelationshipReactionHandler {
             command_handler: self.command_handler,
             owner: &source,
@@ -464,10 +464,11 @@ pub(super) fn propose_on_defend(
     let source = AuthoredCourierSource { current };
     let entries = [entry()?];
     let content = model::contents()?;
+    let resources = super::resources_for(current.state())?;
     let inventory = ReferenceInventory {
         rules: &[],
         content: &content,
-        resources: &[],
+        resources: &resources,
         assets: &[],
     };
     let policy = ReactionPolicy::new(
@@ -606,10 +607,11 @@ mod tests {
         let source = AuthoredCourierSource { current: &current };
         let entries = [entry().unwrap()];
         let content = model::contents().unwrap();
+        let resources = super::super::resources_for(current.state()).unwrap();
         let inventory = || ReferenceInventory {
             rules: &[],
             content: &content,
-            resources: &[],
+            resources: &resources,
             assets: &[],
         };
         let admitted = relationship_limits().reaction;

@@ -26,7 +26,9 @@ pub mod story_memory;
 #[cfg(not(target_arch = "wasm32"))]
 pub use checkpoint_codec::CodecLimits as NativeCodecLimits;
 #[cfg(not(target_arch = "wasm32"))]
-pub use decision_adapter::RecoverySource as NativeRecoverySource;
+pub use decision_adapter::{
+    RecoverySource as NativeRecoverySource, ResourceResolver as NativeResourceResolver,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_bridge::{
     NativeRepositoryOptions, NativeSetupFailure, NativeVerifierSource, PostgresRepository,

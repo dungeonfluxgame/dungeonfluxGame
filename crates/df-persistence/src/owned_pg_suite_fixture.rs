@@ -831,6 +831,7 @@ fn run_registered_suite(stage: &std::cell::Cell<&'static str>) -> Result<(), Rep
         let recovery = RecoverySource {
             rules: rules.clone(),
             content: entries.clone(),
+            resource_resolver: None,
             resources: resources.clone(),
             assets: vec![],
             limits: limits(),
@@ -957,6 +958,7 @@ fn run_registered_suite(stage: &std::cell::Cell<&'static str>) -> Result<(), Rep
                         recovery: Some(RecoverySource {
                             rules: rules.clone(),
                             content: entries.clone(),
+                            resource_resolver: None,
                             resources: resources.clone(),
                             assets: vec![],
                             limits: limits(),
@@ -1026,6 +1028,7 @@ fn run_registered_suite(stage: &std::cell::Cell<&'static str>) -> Result<(), Rep
             let recovery = RecoverySource {
                 rules: rules.clone(),
                 content: entries.clone(),
+                resource_resolver: None,
                 resources: resources.clone(),
                 assets: vec![],
                 limits: limits(),
@@ -1064,6 +1067,7 @@ fn run_registered_suite(stage: &std::cell::Cell<&'static str>) -> Result<(), Rep
                 let recovery = RecoverySource {
                     rules: rules.clone(),
                     content: entries.clone(),
+                    resource_resolver: None,
                     resources: resources.clone(),
                     assets: vec![],
                     limits: limits(),
@@ -1143,6 +1147,7 @@ fn run_registered_suite(stage: &std::cell::Cell<&'static str>) -> Result<(), Rep
             let recovery = RecoverySource {
                 rules: rules.clone(),
                 content: entries.clone(),
+                resource_resolver: None,
                 resources: resources.clone(),
                 assets: vec![],
                 limits: limits(),
@@ -1228,6 +1233,7 @@ fn run_registered_suite(stage: &std::cell::Cell<&'static str>) -> Result<(), Rep
             let recovery = RecoverySource {
                 rules: rules.clone(),
                 content: entries.clone(),
+                resource_resolver: None,
                 resources: resources.clone(),
                 assets: vec![],
                 limits: limits(),
@@ -1505,6 +1511,7 @@ fn observe_registered_lost_commit_ack(
     let recovery = || RecoverySource {
         rules: rules.clone(),
         content: entries.clone(),
+        resource_resolver: None,
         resources: resources.clone(),
         assets: vec![],
         limits: limits(),
@@ -1893,6 +1900,7 @@ fn registered_case_repository(
     let recovery = RecoverySource {
         rules: vec![rule()],
         content: vec![content()],
+        resource_resolver: None,
         resources: resource_constraints(),
         assets: vec![],
         limits: limits(),
@@ -3385,6 +3393,7 @@ fn observe_registered_retained_refusals(
             RecoverySource {
                 rules: rules.clone(),
                 content: entries.clone(),
+                resource_resolver: None,
                 resources: resources.clone(),
                 assets: vec![],
                 limits: limits(),
@@ -5291,6 +5300,7 @@ fn observe_registered_forced_driver_join(
     let recovery = RecoverySource {
         rules: vec![rule()],
         content: vec![content()],
+        resource_resolver: None,
         resources: resource_constraints(),
         assets: vec![],
         limits: limits(),
@@ -5903,6 +5913,7 @@ fn observe_registered_actor_lost_commit_ack(
             RecoverySource {
                 rules: rules.clone(),
                 content: entries.clone(),
+                resource_resolver: None,
                 resources: resources.clone(),
                 assets: vec![],
                 limits: limits(),

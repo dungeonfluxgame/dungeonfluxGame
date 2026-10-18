@@ -1,5 +1,5 @@
 //! Trusted local startup. Stored bytes never admit a new inventory or owner.
-use df_model::checkpoint::{Checkpoint, ReferenceInventory};
+use df_model::checkpoint::Checkpoint;
 use df_session::submission::RepositoryError;
 use df_types::SessionId;
 use tokio_postgres::{Client, Transaction};
@@ -236,22 +236,9 @@ async fn restore(
         .await
         .map_err(|_| error("checkpoint_read", RepositoryError::Unavailable))?
         .ok_or_else(|| error("missing_checkpoint", RepositoryError::InvalidCandidate))?;
-    let inventory = ReferenceInventory {
-        rules: &recovery.rules,
-        content: &recovery.content,
-        resources: &recovery.resources,
-        assets: &recovery.assets,
-    };
-    let checkpoint = crate::decision_rows::decode_current_row(
-        &stored,
-        session,
-        basis,
-        cold.pins(),
-        inventory,
-        recovery.limits,
-        codec,
-    )
-    .map_err(|e| error("checkpoint_decode", e))?;
+    let checkpoint = recovery
+        .decode_current_row(&stored, basis, cold.pins(), codec)
+        .map_err(|e| error("checkpoint_decode", e))?;
     validate(&checkpoint).map_err(|e| error("engine_validation", e))?;
     let player = credential(tx, session, PLAYER, b"player").await?;
     let display = credential(tx, session, DISPLAY, b"display").await?;

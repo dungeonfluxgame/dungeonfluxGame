@@ -40,6 +40,7 @@ pub(crate) enum CodecError {
     UnsupportedCodec,
     TrailingBytes,
     Checkpoint(CheckpointError),
+    ResourceResolution(df_session::submission::RepositoryError),
 }
 
 /// Every allocation and collection is bounded before reading storage-controlled lengths.
@@ -486,6 +487,26 @@ pub(crate) fn decode_checkpoint(
     checkpoint_limits: CheckpointLimits,
     codec_limits: CodecLimits,
 ) -> Result<Checkpoint, CodecError> {
+    decode_checkpoint_with_recovery(
+        bytes,
+        expected,
+        pins,
+        inventory,
+        checkpoint_limits,
+        codec_limits,
+        None,
+    )
+}
+
+pub(crate) fn decode_checkpoint_with_recovery(
+    bytes: &[u8],
+    expected: Basis,
+    pins: &CheckpointPins,
+    inventory: ReferenceInventory<'_>,
+    checkpoint_limits: CheckpointLimits,
+    codec_limits: CodecLimits,
+    resource_resolver: Option<crate::decision_adapter::ResourceResolver>,
+) -> Result<Checkpoint, CodecError> {
     let limits = codec_limits.validate()?;
     if bytes.len() > limits.maximum_document_bytes {
         return Err(CodecError::Capacity);
@@ -523,6 +544,14 @@ pub(crate) fn decode_checkpoint(
     if input.offset != bytes.len() {
         return Err(CodecError::TrailingBytes);
     }
+    let resolved_resources = resource_resolver
+        .map(|resolve| resolve(&state))
+        .transpose()
+        .map_err(CodecError::ResourceResolution)?;
+    let inventory = ReferenceInventory {
+        resources: resolved_resources.as_deref().unwrap_or(inventory.resources),
+        ..inventory
+    };
     let checkpoint = Checkpoint::new(
         schema,
         basis,
@@ -2373,6 +2402,96 @@ mod tests {
             codec_limits(),
         )
     }
+    fn recovery_source() -> crate::decision_adapter::RecoverySource {
+        crate::decision_adapter::RecoverySource {
+            rules: vec![rule()],
+            content: vec![content()],
+            resources: resource_constraints(),
+            resource_resolver: None,
+            assets: vec![],
+            limits: limits(),
+        }
+    }
+
+    #[test]
+    fn recovery_resolver_replaces_fixed_inventory_for_original_decoded_state() {
+        let original = checkpoint(state()).unwrap();
+        let bytes = encode_checkpoint(&original, codec_limits()).unwrap();
+        let mut recovery = recovery_source();
+        assert_eq!(
+            recovery
+                .decode_checkpoint(&bytes, basis(), &pins(), codec_limits())
+                .unwrap(),
+            original
+        );
+        recovery.resources.clear();
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(df_session::submission::RepositoryError::InvalidCandidate)
+        );
+        recovery.resource_resolver = Some(|decoded| {
+            assert_eq!(decoded, &state());
+            Ok(resource_constraints())
+        });
+        assert_eq!(
+            recovery
+                .decode_checkpoint(&bytes, basis(), &pins(), codec_limits())
+                .unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn recovery_resolver_errors_and_incomplete_inventory_fail_closed() {
+        use df_session::submission::RepositoryError;
+        let bytes = encode_checkpoint(&checkpoint(state()).unwrap(), codec_limits()).unwrap();
+        let mut recovery = recovery_source();
+        recovery.resource_resolver = Some(|_| Err(RepositoryError::Capacity));
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::Capacity)
+        );
+        recovery.resource_resolver = Some(|_| Ok(vec![]));
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::InvalidCandidate)
+        );
+        recovery.resource_resolver = Some(|_| {
+            let mut resources = resource_constraints();
+            resources[0].maximum = 7;
+            Ok(resources)
+        });
+        assert_eq!(
+            recovery.decode_checkpoint(&bytes, basis(), &pins(), codec_limits()),
+            Err(RepositoryError::InvalidCandidate)
+        );
+    }
+
+    #[test]
+    fn recovery_resolver_runs_only_after_complete_bounded_decode() {
+        let bytes = encode_checkpoint(&checkpoint(state()).unwrap(), codec_limits()).unwrap();
+        let mut recovery = recovery_source();
+        recovery.resource_resolver = Some(|_| panic!("resolver reached before bounded decode"));
+        let mut too_small = codec_limits();
+        too_small.maximum_allocated_bytes = 1;
+        for (bytes, bounds) in [
+            (bytes.as_slice(), too_small),
+            (&bytes[..bytes.len() - 1], codec_limits()),
+        ] {
+            assert_eq!(
+                recovery.decode_checkpoint(bytes, basis(), &pins(), bounds),
+                Err(df_session::submission::RepositoryError::InvalidCandidate)
+            );
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(
+            recovery
+                .decode_checkpoint(&trailing, basis(), &pins(), codec_limits())
+                .is_err()
+        );
+    }
+
     fn value_round_trip<T: Wire + std::fmt::Debug + PartialEq>(value: &T) {
         let bounds = codec_limits();
         let mut output = Encoder {
