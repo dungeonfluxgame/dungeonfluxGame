@@ -583,6 +583,65 @@ mod tests {
     }
 
     #[test]
+    fn two_attacks_from_one_npc_keep_their_impacts_and_turn_in_order() {
+        let mut stage = stage();
+        stage.set_feel_enabled(false);
+        let mut feed = CombatFeed::default();
+        feed.apply(&mut stage, &snapshot(vec![], [12, 12, 12]))
+            .unwrap();
+        let attack = |damage, after| Outcome {
+            actor: "e".to_owned(),
+            target: "a".to_owned(),
+            weapon: "shortsword".to_owned(),
+            damage_type: "piercing".to_owned(),
+            ..strike(true, damage, after, false)
+        };
+        let after = snapshot(vec![attack(2, 10), attack(3, 7)], [7, 12, 12]);
+        assert_eq!(feed.apply(&mut stage, &after).unwrap().staged, 2);
+        let mut impacts = Vec::new();
+        let mut elapsed_ms = 0;
+        for _ in 0..300 {
+            stage.update(Duration::from_millis(20));
+            elapsed_ms += 20;
+            for impact in stage.take_impacts() {
+                assert_eq!(impact.attacker.0, "e");
+                assert_eq!(stage.hud().active.as_ref(), Some(&TokenId::new("e")));
+                let frame = stage.frame();
+                let hp = frame
+                    .figures
+                    .iter()
+                    .find(|figure| figure.id.0 == "a")
+                    .unwrap()
+                    .hit_points
+                    .unwrap()
+                    .current;
+                impacts.push((elapsed_ms, hp));
+                assert_eq!(
+                    frame.floats.last().unwrap().text,
+                    if impacts.len() == 1 {
+                        "Shortsword \u{b7} 2 piercing"
+                    } else {
+                        "Shortsword \u{b7} 3 piercing"
+                    }
+                );
+            }
+            if !stage.is_busy() {
+                break;
+            }
+        }
+        assert_eq!(impacts.len(), 2);
+        println!("T1 multiattack: impact/HP samples (ms)={impacts:?}");
+        assert_eq!([impacts[0].1, impacts[1].1], [10, 7]);
+        assert!(
+            impacts[1].0 - impacts[0].0 >= super::super::beat_timing::blow_ms(false, true, false),
+            "the second attack must wait for the first impact and camera settle"
+        );
+        assert!(!stage.is_busy());
+        assert_eq!(stage.hud().active.as_ref(), Some(&TokenId::new("a")));
+        assert_eq!(feed.apply(&mut stage, &after).unwrap().staged, 0);
+    }
+
+    #[test]
     fn a_downing_outcome_ends_with_the_enemy_fallen_without_a_finishing_card() {
         let mut stage = stage();
         let mut feed = CombatFeed::default();

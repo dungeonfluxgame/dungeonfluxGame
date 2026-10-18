@@ -797,10 +797,6 @@ fn strike(
         && target.side == Side::Enemy
         && attacker.side == Side::Hero;
     let finishing = fight_over && downing_enemy;
-    if downing_enemy {
-        // Time slows into the blow.
-        builder.at(base, Step::SlowMotion);
-    }
     match result {
         AttackResult::Miss => {
             builder.at(contact, Step::Whoosh);
@@ -847,6 +843,10 @@ fn strike(
                     ranged,
                 },
             );
+            if finishing {
+                // The result lands first; only the deciding blow slows the fall that follows.
+                builder.at(contact, Step::SlowMotion);
+            }
             builder.at(
                 contact,
                 Step::Float {
@@ -1194,6 +1194,7 @@ mod tests {
             "focus",
             "lunge",
             "impact",
+            "slow-motion",
             "float",
             "recoil",
             "fall",
@@ -1207,6 +1208,17 @@ mod tests {
         let times: Vec<Duration> = timeline.steps.iter().map(|step| step.at).collect();
         assert!(times.windows(2).all(|pair| pair[0] <= pair[1]));
         assert!(timeline.duration >= *times.last().unwrap());
+        let impact = timeline.steps[position(&names, "impact")].at;
+        let slow_motion = timeline.steps[position(&names, "slow-motion")].at;
+        let fall = timeline.steps[position(&names, "fall")].at;
+        let finishing = timeline.steps[position(&names, "finishing")].at;
+        assert_eq!(
+            slow_motion, impact,
+            "the ramp begins after impact is applied"
+        );
+        assert_eq!(fall - impact, FALL_DELAY);
+        assert_eq!(finishing - fall, FALL_LANDS);
+        assert_eq!(timeline.duration - finishing, FINISHING_HOLD);
     }
 
     #[test]
@@ -1230,6 +1242,7 @@ mod tests {
         let names = names(&timeline);
         assert!(names.contains(&"fall"));
         assert!(!names.contains(&"finishing"));
+        assert!(!names.contains(&"slow-motion"));
         assert!(timeline.steps.iter().any(|timed| matches!(
             &timed.step,
             Step::Camera {

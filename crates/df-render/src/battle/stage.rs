@@ -653,10 +653,15 @@ impl Stage {
     }
 
     /// Shows the roll card, but only once the camera has settled on the fighters: while it is
-    /// still moving to them the card would hang over the wrong picture. It waits at most
-    /// [`ROLL_CARD_MAX_WAIT_S`].
+    /// still moving to them the card would hang over the wrong picture. Movement and finishing
+    /// holds drain first; the camera then gets at most [`ROLL_CARD_MAX_WAIT_S`] to settle.
     pub fn show_roll_card(&mut self, card: super::model::RollCard) {
-        if self.rig.is_panning() || self.camera_move_ahead() || self.move_ahead() {
+        if self.finishing_ahead()
+            || self.celebration.is_some()
+            || self.rig.is_panning()
+            || self.camera_move_ahead()
+            || self.move_ahead()
+        {
             self.pending_roll_card = Some((card, 0.0));
         } else {
             self.pending_roll_card = None;
@@ -765,10 +770,13 @@ impl Stage {
 
     /// Names the combatant whose turn the cue stream just reached, at once: its label, roll
     /// card and walk arrive together at the rolling cue, so the label must not wait behind
-    /// the previous blow's draining beats. Later beats restate the same active figure.
+    /// the previous blow's draining beats. A finishing blow protects its heading until its
+    /// celebration ends. Later beats restate the same active figure.
     pub fn show_turn_now(&mut self, active: Option<TokenId>) {
         self.server_active = active.clone();
-        self.hud.active = active;
+        if !self.finishing_ahead() && self.celebration.is_none() {
+            self.hud.active = active;
+        }
     }
 
     /// A question the server is waiting on, shown where the turn label is; `None` clears it.
@@ -790,7 +798,10 @@ impl Stage {
     }
 
     fn is_showing_beats(&self) -> bool {
-        self.active_held || self.playing.is_some() || !self.queue.is_empty()
+        self.active_held
+            || self.playing.is_some()
+            || !self.queue.is_empty()
+            || self.celebration.is_some()
     }
 
     /// Stages the server's move of `actor` to `to`: its cell is the new one from now on, and it
@@ -874,6 +885,7 @@ impl Stage {
     pub fn is_busy(&self) -> bool {
         self.playing.is_some()
             || !self.queue.is_empty()
+            || self.tokens.iter().any(|runtime| runtime.walk.is_some())
             || self.feel.is_active()
             || self.celebration.is_some()
     }
@@ -1182,7 +1194,7 @@ impl Stage {
         {
             self.tokens[index].pending_revival = true;
         }
-        let was_idle = self.playing.is_none() && self.queue.is_empty();
+        let was_idle = !self.is_busy();
         let heading = heading_token(&beat).cloned();
         self.queue.push_back(QueuedBeat { beat, round });
         if was_idle {
@@ -1202,6 +1214,11 @@ impl Stage {
     }
 
     fn start_next(&mut self) {
+        // A nominal timeline cannot release the next blow before the visible walk or the
+        // deciding blow's protected celebration has actually ended.
+        if self.celebration.is_some() || self.tokens.iter().any(|runtime| runtime.walk.is_some()) {
+            return;
+        }
         while let Some(queued) = self.queue.pop_front() {
             let QueuedBeat { beat, round } = queued;
             // A beat queued before its actor fell must not move the body when its turn
@@ -1237,9 +1254,11 @@ impl Stage {
 
     /// Advances every clock by `elapsed`.
     pub fn update(&mut self, elapsed: Duration) {
+        // Both the director and figures consume the same interval, including a stalled frame.
+        // Capping only figure time lets the director release an attack ahead of its walk.
         // Real time drives the camera, the shake and the particles; the stage's own clock (the
         // timeline, the figures' animations) runs slower or stops during hit-stop and slow motion.
-        let real_dt = elapsed.as_secs_f32().min(0.25);
+        let real_dt = elapsed.as_secs_f32();
         self.clock_s += real_dt;
         if self.feel_enabled {
             self.feel.advance(real_dt);
@@ -1251,7 +1270,7 @@ impl Stage {
             1.0
         };
         let sim = elapsed.mul_f32(scale);
-        let dt = sim.as_secs_f32().min(0.25);
+        let dt = sim.as_secs_f32();
         self.rig.update(elapsed);
         self.observe_camera_speed(real_dt);
         if let Some(speech) = &mut self.speech {
@@ -1348,10 +1367,11 @@ impl Stage {
             projectile.age_s < life
         });
         if let Some((card, waited)) = self.pending_roll_card.take() {
-            // The card never shows while a creature is still walking to its target.
-            if self.move_ahead()
-                || ((self.rig.is_panning() || self.camera_move_ahead())
-                    && waited < ROLL_CARD_MAX_WAIT_S)
+            // Movement and finishing holds do not spend the camera's settle allowance.
+            if self.move_ahead() || self.finishing_ahead() || self.celebration.is_some() {
+                self.pending_roll_card = Some((card, 0.0));
+            } else if (self.rig.is_panning() || self.camera_move_ahead())
+                && waited < ROLL_CARD_MAX_WAIT_S
             {
                 self.pending_roll_card = Some((card, waited + real_dt));
             } else {
@@ -1444,6 +1464,7 @@ impl Stage {
         }
         if playback.elapsed >= playback.timeline.duration
             && playback.next >= playback.timeline.steps.len()
+            && !self.tokens.iter().any(|runtime| runtime.walk.is_some())
         {
             self.playing = None;
             self.initiative_playing = false;
@@ -1479,11 +1500,29 @@ impl Stage {
 
     /// Whether a creature's walk is playing or queued.
     fn move_ahead(&self) -> bool {
-        (self.playing.is_some() && self.playing_move)
+        self.tokens.iter().any(|runtime| runtime.walk.is_some())
+            || (self.playing.is_some() && self.playing_move)
             || self
                 .queue
                 .iter()
                 .any(|queued| matches!(queued.beat, Beat::Move { .. }))
+    }
+
+    fn finishing_ahead(&self) -> bool {
+        self.hud.finishing_blow.is_some()
+            || self.playing.as_ref().is_some_and(|playing| {
+                playing
+                    .timeline
+                    .steps
+                    .iter()
+                    .any(|timed| matches!(timed.step, Step::FinishingBlow { .. }))
+            })
+            || self.queue.iter().any(|queued| {
+                matches!(
+                    queued.beat,
+                    Beat::FightEndingAttack { .. } | Beat::FightEndingStrike { .. }
+                )
+            })
     }
 
     /// Whether the camera is about to move: a beat is queued, or the one playing has a camera
@@ -1883,6 +1922,8 @@ impl Stage {
                 }
             }
             Step::FinishingBlow { hero, enemy } => {
+                self.hud.roll_card = None;
+                self.roll_card_left_s = 0.0;
                 let name = |id: &TokenId| {
                     self.token_index(id)
                         .map(|index| self.tokens[index].token.name.clone())
@@ -2120,7 +2161,7 @@ impl Stage {
         }
         // The blow's own timeline (the fall and the finishing card) plays out first; then the
         // camera goes to the party and holds there.
-        let timeline_over = self.playing.is_none() && self.queue.is_empty();
+        let timeline_over = self.playing.is_none();
         if timeline_over && beat.party_for_s.is_none() {
             beat.party_for_s = Some(0.0);
             beat.left_s = beat.left_s.max(PARTY_HOLD_MIN_S);
@@ -2870,6 +2911,205 @@ mod tests {
         }
     }
 
+    fn roll_card(value: &str) -> super::super::model::RollCard {
+        super::super::model::RollCard {
+            value: value.to_owned(),
+            label: "d20".to_owned(),
+            explanation: String::new(),
+            verdict: "HIT".to_owned(),
+            tone: "hit".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_stalled_frame_keeps_the_move_windup_roll_and_strike_in_order() {
+        let mut stage = stage();
+        stage.set_feel_enabled(false);
+        let attacker = TokenId::new("hero");
+        let target = TokenId::new("enemy");
+        let from = stage.tokens[0].token.cell;
+        let to = stage
+            .grid
+            .reachable_from(from)
+            .into_iter()
+            .find(|cell| {
+                stage
+                    .grid
+                    .path(from, *cell)
+                    .is_some_and(|path| path.len() >= 6)
+            })
+            .unwrap();
+        stage.stage_move(&attacker, to).unwrap();
+        stage
+            .stage(Beat::Approach {
+                attacker: attacker.clone(),
+                target: target.clone(),
+            })
+            .unwrap();
+        stage.show_roll_card(roll_card("7"));
+        let mut rolled = false;
+        for tick in 0..100 {
+            // A 1 s browser stall used to advance the timeline four times faster than the walk.
+            stage.update(Duration::from_secs(1));
+            assert_eq!(stage.clock_s, (tick + 1) as f32);
+            if stage.tokens[0].walk.is_some() {
+                assert!(stage.hud.roll_card.is_none());
+                assert_eq!(stage.target, None, "wind-up must wait for arrival");
+            }
+            if stage.hud.roll_card.is_some() {
+                assert_eq!(stage.tokens[0].position, stage.grid.cell_centre(to));
+                assert!(stage.tokens[0].walk.is_none());
+                assert!(
+                    stage.playing.is_none(),
+                    "the full approach must finish first"
+                );
+                rolled = true;
+                break;
+            }
+        }
+        assert!(rolled);
+        stage
+            .stage(Beat::Strike {
+                attacker,
+                target,
+                result: AttackResult::Hit {
+                    damage: 2,
+                    critical: false,
+                    downed: false,
+                },
+                target_hit_points_after: Some(3),
+            })
+            .unwrap();
+        run(&mut stage, 1.5);
+        assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 3);
+    }
+
+    #[test]
+    fn a_move_with_a_longer_visible_path_does_not_release_the_next_attack_early() {
+        let mut stage = stage();
+        stage.set_feel_enabled(false);
+        let from = stage.tokens[0].token.cell;
+        let to = stage
+            .grid
+            .reachable_from(from)
+            .into_iter()
+            .find(|cell| {
+                stage
+                    .grid
+                    .path(from, *cell)
+                    .is_some_and(|path| path.len() >= 6)
+            })
+            .unwrap();
+        // A queued view can name a more recent starting cell than the figure has reached.
+        stage
+            .stage(Beat::Move {
+                actor: TokenId::new("hero"),
+                from: to,
+                to,
+            })
+            .unwrap();
+        stage
+            .stage(Beat::Attack {
+                attacker: TokenId::new("hero"),
+                target: TokenId::new("enemy"),
+                result: AttackResult::Miss,
+                target_hit_points_after: None,
+            })
+            .unwrap();
+        let mut saw_walk = false;
+        let mut saw_windup = false;
+        for _ in 0..200 {
+            stage.update(Duration::from_millis(50));
+            saw_walk |= stage.tokens[0].walk.is_some();
+            if stage.target.is_some() {
+                assert!(stage.tokens[0].walk.is_none());
+                assert_eq!(stage.tokens[0].position, stage.grid.cell_centre(to));
+                saw_windup = true;
+                break;
+            }
+            assert!(stage.is_busy());
+        }
+        assert!(saw_walk && saw_windup);
+    }
+
+    #[test]
+    fn the_finishing_card_holds_for_3600_ms_before_a_queued_turn_or_roll_can_show() {
+        let mut stage = stage();
+        stage.stage(killing_blow()).unwrap();
+        let mut impact_at = None;
+        let mut card_at = None;
+        let mut card_end = None;
+        let mut elapsed_ms = 0;
+        for _ in 0..700 {
+            stage.update(Duration::from_millis(20));
+            elapsed_ms += 20;
+            if !stage.take_impacts().is_empty() {
+                impact_at = Some(elapsed_ms);
+            }
+            if stage.hud.finishing_blow.is_some() {
+                if card_at.is_none() {
+                    card_at = Some(elapsed_ms);
+                    stage.show_turn_now(Some(TokenId::new("ally")));
+                    stage.show_roll_card(roll_card("19"));
+                    stage
+                        .stage(Beat::TurnStart {
+                            actor: TokenId::new("ally"),
+                        })
+                        .unwrap();
+                }
+                assert!(stage.is_busy(), "the splash must keep waiting");
+                assert_eq!(stage.hud.active, Some(TokenId::new("hero")));
+                assert!(stage.hud.roll_card.is_none());
+                assert_eq!(stage.queue.len(), 1, "the next turn cannot start yet");
+            } else if card_at.is_some() && card_end.is_none() {
+                card_end = Some(elapsed_ms);
+            }
+            if !stage.is_busy() && card_end.is_some() {
+                break;
+            }
+        }
+        assert!(impact_at.unwrap() < card_at.unwrap());
+        println!(
+            "T1 finishing: impact={} ms, card={}..{} ms, card hold={} ms",
+            impact_at.unwrap(),
+            card_at.unwrap(),
+            card_end.unwrap(),
+            card_end.unwrap() - card_at.unwrap()
+        );
+        assert!((3_580..=3_620).contains(&(card_end.unwrap() - card_at.unwrap())));
+        assert_eq!(stage.hud.active, Some(TokenId::new("ally")));
+        assert!(!stage.is_busy());
+    }
+
+    #[test]
+    fn a_turn_queued_during_the_party_hold_keeps_the_deciding_actor_heading() {
+        let mut stage = stage();
+        stage.stage(killing_blow()).unwrap();
+        for _ in 0..600 {
+            stage.update(Duration::from_millis(20));
+            if stage.playing.is_none() && stage.celebration.is_some() {
+                break;
+            }
+        }
+        assert!(stage.playing.is_none() && stage.celebration.is_some());
+        stage.set_active(Some(TokenId::new("ally")));
+        stage
+            .stage(Beat::TurnStart {
+                actor: TokenId::new("ally"),
+            })
+            .unwrap();
+        assert_eq!(stage.hud.active, Some(TokenId::new("hero")));
+        stage.update(Duration::from_millis(20));
+        assert!(
+            stage.playing.is_none(),
+            "the party hold still owns the stage"
+        );
+        assert_eq!(stage.hud.active, Some(TokenId::new("hero")));
+        run(&mut stage, 4.0);
+        assert_eq!(stage.hud.active, Some(TokenId::new("ally")));
+        assert!(!stage.is_busy());
+    }
+
     #[test]
     fn occupied_action_and_party_closeups_fall_back_to_the_tactical_pose() {
         let mut stage = stage();
@@ -3258,9 +3498,11 @@ mod tests {
     fn the_hit_point_bar_changes_only_at_the_moment_of_impact() {
         let mut stage = stage();
         stage.stage(killing_blow()).unwrap();
-        run(&mut stage, 1.0);
+        // Focus + wind-up + focus hold + melee contact is 850 ms. The finishing
+        // slow-motion ramp now starts at contact, so it cannot postpone the HP change.
+        run(&mut stage, 0.8);
         assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 5);
-        run(&mut stage, 3.0);
+        run(&mut stage, 0.1);
         assert_eq!(figure(&stage, "enemy").hit_points.unwrap().current, 0);
     }
 
