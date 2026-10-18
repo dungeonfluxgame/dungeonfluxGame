@@ -11,6 +11,16 @@ pub struct VisibleBounds {
     pub right: f32,
 }
 
+/// Keeps a figure's last ready cut-out only while its replacement is still loading.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn cutout_or_loading_fallback<'a, T>(
+    chosen: Option<&'a T>,
+    previous: Option<&'a T>,
+    replacement_loading: bool,
+) -> Option<&'a T> {
+    chosen.or_else(|| replacement_loading.then_some(previous).flatten())
+}
+
 impl VisibleBounds {
     /// What a typical full-length hero cut-out measures, used until the real bounds are read.
     pub const TYPICAL: Self = Self {
@@ -78,6 +88,26 @@ mod tests {
             }
         }
         data
+    }
+
+    #[test]
+    fn loading_replacement_keeps_last_ready_cutout() {
+        assert_eq!(
+            cutout_or_loading_fallback(None, Some(&"ready-old"), true),
+            Some(&"ready-old")
+        );
+    }
+
+    #[test]
+    fn explicit_removal_clears_last_ready_cutout() {
+        let previous = Some(&"ready-old");
+        assert_eq!(cutout_or_loading_fallback(None, previous, false), None);
+    }
+
+    #[test]
+    fn failed_replacement_clears_last_ready_cutout() {
+        let previous = Some(&"ready-old");
+        assert_eq!(cutout_or_loading_fallback(None, previous, false), None);
     }
 
     #[test]

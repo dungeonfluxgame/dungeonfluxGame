@@ -2187,6 +2187,7 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                 .map(|combat| combat.layout_id.clone())
                 .filter(|id| !id.is_empty()),
             &view.scene.location_id,
+            &view.scene.title,
             view.journey
                 .combat
                 .as_ref()
@@ -2204,6 +2205,7 @@ fn start_mount(
     key: &str,
     server_layout: Option<String>,
     story_location: &str,
+    place_title: &str,
     world: Option<rpc::BattleWorld>,
 ) {
     let (document, host) = {
@@ -2231,11 +2233,6 @@ fn start_mount(
         .get_attribute("data-battle-scene")
         .and_then(|id| battle::load_embedded(&id))
         .and_then(Result::ok);
-    // The fight's title is the story place, never the scan's source name (that belongs in the
-    // credits with its attribution).
-    let place_title = story_scene
-        .as_ref()
-        .map_or_else(|| location_scene.title.clone(), |story| story.title.clone());
     let painted = |scene: &BattleScene| Some((scene.ground.clone(), scene.backdrop.clone()));
     let (mut scene, mut fallback_layers) = match forced {
         Some(forced) => (forced, painted(&location_scene)),
@@ -2250,7 +2247,7 @@ fn start_mount(
     };
     // A scan's splat streams in; the entrance waits for it (see `splat_streaming`).
     let expects_splat = scene.splat.is_some();
-    scene.title = place_title;
+    scene.title = place_title.to_owned();
     // Best-effort diagnostic attribute; a failure here changes nothing about the fight.
     let _ = host.set_attribute("data-battlefield-scene", &marker);
     if let Some(stem) = backdrop {

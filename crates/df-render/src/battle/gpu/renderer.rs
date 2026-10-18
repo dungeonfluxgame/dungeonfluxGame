@@ -19,6 +19,7 @@ use super::{
 };
 use crate::battle::{
     director::FlashTone,
+    figure_art::cutout_or_loading_fallback,
     grid::Grid,
     grid_lines,
     layout::Cover,
@@ -1420,6 +1421,12 @@ impl Renderer {
                 self.ready(stem).map(|texture| (stem, texture))
             });
             let chosen = variant.or(authored);
+            let replacement_loading = figure
+                .variant
+                .as_deref()
+                .into_iter()
+                .chain(figure.figure.as_deref())
+                .any(|stem| matches!(self.cache.borrow().get(stem), Some(Slot::Loading)));
             let mut fading: Option<(Rc<ImageTexture>, f32)> = None;
             if let Some((stem, texture)) = &chosen {
                 let entry = self.art_fades.get_mut(&figure.id.0);
@@ -1452,7 +1459,15 @@ impl Renderer {
                     }
                 }
             }
-            let cutout = chosen.map(|(_, texture)| texture);
+            if chosen.is_none() && !replacement_loading {
+                self.art_fades.remove(&figure.id.0);
+            }
+            let cutout = cutout_or_loading_fallback(
+                chosen.as_ref().map(|(_, texture)| texture),
+                self.art_fades.get(&figure.id.0).map(|fade| &fade.texture),
+                replacement_loading,
+            )
+            .cloned();
             let portrait = if cutout.is_none() {
                 figure.portrait.as_deref().and_then(|stem| {
                     self.request(stem, true, false);
