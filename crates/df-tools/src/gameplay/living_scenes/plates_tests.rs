@@ -1012,6 +1012,8 @@ fn narrative_focus_waits_for_pending_references_and_reports_terminal_reference_f
     assert!(locked(&shared.book).state_images.pending.is_none());
     assert!(drain(&mut queue).is_empty());
     let mut projection = rpc::GameplayScene {
+        source_scene_key: current.key.source_label().into(),
+        source_scene_variant: current.source_variant_id.clone().unwrap_or_default(),
         title: current.title,
         scene_asset: current.asset,
         ..Default::default()
@@ -1030,6 +1032,7 @@ fn narrative_focus_waits_for_pending_references_and_reports_terminal_reference_f
 async fn authored_story_coalesces_latest_reply_and_refreshes_the_base_before_a_second_edit() {
     let current = scene(SceneKey::DialogueSeal, "Harbor story", Some("Kestrel"));
     let (shared, mut queue) = shared(16);
+    admit_canonical_references(&shared.inner, &current);
     observe(&shared, &current, &[], &[1]);
     let id = fresh_ids(&drain(&mut queue)).remove(0);
     ready(&shared, &id, 'a');
@@ -1124,6 +1127,7 @@ async fn a_state_edit_after_an_edit_starts_from_the_fresh_plate_not_the_edited_s
     current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
     let (shared, mut queue) = shared(16);
     observe(&shared, &current, &[], &[1]);
+    drain(&mut queue);
     let plate = PlateScene::of(&current).unwrap();
     let id = shared.canonical_plate_id(&plate, &[1], &[], 1);
     ready(&shared, &id, 'a');
@@ -1323,11 +1327,8 @@ fn public_npc_line(sequence: u64, actor: &pack::SceneCastMember, text: &str) -> 
 #[tokio::test]
 async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_edited_key() {
     use crate::gameplay::imagery::tests::DirectionFixture;
-    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../artifacts/tmp/filmic-camera-repair/caller-{}",
-        std::process::id(),
-    ));
-    let fixture = DirectionFixture::new(&cache);
+    let cache = lane_cache("public-camera");
+    let fixture = DirectionFixture::photographic(&cache);
     let timing = Timing::from_interval(Duration::from_secs(30));
     let (jobs, mut queue) = mpsc::channel(16);
     let shared = Arc::new(Shared {
@@ -1361,6 +1362,8 @@ async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_
         .unwrap();
     let first_actor = &current.cast[0];
     let other_actor = &current.cast[1];
+    admit_canonical_references(&shared.inner, current);
+    render_canonical_references(&shared.inner).await;
     pack::with_test_pack(loaded.clone(), || {
         plates.observe(&public_story_message(current, Vec::new()), 1);
     });
@@ -1490,6 +1493,49 @@ async fn public_story_caller_changes_camera_at_constant_tempo_and_measures_each_
     }
 }
 
+// A scheduler-only worker: fresh speaker plates and anti-drift refreshes are prerequisites,
+// while only the caller's explicit Bake completions count as published story edits.
+fn poll_story_edit(
+    shared: &Shared,
+    queue: &mut mpsc::Receiver<Job>,
+    now: &mut Duration,
+) -> state_images::Pending {
+    let finish_fresh = |job| {
+        let Job::Fresh {
+            id,
+            graph_revision,
+            ahead,
+            ..
+        } = job
+        else {
+            panic!("only fresh plate prerequisites precede the story edit");
+        };
+        shared.finish(Done::Fresh {
+            id,
+            graph_revision,
+            ahead,
+            elapsed: Duration::ZERO,
+            result: Ok((key('a'), None)),
+        });
+    };
+    for job in drain(queue) {
+        finish_fresh(job);
+    }
+    shared.poll_state_images_at(*now);
+    let mut jobs = drain(queue);
+    if matches!(jobs.as_slice(), [Job::Fresh { .. }]) {
+        finish_fresh(jobs.remove(0));
+        *now += shared.inner.timing.interval;
+        shared.poll_state_images_at(*now);
+        jobs = drain(queue);
+    }
+    assert_eq!(jobs.len(), 1, "one settled story edit");
+    let Job::State(state_images::Job::Bake { pending, .. }) = jobs.remove(0) else {
+        panic!("story edit after its fresh base is ready");
+    };
+    pending
+}
+
 #[tokio::test]
 async fn public_story_caller_counts_only_published_edits_and_resets_when_the_scene_changes() {
     let loaded =
@@ -1515,6 +1561,9 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
         _worker: Arc::new(WorkerGuard(tokio::spawn(async {}))),
     };
     let mut lines = Vec::new();
+    admit_canonical_references(&shared.inner, current);
+    admit_canonical_references(&shared.inner, next);
+    finish_canonical_references(&shared.inner);
     pack::with_test_pack(loaded.clone(), || {
         plates.observe(&public_story_message(current, Vec::new()), 1)
     });
@@ -1527,10 +1576,8 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             plates.observe(&public_story_message(current, lines.clone()), sequence)
         });
     }
-    shared.poll_state_images_at(Duration::from_secs(4));
-    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
-        panic!("first edit")
-    };
+    let mut now = Duration::from_secs(4);
+    let pending = poll_story_edit(&shared, &mut queue, &mut now);
     assert_eq!(
         pending.story.as_ref().unwrap().dialogue,
         shot::PublicDialogue::FirstReply
@@ -1545,24 +1592,23 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             fresh: false,
             result: Ok(key('b')),
         },
-        Duration::from_secs(5),
+        now + Duration::from_secs(1),
     );
     // Identical text with another public sequence is suppressed.
     lines.push(public_npc_line(4, actor, "Let me explain."));
     pack::with_test_pack(loaded.clone(), || {
         plates.observe(&public_story_message(current, lines.clone()), 4)
     });
-    shared.poll_state_images_at(Duration::from_secs(34));
+    now += Duration::from_secs(30);
+    shared.poll_state_images_at(now);
     assert!(drain(&mut queue).is_empty());
     // A failed change of speaker does not become the previous shown actor.
     lines.push(public_npc_line(5, other, "No."));
     pack::with_test_pack(loaded.clone(), || {
         plates.observe(&public_story_message(current, lines.clone()), 5)
     });
-    shared.poll_state_images_at(Duration::from_secs(35));
-    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
-        panic!("changed speaker")
-    };
+    now += Duration::from_secs(1);
+    let pending = poll_story_edit(&shared, &mut queue, &mut now);
     assert_eq!(
         pending.story.as_ref().unwrap().dialogue,
         shot::PublicDialogue::SpeakerChange
@@ -1576,7 +1622,7 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             fresh: false,
             result: Err(ImageFailure::InvalidRequest),
         },
-        Duration::from_secs(36),
+        now + Duration::from_secs(1),
     );
     for (sequence, speaker, text) in [(6, other, "Listen."), (7, actor, "As I said.")] {
         lines.push(public_npc_line(sequence, speaker, text));
@@ -1584,10 +1630,8 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             plates.observe(&public_story_message(current, lines.clone()), sequence)
         });
     }
-    shared.poll_state_images_at(Duration::from_secs(66));
-    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
-        panic!("followup")
-    };
+    now += Duration::from_secs(31);
+    let pending = poll_story_edit(&shared, &mut queue, &mut now);
     assert_eq!(
         pending.story.as_ref().unwrap().dialogue,
         shot::PublicDialogue::SameSpeakerFollowup
@@ -1615,16 +1659,14 @@ async fn public_story_caller_counts_only_published_edits_and_resets_when_the_sce
             fresh: false,
             result: Ok(key('d')),
         },
-        Duration::from_secs(67),
+        now + Duration::from_secs(1),
     );
     lines.push(public_npc_line(9, actor, "Here we are."));
     pack::with_test_pack(loaded.clone(), || {
         plates.observe(&public_story_message(next, lines), 9)
     });
-    shared.poll_state_images_at(Duration::from_secs(70));
-    let Job::State(state_images::Job::Bake { pending, .. }) = drain(&mut queue).remove(0) else {
-        panic!("new scene first reply")
-    };
+    now += Duration::from_secs(4);
+    let pending = poll_story_edit(&shared, &mut queue, &mut now);
     assert_eq!(
         pending.story.as_ref().unwrap().dialogue,
         shot::PublicDialogue::FirstReply
@@ -1927,33 +1969,68 @@ async fn directed_plate_uses_the_same_references_updates_views_and_keeps_the_bas
     assert_eq!(fixture.calls(), calls, "undirected cache is retained");
 }
 
-fn observe(shared: &Shared, current: &pack::Scene, next: &[pack::Scene], heroes: &[u8]) {
-    if let Some(setting) = &current.setting
-        && let Some(model) = &setting.model
-    {
-        let mut model_with_cast = model.clone();
-        for member in &current.cast {
-            if model_with_cast
-                .people
-                .iter()
-                .any(|person| person.id == member.id)
-            {
-                continue;
-            }
-            if let Some(mut person) = model_with_cast.people.first().cloned() {
-                person.id.clone_from(&member.id);
-                person.name.clone_from(&member.name);
-                model_with_cast.people.push(person);
-            }
-        }
-        shared
-            .inner
-            .observe_checkpoint(&crate::gameplay::beat_script_tests::prepared_story());
-        shared
-            .inner
-            .admit_canonical_room(&setting.place_id, &model_with_cast, &current.cast);
-        finish_canonical_references(&shared.inner);
+fn lane_cache(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/lanes/Q6B/{name}-{}",
+        std::process::id()
+    ))
+}
+
+fn canonical_member(member: &pack::SceneCastMember) -> super::super::Member {
+    super::super::Member {
+        id: member.id.clone(),
+        role: super::super::role_of(member.role),
+        life_stage: super::super::LifeStage::from_age(member.age),
+        name: member.name.clone(),
+        sprite: member.sprite.clone(),
+        dossier_id: None,
+        opposes: false,
+        starting_attitude: None,
     }
+}
+
+fn admit_canonical_references(inner: &Inner, current: &pack::Scene) {
+    inner.observe_checkpoint(&crate::gameplay::beat_script_tests::prepared_story());
+    let mut state = locked(&inner.state);
+    state.canonical.observe_room(current);
+    // Some scheduling fixtures deliberately have no authored model, or use an unrelated room
+    // model. Admit their actual cast without changing the scene snapshot under test.
+    for member in &current.cast {
+        state.canonical.admit_cast(&canonical_member(member));
+    }
+}
+
+async fn render_canonical_references(inner: &Inner) {
+    loop {
+        let jobs = locked(&inner.state).canonical.take_jobs();
+        if jobs.is_empty() {
+            return;
+        }
+        for job in jobs {
+            let super::super::Job::Canonical(work) = job else {
+                panic!("canonical reference job");
+            };
+            let image = inner.render_canonical(&work).await.unwrap();
+            assert!(matches!(
+                inner.imagery.image(image.as_str()).await,
+                Lookup::Image { .. }
+            ));
+            inner.finish_canonical(work, Ok(image));
+        }
+    }
+}
+
+fn observe(shared: &Shared, current: &pack::Scene, next: &[pack::Scene], heroes: &[u8]) {
+    for scene in std::iter::once(current).chain(next) {
+        if scene
+            .setting
+            .as_ref()
+            .is_some_and(|setting| setting.model.is_some())
+        {
+            admit_canonical_references(&shared.inner, scene);
+        }
+    }
+    finish_canonical_references(&shared.inner);
     shared.observe_with(
         &view(current, heroes, false),
         Some(current.clone()),
@@ -2296,6 +2373,8 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
     plates.request_item("Brakka", &id, None, false).unwrap();
     assert_eq!(drain(&mut queue).len(), 1);
     let mut private = rpc::GameplayScene {
+        source_scene_key: scene.key.source_label().into(),
+        source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
         item: Some(rpc::SceneItemCard {
@@ -2335,6 +2414,8 @@ async fn item_cards_are_cached_per_object_state_and_private_until_shared() {
         "media requests cannot fabricate durable item selection"
     );
     let mut public = rpc::GameplayScene {
+        source_scene_key: scene.key.source_label().into(),
+        source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
         ..Default::default()
@@ -2615,6 +2696,8 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
         ..Default::default()
     };
     let mut phone = rpc::GameplayScene {
+        source_scene_key: scene.key.source_label().into(),
+        source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
         hand_items: vec![hand_card("Sigrun", &thing_detail)],
@@ -2626,6 +2709,8 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
     assert_eq!(phone.hand_items[0].holder, "Sigrun");
 
     let mut display = rpc::GameplayScene {
+        source_scene_key: scene.key.source_label().into(),
+        source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
         hand_items: vec![hand_card("Sigrun", &thing_detail)],
@@ -2679,6 +2764,8 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
     );
 
     let mut private_phone = rpc::GameplayScene {
+        source_scene_key: scene.key.source_label().into(),
+        source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
         hand_items: vec![hand_card("Vale", &thing_detail)],
@@ -2688,6 +2775,8 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
     assert_eq!(private_phone.hand_items[0].image_path, key('a').path());
 
     let mut private_display = rpc::GameplayScene {
+        source_scene_key: scene.key.source_label().into(),
+        source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
         ..Default::default()
@@ -2740,6 +2829,8 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
     );
     let detailed_card = hand_card("Vale", &detailed_detail);
     let mut detailed_phone = rpc::GameplayScene {
+        source_scene_key: scene.key.source_label().into(),
+        source_scene_variant: scene.source_variant_id.clone().unwrap_or_default(),
         title: scene.title.clone(),
         scene_asset: scene.asset.clone(),
         hand_items: vec![detailed_card],
@@ -2755,11 +2846,8 @@ async fn hand_item_image_tracks_custody_and_stays_out_of_private_display_project
 #[tokio::test]
 async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() {
     use crate::gameplay::imagery::tests::DirectionFixture;
-    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../artifacts/tmp/campaign/luna6/K03/state-image-fixture-{}",
-        std::process::id()
-    ));
-    let fixture = DirectionFixture::new(&cache);
+    let cache = lane_cache("state-batch");
+    let fixture = DirectionFixture::photographic(&cache);
     let timing = Timing::from_interval(Duration::from_secs(30));
     let inner = Arc::new(Inner {
         imagery: fixture.imagery.clone(),
@@ -2782,6 +2870,13 @@ async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() 
     let generated = crate::gameplay::npc_dossier_tests::adventure(42);
     let mut current = scene(SceneKey::Opening, "Stateful room", Some("Kestrel"));
     current.setting.as_mut().unwrap().model = generated.settings.meeting.model.clone();
+    admit_canonical_references(&shared.inner, &current);
+    render_canonical_references(&shared.inner).await;
+    let reference_calls = fixture.calls();
+    assert!(
+        reference_calls > 0,
+        "canonical references used the local provider"
+    );
     observe(&shared, &current, &[], &[1]);
     let Job::Fresh {
         id,
@@ -2841,7 +2936,7 @@ async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() 
     let done = shared.render_state_image(job).await;
     shared.finish_state_image(done);
     assert_eq!(
-        fixture.calls(),
+        fixture.calls() - reference_calls,
         2,
         "one initial still and one edit for the entire batch"
     );
@@ -2862,7 +2957,7 @@ async fn visible_change_batch_uses_one_provider_edit_from_the_displayed_still() 
     );
     shared.poll_state_images_at(Duration::from_secs(20));
     assert!(drain(&mut queue).is_empty());
-    assert_eq!(fixture.calls(), 2);
+    assert_eq!(fixture.calls() - reference_calls, 2);
 }
 
 fn apply(shared: &Shared, message: &mut rpc::ViewMessage) {
@@ -3009,18 +3104,17 @@ async fn a_visible_change_before_the_first_plate_stays_pending_until_that_plate_
     let (shared, mut queue) = shared(16);
     observe(&shared, &current, &[], &[1]);
     let id = fresh_ids(&drain(&mut queue)).remove(0);
-    current
-        .setting
-        .as_mut()
-        .unwrap()
-        .model
-        .as_mut()
-        .unwrap()
-        .things[0]
-        .open = true;
+    // This is a runtime state edit of the accepted room, not a newly authored room reference.
+    let mut next = PlateScene::of(&current).unwrap();
+    next.snapshot.as_mut().unwrap().model.things[0].open = true;
     let mut changed = view(&current, &[1], false);
     changed.graph_revision = 2;
-    shared.observe_with(&changed, Some(current), Vec::new());
+    state_images::observe(
+        &mut locked(&shared.book),
+        &changed,
+        &next,
+        Duration::from_secs(1),
+    );
     shared.poll_state_images_at(Duration::from_secs(5));
     assert!(locked(&shared.book).state_images.pending.is_some());
     assert!(drain(&mut queue).is_empty());
@@ -3490,6 +3584,8 @@ async fn a_scene_plate_with_two_heroes_and_two_cast_members_stays_within_referen
 
 #[tokio::test]
 async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references() {
+    let cache = lane_cache("reviewed-harbor");
+    let fixture = crate::gameplay::imagery::tests::DirectionFixture::photographic(&cache);
     let timing = Timing::from_interval(Duration::from_secs(30));
     let references = super::super::ReferenceStore::new(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui/generated"),
@@ -3497,7 +3593,7 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
     let base = references.load("scene-salt-quay-candid").unwrap();
     let courier = references.load("sprite-courier").unwrap();
     let inner = Arc::new(Inner {
-        imagery: Imagery::disabled(ImageryOff::Qualification),
+        imagery: fixture.imagery.clone(),
         references,
         social: SocialLedger::none(),
         rating: ContentRating::Restrained,
@@ -3523,6 +3619,58 @@ async fn fixed_harbor_edits_the_reviewed_full_frame_before_identity_references()
         .map(|value| serde_json::from_value::<pack::Scene>(value.clone()).unwrap())
         .find(|scene| scene.key == SceneKey::DialogueSeal)
         .unwrap();
+    shared
+        .inner
+        .observe_checkpoint(&crate::gameplay::journey::initial().unwrap());
+    for member in &current.cast {
+        let reference = shared.inner.references.load(&member.sprite).unwrap();
+        let canonical = canonical_member(member);
+        locked(&shared.inner.state).canonical.admit_cast(&canonical);
+        let request = ImageRequest {
+            kind: ImageKind::CanonicalCharacter,
+            references: vec![reference.clone()],
+            prompt: crate::gameplay::imagery::canonical_cast_member(
+                shared.inner.rating,
+                &member.id,
+                &member.name,
+                canonical.role,
+                canonical.life_stage,
+                &reference.sha256,
+            )
+            .unwrap(),
+            output: OutputSpec::CUTOUT,
+        };
+        let key = shared.inner.imagery.key_for(&request);
+        let extension = match reference.format {
+            df_providers::ImageFormat::Webp => "webp",
+            df_providers::ImageFormat::Png => "png",
+            df_providers::ImageFormat::Jpeg => panic!("reviewed cutout format"),
+        };
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join(format!("{}.{}", key.as_str(), extension)),
+            &reference.bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            shared
+                .inner
+                .imagery
+                .generate(&member.id, request)
+                .await
+                .unwrap(),
+            key
+        );
+        let jobs = locked(&shared.inner.state).canonical.take_jobs();
+        assert_eq!(jobs.len(), 1);
+        for job in jobs {
+            let super::super::Job::Canonical(work) = job else {
+                panic!("reviewed canonical cast job");
+            };
+            shared.inner.finish_canonical(work, Ok(key.clone()));
+        }
+    }
+    assert_eq!(fixture.calls(), 0, "reviewed references are already cached");
     let mut scene = PlateScene::of(&current).unwrap();
     let spec = scene.stage(&[1, 2]).unwrap();
     let (request, _) = shared
@@ -3697,7 +3845,7 @@ fn mystery_script() -> (BeatScript, Vec<pack::Scene>) {
             })).collect::<Vec<_>>(),
         })
     };
-    let script = serde_json::from_value(serde_json::json!({
+    let mut script: BeatScript = serde_json::from_value(serde_json::json!({
         "entry": "opening", "terminal": ["end"], "scenes": scenes,
         "beats": [
             beat("opening", "investigate", &["crates", "travel"]),
@@ -3709,6 +3857,9 @@ fn mystery_script() -> (BeatScript, Vec<pack::Scene>) {
         ],
     }))
     .unwrap();
+    for (id, current) in &mut script.scenes {
+        current.source_variant_id = Some(id.clone());
+    }
     (script, Vec::new())
 }
 
