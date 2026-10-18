@@ -780,11 +780,7 @@ pub(super) async fn act(
                     "use choose with --option, or an offer label directly",
                 ));
             }
-            body["option"] = json!(if action == "action-surge" {
-                "Action Surge"
-            } else {
-                action
-            });
+            body["option"] = json!(action);
             parse::PlayAction::Choose
         }
     };
@@ -1494,6 +1490,33 @@ mod offer_tests {
             label: label.to_owned(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn r3_action_surge_submission_has_its_own_kind_and_no_second_wind_choice() {
+        let action = parse::parse_action("action-surge").unwrap();
+        let mut view_offer = offer("Action Surge");
+        view_offer.action_kind = rpc::GameplayActionKind::ActionSurge as i32;
+        let offered = player_offers(&player_view(vec![view_offer]))
+            .unwrap()
+            .remove(0);
+        let mut submit = rpc::SubmitActionRequest {
+            offer_id: offered.offer_id.clone(),
+            action_kind: action.kind() as i32,
+            ..Default::default()
+        };
+        fill_action_choices(
+            &json!({"hero":"Brynn", "action":"action-surge"}),
+            action,
+            &offered,
+            &mut submit,
+        )
+        .unwrap();
+        assert_eq!(
+            submit.action_kind,
+            rpc::GameplayActionKind::ActionSurge as i32
+        );
+        assert!(submit.action_choices.is_empty());
     }
 
     #[test]

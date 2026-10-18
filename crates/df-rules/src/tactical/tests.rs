@@ -2821,3 +2821,455 @@ fn development_conditions_refuse_conscious_zero_hp_and_dead_stable_combinations(
         assert_eq!(dead.snapshot().unwrap(), corpse);
     }
 }
+
+// SRD 5.2.1 pp.298,312-313,333,341; PDF SHA256 is pinned by the source manifest.
+#[test]
+fn r2_stronger_creatures_preserve_source_stats_spaces_and_published_initiative() {
+    let manifest: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../development/rules-sources/manifest.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        manifest["sha256"],
+        "8974902d109d6e63672d7c490bde9ccf052410503d9cfa768237154fbc5e3d87"
+    );
+    for (
+        id,
+        page,
+        hp,
+        ac,
+        abilities,
+        bonus,
+        modifier,
+        dice,
+        sides,
+        speed,
+        size,
+        initiative,
+        attacks,
+    ) in [
+        (
+            "ogre",
+            312,
+            68,
+            11,
+            [19, 8, 16, 5, 7, 7],
+            6,
+            4,
+            2,
+            8,
+            40,
+            Size::Large,
+            -1,
+            1,
+        ),
+        (
+            "owlbear",
+            313,
+            59,
+            13,
+            [20, 12, 17, 3, 12, 7],
+            7,
+            5,
+            2,
+            8,
+            40,
+            Size::Large,
+            1,
+            2,
+        ),
+        (
+            "wight",
+            341,
+            82,
+            14,
+            [15, 14, 16, 10, 13, 15],
+            4,
+            2,
+            1,
+            8,
+            30,
+            Size::Medium,
+            4,
+            2,
+        ),
+        (
+            "hill-giant",
+            298,
+            105,
+            13,
+            [21, 8, 19, 5, 9, 6],
+            8,
+            5,
+            3,
+            8,
+            40,
+            Size::Huge,
+            2,
+            2,
+        ),
+        (
+            "troll",
+            333,
+            94,
+            15,
+            [18, 13, 20, 7, 9, 7],
+            7,
+            4,
+            2,
+            6,
+            30,
+            Size::Large,
+            1,
+            3,
+        ),
+    ] {
+        let source = crate::SRD_521_CREATURES
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap();
+        assert_eq!(
+            (
+                source.page,
+                source.rules.hit_points,
+                source.rules.armor_class
+            ),
+            (page, hp, ac)
+        );
+        assert_eq!(source.rules.abilities, abilities);
+        assert_eq!(
+            (
+                source.rules.attack_bonus,
+                source.rules.damage_modifier,
+                source.rules.weapon.damage_dice,
+                source.rules.weapon.damage_sides
+            ),
+            (bonus, modifier, dice, sides)
+        );
+        let spec = CombatantSpec::creature(3, id, Cell(5, 2), 20).unwrap();
+        assert_eq!(
+            (
+                spec.speed_ft,
+                spec.size,
+                spec.initiative_modifier(),
+                spec.multiattack_count()
+            ),
+            (speed, size, initiative, attacks)
+        );
+        let state = battle(vec![melee(1, Cell(1, 1)), spec]);
+        assert_eq!(
+            Battle::from_snapshot(state.map().clone(), &state.snapshot().unwrap()).unwrap(),
+            state
+        );
+    }
+}
+
+#[test]
+fn r2_large_and_huge_space_reject_overlap_edges_and_swept_walls() {
+    let ogre = CombatantSpec::creature(3, "ogre", Cell(5, 2), 0).unwrap();
+    assert_eq!(
+        ogre.space_cells(ogre.cell),
+        vec![Cell(5, 2), Cell(5, 3), Cell(6, 2), Cell(6, 3)]
+    );
+    let state = battle(vec![melee(1, Cell(4, 3)), ogre.clone()]);
+    assert_eq!(
+        state.actor(1).unwrap().distance_to(state.actor(3).unwrap()),
+        5
+    );
+    assert_eq!(
+        state.attack_from(1, Cell(6, 3), 3, usage(Weapon::Greatsword, false)),
+        Err(RuleError::Occupied)
+    );
+    let mut invalid = ogre.clone();
+    invalid.cell = Cell(127, 2);
+    let src = source();
+    assert_eq!(
+        begin(
+            map("open-court"),
+            vec![melee(1, Cell(1, 1)), invalid],
+            binding(&src),
+            &records(&src, &[(20, 20), (20, 1)])
+        ),
+        Err(RuleError::Spawn)
+    );
+    let walled=BattleMap::from_json(br#"{"schema":2,"grid":{"cols":8,"rows":6,"blocked":[[4,3]]},"layouts":[{"id":"large-wall","obstacles":[],"difficult":[],"spawns":{"heroes":[[0,0]],"enemies":[[2,2]]}}]}"#,"large-wall").unwrap();
+    let state = battle_with_map(
+        walled,
+        vec![
+            melee(1, Cell(0, 0)),
+            CombatantSpec::creature(3, "ogre", Cell(2, 2), 0).unwrap(),
+        ],
+    );
+    assert_eq!(
+        state.validate_path(3, &[Cell(3, 2)]),
+        Err(RuleError::Blocked)
+    );
+    let giant = CombatantSpec::creature(3, "hill-giant", Cell(3, 2), 0).unwrap();
+    assert_eq!(giant.space_cells(giant.cell).len(), 9);
+}
+
+#[test]
+fn r2_stat_block_multiattacks_damage_reach_and_ogre_javelin_dice() {
+    for (id, chosen, faces, expected, count, reach) in [
+        (
+            "ogre",
+            Weapon::Greatclub,
+            vec![(20, 15), (8, 4), (8, 5)],
+            13,
+            1,
+            5,
+        ),
+        (
+            "owlbear",
+            Weapon::Rend,
+            vec![(20, 15), (8, 4), (8, 5)],
+            14,
+            2,
+            5,
+        ),
+        (
+            "troll",
+            Weapon::Rend,
+            vec![(20, 15), (6, 3), (6, 4)],
+            11,
+            3,
+            10,
+        ),
+        (
+            "hill-giant",
+            Weapon::TreeClub,
+            vec![(20, 15), (8, 4), (8, 5), (8, 4)],
+            18,
+            2,
+            10,
+        ),
+        (
+            "wight",
+            Weapon::NecroticSword,
+            vec![(20, 15), (8, 4), (8, 5)],
+            11,
+            2,
+            5,
+        ),
+    ] {
+        let state = battle(vec![
+            melee(1, Cell(1, 2)).at_fighter_level(5).unwrap(),
+            CombatantSpec::creature(3, id, Cell(if reach == 10 { 3 } else { 2 }, 2), 0).unwrap(),
+        ]);
+        let mut state = next_turn(state, 3);
+        for index in 0..count {
+            let mut attack = usage(chosen, false);
+            attack.use_mastery = false;
+            let resolved = step(
+                &state,
+                3,
+                Action::Attack {
+                    target: 1,
+                    weapon: attack,
+                    spend: if index == 0 {
+                        AttackSpend::Action
+                    } else {
+                        AttackSpend::Multiattack
+                    },
+                },
+                &faces,
+            );
+            assert_eq!(
+                resolved.attacks[0].damage + resolved.attacks[0].necrotic_damage,
+                expected,
+                "{id}"
+            );
+            assert_eq!(resolved.attacks[0].distance_ft, reach, "{id}");
+            state = resolved.battle;
+            // Get up between isolated damage samples without modifying source HP or dice.
+            if index + 1 < count {
+                state.actor_mut(1).unwrap().health.prone = false;
+            }
+        }
+        assert_eq!(state.actor(3).unwrap().extra_attacks, 0);
+        let mut attack = usage(chosen, false);
+        attack.use_mastery = false;
+        rejects(
+            &state,
+            3,
+            Action::Attack {
+                target: 1,
+                weapon: attack,
+                spend: AttackSpend::Multiattack,
+            },
+            RuleError::InvalidExtraAttack,
+        );
+    }
+    let mut state = next_turn(
+        battle(vec![
+            melee(1, Cell(1, 2)),
+            CombatantSpec::creature(3, "ogre", Cell(5, 2), 0).unwrap(),
+        ]),
+        3,
+    );
+    assert_eq!(state.actor(3).unwrap().weapon_count(Weapon::Javelin), 3);
+    let resolved = step(
+        &state,
+        3,
+        strike(1, Weapon::Javelin, true),
+        &[(20, 15), (6, 3), (6, 4)],
+    );
+    assert_eq!(resolved.attacks[0].damage, 11);
+    state = resolved.battle;
+    assert_eq!(state.actor(3).unwrap().weapon_count(Weapon::Javelin), 2);
+}
+
+#[test]
+fn r2_troll_regenerates_from_zero_and_is_not_prematurely_awarded_as_dead() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 2)),
+        CombatantSpec::creature(3, "troll", Cell(2, 2), 0).unwrap(),
+    ]);
+    state.actor_mut(3).unwrap().health.hit_points = 1;
+    let state = step(
+        &state,
+        1,
+        strike(3, Weapon::Greatsword, false),
+        &[(20, 15), (6, 3), (6, 3)],
+    )
+    .battle;
+    assert_eq!(state.actor(3).unwrap().health.hit_points, 0);
+    assert!(!state.actor(3).unwrap().health.dead);
+    assert!(!state.finished());
+    assert_eq!(state.winner(), None);
+    assert_eq!(state.experience_award().unwrap(), None);
+    let state = next_turn(state, 3);
+    assert_eq!(state.actor(3).unwrap().health.hit_points, 15);
+    assert!(!state.actor(3).unwrap().health.unconscious);
+    assert!(
+        state.actor(3).unwrap().held.is_empty(),
+        "Rend is not discarded gear"
+    );
+}
+
+#[test]
+fn r2_javelin_stack_spends_on_hits_and_misses_and_zero_is_not_legal() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "ogre", Cell(7, 1), 0).unwrap(),
+    ]);
+    assert_eq!(state.actor(1).unwrap().weapon_count(Weapon::Javelin), 8);
+    for throw in 1..=8 {
+        state = step(
+            &state,
+            1,
+            strike(3, Weapon::Javelin, true),
+            if throw % 2 == 1 {
+                &[(20, 1)]
+            } else {
+                &[(20, 15), (6, 1)]
+            },
+        )
+        .battle;
+        assert_eq!(
+            state.actor(1).unwrap().weapon_count(Weapon::Javelin),
+            8 - throw
+        );
+        assert_eq!(state.actor(1).unwrap().dropped.len(), usize::from(throw));
+        if throw < 8 {
+            state = next_turn(state, 1);
+        }
+    }
+    assert!(
+        state
+            .legal_targets(1, usage(Weapon::Javelin, true))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        Battle::from_snapshot(state.map().clone(), &state.snapshot().unwrap()).unwrap(),
+        state
+    );
+}
+
+#[test]
+fn r2_action_surge_leaves_second_wind_bonus_action_and_healing_independent() {
+    let mut state = battle(vec![
+        melee(1, Cell(1, 1)).at_fighter_level(5).unwrap(),
+        CombatantSpec::creature(3, "ogre", Cell(6, 1), 0).unwrap(),
+    ]);
+    state.actor_mut(1).unwrap().health.hit_points = 39;
+    let before = state.actor(1).unwrap().clone();
+    let surged = step(&state, 1, Action::ActionSurge, &[]).battle;
+    let after = surged.actor(1).unwrap();
+    assert_eq!(
+        after.spec().second_wind_uses,
+        before.spec().second_wind_uses
+    );
+    assert!(!after.budget().bonus_action_used);
+    assert_eq!(after.health(), before.health());
+    assert_eq!(after.additional_actions(), 1);
+    let healed = step(&surged, 1, Action::SecondWind, &[(10, 3)]).battle;
+    let after = healed.actor(1).unwrap();
+    assert_eq!(after.spec().second_wind_uses, 2);
+    assert!(after.budget().bonus_action_used);
+    assert_eq!(after.health().hit_points, 47);
+    assert_eq!(after.additional_actions(), 1);
+}
+
+#[test]
+fn r2_wight_critical_doubles_both_types_and_bow_is_not_a_thrown_object() {
+    let state = battle(vec![
+        melee(1, Cell(1, 2)).at_fighter_level(5).unwrap(),
+        CombatantSpec::creature(3, "wight", Cell(8, 2), 0).unwrap(),
+    ]);
+    let state = next_turn(state, 3);
+    let result = step(
+        &state,
+        3,
+        strike(1, Weapon::NecroticBow, true),
+        &[(20, 20), (8, 2), (8, 3), (8, 4), (8, 5)],
+    );
+    assert_eq!(
+        (result.attacks[0].damage, result.attacks[0].necrotic_damage),
+        (7, 9)
+    );
+    assert!(result.attacks[0].critical);
+    assert_eq!(
+        result
+            .battle
+            .actor(3)
+            .unwrap()
+            .weapon_count(Weapon::NecroticBow),
+        1
+    );
+    assert!(result.battle.actor(3).unwrap().dropped.is_empty());
+    assert_eq!(result.battle.actor(3).unwrap().arrows(), 0);
+    assert_eq!(
+        Battle::from_snapshot(
+            result.battle.map().clone(),
+            &result.battle.snapshot().unwrap()
+        )
+        .unwrap(),
+        result.battle
+    );
+}
+
+#[test]
+fn r2_sunlit_wight_group_initiative_uses_one_disadvantaged_source_check() {
+    let src = source();
+    let specs = vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "wight", Cell(5, 1), 0).unwrap(),
+        CombatantSpec::creature(4, "wight", Cell(6, 1), 0).unwrap(),
+    ];
+    let result = begin(
+        map("open-court").with_lighting(Lighting::Sunlight),
+        specs,
+        binding(&src),
+        &records(&src, &[(20, 10), (20, 18), (20, 3)]),
+    )
+    .unwrap();
+    assert_eq!(result.draws.len(), 3);
+    assert_eq!(
+        result.battle.initiative_policy(),
+        "identical-monster-groups"
+    );
+    assert_eq!(result.battle.development_initiative(3), Some(7));
+    assert_eq!(result.battle.development_initiative(4), Some(7));
+}

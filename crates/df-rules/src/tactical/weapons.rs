@@ -17,6 +17,11 @@ pub enum Weapon {
     Bite,
     Slam,
     UnarmedStrike,
+    Greatclub,
+    Rend,
+    TreeClub,
+    NecroticSword,
+    NecroticBow,
 }
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mastery {
@@ -66,6 +71,11 @@ impl Weapon {
             Self::Bite => "bite",
             Self::Slam => "slam",
             Self::UnarmedStrike => "unarmed-strike",
+            Self::Greatclub => "greatclub",
+            Self::Rend => "rend",
+            Self::TreeClub => "tree-club",
+            Self::NecroticSword => "necrotic-sword",
+            Self::NecroticBow => "necrotic-bow",
         }
     }
     pub fn mastery(self) -> Option<Mastery> {
@@ -76,12 +86,19 @@ impl Weapon {
             Self::Shortbow | Self::Shortsword => Some(Mastery::Vex),
             Self::Scimitar | Self::Dagger | Self::Sickle => Some(Mastery::Nick),
             Self::Club => Some(Mastery::Sap),
-            Self::Bite | Self::Slam | Self::UnarmedStrike => None,
+            Self::Bite
+            | Self::Slam
+            | Self::UnarmedStrike
+            | Self::Greatclub
+            | Self::Rend
+            | Self::TreeClub
+            | Self::NecroticSword
+            | Self::NecroticBow => None,
         }
     }
     pub fn range(self) -> Option<(u16, u16)> {
         match self {
-            Self::Longbow => Some((150, 600)),
+            Self::Longbow | Self::NecroticBow => Some((150, 600)),
             Self::Shortbow | Self::LightCrossbow => Some((80, 320)),
             Self::Javelin => Some((30, 120)),
             Self::Spear | Self::Dagger => Some((20, 60)),
@@ -89,15 +106,36 @@ impl Weapon {
         }
     }
     pub fn ranged_weapon(self) -> bool {
-        matches!(self, Self::Longbow | Self::Shortbow | Self::LightCrossbow)
+        matches!(
+            self,
+            Self::Longbow | Self::Shortbow | Self::LightCrossbow | Self::NecroticBow
+        )
     }
     pub fn ammunition(self) -> bool {
-        self.ranged_weapon()
+        matches!(self, Self::Longbow | Self::Shortbow | Self::LightCrossbow)
+    }
+    pub fn thrown(self) -> bool {
+        matches!(self, Self::Javelin | Self::Spear | Self::Dagger)
+    }
+    pub fn natural(self) -> bool {
+        matches!(
+            self,
+            Self::Bite
+                | Self::Slam
+                | Self::Rend
+                | Self::TreeClub
+                | Self::NecroticSword
+                | Self::NecroticBow
+        )
     }
     pub fn two_handed(self) -> bool {
         matches!(
             self,
-            Self::Greatsword | Self::Longbow | Self::Shortbow | Self::LightCrossbow
+            Self::Greatsword
+                | Self::Longbow
+                | Self::Shortbow
+                | Self::LightCrossbow
+                | Self::NecroticBow
         )
     }
     pub fn heavy(self) -> bool {
@@ -117,6 +155,10 @@ impl Weapon {
         match self {
             Self::UnarmedStrike => (0, 6),
             Self::Greatsword => (2, 6),
+            Self::Greatclub => (2, 8),
+            Self::TreeClub => (3, 8),
+            Self::Rend => (2, 6),
+            Self::NecroticSword | Self::NecroticBow => (1, 8),
             Self::Flail | Self::Longbow | Self::LightCrossbow | Self::Slam => (1, 8),
             Self::Spear if two_hands => (1, 8),
             Self::Dagger | Self::Sickle => (1, 4),
@@ -125,8 +167,12 @@ impl Weapon {
     }
     pub fn damage_type(self) -> DamageType {
         match self {
-            Self::Greatsword | Self::Scimitar | Self::Sickle => DamageType::Slashing,
-            Self::Flail | Self::Slam | Self::UnarmedStrike => DamageType::Bludgeoning,
+            Self::Greatsword | Self::Scimitar | Self::Sickle | Self::Rend | Self::NecroticSword => {
+                DamageType::Slashing
+            }
+            Self::Flail | Self::Slam | Self::UnarmedStrike | Self::Greatclub | Self::TreeClub => {
+                DamageType::Bludgeoning
+            }
             _ => DamageType::Piercing,
         }
     }

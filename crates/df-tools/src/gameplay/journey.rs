@@ -76,6 +76,7 @@ const THREAD_EVENTS: &[(&str, &str)] = &[
     ("scene-npc-assault", THREAT_THREAD),
     ("greatsword-attack", THREAT_THREAD),
     ("second-wind", THREAT_THREAD),
+    ("action-surge", THREAT_THREAD),
     ("move", THREAT_THREAD),
     ("dash", THREAT_THREAD),
     ("dodge", THREAT_THREAD),
@@ -122,6 +123,7 @@ pub(super) const CONTENT_ENTRIES: &[&str] = &[
     "bandit",
     "greatsword-attack",
     "second-wind",
+    "action-surge",
     "move",
     "dash",
     "dodge",
@@ -4975,7 +4977,28 @@ mod tests {
                 .as_path(),
         )
         .unwrap();
-        for creature in &df_rules::SRD_521_CREATURES {
+        // Only creatures the antagonist table can roll: the CR 2-5 rows exist for level-5 test
+        // fights (`dev fight start --foe`) and are not adventure antagonists.
+        let table: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../content/adventure-tables/antagonists.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let rollable: Vec<&str> = table["tables"]["antagonists"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["id"].as_str())
+            .collect();
+        let creatures: Vec<_> = df_rules::SRD_521_CREATURES
+            .iter()
+            .filter(|creature| rollable.contains(&creature.id))
+            .collect();
+        assert!(creatures.len() >= 12, "antagonist table rolls {rollable:?}");
+        for creature in creatures {
             let location = if ["skeleton", "wolf"].contains(&creature.id) {
                 "pinewood-trail"
             } else {

@@ -1940,13 +1940,13 @@ pub(super) fn audit_line(outcome: &rpc::CombatOutcome) -> String {
     }
 }
 
-pub(super) fn initiative_audit_line(rolls: &[rpc::InitiativeRoll]) -> String {
+pub(super) fn initiative_audit_line(rolls: &[rpc::InitiativeRoll], policy: &str) -> String {
     let order = rolls
         .iter()
         .map(|roll| format!("{}:{}", roll.name, roll.total))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("COMBAT initiative order=[{order}]")
+    format!("{policy} order=[{order}]")
 }
 
 pub(super) fn combat_audit_lines(
@@ -2169,8 +2169,11 @@ mod tests {
             },
         ];
         assert_eq!(
-            initiative_audit_line(&rolls),
-            "COMBAT initiative order=[Sigrun:18, Giant Weasel:12]"
+            initiative_audit_line(
+                &rolls,
+                "COMBAT initiative policy=identical-monster-groups group=giant-weasel",
+            ),
+            "COMBAT initiative policy=identical-monster-groups group=giant-weasel order=[Sigrun:18, Giant Weasel:12]"
         );
     }
 

@@ -299,6 +299,11 @@ pub(in crate::gameplay) fn stat_block_possessions(
         "scout" => (322, &["leather armor", "longbow", "shortsword"]),
         "skeleton" => (325, &["shortbow", "shortsword"]),
         "zombie" => (343, &[]),
+        "ogre" => (312, &["greatclub", "javelins (3)"]),
+        "owlbear" => (313, &[]),
+        "wight" => (341, &["studded leather armor"]),
+        "hill-giant" => (298, &[]),
+        "troll" => (333, &[]),
         "giant-rat" => (353, &[]),
         "giant-weasel" => (355, &[]),
         "mastiff" => (357, &[]),
@@ -600,5 +605,33 @@ mod tests {
             stat_block_possessions("kobold-warrior").unwrap()[0].name,
             "daggers (3)"
         );
+    }
+}
+
+#[cfg(test)]
+mod r2_gear_tests {
+    use super::*;
+
+    #[test]
+    fn r2_stronger_foes_carry_only_the_pinned_srd_gear_entries() {
+        for (id, page, names) in [
+            ("ogre", 312, vec!["greatclub", "javelins (3)"]),
+            ("owlbear", 313, vec![]),
+            ("wight", 341, vec!["studded leather armor"]),
+            ("hill-giant", 298, vec![]),
+            ("troll", 333, vec![]),
+        ] {
+            let gear = stat_block_possessions(id).unwrap();
+            assert_eq!(
+                gear.iter()
+                    .map(|item| item.name.as_str())
+                    .collect::<Vec<_>>(),
+                names
+            );
+            assert!(
+                gear.iter()
+                    .all(|item| item.source.starts_with(&format!("srd-5.2.1:p{page}:{id}:")))
+            );
+        }
     }
 }

@@ -1210,6 +1210,7 @@ pub(super) fn action_label(
             rpc::GameplayActionKind::Dodge => "Dodge",
             rpc::GameplayActionKind::Disengage => "Disengage",
             rpc::GameplayActionKind::SecondWind => "Second Wind",
+            rpc::GameplayActionKind::ActionSurge => "Action Surge",
             rpc::GameplayActionKind::StabiliseWithHealersKit => "Stabilize with Healer's Kit",
             rpc::GameplayActionKind::StabiliseMedicine => "Stabilize with Wisdom (Medicine)",
             rpc::GameplayActionKind::EndTurn => "End turn",

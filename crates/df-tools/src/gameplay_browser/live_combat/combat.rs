@@ -693,6 +693,10 @@ fn offers(state: &Client, view: &LiveView<'_>, blocked: bool) -> Result<Vec<Offe
                 "second-wind".to_owned(),
                 "A bonus action. The server resolves the healing.",
             ),
+            Some(rpc::GameplayActionKind::ActionSurge) => (
+                "action-surge".to_owned(),
+                "Gain one additional action. Uses no bonus action or Second Wind.",
+            ),
             Some(rpc::GameplayActionKind::EndTurn) => (
                 "end-turn".to_owned(),
                 "Pass the turn to the next combatant.",

@@ -2009,12 +2009,32 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The figure's standing height from its SRD size, which the server sends with the combatant;
-/// no creature name is read.
+/// Display the occupied squares from the supplied size and north-west anchor.
+fn participant_cells(member: &rpc::PartyMemberView) -> Vec<Cell> {
+    let Some(anchor) = member.cell.as_ref().and_then(|cell| {
+        Some(Cell::new(
+            i32::try_from(cell.col).ok()?,
+            i32::try_from(cell.row).ok()?,
+        ))
+    }) else {
+        return Vec::new();
+    };
+    let extent = match member.size() {
+        rpc::CreatureSize::Large => 2,
+        rpc::CreatureSize::Huge => 3,
+        _ => 1,
+    };
+    (0..extent)
+        .flat_map(|row| (0..extent).map(move |col| Cell::new(anchor.col + col, anchor.row + row)))
+        .collect()
+}
+
+/// The figure's standing height from the server-supplied SRD size, without reading its name.
 fn enemy_height_m(size: rpc::CreatureSize) -> f32 {
     match size {
         rpc::CreatureSize::Small => 1.0,
         rpc::CreatureSize::Large => 2.6,
+        rpc::CreatureSize::Huge => 3.0,
         rpc::CreatureSize::Medium | rpc::CreatureSize::Unspecified => 1.75,
     }
 }
@@ -2413,16 +2433,9 @@ pub(super) fn present(client: &Rc<RefCell<Client>>, view: &LiveView<'_>) {
                     combat
                         .participants
                         .iter()
-                        .find(|member| member.participant_id == target.participant_id)?
-                        .cell
-                        .as_ref()
+                        .find(|member| member.participant_id == target.participant_id)
                 })
-                .filter_map(|cell| {
-                    Some(Cell::new(
-                        i32::try_from(cell.col).ok()?,
-                        i32::try_from(cell.row).ok()?,
-                    ))
-                })
+                .flat_map(participant_cells)
                 .collect();
         }
         if let Some(combat) = &view.journey.combat {
@@ -3788,6 +3801,26 @@ fn cell_of((col, row): GridCell) -> Option<Cell> {
 #[cfg(test)]
 mod tests {
     use super::{Cell, LIVE, has_pending, now_ms};
+
+    #[test]
+    fn large_and_huge_target_highlights_cover_the_supplied_north_west_footprint() {
+        for (size, extent) in [
+            (rpc::CreatureSize::Medium, 1),
+            (rpc::CreatureSize::Large, 2),
+            (rpc::CreatureSize::Huge, 3),
+        ] {
+            let member = rpc::PartyMemberView {
+                size: size as i32,
+                cell: Some(rpc::GridCell { col: 4, row: 2 }),
+                ..Default::default()
+            };
+            let cells = super::participant_cells(&member);
+            assert_eq!(cells.len(), (extent * extent) as usize);
+            assert!(cells.contains(&Cell::new(4, 2)));
+            assert!(cells.contains(&Cell::new(4 + extent - 1, 2 + extent - 1)));
+        }
+    }
+
     use df_protocol::common as rpc;
 
     #[test]

@@ -890,6 +890,11 @@ fn creature_can_speak(kind: tactical_rules::CreatureKind) -> bool {
         tactical_rules::CreatureKind::Mastiff => "mastiff",
         tactical_rules::CreatureKind::Commoner => "commoner",
         tactical_rules::CreatureKind::Scout => "scout",
+        tactical_rules::CreatureKind::Ogre => "ogre",
+        tactical_rules::CreatureKind::Owlbear => "owlbear",
+        tactical_rules::CreatureKind::Wight => "wight",
+        tactical_rules::CreatureKind::HillGiant => "hill-giant",
+        tactical_rules::CreatureKind::Troll => "troll",
         tactical_rules::CreatureKind::Hero => return true,
     };
     df_rules::SRD_521_CREATURES
@@ -934,7 +939,9 @@ fn cry_pool(state: &GameState, battle: &Battle, actor: u32, hero: bool) -> &'sta
         | tactical_rules::CreatureKind::GiantRat
         | tactical_rules::CreatureKind::GiantWeasel
         | tactical_rules::CreatureKind::Mastiff => "beast",
-        tactical_rules::CreatureKind::Skeleton | tactical_rules::CreatureKind::Zombie => "undead",
+        tactical_rules::CreatureKind::Skeleton
+        | tactical_rules::CreatureKind::Zombie
+        | tactical_rules::CreatureKind::Wight => "undead",
         _ => "humanoid",
     }
 }
@@ -1208,17 +1215,6 @@ fn apply(
         outcomes,
     )?;
     store(state, &result.battle)?;
-    if matches!(action, Action::ActionSurge) {
-        super::super::actor::record_audit_line(
-            "gameplay.action_surge",
-            format!(
-                "COMBAT action-surge actor={} operation={} source={} additional_actions=1",
-                name(state, canonical(state, actor)?)?,
-                hex(operation.as_bytes()),
-                tactical_rules::FIGHTER_SOURCE_REVISION
-            ),
-        );
-    }
     Ok(result.battle)
 }
 fn finish_if_done(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> {
@@ -1248,6 +1244,54 @@ fn policy(
         ranking::{KnowledgeObserver, RankingObservation, TacticalKnowledge, UtilityPolicy},
         tactical::TacticContext,
     };
+    let combatant = battle.actor(actor).map_err(bad)?;
+    if battle.reaction_offers().first() == Some(&actor)
+        && matches!(
+            combatant.spec().kind,
+            CreatureKind::Owlbear
+                | CreatureKind::Wight
+                | CreatureKind::HillGiant
+                | CreatureKind::Troll
+        )
+    {
+        return Ok(Action::Opportunity {
+            attack: Some(weapon(combatant, combatant.spec().weapons[0])),
+        });
+    }
+    if matches!(
+        combatant.spec().kind,
+        CreatureKind::Ogre
+            | CreatureKind::Owlbear
+            | CreatureKind::Wight
+            | CreatureKind::HillGiant
+            | CreatureKind::Troll
+    ) && battle.active_actor() == Some(actor)
+        && battle.reaction_offers().is_empty()
+        && !combatant.health().incapacitated()
+        && (!combatant.budget().action_used || combatant.extra_attacks_available())
+    {
+        let spend = if combatant.budget().action_used {
+            AttackSpend::Multiattack
+        } else {
+            AttackSpend::Action
+        };
+        for chosen in &combatant.spec().weapons {
+            let usage = weapon(combatant, *chosen);
+            let mut targets = battle.legal_targets(actor, usage).map_err(bad)?;
+            targets.sort_by_key(|id| {
+                battle.actor(*id).map_or((true, u32::MAX), |other| {
+                    (other.health().incapacitated(), combatant.distance_to(other))
+                })
+            });
+            if let Some(target) = targets.first() {
+                return Ok(Action::Attack {
+                    target: *target,
+                    weapon: usage,
+                    spend,
+                });
+            }
+        }
+    }
     let basis = current.basis();
     let pins = current.pins();
     let observer = KnowledgeObserver::Entity(canonical(state, actor)?);
@@ -1615,7 +1659,7 @@ fn act_action(
                 return Err("that foe is not in reach of this weapon from here".to_owned());
             }
             let spend = if actor.budget().action_used
-                && actor.spec().kind == CreatureKind::Scout
+                && actor.spec().multiattack_count() > 1
                 && actor.extra_attacks_available()
             {
                 AttackSpend::Multiattack
@@ -1980,10 +2024,34 @@ fn start_on(
                 .get(index)
                 .ok_or(RepositoryError::InvalidCandidate),
         )?;
-        let spec = noted(
+        let mut spec = noted(
             "fight-enemy-spec",
             CombatantSpec::creature(id, &source_id, cell, ammunition).map_err(bad),
         )?;
+        if matches!(
+            spec.size,
+            tactical_rules::Size::Large | tactical_rules::Size::Huge
+        ) {
+            let (cols, rows) = map.dimensions();
+            let mut cells = (0..cols)
+                .flat_map(|col| (0..rows).map(move |row| tactical_rules::Cell(col, row)))
+                .collect::<Vec<_>>();
+            cells.sort_by_key(|candidate| (candidate.distance(cell), *candidate));
+            spec.cell = cells
+                .into_iter()
+                .find(|candidate| {
+                    let space = spec.space_cells(*candidate);
+                    space.iter().all(|cell| !map.is_blocked(*cell))
+                        && specs.iter().all(|other| {
+                            other
+                                .space_cells(other.cell)
+                                .iter()
+                                .all(|cell| !space.contains(cell))
+                        })
+                })
+                .ok_or(RepositoryError::InvalidCandidate)?;
+        }
+        let cell = spec.cell;
         if state.entities.iter().any(|entity| entity.id == who)
             && scene_binding.is_none()
             && scene_fight.is_none()
@@ -2308,6 +2376,7 @@ pub(in crate::gameplay) fn combat_action(kind: rpc::GameplayActionKind) -> bool 
             | rpc::GameplayActionKind::Dodge
             | rpc::GameplayActionKind::Disengage
             | rpc::GameplayActionKind::SecondWind
+            | rpc::GameplayActionKind::ActionSurge
             | rpc::GameplayActionKind::StabiliseWithHealersKit
             | rpc::GameplayActionKind::StabiliseMedicine
             | rpc::GameplayActionKind::HelpAttack
@@ -2552,8 +2621,10 @@ fn options(
             }
             K::SecondWind => {
                 candidates.push((String::new(), Action::SecondWind, "Second Wind".to_owned()));
+            }
+            K::ActionSurge => {
                 candidates.push((
-                    "action-surge".to_owned(),
+                    String::new(),
                     Action::ActionSurge,
                     "Action Surge".to_owned(),
                 ));
@@ -2685,14 +2756,7 @@ pub(in crate::gameplay) fn groups(
             | rpc::GameplayActionKind::HelpAttack
             | rpc::GameplayActionKind::OpportunityAttack
             | rpc::GameplayActionKind::PickUpWeapon
-    ) && !(kind == rpc::GameplayActionKind::SecondWind
-        && read(current.state())?
-            .actor(actor_id(current.state(), player_entity(member, current)?)?)
-            .map_err(bad)?
-            .spec()
-            .fighter_level()
-            .is_some_and(|progression| progression.level() >= 2))
-    {
+    ) {
         return Ok(Vec::new());
     }
     let actor = actor_id(current.state(), player_entity(member, current)?)?;
@@ -2711,7 +2775,6 @@ pub(in crate::gameplay) fn groups(
         label: match kind {
             rpc::GameplayActionKind::Move => "Reachable cell",
             rpc::GameplayActionKind::HelpAttack => "Ally and target",
-            rpc::GameplayActionKind::SecondWind => "Fighter technique",
             _ => "Weapon and target",
         }
         .to_owned(),
@@ -2949,6 +3012,7 @@ pub(super) fn offered(
         (K::Dodge, "Dodge"),
         (K::Disengage, "Disengage"),
         (K::SecondWind, "Second Wind"),
+        (K::ActionSurge, "Action Surge"),
         (K::EndTurn, "End turn"),
         (K::Stand, "Stand up"),
         (K::PickUpWeapon, "Pick up weapon"),
@@ -2958,15 +3022,6 @@ pub(super) fn offered(
         if super::session_machine::kind_accepted(state, kind)
             && !options(current.state(), actor, kind)?.is_empty()
         {
-            let label = if kind == K::SecondWind
-                && options(current.state(), actor, kind)?
-                    .iter()
-                    .any(|(_, action, _)| matches!(action, Action::ActionSurge))
-            {
-                "Second Wind / Action Surge"
-            } else {
-                label
-            };
             offers.push((kind, label.to_owned()));
         }
     }
@@ -3558,6 +3613,28 @@ pub(super) fn sync_hero_hit_points(
     store(state, &battle)
 }
 
+pub(in crate::gameplay) fn initiative_policy_audit(
+    state: &GameState,
+) -> Result<String, RepositoryError> {
+    let battle = read(state)?;
+    let mut groups = battle
+        .combatants()
+        .iter()
+        .filter_map(|actor| actor.spec().kind.srd_id())
+        .collect::<Vec<_>>();
+    groups.sort_unstable();
+    groups.dedup();
+    Ok(format!(
+        "COMBAT initiative policy={} {}",
+        battle.initiative_policy(),
+        groups
+            .iter()
+            .map(|group| format!("group={group}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    ))
+}
+
 pub(super) fn initiative(
     current: &Checkpoint,
 ) -> Result<Vec<rpc::InitiativeRoll>, RepositoryError> {
@@ -3575,7 +3652,7 @@ pub(super) fn initiative(
             .enumerate()
             .map(|(index, id)| {
                 let actor = battle.actor(*id).map_err(bad)?;
-                let modifier = rules::ability_modifier(actor.spec().abilities[1]);
+                let modifier = actor.spec().initiative_modifier();
                 let total = battle
                     .development_initiative(*id)
                     .ok_or(RepositoryError::InvalidCandidate)?;
@@ -3602,6 +3679,7 @@ pub(super) fn initiative(
         })
         .ok_or(RepositoryError::InvalidCandidate)?;
     let mut groups = Vec::new();
+    let mut sunlight_faces = Vec::new();
     let mut ordinal = 0;
     let mut rolls = Vec::new();
     let source = rule()?;
@@ -3630,6 +3708,33 @@ pub(super) fn initiative(
             })
             .ok_or(RepositoryError::InvalidCandidate)?;
         let mut initiative_face = draw.value;
+        if matches!(
+            actor.spec().kind,
+            CreatureKind::Kobold | CreatureKind::Wight
+        ) && battle.map().lighting() == tactical_rules::Lighting::Sunlight
+        {
+            if let Some((_, face)) = sunlight_faces
+                .iter()
+                .find(|(kind, _)| *kind == actor.spec().kind)
+            {
+                initiative_face = *face;
+            } else {
+                let second = state
+                    .draws
+                    .iter()
+                    .find(|draw| {
+                        draw.operation == start.operation
+                            && draw.ordinal == ordinal
+                            && draw.sides == 20
+                            && draw.source == source
+                            && decision.draws.contains(&draw.ordinal)
+                    })
+                    .ok_or(RepositoryError::InvalidCandidate)?;
+                initiative_face = initiative_face.min(second.value);
+                ordinal += 1;
+                sunlight_faces.push((actor.spec().kind, initiative_face));
+            }
+        }
         if actor.side() == Side::Heroes
             && actor
                 .spec()
@@ -3682,7 +3787,7 @@ pub(super) fn initiative(
             initiative_face = initiative_face.max(second);
         }
         let who = canonical(state, actor.id())?;
-        let modifier = rules::ability_modifier(actor.spec().abilities[1]);
+        let modifier = actor.spec().initiative_modifier();
         let order = battle
             .initiative_order()
             .iter()
@@ -3754,6 +3859,11 @@ pub(in crate::gameplay) fn project_member(
             C::Mastiff => "mastiff",
             C::Scout => "scout",
             C::Commoner => "commoner",
+            C::Ogre => "ogre",
+            C::Owlbear => "owlbear",
+            C::Wight => "wight",
+            C::HillGiant => "hill-giant",
+            C::Troll => "troll",
             C::Hero => return Err(RepositoryError::InvalidCandidate),
         };
         format!("portrait-ant-{source}")
@@ -3769,6 +3879,7 @@ pub(in crate::gameplay) fn project_member(
         tactical_rules::Size::Small => rpc::CreatureSize::Small,
         tactical_rules::Size::Medium => rpc::CreatureSize::Medium,
         tactical_rules::Size::Large => rpc::CreatureSize::Large,
+        tactical_rules::Size::Huge => rpc::CreatureSize::Huge,
     } as i32;
     view.voice_set = if actor.side() == Side::Heroes {
         if matches!(portrait.as_str(), "portrait-hero-2" | "portrait-hero-3") {
@@ -3781,7 +3892,7 @@ pub(in crate::gameplay) fn project_member(
         match actor.spec().kind {
             C::Goblin | C::Kobold => "small-creature",
             C::Wolf | C::GiantRat | C::GiantWeasel | C::Mastiff => "beast",
-            C::Skeleton | C::Zombie => "undead",
+            C::Skeleton | C::Zombie | C::Wight => "undead",
             _ => "humanoid",
         }
     }
@@ -3926,7 +4037,7 @@ pub(in crate::gameplay) fn project_combat(
             let cover = battle.attack_cover(actor, target).map_err(bad)?;
             let (advantage, disadvantage) =
                 battle.attack_reasons(actor, target, weapon).map_err(bad)?;
-            let distance = source.cell().distance(destination.cell());
+            let distance = source.distance_to(destination);
             let range = if weapon.ranged {
                 if weapon
                     .weapon
@@ -7996,24 +8107,19 @@ pub(super) mod tests {
                     assert_eq!(hero.spec().fighter_level().unwrap().level(), 5);
                     assert_eq!(hero.health().maximum, 49);
                 }
-                let member = member_offering(&current, rpc::GameplayActionKind::SecondWind);
+                let member = member_offering(&current, rpc::GameplayActionKind::ActionSurge);
                 let actor =
                     actor_id(current.state(), player_entity(member, &current).unwrap()).unwrap();
+                let before = battle.actor(actor).unwrap().clone();
                 assert!(
-                    groups(&current, member, rpc::GameplayActionKind::SecondWind).unwrap()[0]
-                        .options
-                        .iter()
-                        .any(|option| option.option_id == "action-surge")
+                    groups(&current, member, rpc::GameplayActionKind::ActionSurge)
+                        .unwrap()
+                        .is_empty()
                 );
                 let surged = submit(
                     &current,
                     member,
-                    &request(
-                        &current,
-                        8,
-                        rpc::GameplayActionKind::SecondWind,
-                        Some("action-surge"),
-                    ),
+                    &request(&current, 8, rpc::GameplayActionKind::ActionSurge, None),
                     &mut |_| panic!("surge has no dice"),
                 );
                 assert_eq!(
@@ -8025,11 +8131,22 @@ pub(super) mod tests {
                     1
                 );
                 assert!(
-                    !options(surged.state(), actor, rpc::GameplayActionKind::SecondWind)
+                    !options(surged.state(), actor, rpc::GameplayActionKind::ActionSurge)
                         .unwrap()
                         .iter()
                         .any(|(_, action, _)| matches!(action, Action::ActionSurge))
                 );
+                let after = read(surged.state()).unwrap();
+                let after = after.actor(actor).unwrap();
+                assert_eq!(
+                    after.spec().second_wind_uses,
+                    before.spec().second_wind_uses
+                );
+                assert_eq!(
+                    after.budget().bonus_action_used,
+                    before.budget().bonus_action_used
+                );
+                assert_eq!(after.health(), before.health());
                 let bytes = df_persistence::local_demo_scope::encode_owned_demo_checkpoint(
                     &surged,
                     codec(),
@@ -8049,8 +8166,95 @@ pub(super) mod tests {
                 let (won, _, _) = play_fight(restored, 9, None, None);
                 assert!(victory(won.state()).unwrap());
                 assert!(won.state().draws.iter().any(|draw| draw.sides == 20));
+                let entity = canonical(won.state(), actor).unwrap();
+                assert_eq!(value(won.state(), entity, "action-surge").unwrap(), 0);
+                let rested = stage_with_supplier(
+                    &won,
+                    &input(&won, member, 201, "short-rest", vec![]),
+                    &mut |_| panic!("rest has no dice"),
+                )
+                .unwrap();
+                assert_eq!(value(rested.state(), entity, "action-surge").unwrap(), 1);
                 TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
             }
+        });
+    }
+    #[test]
+    fn r2_level_five_pair_completes_ogre_and_troll_fights_with_source_stats() {
+        with_live(|| {
+            for (foe, hp) in [("ogre", 68), ("troll", 94)] {
+                TEST_LEVEL_OVERRIDE.with(|own| own.set(Some(5)));
+                TEST_FIGHT_OVERRIDE.with(|own| {
+                    *own.borrow_mut() = Some(TestFight {
+                        enemies: 1,
+                        foe: Some(foe.to_owned()),
+                    })
+                });
+                let current = fight(false);
+                let battle = read(current.state()).unwrap();
+                assert_eq!(battle.actor(3).unwrap().health().maximum, hp);
+                assert_eq!(
+                    battle.actor(3).unwrap().spec().size,
+                    tactical_rules::Size::Large
+                );
+                assert!(
+                    battle
+                        .combatants()
+                        .iter()
+                        .filter(|actor| actor.side() == Side::Heroes)
+                        .all(|actor| actor.spec().fighter_level().unwrap().level() == 5)
+                );
+                let (finished, _, _) = play_fight(current, 8, None, Some(13));
+                let battle = read(finished.state()).unwrap();
+                assert!(battle.finished());
+                if foe == "troll" {
+                    assert_ne!(
+                        battle.winner(),
+                        Some(Side::Heroes),
+                        "weapon-only damage cannot kill a regenerating Troll"
+                    );
+                }
+                TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
+                TEST_LEVEL_OVERRIDE.with(|own| own.set(None));
+            }
+        });
+    }
+
+    #[test]
+    fn r2_group_initiative_choice_and_zero_javelin_offer_are_explicit() {
+        with_live(|| {
+            TEST_FIGHT_OVERRIDE.with(|own| {
+                *own.borrow_mut() = Some(TestFight {
+                    enemies: 2,
+                    foe: Some("skeleton".to_owned()),
+                })
+            });
+            let current = fight(false);
+            assert_eq!(
+                initiative_policy_audit(current.state()).unwrap(),
+                "COMBAT initiative policy=identical-monster-groups group=skeleton"
+            );
+            let mut state = current.state().clone();
+            let battle = read(&state).unwrap();
+            let actor = battle.active_actor().unwrap();
+            let mut quantities = battle
+                .actor(actor)
+                .unwrap()
+                .spec()
+                .weapons
+                .iter()
+                .map(|weapon| (*weapon, battle.actor(actor).unwrap().weapon_count(*weapon)))
+                .collect::<Vec<_>>();
+            *quantities
+                .iter_mut()
+                .find(|(weapon, _)| *weapon == Weapon::Javelin)
+                .unwrap() = (Weapon::Javelin, 0);
+            let battle = battle.with_hero_weapons(actor, &quantities).unwrap();
+            store(&mut state, &battle).unwrap();
+            let choices =
+                options(&state, actor, rpc::GameplayActionKind::GreatswordAttack).unwrap();
+            assert!(!choices.iter().any(|(_,action,label)| label.contains("Javelin (throw)") || matches!(action,Action::Attack{weapon,..} if weapon.weapon==Weapon::Javelin)));
+            TEST_FIGHT_OVERRIDE.with(|own| *own.borrow_mut() = None);
         });
     }
 }
@@ -9455,7 +9659,7 @@ fn development_turn(
                 } else {
                     let face = draw(operation, 20, &mut draws, supplier)
                         .map_err(|error| format!("initiative draw: {error:?}"))?;
-                    let face = if spec.kind == CreatureKind::Kobold
+                    let face = if matches!(spec.kind, CreatureKind::Kobold | CreatureKind::Wight)
                         && battle.map().lighting() == tactical_rules::Lighting::Sunlight
                     {
                         face.min(
@@ -9465,7 +9669,7 @@ fn development_turn(
                     } else {
                         face
                     };
-                    face as i32 + rules::ability_modifier(spec.abilities[1])
+                    face as i32 + spec.initiative_modifier()
                 };
                 battle = battle
                     .development_add(spec, initiative_total)
@@ -9550,8 +9754,8 @@ fn development_turn(
                     .spec()
                     .fighter_level()
                     .map_or(0, |level| level.second_wind_maximum());
-                let dexterity = rules::ability_modifier(profile.spec().abilities[1]);
-                battle=battle.development_edit(id,&edit).map_err(|error|format!("{person}: {edit:?} refused: {error:?}; zero HP must remain unconscious; dead/stable cannot coexist, restore or set positive HP to revive; HP 0..={maximum}, second-wind 0..={wind}, action-surge 0..=1 (Fighter 2+), ammo 0..=1000, initiative {}..={}; conditions: prone unconscious dead stable dodging disengaged slowed sapped",1+dexterity,20+dexterity))?;
+                let initiative_modifier = profile.spec().initiative_modifier();
+                battle=battle.development_edit(id,&edit).map_err(|error|format!("{person}: {edit:?} refused: {error:?}; zero HP must remain unconscious; dead/stable cannot coexist, restore or set positive HP to revive; HP 0..={maximum}, second-wind 0..={wind}, action-surge 0..=1 (Fighter 2+), ammo 0..=1000, initiative {}..={}; conditions: prone unconscious dead stable dodging disengaged slowed sapped",1+initiative_modifier,20+initiative_modifier))?;
                 store(&mut state, &battle)
                     .map_err(|error| format!("edit canonical sync: {error:?}"))?;
             }
@@ -9873,6 +10077,111 @@ pub(crate) mod development_tests {
         )
         .unwrap();
     }
+    #[test]
+    fn r3_development_level_five_ogre_and_hill_giant_project_and_offer_surge_once() {
+        let _process_state = process_state_test_scope();
+        let generated = shop::generate(46, RulesMode::Standard, ContentRating::default()).unwrap();
+        let documents = generated.documents(true).unwrap();
+        let (loaded, _) = record::reload(&documents).unwrap();
+        pack::with_test_pack(loaded, || {
+            let _held = HeldNpcs::all();
+            for (foe, size) in [
+                ("ogre", rpc::CreatureSize::Large),
+                ("hill-giant", rpc::CreatureSize::Huge),
+            ] {
+                let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
+                let mut current = commit(
+                    &opening,
+                    BattleCommand::Start {
+                        foe: foe.to_owned(),
+                        count: 1,
+                        level: Some(5),
+                        scene: Some("salt-quay".to_owned()),
+                        layout: Some("open-quay".to_owned()),
+                    },
+                    230,
+                );
+                project(&current);
+                let battle = read(current.state()).unwrap();
+                let enemy = battle
+                    .combatants()
+                    .iter()
+                    .find(|actor| actor.side() == Side::Enemies)
+                    .unwrap();
+                let mut participant = rpc::PartyMemberView::default();
+                project_member(
+                    current.state(),
+                    canonical(current.state(), enemy.id()).unwrap(),
+                    &mut participant,
+                )
+                .unwrap();
+                assert_eq!(participant.creature_id, foe);
+                assert_eq!(participant.size(), size);
+                let entity = player_entity(native::first(), &current).unwrap();
+                assert_eq!(
+                    super::super::fighter_progression(current.state(), entity)
+                        .unwrap()
+                        .level(),
+                    5
+                );
+                let hero = name(current.state(), entity).unwrap();
+                let turn = || BattleCommand::Edit {
+                    name: hero.clone(),
+                    kind: "turn".to_owned(),
+                    value: None,
+                    condition: None,
+                    present: None,
+                    cell: None,
+                    resource: None,
+                };
+                current = commit(&current, turn(), 231);
+                let offers = super::super::offered(&current, native::first()).unwrap();
+                assert_eq!(
+                    offers
+                        .iter()
+                        .filter(|(kind, _)| *kind == rpc::GameplayActionKind::ActionSurge)
+                        .count(),
+                    1
+                );
+                let raw = rpc::SubmitActionRequest {
+                    session_id: Some(rpc::SessionId {
+                        value: Some(current.basis().session.as_bytes().to_vec()),
+                    }),
+                    run_id: Some(rpc::RunId {
+                        value: Some(current.basis().run.as_bytes().to_vec()),
+                    }),
+                    observed_revision: Some(wire::revision(current.basis().revision)),
+                    operation_id: Some(rpc::OperationId {
+                        value: Some(vec![232; 16]),
+                    }),
+                    offer_id: offer_id(&current, rpc::GameplayActionKind::ActionSurge),
+                    action_kind: rpc::GameplayActionKind::ActionSurge as i32,
+                    ..Default::default()
+                };
+                let input = wire::journey_input(&raw, native::first(), &current).unwrap();
+                current = super::super::stage_with_supplier(&current, &input, &mut |_| {
+                    panic!("surge has no dice")
+                })
+                .unwrap();
+                project(&current);
+                assert_eq!(value(current.state(), entity, "action-surge").unwrap(), 0);
+                assert!(
+                    !super::super::offered(&current, native::first())
+                        .unwrap()
+                        .iter()
+                        .any(|(kind, _)| *kind == rpc::GameplayActionKind::ActionSurge)
+                );
+                current = commit(&current, turn(), 233);
+                assert!(
+                    !super::super::offered(&current, native::first())
+                        .unwrap()
+                        .iter()
+                        .any(|(kind, _)| *kind == rpc::GameplayActionKind::ActionSurge)
+                );
+            }
+        });
+    }
+
     #[test]
     fn development_start_runs_unheld_enemy_first_policy() {
         let _process_state = process_state_test_scope();

@@ -60,7 +60,7 @@ impl Battle {
             }
             DevelopmentEdit::Initiative(value) => {
                 let actor = next.actor(id)?;
-                let modifier = crate::local_journey::ability_modifier(actor.spec.abilities[1]);
+                let modifier = actor.spec.initiative_modifier();
                 if !(1 + modifier..=20 + modifier).contains(value) {
                     return Err(RuleError::InvalidDraw);
                 }
@@ -310,7 +310,7 @@ impl Battle {
         let mut next = self.clone();
         let active = next.active_actor();
         next.order.push(spec.id);
-        let modifier = crate::local_journey::ability_modifier(spec.abilities[1]);
+        let modifier = spec.initiative_modifier();
         if !(1 + modifier..=20 + modifier).contains(&initiative_total) {
             return Err(RuleError::InvalidDraw);
         }
@@ -336,7 +336,7 @@ impl Battle {
     ) -> Result<Self, RuleError> {
         for (id, total) in totals {
             let actor = self.actor(*id)?;
-            let modifier = crate::local_journey::ability_modifier(actor.spec.abilities[1]);
+            let modifier = actor.spec.initiative_modifier();
             if !(1 + modifier..=20 + modifier).contains(total) {
                 return Err(RuleError::InvalidDraw);
             }

@@ -671,7 +671,7 @@ fn help_attack(
         return Err(RuleError::InvalidTarget);
     }
     // SRD 5.2.1 p. 182: "The creature you aid has Advantage on the next attack roll it makes against a creature within 5 feet of you."
-    if helper_actor.cell().distance(target_actor.cell()) > 5 {
+    if helper_actor.distance_to(target_actor) > 5 {
         return Err(RuleError::OutOfRange);
     }
     if helper_actor.budget().action_used && helper_actor.additional_actions == 0 {
@@ -710,7 +710,7 @@ fn validate_stabilization_target(
         return Err(RuleError::InvalidTarget);
     }
     // The session's disclosed adjudication keeps stabilization actions within 5 feet.
-    if helper_actor.cell().distance(target_actor.cell()) > 5 {
+    if helper_actor.distance_to(target_actor) > 5 {
         return Err(RuleError::OutOfRange);
     }
     if helper_actor.budget().action_used && helper_actor.additional_actions == 0 {
@@ -816,17 +816,26 @@ impl Battle {
         target: u32,
         weapon: AttackUse,
     ) -> Result<(), RuleError> {
-        if !self.map.contains(origin) {
+        let combatant = self.actor(actor)?;
+        if combatant
+            .spec
+            .space_cells(origin)
+            .iter()
+            .any(|cell| !self.map.contains(*cell))
+        {
             return Err(RuleError::OutOfBounds);
         }
-        if self.map.is_blocked(origin) {
+        if combatant
+            .spec
+            .space_cells(origin)
+            .iter()
+            .any(|cell| self.map.is_blocked(*cell))
+        {
             return Err(RuleError::Blocked);
         }
-        if self
-            .actors
-            .iter()
-            .any(|other| other.id() != actor && other.cell() == origin && !other.health.dead)
-        {
+        if self.actors.iter().any(|other| {
+            other.id() != actor && self.overlaps(combatant, origin, other) && !other.health.dead
+        }) {
             return Err(RuleError::Occupied);
         }
         let mut projected = self.clone();
@@ -847,13 +856,26 @@ impl Battle {
     pub fn attack_cover(&self, actor: u32, target: u32) -> Result<Cover, RuleError> {
         let attacker = self.actor(actor)?;
         let target = self.actor(target)?;
-        let creatures = self.cover_cells_for(target);
-        self.map.cover_between_for_size(
-            attacker.cell(),
-            target.cell(),
-            &creatures,
-            target.spec.size,
-        )
+        let creatures = self
+            .cover_cells_for(target)
+            .into_iter()
+            .filter(|cell| {
+                !attacker.spec.space_cells(attacker.cell()).contains(cell)
+                    && !target.spec.space_cells(target.cell()).contains(cell)
+            })
+            .collect::<Vec<_>>();
+        let mut cover = Cover::Total;
+        for from in attacker.spec.space_cells(attacker.cell()) {
+            for to in target.spec.space_cells(target.cell()) {
+                cover = cover.min(self.map.cover_between_for_size(
+                    from,
+                    to,
+                    &creatures,
+                    target.spec.size,
+                )?);
+            }
+        }
+        Ok(cover)
     }
     /// Dodge saving throw advantage and cover bonus for future save handlers; Unconscious
     /// automatically fails Dexterity saves. This function does not invent an actual save.
@@ -891,7 +913,7 @@ impl Battle {
                     && u32::from(super::map::target_height_dm(creature.spec.size)) * 2
                         >= u32::from(super::map::target_height_dm(target.spec.size))
             })
-            .map(super::Combatant::cell)
+            .flat_map(|actor| actor.spec.space_cells(actor.cell()))
             .collect()
     }
 }
@@ -913,11 +935,7 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
     let listed_creature_attack = actor.spec.kind != CreatureKind::Hero
         && usage.weapon.two_handed()
         && actor.spec.weapons.contains(&usage.weapon);
-    if (usage.hands == 0
-        && !matches!(
-            usage.weapon,
-            Weapon::UnarmedStrike | Weapon::Bite | Weapon::Slam
-        ))
+    if (usage.hands == 0 && !(usage.weapon == Weapon::UnarmedStrike || usage.weapon.natural()))
         || usage.hands > 2
         || (actor.shield_equipped && usage.hands > 1 && !listed_creature_attack)
         || (usage.weapon.two_handed() && usage.hands != 2)
@@ -943,7 +961,7 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
     }
     if usage.ranged {
         let (_, long) = usage.weapon.range().ok_or(RuleError::InvalidWeapon)?;
-        if actor.cell().distance(target.cell()) > u32::from(long) {
+        if actor.distance_to(target) > u32::from(long) {
             return Err(RuleError::OutOfRange);
         }
         if usage.weapon.ammunition()
@@ -957,11 +975,20 @@ fn admit_attack(battle: &Battle, id: u32, target: u32, usage: AttackUse) -> Resu
         }
     } else if usage.weapon.ranged_weapon() {
         return Err(RuleError::InvalidWeapon);
-    } else if actor.cell().distance(target.cell()) > 5 {
+    } else if actor.distance_to(target) > actor.spec.melee_reach_ft(usage.weapon) {
         return Err(RuleError::OutOfRange);
     }
     let cover = battle.attack_cover(id, target.id())?;
-    if !usage.ranged && !battle.map.step_clear(actor.cell(), target.cell()) && cover != Cover::Total
+    if !usage.ranged
+        && actor.distance_to(target) <= 5
+        && !actor.spec.space_cells(actor.cell()).iter().any(|from| {
+            target
+                .spec
+                .space_cells(target.cell())
+                .iter()
+                .any(|to| battle.map.step_clear(*from, *to))
+        })
+        && cover != Cover::Total
     {
         return Err(RuleError::Blocked);
     }
@@ -980,14 +1007,18 @@ fn spend_attack(
     match spend {
         AttackSpend::Action => {
             actor.spend_action()?;
-            actor.extra_attacks += u8::from(
-                actor
-                    .spec
-                    .fighter_level()
-                    .is_some_and(|progression| progression.level() >= 5)
-                    || (actor.spec.kind == CreatureKind::Scout
-                        && matches!(weapon, Weapon::Shortsword | Weapon::Longbow)),
-            );
+            actor.extra_attacks += if actor.spec.kind == CreatureKind::Hero {
+                u8::from(
+                    actor
+                        .spec
+                        .fighter_level()
+                        .is_some_and(|progression| progression.level() >= 5),
+                )
+            } else if actor.spec.weapons.contains(&weapon) {
+                actor.spec.multiattack_count() - 1
+            } else {
+                0
+            };
             if weapon.light() {
                 actor.light_first = Some(weapon);
             }
@@ -998,8 +1029,7 @@ fn spend_attack(
                     .spec
                     .fighter_level()
                     .is_some_and(|progression| progression.level() >= 5)
-                    || (actor.spec.kind == CreatureKind::Scout
-                        && matches!(weapon, Weapon::Shortsword | Weapon::Longbow)))
+                    || (actor.spec.multiattack_count() > 1 && actor.spec.weapons.contains(&weapon)))
             {
                 return Err(RuleError::InvalidExtraAttack);
             }
@@ -1075,6 +1105,10 @@ fn modifiers(
             | CreatureKind::Wolf
             | CreatureKind::Scout => 4,
             CreatureKind::Skeleton | CreatureKind::GiantRat | CreatureKind::GiantWeasel => 5,
+            CreatureKind::Ogre => 6,
+            CreatureKind::Owlbear | CreatureKind::Troll => 7,
+            CreatureKind::Wight => 4,
+            CreatureKind::HillGiant => 8,
             _ => 3,
         }
     };
@@ -1082,7 +1116,7 @@ fn modifiers(
         disadvantage.push(AttackReason::ProneAttacker);
     }
     if target.health.prone {
-        if actor.cell().distance(target.cell()) <= 5 {
+        if actor.distance_to(target) <= 5 {
             advantage.push(AttackReason::ProneTarget);
         } else {
             disadvantage.push(AttackReason::ProneTarget);
@@ -1110,14 +1144,14 @@ fn modifiers(
         if usage
             .weapon
             .range()
-            .is_some_and(|(normal, _)| actor.cell().distance(target.cell()) > u32::from(normal))
+            .is_some_and(|(normal, _)| actor.distance_to(target) > u32::from(normal))
         {
             disadvantage.push(AttackReason::LongRange);
         }
         if battle.actors.iter().any(|other| {
             other.side() != actor.side()
                 && !other.health.incapacitated()
-                && other.cell().distance(actor.cell()) <= 5
+                && other.distance_to(actor) <= 5
                 && battle.can_see_actor(other, actor)
         }) {
             disadvantage.push(AttackReason::HostileNearby);
@@ -1130,11 +1164,12 @@ fn modifiers(
         ally.id() != id
             && ally.side() == actor.side()
             && !ally.health.incapacitated()
-            && ally.cell().distance(target.cell()) <= 5
+            && ally.distance_to(target) <= 5
     }) {
         advantage.push(AttackReason::PackTactics);
     }
-    if actor.spec.kind == CreatureKind::Kobold && battle.map.lighting() == super::Lighting::Sunlight
+    if matches!(actor.spec.kind, CreatureKind::Kobold | CreatureKind::Wight)
+        && battle.map.lighting() == super::Lighting::Sunlight
     {
         disadvantage.push(AttackReason::SunlightSensitivity);
     }
@@ -1200,18 +1235,14 @@ fn attack(
     let critical = hit
         && (critical_roll
             || (battle.actor(target)?.health.unconscious
-                && battle
-                    .actor(id)?
-                    .cell()
-                    .distance(battle.actor(target)?.cell())
-                    <= 5));
+                && battle.actor(id)?.distance_to(battle.actor(target)?) <= 5));
     let kind = battle.actor(id)?.spec.kind;
     let mastery = if usage.use_mastery && battle.actor(id)?.spec.masteries.contains(&usage.weapon) {
         usage.weapon.mastery()
     } else {
         None
     };
-    let thrown_landing = if usage.ranged && !usage.weapon.ammunition() {
+    let thrown_landing = if usage.ranged && usage.weapon.thrown() {
         Some(battle.actor(target)?.cell())
     } else {
         None
@@ -1227,6 +1258,12 @@ fn attack(
         count = 1;
         sides = 4;
     }
+    if (kind == CreatureKind::Owlbear && usage.weapon == Weapon::Rend)
+        || (kind == CreatureKind::Ogre && usage.weapon == Weapon::Javelin)
+    {
+        count = 2;
+        sides = if kind == CreatureKind::Owlbear { 8 } else { 6 };
+    }
     // Monster weapons use their stat block modifier, including finesse-like sickle attacks.
     let damage_modifier = if kind == CreatureKind::Hero || usage.weapon == Weapon::UnarmedStrike {
         ability_modifier
@@ -1237,6 +1274,9 @@ fn attack(
             | CreatureKind::Wolf
             | CreatureKind::Scout => 2,
             CreatureKind::Skeleton | CreatureKind::GiantRat | CreatureKind::GiantWeasel => 3,
+            CreatureKind::Ogre | CreatureKind::Troll => 4,
+            CreatureKind::Owlbear | CreatureKind::HillGiant => 5,
+            CreatureKind::Wight => 2,
             _ => 1,
         }
     };
@@ -1288,6 +1328,15 @@ fn attack(
         if kind == CreatureKind::Cultist && usage.weapon == Weapon::Sickle {
             necrotic_damage = 1;
         }
+        if kind == CreatureKind::Wight
+            && matches!(usage.weapon, Weapon::NecroticSword | Weapon::NecroticBow)
+        {
+            for _ in 0..multiplier {
+                let face = draws.take(8)?;
+                damage_faces.push(face);
+                necrotic_damage += face as u16;
+            }
+        }
     }
     [damage, necrotic_damage] = apply_typed_defenses(
         [
@@ -1298,16 +1347,9 @@ fn attack(
     );
     {
         let actor = battle.actor_mut(id)?;
-        if !matches!(
-            usage.weapon,
-            Weapon::UnarmedStrike | Weapon::Bite | Weapon::Slam
-        ) && usage.hands == 2
-        {
+        if !(usage.weapon == Weapon::UnarmedStrike || usage.weapon.natural()) && usage.hands == 2 {
             actor.held = vec![usage.weapon];
-        } else if !matches!(
-            usage.weapon,
-            Weapon::UnarmedStrike | Weapon::Bite | Weapon::Slam
-        ) {
+        } else if !(usage.weapon == Weapon::UnarmedStrike || usage.weapon.natural()) {
             actor.held.retain(|weapon| !weapon.two_handed());
             if !actor.held.contains(&usage.weapon) {
                 actor.held.push(usage.weapon);
@@ -1330,7 +1372,7 @@ fn attack(
                 actor.spec.arrows -= 1;
                 actor.ammunition_used += 1;
             }
-        } else if usage.ranged {
+        } else if usage.ranged && usage.weapon.thrown() {
             let quantity = actor
                 .weapon_counts
                 .get_mut(&usage.weapon)
@@ -1378,6 +1420,13 @@ fn attack(
         }
     }
     if hit
+        && kind == CreatureKind::HillGiant
+        && usage.weapon == Weapon::TreeClub
+        && battle.actor(target)?.spec.size != super::Size::Huge
+    {
+        battle.actor_mut(target)?.health.prone = true;
+    }
+    if hit
         && usage.weapon == Weapon::Bite
         && matches!(kind, CreatureKind::Wolf | CreatureKind::Mastiff)
         && matches!(
@@ -1411,7 +1460,7 @@ fn attack(
         target,
         weapon: usage.weapon,
         ranged: usage.ranged,
-        distance_ft: battle.actor(id)?.cell().distance(target_actor.cell()),
+        distance_ft: battle.actor(id)?.distance_to(target_actor),
         cover,
         armor_class,
         modifier,
@@ -1458,6 +1507,11 @@ fn source_damage_defenses(spec: &CombatantSpec) -> DamageDefenses<'static> {
             resistances: &[],
             immunities: &[DamageType::Poison],
             vulnerabilities: &[DamageType::Bludgeoning],
+        },
+        CreatureKind::Wight => DamageDefenses {
+            resistances: &[DamageType::Necrotic],
+            immunities: &[DamageType::Poison],
+            vulnerabilities: &[],
         },
         CreatureKind::Zombie => DamageDefenses {
             resistances: &[],
@@ -1537,6 +1591,9 @@ fn apply_damage(
     actor.health.unconscious = true;
     actor.health.prone = true;
     drop_held(actor)?;
+    if actor.spec.kind == CreatureKind::Troll {
+        return Ok(());
+    }
     if actor.spec.kind != CreatureKind::Hero
         || (hp > 0 && damage - hp >= actor.health.maximum)
         || (hp == 0 && damage >= actor.health.maximum)
@@ -1634,6 +1691,17 @@ pub(super) fn begin_turn(battle: &mut Battle, next: u32) -> Result<(), RuleError
     let actor = battle.actor_mut(next)?;
     actor.turn_count = actor.turn_count.checked_add(1).ok_or(RuleError::Capacity)?;
     let turn = actor.turn_count;
+    // SRD 5.2.1 p.333: regeneration works even at zero. No admitted attack deals
+    // Acid or Fire; those damage handlers must supply next-turn inhibition before admission.
+    if actor.spec.kind == CreatureKind::Troll && !actor.health.dead {
+        actor.health.hit_points = actor
+            .health
+            .hit_points
+            .saturating_add(15)
+            .min(actor.health.maximum);
+        actor.health.unconscious = false;
+        actor.health.knocked_out = false;
+    }
     actor.budget = super::Budget {
         action_used: false,
         bonus_action_used: false,
@@ -1687,9 +1755,18 @@ fn continue_move(
                 if other.side() != actor.side()
                     && !other.health.incapacitated()
                     && !other.budget.reaction_used
-                    && other.cell().distance(actor.cell()) <= 5
-                    && other.cell().distance(to) > 5
-                    && battle.map.step_clear(other.cell(), actor.cell())
+                    && other.distance_to(actor) <= other.spec.melee_reach_ft(other.spec.weapons[0])
+                    && actor.spec.distance_from(to, &other.spec, other.cell())
+                        > other.spec.melee_reach_ft(other.spec.weapons[0])
+                    && battle.attack_cover(other.id(), actor.id())? != Cover::Total
+                    && (other.distance_to(actor) > 5
+                        || other.spec.space_cells(other.cell()).iter().any(|from| {
+                            actor
+                                .spec
+                                .space_cells(actor.cell())
+                                .iter()
+                                .any(|to| battle.map.step_clear(*from, *to))
+                        }))
                     && battle.can_see_actor(other, actor)
                 {
                     movement.eligible.push(id);
@@ -1738,7 +1815,7 @@ fn react(
         }
         if usage.weapon != Weapon::UnarmedStrike
             && !battle.actor(reactor)?.held.contains(&usage.weapon)
-            && !matches!(usage.weapon, Weapon::Bite | Weapon::Slam)
+            && !usage.weapon.natural()
         {
             return Err(RuleError::InvalidWeapon);
         }

@@ -13,6 +13,7 @@ pub enum Size {
     Small,
     Medium,
     Large,
+    Huge,
 }
 /// Source stat blocks; departures in the old adjacent journey are not imported here.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +32,11 @@ pub enum CreatureKind {
     Mastiff,
     Scout,
     Commoner,
+    Ogre,
+    Owlbear,
+    Wight,
+    HillGiant,
+    Troll,
 }
 
 /// Caller-owned combatant data. Construction validates the bounded supported subset.
@@ -81,14 +87,23 @@ impl CreatureKind {
             Self::Mastiff => "mastiff",
             Self::Scout => "scout",
             Self::Commoner => "commoner",
+            Self::Ogre => "ogre",
+            Self::Owlbear => "owlbear",
+            Self::Wight => "wight",
+            Self::HillGiant => "hill-giant",
+            Self::Troll => "troll",
         })
     }
 
-    /// SRD 5.2.1 pp. 353, 355: the two creatures have a 30 ft. Climb Speed.
+    /// SRD 5.2.1 pp. 313, 353, 355: the Owlbear climbs 40 ft.; Rat/Weasel 30 ft.
     /// The current battle grid is flat, so callers must use this only when a
     /// vertical movement model is admitted.
     pub fn climb_speed_ft(self) -> Option<u16> {
-        matches!(self, Self::GiantRat | Self::GiantWeasel).then_some(30)
+        match self {
+            Self::GiantRat | Self::GiantWeasel => Some(30),
+            Self::Owlbear => Some(40),
+            _ => None,
+        }
     }
 
     /// SRD 5.2.1 pp. 290, 302, 325, 343, 353, 355, 357, 364: these creature
@@ -103,12 +118,74 @@ impl CreatureKind {
             | Self::Wolf
             | Self::GiantRat
             | Self::GiantWeasel
-            | Self::Mastiff => Some(60),
+            | Self::Mastiff
+            | Self::Ogre
+            | Self::Owlbear
+            | Self::Wight
+            | Self::Troll => Some(60),
             _ => None,
         }
     }
 }
 impl CombatantSpec {
+    /// The cell is the north-west corner of the source creature's space (SRD p. 14).
+    pub fn space_cells(&self, origin: Cell) -> Vec<Cell> {
+        let width = self.space_width_cells();
+        (0..width)
+            .flat_map(|x| {
+                (0..width)
+                    .map(move |y| Cell(origin.0.saturating_add(x), origin.1.saturating_add(y)))
+            })
+            .collect()
+    }
+    fn space_width_cells(&self) -> u16 {
+        match self.size {
+            Size::Small | Size::Medium => 1,
+            Size::Large => 2,
+            Size::Huge => 3,
+        }
+    }
+    pub fn distance_from(&self, origin: Cell, other: &CombatantSpec, target: Cell) -> u32 {
+        let width = self.space_width_cells();
+        let other_width = other.space_width_cells();
+        let col = origin
+            .0
+            .saturating_sub(target.0.saturating_add(other_width - 1))
+            .max(target.0.saturating_sub(origin.0.saturating_add(width - 1)));
+        let row = origin
+            .1
+            .saturating_sub(target.1.saturating_add(other_width - 1))
+            .max(target.1.saturating_sub(origin.1.saturating_add(width - 1)));
+        u32::from(col.max(row)) * 5
+    }
+    pub fn initiative_modifier(&self) -> i32 {
+        match self.kind {
+            CreatureKind::Wight => 4,
+            CreatureKind::HillGiant => 2,
+            _ => crate::local_journey::ability_modifier(self.abilities[1]),
+        }
+    }
+    pub fn multiattack_count(&self) -> u8 {
+        match self.kind {
+            CreatureKind::Scout
+            | CreatureKind::Owlbear
+            | CreatureKind::Wight
+            | CreatureKind::HillGiant => 2,
+            CreatureKind::Troll => 3,
+            _ => 1,
+        }
+    }
+    pub fn melee_reach_ft(&self, weapon: Weapon) -> u32 {
+        if matches!(
+            (self.kind, weapon),
+            (CreatureKind::Troll, Weapon::Rend) | (CreatureKind::HillGiant, Weapon::TreeClub)
+        ) {
+            10
+        } else {
+            5
+        }
+    }
+
     /// The supported fixed-HP Fighter profiles identify their level without changing legacy
     /// caller construction or snapshot schemas. Source validation checks every derived field.
     pub fn fighter_level(&self) -> Option<crate::local_journey::FighterProgression> {
@@ -257,7 +334,7 @@ impl CombatantSpec {
             shield: false,
         })
     }
-    /// Exact supported SRD 5.2.1 stat block, including speed/actions/traits in resolution.
+    /// Source-pinned SRD 5.2.1 stat block; excluded features are catalogued explicitly.
     /// Night/normal sight only; sunlight/hidden/alternate movement modes are outside this slice.
     pub fn creature(id: u32, srd_id: &str, cell: Cell, ammunition: u16) -> Result<Self, RuleError> {
         // Commoner is an authored scene-NPC profile, intentionally kept out of
@@ -361,6 +438,41 @@ impl CombatantSpec {
                 Size::Medium,
                 30,
                 vec![Weapon::Club],
+                false,
+            ),
+            "ogre" => (
+                CreatureKind::Ogre,
+                Size::Large,
+                40,
+                vec![Weapon::Greatclub, Weapon::Javelin],
+                false,
+            ),
+            "owlbear" => (
+                CreatureKind::Owlbear,
+                Size::Large,
+                40,
+                vec![Weapon::Rend],
+                false,
+            ),
+            "wight" => (
+                CreatureKind::Wight,
+                Size::Medium,
+                30,
+                vec![Weapon::NecroticSword, Weapon::NecroticBow],
+                false,
+            ),
+            "hill-giant" => (
+                CreatureKind::HillGiant,
+                Size::Huge,
+                40,
+                vec![Weapon::TreeClub],
+                false,
+            ),
+            "troll" => (
+                CreatureKind::Troll,
+                Size::Large,
+                30,
+                vec![Weapon::Rend],
                 false,
             ),
             _ => return Err(RuleError::UnsupportedCreature),
@@ -497,6 +609,10 @@ impl Combatant {
     }
     pub fn side(&self) -> Side {
         self.spec.side
+    }
+    pub fn distance_to(&self, other: &Self) -> u32 {
+        self.spec
+            .distance_from(self.cell(), &other.spec, other.cell())
     }
     pub fn cell(&self) -> Cell {
         self.spec.cell
@@ -708,6 +824,18 @@ impl Battle {
     pub fn active_actor(&self) -> Option<u32> {
         self.order.get(self.active).copied()
     }
+    /// SRD 5.2.1 p. 13: the GM rolls once for an entire group of identical creatures.
+    pub fn initiative_policy(&self) -> &'static str {
+        "identical-monster-groups"
+    }
+    pub(crate) fn overlaps(&self, actor: &Combatant, origin: Cell, other: &Combatant) -> bool {
+        let space = actor.spec.space_cells(origin);
+        other
+            .spec
+            .space_cells(other.cell())
+            .iter()
+            .any(|cell| space.contains(cell))
+    }
     pub fn initiative_order(&self) -> &[u32] {
         &self.order
     }
@@ -725,10 +853,13 @@ impl Battle {
             .actors
             .iter()
             .any(|a| a.side() == Side::Heroes && !a.health.incapacitated());
-        let enemies = self
-            .actors
-            .iter()
-            .any(|a| a.side() == Side::Enemies && !a.health.incapacitated());
+        let enemies = self.actors.iter().any(|a| {
+            a.side() == Side::Enemies
+                && (!a.health.incapacitated()
+                    || (a.spec.kind == CreatureKind::Troll
+                        && !a.health.dead
+                        && !a.health.knocked_out))
+        });
         match (heroes, enemies) {
             (true, false) => Some(Side::Heroes),
             (false, true) => Some(Side::Enemies),
@@ -776,9 +907,13 @@ impl Battle {
     }
     pub fn finished(&self) -> bool {
         ![Side::Heroes, Side::Enemies].iter().all(|side| {
-            self.actors
-                .iter()
-                .any(|a| a.side() == *side && !a.health.incapacitated())
+            self.actors.iter().any(|a| {
+                a.side() == *side
+                    && (!a.health.incapacitated()
+                        || (a.spec.kind == CreatureKind::Troll
+                            && !a.health.dead
+                            && !a.health.knocked_out))
+            })
         })
     }
     pub(crate) fn actor_mut(&mut self, id: u32) -> Result<&mut Combatant, RuleError> {
@@ -793,11 +928,22 @@ impl Battle {
             .is_ok_and(|cover| cover != super::Cover::Total)
     }
     pub(crate) fn can_see_actor(&self, observer: &Combatant, target: &Combatant) -> bool {
-        self.can_see(observer.cell(), target.cell())
+        observer
+            .spec
+            .space_cells(observer.cell())
+            .iter()
+            .any(|from| {
+                target
+                    .spec
+                    .space_cells(target.cell())
+                    .iter()
+                    .any(|to| self.can_see(*from, *to))
+            })
             && (self.map.lighting() != super::Lighting::Darkness
-                || observer.spec.darkvision_ft().is_some_and(|range| {
-                    target.cell().distance(observer.cell()) <= u32::from(range)
-                }))
+                || observer
+                    .spec
+                    .darkvision_ft()
+                    .is_some_and(|range| target.distance_to(observer) <= u32::from(range)))
     }
     pub(crate) fn step_cost(
         &self,
@@ -805,16 +951,35 @@ impl Battle {
         from: Cell,
         to: Cell,
     ) -> Result<u16, RuleError> {
-        if !self.map.contains(to) {
+        let from_space = actor.spec.space_cells(from);
+        let to_space = actor.spec.space_cells(to);
+        if to_space.iter().any(|cell| !self.map.contains(*cell)) {
             return Err(RuleError::OutOfBounds);
         }
-        if !self.map.step_clear(from, to) {
+        if from_space
+            .iter()
+            .zip(&to_space)
+            .any(|(from, to)| !self.map.step_clear(*from, *to))
+        {
             return Err(RuleError::Blocked);
         }
-        let mut difficult = self.map.is_difficult(to);
+        let mut difficult = to_space.iter().any(|cell| self.map.is_difficult(*cell));
         for other in &self.actors {
-            if other.id() != actor.id() && other.cell() == to && !other.health.dead {
-                if other.side() != actor.side() && !other.health.incapacitated() {
+            if other.id() != actor.id() && self.overlaps(actor, to, other) && !other.health.dead {
+                let size_rank = |size| -> u8 {
+                    match size {
+                        Size::Small => 0,
+                        Size::Medium => 1,
+                        Size::Large => 2,
+                        Size::Huge => 3,
+                    }
+                };
+                let size_difference =
+                    size_rank(actor.spec.size).abs_diff(size_rank(other.spec.size));
+                if other.side() != actor.side()
+                    && !other.health.incapacitated()
+                    && size_difference < 2
+                {
                     return Err(RuleError::Occupied);
                 }
                 difficult |= other.side() != actor.side();
@@ -858,11 +1023,9 @@ impl Battle {
                 .ok_or(RuleError::MovementSpent)?;
             from = to;
         }
-        if self
-            .actors
-            .iter()
-            .any(|other| other.id() != id && other.cell() == from && !other.health.dead)
-        {
+        if self.actors.iter().any(|other| {
+            other.id() != id && self.overlaps(actor, from, other) && !other.health.dead
+        }) {
             return Err(RuleError::Occupied);
         }
         if cost > actor.movement_remaining_ft() {
@@ -885,11 +1048,9 @@ impl Battle {
         if actor.health.incapacitated() {
             return Err(RuleError::Incapacitated);
         }
-        if self
-            .actors
-            .iter()
-            .any(|other| other.id() != id && other.cell() == goal && !other.health.dead)
-        {
+        if self.actors.iter().any(|other| {
+            other.id() != id && self.overlaps(actor, goal, other) && !other.health.dead
+        }) {
             return Err(RuleError::Occupied);
         }
         let mut frontier = BTreeSet::from([(0_u32, actor.cell())]);
@@ -956,10 +1117,9 @@ impl Battle {
         Ok(costs
             .into_keys()
             .filter(|cell| {
-                !self
-                    .actors
-                    .iter()
-                    .any(|other| other.id() != id && other.cell() == *cell && !other.health.dead)
+                !self.actors.iter().any(|other| {
+                    other.id() != id && self.overlaps(actor, *cell, other) && !other.health.dead
+                })
             })
             .collect())
     }
@@ -980,7 +1140,7 @@ pub(super) fn begin_faces(
         if spec.id == 0 || !ids.insert(spec.id) {
             return Err(RuleError::DuplicateId);
         }
-        if spec.size == Size::Large {
+        if spec.kind == CreatureKind::Hero && matches!(spec.size, Size::Large | Size::Huge) {
             return Err(RuleError::UnsupportedSize);
         }
         if spec.hit_points == 0
@@ -1011,7 +1171,11 @@ pub(super) fn begin_faces(
             return Err(RuleError::InvalidCombatant);
         }
         validate_source_profile(spec)?;
-        if map.is_blocked(spec.cell) || !cells.insert(spec.cell) {
+        if spec
+            .space_cells(spec.cell)
+            .into_iter()
+            .any(|cell| map.is_blocked(cell) || !cells.insert(cell))
+        {
             return Err(RuleError::Spawn);
         }
     }
@@ -1039,10 +1203,7 @@ pub(super) fn begin_faces(
     let mut order: Vec<usize> = (0..specs.len()).collect();
     order.sort_by_key(|&i| {
         (
-            std::cmp::Reverse(
-                initiative[i] as i32
-                    + crate::local_journey::ability_modifier(specs[i].abilities[1]),
-            ),
+            std::cmp::Reverse(initiative[i] as i32 + specs[i].initiative_modifier()),
             i,
         )
     });
@@ -1053,8 +1214,7 @@ pub(super) fn begin_faces(
         .map(|(index, spec)| {
             (
                 spec.id,
-                initiative[index] as i32
-                    + crate::local_journey::ability_modifier(spec.abilities[1]),
+                initiative[index] as i32 + spec.initiative_modifier(),
             )
         })
         .collect();
@@ -1082,7 +1242,7 @@ pub(super) fn begin_faces(
                 disengaged: false,
                 dodging: false,
             },
-            held: if matches!(spec.weapons[0], Weapon::Bite | Weapon::Slam) {
+            held: if spec.weapons[0].natural() {
                 vec![]
             } else {
                 vec![spec.weapons[0]]
@@ -1094,7 +1254,9 @@ pub(super) fn begin_faces(
                 .map(|weapon| {
                     (
                         *weapon,
-                        if *weapon == Weapon::Javelin {
+                        if spec.kind == CreatureKind::Ogre && *weapon == Weapon::Javelin {
+                            3
+                        } else if *weapon == Weapon::Javelin {
                             8
                         } else if spec.kind == CreatureKind::Kobold && *weapon == Weapon::Dagger {
                             3
@@ -1174,7 +1336,9 @@ pub fn begin(
         )?;
         // SRD 5.2.1 p302: a Kobold in sunlight has Disadvantage on ability checks, and
         // Initiative is a Dexterity check. The group makes one roll, with Disadvantage.
-        if actor.kind == CreatureKind::Kobold && map.lighting() == super::Lighting::Sunlight {
+        if matches!(actor.kind, CreatureKind::Kobold | CreatureKind::Wight)
+            && map.lighting() == super::Lighting::Sunlight
+        {
             face = face.min(super::resolve::take_d20(
                 actor,
                 actor.id,
@@ -1298,6 +1462,11 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             CreatureKind::Mastiff => "mastiff",
             CreatureKind::Scout => "scout",
             CreatureKind::Commoner => "commoner",
+            CreatureKind::Ogre => "ogre",
+            CreatureKind::Owlbear => "owlbear",
+            CreatureKind::Wight => "wight",
+            CreatureKind::HillGiant => "hill-giant",
+            CreatureKind::Troll => "troll",
             CreatureKind::Hero => return Err(RuleError::InvalidBuild),
         };
         let mut expected = CombatantSpec::creature(spec.id, source_id, spec.cell, spec.arrows)?;

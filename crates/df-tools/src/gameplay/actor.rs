@@ -3920,6 +3920,10 @@ impl Actor {
                 );
             }
             match kind {
+                rpc::GameplayActionKind::ActionSurge => record_audit_line(
+                    "gameplay.action_surge",
+                    format!("COMBAT action-surge actor={actor:?} additional_actions=1"),
+                ),
                 rpc::GameplayActionKind::SecondWind => {
                     if let Some(entity) = after
                         .state()
@@ -4035,10 +4039,18 @@ impl Actor {
             && after_phase == Some(rpc::JourneyPhase::Combat)
             && let Ok(rolls) = super::journey::initiative_rolls(after)
         {
-            record_audit_line(
-                "gameplay.combat_start",
-                super::table_log::initiative_audit_line(&rolls),
-            );
+            let policy = if super::journey::tactical::present(after.state()) {
+                super::journey::tactical::initiative_policy_audit(after.state())
+            } else {
+                Ok("COMBAT initiative".to_owned())
+            };
+            match policy {
+                Ok(policy) => record_audit_line(
+                    "gameplay.combat_start",
+                    super::table_log::initiative_audit_line(&rolls, &policy),
+                ),
+                Err(error) => record_unavailable("initiative-policy-audit", &format!("{error:?}")),
+            }
         }
         for (event, line) in super::table_log::combat_audit_lines(
             &accepted.combat,

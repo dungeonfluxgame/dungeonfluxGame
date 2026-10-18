@@ -53,7 +53,7 @@ pub const SCENE_COMMONER: SrdCreature = SrdCreature {
     },
 };
 
-pub const SRD_521_CREATURES: [SrdCreature; 12] = [
+pub const SRD_521_CREATURES: [SrdCreature; 17] = [
     // SRD 5.2.1, p. 261. Single melee attack taken as written. Light Crossbow is an unused alternative action.
     SrdCreature {
         id: "bandit",
@@ -327,6 +327,116 @@ pub const SRD_521_CREATURES: [SrdCreature; 12] = [
             },
         },
     },
+    // SRD 5.2.1 p. 312; tactical feature exclusions are enumerated below.
+    SrdCreature {
+        id: "ogre",
+        name: "Ogre",
+        page: 312,
+        challenge_rating: ChallengeRating::Whole(2),
+        languages: "Common, Giant",
+        exact: false,
+        attacks_unconscious: false,
+        weapon_label: "greatclub",
+        rules: BanditRules {
+            hit_points: 68,
+            armor_class: 11,
+            abilities: [19, 8, 16, 5, 7, 7],
+            attack_bonus: 6,
+            damage_modifier: 4,
+            weapon: WeaponRules {
+                damage_dice: 2,
+                damage_sides: 8,
+            },
+        },
+    },
+    // SRD 5.2.1 p. 313; tactical feature exclusions are enumerated below.
+    SrdCreature {
+        id: "owlbear",
+        name: "Owlbear",
+        page: 313,
+        challenge_rating: ChallengeRating::Whole(3),
+        languages: "None",
+        exact: false,
+        attacks_unconscious: false,
+        weapon_label: "rend",
+        rules: BanditRules {
+            hit_points: 59,
+            armor_class: 13,
+            abilities: [20, 12, 17, 3, 12, 7],
+            attack_bonus: 7,
+            damage_modifier: 5,
+            weapon: WeaponRules {
+                damage_dice: 2,
+                damage_sides: 8,
+            },
+        },
+    },
+    // SRD 5.2.1 p. 341; tactical feature exclusions are enumerated below.
+    SrdCreature {
+        id: "wight",
+        name: "Wight",
+        page: 341,
+        challenge_rating: ChallengeRating::Whole(3),
+        languages: "Common plus one other language",
+        exact: false,
+        attacks_unconscious: false,
+        weapon_label: "necrotic sword",
+        rules: BanditRules {
+            hit_points: 82,
+            armor_class: 14,
+            abilities: [15, 14, 16, 10, 13, 15],
+            attack_bonus: 4,
+            damage_modifier: 2,
+            weapon: WeaponRules {
+                damage_dice: 1,
+                damage_sides: 8,
+            },
+        },
+    },
+    // SRD 5.2.1 p. 298; tactical feature exclusions are enumerated below.
+    SrdCreature {
+        id: "hill-giant",
+        name: "Hill Giant",
+        page: 298,
+        challenge_rating: ChallengeRating::Whole(5),
+        languages: "Giant",
+        exact: false,
+        attacks_unconscious: false,
+        weapon_label: "tree club",
+        rules: BanditRules {
+            hit_points: 105,
+            armor_class: 13,
+            abilities: [21, 8, 19, 5, 9, 6],
+            attack_bonus: 8,
+            damage_modifier: 5,
+            weapon: WeaponRules {
+                damage_dice: 3,
+                damage_sides: 8,
+            },
+        },
+    },
+    // SRD 5.2.1 p. 333; tactical feature exclusions are enumerated below.
+    SrdCreature {
+        id: "troll",
+        name: "Troll",
+        page: 333,
+        challenge_rating: ChallengeRating::Whole(5),
+        languages: "Giant",
+        exact: false,
+        attacks_unconscious: false,
+        weapon_label: "rend",
+        rules: BanditRules {
+            hit_points: 94,
+            armor_class: 15,
+            abilities: [18, 13, 20, 7, 9, 7],
+            attack_bonus: 7,
+            damage_modifier: 4,
+            weapon: WeaponRules {
+                damage_dice: 2,
+                damage_sides: 6,
+            },
+        },
+    },
 ];
 
 /// Where an SRD 5.2.1 stat-block feature stands in the tactical rules.
@@ -376,7 +486,7 @@ const fn feature(
 use FeatureKind::{Action, BonusAction, Movement, Sense, Trait};
 use FeatureStatus::{Implemented, Missing, NotExercised};
 const DARKVISION_NOTE: &str = "It can see in darkness within 60 ft. in this tactical fight.";
-/// Every trait, action, bonus action, reaction, movement mode and sense of the twelve compiled
+/// Every trait, action, bonus action, reaction, movement mode and sense of the seventeen compiled
 /// stat blocks (SRD 5.2.1 page in the creature row above), checked so none is omitted silently.
 pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
     feature(
@@ -670,6 +780,174 @@ pub const SRD_521_CREATURE_FEATURES: &[CreatureFeature] = &[
         Action,
         Implemented,
         "melee, reach 5 ft, 1d4 bludgeoning",
+    ),
+    feature(
+        "ogre",
+        "Darkvision 60 ft.",
+        Sense,
+        Implemented,
+        "It can see in darkness within 60 ft. in this tactical fight.",
+    ),
+    feature(
+        "owlbear",
+        "Darkvision 60 ft.",
+        Sense,
+        Implemented,
+        "It can see in darkness within 60 ft. in this tactical fight.",
+    ),
+    feature(
+        "wight",
+        "Darkvision 60 ft.",
+        Sense,
+        Implemented,
+        "It can see in darkness within 60 ft. in this tactical fight.",
+    ),
+    feature(
+        "troll",
+        "Darkvision 60 ft.",
+        Sense,
+        Implemented,
+        "It can see in darkness within 60 ft. in this tactical fight.",
+    ),
+    feature(
+        "ogre",
+        "Greatclub",
+        Action,
+        Implemented,
+        "+6, reach 5 ft, 2d8 + 4 Bludgeoning; Large 10-foot space.",
+    ),
+    feature(
+        "ogre",
+        "Javelin",
+        Action,
+        Implemented,
+        "+6, reach 5 ft or range 30/120 ft, 2d6 + 4 Piercing; three counted javelins.",
+    ),
+    feature(
+        "owlbear",
+        "Multiattack",
+        Action,
+        Implemented,
+        "Two Rend attacks.",
+    ),
+    feature(
+        "owlbear",
+        "Rend",
+        Action,
+        Implemented,
+        "+7, reach 5 ft, 2d8 + 5 Slashing; Large 10-foot space.",
+    ),
+    feature(
+        "owlbear",
+        "Climb Speed 40 ft.",
+        Movement,
+        Missing,
+        "Excluded: the tactical map has no vertical path admission; flat walking remains 40 ft.",
+    ),
+    feature(
+        "wight",
+        "Multiattack",
+        Action,
+        Implemented,
+        "Two Necrotic Sword or Necrotic Bow attacks in any combination; optional Life Drain replacement excluded separately.",
+    ),
+    feature(
+        "wight",
+        "Necrotic Sword",
+        Action,
+        Implemented,
+        "+4, reach 5 ft, 1d8 + 2 Slashing plus 1d8 Necrotic; critical doubles both dice.",
+    ),
+    feature(
+        "wight",
+        "Necrotic Bow",
+        Action,
+        Implemented,
+        "+4, range 150/600 ft, 1d8 + 2 Piercing plus 1d8 Necrotic; stat-block attack has no ammunition Gear entry.",
+    ),
+    feature(
+        "wight",
+        "Life Drain",
+        Action,
+        Missing,
+        "Excluded: no hit-point-maximum reduction, 24-hour Zombie creation or control ownership contract; not offered.",
+    ),
+    feature(
+        "wight",
+        "Sunlight Sensitivity",
+        Trait,
+        Implemented,
+        "Disadvantage on ability checks and attack rolls in the typed Sunlight scene.",
+    ),
+    feature(
+        "wight",
+        "Resistance: Necrotic",
+        Trait,
+        Implemented,
+        "Necrotic damage halved after immunity and vulnerability.",
+    ),
+    feature(
+        "wight",
+        "Immunity: Poison, Exhaustion, Poisoned",
+        Trait,
+        NotExercised,
+        "Poison damage immunity implemented; no admitted action applies Exhaustion or Poisoned.",
+    ),
+    feature(
+        "hill-giant",
+        "Multiattack",
+        Action,
+        Implemented,
+        "Two Tree Club attacks; optional Trash Lob excluded separately.",
+    ),
+    feature(
+        "hill-giant",
+        "Tree Club",
+        Action,
+        Implemented,
+        "+8, reach 10 ft, 3d8 + 5 Bludgeoning; hits knock Large or smaller targets Prone; Huge 15-foot space.",
+    ),
+    feature(
+        "hill-giant",
+        "Trash Lob",
+        Action,
+        Missing,
+        "Excluded: Poisoned until end of the target next turn has no admitted condition handler; the entire action is not offered.",
+    ),
+    feature(
+        "troll",
+        "Multiattack",
+        Action,
+        Implemented,
+        "Three Rend attacks.",
+    ),
+    feature(
+        "troll",
+        "Rend",
+        Action,
+        Implemented,
+        "+7, reach 10 ft, 2d6 + 4 Slashing; Large 10-foot space.",
+    ),
+    feature(
+        "troll",
+        "Regeneration",
+        Trait,
+        Implemented,
+        "Regains 15 HP at turn start, including from zero; ordinary weapon damage cannot kill it. Acid/Fire inhibition is unreachable: no admitted action deals those types.",
+    ),
+    feature(
+        "troll",
+        "Loathsome Limbs (4/Day)",
+        Trait,
+        Missing,
+        "Excluded: dynamic Troll Limb admission, independent turns and Exhaustion per severed limb are not supported; slashing cannot silently create approximate limbs.",
+    ),
+    feature(
+        "troll",
+        "Charge",
+        BonusAction,
+        Missing,
+        "Excluded: no straight-toward-visible-enemy bonus movement action contract; not replaced with Dash or free movement.",
     ),
 ];
 /// The gaps a fight against this creature must disclose.

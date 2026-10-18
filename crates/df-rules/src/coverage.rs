@@ -188,7 +188,7 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "square-by-square Speed budget, diagonals 5 ft, Difficult Terrain and crawling, Dash, standing, passing through allies and the Incapacitated, corners, Opportunity Attacks; Large creatures, flying, climbing and swimming are not supported",
+        note: "square-by-square Speed budget, diagonals 5 ft, Difficult Terrain and crawling, Dash, standing, passing through allies and the Incapacitated, corners, Opportunity Attacks; Large/Huge source monsters use full 2x2/3x3 spaces, swept occupancy and footprint reach; Huge wire projection awaits its enum; flying, climbing and swimming are not supported",
         evidence: &[
             (STATE, "fn step_cost"),
             (MAP, "fn step_clear"),
@@ -348,7 +348,7 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "twelve SRD creatures with every trait and action classified in SRD_521_CREATURE_FEATURES; gaps (Climb Speed, Hide) are disclosed in the card's rules note",
+        note: "seventeen SRD creatures including CR 2-5 Ogre, Owlbear, Wight, Hill Giant and Troll; source actions and all excluded features are classified in SRD_521_CREATURE_FEATURES and disclosed in the card rules note; Troll regeneration is active, limbs/Charge, Wight Life Drain, Hill Giant Trash Lob and vertical climbing are excluded explicitly",
         evidence: &[
             (CREATURES, "SRD_521_CREATURE_FEATURES"),
             (STATE, "pub fn creature"),

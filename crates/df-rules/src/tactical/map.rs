@@ -360,7 +360,7 @@ impl BattleMap {
         creatures: &[Cell],
         target_size: Size,
     ) -> Result<Cover, RuleError> {
-        if creatures.len() > 64 {
+        if creatures.len() > 64 * 9 {
             return Err(RuleError::Capacity);
         }
         self.require_cell(from)?;
@@ -416,6 +416,7 @@ pub(crate) fn target_height_dm(size: Size) -> u16 {
         Size::Small => 12,
         Size::Medium => 18,
         Size::Large => 30,
+        Size::Huge => 45,
     }
 }
 

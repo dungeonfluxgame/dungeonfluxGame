@@ -267,7 +267,7 @@ fn print_help() {
          \n\
          (direct edits need the milestone 3 proof); see dev describe.\n\
          \n\
-         actions: begin ask escort defend scene-assault move attack second-wind end-turn dash dodge\n\
+         actions: begin ask escort defend scene-assault move attack second-wind action-surge end-turn dash dodge\n\
                   disengage stand pick-up short-rest inn resolve search new-adventure\n\
                   opportunity-attack decline-reaction stabilise-kit stabilise-medicine help-attack table-setting\n\
          choose any offer: act <hero> <label-or-id>, or act <hero> choose --option <label-or-id>\n\

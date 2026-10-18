@@ -180,6 +180,7 @@ pub(super) fn events_for_kind(kind: rpc::GameplayActionKind) -> &'static [Event]
         K::DefendCourier | K::SceneAssault => &[Event::StartFight],
         K::GreatswordAttack
         | K::SecondWind
+        | K::ActionSurge
         | K::StabiliseWithHealersKit
         | K::StabiliseMedicine
         | K::HelpAttack
@@ -635,5 +636,19 @@ mod tests {
             }
             assert_eq!(state, SessionState::Ended, "seed {seed}");
         }
+    }
+}
+
+#[cfg(test)]
+mod r2_action_surge_tests {
+    use super::*;
+
+    #[test]
+    fn r2_action_surge_is_admitted_as_a_combat_action_only() {
+        let kind = rpc::GameplayActionKind::ActionSurge;
+        assert_eq!(events_for_kind(kind), &[Event::CombatAction]);
+        assert!(kind_accepted(SessionState::Fight, kind));
+        assert!(!kind_accepted(SessionState::Story, kind));
+        assert!(!kind_accepted(SessionState::Aftermath, kind));
     }
 }

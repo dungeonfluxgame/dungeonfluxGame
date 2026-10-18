@@ -76,6 +76,7 @@ pub(super) fn action_kind(entry: &str) -> Option<rpc::GameplayActionKind> {
         "scene-assault" => rpc::GameplayActionKind::SceneAssault,
         "greatsword-attack" => rpc::GameplayActionKind::GreatswordAttack,
         "second-wind" => rpc::GameplayActionKind::SecondWind,
+        "action-surge" => rpc::GameplayActionKind::ActionSurge,
         "stabilise-kit" => rpc::GameplayActionKind::StabiliseWithHealersKit,
         "stabilise-medicine" => rpc::GameplayActionKind::StabiliseMedicine,
         "help-attack" => rpc::GameplayActionKind::HelpAttack,
@@ -106,6 +107,7 @@ pub(super) fn action_entry(kind: rpc::GameplayActionKind) -> Option<&'static str
         rpc::GameplayActionKind::SceneAssault => "scene-assault",
         rpc::GameplayActionKind::GreatswordAttack => "greatsword-attack",
         rpc::GameplayActionKind::SecondWind => "second-wind",
+        rpc::GameplayActionKind::ActionSurge => "action-surge",
         rpc::GameplayActionKind::StabiliseWithHealersKit => "stabilise-kit",
         rpc::GameplayActionKind::StabiliseMedicine => "stabilise-medicine",
         rpc::GameplayActionKind::HelpAttack => "help-attack",
@@ -2028,4 +2030,26 @@ fn project_battle_world(
     ready: Option<super::splat_world::ReadyWorld>,
 ) -> Option<rpc::BattleWorld> {
     super::splat_world::battle_world(display_open && forced_scene.is_none(), ready)
+}
+
+#[cfg(test)]
+mod r2_action_surge_tests {
+    use super::*;
+
+    #[test]
+    fn r2_action_surge_has_its_own_stable_wire_kind() {
+        assert_eq!(rpc::GameplayActionKind::ActionSurge as i32, 42);
+        assert_eq!(
+            action_kind("action-surge"),
+            Some(rpc::GameplayActionKind::ActionSurge)
+        );
+        assert_eq!(
+            action_entry(rpc::GameplayActionKind::ActionSurge),
+            Some("action-surge")
+        );
+        assert_eq!(
+            action_kind("second-wind"),
+            Some(rpc::GameplayActionKind::SecondWind)
+        );
+    }
 }

@@ -124,10 +124,8 @@ impl Battle {
                         .is_some_and(|progression| progression.level() >= 5)
                     {
                         if actor.action_surge_spent { 2 } else { 1 }
-                    } else if actor.spec.kind == super::CreatureKind::Scout {
-                        1
                     } else {
-                        0
+                        actor.spec.multiattack_count() - 1
                     }
                 || (actor.extra_attacks > 0 && !actor.budget.action_used)
                 || actor.additional_actions > 1
@@ -144,7 +142,13 @@ impl Battle {
                         .fighter_level()
                         .is_none_or(|progression| !progression.champion()))
                 || (actor.additional_dash && (!actor.action_surge_spent || !actor.budget.dash))
-                || (!actor.health.dead && !in_transit && !living_cells.insert(actor.cell()))
+                || (!actor.health.dead
+                    && !in_transit
+                    && actor
+                        .spec
+                        .space_cells(actor.cell())
+                        .iter()
+                        .any(|cell| map.is_blocked(*cell) || !living_cells.insert(*cell)))
                 || actor.budget.movement_spent_ft > 240
                 || (actor.budget.dash && !actor.budget.action_used)
                 || (actor.budget.dodging && !actor.budget.action_used)
@@ -175,15 +179,21 @@ impl Battle {
                             .iter()
                             .filter(|(dropped, _)| dropped == weapon)
                             .count()
-                        > usize::from(if *weapon == super::Weapon::Javelin {
-                            8_u16
-                        } else if actor.spec.kind == super::CreatureKind::Kobold
-                            && *weapon == super::Weapon::Dagger
-                        {
-                            3
-                        } else {
-                            1
-                        })
+                        > usize::from(
+                            if actor.spec.kind == super::CreatureKind::Ogre
+                                && *weapon == super::Weapon::Javelin
+                            {
+                                3_u16
+                            } else if *weapon == super::Weapon::Javelin {
+                                8_u16
+                            } else if actor.spec.kind == super::CreatureKind::Kobold
+                                && *weapon == super::Weapon::Dagger
+                            {
+                                3
+                            } else {
+                                1
+                            },
+                        )
                 })
             {
                 return Err(RuleError::SnapshotData);
@@ -217,7 +227,7 @@ impl Battle {
         if !state.initiatives.is_empty()
             && (state.initiatives.len() != state.actors.len()
                 || state.actors.iter().any(|actor| {
-                    let modifier = crate::local_journey::ability_modifier(actor.spec.abilities[1]);
+                    let modifier = actor.spec.initiative_modifier();
                     state
                         .initiatives
                         .get(&actor.id())

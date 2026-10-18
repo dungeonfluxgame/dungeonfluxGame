@@ -85,6 +85,7 @@ pub(super) enum PlayAction {
     Move,
     Attack,
     SecondWind,
+    ActionSurge,
     StabiliseWithHealersKit,
     StabiliseMedicine,
     HelpAttack,
@@ -118,6 +119,7 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
         "move" => PlayAction::Move,
         "attack" => PlayAction::Attack,
         "second-wind" => PlayAction::SecondWind,
+        "action-surge" => PlayAction::ActionSurge,
         "stabilise-kit" | "stabilise-with-healers-kit" => PlayAction::StabiliseWithHealersKit,
         "stabilise-medicine" => PlayAction::StabiliseMedicine,
         "help-attack" => PlayAction::HelpAttack,
@@ -162,6 +164,7 @@ impl PlayAction {
             Self::Move => rpc::GameplayActionKind::Move,
             Self::Attack => rpc::GameplayActionKind::GreatswordAttack,
             Self::SecondWind => rpc::GameplayActionKind::SecondWind,
+            Self::ActionSurge => rpc::GameplayActionKind::ActionSurge,
             Self::StabiliseWithHealersKit => rpc::GameplayActionKind::StabiliseWithHealersKit,
             Self::StabiliseMedicine => rpc::GameplayActionKind::StabiliseMedicine,
             Self::HelpAttack => rpc::GameplayActionKind::HelpAttack,
@@ -205,6 +208,17 @@ impl PlayAction {
 #[cfg(test)]
 mod action_name_tests {
     use super::*;
+
+    #[test]
+    fn action_surge_uses_its_dedicated_kind_without_tactical_choices() {
+        let action = parse_action("action-surge").unwrap();
+        assert_eq!(action.kind(), rpc::GameplayActionKind::ActionSurge);
+        assert!(!action.needs_option());
+        assert_eq!(
+            parse_action("second-wind").unwrap().kind(),
+            rpc::GameplayActionKind::SecondWind
+        );
+    }
 
     #[test]
     fn listed_reaction_action_names_parse_to_the_same_wire_kind() {
