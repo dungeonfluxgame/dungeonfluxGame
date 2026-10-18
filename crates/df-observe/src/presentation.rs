@@ -104,6 +104,11 @@ pub enum PresentationComponent {
     CheckCard,
     /// A server d20 roll's die and result card on the shared display.
     Dice,
+    RollCard,
+    Die,
+    CombatBanner,
+    TurnChange,
+    Battlefield,
     ItemCard,
     TitleCard,
     SceneCard,
@@ -121,6 +126,11 @@ impl PresentationComponent {
             Self::IntentLoader => "intent_loader",
             Self::CheckCard => "check_card",
             Self::Dice => "dice",
+            Self::RollCard => "roll_card",
+            Self::Die => "die",
+            Self::CombatBanner => "combat_banner",
+            Self::TurnChange => "turn_change",
+            Self::Battlefield => "battlefield",
             Self::ItemCard => "item_card",
             Self::TitleCard => "title_card",
             Self::SceneCard => "scene_card",
@@ -138,6 +148,11 @@ impl PresentationComponent {
             Self::IntentLoader,
             Self::CheckCard,
             Self::Dice,
+            Self::RollCard,
+            Self::Die,
+            Self::CombatBanner,
+            Self::TurnChange,
+            Self::Battlefield,
             Self::ItemCard,
             Self::TitleCard,
             Self::SceneCard,
@@ -1208,6 +1223,26 @@ mod tests {
             PresentationComponent::from_label("party_hud"),
             Some(PresentationComponent::PartyHud)
         );
+        assert_eq!(
+            PresentationComponent::from_label("roll_card"),
+            Some(PresentationComponent::RollCard)
+        );
+        assert_eq!(
+            PresentationComponent::from_label("die"),
+            Some(PresentationComponent::Die)
+        );
+        assert_eq!(
+            PresentationComponent::from_label("combat_banner"),
+            Some(PresentationComponent::CombatBanner)
+        );
+        assert_eq!(
+            PresentationComponent::from_label("turn_change"),
+            Some(PresentationComponent::TurnChange)
+        );
+        assert_eq!(
+            PresentationComponent::from_label("battlefield"),
+            Some(PresentationComponent::Battlefield)
+        );
         assert_eq!(PresentationComponent::from_label("secret-component"), None);
         assert_eq!(
             ComponentPhase::from_label("readable"),
@@ -1217,6 +1252,64 @@ mod tests {
             EffectiveVisibility::from_label("hidden"),
             Some(EffectiveVisibility::Hidden)
         );
+    }
+
+    #[test]
+    fn battle_component_kinds_build_valid_lifecycle_events() {
+        use ComponentPhase::{Closing, Hidden, Opened, Readable};
+
+        let components = [
+            (
+                PresentationComponent::RollCard,
+                "roll_card",
+                &[Opened, Readable, Closing, Hidden][..],
+            ),
+            (
+                PresentationComponent::Die,
+                "die",
+                &[Opened, Readable, Closing, Hidden][..],
+            ),
+            (
+                PresentationComponent::CombatBanner,
+                "combat_banner",
+                &[Opened, Readable, Hidden][..],
+            ),
+            (
+                PresentationComponent::TurnChange,
+                "turn_change",
+                &[Opened, Readable, Hidden][..],
+            ),
+            (
+                PresentationComponent::Battlefield,
+                "battlefield",
+                &[Opened, Readable, Hidden][..],
+            ),
+        ];
+
+        for (component, label, phases) in components {
+            for phase in phases {
+                let hidden = *phase == Hidden;
+                let event = TimingEvent::component_lifecycle(
+                    41,
+                    23,
+                    8_250,
+                    component,
+                    *phase,
+                    if hidden {
+                        EffectiveVisibility::Hidden
+                    } else {
+                        EffectiveVisibility::Visible
+                    },
+                    if hidden { "ended" } else { "ready" },
+                );
+
+                assert_eq!(event.component, Some(component));
+                assert_eq!(event.component.unwrap().label(), label);
+                assert_eq!(event.component_phase, Some(*phase));
+                assert_eq!(event.at_ms, 8_250);
+                assert!(encode(&[event]).is_ok());
+            }
+        }
     }
 
     #[test]

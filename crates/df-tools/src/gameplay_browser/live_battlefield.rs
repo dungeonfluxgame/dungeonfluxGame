@@ -1615,6 +1615,10 @@ struct Live {
     world_mount: Option<Rc<()>>,
     host: Option<Element>,
     stage: Option<BattleStage>,
+    battlefield_component_id: Option<u64>,
+    banner_component_id: Option<u64>,
+    turn_component_id: Option<u64>,
+    last_turn_key: Option<String>,
     feed: CombatFeed,
     latest: Option<CombatSnapshot>,
     /// The fight began in front of the display and its first feed has not run yet.
@@ -1671,6 +1675,10 @@ thread_local! {
         phase: Phase::Idle,
         host: None,
         stage: None,
+        battlefield_component_id: None,
+        banner_component_id: None,
+        turn_component_id: None,
+        last_turn_key: None,
         feed: CombatFeed::new(FeedMode::HoldForCues),
         latest: None,
         begun_live: false,
@@ -2357,6 +2365,8 @@ fn start_mount(
             };
             if available {
                 live.stage = Some(stage);
+                live.battlefield_component_id =
+                    Some(super::presentation_timing::next_component_id());
             }
             // A line that opened while the stage mounted lands on the splash now.
             if let (Some(stage), Some((label, text))) = (&live.stage, &live.pending_caption) {
@@ -2365,6 +2375,32 @@ fn start_mount(
             available
         });
         if keep {
+            LIVE.with(|live| {
+                let live = live.borrow();
+                if let (Some(id), Some(host)) = (live.battlefield_component_id, live.host.as_ref())
+                {
+                    let scene = host
+                        .get_attribute("data-battlefield-scene")
+                        .unwrap_or_default();
+                    let element = host.query_selector(".battlefield").ok().flatten();
+                    battle_component(
+                        element.as_ref(),
+                        df_observe::presentation::PresentationComponent::Battlefield,
+                        id,
+                        &scene,
+                        df_observe::presentation::ComponentPhase::Opened,
+                        "ready",
+                    );
+                    battle_component(
+                        element.as_ref(),
+                        df_observe::presentation::PresentationComponent::Battlefield,
+                        id,
+                        &scene,
+                        df_observe::presentation::ComponentPhase::Readable,
+                        "ready",
+                    );
+                }
+            });
             sync("view");
         }
     });
@@ -2567,6 +2603,9 @@ fn sync(writer: &str) {
         if live.begun_live && applied.is_some() && !shown.initiative.is_empty() {
             live.initiative_pending = true;
             live.initiative_seen = false;
+        }
+        if applied.is_some() {
+            record_battle_overlays(live, &shown);
         }
         live.begun_live = false;
         if applied.is_none() {
@@ -3253,6 +3292,10 @@ pub(super) fn splash_caption(label: &str, text: &str, showing: bool) {
 }
 
 fn reset_fight(live: &mut Live) {
+    live.battlefield_component_id = None;
+    live.banner_component_id = None;
+    live.turn_component_id = None;
+    live.last_turn_key = None;
     live.world_mount = None;
     live.accepted_cells.clear();
     live.reaction = None;
@@ -3285,10 +3328,143 @@ fn reset_fight(live: &mut Live) {
 pub(super) fn release() {
     // A view that is not combat means the next fight begins in front of the display.
     SEEN_NON_COMBAT.with(|seen| seen.set(true));
-    LIVE.with(|live| {
+    let (field_id, scene) = LIVE.with(|live| {
         let mut live = live.borrow_mut();
+        let scene = live
+            .host
+            .as_ref()
+            .and_then(|host| host.get_attribute("data-battlefield-scene"))
+            .unwrap_or_default();
+        let field_id = live.battlefield_component_id.take();
+        if let Some(id) = live.banner_component_id.take() {
+            battle_component(
+                None,
+                df_observe::presentation::PresentationComponent::CombatBanner,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                "ended",
+            );
+        }
+        if let Some(id) = live.turn_component_id.take() {
+            battle_component(
+                None,
+                df_observe::presentation::PresentationComponent::TurnChange,
+                id,
+                &scene,
+                df_observe::presentation::ComponentPhase::Hidden,
+                "ended",
+            );
+        }
         live.stage = None;
         reset_fight(&mut live);
+        (field_id, scene)
     });
+    if let Some(id) = field_id {
+        battle_component(
+            None,
+            df_observe::presentation::PresentationComponent::Battlefield,
+            id,
+            &scene,
+            df_observe::presentation::ComponentPhase::Hidden,
+            "ended",
+        );
+    }
     live_sfx::set_battlefield_owns_combat(false);
+}
+
+fn record_battle_overlays(live: &mut Live, snapshot: &CombatSnapshot) {
+    use df_observe::presentation::{ComponentPhase, PresentationComponent};
+
+    let Some(host) = live.host.as_ref() else {
+        return;
+    };
+    let scene = host
+        .get_attribute("data-battlefield-scene")
+        .unwrap_or_default();
+    let banner = host.query_selector(".bf-banner[data-open]").ok().flatten();
+    match (live.banner_component_id, banner.as_ref()) {
+        (None, Some(element)) => {
+            let id = super::presentation_timing::next_component_id();
+            live.banner_component_id = Some(id);
+            battle_component(
+                Some(element),
+                PresentationComponent::CombatBanner,
+                id,
+                &scene,
+                ComponentPhase::Opened,
+                "ready",
+            );
+            battle_component(
+                Some(element),
+                PresentationComponent::CombatBanner,
+                id,
+                &scene,
+                ComponentPhase::Readable,
+                "ready",
+            );
+        }
+        (Some(id), None) => {
+            live.banner_component_id = None;
+            battle_component(
+                None,
+                PresentationComponent::CombatBanner,
+                id,
+                &scene,
+                ComponentPhase::Hidden,
+                "ended",
+            );
+        }
+        _ => {}
+    }
+
+    let turn_key = snapshot
+        .active
+        .as_ref()
+        .map(|active| format!("{}:{active}", snapshot.round));
+    if turn_key != live.last_turn_key {
+        if let Some(id) = live.turn_component_id.take() {
+            battle_component(
+                None,
+                PresentationComponent::TurnChange,
+                id,
+                &scene,
+                ComponentPhase::Hidden,
+                "changed",
+            );
+        }
+        live.last_turn_key = turn_key.clone();
+        if let Some(turn_key) = turn_key {
+            let id = super::presentation_timing::identity(&turn_key);
+            live.turn_component_id = Some(id);
+            let turn_element = host.query_selector(".bf-turn").ok().flatten();
+            battle_component(
+                turn_element.as_ref(),
+                PresentationComponent::TurnChange,
+                id,
+                &scene,
+                ComponentPhase::Opened,
+                "changed",
+            );
+            battle_component(
+                turn_element.as_ref(),
+                PresentationComponent::TurnChange,
+                id,
+                &scene,
+                ComponentPhase::Readable,
+                "changed",
+            );
+        }
+    }
+}
+
+fn battle_component(
+    element: Option<&Element>,
+    component: df_observe::presentation::PresentationComponent,
+    id: u64,
+    scene: &str,
+    phase: df_observe::presentation::ComponentPhase,
+    reason: &'static str,
+) {
+    super::presentation_timing::component(element, component, id, scene, phase, reason, 0);
 }

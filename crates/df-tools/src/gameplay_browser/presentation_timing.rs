@@ -89,6 +89,30 @@ fn now_ms() -> Option<u64> {
     measured.map(|time| time as u64)
 }
 
+fn component_event(
+    id: u64,
+    scene: u64,
+    at_ms: u64,
+    component: PresentationComponent,
+    phase: ComponentPhase,
+    visibility: EffectiveVisibility,
+    reason: &'static str,
+    read_ms: u32,
+    opened_ms: Option<u64>,
+    closed_ms: Option<u64>,
+    visible_held_ms: Option<u64>,
+    lag_ms: Option<u64>,
+) -> TimingEvent {
+    let mut event =
+        TimingEvent::component_lifecycle(id, scene, at_ms, component, phase, visibility, reason);
+    event.read_ms = read_ms;
+    event.opened_ms = opened_ms;
+    event.closed_ms = closed_ms;
+    event.visible_held_ms = visible_held_ms;
+    event.lag_ms = lag_ms;
+    event
+}
+
 // Stable content-free local identifiers. Clear the sign bit for the OTLP integer domain.
 pub(super) fn identity(text: &str) -> u64 {
     df_observe::presentation::local_identity(text)
@@ -306,12 +330,20 @@ pub(super) fn component(
             |element| effective_visibility(Some(element)),
         );
         if phase == ComponentPhase::Failed && !capture.components.contains_key(&key) {
-            let mut event = TimingEvent::component_lifecycle(
-                id, scene, now, component, phase, visibility, reason,
+            let event = component_event(
+                id,
+                scene,
+                now,
+                component,
+                phase,
+                visibility,
+                reason,
+                read_ms,
+                None,
+                Some(now),
+                Some(0),
+                None,
             );
-            event.read_ms = read_ms;
-            event.closed_ms = Some(now);
-            event.visible_held_ms = Some(0);
             retain(capture, event);
             return;
         }
@@ -375,7 +407,7 @@ pub(super) fn component(
                 active.element = element.cloned();
             }
             let visible_held_ms = active.clock.observe(now, active.phase, visibility);
-            let mut event = TimingEvent::component_lifecycle(
+            let mut event = component_event(
                 id,
                 scene,
                 now,
@@ -383,11 +415,12 @@ pub(super) fn component(
                 active.phase,
                 visibility,
                 reason,
+                active.read_ms,
+                active.clock.opened_ms(),
+                closing.then_some(now),
+                Some(visible_held_ms),
+                NEXT_LAG_MS.take(),
             );
-            event.read_ms = active.read_ms;
-            event.opened_ms = active.clock.opened_ms();
-            event.visible_held_ms = Some(visible_held_ms);
-            event.lag_ms = NEXT_LAG_MS.take();
             if active.phase == ComponentPhase::Closing && active.close_reason == "ended" {
                 active.close_reason = reason;
             }
@@ -397,9 +430,6 @@ pub(super) fn component(
                 event.reason = active.close_reason;
             } else if closing {
                 event.reason = reason;
-            }
-            if closing {
-                event.closed_ms = Some(now);
             }
             event
         };
@@ -994,6 +1024,78 @@ pub(super) fn disconnect(client: &Client) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn battle_component_records_keep_component_names_phases_and_timestamps() {
+        use df_observe::presentation::ComponentPhase::{Closing, Hidden, Opened, Readable};
+
+        let expected = [
+            (
+                PresentationComponent::RollCard,
+                "roll_card",
+                &[Opened, Readable, Closing, Hidden][..],
+            ),
+            (
+                PresentationComponent::Die,
+                "die",
+                &[Opened, Readable, Closing, Hidden][..],
+            ),
+            (
+                PresentationComponent::CombatBanner,
+                "combat_banner",
+                &[Opened, Readable, Hidden][..],
+            ),
+            (
+                PresentationComponent::TurnChange,
+                "turn_change",
+                &[Opened, Readable, Hidden][..],
+            ),
+            (
+                PresentationComponent::Battlefield,
+                "battlefield",
+                &[Opened, Readable, Hidden][..],
+            ),
+        ];
+
+        for (component, label, phases) in expected {
+            for phase in phases {
+                let at_ms = if *phase == Hidden { 2_500 } else { 1_000 };
+                let event = component_event(
+                    7,
+                    11,
+                    at_ms,
+                    component,
+                    *phase,
+                    if *phase == Hidden {
+                        EffectiveVisibility::Hidden
+                    } else {
+                        EffectiveVisibility::Visible
+                    },
+                    if *phase == Hidden { "read" } else { "ready" },
+                    1_500,
+                    Some(1_000),
+                    (*phase == Hidden).then_some(at_ms),
+                    Some(if *phase == Hidden { 1_400 } else { 0 }),
+                    (*phase == Opened).then_some(25),
+                );
+                assert_eq!(event.kind, "component");
+                assert_eq!(event.id, 7);
+                assert_eq!(event.scene, 11);
+                assert_eq!(event.component, Some(component));
+                assert_eq!(event.component.unwrap().label(), label);
+                assert_eq!(event.component_phase, Some(*phase));
+                assert_eq!(event.at_ms, at_ms);
+                assert_eq!(event.opened_ms, Some(1_000));
+                assert_eq!(event.closed_ms, (*phase == Hidden).then_some(at_ms));
+                assert_eq!(
+                    event.visible_held_ms,
+                    Some(if *phase == Hidden { 1_400 } else { 0 })
+                );
+                assert_eq!(event.lag_ms, (*phase == Opened).then_some(25));
+            }
+        }
+    }
+
     #[test]
     fn identifiers_are_stable_content_free_and_fit_otlp_integers() {
         assert_eq!(identity("scene"), identity("scene"));

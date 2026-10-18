@@ -1113,42 +1113,140 @@ pub(super) fn log_fight_roll(
     }
     let id = FIGHT_COMPONENT_BASE | sequence;
     let hold_ms = u32::try_from(fight_hold_ms(short)).unwrap_or(u32::MAX);
-    let element = client
-        .borrow()
-        .root
-        .query_selector(".tv-dice")
-        .ok()
-        .flatten();
-    record(None, id, ComponentPhase::Requested, "ready", hold_ms);
-    super::presentation_timing::note_lag(lag_ms);
-    record(
-        element.as_ref(),
+    let (root, scene) = {
+        let state = client.borrow();
+        (
+            state.root.clone(),
+            state
+                .root
+                .get_attribute("data-battlefield-scene")
+                .unwrap_or_default(),
+        )
+    };
+    let dice = root.query_selector(".tv-dice").ok().flatten();
+    let die_elements = dice
+        .as_ref()
+        .and_then(|dice| dice.query_selector_all(".tv-die").ok());
+    record_fight_component(
+        None,
+        PresentationComponent::RollCard,
         id,
+        &scene,
+        ComponentPhase::Requested,
+        "ready",
+        hold_ms,
+    );
+    super::presentation_timing::note_lag(lag_ms);
+    let card = root.query_selector(".bf-roll[data-open]").ok().flatten();
+    record_fight_component(
+        card.as_ref(),
+        PresentationComponent::RollCard,
+        id,
+        &scene,
         ComponentPhase::Opened,
         "ready",
         hold_ms,
     );
+    let mut die_records = Vec::new();
+    if let Some(die_elements) = die_elements {
+        for index in 0..die_elements.length() {
+            if let Some(element) = die_elements
+                .item(index)
+                .and_then(|node| node.dyn_into::<Element>().ok())
+            {
+                let die_id = FIGHT_COMPONENT_BASE
+                    | sequence.saturating_mul(4).saturating_add(u64::from(index));
+                record_fight_component(
+                    Some(&element),
+                    PresentationComponent::Die,
+                    die_id,
+                    &scene,
+                    ComponentPhase::Opened,
+                    "ready",
+                    hold_ms,
+                );
+                die_records.push((element, die_id));
+            }
+        }
+    }
     let rest = u32::try_from(rest_ms).unwrap_or(u32::MAX);
     spawn_local(async move {
         TimeoutFuture::new(rest).await;
-        record(
-            element.as_ref(),
+        for (element, die_id) in &die_records {
+            record_fight_component(
+                Some(element),
+                PresentationComponent::Die,
+                *die_id,
+                &scene,
+                ComponentPhase::Readable,
+                "read",
+                hold_ms,
+            );
+        }
+        record_fight_component(
+            card.as_ref(),
+            PresentationComponent::RollCard,
             id,
+            &scene,
             ComponentPhase::Readable,
-            "ready",
+            "read",
             hold_ms,
         );
         TimeoutFuture::new(hold_ms).await;
-        record(
-            element.as_ref(),
+        for (element, die_id) in &die_records {
+            record_fight_component(
+                Some(element),
+                PresentationComponent::Die,
+                *die_id,
+                &scene,
+                ComponentPhase::Closing,
+                "read",
+                hold_ms,
+            );
+        }
+        record_fight_component(
+            card.as_ref(),
+            PresentationComponent::RollCard,
             id,
+            &scene,
             ComponentPhase::Closing,
             "read",
             hold_ms,
         );
         TimeoutFuture::new(320).await;
-        record(None, id, ComponentPhase::Hidden, "read", hold_ms);
+        for (_, die_id) in &die_records {
+            record_fight_component(
+                None,
+                PresentationComponent::Die,
+                *die_id,
+                &scene,
+                ComponentPhase::Hidden,
+                "read",
+                hold_ms,
+            );
+        }
+        record_fight_component(
+            None,
+            PresentationComponent::RollCard,
+            id,
+            &scene,
+            ComponentPhase::Hidden,
+            "read",
+            hold_ms,
+        );
     });
+}
+
+fn record_fight_component(
+    element: Option<&Element>,
+    component: PresentationComponent,
+    id: u64,
+    scene: &str,
+    phase: ComponentPhase,
+    reason: &'static str,
+    read_ms: u32,
+) {
+    super::presentation_timing::component(element, component, id, scene, phase, reason, read_ms);
 }
 
 /// Applies a dice line's state: the die and result card open with the line, are marked closing
