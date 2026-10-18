@@ -249,6 +249,26 @@ fn tactical_option_label(label: &str, target: &rpc::LegalCombatTarget) -> String
     label
 }
 
+fn attack_button_label(offer: &rpc::GameplayActionOffer) -> Option<String> {
+    let target = offer
+        .input_groups
+        .iter()
+        .find(|group| group.group_id == "target")?
+        .options
+        .first()?
+        .label
+        .split(" · ")
+        .next()?;
+    let weapon = offer
+        .input_groups
+        .iter()
+        .find(|group| group.group_id == "weapon")
+        .and_then(|group| group.options.first())
+        .map(|option| option.label.as_str())
+        .unwrap_or("weapon");
+    Some(format!("Attack {target} with {weapon}"))
+}
+
 fn reaction_status(available: bool) -> &'static str {
     // SRD 5.2.1 p. 10: a used Reaction returns at the start of the hero's next turn.
     if available {
@@ -1129,6 +1149,11 @@ fn publish_tactical_controls(
     for offer in ordered_tactical_offers(view.offers) {
         let mut offer = offer.clone();
         match rpc::GameplayActionKind::try_from(offer.action_kind) {
+            Ok(rpc::GameplayActionKind::GreatswordAttack) => {
+                if let Some(label) = attack_button_label(&offer) {
+                    offer.label = label;
+                }
+            }
             Ok(rpc::GameplayActionKind::OpportunityAttack) => {
                 // SRD 5.2.1 p. 15: an Opportunity Attack uses a melee weapon or Unarmed Strike;
                 // the server supplies the legal weapon choices and remains authoritative.
@@ -1840,11 +1865,44 @@ fn handle_intent(client: &Rc<RefCell<Client>>, intent: CombatIntent) {
 #[cfg(test)]
 mod tests {
     use super::{
-        action_empty, attack_roll_explanation, conditions_resource, death_save_for,
-        death_save_summary, initiative_tie_disclosure, movement_dead_space_disclosure,
-        ordered_tactical_offers, own_hit_points, pending_hero_reaction, reaction_countdown_text,
-        reaction_status, rolls, tactical_option_label, waiting_for_current_view,
+        action_empty, attack_button_label, attack_roll_explanation, conditions_resource,
+        death_save_for, death_save_summary, initiative_tie_disclosure,
+        movement_dead_space_disclosure, ordered_tactical_offers, own_hit_points,
+        pending_hero_reaction, reaction_countdown_text, reaction_status, rolls,
+        tactical_option_label, waiting_for_current_view,
     };
+
+    #[test]
+    fn attack_button_names_the_default_target_and_weapon() {
+        let offer = rpc::GameplayActionOffer {
+            input_groups: vec![
+                rpc::JourneyGroup {
+                    group_id: "target".to_owned(),
+                    options: vec![rpc::JourneyOption {
+                        option_id: "jessa-greatsword".to_owned(),
+                        label: "Jessa · no cover · melee reach".to_owned(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                rpc::JourneyGroup {
+                    group_id: "weapon".to_owned(),
+                    options: vec![rpc::JourneyOption {
+                        option_id: "greatsword".to_owned(),
+                        label: "greatsword".to_owned(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            attack_button_label(&offer).as_deref(),
+            Some("Attack Jessa with greatsword")
+        );
+    }
     use df_protocol::common as rpc;
 
     #[test]

@@ -161,6 +161,19 @@ fn addressee_chip(replying: &str) -> String {
     "anyone here".to_owned()
 }
 
+fn addressee_after_reply<'a>(replying: &'a str, exchange: Option<&'a Exchange>) -> &'a str {
+    if !replying.trim().is_empty() {
+        return replying;
+    }
+    exchange
+        .filter(|exchange| exchange.speaker != "Narrator" && !exchange.speaker.trim().is_empty())
+        .map_or("", |exchange| exchange.speaker.as_str())
+}
+
+fn already_spoken_on_phone(exchange_reply: &str, current_dialogue: &str) -> bool {
+    !exchange_reply.is_empty() && exchange_reply == current_dialogue
+}
+
 /// Whether Enter in the composer sends: a plain Enter on a fine-pointer (desktop)
 /// keyboard, never Shift+Enter, never mid-composition, never on a touch keyboard.
 fn enter_should_send(key: &str, shift: bool, composing: bool, fine_pointer: bool) -> bool {
@@ -553,6 +566,12 @@ pub(super) fn mount(
             .and_then(|views| views.current())
             .and_then(crate::presentation::replying_speaker)
             .unwrap_or_default();
+        let exchange = state
+            .dialogue
+            .exchange
+            .as_ref()
+            .filter(|exchange| exchange.revision == state.revision);
+        let replying = addressee_after_reply(&replying, exchange);
         let addressee = addressee_chip(&replying);
         let chip = node(
             &document,
@@ -1213,7 +1232,23 @@ fn try_dispatch(client: Rc<RefCell<Client>>, call: Call) -> Result<(), String> {
                             disposition: Some(disposition.to_owned()),
                             speaker: "Narrator".to_owned(),
                             portrait: NEUTRAL_PORTRAIT.to_owned(),
-                            reply: result.to_owned(),
+                            reply: if already_spoken_on_phone(result, state
+                                .views
+                                .as_ref()
+                                .and_then(|views| views.current())
+                                .and_then(|view| match view.audience.as_ref()? {
+                                    rpc::view_message::Audience::Player(player) => player
+                                        .journey
+                                        .as_ref()
+                                        .map(|journey| journey.dialogue.as_str()),
+                                    _ => None,
+                                })
+                                .unwrap_or_default())
+                            {
+                                String::new()
+                            } else {
+                                result.to_owned()
+                            },
                         });
                         if let Some(editor) = &state.dialogue.editor {
                             editor.set_value("");
@@ -1396,9 +1431,9 @@ mod tests {
     }
 
     use super::{
-        addressee_chip, clears_draft, composer_available, downed_state, enter_should_send,
-        portrait_for_actor_id, reply_attribution, reply_status, scope_change_notice,
-        scope_changed_notice, speaker_portrait_url, split_action_response,
+        addressee_after_reply, addressee_chip, clears_draft, composer_available, downed_state,
+        enter_should_send, portrait_for_actor_id, reply_attribution, reply_status,
+        scope_change_notice, scope_changed_notice, speaker_portrait_url, split_action_response,
     };
 
     #[test]
@@ -1552,6 +1587,39 @@ mod tests {
     fn the_addressee_chip_follows_the_server_selected_speaker_not_the_scene_focus() {
         assert_eq!(addressee_chip(""), "anyone here");
         assert_eq!(addressee_chip("Corin"), "Corin");
+    }
+
+    #[test]
+    fn a_current_reply_keeps_its_responding_actor_on_the_addressee_chip() {
+        let exchange = Exchange {
+            revision: None,
+            you: "Jessa, what brings you here?".to_owned(),
+            disposition: None,
+            speaker: "Jessa".to_owned(),
+            portrait: NEUTRAL_PORTRAIT.to_owned(),
+            reply: "I am shopping for a warm cloak.".to_owned(),
+        };
+
+        assert_eq!(
+            addressee_chip(addressee_after_reply("", Some(&exchange))),
+            "Jessa"
+        );
+        assert_eq!(
+            addressee_chip(addressee_after_reply("Corin", Some(&exchange))),
+            "Corin"
+        );
+    }
+
+    #[test]
+    fn a_refusal_already_in_the_current_narration_is_not_echoed_in_the_exchange() {
+        let refusal = "Nothing like that is here to act on.";
+
+        assert!(already_spoken_on_phone(refusal, refusal));
+        assert!(!already_spoken_on_phone(
+            refusal,
+            "The table refuses the action."
+        ));
+        assert!(!already_spoken_on_phone("", refusal));
     }
 
     #[test]
