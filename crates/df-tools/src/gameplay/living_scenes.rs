@@ -1442,7 +1442,8 @@ impl LivingScenes {
             wake: watch::channel(0).0,
             origin,
         });
-        inner.observe_checkpoint(&checkpoints.borrow().clone());
+        let checkpoint = checkpoints.borrow().clone();
+        inner.observe_checkpoint(&checkpoint);
         let worker = tokio::spawn(Arc::clone(&inner).run(checkpoints));
         let plates = plates_on.then(|| plates::Plates::start(Arc::clone(&inner)));
         Self {
@@ -2651,10 +2652,12 @@ impl LivingScenes {
         let inner = self.inner.as_ref()?;
         let plan = art_contract::plan(role, request);
         let (live, status) = match subject.kind {
-            art_contract::SubjectKind::Character => (
-                locked(&inner.state).canonical.npc(&subject.id),
-                inner.canonical_npc_status(&subject.id),
-            ),
+            // The guard must drop before the status read takes the same lock: a tuple keeps it
+            // alive to the end of the expression and the thread deadlocks against itself.
+            art_contract::SubjectKind::Character => {
+                let live = locked(&inner.state).canonical.npc(&subject.id);
+                (live, inner.canonical_npc_status(&subject.id))
+            }
             art_contract::SubjectKind::Place => (
                 inner.canonical_room_key(&subject.id),
                 inner.canonical_room_status(&subject.id),

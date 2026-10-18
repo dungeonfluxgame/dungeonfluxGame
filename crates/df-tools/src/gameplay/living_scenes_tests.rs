@@ -1616,3 +1616,28 @@ impl Drop for AbortWorker {
         self.0.abort();
     }
 }
+
+#[test]
+fn describing_a_character_depiction_returns_instead_of_locking_the_state_twice() {
+    let (inner, _ledger) = director(&dossier());
+    let scenes = LivingScenes {
+        inner: Some(inner),
+        _worker: None,
+        plates: None,
+        last_graph_revision: Arc::new(Mutex::new(None)),
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let report = scenes.describe_depiction(
+            df_render::art_contract::Role::GenerationReference,
+            "",
+            &df_render::art_contract::Subject::character("courier".to_owned()),
+        );
+        let _ = sender.send(report.is_some());
+    });
+    // The character clip resolver calls this on every fighter; a held guard deadlocked the server.
+    assert!(
+        receiver.recv_timeout(Duration::from_secs(10)).is_ok(),
+        "describe_depiction never returned for a character subject"
+    );
+}

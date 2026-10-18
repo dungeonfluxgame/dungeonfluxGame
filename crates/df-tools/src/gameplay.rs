@@ -210,8 +210,10 @@ impl Service {
         // Living scenes watch the display's view and then add their published art to it; the
         // art is presentation only and nothing else in the view changes.
         let (role, mut message) = viewed?;
-        self.living
-            .observe_checkpoint(&self.updates.borrow().clone());
+        // Release the checkpoint watch before the living-scenes lock: holding its read borrow
+        // across that lock blocks the owner's publish behind any thread waiting on the lock.
+        let checkpoint = self.updates.borrow().clone();
+        self.living.observe_checkpoint(&checkpoint);
         self.living.observe(&message);
         self.living.apply(&mut message);
         // PLAY-V10: the home loop's state, read on every view so a loop that lands wakes it.
