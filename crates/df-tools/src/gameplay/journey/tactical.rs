@@ -364,7 +364,7 @@ pub(super) fn read(state: &GameState) -> Result<Battle, RepositoryError> {
         );
     }
     let map = scene_map(&saved.scene, saved.layout.as_str())?;
-    let battle = Battle::from_snapshot(map, &saved.state).map_err(bad)?;
+    let battle = Battle::from_snapshot(map, saved.rules_state()).map_err(bad)?;
     if battle.combatants().len() != saved.actors.len()
         || battle
             .combatants()
@@ -537,12 +537,197 @@ fn store(state: &mut GameState, battle: &Battle) -> Result<(), RepositoryError> 
         .ok_or(RepositoryError::InvalidCandidate)?;
     encounter.turn_order = order;
     encounter.active_turn = active;
-    encounter
+    let saved = encounter
         .tactical
         .as_mut()
-        .ok_or(RepositoryError::InvalidCandidate)?
-        .state = battle.snapshot().map_err(bad)?;
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    saved.set_rules_state(battle.snapshot().map_err(bad)?);
+    // A recorded answer window belongs to one offer: it goes when that offer is answered.
+    let offer = hero_reaction_offer(battle)?.map(|(reaction, _, _)| reaction);
+    if saved
+        .reaction_window()
+        .map_err(bad)?
+        .is_some_and(|window| Some(window.reaction) != offer)
+    {
+        saved.set_reaction_window(None);
+    }
     Ok(())
+}
+/// The hero reaction offer the battle waits on, as `(identity, reactor, provoker)`. An enemy's
+/// reaction is answered by the enemy policy at once, so only a hero's offer has a window.
+/// The identity names one offer: the round, the mover, where its move has reached and how much
+/// movement it has left, and the hero offered the reaction.
+fn hero_reaction_offer(battle: &Battle) -> Result<Option<(RecordId, u32, u32)>, RepositoryError> {
+    let Some(&reactor) = battle.reaction_offers().first() else {
+        return Ok(None);
+    };
+    if battle.finished() || battle.actor(reactor).map_err(bad)?.side() != Side::Heroes {
+        return Ok(None);
+    }
+    let provoker = battle
+        .active_actor()
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let mover = battle.actor(provoker).map_err(bad)?;
+    let digest = Sha256::new()
+        .chain_update(b"df-reaction-offer-v1")
+        .chain_update(battle.round().to_be_bytes())
+        .chain_update(provoker.to_be_bytes())
+        .chain_update(u32::from(mover.cell().0).to_be_bytes())
+        .chain_update(u32::from(mover.cell().1).to_be_bytes())
+        .chain_update(u32::from(mover.movement_remaining_ft()).to_be_bytes())
+        .chain_update(reactor.to_be_bytes())
+        .finalize();
+    let reaction = RecordId::from_bytes(&digest[..16]).map_err(bad)?;
+    Ok(Some((reaction, reactor, provoker)))
+}
+/// A hero's pending reaction offer, as the session owner times it (P6-80).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::gameplay) struct PendingReaction {
+    pub(in crate::gameplay) reaction: RecordId,
+    pub(in crate::gameplay) member: MemberId,
+    pub(in crate::gameplay) reactor_name: String,
+    pub(in crate::gameplay) provoker_name: String,
+    pub(in crate::gameplay) provocation: Provocation,
+    /// This offer's recorded window; `None` when the checkpoint was written without one.
+    pub(in crate::gameplay) window: Option<ReactionWindow>,
+}
+impl PendingReaction {
+    pub(in crate::gameplay) fn provocation_name(&self) -> &'static str {
+        match self.provocation {
+            Provocation::Move => "move",
+        }
+    }
+}
+/// The hero reaction the fight is waiting on, if any.
+pub(in crate::gameplay) fn pending_reaction(
+    current: &Checkpoint,
+) -> Result<Option<PendingReaction>, RepositoryError> {
+    let state = current.state();
+    if !present(state) {
+        return Ok(None);
+    }
+    pending_reaction_in(state, &read(state)?)
+}
+fn pending_reaction_in(
+    state: &GameState,
+    battle: &Battle,
+) -> Result<Option<PendingReaction>, RepositoryError> {
+    let Some((reaction, reactor, provoker)) = hero_reaction_offer(battle)? else {
+        return Ok(None);
+    };
+    let hero = canonical(state, reactor)?;
+    let member = state
+        .characters
+        .iter()
+        .find(|character| character.entity == hero)
+        .map(|character| character.owner)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let window = snapshot(state)?
+        .reaction_window()
+        .map_err(bad)?
+        .filter(|window| window.reaction == reaction);
+    Ok(Some(PendingReaction {
+        reaction,
+        member,
+        reactor_name: name(state, hero)?,
+        provoker_name: name(state, canonical(state, provoker)?)?,
+        provocation: Provocation::Move,
+        window,
+    }))
+}
+/// Records the answer window of a hero reaction offer the candidate opened, opening it at
+/// `now_unix_ms`; drops a window whose offer is gone. `None` when nothing changes. A window
+/// already recorded for the same offer is kept, so a later decision never restarts it.
+pub(in crate::gameplay) fn stamp_reaction_window(
+    candidate: &Checkpoint,
+    now_unix_ms: i64,
+) -> Result<Option<Checkpoint>, RepositoryError> {
+    let state = candidate.state();
+    if !present(state) {
+        return Ok(None);
+    }
+    let battle = read(state)?;
+    let saved = snapshot(state)?;
+    let recorded = saved.reaction_window().map_err(bad)?;
+    let window = match hero_reaction_offer(&battle)? {
+        Some((reaction, _, _)) if recorded.is_some_and(|window| window.reaction == reaction) => {
+            return Ok(None);
+        }
+        Some((reaction, reactor, provoker)) => Some(ReactionWindow {
+            reaction,
+            reactor,
+            provoker,
+            provocation: Provocation::Move,
+            opened_unix_ms: now_unix_ms,
+            deadline_unix_ms: now_unix_ms
+                .checked_add(REACTION_WINDOW_MILLIS)
+                .ok_or(RepositoryError::Capacity)?,
+        }),
+        None if recorded.is_none() => return Ok(None),
+        None => None,
+    };
+    let mut state = state.clone();
+    state
+        .encounters
+        .first_mut()
+        .and_then(|encounter| encounter.tactical.as_mut())
+        .ok_or(RepositoryError::InvalidCandidate)?
+        .set_reaction_window(window.as_ref());
+    model::checkpoint(candidate.basis(), state).map(Some)
+}
+/// Whole seconds left to answer, rounded up, as the phones and the display count them down.
+/// An offer without a recorded window has the whole window left.
+pub(in crate::gameplay) fn reaction_seconds_remaining(
+    window: Option<&ReactionWindow>,
+    now_unix_ms: i64,
+) -> u32 {
+    let remaining = window.map_or(REACTION_WINDOW_MILLIS, |window| {
+        window
+            .deadline_unix_ms
+            .saturating_sub(now_unix_ms)
+            .clamp(0, REACTION_WINDOW_MILLIS)
+    });
+    // The clamp keeps the value within `0..=REACTION_WINDOW_MILLIS`, so it always converts.
+    u32::try_from(remaining).unwrap_or_default().div_ceil(1000)
+}
+/// The wall clock the owner stamps and counts reaction windows with.
+pub(in crate::gameplay) fn unix_now_ms() -> Result<i64, RepositoryError> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| RepositoryError::Unavailable)?;
+    i64::try_from(elapsed.as_millis()).map_err(|_| RepositoryError::Capacity)
+}
+/// The ordinary decline a hero would send, built for the owner to submit when the hero's
+/// window runs out. Its operation is derived from the offer and its deadline, so a repeated
+/// expiry of the same offer is the same operation and resolves at most once.
+pub(in crate::gameplay) fn expired_reaction_decline(
+    current: &Checkpoint,
+    pending: &PendingReaction,
+    deadline_unix_ms: i64,
+) -> Result<rpc::SubmitActionRequest, RepositoryError> {
+    use rpc::GameplayActionKind as K;
+    let digest = Sha256::new()
+        .chain_update(b"df-reaction-expiry-v1")
+        .chain_update(current.basis().run.as_bytes())
+        .chain_update(pending.reaction.as_bytes())
+        .chain_update(deadline_unix_ms.to_be_bytes())
+        .finalize();
+    let operation = OperationId::from_bytes(&digest[..16]).map_err(bad)?;
+    Ok(rpc::SubmitActionRequest {
+        session_id: Some(rpc::SessionId {
+            value: Some(current.basis().session.as_bytes().to_vec()),
+        }),
+        run_id: Some(rpc::RunId {
+            value: Some(current.basis().run.as_bytes().to_vec()),
+        }),
+        observed_revision: Some(wire::revision(current.basis().revision)),
+        operation_id: Some(rpc::OperationId {
+            value: Some(operation.as_bytes().to_vec()),
+        }),
+        offer_id: super::offer_id(current, K::DeclineReaction),
+        action_kind: K::DeclineReaction as i32,
+        ..Default::default()
+    })
 }
 fn grid_cell(cell: tactical_rules::Cell) -> rpc::GridCell {
     rpc::GridCell {
@@ -3399,6 +3584,11 @@ pub(in crate::gameplay) fn project_combat(
     if let Some(&reactor) = battle.reaction_offers().first() {
         view.reaction_participant_id = canonical(state, reactor)?.as_bytes().to_vec();
     }
+    // The countdown is the server's own deadline, so a reconnect never restarts it.
+    if let Some(pending) = pending_reaction_in(state, &battle)? {
+        view.reaction_seconds_remaining =
+            reaction_seconds_remaining(pending.window.as_ref(), unix_now_ms()?);
+    }
     if let Some(actor) = battle.active_actor().filter(|_| !view.finished)
         && battle.actor(actor).map_err(bad)?.side() == Side::Heroes
     {
@@ -5004,9 +5194,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn scene_quote_acceptance_submits_four_choices_while_fight_actions_keep_three() {
+    fn scene_quote_acceptance_and_fight_actions_submit_at_most_four_choices() {
         // dialogue.rs sends a merchant quote acceptance as target, option, payment and quote id;
-        // a fight action keeps the three-choice bound.
+        // a fight action keeps a four-choice bound (tactical choice, weapon mastery, Savage
+        // Attacker and knock-out), so five are refused.
         with_live(|| {
             use rpc::GameplayActionKind as K;
             let story = opening_story();
@@ -5041,7 +5232,7 @@ pub(super) mod tests {
 
             let fight_current = fight(true);
             let mut fight_submit = request(&fight_current, 8, K::GreatswordAttack, None);
-            fight_submit.action_choices = (0..4)
+            fight_submit.action_choices = (0..5)
                 .map(|index| rpc::JourneyChoice {
                     group_id: format!("choice-{index}"),
                     option_id: "yes".into(),
@@ -6783,6 +6974,295 @@ pub(super) mod tests {
                     .budget()
                     .reaction_used
             );
+        });
+    }
+    /// The fight from the test above, stopped where Brakka (the first hero) is offered an
+    /// opportunity attack during the enemy's turn (SRD 5.2.1 p. 14).
+    fn pending_hero_reaction() -> (Checkpoint, MemberId) {
+        use rpc::GameplayActionKind as K;
+        let first = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+        let second = MemberId::from_bytes(&MEMBERS[1]).unwrap();
+        let current = fight(true);
+        let adjacent = options(current.state(), 1, K::Move)
+            .unwrap()
+            .into_iter()
+            .find(|(_, action, _)| {
+                matches!(action, Action::Move(path) if path.last() == Some(&tactical_rules::Cell(3, 2)))
+            })
+            .unwrap()
+            .0;
+        let current = submit(
+            &current,
+            first,
+            &request(&current, 8, K::Move, Some(&adjacent)),
+            &mut |_| Ok(1),
+        );
+        let current = submit(
+            &current,
+            first,
+            &request(&current, 9, K::EndTurn, None),
+            &mut |_| Ok(1),
+        );
+        let current = submit(
+            &current,
+            second,
+            &request(&current, 10, K::EndTurn, None),
+            &mut |_| Ok(1),
+        );
+        assert_eq!(
+            read(current.state()).unwrap().reaction_offers().first(),
+            Some(&1)
+        );
+        (current, first)
+    }
+    /// The owner's clock when the offer opened, in Unix milliseconds: controlled, never read.
+    const OPENED_MS: i64 = 1_760_000_000_000;
+    fn opened_window(current: &Checkpoint) -> (Checkpoint, PendingReaction, ReactionWindow) {
+        let stamped = stamp_reaction_window(current, OPENED_MS)
+            .unwrap()
+            .expect("the offer opens a window");
+        let pending = pending_reaction(&stamped)
+            .unwrap()
+            .expect("a hero reaction is pending");
+        let window = pending
+            .window
+            .expect("the window is recorded with the offer");
+        (stamped, pending, window)
+    }
+    /// P6-80: the window opens with the offer, keeps its deadline across later decisions, and
+    /// its expiry is the ordinary decline: Brakka lets the enemy pass and its turn resumes.
+    #[test]
+    fn an_expired_reaction_window_declines_the_offer_and_resumes_the_enemy_turn() {
+        use rpc::GameplayActionKind as K;
+        with_live(|| {
+            let (current, first) = pending_hero_reaction();
+            let (stamped, pending, window) = opened_window(&current);
+            assert_eq!(pending.member, first);
+            assert_eq!(pending.provocation_name(), "move");
+            assert_eq!(window.reactor, 1);
+            assert_eq!(window.opened_unix_ms, OPENED_MS);
+            assert_eq!(window.deadline_unix_ms, OPENED_MS + 17_000);
+            // The rules bytes are untouched: the window travels beside them.
+            assert_eq!(
+                snapshot(stamped.state()).unwrap().rules_state(),
+                snapshot(current.state()).unwrap().state.as_slice()
+            );
+            assert_eq!(reaction_seconds_remaining(Some(&window), OPENED_MS), 17);
+            assert_eq!(
+                reaction_seconds_remaining(Some(&window), OPENED_MS + 16_001),
+                1
+            );
+            assert_eq!(
+                reaction_seconds_remaining(Some(&window), OPENED_MS + 17_000),
+                0
+            );
+            // A decision later in the window never restarts it.
+            assert!(
+                stamp_reaction_window(&stamped, OPENED_MS + 9_000)
+                    .unwrap()
+                    .is_none()
+            );
+            let mut state = stamped.state().clone();
+            store(&mut state, &read(stamped.state()).unwrap()).unwrap();
+            assert_eq!(
+                snapshot(&state).unwrap().reaction_window().unwrap(),
+                Some(window)
+            );
+
+            let decline =
+                expired_reaction_decline(&stamped, &pending, window.deadline_unix_ms).unwrap();
+            assert_eq!(decline.action_kind, K::DeclineReaction as i32);
+            assert_eq!(
+                decline,
+                expired_reaction_decline(&stamped, &pending, window.deadline_unix_ms).unwrap(),
+                "a repeated expiry of one offer is the same operation"
+            );
+            let declined = submit(&stamped, first, &decline, &mut |_| Ok(1));
+            assert!(
+                pending_reaction(&declined)
+                    .unwrap()
+                    .is_none_or(|next| next.reaction != pending.reaction)
+            );
+            let battle = read(declined.state()).unwrap();
+            assert!(!battle.actor(1).unwrap().budget().reaction_used);
+            let receipt =
+                super::super::accepted(declined.state().decisions.last().unwrap()).unwrap();
+            assert!(
+                receipt
+                    .combat
+                    .iter()
+                    .any(|outcome| outcome.actor_name == pending.provoker_name
+                        && outcome.kind == rpc::OutcomeKind::Move as i32),
+                "the interrupted enemy move resumes: {:?}",
+                receipt.combat
+            );
+        });
+    }
+    /// P6-80: Brakka's own answer commits a moment before the deadline. It wins; at the
+    /// deadline nothing is pending any more, and the expiry built for the old offer is refused.
+    #[test]
+    fn a_manual_answer_just_before_expiry_wins_and_the_expiry_does_nothing() {
+        use rpc::GameplayActionKind as K;
+        with_live(|| {
+            let (current, first) = pending_hero_reaction();
+            let (stamped, pending, window) = opened_window(&current);
+            let manual = submit(
+                &stamped,
+                first,
+                &request(&stamped, 11, K::DeclineReaction, None),
+                &mut |_| Ok(1),
+            );
+            assert_eq!(
+                reaction_seconds_remaining(Some(&window), window.deadline_unix_ms - 1),
+                1
+            );
+            assert!(
+                pending_reaction(&manual)
+                    .unwrap()
+                    .is_none_or(|next| next.reaction != pending.reaction),
+                "nothing is left for the expiry to decline"
+            );
+            let late =
+                expired_reaction_decline(&stamped, &pending, window.deadline_unix_ms).unwrap();
+            assert!(
+                wire::action_offer_rejection(
+                    &manual,
+                    first,
+                    K::DeclineReaction,
+                    &late.offer_id,
+                    &late.action_choices
+                )
+                .unwrap()
+                .is_some()
+            );
+            let input = wire::journey_input(&late, first, &manual).unwrap();
+            let GameInput::Game(command) = &input else {
+                panic!("a game command");
+            };
+            // The owner refuses this as a stale offer before staging: its revision is behind.
+            assert!(present(manual.state()) && command.observed_revision < manual.basis().revision);
+            assert!(stage_with_supplier(&manual, &input, &mut |_| Ok(1)).is_err());
+        });
+    }
+    /// P6-80: the expiry commits first. Brakka's answer, sent against the offer he saw, is then
+    /// stale and cannot resolve the reaction a second time.
+    #[test]
+    fn an_expiry_just_before_a_manual_answer_makes_the_answer_stale() {
+        use rpc::GameplayActionKind as K;
+        with_live(|| {
+            let (current, first) = pending_hero_reaction();
+            let (stamped, pending, window) = opened_window(&current);
+            let expired = submit(
+                &stamped,
+                first,
+                &expired_reaction_decline(&stamped, &pending, window.deadline_unix_ms).unwrap(),
+                &mut |_| Ok(1),
+            );
+            let weapon = options(stamped.state(), 1, K::OpportunityAttack)
+                .unwrap()
+                .first()
+                .unwrap()
+                .0
+                .clone();
+            for manual in [
+                request(&stamped, 12, K::OpportunityAttack, Some(&weapon)),
+                request(&stamped, 12, K::DeclineReaction, None),
+            ] {
+                let kind = rpc::GameplayActionKind::try_from(manual.action_kind).unwrap();
+                assert!(
+                    wire::action_offer_rejection(
+                        &expired,
+                        first,
+                        kind,
+                        &manual.offer_id,
+                        &manual.action_choices
+                    )
+                    .unwrap()
+                    .is_some(),
+                    "{kind:?} is refused after the expiry"
+                );
+                let input = wire::journey_input(&manual, first, &expired).unwrap();
+                let GameInput::Game(command) = &input else {
+                    panic!("a game command");
+                };
+                assert!(
+                    present(expired.state())
+                        && command.observed_revision < expired.basis().revision
+                );
+                assert!(stage_with_supplier(&expired, &input, &mut |_| Ok(1)).is_err());
+            }
+        });
+    }
+    /// P6-80: a saved and reloaded fight keeps the same deadline, so a restart or reconnect
+    /// never restarts the countdown, and replaying the expiry from the reload is identical.
+    #[test]
+    fn a_pending_reaction_window_survives_checkpoint_encode_decode_and_replay() {
+        with_live(|| {
+            let (current, first) = pending_hero_reaction();
+            let (stamped, pending, window) = opened_window(&current);
+            let bytes =
+                df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&stamped, codec())
+                    .unwrap();
+            let restored = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+                &bytes,
+                stamped.basis(),
+                &model::pins().unwrap(),
+                &model::recovery().unwrap(),
+                codec(),
+            )
+            .unwrap();
+            assert_eq!(restored, stamped);
+            assert_eq!(pending_reaction(&restored).unwrap(), Some(pending.clone()));
+            // A decision after the reload, a minute on, keeps the recorded deadline.
+            assert!(
+                stamp_reaction_window(&restored, OPENED_MS + 60_000)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                reaction_seconds_remaining(Some(&window), OPENED_MS + 5_000),
+                12
+            );
+            let decline =
+                expired_reaction_decline(&restored, &pending, window.deadline_unix_ms).unwrap();
+            assert_eq!(
+                submit(&stamped, first, &decline, &mut |_| Ok(1)),
+                submit(&restored, first, &decline, &mut |_| Ok(1))
+            );
+        });
+    }
+    /// P6-80: a checkpoint saved before windows existed decodes and plays; its pending offer
+    /// has no recorded deadline, and the owner gives it a whole window from when it loads.
+    #[test]
+    fn a_checkpoint_without_a_reaction_window_decodes_with_the_offer_pending() {
+        with_live(|| {
+            let (current, first) = pending_hero_reaction();
+            let saved = snapshot(current.state()).unwrap();
+            assert_eq!(saved.rules_state(), saved.state.as_slice());
+            let bytes =
+                df_persistence::local_demo_scope::encode_owned_demo_checkpoint(&current, codec())
+                    .unwrap();
+            let restored = df_persistence::local_demo_scope::decode_owned_demo_checkpoint(
+                &bytes,
+                current.basis(),
+                &model::pins().unwrap(),
+                &model::recovery().unwrap(),
+                codec(),
+            )
+            .unwrap();
+            let pending = pending_reaction(&restored)
+                .unwrap()
+                .expect("the offer is pending");
+            assert_eq!(pending.member, first);
+            assert_eq!(pending.window, None);
+            assert_eq!(reaction_seconds_remaining(None, OPENED_MS), 17);
+            let mut view = rpc::CombatView::default();
+            project_combat(&restored, None, &mut view).unwrap();
+            assert_eq!(view.reaction_seconds_remaining, 17);
+            // The next decision through the owner records the window from that moment.
+            let (_, reloaded, window) = opened_window(&restored);
+            assert_eq!(reloaded.reaction, pending.reaction);
+            assert_eq!(window.deadline_unix_ms, OPENED_MS + 17_000);
         });
     }
     #[test]

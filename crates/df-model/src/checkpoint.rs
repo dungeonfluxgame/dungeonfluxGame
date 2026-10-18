@@ -528,6 +528,141 @@ pub struct TacticalSnapshot {
     pub actors: Vec<(u32, EntityId)>,
     pub state: Vec<u8>,
 }
+
+/// How long a hero has to answer a reaction offer before the owner declines it for them.
+pub const REACTION_WINDOW_MILLIS: i64 = 17_000;
+
+/// What the provoking combatant was doing when its reaction offer opened.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Provocation {
+    /// Leaving a hero's reach while moving (SRD 5.2.1 p. 14, Opportunity Attacks).
+    Move,
+}
+
+/// The owner's answer window for the hero reaction a tactical snapshot is waiting on.
+/// Times are Unix milliseconds stamped by the session owner, never by the rules.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReactionWindow {
+    /// Identity of the exact offer: a later offer, even to the same hero, has another one.
+    pub reaction: RecordId,
+    /// Tactical actor id of the hero who may react.
+    pub reactor: u32,
+    /// Tactical actor id of the combatant whose action provoked the reaction.
+    pub provoker: u32,
+    pub provocation: Provocation,
+    pub opened_unix_ms: i64,
+    pub deadline_unix_ms: i64,
+}
+
+/// The window travels after the rules bytes in `TacticalSnapshot::state`, so checkpoints
+/// written before the window existed decode unchanged and carry none. The leading zero byte
+/// cannot occur in the rules' JSON text, so the marker is unambiguous.
+const REACTION_WINDOW_MARKER: [u8; 8] = *b"\0dfrw01\0";
+const REACTION_WINDOW_BYTES: usize = REACTION_WINDOW_MARKER.len() + 16 + 4 + 4 + 1 + 8 + 8;
+
+impl ReactionWindow {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(REACTION_WINDOW_BYTES);
+        bytes.extend_from_slice(&REACTION_WINDOW_MARKER);
+        bytes.extend_from_slice(self.reaction.as_bytes());
+        bytes.extend_from_slice(&self.reactor.to_be_bytes());
+        bytes.extend_from_slice(&self.provoker.to_be_bytes());
+        bytes.push(match self.provocation {
+            Provocation::Move => 1,
+        });
+        bytes.extend_from_slice(&self.opened_unix_ms.to_be_bytes());
+        bytes.extend_from_slice(&self.deadline_unix_ms.to_be_bytes());
+        bytes
+    }
+    fn decode(bytes: &[u8; REACTION_WINDOW_BYTES]) -> Result<Self, CheckpointError> {
+        let mut offset = 0;
+        let mut take = |count: usize| {
+            let field = &bytes[offset..offset + count];
+            offset += count;
+            field
+        };
+        require(
+            take(REACTION_WINDOW_MARKER.len()) == REACTION_WINDOW_MARKER,
+            CheckpointError::InvalidReference,
+        )?;
+        let reaction =
+            RecordId::from_bytes(take(16)).map_err(|_| CheckpointError::InvalidReference)?;
+        let mut word = [0; 4];
+        word.copy_from_slice(take(4));
+        let reactor = u32::from_be_bytes(word);
+        word.copy_from_slice(take(4));
+        let provoker = u32::from_be_bytes(word);
+        let provocation = match take(1) {
+            [1] => Provocation::Move,
+            _ => return Err(CheckpointError::InvalidReference),
+        };
+        let mut time = [0; 8];
+        time.copy_from_slice(take(8));
+        let opened_unix_ms = i64::from_be_bytes(time);
+        time.copy_from_slice(take(8));
+        let window = Self {
+            reaction,
+            reactor,
+            provoker,
+            provocation,
+            opened_unix_ms,
+            deadline_unix_ms: i64::from_be_bytes(time),
+        };
+        require(
+            window.reactor != 0 && window.provoker != 0 && window.reactor != window.provoker,
+            CheckpointError::InvalidReference,
+        )?;
+        require(
+            window.opened_unix_ms >= 0
+                && window.deadline_unix_ms > window.opened_unix_ms
+                && window.deadline_unix_ms - window.opened_unix_ms <= REACTION_WINDOW_MILLIS,
+            CheckpointError::InvalidTime,
+        )?;
+        Ok(window)
+    }
+}
+
+impl TacticalSnapshot {
+    fn window_split(&self) -> Option<usize> {
+        let start = self.state.len().checked_sub(REACTION_WINDOW_BYTES)?;
+        self.state[start..]
+            .starts_with(&REACTION_WINDOW_MARKER)
+            .then_some(start)
+    }
+    /// The rules' own snapshot bytes, without the owner's reaction window.
+    pub fn rules_state(&self) -> &[u8] {
+        &self.state[..self.window_split().unwrap_or(self.state.len())]
+    }
+    /// The recorded answer window, or `None` when the snapshot carries none (every checkpoint
+    /// written before windows existed, and any snapshot not waiting on a hero reaction).
+    pub fn reaction_window(&self) -> Result<Option<ReactionWindow>, CheckpointError> {
+        let Some(start) = self.window_split() else {
+            return Ok(None);
+        };
+        let bytes = self.state[start..]
+            .try_into()
+            .map_err(|_| CheckpointError::InvalidReference)?;
+        ReactionWindow::decode(bytes).map(Some)
+    }
+    /// Replaces the rules' snapshot bytes and keeps the recorded window, if any.
+    pub fn set_rules_state(&mut self, rules: Vec<u8>) {
+        let window = self
+            .window_split()
+            .map(|start| self.state[start..].to_vec());
+        self.state = rules;
+        if let Some(window) = window {
+            self.state.extend_from_slice(&window);
+        }
+    }
+    /// Records, replaces or (with `None`) clears the answer window.
+    pub fn set_reaction_window(&mut self, window: Option<&ReactionWindow>) {
+        let end = self.window_split().unwrap_or(self.state.len());
+        self.state.truncate(end);
+        if let Some(window) = window {
+            self.state.extend_from_slice(&window.encode());
+        }
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EncounterState {
     pub id: RecordId,
@@ -1424,11 +1559,19 @@ fn validate_state(
             require(
                 !tactical.scene.is_empty()
                     && tactical.scene.len() <= 1024 * 1024
-                    && !tactical.state.is_empty()
+                    && !tactical.rules_state().is_empty()
                     && tactical.state.len() <= 1024 * 1024
                     && tactical.actors.len() == x.participants.len(),
                 CheckpointError::Capacity,
             )?;
+            if let Some(window) = tactical.reaction_window()? {
+                require(
+                    [window.reactor, window.provoker]
+                        .iter()
+                        .all(|actor| tactical.actors.iter().any(|(id, _)| id == actor)),
+                    CheckpointError::InvalidReference,
+                )?;
+            }
             unique(tactical.actors.iter().map(|(id, _)| *id))?;
             unique(tactical.actors.iter().map(|(_, entity)| *entity))?;
             require(
@@ -3473,5 +3616,73 @@ impl RetainedHeap for GameInput {
             Self::Timer(value) => value.retained_heap(),
             Self::Presentation(value) => value.retained_heap(),
         }
+    }
+}
+
+#[cfg(test)]
+mod reaction_window_tests {
+    use super::*;
+
+    fn snapshot(rules: &[u8]) -> TacticalSnapshot {
+        let label = |text| RevisionLabel::new(Some(text)).unwrap();
+        TacticalSnapshot {
+            schema: 1,
+            source_revision: label("source"),
+            scene_digest: ContentDigest([1; 32]),
+            scene: b"{}".to_vec(),
+            layout: label("layout"),
+            actors: vec![
+                (1, EntityId::from_bytes(&[1; 16]).unwrap()),
+                (3, EntityId::from_bytes(&[3; 16]).unwrap()),
+            ],
+            state: rules.to_vec(),
+        }
+    }
+    fn window(opened: i64) -> ReactionWindow {
+        ReactionWindow {
+            reaction: RecordId::from_bytes(&[7; 16]).unwrap(),
+            reactor: 1,
+            provoker: 3,
+            provocation: Provocation::Move,
+            opened_unix_ms: opened,
+            deadline_unix_ms: opened + REACTION_WINDOW_MILLIS,
+        }
+    }
+
+    #[test]
+    fn a_snapshot_written_before_reaction_windows_reads_as_rules_bytes_without_a_window() {
+        let old = snapshot(br#"{"version":2,"pending":null}"#);
+        assert_eq!(old.rules_state(), old.state.as_slice());
+        assert_eq!(old.reaction_window(), Ok(None));
+    }
+
+    #[test]
+    fn the_reaction_window_round_trips_beside_the_rules_bytes_and_clears_back_to_them() {
+        let rules = br#"{"version":2,"pending":{"actor":3}}"#;
+        let mut saved = snapshot(rules);
+        let opened = window(1_760_000_000_000);
+        saved.set_reaction_window(Some(&opened));
+        assert_eq!(saved.rules_state(), rules);
+        assert_eq!(saved.reaction_window(), Ok(Some(opened)));
+        // New rules bytes keep the window; only an explicit clear removes it.
+        saved.set_rules_state(br#"{"version":2}"#.to_vec());
+        assert_eq!(saved.rules_state(), br#"{"version":2}"#);
+        assert_eq!(saved.reaction_window(), Ok(Some(opened)));
+        saved.set_reaction_window(None);
+        assert_eq!(saved.state, br#"{"version":2}"#);
+        assert_eq!(saved.reaction_window(), Ok(None));
+    }
+
+    #[test]
+    fn a_reaction_window_longer_than_the_answer_window_or_backwards_is_refused() {
+        let mut saved = snapshot(b"{}");
+        let mut long = window(1_000);
+        long.deadline_unix_ms += 1;
+        saved.set_reaction_window(Some(&long));
+        assert_eq!(saved.reaction_window(), Err(CheckpointError::InvalidTime));
+        let mut backwards = window(1_000);
+        backwards.deadline_unix_ms = backwards.opened_unix_ms;
+        saved.set_reaction_window(Some(&backwards));
+        assert_eq!(saved.reaction_window(), Err(CheckpointError::InvalidTime));
     }
 }

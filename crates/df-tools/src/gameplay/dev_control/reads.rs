@@ -33,7 +33,8 @@ pub(super) async fn game_state(State(state): State<Arc<Shared>>, headers: Header
 async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Json<Value>)> {
     let (_, display) = display_view(state).await?;
     let revision = revision_json(display.revision.as_ref());
-    let journey = display_journey(&display);
+    let current = state.service.updates.borrow().clone();
+    let journey = display_journey_with(&display, Some(&current));
     let mut seats = Vec::new();
     for index in 0..2 {
         if let Some(seat) = seat_json(state, index).await? {
@@ -41,7 +42,7 @@ async fn state_json(state: &Shared) -> Result<Value, (axum::http::StatusCode, Js
         }
     }
     let overrides = state.overrides.lock().await;
-    let checkpoint = state.service.updates.borrow().clone();
+    let checkpoint = current;
     let history = state
         .history
         .lock()
@@ -128,6 +129,14 @@ fn stale_seat_json(index: usize, hero: Option<&str>, error: &Value) -> Value {
 }
 
 pub(super) fn display_journey(view: &rpc::ViewMessage) -> HashMap<String, Value> {
+    display_journey_with(view, None)
+}
+
+/// `display_journey`, with the pending reaction read from `current` when the caller has it.
+fn display_journey_with(
+    view: &rpc::ViewMessage,
+    current: Option<&Checkpoint>,
+) -> HashMap<String, Value> {
     let mut out = HashMap::new();
     let Some(rpc::view_message::Audience::Display(display)) = view.audience.as_ref() else {
         return out;
@@ -155,7 +164,7 @@ pub(super) fn display_journey(view: &rpc::ViewMessage) -> HashMap<String, Value>
             journey
                 .combat
                 .as_ref()
-                .map(combat_json)
+                .map(|combat| combat_json(combat, current))
                 .unwrap_or(json!(null)),
         );
         out.insert("table_choices".to_owned(), json!(journey.table_choices));
@@ -446,13 +455,46 @@ fn cell_name(cell: &rpc::GridCell) -> String {
     format!("c{}r{}", cell.col + 1, cell.row + 1)
 }
 
-fn combat_json(combat: &rpc::CombatView) -> Value {
+/// The reaction the fight is waiting on (P6-80): who may react, what provoked it, and the
+/// server's deadline. The deadline is read from `current` when the caller has the checkpoint;
+/// from the view alone it is `null` and only the projected countdown is known.
+fn pending_reaction_json(
+    combat: &rpc::CombatView,
+    names: &HashMap<Vec<u8>, String>,
+    current: Option<&Checkpoint>,
+) -> Option<Value> {
+    if combat.reaction_participant_id.is_empty() {
+        return None;
+    }
+    let pending = current.and_then(|current| journey::tactical::pending_reaction(current).ok()?);
+    let Some(pending) = pending else {
+        return Some(json!({
+            "reactor": names.get(&combat.reaction_participant_id).cloned().unwrap_or_default(),
+            "provoking_actor": names.get(&combat.active_participant_id).cloned().unwrap_or_default(),
+            "provoking_action": "move",
+            "deadline_unix_ms": null,
+            "seconds_remaining": combat.reaction_seconds_remaining,
+        }));
+    };
+    let seconds = journey::tactical::unix_now_ms()
+        .ok()
+        .map(|now| journey::tactical::reaction_seconds_remaining(pending.window.as_ref(), now));
+    Some(json!({
+        "reactor": pending.reactor_name,
+        "provoking_actor": pending.provoker_name,
+        "provoking_action": pending.provocation_name(),
+        "deadline_unix_ms": pending.window.map(|window| window.deadline_unix_ms),
+        "seconds_remaining": seconds.unwrap_or(combat.reaction_seconds_remaining),
+    }))
+}
+
+fn combat_json(combat: &rpc::CombatView, current: Option<&Checkpoint>) -> Value {
     let names: HashMap<Vec<u8>, String> = combat
         .participants
         .iter()
         .map(|member| (member.participant_id.clone(), member.name.clone()))
         .collect();
-    json!({
+    let mut value = json!({
         "round": combat.round,
         "latest_sequence":combat.latest_sequence, "released_sequence":combat.released_sequence,
         "own_budget":combat.own_budget.as_ref().map(|budget|json!({"movement_ft":budget.movement_ft,"action":budget.action,"bonus_action":budget.bonus_action,"reaction":budget.reaction})),
@@ -479,7 +521,14 @@ fn combat_json(combat: &rpc::CombatView) -> Value {
             "name": save.name, "successes": save.successes, "failures": save.failures,
             "stable": save.stable, "dead": save.dead,
         })).collect::<Vec<_>>(),
-    })
+    });
+    if let (Some(pending), Some(object)) = (
+        pending_reaction_json(combat, &names, current),
+        value.as_object_mut(),
+    ) {
+        object.insert("pending_reaction".to_owned(), pending);
+    }
+    value
 }
 
 fn attitude_name(attitude: u32) -> &'static str {
@@ -665,7 +714,7 @@ fn journey_json(journey: &rpc::JourneyView, include_private_character: bool) -> 
             "identity_groups": creation.identity_groups.iter().map(group_json).collect::<Vec<_>>(),
             "default_identity": creation.default_identity.as_ref().map(identity_json),
         })).unwrap_or(json!(null)),
-        "combat": journey.combat.as_ref().map(combat_json).unwrap_or(json!(null)),
+        "combat": journey.combat.as_ref().map(|combat| combat_json(combat, None)).unwrap_or(json!(null)),
         "speaker": journey.speaker,
         "dialogue": journey.dialogue,
         "table_log": journey.table_log.iter().map(line_json).collect::<Vec<_>>(),

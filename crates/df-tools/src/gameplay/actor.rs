@@ -555,12 +555,53 @@ impl df_session::submission::SessionEngine<NativeScope<LocalDemoAuthority>> for 
             scope,
             input,
         )
+        .map(with_reaction_window)
     }
     fn validate_recovery(&mut self, checkpoint: &Checkpoint) -> Result<(), RepositoryError> {
         df_session::submission::SessionEngine::<NativeScope<LocalDemoAuthority>>::validate_recovery(
             &mut model::HarborEngine,
             checkpoint,
         )
+    }
+}
+/// Opens the answer window of a hero reaction offer the decision opened, at the owner's clock,
+/// before the decision commits; the rules stay clock-free. A failure leaves the candidate as
+/// it is: the owner then times the offer from when it first sees it.
+fn with_reaction_window(candidate: Checkpoint) -> Checkpoint {
+    use super::journey::tactical;
+    let stamped = tactical::unix_now_ms()
+        .and_then(|now| tactical::stamp_reaction_window(&candidate, now))
+        .and_then(|stamped| {
+            let opened = match &stamped {
+                Some(stamped) => tactical::pending_reaction(stamped)?,
+                None => None,
+            };
+            Ok((stamped, opened))
+        });
+    match stamped {
+        Ok((Some(stamped), opened)) => {
+            if let Some(pending) = opened
+                && let Some(window) = pending.window
+            {
+                record_audit_line(
+                    "gameplay.reaction_window",
+                    format!(
+                        "REACTION window hero={:?} provoker={:?} action={} opened_ms={} deadline_ms={}",
+                        pending.reactor_name,
+                        pending.provoker_name,
+                        pending.provocation_name(),
+                        window.opened_unix_ms,
+                        window.deadline_unix_ms
+                    ),
+                );
+            }
+            stamped
+        }
+        Ok((None, _)) => candidate,
+        Err(error) => {
+            record_unavailable("reaction-window", &format!("{error:?}"));
+            candidate
+        }
     }
 }
 pub(super) type Owner = DurableOwner<PostgresRepository<LocalDemoAuthority>, Engine, Publication>;
@@ -634,12 +675,15 @@ pub(super) struct SessionState {
     /// Keeps the owner lease and access grants alive while nobody is acting.
     pub(super) heartbeat: super::session_recovery::Heartbeat,
     pub(super) seat_clock: super::room::SeatClock,
+    /// Times hero reaction offers and declines one whose window runs out (P6-80).
+    pub(super) reaction: ReactionTimer,
 }
 
 impl Default for SessionState {
     fn default() -> Self {
         Self {
             seat_clock: super::room::SeatClock::default(),
+            reaction: ReactionTimer::default(),
             attempt: None,
             commit_millis: 0,
             fence: None,
@@ -648,6 +692,117 @@ impl Default for SessionState {
             ),
         }
     }
+}
+
+/// How long the owner waits before it tries again an expiry decline it could not send.
+const REACTION_EXPIRY_RETRY: Duration = Duration::from_secs(5);
+
+/// The owner's clock for hero reaction offers (P6-80). The window itself is recorded in the
+/// checkpoint when the offer opens; this keeps only what the owner needs to act on it.
+#[derive(Default)]
+pub(super) struct ReactionTimer {
+    /// The latest live player credential of each member, so that a decline for a hero whose
+    /// window ran out goes through the same submit path as the hero's own answer.
+    credentials: std::collections::HashMap<[u8; 16], [u8; 32]>,
+    /// The window of an offer whose checkpoint records none (one written before windows
+    /// existed, or a development candidate): it runs from when this owner first saw the offer.
+    fallback: Option<(df_model::checkpoint::RecordId, i64)>,
+    /// The earliest next attempt after an expiry decline that could not be sent.
+    retry_after: Option<(df_model::checkpoint::RecordId, Instant)>,
+    /// The offer whose expiry decline is being submitted right now.
+    expiring: Option<super::journey::tactical::PendingReaction>,
+}
+impl ReactionTimer {
+    /// The most members whose credentials are kept; a room never seats more.
+    const CREDENTIALS: usize = 16;
+
+    fn remember(&mut self, member: df_types::MemberId, credential: [u8; 32]) {
+        if self.credentials.len() < Self::CREDENTIALS
+            || self.credentials.contains_key(member.as_bytes())
+        {
+            self.credentials.insert(*member.as_bytes(), credential);
+        }
+    }
+    /// The deadline of this offer: the recorded one, else the window this owner started.
+    fn deadline(&self, pending: &super::journey::tactical::PendingReaction) -> Option<i64> {
+        pending
+            .window
+            .map(|window| window.deadline_unix_ms)
+            .or_else(|| {
+                self.fallback
+                    .filter(|(reaction, _)| *reaction == pending.reaction)
+                    .map(|(_, deadline)| deadline)
+            })
+    }
+    /// When the owner must next look at the pending offer: its deadline, no earlier than a
+    /// scheduled retry, or at once for an offer without a window yet.
+    fn wake_at(
+        &self,
+        pending: Option<&super::journey::tactical::PendingReaction>,
+        now: Instant,
+        now_unix_ms: i64,
+    ) -> Option<Instant> {
+        let pending = pending?;
+        let Some(deadline) = self.deadline(pending) else {
+            return Some(now);
+        };
+        let wait = u64::try_from(deadline.saturating_sub(now_unix_ms)).unwrap_or_default();
+        let due = now + Duration::from_millis(wait);
+        Some(match self.retry_after {
+            Some((reaction, retry)) if reaction == pending.reaction => due.max(retry),
+            _ => due,
+        })
+    }
+    /// The deadline of an offer whose window has run out and whose decline may be sent now.
+    /// An offer without a recorded window starts its window here, at `now_unix_ms`.
+    fn due(
+        &mut self,
+        pending: Option<&super::journey::tactical::PendingReaction>,
+        now: Instant,
+        now_unix_ms: i64,
+    ) -> Option<i64> {
+        let current = pending.map(|pending| pending.reaction);
+        self.fallback = self
+            .fallback
+            .filter(|(reaction, _)| Some(*reaction) == current);
+        self.retry_after = self
+            .retry_after
+            .filter(|(reaction, _)| Some(*reaction) == current);
+        let pending = pending?;
+        let Some(deadline) = self.deadline(pending) else {
+            let deadline = now_unix_ms.saturating_add(df_model::checkpoint::REACTION_WINDOW_MILLIS);
+            self.fallback = Some((pending.reaction, deadline));
+            record_audit_line(
+                "gameplay.reaction_window",
+                format!(
+                    "REACTION window hero={:?} provoker={:?} deadline_ms={deadline} source=owner-start",
+                    pending.reactor_name, pending.provoker_name
+                ),
+            );
+            return None;
+        };
+        let waiting = self.retry_after.is_some_and(|(_, retry)| now < retry);
+        (now_unix_ms >= deadline && !waiting).then_some(deadline)
+    }
+    fn retry_later(&mut self, reaction: df_model::checkpoint::RecordId, now: Instant) {
+        self.retry_after = Some((reaction, now + REACTION_EXPIRY_RETRY));
+    }
+}
+
+/// The hero's own table line of a decline the owner sent because the window ran out: the hero
+/// let the provoking combatant pass. The other lines of the resolution are unchanged.
+fn expired_reaction_lines(
+    mut lines: Vec<super::table_log::ActionLine>,
+    hero: &str,
+    provoker: &str,
+) -> Vec<super::table_log::ActionLine> {
+    if let Some(line) = lines.iter_mut().find(|line| line.speaker == hero) {
+        line.text = format!(
+            "lets {provoker} pass without an opportunity attack: no answer within {} seconds",
+            df_model::checkpoint::REACTION_WINDOW_MILLIS / 1000
+        );
+    }
+    lines
 }
 
 pub(super) struct Actor {
@@ -1225,10 +1380,106 @@ impl Actor {
             recovery,
             heartbeat,
             (!self.session_lost()).then_some(self.session.seat_clock.next_poll),
+            self.reaction_wake(),
         ]
         .into_iter()
         .flatten()
         .min()
+    }
+
+    /// When the pending hero reaction offer's window runs out, if one is pending.
+    fn reaction_wake(&self) -> Option<Instant> {
+        if self.fenced || self.session_lost() {
+            return None;
+        }
+        let pending = super::journey::tactical::pending_reaction(self.owner.checkpoint()).ok()?;
+        let now_unix_ms = super::journey::tactical::unix_now_ms().ok()?;
+        self.session
+            .reaction
+            .wake_at(pending.as_ref(), Instant::now(), now_unix_ms)
+    }
+
+    /// Declines the pending hero reaction offer whose window has run out, through the same
+    /// admission and commit path as the hero's own "Let it go": the interrupted turn resumes.
+    /// An answer that committed first leaves nothing pending here, so this does nothing.
+    fn expire_reaction_if_due(&mut self) {
+        use super::journey::tactical;
+        if self.fenced || self.session_lost() {
+            return;
+        }
+        let now = Instant::now();
+        let read = tactical::pending_reaction(self.owner.checkpoint())
+            .and_then(|pending| tactical::unix_now_ms().map(|now_unix_ms| (pending, now_unix_ms)));
+        let (pending, now_unix_ms) = match read {
+            Ok(read) => read,
+            Err(error) => {
+                record_unavailable("reaction-window", &format!("{error:?}"));
+                return;
+            }
+        };
+        let Some(deadline) = self
+            .session
+            .reaction
+            .due(pending.as_ref(), now, now_unix_ms)
+        else {
+            return;
+        };
+        let Some(pending) = pending else {
+            return;
+        };
+        let expiry_line = |answer: &str| {
+            format!(
+                "REACTION expired hero={:?} provoker={:?} deadline_ms={deadline} late_ms={} answer={answer}",
+                pending.reactor_name,
+                pending.provoker_name,
+                now_unix_ms.saturating_sub(deadline)
+            )
+        };
+        let Some(&credential) = self
+            .session
+            .reaction
+            .credentials
+            .get(pending.member.as_bytes())
+        else {
+            self.session.reaction.retry_later(pending.reaction, now);
+            record_audit_line(
+                "gameplay.reaction_expired",
+                expiry_line("waiting reason=no-seat-credential"),
+            );
+            return;
+        };
+        let request =
+            match tactical::expired_reaction_decline(self.owner.checkpoint(), &pending, deadline) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.session.reaction.retry_later(pending.reaction, now);
+                    record_unavailable("reaction-expiry", &format!("{error:?}"));
+                    return;
+                }
+            };
+        // The ordinary call path repairs a closed grant connection first; so does this one.
+        if let Err(error) = self.issuer.reconnect_if_closed() {
+            self.session.reaction.retry_later(pending.reaction, now);
+            record_audit_line(
+                "gameplay.reaction_expired",
+                expiry_line(&format!("waiting reason=reconnect-{error:?}")),
+            );
+            return;
+        }
+        let _cleared = refusal_detail::take();
+        self.session.reaction.expiring = Some(pending.clone());
+        let result = self.submit(credential, request);
+        self.session.reaction.expiring = None;
+        let answer = if accepted_now(&result) {
+            "declined".to_owned()
+        } else {
+            self.session.reaction.retry_later(pending.reaction, now);
+            match &result {
+                Ok(response) => format!("refused outcome={:?}", response.outcome),
+                Err(status) => format!("unavailable status={:?}", status.message()),
+            }
+        };
+        record_audit_line("gameplay.reaction_expired", expiry_line(&answer));
     }
 
     /// Renews the session lease and grants when the heartbeat is due. Called at every wake and
@@ -1290,6 +1541,7 @@ impl Actor {
         {
             self.run_committed_intents();
         }
+        self.expire_reaction_if_due();
     }
 
     /// Whether the saved state was lost and only a restart can help.
@@ -2568,7 +2820,10 @@ impl Actor {
             ));
         }
 
-        self.seat_activity(&credential)?;
+        // An expiry decline is the owner's, not a sign that the silent hero is back.
+        if self.session.reaction.expiring.is_none() {
+            self.seat_activity(&credential)?;
+        }
         let principal = self.issuer.principal(&credential).map_err(unavailable)?;
         if principal == df_persistence::local_demo_scope::PLAYER {
             return Err(tonic::Status::permission_denied(
@@ -2577,6 +2832,7 @@ impl Actor {
         }
         let member = df_types::MemberId::from_bytes(&principal)
             .map_err(|_| tonic::Status::permission_denied("member binding invalid"))?;
+        self.session.reaction.remember(member, credential);
         self.validate_trade_quote_receipt(member, &request)?;
         if rpc::GameplayActionKind::try_from(request.action_kind)
             == Ok(rpc::GameplayActionKind::SetTableSetting)
@@ -3180,6 +3436,12 @@ impl Actor {
                 None => (rpc::TableRole::Npc, 0),
             }
         };
+        let action_lines = match &self.session.reaction.expiring {
+            Some(pending) if kind == rpc::GameplayActionKind::DeclineReaction => {
+                expired_reaction_lines(action_lines, &hero, &pending.provoker_name)
+            }
+            _ => action_lines,
+        };
         let mut reservation = Some(reservation);
         for line in action_lines {
             let (role, hero_index) = role_of(&line.speaker);
@@ -3536,6 +3798,9 @@ impl Actor {
         let principal = self.issuer.principal(&credential).map_err(unavailable)?;
         let current = self.owner.checkpoint();
         let member = watch_scope_identity(current.basis(), role, principal, &request)?;
+        if role == LocalDemoRole::Player {
+            self.session.reaction.remember(member, credential);
+        }
         let scene = super::beat_script_runtime::scene(current.state()).map_err(unavailable)?;
         if let Some(snapshot) =
             super::journey::living_scene::snapshot(current.state(), &scene).map_err(unavailable)?
@@ -4450,5 +4715,151 @@ mod telemetry_identity_tests {
             );
         }
         assert_eq!(basis, current.basis());
+    }
+}
+
+#[cfg(test)]
+mod reaction_timer_tests {
+    use super::super::journey::tactical::PendingReaction;
+    use super::*;
+    use df_model::checkpoint::{Provocation, REACTION_WINDOW_MILLIS, ReactionWindow, RecordId};
+
+    /// The owner's wall clock at the start of each test: controlled, never read.
+    const NOW_MS: i64 = 1_760_000_000_000;
+
+    fn pending(reaction: u8, recorded_deadline: Option<i64>) -> PendingReaction {
+        let reaction = RecordId::from_bytes(&[reaction; 16]).unwrap();
+        PendingReaction {
+            reaction,
+            member: df_types::MemberId::from_bytes(&[0x11; 16]).unwrap(),
+            reactor_name: "Brakka".to_owned(),
+            provoker_name: "Bandit 1".to_owned(),
+            provocation: Provocation::Move,
+            window: recorded_deadline.map(|deadline| ReactionWindow {
+                reaction,
+                reactor: 1,
+                provoker: 3,
+                provocation: Provocation::Move,
+                opened_unix_ms: deadline - REACTION_WINDOW_MILLIS,
+                deadline_unix_ms: deadline,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_recorded_window_wakes_and_expires_at_its_deadline_and_not_before() {
+        let mut timer = ReactionTimer::default();
+        let start = Instant::now();
+        let deadline = NOW_MS + REACTION_WINDOW_MILLIS;
+        let offer = pending(1, Some(deadline));
+        assert_eq!(
+            timer.wake_at(Some(&offer), start, NOW_MS),
+            Some(start + Duration::from_millis(17_000))
+        );
+        let late = start + Duration::from_millis(16_999);
+        assert_eq!(timer.due(Some(&offer), late, deadline - 1), None);
+        let at = start + Duration::from_millis(17_000);
+        assert_eq!(timer.due(Some(&offer), at, deadline), Some(deadline));
+        // A reload later than the deadline expires at once, against the same deadline.
+        assert_eq!(timer.wake_at(Some(&offer), at, deadline + 60_000), Some(at));
+    }
+
+    #[test]
+    fn an_offer_answered_before_its_deadline_leaves_nothing_to_expire() {
+        let mut timer = ReactionTimer::default();
+        let start = Instant::now();
+        let deadline = NOW_MS + REACTION_WINDOW_MILLIS;
+        let offer = pending(1, Some(deadline));
+        assert_eq!(timer.due(Some(&offer), start, deadline - 1), None);
+        // The hero's answer committed a millisecond before the deadline: nothing is pending.
+        assert_eq!(timer.due(None, start, deadline), None);
+        assert_eq!(timer.wake_at(None, start, deadline), None);
+        // A new offer, even to the same hero, has its own window.
+        let next = pending(2, Some(deadline + 5_000));
+        assert_eq!(timer.due(Some(&next), start, deadline), None);
+    }
+
+    #[test]
+    fn an_offer_without_a_recorded_window_gets_seventeen_seconds_from_when_the_owner_loads_it() {
+        let mut timer = ReactionTimer::default();
+        let start = Instant::now();
+        let offer = pending(1, None);
+        // Seen for the first time: wake at once to start the window.
+        assert_eq!(timer.wake_at(Some(&offer), start, NOW_MS), Some(start));
+        assert_eq!(timer.due(Some(&offer), start, NOW_MS), None);
+        assert_eq!(
+            timer.wake_at(Some(&offer), start, NOW_MS),
+            Some(start + Duration::from_millis(17_000))
+        );
+        let later = start + Duration::from_millis(17_000);
+        assert_eq!(timer.due(Some(&offer), later, NOW_MS + 16_999), None);
+        assert_eq!(
+            timer.due(Some(&offer), later, NOW_MS + 17_000),
+            Some(NOW_MS + 17_000)
+        );
+        // Another offer drops the started window.
+        assert_eq!(
+            timer.due(Some(&pending(2, None)), later, NOW_MS + 17_000),
+            None
+        );
+        assert_eq!(timer.deadline(&offer), None);
+    }
+
+    #[test]
+    fn an_expiry_that_could_not_be_sent_waits_before_trying_again() {
+        let mut timer = ReactionTimer::default();
+        let start = Instant::now();
+        let deadline = NOW_MS;
+        let offer = pending(1, Some(deadline));
+        assert_eq!(timer.due(Some(&offer), start, deadline), Some(deadline));
+        timer.retry_later(offer.reaction, start);
+        assert_eq!(
+            timer.wake_at(Some(&offer), start, deadline),
+            Some(start + REACTION_EXPIRY_RETRY)
+        );
+        assert_eq!(
+            timer.due(Some(&offer), start + Duration::from_secs(4), deadline),
+            None
+        );
+        assert_eq!(
+            timer.due(Some(&offer), start + REACTION_EXPIRY_RETRY, deadline),
+            Some(deadline)
+        );
+    }
+
+    #[test]
+    fn an_expired_decline_reads_that_the_hero_let_the_enemy_pass() {
+        use rpc::GameplayActionKind as K;
+        let enemy_move = rpc::CombatOutcome {
+            actor_name: "Bandit 1".to_owned(),
+            kind: rpc::OutcomeKind::Move as i32,
+            path: vec![rpc::GridCell { col: 2, row: 2 }],
+            cost_ft: 5,
+            ..Default::default()
+        };
+        let lines = super::super::table_log::action_lines(
+            K::DeclineReaction,
+            "Brakka",
+            &[enemy_move],
+            "greatsword",
+            "the harbor",
+            "Decline opportunity attack",
+        );
+        assert_eq!(lines[0].text, "declines opportunity attack");
+        let expired = expired_reaction_lines(lines, "Brakka", "Bandit 1");
+        let told = expired
+            .iter()
+            .map(|line| (line.speaker.as_str(), line.text.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            told,
+            [
+                (
+                    "Brakka",
+                    "lets Bandit 1 pass without an opportunity attack: no answer within 17 seconds"
+                ),
+                ("Bandit 1", "moves 1 square (5 ft)"),
+            ]
+        );
     }
 }
