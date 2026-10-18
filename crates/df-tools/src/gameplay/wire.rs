@@ -1285,10 +1285,19 @@ pub(super) fn project_journey(
     use super::pack::{self, SceneKey};
     let authored = stage("view-scene", super::beat_script_runtime::scene(state))?;
     if let Some(view) = combat.as_mut() {
-        view.battle_world = authored.setting.as_ref().and_then(|place| {
+        let world_place = if journey::scene_fight::open(state) {
+            stage("view-fight-arena", journey::scene_fight::world_place(state))?
+        } else {
+            authored
+                .setting
+                .as_ref()
+                .map(|place| place.place_id.clone())
+                .filter(|place| super::fight_foresight::approved_large_arena(place))
+        };
+        view.battle_world = world_place.as_deref().and_then(|place| {
             super::splat_world::battle_world(
                 role == LocalDemoRole::Display && !view.finished,
-                super::splat_world::ready_world(&place.place_id),
+                super::splat_world::ready_world(place),
             )
         });
     }

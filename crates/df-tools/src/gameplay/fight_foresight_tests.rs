@@ -11,8 +11,11 @@ impl Jev for FakeJev {
         state: &'a serde_json::Value,
         choices: &'a [String],
     ) -> ChoiceFuture<'a> {
-        assert_eq!(state["place_id"], "shop");
-        assert_eq!(choices.len(), 3);
+        assert!(state["place_id"].is_string());
+        assert_eq!(
+            choices.last().unwrap(),
+            "likely | no large arena (flat view)"
+        );
         Box::pin(async { self.0 })
     }
 }
@@ -30,19 +33,19 @@ fn shop() -> Place {
 }
 
 #[tokio::test]
-async fn likely_requests_here_once_per_place_per_run() {
+async fn large_hall_requests_here_once_per_place_per_run() {
     let foresight = FightForesight::new(Box::new(FakeJev(Ok(1))));
     let requests = Mutex::new(Vec::new());
     for _ in 0..3 {
         foresight
-            .after_line(&shop(), &[], |spec| {
+            .after_line(&hall(), &[], |spec| {
                 requests.lock().unwrap().push(spec.place_id().to_owned());
                 true
             })
             .await;
     }
-    assert_eq!(*requests.lock().unwrap(), ["shop"]);
-    assert_eq!(foresight.proposed_arena("shop").as_deref(), Some("shop"));
+    assert_eq!(*requests.lock().unwrap(), ["hall"]);
+    assert_eq!(foresight.proposed_arena("hall").as_deref(), Some("hall"));
 }
 
 #[tokio::test]
@@ -57,6 +60,37 @@ async fn likely_outside_requests_only_the_chosen_exit_destination() {
         .await;
     assert_eq!(requests, ["street"]);
     assert_eq!(foresight.proposed_arena("shop").as_deref(), Some("street"));
+}
+
+#[tokio::test]
+async fn an_unnamed_large_exit_never_spends_on_a_placeholder_place_id() {
+    let foresight = FightForesight::new(Box::new(FakeJev(Ok(2))));
+    let mut place = shop();
+    place.exits[0].place_id = crate::gameplay::place::UNNAMED.to_owned();
+    foresight
+        .after_line(&place, &[], |_| {
+            panic!("a canonical destination is required")
+        })
+        .await;
+    assert_eq!(foresight.proposed_arena("shop"), None);
+    assert_eq!(
+        foresight
+            .state
+            .lock()
+            .unwrap()
+            .selected_exits
+            .get("shop")
+            .map(String::as_str),
+        Some("door")
+    );
+    assert!(
+        !foresight
+            .state
+            .lock()
+            .unwrap()
+            .requested
+            .contains(crate::gameplay::place::UNNAMED)
+    );
 }
 
 #[tokio::test]
@@ -81,14 +115,86 @@ async fn unavailable_resource_service_is_attempted_only_once_per_run() {
     let mut tries = 0;
     for _ in 0..2 {
         foresight
-            .after_line(&shop(), &[], |_| {
+            .after_line(&hall(), &[], |_| {
                 tries += 1;
                 false
             })
             .await;
     }
     assert_eq!(tries, 1);
-    assert!(foresight.state.lock().unwrap().requested.contains("shop"));
+    assert!(foresight.state.lock().unwrap().requested.contains("hall"));
+}
+
+fn hall() -> Place {
+    Place {
+        id: "hall".to_owned(),
+        facts: vec!["A spacious assembly hall with ample floor for combat".to_owned()],
+        exits: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn small_room_without_a_large_exit_uses_flat_and_revokes_an_old_proposal() {
+    let foresight = FightForesight::new(Box::new(FakeJev(Ok(2))));
+    foresight.after_line(&shop(), &[], |_| true).await;
+    assert_eq!(foresight.proposed_arena("shop").as_deref(), Some("street"));
+    let mut closed = shop();
+    closed.exits.clear();
+    // With no exits, index 2 is the explicit no-large-arena verdict.
+    foresight
+        .after_line(&closed, &[], |_| {
+            panic!("small rooms never request a world")
+        })
+        .await;
+    assert_eq!(foresight.proposed_arena("shop"), None);
+}
+
+struct PendingJev(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Jev for PendingJev {
+    fn forecast<'a>(&'a self, state: &'a serde_json::Value, _: &'a [String]) -> ChoiceFuture<'a> {
+        assert_eq!(state["fight_starting"], true);
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test]
+async fn an_unforecast_opening_times_out_once_and_never_dispatches_a_world() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let foresight = FightForesight::new(Box::new(PendingJev(calls.clone())));
+    assert_eq!(
+        foresight
+            .opening(&shop(), |_| panic!("no world after timeout"))
+            .await,
+        None
+    );
+    assert_eq!(
+        foresight
+            .opening(&shop(), |_| panic!("no retry world"))
+            .await,
+        None
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn unforecast_opening_asks_for_an_arena_once_and_existing_forecast_is_reused() {
+    let foresight = FightForesight::new(Box::new(FakeJev(Ok(2))));
+    let mut requested = Vec::new();
+    for _ in 0..2 {
+        assert_eq!(
+            foresight
+                .opening(&shop(), |spec| {
+                    requested.push(spec.place_id().to_owned());
+                    true
+                })
+                .await
+                .as_deref(),
+            Some("street")
+        );
+    }
+    assert_eq!(requested, ["street"]);
 }
 
 struct RecordingJev(tokio::sync::mpsc::Sender<serde_json::Value>);

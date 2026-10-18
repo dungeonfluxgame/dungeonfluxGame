@@ -4321,6 +4321,30 @@ impl Service {
             .map_err(|_| {
                 Status::failed_precondition("scene assault unavailable: nobody to fight")
             })?;
+        super::fight_foresight::prepare_opening(&current).await;
+        if self.updates.borrow().basis() != current.basis() {
+            return Err(Status::failed_precondition(
+                "fight source changed; retain the attack operation",
+            ));
+        }
+        if let Some(operation) = origin
+            .operation_id
+            .as_ref()
+            .and_then(|operation| operation.value.as_deref())
+            .and_then(|bytes| OperationId::from_bytes(bytes).ok())
+            && let Err(error) = self.prepare_fight_arena(&current, operation).await
+        {
+            let reason = match error {
+                super::place_move::MoveError::Refused(reason) => reason.label().to_owned(),
+                super::place_move::MoveError::Status(status) => status.to_string(),
+            };
+            actor::record_unavailable("fight-arena-preparation", &reason);
+        }
+        if self.updates.borrow().basis() != current.basis() {
+            return Err(Status::failed_precondition(
+                "fight source changed; retain the attack operation",
+            ));
+        }
         let submit = rpc::SubmitActionRequest {
             session_id: origin.session_id,
             run_id: origin.run_id,
@@ -4344,6 +4368,7 @@ impl Service {
         // combat rows the owner publishes while it commits, and dropped if the fight is refused.
         let (lines, audit) = journey::scene_fight::announce(&hero, &plan);
         let held = self.table_log.reserve_lines(lines.len());
+        let arena_row = self.table_log.reserve();
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::Submit {
@@ -4367,6 +4392,24 @@ impl Service {
         ) {
             return Err(Status::failed_precondition("attack was refused"));
         }
+        if receipt.replayed {
+            return Ok(SceneFightStart {
+                receipt: *receipt,
+                plan,
+                narration: String::new(),
+            });
+        }
+        let committed = self.updates.borrow().clone();
+        if committed.basis().session != current.basis().session
+            || committed.basis().run != current.basis().run
+            || receipt.revision != Some(wire::revision(committed.basis().revision))
+        {
+            return Err(Status::unavailable(
+                "retain the attack operation for lookup",
+            ));
+        }
+        let arena_line =
+            journey::scene_fight::arena_narration(committed.state()).map_err(actor::unavailable)?;
         // The owner has committed the fight: the people it touched now remember it.
         let recorded = journey::scene_fight::record_consequences(
             &self.social,
@@ -4394,10 +4437,23 @@ impl Service {
                 line,
             );
         }
+        let mut narration = lines.join(" ");
+        if let Some(line) = arena_line {
+            self.table_log.push_reserved(
+                arena_row,
+                "Narrator",
+                rpc::TableRole::Narrator,
+                0,
+                rpc::TableKind::Action,
+                &line,
+            );
+            narration.push(' ');
+            narration.push_str(&line);
+        }
         Ok(SceneFightStart {
             receipt: *receipt,
             plan,
-            narration: lines.join(" "),
+            narration,
         })
     }
 

@@ -1499,3 +1499,6 @@ fn a_replay_reads_the_place_the_party_stood_in_when_a_decision_was_made() {
         );
     });
 }
+
+#[path = "arena_opening_tests.rs"]
+mod arena_opening_tests;

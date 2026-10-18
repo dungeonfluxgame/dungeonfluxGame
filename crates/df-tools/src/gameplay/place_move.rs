@@ -585,6 +585,44 @@ impl Service {
         self.commit_prepared(credential, prepared).await
     }
 
+    /// Prepares the forecast's ordinary exit destination without committing a separate move.
+    /// The assault owner validates and journals the retained destination with the fight.
+    pub(super) async fn prepare_fight_arena(
+        &self,
+        current: &Checkpoint,
+        operation: OperationId,
+    ) -> Result<(), MoveError> {
+        let scene = beat_script_runtime::scene(current.state()).map_err(state_failure)?;
+        let source = place::whereabouts(current.state(), &scene)
+            .map_err(state_failure)?
+            .here;
+        let Some(exit) = super::fight_foresight::proposed_exit(&source) else {
+            return Ok(());
+        };
+        if self.updates.borrow().basis() != current.basis() {
+            return Err(tonic::Status::failed_precondition("fight source changed").into());
+        }
+        let prepared = tokio::time::timeout(
+            CREATION_DEADLINE,
+            self.prepare_move(operation, MoveTarget::Exit(exit.clone()), ""),
+        )
+        .await
+        .map_err(|_| {
+            audit_refusal(&source, &exit, "arena_creation_deadline");
+            MoveError::Refused(PlaceRefusal::CreationUnavailable)
+        })??;
+        if self.updates.borrow().basis() != current.basis() || prepared.from != source {
+            return Err(tonic::Status::failed_precondition("fight source changed").into());
+        }
+        if let Some(record) = prepared.created
+            && !super::fight_foresight::retain_destination(&source, record)
+        {
+            audit_refusal(&source, &exit, "arena_destination_not_retained");
+            return Err(PlaceRefusal::CreationUnavailable.into());
+        }
+        Ok(())
+    }
+
     /// Resolves where a move goes and makes the place when it is new; nothing is committed here.
     async fn prepare_move(
         &self,

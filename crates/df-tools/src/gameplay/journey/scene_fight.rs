@@ -18,6 +18,7 @@ use super::*;
 use crate::gameplay::adventure::dossier::Attitude;
 use crate::gameplay::social::SocialLedger;
 use df_rules::tactical as tactical_rules;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tactical_rules::{Battle, Side};
 
@@ -90,6 +91,33 @@ fn cast_in(state: &GameState) -> Result<Vec<pack::SceneCastMember>, RepositoryEr
 /// filters those people out for conversation, but fight narration/validation still needs them.
 fn scene_cast(state: &GameState) -> Result<Vec<pack::SceneCastMember>, RepositoryError> {
     let scene = super::super::beat_script_runtime::scene(state)?;
+    // A spill keeps the source's fighters/bystanders; the destination's local cast does not
+    // replace them merely because the party's place overlay has changed.
+    if let Some(entry) = opening_move(state)? {
+        if let Some(record) = crate::gameplay::place::created(state)?.remove(&entry.change.from) {
+            return Ok(record.expand().map_err(bad)?.cast);
+        }
+        return pack::with_content(|content| {
+            content
+                .scenes
+                .iter()
+                .chain(
+                    content
+                        .beat_script
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|script| script.scenes.values()),
+                )
+                .find(|source| {
+                    source
+                        .setting
+                        .as_ref()
+                        .is_some_and(|setting| setting.place_id == entry.change.from)
+                })
+                .map(|source| source.cast.clone())
+                .ok_or(RepositoryError::InvalidCandidate)
+        });
+    }
     if let Some(setting) = scene.setting
         && let Some(record) = crate::gameplay::place::created(state)?.remove(&setting.place_id)
     {
@@ -917,6 +945,30 @@ pub(super) fn stage_assault(
     command: &CommandInput,
     supplier: DiceSource<'_>,
 ) -> Result<Checkpoint, RepositoryError> {
+    let scene = super::super::beat_script_runtime::scene(current.state())?;
+    let proposed = scene
+        .setting
+        .as_ref()
+        .and_then(|setting| crate::gameplay::fight_foresight::proposed_arena(&setting.place_id));
+    let destination = scene.setting.as_ref().and_then(|setting| {
+        crate::gameplay::fight_foresight::proposed_destination(&setting.place_id)
+    });
+    stage_assault_at(
+        current,
+        command,
+        supplier,
+        proposed.as_deref(),
+        destination.as_ref(),
+    )
+}
+
+fn stage_assault_at(
+    current: &Checkpoint,
+    command: &CommandInput,
+    supplier: DiceSource<'_>,
+    proposed: Option<&str>,
+    created: Option<&crate::gameplay::place::PlaceRecord>,
+) -> Result<Checkpoint, RepositoryError> {
     use session_machine::{Event, SessionState};
     let refuse = |step: &'static str| {
         refusal_detail::note(step);
@@ -929,8 +981,6 @@ pub(super) fn stage_assault(
     let transition =
         session_machine::next(machine, Event::StartFight).map_err(|_| refuse("session-machine"))?;
     let fight = fight_of(current, command)?.ok_or_else(|| refuse("scene-fight-command"))?;
-    let battle_scene =
-        pack::scene_assault_battle().ok_or_else(|| refuse("scene-fight-unavailable"))?;
     if *actor != player_entity(command.member, current)?
         || !offered_targets(current, command.member)?
             .iter()
@@ -940,7 +990,21 @@ pub(super) fn stage_assault(
     }
     let mut basis = current.basis();
     basis.revision = basis.revision.next_sequence().map_err(bad)?;
-    let mut state = current.state().clone();
+    let ArenaStaging {
+        mut state,
+        arena,
+        movement,
+    } = stage_arena_move(current, command, proposed, created)?;
+    // Created places use the same configured battle-map path as other C1 scene fights.
+    // Prefer an authored destination layout when the server holds one.
+    let destination = super::super::beat_script_runtime::scene(&state)?;
+    let battle_scene = destination
+        .setting
+        .as_ref()
+        .filter(|setting| tactical::holds_scene(&setting.art_key))
+        .map(|setting| setting.art_key.clone())
+        .or_else(pack::scene_assault_battle)
+        .ok_or_else(|| refuse("scene-fight-unavailable"))?;
     bring_on_stage(&mut state, &fight)?;
     let mut draws = Vec::new();
     let mut outcomes = Vec::new();
@@ -959,7 +1023,34 @@ pub(super) fn stage_assault(
         phase: rpc::JourneyPhase::Combat as i32,
         ..Default::default()
     };
-    let semantic = hex(&prost::Message::encode_to_vec(&accepted));
+    let accepted = hex(&prost::Message::encode_to_vec(&accepted));
+    // The durable owner admits one decision per submission. Keep the normal place entry
+    // inside that opening decision, rather than appending a second decision at the same revision.
+    if movement.is_some() {
+        let placed = state
+            .decisions
+            .pop()
+            .ok_or(RepositoryError::InvalidCandidate)?;
+        if placed.source_policy.as_str() != crate::gameplay::place::POLICY {
+            return Err(RepositoryError::InvalidCandidate);
+        }
+        state
+            .facts
+            .retain(|fact| fact.operation != placed.operation);
+    }
+    let semantic = if arena.is_some() {
+        format!(
+            "{OPENING_PREFIX}{}",
+            serde_json::to_string(&ArenaOpening {
+                accepted,
+                arena,
+                movement
+            })
+            .map_err(bad)?
+        )
+    } else {
+        accepted
+    };
     // The recorded receipt is the largest text a checkpoint holds; refuse here, by name.
     if semantic.len() > model::limits().maximum_text_bytes {
         refusal_detail::note("receipt-too-large");
@@ -991,6 +1082,200 @@ pub(super) fn stage_assault(
         return Err(refuse("session-machine-outcome"));
     }
     Ok(candidate)
+}
+
+/// A model-approved large place retained beside the opening receipt.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Arena {
+    place_id: String,
+    name: String,
+}
+
+const OPENING_PREFIX: &str = "scene-fight-opening-1:";
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ArenaOpening {
+    accepted: String,
+    arena: Option<Arena>,
+    movement: Option<crate::gameplay::place::PlaceEntry>,
+}
+
+struct ArenaStaging {
+    state: GameState,
+    arena: Option<Arena>,
+    movement: Option<crate::gameplay::place::PlaceEntry>,
+}
+
+fn flat_arena(current: &Checkpoint) -> ArenaStaging {
+    ArenaStaging {
+        state: current.state().clone(),
+        arena: None,
+        movement: None,
+    }
+}
+
+/// Validate through the normal place planner. Its temporary candidate supplies the map's
+/// destination; the final fight retains only its PlaceEntry inside the one opening decision.
+fn stage_arena_move(
+    current: &Checkpoint,
+    command: &CommandInput,
+    proposed: Option<&str>,
+    created: Option<&crate::gameplay::place::PlaceRecord>,
+) -> Result<ArenaStaging, RepositoryError> {
+    use crate::gameplay::{beat_script_runtime, place};
+    let scene = beat_script_runtime::scene(current.state())?;
+    let Some(setting) = scene.setting.as_ref() else {
+        return Ok(flat_arena(current));
+    };
+    let Some(target) = proposed else {
+        return Ok(flat_arena(current));
+    };
+    if target == setting.place_id {
+        return Ok(ArenaStaging {
+            state: current.state().clone(),
+            arena: Some(Arena {
+                place_id: target.to_owned(),
+                name: setting.name.clone(),
+            }),
+            movement: None,
+        });
+    }
+    let snapshot = super::living_scene::snapshot(current.state(), &scene)?
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    let selected_exit = crate::gameplay::fight_foresight::proposed_exit(&setting.place_id);
+    let Some(exit) = snapshot.model.ways_out.iter().find(|exit| {
+        exit.open
+            && (exit.beyond_place_id == target
+                || (exit.beyond_place_id == place::UNNAMED
+                    && selected_exit.as_deref() == Some(&exit.id)
+                    && created.is_some_and(|record| record.place_id == target)))
+    }) else {
+        crate::gameplay::actor::record_audit_line(
+            "gameplay.fight_arena",
+            format!(
+                "FIGHT_ARENA source={} target={target} outcome=stale_exit flat=true",
+                setting.place_id
+            ),
+        );
+        return Ok(flat_arena(current));
+    };
+    let digest = Sha256::digest(
+        [
+            b"df-fight-arena-move-1:".as_slice(),
+            command.operation.as_bytes(),
+        ]
+        .concat(),
+    );
+    let operation = OperationId::from_bytes(&digest[..16]).map_err(bad)?;
+    let hero = name(current.state(), player_entity(command.member, current)?)?;
+    let mut planned = match place::plan(
+        current,
+        &hero,
+        operation,
+        &setting.place_id,
+        &exit.id,
+        target,
+        created,
+    ) {
+        Ok(planned) => planned,
+        Err(place::PlaceFailure::Refused(reason)) => {
+            place::audit_refused(&setting.place_id, target, &exit.id, reason.label());
+            return Ok(flat_arena(current));
+        }
+        Err(place::PlaceFailure::State(error)) => return Err(error),
+    };
+    planned.entry.line = format!("The fight spills out into {}.", planned.to_name);
+    let mut state = planned.candidate.state().clone();
+    let decision = state
+        .decisions
+        .iter_mut()
+        .find(|decision| decision.operation == operation)
+        .ok_or(RepositoryError::InvalidCandidate)?;
+    decision.semantic_output = Some(planned.entry.encode()?);
+    Ok(ArenaStaging {
+        state,
+        arena: Some(Arena {
+            place_id: target.to_owned(),
+            name: planned.to_name,
+        }),
+        movement: Some(planned.entry),
+    })
+}
+
+fn arena_opening(decision: &AcceptedDecision) -> Result<Option<ArenaOpening>, RepositoryError> {
+    let Some(text) = decision
+        .semantic_output
+        .as_deref()
+        .and_then(|text| text.strip_prefix(OPENING_PREFIX))
+    else {
+        return Ok(None);
+    };
+    if decision.source_policy.as_str() != THREAD_POLICY {
+        return Err(RepositoryError::InvalidReceipt);
+    }
+    serde_json::from_str(text).map(Some).map_err(bad)
+}
+
+/// Shared receipt reader hook: the wire receipt stays the ordinary AcceptedAction.
+pub(in crate::gameplay) fn opening_receipt(
+    decision: &AcceptedDecision,
+) -> Result<Option<rpc::AcceptedAction>, RepositoryError> {
+    use prost::Message;
+    arena_opening(decision)?
+        .map(|opening| {
+            rpc::AcceptedAction::decode(unhex(&opening.accepted)?.as_slice()).map_err(bad)
+        })
+        .transpose()
+}
+
+/// Shared place-journal reader hook: the normal admitted PlaceEntry, in the fight's decision.
+pub(in crate::gameplay) fn opening_place_move(
+    decision: &AcceptedDecision,
+) -> Result<Option<crate::gameplay::place::PlaceEntry>, RepositoryError> {
+    Ok(arena_opening(decision)?.and_then(|opening| opening.movement))
+}
+
+fn opening_decision(state: &GameState) -> Option<&AcceptedDecision> {
+    state.decisions.iter().rev().find(|decision| {
+        decision.facts.iter().any(|id| {
+            state.facts.iter().any(|fact| {
+                fact.id == *id
+                    && matches!(&fact.value,
+            FactValue::ContentEvent { definition, .. } if definition.entry.as_str() == OBJECTIVE)
+            })
+        })
+    })
+}
+
+fn opening_move(
+    state: &GameState,
+) -> Result<Option<crate::gameplay::place::PlaceEntry>, RepositoryError> {
+    let Some(opening) = opening_decision(state) else {
+        return Ok(None);
+    };
+    opening_place_move(opening)
+}
+
+/// The ready world may only belong to the large arena retained by the committed fight receipt.
+pub(in crate::gameplay) fn world_place(
+    state: &GameState,
+) -> Result<Option<String>, RepositoryError> {
+    if !open(state) {
+        return Ok(None);
+    }
+    let decision = opening_decision(state).ok_or(RepositoryError::InvalidCandidate)?;
+    Ok(arena_opening(decision)?
+        .and_then(|opening| opening.arena)
+        .map(|arena| arena.place_id))
+}
+
+/// One narrator row, read from the committed move rather than a presentation forecast.
+pub(in crate::gameplay) fn arena_narration(
+    state: &GameState,
+) -> Result<Option<String>, RepositoryError> {
+    Ok(opening_move(state)?.map(|entry| entry.line))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1193,6 +1478,9 @@ pub(in crate::gameplay) fn opening_narration(state: &GameState) -> Result<String
             .join(", ");
         vec![format!("A fight begins: {names} turn on the heroes.")]
     };
+    if let Some(line) = arena_narration(state)? {
+        lines.push(line);
+    }
     for member in scene_cast(state)? {
         if presence(state, &member.id)? == Presence::Gone {
             lines.push(format!("{} flees, shouting for the watch.", member.name));
@@ -1405,7 +1693,7 @@ mod tests {
     }
 
     /// Two heroes in Marek's shop with the story begun, the freeplay beat showing.
-    fn opening() -> Checkpoint {
+    pub(super) fn opening() -> Checkpoint {
         native::act(&native::prepared(), native::first(), 5, "begin-story")
     }
 
@@ -1429,7 +1717,7 @@ mod tests {
         }
     }
 
-    fn assault_request(
+    pub(super) fn assault_request(
         current: &Checkpoint,
         operation: u8,
         target: &str,
@@ -1486,7 +1774,7 @@ mod tests {
         })
     }
 
-    fn start(
+    pub(super) fn start(
         current: &Checkpoint,
         operation: u8,
         target: &str,
@@ -1517,7 +1805,12 @@ mod tests {
 
     /// One tactical action of the hero whose turn it is. A d20 is a 15 and a damage die at most 3,
     /// so the heroes hit the shop's people and the people mostly miss.
-    fn act(current: &Checkpoint, operation: u8, kind: K, choice: Option<&str>) -> Checkpoint {
+    pub(super) fn act(
+        current: &Checkpoint,
+        operation: u8,
+        kind: K,
+        choice: Option<&str>,
+    ) -> Checkpoint {
         let member = member_with_turn(current);
         let request = rpc::SubmitActionRequest {
             offer_id: super::super::offer_id(current, kind),
@@ -1609,7 +1902,7 @@ mod tests {
             .collect()
     }
 
-    fn with_created_shop(run: impl FnOnce()) {
+    pub(super) fn with_created_shop(run: impl FnOnce()) {
         use crate::gameplay::{
             adventure::{RulesMode, record, shop},
             startup_configuration::ContentRating,

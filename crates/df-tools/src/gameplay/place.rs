@@ -613,6 +613,10 @@ pub(in crate::gameplay) fn entries(
 ) -> Result<Vec<(SessionRevision, PlaceEntry)>, RepositoryError> {
     let mut found = Vec::new();
     for decision in &state.decisions {
+        if let Some(entry) = super::journey::scene_fight::opening_place_move(decision)? {
+            found.push((decision.revision, entry));
+            continue;
+        }
         if decision.source_policy.as_str() != POLICY {
             continue;
         }

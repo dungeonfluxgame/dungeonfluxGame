@@ -864,6 +864,9 @@ pub(in crate::gameplay) fn ready_world(place_id: &str) -> Option<ReadyWorld> {
 /// Asks the hub for a place's world (idempotent per place). Does nothing when no
 /// service is installed; the narrative engine's judgement is the only caller.
 pub(in crate::gameplay) fn request_world(spec: &SplatWorldSpec) -> Option<ResourceKey> {
+    if !super::fight_foresight::approved_large_arena(spec.place_id()) {
+        return None;
+    }
     let service = service()?;
     if service.maker.is_none()
         && service.ready_world(spec.place_id()).is_none()

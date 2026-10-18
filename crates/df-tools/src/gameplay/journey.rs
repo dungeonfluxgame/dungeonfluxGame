@@ -1386,6 +1386,9 @@ pub(super) fn inn_scene() -> rpc::GameplayScene {
 pub(super) fn accepted(
     decision: &AcceptedDecision,
 ) -> Result<rpc::AcceptedAction, RepositoryError> {
+    if let Some(accepted) = scene_fight::opening_receipt(decision)? {
+        return Ok(accepted);
+    }
     if let Some(accepted) = living_scene::accepted(decision)? {
         return Ok(accepted);
     }
