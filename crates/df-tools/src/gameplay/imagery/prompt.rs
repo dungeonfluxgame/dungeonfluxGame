@@ -156,6 +156,16 @@ impl AssembledPrompt {
         &self.text
     }
 
+    /// The still of one committed killing blow: the kill-shot plan's photographic prompt, built
+    /// from the committed facts only (see `home_video::kill_shot::still_plan`).
+    pub(in crate::gameplay) fn kill_shot(
+        request: &crate::gameplay::home_video::kill_shot::KillShotRequest,
+        rating: ContentRating,
+    ) -> Self {
+        let plan = crate::gameplay::home_video::kill_shot::still_plan(request, rating);
+        Self::from_parts(vec![Part::Fact(plan.prompt)])
+    }
+
     pub(in crate::gameplay) fn with_cast_sheet(
         mut self,
         image_number: usize,

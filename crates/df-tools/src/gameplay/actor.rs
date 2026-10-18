@@ -2736,6 +2736,17 @@ impl Actor {
                         return Err(authority_unavailable());
                     }
                 }
+                if let candidate::Change::NpcTurn { turn } = &change {
+                    match super::journey::unhex(&turn.receipt)
+                        .ok()
+                        .and_then(|bytes| rpc::AcceptedAction::decode(bytes.as_slice()).ok())
+                    {
+                        Some(accepted) => self.record_kill_shots(&current, &accepted.combat),
+                        None => {
+                            record_unavailable("kill-shot-npc-receipt", "invalid committed receipt")
+                        }
+                    }
+                }
                 let revision = receipt.basis().revision;
                 self.table_log.push(
                     "table",
@@ -3260,6 +3271,80 @@ impl Actor {
         }
     }
 
+    /// Cosmetic work starts only after the authoritative owner confirmed this decision.
+    fn record_kill_shots(&self, before: &Checkpoint, outcomes: &[rpc::CombatOutcome]) {
+        use super::home_video::kill_shot;
+        if outcomes.is_empty() {
+            return;
+        }
+        let after = self.owner.checkpoint();
+        let scene = match super::beat_script_runtime::scene(before.state()) {
+            Ok(scene) => scene,
+            Err(error) => {
+                record_unavailable("kill-shot-place", &format!("{error:?}"));
+                return;
+            }
+        };
+        // Receipts leave sequence at zero. Use the same committed history clock as
+        // the TV projection, including moves and saves before these new attacks.
+        let Some(combat) = after
+            .state()
+            .characters
+            .first()
+            .and_then(|hero| audit_combat_view(after, hero.owner))
+        else {
+            record_unavailable("kill-shot-sequence", "committed combat view unavailable");
+            return;
+        };
+        let Some(sequence_start) = u64::try_from(outcomes.len())
+            .ok()
+            .and_then(|count| combat.latest_sequence.checked_sub(count))
+        else {
+            record_unavailable("kill-shot-sequence", "committed combat history incomplete");
+            return;
+        };
+        for (index, outcome) in outcomes.iter().enumerate() {
+            if !matches!(
+                rpc::OutcomeKind::try_from(outcome.kind),
+                Ok(rpc::OutcomeKind::Attack | rpc::OutcomeKind::OpportunityAttack)
+            ) {
+                continue;
+            }
+            let hero = after
+                .state()
+                .characters
+                .iter()
+                .find(|hero| hero.entity.as_bytes().as_slice() == outcome.target_id.as_slice());
+            let hero_dead = match hero {
+                Some(hero) => {
+                    match super::journey::tactical::hero_is_dead(after.state(), hero.entity) {
+                        Ok(dead) => Some(kill_shot::hero_death_at_blow(
+                            outcome,
+                            &outcomes[index + 1..],
+                            dead,
+                        )),
+                        Err(error) => {
+                            record_unavailable("kill-shot-hero-health", &format!("{error:?}"));
+                            continue;
+                        }
+                    }
+                }
+                None => None,
+            };
+            let mut sequenced = outcome.clone();
+            // The checked history length above proves this index fits and cannot overflow.
+            sequenced.sequence = sequence_start + index as u64 + 1;
+            let blow = kill_shot::committed_blow(&sequenced, &scene.title, hero_dead);
+            match kill_shot::decide(&blow, after.basis().revision.epoch().get()) {
+                Ok(request) => super::home_video::request_kill_shot_still(request, before, outcome),
+                Err(reason) => record_audit_line(
+                    "gameplay.kill_shot",
+                    kill_shot::audit_line("skipped", &blow.killer, &blow.victim, 0, reason.label()),
+                ),
+            }
+        }
+    }
+
     fn record_table_action(
         &self,
         member: df_types::MemberId,
@@ -3268,6 +3353,7 @@ impl Actor {
         before: &Checkpoint,
         reservation: super::table_log::TableLogReservation,
     ) {
+        self.record_kill_shots(before, &accepted.combat);
         self.record_accepted_audit(member, request, accepted, before);
         let Ok(view) = wire::journey_view(self.owner.checkpoint(), LocalDemoRole::Player, member)
         else {

@@ -47,7 +47,7 @@ use super::{
 };
 
 use super::shot::scene_graph::{ActorInput, SceneGraph, SceneGraphInput};
-use super::{actor, resources};
+use super::{actor, home_video::kill_shot, resources};
 
 /// The authored cut-out of the party's hero at this position. Used only as the source of a
 /// health variant before that hero's live canonical picture exists; once it does, variants are
@@ -887,8 +887,55 @@ struct ReadyBackdrop {
     alternate: bool,
 }
 
+const MAXIMUM_PENDING_KILL_STILLS: usize = 32;
+const KILL_REFERENCE_DEADLINE: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Debug)]
+enum KillSubject {
+    Hero {
+        entity: df_model::checkpoint::EntityId,
+        name: String,
+    },
+    Npc(String),
+}
+
+#[derive(Clone, Debug)]
+struct KillStill {
+    request: kill_shot::KillShotRequest,
+    subjects: [KillSubject; 2],
+    room: String,
+    references: [Option<ImageKey>; 3],
+    started: Instant,
+}
+
+impl KillStill {
+    fn resolve(&mut self, state: &State) -> Option<[ImageKey; 3]> {
+        for (index, subject) in self.subjects.iter().enumerate() {
+            if self.references[index].is_none() {
+                self.references[index] = match subject {
+                    KillSubject::Hero { entity, name } => state
+                        .canonical
+                        .hero(*entity)
+                        .or_else(|| state.hero_cutouts.get(name).cloned()),
+                    KillSubject::Npc(id) => state.canonical.npc(id),
+                };
+            }
+        }
+        if self.references[2].is_none() {
+            self.references[2] = state.canonical.room(&self.room);
+        }
+        Some([
+            self.references[0].clone()?,
+            self.references[1].clone()?,
+            self.references[2].clone()?,
+        ])
+    }
+}
+
 struct State {
     canonical: canonical::References,
+    kill_stills_seen: kill_shot::ShownShots,
+    kill_stills_pending: Vec<KillStill>,
     stage: Option<Stage>,
     facts: Option<SceneFacts>,
     tracker: MoodTracker,
@@ -920,6 +967,10 @@ struct State {
 
 /// What the worker should start.
 enum Job {
+    KillShot {
+        still: KillStill,
+        references: [ImageKey; 3],
+    },
     Canonical(canonical::Work),
     HeroCutout {
         name: String,
@@ -949,6 +1000,11 @@ enum Job {
 }
 
 enum Done {
+    KillShot {
+        request: kill_shot::KillShotRequest,
+        elapsed: Duration,
+        result: Result<(Vec<u8>, String), ImageFailure>,
+    },
     Canonical {
         work: canonical::Work,
         result: Result<ImageKey, ImageFailure>,
@@ -1228,6 +1284,89 @@ impl LivingScenes {
             inner.observe_checkpoint(checkpoint);
         }
     }
+    /// Queue the committed blow once; the living-scenes worker owns all image I/O.
+    pub(super) fn request_kill_shot(
+        &self,
+        request: kill_shot::KillShotRequest,
+        checkpoint: &df_model::checkpoint::Checkpoint,
+        outcome: &rpc::CombatOutcome,
+    ) {
+        let Some(inner) = &self.inner else {
+            audit_kill_still(&request, Duration::ZERO, "failed", "imagery_off");
+            return;
+        };
+        inner.observe_checkpoint(checkpoint);
+        let scene = super::beat_script_runtime::scene(checkpoint.state()).ok();
+        let subject = |id: &[u8], name: &str| {
+            if let Some(hero) = checkpoint
+                .state()
+                .characters
+                .iter()
+                .find(|hero| hero.entity.as_bytes().as_slice() == id)
+            {
+                return Some(KillSubject::Hero {
+                    entity: hero.entity,
+                    name: name.to_owned(),
+                });
+            }
+            scene
+                .as_ref()?
+                .cast
+                .iter()
+                .find(|member| member.name == name)
+                .map(|member| KillSubject::Npc(member.id.clone()))
+        };
+        let subjects = subject(&outcome.actor_id, &outcome.actor_name)
+            .zip(subject(&outcome.target_id, &outcome.target_name));
+        let room = scene
+            .as_ref()
+            .and_then(|scene| scene.setting.as_ref())
+            .map(|setting| setting.place_id.clone());
+        let mut state = locked(&inner.state);
+        if state.kill_stills_seen.was_shown(&request.id, request.epoch) {
+            return;
+        }
+        let (Some((killer, victim)), Some(room)) = (subjects, room) else {
+            state.kill_stills_seen.claim(&request.id, request.epoch);
+            audit_kill_still(
+                &request,
+                Duration::ZERO,
+                "failed",
+                "canonical_subject_missing",
+            );
+            return;
+        };
+        if let Some(scene) = &scene {
+            state.canonical.observe_room(scene);
+            for member in scene.cast.iter().filter(|member| {
+                member.name == outcome.actor_name || member.name == outcome.target_name
+            }) {
+                state.canonical.admit_cast(&Member {
+                    id: member.id.clone(),
+                    role: role_of(member.role),
+                    life_stage: LifeStage::from_age(member.age),
+                    name: member.name.clone(),
+                    sprite: member.sprite.clone(),
+                    dossier_id: None,
+                    opposes: false,
+                    starting_attitude: None,
+                });
+            }
+        }
+        inner.queue_kill_still(
+            &mut state,
+            KillStill {
+                request,
+                subjects: [killer, victim],
+                room,
+                references: [None, None, None],
+                started: Instant::now(),
+            },
+        );
+        drop(state);
+        inner.wake.send_modify(|count| *count += 1);
+    }
+
     /// Living scenes that do nothing: imagery is off.
     pub(super) fn disabled() -> Self {
         Self {
@@ -1545,6 +1684,7 @@ impl Inner {
         let mut ticker = tokio::time::interval(self.timing.tick);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut exchanges = self.social.subscribe_exchanges();
+        let mut kill_requests = self.wake.subscribe();
         let mut tasks: JoinSet<Done> = JoinSet::new();
         loop {
             tokio::select! {
@@ -1553,6 +1693,7 @@ impl Inner {
                     else { checkpoints_open = false; }
                 }
                 _ = ticker.tick() => {}
+                _ = kill_requests.changed() => {}
                 _ = exchanges.changed() => {}
                 Some(done) = tasks.join_next(), if !tasks.is_empty() => {
                     // A render task that panicked or was cancelled has nothing to report.
@@ -1560,6 +1701,12 @@ impl Inner {
                         self.finish(done);
                     }
                 }
+            }
+            for job in self.take_kill_stills(
+                Instant::now(),
+                super::imagery::MAXIMUM_IN_FLIGHT.saturating_sub(tasks.len()),
+            ) {
+                self.spawn(&mut tasks, job);
             }
             let canonical_jobs = locked(&self.state)
                 .canonical
@@ -1577,6 +1724,22 @@ impl Inner {
         let inner = Arc::clone(self);
         let started = Instant::now();
         match job {
+            Job::KillShot { still, references } => {
+                tasks.spawn(async move {
+                    use futures::FutureExt;
+                    let result = std::panic::AssertUnwindSafe(
+                        inner.render_kill_still(&still.request, &references),
+                    )
+                    .catch_unwind()
+                    .await
+                    .unwrap_or(Err(ImageFailure::Interrupted));
+                    Done::KillShot {
+                        request: still.request,
+                        elapsed: still.started.elapsed(),
+                        result,
+                    }
+                });
+            }
             Job::Canonical(work) => {
                 tasks.spawn(async move {
                     use futures::FutureExt;
@@ -1700,6 +1863,77 @@ impl Inner {
             .await
             .map_err(|_| ImageFailure::Interrupted)?
             .map_err(|_| ImageFailure::InvalidRequest)
+    }
+
+    fn queue_kill_still(&self, state: &mut State, mut still: KillStill) {
+        if !state
+            .kill_stills_seen
+            .claim(&still.request.id, still.request.epoch)
+        {
+            return;
+        }
+        if state.kill_stills_pending.len() >= MAXIMUM_PENDING_KILL_STILLS {
+            audit_kill_still(&still.request, Duration::ZERO, "failed", "still_queue_full");
+            return;
+        }
+        // Freeze every ready identity immediately, before a subsequent scene can replace it.
+        let _ = still.resolve(state);
+        audit_kill_still(
+            &still.request,
+            Duration::ZERO,
+            "still_queued",
+            "committed_killing_blow",
+        );
+        state.kill_stills_pending.push(still);
+    }
+
+    fn take_kill_stills(&self, now: Instant, available: usize) -> Vec<Job> {
+        let mut state = locked(&self.state);
+        let pending = std::mem::take(&mut state.kill_stills_pending);
+        let mut jobs = Vec::new();
+        for mut still in pending {
+            let elapsed = now.saturating_duration_since(still.started);
+            if elapsed >= KILL_REFERENCE_DEADLINE {
+                audit_kill_still(
+                    &still.request,
+                    elapsed,
+                    "failed",
+                    "canonical_reference_timeout",
+                );
+            } else if jobs.len() < available {
+                match still.resolve(&state) {
+                    Some(references) => jobs.push(Job::KillShot { still, references }),
+                    None => state.kill_stills_pending.push(still),
+                }
+            } else {
+                state.kill_stills_pending.push(still);
+            }
+        }
+        jobs
+    }
+
+    async fn render_kill_still(
+        &self,
+        request: &kill_shot::KillShotRequest,
+        keys: &[ImageKey; 3],
+    ) -> Result<(Vec<u8>, String), ImageFailure> {
+        let mut references = Vec::with_capacity(3);
+        for key in keys {
+            match self.imagery.image(key.as_str()).await {
+                Lookup::Image { bytes, format } => {
+                    references.push(ReferenceImage::new(format, bytes))
+                }
+                Lookup::NotReady | Lookup::Unregistered => {
+                    return Err(ImageFailure::InvalidRequest);
+                }
+            }
+        }
+        let image_request = kill_still_request(request, self.rating, references);
+        let key = self.imagery.generate(&request.id, image_request).await?;
+        match self.imagery.image(key.as_str()).await {
+            Lookup::Image { bytes, .. } => Ok((bytes.to_vec(), key.path())),
+            Lookup::NotReady | Lookup::Unregistered => Err(ImageFailure::InvalidRequest),
+        }
     }
 
     async fn render_hero_cutout(
@@ -1856,6 +2090,21 @@ impl Inner {
 
     /// Records a finished render. A scene refresh waits for a quiet moment before it lands.
     fn finish(&self, done: Done) {
+        if let Done::KillShot {
+            request,
+            elapsed,
+            result,
+        } = done
+        {
+            match result {
+                Ok((bytes, path)) => {
+                    audit_kill_still(&request, elapsed, "still_generated", "photo_check_passed");
+                    super::home_video::request_kill_shot(request, bytes, path);
+                }
+                Err(failure) => audit_kill_still(&request, elapsed, "failed", failure.label()),
+            }
+            return;
+        }
         if let Done::Canonical { work, result } = done {
             self.finish_canonical(work, result);
             return;
@@ -1867,7 +2116,7 @@ impl Inner {
                 .to_owned()
         };
         let (kind, outcome) = match &done {
-            Done::Canonical { .. } => return,
+            Done::Canonical { .. } | Done::KillShot { .. } => return,
             Done::HeroCutout { result, .. } => ("hero_cutout", label_of(result)),
             Done::Expression { result, .. } => ("expression", label_of(result)),
             Done::Refresh { result, .. } => ("refresh", label_of(result)),
@@ -1880,7 +2129,7 @@ impl Inner {
         );
         let mut state = locked(&self.state);
         match done {
-            Done::Canonical { .. } => return,
+            Done::Canonical { .. } | Done::KillShot { .. } => return,
             Done::HeroCutout { name, result } => {
                 state.hero_cutouts_in_flight.remove(&name);
                 match result {
@@ -2220,6 +2469,8 @@ impl State {
     fn new(timing: Timing) -> Self {
         Self {
             canonical: canonical::References::default(),
+            kill_stills_seen: kill_shot::ShownShots::new(),
+            kill_stills_pending: Vec::new(),
             stage: None,
             facts: None,
             tracker: MoodTracker::new(timing.hysteresis),
@@ -2263,6 +2514,45 @@ fn alternate_look(target: Look, alternates: usize) -> Look {
     }
 }
 
+fn kill_still_request(
+    request: &kill_shot::KillShotRequest,
+    rating: ContentRating,
+    references: Vec<ReferenceImage>,
+) -> ImageRequest {
+    let plan = kill_shot::still_plan(request, rating);
+    ImageRequest {
+        kind: ImageKind::ScenePlate,
+        references,
+        prompt: super::imagery::AssembledPrompt::kill_shot(request, rating)
+            .with_canonical_speaker_reference(1, "killer", &request.killer)
+            .with_canonical_speaker_reference(2, "victim", &request.victim)
+            .with_canonical_room_reference(3),
+        output: OutputSpec {
+            width: plan.width,
+            height: plan.height,
+            transparent: false,
+        },
+    }
+}
+
+fn audit_kill_still(
+    request: &kill_shot::KillShotRequest,
+    elapsed: Duration,
+    status: &str,
+    reason: &str,
+) {
+    actor::record_audit_line(
+        "gameplay.kill_shot",
+        kill_shot::audit_line(
+            status,
+            &request.killer,
+            &request.victim,
+            elapsed.as_millis(),
+            reason,
+        ),
+    );
+}
+
 fn image_completion_line(
     kind: &'static str,
     elapsed: Duration,
@@ -2284,9 +2574,7 @@ fn image_completion_line(
 impl LivingScenes {
     /// The resource hub that owns every generated image's request, state and audit.
     pub(super) fn resource_hub(&self) -> Option<resources::Hub> {
-        self.inner
-            .as_ref()
-            .map(|inner| inner.imagery.hub().clone())
+        self.inner.as_ref().map(|inner| inner.imagery.hub().clone())
     }
 
     /// Resolves a subject's depiction for a role: the source kind (`live`, `reviewed` or

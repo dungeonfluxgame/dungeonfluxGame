@@ -91,6 +91,42 @@ pub(in crate::gameplay) struct KillShotRequest {
     pub epoch: u64,
 }
 
+/// Project one committed attack; heroes use the rules' death flag, while other
+/// creatures die at zero unless the attacker chose to knock them out (SRD 5.2.1).
+pub(in crate::gameplay) fn committed_blow(
+    outcome: &super::super::rpc::CombatOutcome,
+    place: &str,
+    hero_dead: Option<bool>,
+) -> CommittedBlow {
+    CommittedBlow {
+        killer: outcome.actor_name.clone(),
+        victim: outcome.target_name.clone(),
+        weapon: outcome.weapon.clone(),
+        damage_type: outcome.damage_type.clone(),
+        place: place.to_owned(),
+        sequence: outcome.sequence,
+        hit: outcome.hit,
+        damage: outcome.damage,
+        target_hit_points: outcome.target_hit_points,
+        victim_dead: hero_dead.unwrap_or(outcome.target_hit_points == 0 && !outcome.knocked_out),
+        knocked_out: outcome.knocked_out,
+    }
+}
+
+/// A final dead flag must not credit an earlier downing hit when a later attack
+/// or Death Saving Throw in the same committed turn actually caused the death.
+pub(in crate::gameplay) fn hero_death_at_blow(
+    outcome: &super::super::rpc::CombatOutcome,
+    later: &[super::super::rpc::CombatOutcome],
+    dead: bool,
+) -> bool {
+    dead && !later.iter().any(|later| {
+        (later.target_id == outcome.target_id && later.hit && later.damage > 0)
+            || (later.actor_id == outcome.target_id
+                && later.kind == super::super::rpc::OutcomeKind::DeathSave as i32)
+    })
+}
+
 fn clean_fact(text: &str) -> Option<String> {
     let cleaned: String = text
         .trim()

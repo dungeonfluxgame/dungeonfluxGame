@@ -678,6 +678,22 @@ pub(crate) fn request_kill_shot(
     engine.request_kill_shot(request, still, still_path);
 }
 
+/// Dispatches still work to the existing living-scenes owner, after commit only.
+pub(in crate::gameplay) fn request_kill_shot_still(
+    request: kill_shot::KillShotRequest,
+    checkpoint: &df_model::checkpoint::Checkpoint,
+    outcome: &rpc::CombatOutcome,
+) {
+    let living = locked(&ENGINE)
+        .as_ref()
+        .filter(|engine| engine.scene_enabled)
+        .and_then(|engine| engine.living.clone());
+    match living {
+        Some(living) => living.request_kill_shot(request, checkpoint, outcome),
+        None => audit_kill("failed", &request.killer, &request.victim, 0, "video_off"),
+    }
+}
+
 fn audit_kill(status: &str, killer: &str, victim: &str, elapsed_ms: u128, reason: &str) {
     super::actor::record_audit_line(
         "gameplay.kill_shot",

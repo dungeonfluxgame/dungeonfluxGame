@@ -151,6 +151,7 @@ fn refresh_jobs(jobs: &[Job]) -> Vec<(Look, RefreshReason)> {
         .filter_map(|job| match job {
             Job::Refresh { look, reason, .. } => Some((*look, *reason)),
             Job::Canonical(_)
+            | Job::KillShot { .. }
             | Job::HeroCutout { .. }
             | Job::Expression { .. }
             | Job::Warm { .. }
@@ -164,6 +165,7 @@ fn face_jobs(jobs: &[Job]) -> Vec<Face> {
         .filter_map(|job| match job {
             Job::Expression { face, .. } => Some(*face),
             Job::Canonical(_)
+            | Job::KillShot { .. }
             | Job::HeroCutout { .. }
             | Job::Refresh { .. }
             | Job::Warm { .. }
@@ -375,6 +377,7 @@ fn job_labels(jobs: &[Job]) -> Vec<String> {
     jobs.iter()
         .map(|job| match job {
             Job::Canonical(_) => "canonical-reference".to_owned(),
+            Job::KillShot { .. } => "kill-shot".to_owned(),
             Job::HeroCutout { name, .. } => format!("hero-cutout {name}"),
             Job::Warm { character, tier } => format!("warm {} {}", character.art, tier.label()),
             Job::Peek { character } => format!("peek {}", character.art),
@@ -1301,4 +1304,199 @@ fn disabled_living_scenes_observe_and_change_nothing() {
     living.apply(&mut after);
     assert_eq!(after, before);
     assert!(living.subscribe().is_none());
+}
+
+fn kill_shot_request() -> kill_shot::KillShotRequest {
+    let outcome = rpc::CombatOutcome {
+        actor_name: "Sigrun".into(),
+        target_name: "Bandit".into(),
+        weapon: "greataxe".into(),
+        damage_type: "slashing".into(),
+        sequence: 81,
+        kind: rpc::OutcomeKind::Attack as i32,
+        hit: true,
+        damage: 15,
+        target_hit_points: 0,
+        ..Default::default()
+    };
+    kill_shot::decide(
+        &kill_shot::committed_blow(&outcome, "Market street", None),
+        3,
+    )
+    .unwrap()
+}
+
+fn kill_shot_still(references: [Option<ImageKey>; 3]) -> KillStill {
+    KillStill {
+        request: kill_shot_request(),
+        subjects: [
+            KillSubject::Npc("sigrun".into()),
+            KillSubject::Npc("bandit".into()),
+        ],
+        room: "market-street".into(),
+        references,
+        started: Instant::now(),
+    }
+}
+
+#[test]
+fn kill_shot_still_carries_both_named_identities_and_the_room_in_reference_order() {
+    use bytes::Bytes;
+    use df_providers::ImageFormat;
+    let references = ["killer photograph", "victim photograph", "room photograph"]
+        .map(|bytes| ReferenceImage::new(ImageFormat::Jpeg, Bytes::from_static(bytes.as_bytes())));
+    let image = kill_still_request(
+        &kill_shot_request(),
+        ContentRating::Restrained,
+        references.to_vec(),
+    );
+    assert_eq!(image.kind, ImageKind::ScenePlate);
+    assert_eq!(
+        (
+            image.output.width,
+            image.output.height,
+            image.output.transparent
+        ),
+        (2560, 1440, false)
+    );
+    assert_eq!(
+        image
+            .references
+            .iter()
+            .map(|reference| &reference.sha256)
+            .collect::<Vec<_>>(),
+        references
+            .iter()
+            .map(|reference| &reference.sha256)
+            .collect::<Vec<_>>()
+    );
+    let prompt = image.prompt.as_str();
+    assert!(prompt.contains("Image 1") && prompt.contains("named Sigrun"));
+    assert!(prompt.contains("Image 2") && prompt.contains("named Bandit"));
+    assert!(prompt.contains("Image 3 is the canonical photograph"));
+    assert!(prompt.contains("strike is landing now"));
+    assert!(prompt.contains("No gore"));
+}
+
+#[tokio::test]
+async fn kill_shot_lethal_blow_generates_one_still_even_after_duplicate_delivery() {
+    use crate::gameplay::imagery::tests::DirectionFixture;
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../artifacts/tmp/lanes/K2/kill-still-test-{}",
+        std::process::id()
+    ));
+    let fixture = DirectionFixture::photographic(&directory);
+    let (original, _) = director(&dossier());
+    let inner = Arc::new(Inner {
+        imagery: fixture.imagery.clone(),
+        references: ReferenceStore::new(PathBuf::new()),
+        social: original.social.clone(),
+        rating: ContentRating::Restrained,
+        timing: timing(),
+        state: Mutex::new(State::new(timing())),
+        wake: watch::channel(0).0,
+        origin: Instant::now(),
+    });
+    // The canonical inputs are registered imagery bytes; the fake accepts every request locally.
+    let mut keys = Vec::new();
+    for name in ["Sigrun", "Bandit", "Market street"] {
+        let mut request = kill_shot_request();
+        request.killer = name.into();
+        let image = kill_still_request(&request, ContentRating::Restrained, Vec::new());
+        keys.push(
+            fixture
+                .imagery
+                .generate("canonical-fixture", image)
+                .await
+                .unwrap(),
+        );
+    }
+    let keys: [ImageKey; 3] = keys.try_into().unwrap();
+    let still = kill_shot_still(keys.clone().map(Some));
+    {
+        let mut state = locked(&inner.state);
+        inner.queue_kill_still(&mut state, still.clone());
+        inner.queue_kill_still(&mut state, still.clone());
+        assert_eq!(state.kill_stills_pending.len(), 1);
+    }
+    let mut jobs = inner.take_kill_stills(Instant::now(), 2);
+    assert_eq!(jobs.len(), 1);
+    let Job::KillShot {
+        still: job,
+        references,
+    } = jobs.remove(0)
+    else {
+        panic!("kill still job")
+    };
+    assert_eq!(references, keys);
+    let before = fixture.calls();
+    let (bytes, path) = inner
+        .render_kill_still(&job.request, &references)
+        .await
+        .unwrap();
+    assert!(!bytes.is_empty());
+    assert!(path.starts_with("/gameplay/imagery/"));
+    assert_eq!(fixture.calls(), before + 1);
+    assert_eq!(fixture.image_count(), 3);
+    assert!(fixture.prompt().contains("named Sigrun"));
+    assert!(fixture.prompt().contains("named Bandit"));
+    assert!(
+        fixture
+            .prompt()
+            .contains("Image 3 is the canonical photograph")
+    );
+    inner.queue_kill_still(&mut locked(&inner.state), still);
+    assert!(
+        inner.take_kill_stills(Instant::now(), 2).is_empty(),
+        "completed blow is never requested again"
+    );
+}
+
+#[test]
+fn kill_shot_waits_for_canonical_references_without_spawning_or_retrying_a_failed_blow() {
+    let (inner, _) = director(&dossier());
+    let still = kill_shot_still([None, None, None]);
+    inner.queue_kill_still(&mut locked(&inner.state), still.clone());
+    assert!(inner.take_kill_stills(Instant::now(), 2).is_empty());
+    assert_eq!(locked(&inner.state).kill_stills_pending.len(), 1);
+    assert!(
+        inner
+            .take_kill_stills(Instant::now() + KILL_REFERENCE_DEADLINE, 2)
+            .is_empty()
+    );
+    assert!(locked(&inner.state).kill_stills_pending.is_empty());
+    inner.queue_kill_still(&mut locked(&inner.state), still);
+    assert!(locked(&inner.state).kill_stills_pending.is_empty());
+}
+
+#[test]
+fn kill_shot_rejected_committed_blows_never_queue_still_work() {
+    let (inner, _) = director(&dossier());
+    let outcome = rpc::CombatOutcome {
+        actor_name: "Sigrun".into(),
+        target_name: "Bandit".into(),
+        weapon: "greataxe".into(),
+        damage_type: "slashing".into(),
+        hit: true,
+        damage: 15,
+        target_hit_points: 0,
+        sequence: 81,
+        kind: rpc::OutcomeKind::Attack as i32,
+        ..Default::default()
+    };
+    let mut knock_out = outcome.clone();
+    knock_out.knocked_out = true;
+    let mut miss = outcome.clone();
+    miss.hit = false;
+    miss.damage = 0;
+    for (outcome, hero_dead) in [(knock_out, None), (outcome, Some(false)), (miss, None)] {
+        let blow = kill_shot::committed_blow(&outcome, "Market street", hero_dead);
+        if let Ok(request) = kill_shot::decide(&blow, 3) {
+            let mut still = kill_shot_still([Some(key('a')), Some(key('b')), Some(key('c'))]);
+            still.request = request;
+            inner.queue_kill_still(&mut locked(&inner.state), still);
+        }
+    }
+    assert!(inner.take_kill_stills(Instant::now(), 2).is_empty());
+    assert!(locked(&inner.state).kill_stills_pending.is_empty());
 }

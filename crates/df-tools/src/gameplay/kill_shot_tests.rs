@@ -239,3 +239,64 @@ fn the_audit_line_names_status_names_elapsed_and_reason() {
     assert!(failed.starts_with("KILL_SHOT status=failed"));
     assert!(failed.contains("elapsed_ms=900"));
 }
+
+#[test]
+fn kill_shot_committed_outcomes_use_rules_death_for_heroes_and_lethality_for_foes() {
+    use super::kill_shot::committed_blow;
+    let lethal = rpc::CombatOutcome {
+        actor_name: "Sigrun".into(),
+        target_name: "Bandit".into(),
+        weapon: "greataxe".into(),
+        damage_type: "slashing".into(),
+        kind: rpc::OutcomeKind::Attack as i32,
+        hit: true,
+        damage: 15,
+        target_hit_points: 0,
+        sequence: 81,
+        ..Default::default()
+    };
+    let blow = committed_blow(&lethal, "Market street", None);
+    assert!(blow.victim_dead);
+    assert_eq!(decide(&blow, 3).unwrap().sequence, 81);
+    let downed = committed_blow(&lethal, "Market street", Some(false));
+    assert_eq!(decide(&downed, 3), Err(Skip::DownedNotDead));
+    let dead_hero = committed_blow(&lethal, "Market street", Some(true));
+    assert!(decide(&dead_hero, 3).is_ok());
+    let mut knocked_out = lethal.clone();
+    knocked_out.knocked_out = true;
+    let blow = committed_blow(&knocked_out, "Market street", None);
+    assert!(!blow.victim_dead);
+    assert_eq!(decide(&blow, 3), Err(Skip::KnockedOut));
+    let mut miss = lethal;
+    miss.hit = false;
+    miss.damage = 0;
+    assert_eq!(
+        decide(&committed_blow(&miss, "Market street", None), 3),
+        Err(Skip::NotAHit)
+    );
+}
+
+#[test]
+fn kill_shot_credits_only_the_last_lethal_hero_hit_and_never_a_later_death_save() {
+    use super::kill_shot::hero_death_at_blow;
+    let first = rpc::CombatOutcome {
+        target_id: vec![7; 16],
+        actor_id: vec![9; 16],
+        hit: true,
+        damage: 6,
+        target_hit_points: 0,
+        kind: rpc::OutcomeKind::Attack as i32,
+        ..Default::default()
+    };
+    let later = first.clone();
+    assert!(!hero_death_at_blow(&first, &[later], true));
+    assert!(hero_death_at_blow(&first, &[], true));
+    assert!(!hero_death_at_blow(&first, &[], false));
+    let death_save = rpc::CombatOutcome {
+        actor_id: first.target_id.clone(),
+        kind: rpc::OutcomeKind::DeathSave as i32,
+        death_failures: 3,
+        ..Default::default()
+    };
+    assert!(!hero_death_at_blow(&first, &[death_save], true));
+}
