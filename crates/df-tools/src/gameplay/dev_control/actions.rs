@@ -1170,6 +1170,27 @@ fn default_action_choices(
         group_id: group.group_id.clone(),
         option_id,
     }];
+    if action == parse::PlayAction::Attack
+        && let Some(value) = body.get("knockout")
+    {
+        let text = value
+            .as_str()
+            .ok_or_else(|| bad_request("knockout must be yes or no"))?;
+        let option_id = parse::parse_knockout_choice(text).map_err(bad_request)?;
+        if !offer
+            .groups
+            .iter()
+            .any(|group| group.group_id == "knock-out")
+        {
+            return Err(bad_request(
+                "knock-out choice is not offered for this attack",
+            ));
+        }
+        submit.action_choices.push(rpc::JourneyChoice {
+            group_id: "knock-out".to_owned(),
+            option_id: option_id.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -1665,6 +1686,73 @@ mod explicit_choice_tests {
         )
         .unwrap();
         assert_eq!(submit.action_choices[0].option_id, "yes");
+    }
+
+    #[test]
+    fn attack_submits_knockout_choice_only_when_given() {
+        let offer = Offer {
+            offer_id: "attack".into(),
+            action_kind: rpc::GameplayActionKind::GreatswordAttack as i32,
+            label: "Attack".into(),
+            destinations: Vec::new(),
+            groups: vec![
+                rpc::JourneyGroup {
+                    group_id: "tactical-choice".into(),
+                    options: vec![rpc::JourneyOption {
+                        option_id: "attack-foe-greataxe".into(),
+                        label: "Attack Foe with Greataxe".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                rpc::JourneyGroup {
+                    group_id: "knock-out".into(),
+                    options: ["yes", "no"]
+                        .into_iter()
+                        .map(|option_id| rpc::JourneyOption {
+                            option_id: option_id.into(),
+                            label: option_id.into(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        for (body, expected) in [
+            (json!({"target":"Foe", "weapon":"Greataxe"}), None),
+            (
+                json!({"target":"Foe", "weapon":"Greataxe", "knockout":"no"}),
+                Some("no"),
+            ),
+            (
+                json!({"target":"Foe", "weapon":"Greataxe", "knockout":"yes"}),
+                Some("yes"),
+            ),
+        ] {
+            let mut submit = rpc::SubmitActionRequest::default();
+            fill_action_choices(&body, parse::PlayAction::Attack, &offer, &mut submit).unwrap();
+            assert_eq!(
+                submit
+                    .action_choices
+                    .iter()
+                    .find(|choice| choice.group_id == "knock-out")
+                    .map(|choice| choice.option_id.as_str()),
+                expected
+            );
+        }
+
+        let mut submit = rpc::SubmitActionRequest::default();
+        assert!(
+            fill_action_choices(
+                &json!({"target":"Foe", "weapon":"Greataxe", "knockout":"lethal"}),
+                parse::PlayAction::Attack,
+                &offer,
+                &mut submit,
+            )
+            .is_err()
+        );
     }
 }
 

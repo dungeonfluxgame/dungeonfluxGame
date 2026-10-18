@@ -111,6 +111,15 @@ pub(super) fn parse_action(text: &str) -> Result<PlayAction, String> {
     })
 }
 
+/// Parses the optional attack knock-out selection using the phone choice IDs.
+pub(super) fn parse_knockout_choice(text: &str) -> Result<&'static str, String> {
+    match text {
+        "yes" => Ok("yes"),
+        "no" => Ok("no"),
+        _ => Err(format!("knockout {text:?} must be yes or no")),
+    }
+}
+
 impl PlayAction {
     /// The engine kind submitted for this action.
     pub(super) fn kind(self) -> rpc::GameplayActionKind {
@@ -295,6 +304,18 @@ mod tests {
         assert!(help.needs_option());
         assert!(parse_action("do something brave").is_err());
         assert!(parse_action("").is_err());
+    }
+
+    #[test]
+    fn knockout_choice_accepts_only_phone_option_ids() {
+        assert_eq!(parse_knockout_choice("yes"), Ok("yes"));
+        assert_eq!(parse_knockout_choice("no"), Ok("no"));
+        for invalid in ["", "true", "lethal", "YES", "1"] {
+            assert!(
+                parse_knockout_choice(invalid).is_err(),
+                "{invalid:?} must be refused"
+            );
+        }
     }
 
     #[test]
