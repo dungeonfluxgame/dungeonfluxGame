@@ -1,12 +1,14 @@
 //! The TV's screen-space effects (owner, 2026-10-17): the stage blur behind the cast, the slow
 //! push-in and rotating drift, the heavy scrim, the film grain, the breathing vignette, the
-//! firelight glows, the dust and the colour grade. All are on by default; `dev fx <effect> off`
-//! switches one off for every display, and the display view carries the names switched off.
+//! firelight glows, the dust and the colour grade. The pictures are photographs, so the effects
+//! that paint over them (firelight, dust, colour grade) start off (owner, 2026-10-17: "make sure
+//! they are photograph like"); `dev fx <effect> on|off` switches any of them for every display,
+//! and the display view carries the names switched off.
 //! It is presentation only and never touches game state.
 
 use std::{
     collections::BTreeSet,
-    sync::{Mutex, PoisonError},
+    sync::{LazyLock, Mutex, PoisonError},
 };
 
 use df_protocol::common as rpc;
@@ -24,7 +26,11 @@ pub(super) const EFFECTS: [&str; 8] = [
     "grade",
 ];
 
-static OFF: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
+/// Effects that paint over the photograph and start switched off.
+const OFF_BY_DEFAULT: [&str; 3] = ["firelight", "dust", "grade"];
+
+static OFF: LazyLock<Mutex<BTreeSet<&'static str>>> =
+    LazyLock::new(|| Mutex::new(OFF_BY_DEFAULT.into_iter().collect()));
 
 fn off() -> std::sync::MutexGuard<'static, BTreeSet<&'static str>> {
     OFF.lock().unwrap_or_else(PoisonError::into_inner)
@@ -89,8 +95,11 @@ mod tests {
     }
 
     #[test]
-    fn effects_are_on_by_default_and_a_switched_off_one_reaches_the_display_view() {
+    fn painting_effects_start_off_and_a_switched_off_one_reaches_the_display_view() {
         // One test owns the process-wide state, so the steps run in order.
+        let mut view = display_view();
+        apply(&mut view);
+        assert_eq!(effects_off(&view), vec!["dust", "firelight", "grade"]);
         for effect in EFFECTS {
             set(effect, true).unwrap();
         }

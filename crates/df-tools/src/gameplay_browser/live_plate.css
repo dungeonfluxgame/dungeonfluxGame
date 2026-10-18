@@ -195,3 +195,9 @@
 .tv-stage[data-fx-dust=off] .tv-plate-dust{display:none}
 .tv-stage[data-fx-grade=off] .tv-scene-set,.tv-stage[data-fx-grade=off][data-shot=plate] .tv-plate-img,.tv-stage[data-fx-grade=off][data-shot=plate] .tv-plate-video .tv-loop-clip{filter:none}
 .tv-stage[data-fx-grade=off] .tv-scene-set::before{display:none}
+/* Grade off keeps people as photographed: no sepia or depth tints, no coloured rim-light halos. */
+.tv-stage[data-fx-grade=off] .tv-figures{--tint:brightness(1)}
+.tv-stage[data-fx-grade=off] .tv-fig,.tv-stage[data-fx-grade=off] .tv-fig[data-low],.tv-stage[data-fx-grade=off] .tv-fig[data-depth]{--depth-grade:brightness(1)}
+.tv-stage[data-fx-grade=off] .tv-figures[data-lit] .tv-fig:not([data-speaking]):not([data-depth=far]){--depth-grade:brightness(.82)}
+.tv-stage[data-fx-grade=off] .tv-fig[data-speaking],.tv-stage[data-fx-grade=off] .tv-fig[data-depth][data-speaking]{--depth-grade:brightness(1.06)}
+.tv-stage[data-fx-grade=off] .tv-fig-sprite{filter:var(--grade)}
