@@ -223,6 +223,26 @@ fn with_motion<R>(operate: impl FnOnce(&mut Motion) -> R) -> Option<R> {
     MOTION.with(|slot| slot.borrow_mut().as_mut().map(operate))
 }
 
+fn clear_timeline(motion: &mut Motion) {
+    motion.previous = None;
+    motion.cells.clear();
+    motion.battlefield_lines.clear();
+    motion.fight_lines.clear();
+    motion.pending_voice.clear();
+    motion.open_voice_lines.clear();
+    motion.seen.clear();
+    motion.latest_seq = 0;
+    motion.battlefield_progress = None;
+    motion.reported_seq = 0;
+    motion.reported_at_ms = 0;
+}
+
+/// Drops line and combat history before processing a restored view. The connection generation,
+/// conductor sound state and current server view remain owned by their existing lifetimes.
+pub(super) fn reset_timeline() {
+    with_motion(clear_timeline);
+}
+
 fn now_ms() -> u64 {
     web_sys::window()
         .and_then(|window| window.performance())
@@ -2645,9 +2665,10 @@ fn render_log(client: &Rc<RefCell<Client>>, party: &[rpc::PartyMemberView]) -> R
 #[cfg(test)]
 mod tests {
     use super::{
-        CheckVoiceLine, Detail, check_roll_script_line, check_voice_script_line, fight_line_stage,
-        fight_scripts, fresh_outcomes, merge_battlefield_beat_log, merge_feed_line, narration_line,
-        restore_pending_move_origin, take_pending_voice, timing_clip_state,
+        CheckVoiceLine, Detail, LineDetail, check_roll_script_line, check_voice_script_line,
+        fight_line_stage, fight_scripts, fresh_outcomes, merge_battlefield_beat_log,
+        merge_feed_line, narration_line, restore_pending_move_origin, take_pending_voice,
+        timing_clip_state,
     };
     use crate::stage_conductor::{ClipOp, ClipSignal, Command, Conductor, ViewPlan};
     use crate::stage_machines::LineState;
@@ -2679,6 +2700,137 @@ mod tests {
             scripted: false,
             roll: None,
         }
+    }
+
+    fn empty_motion() -> super::Motion {
+        super::Motion {
+            client: std::rc::Weak::new(),
+            conductor: Conductor::new(),
+            thinking_for: None,
+            previous: None,
+            scene_key: None,
+            narration: String::new(),
+            party_hit_points: Vec::new(),
+            cells: HashMap::new(),
+            battlefield_lines: Vec::new(),
+            fight_lines: std::collections::VecDeque::new(),
+            pending_voice: std::collections::VecDeque::new(),
+            open_voice_lines: std::collections::VecDeque::new(),
+            seen: std::collections::VecDeque::new(),
+            generation: 0,
+            roll_tick: false,
+            overlay: None,
+            frame: None,
+            frame_armed: false,
+            timer: None,
+            timer_armed: false,
+            log: std::collections::VecDeque::new(),
+            latest_seq: 0,
+            reported_seq: 0,
+            reported_at_ms: 0,
+            battlefield_progress: None,
+        }
+    }
+
+    #[test]
+    fn restored_reply_with_reused_sequence_reaches_stage_after_combat_cache_reset() {
+        use crate::presentation::TableRole;
+        use crate::stage_conductor::{LineTiming, ScriptLine, ViewPlan};
+        use crate::stage_director::ViewDiff;
+
+        let mut motion = empty_motion();
+        motion.generation = 9;
+        motion.conductor.set_sound(true);
+        motion.seen.push_back(7);
+        motion.cells.insert("Old combatant".into(), (2, 3));
+        motion.battlefield_lines.push(41);
+        motion.fight_lines.push_back(41);
+        motion
+            .pending_voice
+            .push_back((41, crate::stage_machines::ClipState::Playing, 10));
+        motion.open_voice_lines.push_back(41);
+        motion.latest_seq = 80;
+
+        super::clear_timeline(&mut motion);
+
+        assert_eq!(motion.generation, 9);
+        assert!(motion.cells.is_empty());
+        assert!(motion.battlefield_lines.is_empty());
+        assert!(motion.fight_lines.is_empty());
+        assert!(motion.pending_voice.is_empty());
+        assert!(motion.open_voice_lines.is_empty());
+        assert_eq!(motion.latest_seq, 0);
+        assert!(super::remember(&mut motion.seen, 7));
+
+        let restored = feed_line(7, TableRole::Npc, "Marek's restored reply.");
+        let voice = VoiceLine {
+            role: crate::voice_line::NARRATOR_ROLE.into(),
+            text: restored.text.clone(),
+        };
+        let script = ScriptLine {
+            voiceable: true,
+            read_ms: 1_000,
+            slot: None,
+            settled: false,
+            timing: LineTiming::Ordinary,
+            detail: Detail::Line(LineDetail {
+                speaker: restored.speaker.clone(),
+                actor_id: restored.actor_id.clone(),
+                role: TableRole::Npc,
+                kind: restored.kind,
+                text: restored.text.clone(),
+                fight_line: false,
+                voice: Some(voice),
+                check_sequence: None,
+                check_roll: None,
+                check_settled: false,
+                dice: None,
+            }),
+        };
+        let commands = motion.conductor.restart(
+            0,
+            ViewPlan {
+                diff: ViewDiff::default(),
+                script: vec![script],
+                cast: Vec::new(),
+            },
+        );
+        let clip_id = commands.iter().find_map(|command| match command {
+            Command::Clip {
+                id,
+                op: ClipOp::Request,
+                detail: Detail::Line(line),
+            } if line.text == restored.text => Some(*id),
+            _ => None,
+        });
+        let clip_id = clip_id.expect("restored line must request its voice");
+        let ready = motion.conductor.on_clip(0, clip_id, ClipSignal::Loaded);
+        let play_id = ready.iter().find_map(|command| match command {
+            Command::Clip {
+                id,
+                op: ClipOp::Play,
+                detail: Detail::Line(line),
+            } if line.text == restored.text => Some(*id),
+            _ => None,
+        });
+        let play_id = play_id.expect("ready restored line must play");
+        let opened = motion.conductor.on_clip(
+            0,
+            play_id,
+            ClipSignal::Started {
+                duration_ms: Some(1_000),
+            },
+        );
+        assert!(opened.iter().any(|command| {
+            matches!(
+                command,
+                Command::Line {
+                    state: LineState::Opening,
+                    detail: Detail::Line(line),
+                    ..
+                } if line.text == restored.text
+            )
+        }));
     }
 
     /// Wasm-only: the phone feed is compiled for the browser target. Arrange a scene greeting, the

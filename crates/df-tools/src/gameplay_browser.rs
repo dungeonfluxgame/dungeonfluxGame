@@ -2201,6 +2201,7 @@ fn receive_view(
     }
     if acceptance == ConnectionViewAcceptance::View(ViewAcceptance::Applied) {
         if display_timeline_reset {
+            live_motion::reset_timeline();
             crate::stage_conductor::request_timeline_reset();
         }
         let mut state = client.borrow_mut();
