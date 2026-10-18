@@ -1395,6 +1395,8 @@ pub(super) fn project_journey(
         Vec::new()
     };
     let mut journey = rpc::JourneyView {
+        // Filled by `home_video::apply` for the display while a kill shot is pending or ready.
+        kill_shot: None,
         phase: if creation.is_some() {
             rpc::JourneyPhase::CharacterCreation as i32
         } else {

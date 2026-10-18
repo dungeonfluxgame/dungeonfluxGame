@@ -78,6 +78,7 @@ const DURATION_SECONDS: u32 = 5;
 /// Changing how a clip is requested or cached changes this, so old loops are not reused for it.
 const RECIPE: &str = "df-home-video/2";
 const SCENE_RECIPE: &str = "df-scene-video/2";
+const KILL_RECIPE: &str = "df-kill-shot/1";
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 /// The still is sent inline as the first and the last frame, so its size is the request's size twice;
@@ -110,7 +111,12 @@ mod scene_video_prompt;
 pub(super) use scene_video_prompt::model_staging;
 #[path = "video_clip_spec.rs"]
 pub(super) mod clip_spec;
-use clip_spec::{ClipInput, ClipRecipe, HomeLoopSpec, SceneLoopSpec};
+#[path = "kill_shot.rs"]
+pub(in crate::gameplay) mod kill_shot;
+#[cfg(test)]
+#[path = "kill_shot_tests.rs"]
+mod kill_shot_tests;
+use clip_spec::{ClipInput, ClipRecipe, HomeLoopSpec, KillShotSpec, SceneLoopSpec};
 
 fn home_video_prompt() -> String {
     format!("{AMBIENCE_LOOK} {HOME_MOTION}")
@@ -394,6 +400,7 @@ impl Failure {
 enum Variant {
     Home,
     Scene,
+    KillShot,
 }
 
 /// The clip a painting or a plate currently points at: the hub's key for it and its file name in
@@ -402,6 +409,15 @@ enum Variant {
 struct Lane {
     key: ResourceKey,
     file: String,
+}
+
+/// One kill shot's slot: its request, its clip lane and its still's served path.
+#[derive(Clone, Debug)]
+struct KillSlot {
+    request: kill_shot::KillShotRequest,
+    lane: Lane,
+    still_path: String,
+    started: Instant,
 }
 
 /// A painting's slot: its still is being prepared (the clip's key is not known yet), or its clip
@@ -432,6 +448,8 @@ struct ClipJob {
     still: StillBytes,
     /// Why the clip was asked for, for the log lines.
     reason: String,
+    /// Killer and victim names for a kill shot's `KILL_SHOT` audit lines.
+    kill_names: Option<(String, String)>,
 }
 
 /// Where the clip requests go: the live fal endpoints, or a loopback fixture in tests.
@@ -468,6 +486,10 @@ pub(crate) struct Engine {
     home: Mutex<BTreeMap<String, HomeSlot>>,
     /// The scene plate key to the clip of its latest request.
     scenes: Mutex<BTreeMap<String, Lane>>,
+    /// Kill shots by their blow identity, plus the latest one's id.
+    kill_shots: Mutex<BTreeMap<String, KillSlot>>,
+    latest_kill: Mutex<Option<String>>,
+    kill_shown_audited: Mutex<BTreeSet<(String, u64)>>,
     /// Clips whose run has been started and has not ended. This is not a failure memory: it only
     /// tells a view that a run is on the way before the hub has heard of it.
     launching: Mutex<BTreeSet<ResourceKey>>,
@@ -641,6 +663,28 @@ pub(crate) fn scene_clip_view(plate_key: &str) -> SceneClipView {
         .unwrap_or(SceneClipView::None)
 }
 
+/// Requests one kill shot for a committed killing blow. Called only after the
+/// blow is committed and its still is ready; the first call for a blow starts
+/// its one clip flight and a replayed call reuses it. A still that failed its
+/// photo check never reaches here, so no clip is made from it.
+pub(crate) fn request_kill_shot(
+    request: kill_shot::KillShotRequest,
+    still: Vec<u8>,
+    still_path: String,
+) {
+    let Some(engine) = ENGINE.lock().ok().and_then(|engine| engine.clone()) else {
+        return;
+    };
+    engine.request_kill_shot(request, still, still_path);
+}
+
+fn audit_kill(status: &str, killer: &str, victim: &str, elapsed_ms: u128, reason: &str) {
+    super::actor::record_audit_line(
+        "gameplay.kill_shot",
+        kill_shot::audit_line(status, killer, victim, elapsed_ms, reason),
+    );
+}
+
 /// Sets the home loop on a view: the state and the served path, for the display's lobby only. It
 /// runs on every view the service hands out, so a loop that lands is seen by the next view, and
 /// the journey projection cached by revision does not hold a stale state.
@@ -665,6 +709,11 @@ pub(crate) fn apply(message: &mut rpc::ViewMessage) {
     };
     journey.home_video_state = loop_view.proto_state() as i32;
     journey.home_video_path = loop_view.path();
+    // K1: the latest kill shot rides on the display view while pending/ready;
+    // a pending clip carries no path and the client shows nothing for it.
+    if let Some(engine) = ENGINE.lock().ok().and_then(|engine| engine.clone()) {
+        journey.kill_shot = engine.kill_shot_for_view();
+    }
 }
 
 /// Serves the cached loops as `GET /gameplay/home-video/<key>`.
@@ -717,6 +766,7 @@ fn clip_recipe(variant: Variant) -> ClipRecipe {
         recipe: match variant {
             Variant::Home => RECIPE,
             Variant::Scene => SCENE_RECIPE,
+            Variant::KillShot => KILL_RECIPE,
         }
         .to_owned(),
         finish: LoopFinish::CURRENT.label(),
@@ -766,6 +816,9 @@ impl Engine {
             flights: Flights::default(),
             home: Mutex::new(BTreeMap::new()),
             scenes: Mutex::new(BTreeMap::new()),
+            kill_shots: Mutex::new(BTreeMap::new()),
+            latest_kill: Mutex::new(None),
+            kill_shown_audited: Mutex::new(BTreeSet::new()),
             launching: Mutex::new(BTreeSet::new()),
             price: tokio::sync::Mutex::new(None),
             living: setup.living,
@@ -895,6 +948,7 @@ impl Engine {
             unavailable,
             still: StillBytes::Plate(still),
             reason: reason.to_owned(),
+            kill_names: None,
         };
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             locked(&self.launching).remove(&lane.key);
@@ -908,6 +962,111 @@ impl Engine {
         };
         let engine = Arc::clone(self);
         handle.spawn(async move { engine.fly_clip(spec, lane.key, job).await });
+    }
+
+    fn request_kill_shot(
+        self: &Arc<Self>,
+        request: kill_shot::KillShotRequest,
+        still: Vec<u8>,
+        still_path: String,
+    ) {
+        if !self.scene_enabled {
+            audit_kill("failed", &request.killer, &request.victim, 0, "video_off");
+            return;
+        }
+        let prompt = kill_shot::motion_prompt(&request);
+        let input = ClipInput::ready(&still, &prompt);
+        let spec = KillShotSpec::new(
+            &request.id,
+            &request.killer,
+            &request.victim,
+            input.clone(),
+            clip_recipe(Variant::KillShot),
+        );
+        let lane = Lane {
+            key: ResourceKey::of(&spec),
+            file: clip_spec::file_key(&spec),
+        };
+        let slot = KillSlot {
+            request: request.clone(),
+            lane: lane.clone(),
+            still_path,
+            started: Instant::now(),
+        };
+        locked(&self.kill_shots).insert(request.id.clone(), slot);
+        *locked(&self.latest_kill) = Some(request.id.clone());
+        if self.lane_state(&lane) != LaneState::Forgotten || !self.claim_launch(&lane.key) {
+            return;
+        }
+        audit_kill(
+            "still_ready",
+            &request.killer,
+            &request.victim,
+            0,
+            "photo_check_passed",
+        );
+        audit_kill(
+            "requested",
+            &request.killer,
+            &request.victim,
+            0,
+            "killing_blow",
+        );
+        let job = ClipJob {
+            variant: Variant::KillShot,
+            resource_subject: spec.subject(),
+            file: lane.file.clone(),
+            input,
+            unavailable: None,
+            still: StillBytes::Plate(still),
+            reason: "killing-blow".to_owned(),
+            kill_names: Some((request.killer.clone(), request.victim.clone())),
+        };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            locked(&self.launching).remove(&lane.key);
+            audit_kill(
+                "failed",
+                &request.killer,
+                &request.victim,
+                0,
+                "runtime_unavailable",
+            );
+            return;
+        };
+        let engine = Arc::clone(self);
+        handle.spawn(async move { engine.fly_clip(spec, lane.key, job).await });
+    }
+
+    /// The view's kill shot for the latest blow, if any. The first ready
+    /// delivery is audited as shown once per (id, epoch); the client's own
+    /// DISPLAY records are the playback evidence.
+    fn kill_shot_for_view(&self) -> Option<rpc::KillShot> {
+        let id = locked(&self.latest_kill).clone()?;
+        let slot = locked(&self.kill_shots).get(&id).cloned()?;
+        let (state, path) = match self.lane_state(&slot.lane) {
+            LaneState::Ready => ("ready", Some(format!("{ROUTE}/{}", slot.lane.file))),
+            LaneState::Pending => ("pending", None),
+            LaneState::Failed => ("failed", None),
+            LaneState::Forgotten => return None,
+        };
+        if state == "ready"
+            && locked(&self.kill_shown_audited)
+                .insert((slot.request.id.clone(), slot.request.epoch))
+        {
+            audit_kill(
+                "shown",
+                &slot.request.killer,
+                &slot.request.victim,
+                slot.started.elapsed().as_millis(),
+                "delivered_ready",
+            );
+        }
+        Some(kill_shot::view_projection(
+            &slot.request,
+            path,
+            state,
+            &slot.still_path,
+        ))
     }
 
     fn scene_clip_view(&self, plate_key: &str) -> SceneClipView {
@@ -960,6 +1119,7 @@ impl Engine {
                 unavailable,
                 still: StillBytes::Prepared(still),
                 reason: "home-loop".to_owned(),
+                kill_names: None,
             };
             self.fly_clip(spec, lane.key, job).await;
         }
@@ -995,6 +1155,9 @@ impl Engine {
         let elapsed = started.elapsed();
         match outcome {
             Ok(done) => {
+                if let Some((killer, victim)) = &job.kill_names {
+                    audit_kill("clip_ready", killer, victim, elapsed.as_millis(), "ready");
+                }
                 log_ready(&job, &done, paid.as_ref(), elapsed);
                 Ok(Produced {
                     generated: Generated {
@@ -1006,6 +1169,15 @@ impl Engine {
                 })
             }
             Err(failure) => {
+                if let Some((killer, victim)) = &job.kill_names {
+                    audit_kill(
+                        "failed",
+                        killer,
+                        victim,
+                        elapsed.as_millis(),
+                        &failure.label(),
+                    );
+                }
                 log_failed(&job, &failure, paid.as_ref(), elapsed);
                 Err(classify(&failure))
             }
@@ -1331,6 +1503,7 @@ fn clip_request(
     let (asset_key, rights_revision, recipe) = match variant {
         Variant::Home => ("home-still", "home-video", RECIPE),
         Variant::Scene => ("scene-plate", "scene-video", SCENE_RECIPE),
+        Variant::KillShot => ("kill-shot-still", "kill-shot", KILL_RECIPE),
     };
     let reference = video_basis_with(still, key, prompt, asset_key, rights_revision, recipe)?;
     let request_basis = video_basis_with(still, key, prompt, asset_key, rights_revision, recipe)?;
@@ -1786,6 +1959,16 @@ fn log_requested(job: &ClipJob) {
             None,
             None,
         ),
+        Variant::KillShot => record_scene_video(
+            "request",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            &job.reason,
+            None,
+            None,
+            None,
+        ),
     }
 }
 
@@ -1859,6 +2042,26 @@ fn log_ready(job: &ClipJob, done: &ClipDone, paid: Option<&PaidCall>, elapsed: D
             Some(request_ms),
             Some(done.bytes),
         ),
+        (Variant::KillShot, true) => record_scene_video(
+            "ready",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            "cached",
+            Some(0),
+            Some(0),
+            Some(done.bytes),
+        ),
+        (Variant::KillShot, false) => record_scene_video(
+            "ready",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            "ambient-scene-loop",
+            paid.map(|paid| paid.elapsed.as_millis()),
+            Some(request_ms),
+            Some(done.bytes),
+        ),
     }
 }
 
@@ -1894,6 +2097,16 @@ fn log_failed(job: &ClipJob, failure: &Failure, paid: Option<&PaidCall>, elapsed
             None,
         ),
         Variant::Scene => record_scene_video(
+            "failed",
+            &job.file,
+            MODEL,
+            DURATION_SECONDS,
+            &failure.label(),
+            None,
+            Some(request_ms),
+            None,
+        ),
+        Variant::KillShot => record_scene_video(
             "failed",
             &job.file,
             MODEL,
@@ -1943,6 +2156,7 @@ fn record_failure_detail(job: &ClipJob, failure: &Failure) {
                 match job.variant {
                     Variant::Home => "home",
                     Variant::Scene => "scene",
+                    Variant::KillShot => "kill_shot",
                 }
                 .to_owned(),
             ),
@@ -2295,6 +2509,23 @@ impl Engine {
 
     pub(crate) fn scene_view_for_test(&self, plate_key: &str) -> SceneClipView {
         self.scene_clip_view(plate_key)
+    }
+
+    pub(crate) fn request_kill_for_test(
+        self: &Arc<Self>,
+        request: kill_shot::KillShotRequest,
+        still: Vec<u8>,
+    ) {
+        self.request_kill_shot(request, still, "/gameplay/imagery/test-still".to_owned());
+    }
+
+    pub(crate) fn kill_stage_of(&self, kill_id: &str) -> Option<String> {
+        let lane = locked(&self.kill_shots).get(kill_id).cloned()?.lane;
+        Some(self.stage_text(&lane))
+    }
+
+    pub(crate) fn kill_view_for_test(&self) -> Option<rpc::KillShot> {
+        self.kill_shot_for_view()
     }
 }
 

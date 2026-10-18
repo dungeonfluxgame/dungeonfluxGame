@@ -981,6 +981,7 @@ fn render_display(
             input.scene.scene_video_state,
             &input.scene.scene_video_path,
         )?;
+        stage.update_kill_shot_wire(input.journey.kill_shot.as_ref())?;
         render_item_card(
             &state.document,
             stage.root(),

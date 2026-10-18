@@ -219,6 +219,8 @@ pub(super) struct TvStage {
     atmosphere: Element,
     /// PLAY-V10: the looping video over the still, below the scrim and the themed blocks.
     home_loop: live_home_video::HomeLoop,
+    /// The kill-shot replay of the fight just finished, played once over everything.
+    kill_shot: live_kill_shot::KillShotPlayer,
     lobby_row: Element,
     stagebox: Element,
     narration: Element,
@@ -1821,6 +1823,7 @@ impl TvStage {
         let art = node(document, &root, "div", "tv-art", "")?;
         let loop_layer = node(document, &root, "div", "tv-loop", "")?;
         let home_loop = live_home_video::HomeLoop::new(document, loop_layer)?;
+        let kill_shot = live_kill_shot::KillShotPlayer::new(document, &root)?;
         let atmosphere = node(document, &root, "div", "tv-atmosphere", "")?;
         let mut plate = mount_plate(document, &root)?;
         let scene_graph = live_scene_stage::StageLayer::mount(document, &root)?;
@@ -1965,6 +1968,7 @@ impl TvStage {
             lede,
             atmosphere,
             home_loop,
+            kill_shot,
             lobby_row,
             stagebox,
             narration,
@@ -2019,6 +2023,10 @@ impl TvStage {
             graph.as_ref(),
             (baked_revision != 0).then_some(baked_revision),
         )
+    }
+
+    pub(super) fn update_kill_shot_wire(&self, shot: Option<&rpc::KillShot>) -> Result<(), JsValue> {
+        self.kill_shot.apply(shot)
     }
 
     pub(super) fn update_scene_video_wire(&self, state: i32, path: &str) -> Result<(), JsValue> {

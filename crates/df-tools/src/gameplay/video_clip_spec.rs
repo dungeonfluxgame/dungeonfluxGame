@@ -72,6 +72,8 @@ pub(in crate::gameplay) enum PromptVariant {
     Ambient,
     /// The ambient loop of a scene plate, staged from the plate's own description.
     SceneAmbient,
+    /// A kill shot: one real-time blow landing and the victim falling, from its still.
+    KillShot,
 }
 
 impl PromptVariant {
@@ -79,6 +81,7 @@ impl PromptVariant {
         match self {
             Self::Ambient => "ambient",
             Self::SceneAmbient => "scene_ambient",
+            Self::KillShot => "kill_shot",
         }
     }
 }
@@ -86,6 +89,8 @@ impl PromptVariant {
 /// How the still is given to the model. Both loops give the same still as the first and the last
 /// frame, so the clip ends where it began and loops without a seam.
 const FRAMES: &str = "first_and_last_frame_same_still";
+/// A kill shot is not a loop: the still is its first frame only, and it plays once forward.
+const KILL_FRAMES: &str = "first_frame_only";
 
 fn canonical(
     variant: &str,
@@ -93,10 +98,20 @@ fn canonical(
     input: &ClipInput,
     recipe: &ClipRecipe,
 ) -> String {
+    canonical_with_frames(variant, prompt_variant, input, recipe, FRAMES)
+}
+
+fn canonical_with_frames(
+    variant: &str,
+    prompt_variant: PromptVariant,
+    input: &ClipInput,
+    recipe: &ClipRecipe,
+    frames: &str,
+) -> String {
     json!({
         "variant": variant,
         "prompt_variant": prompt_variant.label(),
-        "frames": FRAMES,
+        "frames": frames,
         "still": input.still_digest,
         "prompt": input.prompt,
         "unavailable": input.unavailable,
@@ -185,6 +200,69 @@ impl ResourceSpec for SceneLoopSpec {
     fn subject(&self) -> String {
         let short: String = self.plate_key.chars().take(12).collect();
         format!("video:scene:{}", slug(&short, 12))
+    }
+
+    fn chrome(&self) -> Chrome {
+        Neutral::Nothing
+    }
+}
+
+/// One killing blow's clip, made from its photographic still. Contract version 1: the key
+/// covers the blow's identity, the still, the motion prompt and the recipe, so a replayed
+/// view of the same blow reuses this clip and a different blow never does.
+#[derive(Clone, Debug)]
+pub(in crate::gameplay) struct KillShotSpec {
+    kill_id: String,
+    killer: String,
+    victim: String,
+    input: ClipInput,
+    recipe: ClipRecipe,
+}
+
+impl KillShotSpec {
+    pub(in crate::gameplay) fn new(
+        kill_id: &str,
+        killer: &str,
+        victim: &str,
+        input: ClipInput,
+        recipe: ClipRecipe,
+    ) -> Self {
+        Self {
+            kill_id: kill_id.to_owned(),
+            killer: killer.to_owned(),
+            victim: victim.to_owned(),
+            input,
+            recipe,
+        }
+    }
+}
+
+impl ResourceSpec for KillShotSpec {
+    const KIND: ResourceKind = ResourceKind::VideoClip;
+    const CONTRACT_VERSION: u32 = 1;
+
+    fn canonical(&self) -> String {
+        let mut text = canonical_with_frames(
+            "kill_shot",
+            PromptVariant::KillShot,
+            &self.input,
+            &self.recipe,
+            KILL_FRAMES,
+        );
+        // The blow's identity is part of the key even when two blows share a still.
+        text.push_str(&format!(
+            "|kill={}|killer={}|victim={}",
+            self.kill_id, self.killer, self.victim
+        ));
+        text
+    }
+
+    fn subject(&self) -> String {
+        format!(
+            "video:kill:{}-{}",
+            slug(&self.killer, 24),
+            slug(&self.victim, 24)
+        )
     }
 
     fn chrome(&self) -> Chrome {
