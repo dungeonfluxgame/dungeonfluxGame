@@ -29,6 +29,8 @@ const CAMERA: &str = "Camera: locked tripod at the battle camera home angle, loo
 const LOOK: &str = "A real photograph from a live-action fantasy television drama: practical costume and worn real props, natural skin and fabric texture, restrained colour, soft key light from the upper left, fine film grain. Not an illustration, not a game render.";
 const FRAMING: &str = "Portrait 2:3 frame. Keep the complete body and entire weapon inside the canvas throughout, including the strike or fall. Leave broad clear margins. Keep the same identity, costume, proportions, weapon, scale and camera as the reference.";
 const DEADLINE: Duration = Duration::from_secs(900);
+/// An image edit's whole request; the shared native HTTP client refuses anything over 180 s.
+const IMAGE_EDIT_TIMEOUT: Duration = Duration::from_secs(180);
 const MAXIMUM_CLIP_BYTES: usize = 16 * 1024 * 1024;
 const SAMPLE_PIXELS: usize = 64 * 96;
 
@@ -1090,15 +1092,13 @@ impl FrameProvider for df_providers::NativeImageEditProvider {
                 output: ImageFormat::Png,
                 moderation: df_providers::ImageModeration::Low,
             };
-            self.edit(&edit, Duration::from_secs(300))
-                .await
-                .map_err(|error| {
-                    super::actor::record_audit_line(
-                        "gameplay.character_clips",
-                        format!("CHARACTER_CLIP image_failed reason={error:?} fallback=cutout"),
-                    );
-                    failure("clip_image_failed")
-                })
+            self.edit(&edit, IMAGE_EDIT_TIMEOUT).await.map_err(|error| {
+                super::actor::record_audit_line(
+                    "gameplay.character_clips",
+                    format!("CHARACTER_CLIP image_failed reason={error:?} fallback=cutout"),
+                );
+                failure("clip_image_failed")
+            })
         })
     }
 }
@@ -1318,24 +1318,16 @@ fn native_providers(live: bool) -> Result<NativeProviders, std::io::Error> {
             df_providers::NativeImageEditProvider::new(
                 df_providers::ImageEditConfig::live(),
                 &key,
-                Duration::from_secs(300),
+                IMAGE_EDIT_TIMEOUT,
             )
             .map(|provider| Arc::new(provider) as Arc<dyn FrameProvider>)
             .map_err(|_| std::io::Error::other("character clip image configuration invalid"))
         })
         .transpose()?;
     let videos = if let Some(key) = fal_key {
-        use std::net::ToSocketAddrs;
-        let mut pins = Vec::new();
-        for host in ["v3.fal.media", "v3b.fal.media"] {
-            if let Ok(addresses) = (host, 443).to_socket_addrs() {
-                for address in addresses {
-                    if let Ok(pin) = df_providers::FalCdnPin::new(host, &[address.ip()]) {
-                        pins.push(pin);
-                    }
-                }
-            }
-        }
+        // One pin per fal media host with all its addresses, as the home video does; a pin per
+        // address exceeds the media fetcher's limit of 16 and refuses the provider.
+        let pins = super::home_video::resolve_pins();
         if pins.is_empty() {
             None
         } else {

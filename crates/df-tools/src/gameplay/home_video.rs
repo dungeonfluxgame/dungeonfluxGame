@@ -604,7 +604,7 @@ pub(crate) fn attach_kit(kit: &Kit) -> Result<(), io::Error> {
 }
 
 /// Resolves each pinned fal media host once, at startup. Only public addresses are kept.
-fn resolve_pins() -> Vec<FalCdnPin> {
+pub(super) fn resolve_pins() -> Vec<FalCdnPin> {
     CDN_HOSTS
         .iter()
         .filter_map(|host| {
