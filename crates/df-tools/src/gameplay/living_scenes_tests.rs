@@ -1500,3 +1500,103 @@ fn kill_shot_rejected_committed_blows_never_queue_still_work() {
     assert!(inner.take_kill_stills(Instant::now(), 2).is_empty());
     assert!(locked(&inner.state).kill_stills_pending.is_empty());
 }
+
+#[tokio::test]
+async fn resource_worker_executes_queued_splat_worlds_within_the_shared_bound_and_wakes_views() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::gameplay::resources::{
+        Generated, Maker, ResourceKey, ResourceStatus, SplatWorldFormat, SplatWorldSpec,
+    };
+    use tokio::sync::{Semaphore, mpsc};
+
+    let (inner, _) = director(&dossier());
+    // Keep the presentation idle: this test exercises the production worker's resource path.
+    locked(&inner.state).stage = None;
+    let bound = super::super::imagery::MAXIMUM_IN_FLIGHT;
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Semaphore::new(0));
+    let (started, mut starts) = mpsc::channel(bound + 1);
+    let mut keys = Vec::new();
+    for index in 0..=bound {
+        let spec = SplatWorldSpec::new(
+            format!("worker-place-{index}"),
+            vec!["An empty photographic room".to_owned()],
+            SplatWorldFormat::Ply,
+        );
+        keys.push(ResourceKey::of(&spec));
+        let active = active.clone();
+        let peak = peak.clone();
+        let release = release.clone();
+        let started = started.clone();
+        let maker: Maker = Arc::new(move || {
+            let active = active.clone();
+            let peak = peak.clone();
+            let release = release.clone();
+            let started = started.clone();
+            Box::pin(async move {
+                let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(count, Ordering::SeqCst);
+                started.send(index).await.unwrap();
+                release.acquire().await.unwrap().forget();
+                active.fetch_sub(1, Ordering::SeqCst);
+                Ok(Generated::new(format!("fake-world-{index}")))
+            })
+        });
+        assert!(matches!(
+            inner.imagery.hub().get_or_request(&spec, maker),
+            ResourceStatus::Pending(_)
+        ));
+    }
+    let (_checkpoints, receiver) = watch::channel(super::super::model::initial().unwrap());
+    let mut views = inner.wake.subscribe();
+    let task = tokio::spawn(inner.clone().run(receiver));
+    let mut worker = AbortWorker(task);
+    tokio::time::timeout(seconds(5), async {
+        for _ in 0..bound {
+            starts.recv().await.unwrap();
+        }
+        assert!(starts.try_recv().is_err(), "the extra world stays queued");
+        assert_eq!(active.load(Ordering::SeqCst), bound);
+        assert!(
+            keys.iter()
+                .all(|key| matches!(inner.imagery.hub().status(key), ResourceStatus::Pending(_)))
+        );
+        // A completed job frees exactly one slot; the queued world then starts.
+        release.add_permits(1);
+        starts.recv().await.unwrap();
+        views.changed().await.unwrap();
+        assert_eq!(peak.load(Ordering::SeqCst), bound);
+        assert_eq!(active.load(Ordering::SeqCst), bound);
+        assert_eq!(
+            keys.iter()
+                .filter(|key| matches!(inner.imagery.hub().status(key), ResourceStatus::Ready(_)))
+                .count(),
+            1
+        );
+        views.borrow_and_update();
+        release.add_permits(bound);
+        while keys
+            .iter()
+            .any(|key| !matches!(inner.imagery.hub().status(key), ResourceStatus::Ready(_)))
+        {
+            views.changed().await.unwrap();
+        }
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(peak.load(Ordering::SeqCst), bound);
+    })
+    .await
+    .expect("the owned resource worker completes every fake world and republishes");
+    worker.0.abort();
+    assert!((&mut worker.0).await.unwrap_err().is_cancelled());
+}
+
+/// A failed assertion still cancels this test's worker and its owned JoinSet.
+struct AbortWorker(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortWorker {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}

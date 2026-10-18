@@ -1000,6 +1000,7 @@ enum Job {
 }
 
 enum Done {
+    Resource(resources::Completed),
     KillShot {
         request: kill_shot::KillShotRequest,
         elapsed: Duration,
@@ -1686,6 +1687,7 @@ impl Inner {
         let mut exchanges = self.social.subscribe_exchanges();
         let mut kill_requests = self.wake.subscribe();
         let mut tasks: JoinSet<Done> = JoinSet::new();
+        let mut pending_renders = std::collections::VecDeque::new();
         loop {
             tokio::select! {
                 changed = checkpoints.changed(), if checkpoints_open => {
@@ -1714,8 +1716,19 @@ impl Inner {
             for job in canonical_jobs {
                 self.spawn(&mut tasks, job);
             }
-            for job in self.evaluate() {
+            pending_renders.extend(self.evaluate());
+            while tasks.len() < super::imagery::MAXIMUM_IN_FLIGHT {
+                let Some(job) = pending_renders.pop_front() else {
+                    break;
+                };
                 self.spawn(&mut tasks, job);
+            }
+            for job in self
+                .imagery
+                .hub()
+                .take_jobs(super::imagery::MAXIMUM_IN_FLIGHT.saturating_sub(tasks.len()))
+            {
+                tasks.spawn(async move { Done::Resource(job.execute().await) });
             }
         }
     }
@@ -2090,6 +2103,11 @@ impl Inner {
 
     /// Records a finished render. A scene refresh waits for a quiet moment before it lands.
     fn finish(&self, done: Done) {
+        if let Done::Resource(completed) = done {
+            self.imagery.hub().complete(completed);
+            self.wake.send_modify(|sequence| *sequence += 1);
+            return;
+        }
         if let Done::KillShot {
             request,
             elapsed,
@@ -2116,7 +2134,7 @@ impl Inner {
                 .to_owned()
         };
         let (kind, outcome) = match &done {
-            Done::Canonical { .. } | Done::KillShot { .. } => return,
+            Done::Resource(_) | Done::Canonical { .. } | Done::KillShot { .. } => return,
             Done::HeroCutout { result, .. } => ("hero_cutout", label_of(result)),
             Done::Expression { result, .. } => ("expression", label_of(result)),
             Done::Refresh { result, .. } => ("refresh", label_of(result)),
@@ -2129,7 +2147,7 @@ impl Inner {
         );
         let mut state = locked(&self.state);
         match done {
-            Done::Canonical { .. } | Done::KillShot { .. } => return,
+            Done::Resource(_) | Done::Canonical { .. } | Done::KillShot { .. } => return,
             Done::HeroCutout { name, result } => {
                 state.hero_cutouts_in_flight.remove(&name);
                 match result {

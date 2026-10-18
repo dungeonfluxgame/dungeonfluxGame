@@ -243,9 +243,60 @@ struct Composing {
     deadline: Instant,
 }
 
+/// Server-only place and open exits captured when a public line commits.
+#[derive(Clone, Debug)]
+pub(super) struct LinePlace {
+    pub(super) id: String,
+    pub(super) facts: Vec<String>,
+    pub(super) exits: Vec<LineExit>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LineExit {
+    pub(super) id: String,
+    pub(super) place_id: String,
+    pub(super) description: String,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CommittedContext {
+    pub(super) run: df_types::RunId,
+    pub(super) place: LinePlace,
+}
+
+impl CommittedContext {
+    fn at(checkpoint: &df_model::checkpoint::Checkpoint) -> Option<Self> {
+        let scene = super::beat_script_runtime::scene(checkpoint.state()).ok()?;
+        let setting = scene.setting.as_ref()?;
+        let exits = super::adventure::scene_model::current_scene(&scene)
+            .map(|room| {
+                room.model
+                    .ways_out
+                    .into_iter()
+                    .filter(|exit| exit.open)
+                    .map(|exit| LineExit {
+                        id: exit.id,
+                        place_id: exit.beyond_place_id,
+                        description: exit.beyond,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            run: checkpoint.basis().run,
+            place: LinePlace {
+                id: setting.place_id.clone(),
+                facts: vec![setting.name.clone(), setting.short.clone()],
+                exits,
+            },
+        })
+    }
+}
+
 struct Ring {
     next_sequence: u64,
     lines: VecDeque<rpc::TableLine>,
+    committed_contexts: BTreeMap<u64, CommittedContext>,
     /// Counts every change a view shows (a line appended, a reply starting or ending), so a
     /// view whose game revision did not move can still be told from the one before it.
     version: u64,
@@ -286,6 +337,8 @@ pub(super) struct TableLog {
     /// How long a speech-intent mark lives without a refresh.
     expiry: Duration,
     ring: Mutex<Ring>,
+    /// Read synchronously on append, never reconstructed by a delayed subscriber.
+    checkpoints: Mutex<Option<watch::Receiver<df_model::checkpoint::Checkpoint>>>,
     /// Carries the latest sequence so a watcher rebuilds its view when a line is appended.
     wake: watch::Sender<u64>,
     /// The async runtime's handle, captured from whichever call first runs inside it (a
@@ -318,6 +371,7 @@ impl TableLog {
             ring: Mutex::new(Ring {
                 next_sequence: 1,
                 lines: VecDeque::new(),
+                committed_contexts: BTreeMap::new(),
                 version: 0,
                 presence_version: 0,
                 replying: Vec::new(),
@@ -330,6 +384,7 @@ impl TableLog {
                 story_scenes: Vec::new(),
                 acks: BTreeMap::new(),
             }),
+            checkpoints: Mutex::new(None),
             wake: watch::channel(0).0,
             // Construction usually runs inside the server's runtime; capture its handle
             // now so the first timer can arm even if it is requested (on the session
@@ -469,6 +524,8 @@ impl TableLog {
         let version = {
             let mut ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
             ring.lines.retain(|line| line.sequence < floor);
+            ring.committed_contexts
+                .retain(|sequence, _| *sequence < floor);
             ring.next_sequence = floor.min(ring.next_sequence);
             ring.pacing = Pacing::CaughtUp { released: 0 };
             ring.acks.clear();
@@ -730,9 +787,20 @@ impl TableLog {
                 roll,
             };
             let tapped = self.sink.get().map(|_| entry.clone());
+            let context = self
+                .checkpoints
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .and_then(|checkpoints| CommittedContext::at(&checkpoints.borrow()));
+            if let Some(context) = context {
+                ring.committed_contexts.insert(sequence, context);
+            }
             ring.lines.insert(position, entry);
             while ring.lines.len() > RING_LINES {
-                ring.lines.pop_front();
+                if let Some(removed) = ring.lines.pop_front() {
+                    ring.committed_contexts.remove(&removed.sequence);
+                }
             }
             // The hero's line replaces the hero's loader in the same view.
             if role == rpc::TableRole::Hero && kind == rpc::TableKind::Speech {
@@ -1243,6 +1311,31 @@ impl TableLog {
             })
             .filter(|line| line.sequence == sequence && line.actor_id == actor_id)
             .map(|line| line.text.clone())
+    }
+
+    pub(super) fn bind_checkpoints(
+        &self,
+        checkpoints: watch::Receiver<df_model::checkpoint::Checkpoint>,
+    ) {
+        *self
+            .checkpoints
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(checkpoints);
+    }
+
+    /// A public row and its commit-time place/run, read under one lock. Context never goes to RPC.
+    pub(super) fn committed_line_at_sequence(
+        &self,
+        sequence: u64,
+    ) -> Option<(rpc::TableLine, CommittedContext)> {
+        let ring = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        let context = ring.committed_contexts.get(&sequence)?.clone();
+        let line = ring
+            .lines
+            .iter()
+            .find(|line| line.sequence == sequence)?
+            .clone();
+        Some((line, context))
     }
 
     /// Returns one public line by its stable in-memory sequence. Transaction callers use this to
