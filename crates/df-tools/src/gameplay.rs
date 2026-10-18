@@ -94,6 +94,7 @@ mod social;
 mod speech_input;
 mod speech_text;
 mod splat_assets;
+mod splat_world;
 mod staging;
 mod startup_configuration;
 #[cfg(test)]

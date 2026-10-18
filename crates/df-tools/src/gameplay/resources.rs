@@ -235,7 +235,8 @@ impl Limits {
             // The fal call has its own deadline; the staging runs two vision calls after it.
             ResourceKind::PlateSegments => 120,
             ResourceKind::PlateStaging => 240,
-            ResourceKind::SplatWorld => 180,
+            // Submit, a 15-minute poll, export and two provider-bounded downloads.
+            ResourceKind::SplatWorld => 1_620,
             ResourceKind::MusicSet => 600,
             ResourceKind::VoiceLine => 90,
             ResourceKind::VideoClip => 900,
@@ -274,6 +275,8 @@ pub(in crate::gameplay) enum Unit {
     EmbeddingToken,
     /// One hosted segmentation call (SAM on fal); its price is the model's, in the audit line.
     SegmentCall,
+    /// One World Labs Marble credit; a marble-1.1 world records 1,580.
+    SplatCredit,
 }
 
 impl Unit {
@@ -287,6 +290,7 @@ impl Unit {
             Self::MusicCall => "music_call",
             Self::EmbeddingToken => "embedding_token",
             Self::SegmentCall => "segment_call",
+            Self::SplatCredit => "splat_credit",
         }
     }
 }
@@ -621,6 +625,21 @@ impl SplatWorldSpec {
             format,
         }
     }
+
+    /// The place this world is for.
+    pub(in crate::gameplay) fn place_id(&self) -> &str {
+        &self.place_id
+    }
+
+    /// The place facts the photographic prompt is built from.
+    pub(in crate::gameplay) fn prompt_facts(&self) -> &[String] {
+        &self.prompt_facts
+    }
+
+    /// The requested splat encoding.
+    pub(in crate::gameplay) fn format(&self) -> SplatWorldFormat {
+        self.format
+    }
 }
 
 impl ResourceSpec for SplatWorldSpec {
@@ -643,11 +662,6 @@ impl ResourceSpec for SplatWorldSpec {
     fn chrome(&self) -> Chrome {
         Neutral::Nothing
     }
-}
-
-/// Stub generator port; callers receive the hub's normal fallback while Marble is unwired.
-pub(in crate::gameplay) fn unavailable_splat_world() -> Generation {
-    Box::pin(async { Err(ResourceFailure::Permanent("unavailable")) })
 }
 
 /// The hub handle: cheap to clone, shared by every consumer.
@@ -1106,25 +1120,6 @@ mod tests {
                 vec!["stone quay".to_owned(), "red lighthouse".to_owned()],
                 SplatWorldFormat::Ply,
             ))
-        );
-    }
-
-    #[tokio::test]
-    async fn splat_world_stub_returns_unavailable_through_the_hub() {
-        let hub = Hub::new();
-        let spec = SplatWorldSpec::new(
-            "harbor",
-            vec!["stone quay".to_owned()],
-            SplatWorldFormat::Ply,
-        );
-
-        assert_eq!(
-            hub.render(&spec, unavailable_splat_world()).await,
-            Err(ResourceFailure::Permanent("unavailable"))
-        );
-        assert_eq!(
-            hub.status(&ResourceKey::of(&spec)),
-            ResourceStatus::Failed(ResourceFailure::Permanent("unavailable"), Neutral::Nothing)
         );
     }
 

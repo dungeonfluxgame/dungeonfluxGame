@@ -22,6 +22,7 @@ use axum::{
 };
 use std::{collections::HashMap, io, path::Path, path::PathBuf, sync::Arc, time::UNIX_EPOCH};
 
+/// Retain the established per-file bound for existing streamed splat assets.
 pub(super) const MAXIMUM_FILE_BYTES: u64 = 128 * 1024 * 1024;
 pub(super) const MAXIMUM_FILES: usize = 4096;
 /// Directories below the splat directory: `<scene>/v1/<level>_<chunk>`.
@@ -36,7 +37,11 @@ struct Entry {
 }
 
 fn mime_for(name: &str) -> Option<&'static str> {
-    if name.ends_with(".splat") || name.ends_with(".ply") || name.ends_with(".sog") {
+    if name.ends_with(".splat")
+        || name.ends_with(".ply")
+        || name.ends_with(".sog")
+        || name.ends_with(".glb")
+    {
         Some("application/octet-stream")
     } else if name.ends_with(".json") {
         Some("application/json")
@@ -132,6 +137,57 @@ fn candidate(root: &Path, path: &Path, name: &str) -> Result<Option<Entry>, io::
 
 type Table = Arc<HashMap<String, Entry>>;
 
+/// Worlds stored after startup, keyed by their `/assets/splat/worlds/<key>/...` URL.
+/// The startup scan cannot see them, so [`register_world`] adds them here and
+/// [`lookup`] consults this table as well as the startup table.
+static DYNAMIC_WORLDS: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, Entry>>,
+> = std::sync::OnceLock::new();
+
+fn dynamic_worlds() -> &'static std::sync::RwLock<std::collections::HashMap<String, Entry>> {
+    DYNAMIC_WORLDS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Registers a newly stored world's two files for serving at once, under the same
+/// name and size bounds as the startup scan. A key or file outside those bounds, or a
+/// missing file, registers nothing.
+pub(super) fn register_world(key: &str, ply: &Path, collider: &Path) {
+    if !name_allowed(key) {
+        return;
+    }
+    let mut table = dynamic_worlds()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (name, path) in [("world.ply", ply), ("collider.glb", collider)] {
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() > MAXIMUM_FILE_BYTES {
+            continue;
+        }
+        let Some(root) = path
+            .parent()
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+        else {
+            continue;
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |time| time.as_secs());
+        table.insert(
+            format!("/assets/splat/worlds/{key}/{name}"),
+            Entry {
+                root,
+                path: path.to_owned(),
+                mime: "application/octet-stream",
+                etag: format!("\"{:x}-{:x}\"", metadata.len(), modified),
+            },
+        );
+    }
+}
+
 /// Routes exactly the splat files present in `directory` at startup.
 pub(super) fn router(directory: &Path) -> Result<Router, io::Error> {
     let table: Table = Arc::new(scan(directory)?.into_iter().collect());
@@ -145,8 +201,24 @@ async fn lookup(
     RoutePath(path): RoutePath<String>,
     headers: HeaderMap,
 ) -> Response {
-    match table.get(&format!("/assets/splat/{path}")) {
-        Some(entry) => respond(entry, &headers).await,
+    let url = format!("/assets/splat/{path}");
+    if let Some(entry) = table.get(&url) {
+        return respond(entry, &headers).await;
+    }
+    // A world stored after startup lives only in the dynamic table. Its entry is
+    // cloned out (paths and validators only) so no lock is held across the read.
+    let dynamic = dynamic_worlds()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&url)
+        .map(|entry| Entry {
+            root: entry.root.clone(),
+            path: entry.path.clone(),
+            mime: entry.mime,
+            etag: entry.etag.clone(),
+        });
+    match dynamic {
+        Some(entry) => respond(&entry, &headers).await,
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -205,7 +277,7 @@ mod tests {
     fn scratch(label: &str) -> PathBuf {
         let lane_directory = std::env::current_dir()
             .unwrap()
-            .join("artifacts/tmp/lanes/M6");
+            .join("artifacts/tmp/lanes/W2");
         std::fs::create_dir_all(&lane_directory).unwrap();
         let directory =
             lane_directory.join(format!("df-splat-assets-{label}-{}", std::process::id()));
@@ -307,7 +379,7 @@ mod tests {
     fn an_absent_directory_routes_nothing_and_oversized_supported_files_refuse_startup() {
         let absent = std::env::current_dir()
             .unwrap()
-            .join("artifacts/tmp/lanes/M6/df-splat-assets-absent-directory");
+            .join("artifacts/tmp/lanes/W2/df-splat-assets-absent-directory");
         assert!(router(&absent).is_ok());
 
         for extension in ["splat", "ply", "sog"] {
