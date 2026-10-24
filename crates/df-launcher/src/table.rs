@@ -65,9 +65,23 @@ pub fn fetch(display_url: &str, token: &str) -> io::Result<TableStatus> {
 /// A hero portrait from the game server; only the server's own image routes are asked for.
 pub fn portrait(display_url: &str, token: &str, path: &str) -> io::Result<Vec<u8>> {
     if !portrait_path(path) {
-        return Err(io::Error::other("not a portrait path"));
+        return Err(io::Error::other("bad_path"));
     }
     get(display_url, path, token, PORTRAIT_BYTES_MAX)
+}
+
+/// A short, loggable reason for a failed request: the reason codes above, or the kind of a
+/// connection error.
+pub fn reason(error: &io::Error) -> String {
+    match error.kind() {
+        io::ErrorKind::Other => error.to_string(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => "timeout".to_owned(),
+        io::ErrorKind::ConnectionRefused => "connection_refused".to_owned(),
+        io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => {
+            "connection_reset".to_owned()
+        }
+        kind => format!("{kind:?}").to_ascii_lowercase(),
+    }
 }
 
 pub fn portrait_path(path: &str) -> bool {
@@ -119,11 +133,11 @@ fn get(display_url: &str, path: &str, token: &str, limit: usize) -> io::Result<V
         .strip_prefix("http://")
         .and_then(|rest| rest.split('/').next())
         .filter(|authority| !authority.is_empty())
-        .ok_or_else(|| io::Error::other("display link is not http"))?;
+        .ok_or_else(|| io::Error::other("not_http"))?;
     let address = authority
         .to_socket_addrs()?
         .next()
-        .ok_or_else(|| io::Error::other("no address for the game server"))?;
+        .ok_or_else(|| io::Error::other("no_address"))?;
     let mut stream = TcpStream::connect_timeout(&address, CONNECT_LIMIT)?;
     stream.set_read_timeout(Some(READ_LIMIT))?;
     stream.set_write_timeout(Some(READ_LIMIT))?;
@@ -143,10 +157,11 @@ fn body(response: &[u8], limit: usize) -> io::Result<Vec<u8>> {
     let split = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| io::Error::other("incomplete response"))?;
+        .ok_or_else(|| io::Error::other("incomplete"))?;
     let head = String::from_utf8_lossy(&response[..split]).to_ascii_lowercase();
     if !head.starts_with("http/1.1 200") && !head.starts_with("http/1.0 200") {
-        return Err(io::Error::other("the game server refused"));
+        let code = head.split_whitespace().nth(1).unwrap_or("unknown");
+        return Err(io::Error::other(format!("http_{code}")));
     }
     let rest = &response[split + 4..];
     let content = if head.contains("transfer-encoding: chunked") {
@@ -155,7 +170,7 @@ fn body(response: &[u8], limit: usize) -> io::Result<Vec<u8>> {
         rest.to_vec()
     };
     if content.len() > limit {
-        return Err(io::Error::other("answer too large"));
+        return Err(io::Error::other("too_large"));
     }
     Ok(content)
 }
@@ -166,17 +181,15 @@ fn dechunk(mut rest: &[u8]) -> io::Result<Vec<u8>> {
         let line_end = rest
             .windows(2)
             .position(|window| window == b"\r\n")
-            .ok_or_else(|| io::Error::other("broken chunk"))?;
+            .ok_or_else(|| io::Error::other("chunk"))?;
         let size_text = String::from_utf8_lossy(&rest[..line_end]);
         let size = usize::from_str_radix(size_text.split(';').next().unwrap_or("").trim(), 16)
-            .map_err(|_| io::Error::other("broken chunk size"))?;
+            .map_err(|_| io::Error::other("chunk"))?;
         rest = &rest[line_end + 2..];
         if size == 0 {
             return Ok(out);
         }
-        let chunk = rest
-            .get(..size)
-            .ok_or_else(|| io::Error::other("short chunk"))?;
+        let chunk = rest.get(..size).ok_or_else(|| io::Error::other("chunk"))?;
         out.extend_from_slice(chunk);
         rest = rest.get(size + 2..).unwrap_or_default();
     }
@@ -235,7 +248,11 @@ mod tests {
         let chunked =
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
         assert_eq!(body(chunked, 100).unwrap(), b"hello world");
-        assert!(body(b"HTTP/1.1 404 Not Found\r\n\r\n", 100).is_err());
+        assert_eq!(
+            reason(&body(b"HTTP/1.1 404 Not Found\r\n\r\n", 100).unwrap_err()),
+            "http_404"
+        );
+        assert_eq!(reason(&body(plain, 3).unwrap_err()), "too_large");
         assert!(body(plain, 3).is_err());
     }
 }

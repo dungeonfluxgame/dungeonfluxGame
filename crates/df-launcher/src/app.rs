@@ -695,7 +695,7 @@ impl App {
             status_token: Some(status_token.clone()),
         };
         // Written before the wait, so a launcher closed during startup still finds the game.
-        let _ = self.write_run(&run);
+        self.write_run_logged(&run, "start");
 
         self.step(game, Step::Waiting, "Loading the adventure");
         let waited = server::wait_ready(&mut child, &log, READY_LIMIT, |line| {
@@ -735,11 +735,16 @@ impl App {
                     "SERVER_NOT_READY",
                     format!("limit_s={}", READY_LIMIT.as_secs()),
                 );
-                let _ = server::request_stop(&run.stop_dir);
-                if child.wait_timeout(STOP_LIMIT).is_none() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+                let stop_request = server::request_stop(&run.stop_dir).is_ok();
+                let (killed, reaped) = if child.wait_timeout(STOP_LIMIT).is_none() {
+                    (child.kill().is_ok(), child.wait().is_ok())
+                } else {
+                    (false, true)
+                };
+                log::event(
+                    "SERVER_NOT_READY_CLEANUP",
+                    format!("stop_request={stop_request} killed={killed} reaped={reaped}"),
+                );
                 stop_postgres();
                 self.clear_run();
                 return Err(failure_with_log(
@@ -755,10 +760,10 @@ impl App {
         if settings.dev_control {
             run.dev_control = server::dev_control_line(&log, Duration::from_secs(5));
         }
-        let _ = self.write_run(&run);
+        self.write_run_logged(&run, "start");
         let mut played = game.clone();
         played.last_played = chrono::Utc::now().timestamp();
-        let _ = saves::record(&self.data, &played);
+        record_save(&self.data, &played, "started");
         run.game = played;
         {
             let mut inner = self.lock();
@@ -794,9 +799,7 @@ impl App {
                 screen: settings.display_screen,
                 full_screen: settings.full_screen,
             }),
-            DisplayTarget::Window | DisplayTarget::Browser => {
-                let _ = open::that_detached(url);
-            }
+            DisplayTarget::Window | DisplayTarget::Browser => open_logged(url, "display"),
             DisplayTarget::Manual => {}
         }
     }
@@ -823,14 +826,14 @@ impl App {
                 full_screen: settings.full_screen,
             });
         } else {
-            let _ = open::that_detached(url);
+            open_logged(&url, "display");
         }
     }
 
     pub fn open_display_in_browser(&self) {
         if let Some(url) = self.display_url() {
             log::event("ACTION_DISPLAY_BROWSER", "");
-            let _ = open::that_detached(url);
+            open_logged(&url, "display");
         }
     }
 
@@ -862,6 +865,20 @@ impl App {
     fn write_run(&self, run: &RunRecord) -> Result<(), io::Error> {
         let text = toml::to_string_pretty(run).map_err(io::Error::other)?;
         crate::files::write_atomic(&self.data.join(RUN_FILE), text.as_bytes())
+    }
+
+    /// Writes the running-game record; a failure is logged, since a launcher reopened later
+    /// relies on that file to find the game.
+    fn write_run_logged(&self, run: &RunRecord, moment: &str) {
+        if let Err(error) = self.write_run(run) {
+            log::event(
+                "RUN_FILE",
+                format!(
+                    "write=failed moment={moment} reason={}",
+                    log::value(error.to_string())
+                ),
+            );
+        }
     }
 
     fn clear_run(&self) {
@@ -928,9 +945,10 @@ impl App {
                 if run.postgres_started {
                     let _ = postgres::stop(&run.postgres_install());
                 }
-                let _ = saves::record(
+                record_save(
                     &app.data,
                     &saves::after_session(&run.game, chrono::Utc::now().timestamp()),
+                    "ended_unexpectedly",
                 );
                 app.clear_run();
                 app.set_phase(Phase::Failed(Failure {
@@ -1005,7 +1023,7 @@ impl App {
     fn mark_stopping(&self, run: &RunRecord) {
         let mut marked = run.clone();
         marked.stopping = true;
-        let _ = self.write_run(&marked);
+        self.write_run_logged(&marked, "stopping");
     }
 
     /// Asks the display window for a last picture of the table and waits briefly for it.
@@ -1151,12 +1169,17 @@ impl App {
                 notice.push_str(&format!(" The game database is still running: {error}"));
             }
         }
+        let played = saves::after_session(&run.game, chrono::Utc::now().timestamp());
         log::event(
             "GAME_STOPPED",
-            format!("name={}", log::value(&run.game.name)),
+            format!(
+                "name={} session_s={} played_seconds={}",
+                log::value(&run.game.name),
+                played.played_seconds - run.game.played_seconds,
+                played.played_seconds
+            ),
         );
-        let played = saves::after_session(&run.game, chrono::Utc::now().timestamp());
-        let _ = saves::record(&self.data, &played);
+        record_save(&self.data, &played, "stopped");
         self.clear_run();
         self.set_phase(Phase::Idle {
             notice: Some(notice),
@@ -1346,18 +1369,42 @@ impl App {
         });
         log::event("ACTION_OPEN_LOGS", "");
         if let Some(folder) = folder.filter(|folder| folder.is_dir()) {
-            let _ = open::that_detached(folder);
+            open_logged(folder, "logs");
         }
     }
 
     pub fn open_data_folder(&self) {
-        let _ = open::that_detached(&self.data);
+        open_logged(&self.data, "data");
     }
 
     pub fn open_config_folder(&self) {
         if let Some(folder) = self.config_path.parent() {
-            let _ = open::that_detached(folder);
+            open_logged(folder, "config");
         }
+    }
+}
+
+/// Records a saved game's times; a failure is logged instead of passing unnoticed.
+fn record_save(data: &Path, game: &SavedGame, moment: &str) {
+    if let Err(error) = saves::record(data, game) {
+        log::event(
+            "SAVE_RECORD",
+            format!(
+                "outcome=failed moment={moment} database={} reason={}",
+                game.database,
+                log::value(error.to_string())
+            ),
+        );
+    }
+}
+
+/// Opens a link or folder with the system; a failure is logged.
+fn open_logged(target: impl AsRef<std::ffi::OsStr>, what: &str) {
+    if let Err(error) = open::that_detached(target) {
+        log::event(
+            "OPEN_FAILED",
+            format!("what={what} reason={}", log::value(error.to_string())),
+        );
     }
 }
 

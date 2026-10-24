@@ -6,19 +6,25 @@ use std::{
     fs::File,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 const ROTATE_BYTES: u64 = 4 * 1024 * 1024;
 
 static SINK: OnceLock<Mutex<Option<File>>> = OnceLock::new();
 static PATH: OnceLock<PathBuf> = OnceLock::new();
+/// Lines that could not be written; the next line that is written says how many.
+static LOST: AtomicU64 = AtomicU64::new(0);
 
 pub fn path(data: &Path) -> PathBuf {
     data.join("logs").join("launcher.log")
 }
 
-/// Opens the log for this process. Failure to open is not fatal: events are then dropped.
+/// Opens the log for this process. Failure to open is not fatal: events are then dropped, and
+/// one line on standard error says so.
 pub fn init(data: &Path) {
     let file = path(data);
     let _ = PATH.set(file.clone());
@@ -33,6 +39,12 @@ pub fn init(data: &Path) {
             .open(&file)
             .ok()
     })();
+    if opened.is_none() {
+        eprintln!(
+            "LAUNCHER_LOG unavailable path={}",
+            value(file.display().to_string())
+        );
+    }
     let _ = SINK.set(Mutex::new(opened));
 }
 
@@ -41,16 +53,26 @@ pub fn event(name: &str, fields: impl AsRef<str>) {
     let Some(sink) = SINK.get() else {
         return;
     };
+    let lost = LOST.load(Ordering::Relaxed);
+    let lost_note = if lost > 0 {
+        format!(" log_lines_lost={lost}")
+    } else {
+        String::new()
+    };
     let line = format!(
-        "{} pid={} {name} {}\n",
+        "{} pid={} {name} {}{lost_note}\n",
         chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"),
         std::process::id(),
         fields.as_ref()
     );
-    if let Ok(mut file) = sink.lock()
-        && let Some(file) = file.as_mut()
-    {
-        let _ = file.write_all(line.as_bytes());
+    let written = sink.lock().ok().and_then(|mut file| {
+        file.as_mut()
+            .map(|file| file.write_all(line.as_bytes()).is_ok())
+    });
+    if written == Some(true) {
+        LOST.fetch_sub(lost, Ordering::Relaxed);
+    } else {
+        LOST.fetch_add(1, Ordering::Relaxed);
     }
 }
 

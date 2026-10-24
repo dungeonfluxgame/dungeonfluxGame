@@ -898,6 +898,44 @@ fn duration_words(seconds: u64) -> String {
     }
 }
 
+/// The table frame asks every five seconds, so its status is logged only when it changes
+/// (`TABLE_STATUS state=ok heroes=N` / `state=failed reason=...`), with the count of failed asks
+/// on recovery. The same holds for portrait refusals (`TABLE_PORTRAIT`).
+static TABLE_STATE: std::sync::Mutex<(String, u64)> = std::sync::Mutex::new((String::new(), 0));
+static PORTRAIT_REFUSAL: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn note_table_state(fetched: Result<usize, &std::io::Error>, ms: u128) {
+    let state = match fetched {
+        Ok(heroes) => format!("state=ok heroes={heroes}"),
+        Err(error) => format!("state=failed reason={}", crate::table::reason(error)),
+    };
+    let Ok(mut last) = TABLE_STATE.lock() else {
+        return;
+    };
+    if last.0 == state {
+        if state.starts_with("state=failed") {
+            last.1 += 1;
+        }
+        return;
+    }
+    let failures = if state.starts_with("state=ok") && last.1 > 0 {
+        format!(" failed_asks={}", last.1 + 1)
+    } else {
+        String::new()
+    };
+    crate::log::event("TABLE_STATUS", format!("{state} ms={ms}{failures}"));
+    *last = (state, 0);
+}
+
+fn note_portrait_refusal(reason: &str) {
+    if let Ok(mut last) = PORTRAIT_REFUSAL.lock()
+        && *last != reason
+    {
+        crate::log::event("TABLE_PORTRAIT", format!("refused reason={reason}"));
+        reason.clone_into(&mut last);
+    }
+}
+
 /// The heroes at the table, for the running page's frame: it reloads itself every few seconds
 /// so the main page and its ambience never do.
 fn table_frame(snapshot: &Snapshot) -> String {
@@ -907,10 +945,18 @@ fn table_frame(snapshot: &Snapshot) -> String {
                 "<p class=\"table-empty\">Table details appear for games this launcher started.</p>"
                     .to_owned()
             }
-            Some(token) => match crate::table::fetch(&run.display_url, token) {
-                Ok(status) => table_content(&status, room_code(&run.player_url)),
-                Err(_) => "<p class=\"table-empty\">Checking the table…</p>".to_owned(),
-            },
+            Some(token) => {
+                let started = std::time::Instant::now();
+                let fetched = crate::table::fetch(&run.display_url, token);
+                note_table_state(
+                    fetched.as_ref().map(|status| status.heroes.len()),
+                    started.elapsed().as_millis(),
+                );
+                match fetched {
+                    Ok(status) => table_content(&status, room_code(&run.player_url)),
+                    Err(_) => "<p class=\"table-empty\">Checking the table…</p>".to_owned(),
+                }
+            }
         },
         _ => String::new(),
     };
@@ -994,14 +1040,22 @@ fn table_content(status: &crate::table::TableStatus, room: Option<&str>) -> Stri
 /// A hero portrait passed through from the game server, so the launcher page shows it from its
 /// own origin.
 fn table_portrait(snapshot: &Snapshot, query: &str) -> Page {
+    let refused = |reason: &str| {
+        note_portrait_refusal(reason);
+        Page::not_found()
+    };
     let Phase::Running(run) = &snapshot.phase else {
-        return Page::not_found();
+        return refused("not_running");
     };
-    let (Some(token), Some(path)) = (run.status_token.as_deref(), query.strip_prefix("p=")) else {
-        return Page::not_found();
+    let Some(token) = run.status_token.as_deref() else {
+        return refused("no_token");
     };
-    let Ok(bytes) = crate::table::portrait(&run.display_url, token, path) else {
-        return Page::not_found();
+    let Some(path) = query.strip_prefix("p=") else {
+        return refused("bad_query");
+    };
+    let bytes = match crate::table::portrait(&run.display_url, token, path) {
+        Ok(bytes) => bytes,
+        Err(error) => return refused(&crate::table::reason(&error)),
     };
     let content_type = if bytes.starts_with(b"\x89PNG") {
         "image/png"
@@ -1010,7 +1064,7 @@ fn table_portrait(snapshot: &Snapshot, query: &str) -> Page {
     } else if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         "image/webp"
     } else {
-        return Page::not_found();
+        return refused("content_type");
     };
     Page {
         status: 200,
