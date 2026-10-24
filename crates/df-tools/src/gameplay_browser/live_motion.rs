@@ -138,6 +138,7 @@ struct RollDescriptionOwned {
 
 #[derive(Clone)]
 struct LineDetail {
+    table_sequence: Option<u64>,
     speaker: String,
     /// The server's actor id of the speaker; empty for the narrator and for a line with none.
     actor_id: String,
@@ -160,6 +161,7 @@ struct LineDetail {
 impl LineDetail {
     fn of(line: &TableLine) -> Self {
         Self {
+            table_sequence: (line.sequence != 0).then_some(line.sequence),
             speaker: line.speaker.clone(),
             actor_id: line.actor_id.clone(),
             role: line.role,
@@ -317,6 +319,7 @@ fn development_submit(
         if plan.diff.roll.is_some() || plan.diff.turn.is_some() {
             DEVELOPMENT.with(|state| state.borrow_mut().last = Some(plan.clone()));
         }
+        update_speaker_entry(motion);
         commands.extend(motion.conductor.on_view(now, plan));
     }
     commands
@@ -655,6 +658,7 @@ fn narrator_script(text: &str, voice: VoiceLine) -> Option<ScriptLine<Detail>> {
         settled: false,
         timing: LineTiming::Ordinary,
         detail: Detail::Line(LineDetail {
+            table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
             role: TableRole::Narrator,
@@ -705,6 +709,7 @@ fn fight_scripts(lines: &[rpc::FightLine], cast: &[StageActor]) -> Vec<ScriptLin
                 settled: false,
                 timing: LineTiming::Ordinary,
                 detail: Detail::Line(LineDetail {
+                    table_sequence: None,
                     speaker,
                     actor_id: voice.actor_id().unwrap_or_default().to_owned(),
                     role: TableRole::Npc,
@@ -806,6 +811,7 @@ fn narration_line(narration: &str, voices: &[VoiceLine], settled: bool) -> Scrip
         settled,
         timing: LineTiming::Ordinary,
         detail: Detail::Line(LineDetail {
+            table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
             role: TableRole::Narrator,
@@ -837,6 +843,7 @@ fn check_voice_script_line(
         settled,
         timing: LineTiming::CheckResult,
         detail: Detail::Line(LineDetail {
+            table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
             role: TableRole::Narrator,
@@ -875,6 +882,7 @@ fn check_roll_script_line(
             }
         },
         detail: Detail::Line(LineDetail {
+            table_sequence: None,
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
             role: TableRole::Narrator,
@@ -904,6 +912,7 @@ fn dice_script_line(line: &TableLine) -> Option<ScriptLine<Detail>> {
         settled: false,
         timing: LineTiming::Dice,
         detail: Detail::Line(LineDetail {
+            table_sequence: (line.sequence != 0).then_some(line.sequence),
             speaker: NARRATOR_NAME.to_owned(),
             actor_id: String::new(),
             role: TableRole::Narrator,
@@ -919,28 +928,37 @@ fn dice_script_line(line: &TableLine) -> Option<ScriptLine<Detail>> {
     })
 }
 
-/// A table line as a line of the stage script, or `None` when no figure carries it.
+/// A table line as a line of the stage script. A named caption needs no figure slot.
 fn script_line(
     line: &TableLine,
     cast: &[StageActor],
     voices: &[VoiceLine],
     settled: bool,
-    fighting: bool,
 ) -> Option<ScriptLine<Detail>> {
+    // NPC action rows describe server outcomes (for example a merchant's offer), not speech.
+    // Keep their sequence and reading turn, but present them silently in the narrator lane.
+    if line.role == TableRole::Npc && line.kind == TableKind::Action {
+        let mut detail = LineDetail::of(line);
+        detail.role = TableRole::Narrator;
+        detail.speaker = NARRATOR_NAME.to_owned();
+        detail.actor_id.clear();
+        return Some(ScriptLine {
+            voiceable: false,
+            read_ms: reading_time_ms(&line.text),
+            slot: None,
+            settled,
+            timing: LineTiming::Ordinary,
+            detail: Detail::Line(detail),
+        });
+    }
     let slot = match line.role {
         TableRole::Hero(index) => super::live_stage::slot_index(ActorSlot::Hero(index)),
         TableRole::Npc => npc_slot(cast, &line.actor_id, &line.speaker, line.scripted),
         TableRole::Narrator => None,
     };
-    // In a fight a speaker the flat stage has no figure for (a sixth hero, a fourth enemy) still
-    // speaks: its line goes to the battlefield, which finds the figure by name.
-    let slot = slot.or_else(|| {
-        (fighting && line.kind == TableKind::Speech && line.role != TableRole::Narrator)
-            .then_some(OFF_STAGE_SLOT)
-    });
-    if slot.is_none() && line.role != TableRole::Narrator {
-        return None;
-    }
+    // Figure-less speakers still take their full reading/audio turn in the named caption lane.
+    // In a fight the battlefield may also find the speaker by name.
+    let slot = slot.or((line.role != TableRole::Narrator).then_some(OFF_STAGE_SLOT));
     let voice = match (line.kind, line.role) {
         (TableKind::Speech, TableRole::Npc) => voices
             .iter()
@@ -1007,7 +1025,6 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     if stale_combat_view {
         return Ok(());
     }
-    let fighting = snapshot.stage == CombatStage::Fighting;
     let lines = presentation::table_lines(&view);
     let cast = presentation::scene_cast(&view);
     let key = format!("{}|{}", journey.phase, scene.title);
@@ -1078,7 +1095,7 @@ pub(super) fn on_view(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         .into_iter()
         .filter_map(|line| match line {
             SceneScriptLine::Narration(text) => Some(narration_line(text, &voices, restart)),
-            SceneScriptLine::Table(line) => script_line(line, &cast, &voices, restart, fighting),
+            SceneScriptLine::Table(line) => script_line(line, &cast, &voices, restart),
             SceneScriptLine::Dice(line) => dice_script_line(line),
             SceneScriptLine::CheckRoll => check_voice
                 .as_ref()
@@ -1604,10 +1621,12 @@ fn publish_state(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
             }
             root.set_attribute("data-stage-pending", if pending { "true" } else { "false" })?;
             root.set_attribute("data-battle-state", battle.name())?;
-            // The one-clock debug record: checks assert sync from these numbers.
-            root.set_attribute("data-presented-seq", &presented.to_string())?;
+            // Combat beat cursors are independent of the table-talk line sequence.
+            root.remove_attribute("data-presented-seq")?;
+            root.remove_attribute("data-latest-seq")?;
+            root.set_attribute("data-presented-combat-seq", &presented.to_string())?;
             root.set_attribute("data-display-instance", &display_instance().to_string())?;
-            root.set_attribute("data-latest-seq", &latest.to_string())?;
+            root.set_attribute("data-latest-combat-seq", &latest.to_string())?;
             root.set_attribute("data-beat-log", &beat_log)?;
             root.set_attribute("data-battlefield-beat-log", &battlefield_beat_log)?;
             root.set_attribute("data-card-log", &card_log)?;
@@ -2214,7 +2233,7 @@ fn set_scene_state(client: &Rc<RefCell<Client>>, state: SceneState) -> Result<()
     match client.borrow().live.tv.as_ref() {
         Some(stage) => {
             if state == SceneState::Entering {
-                stage.clear_narration()?;
+                stage.clear_narration("scene-change")?;
             }
             // PLAY-V12: every line of the scene has been told, so whatever the narration did, the
             // plate may be cut to.
@@ -2246,7 +2265,13 @@ fn line_command(
     let Detail::Line(line) = detail else {
         return Ok(());
     };
+    super::presentation_timing::bind_line(id, line.table_sequence);
     if let Some(card) = line.dice.as_ref() {
+        if state == LineState::Opening
+            && let Some(stage) = client.borrow().live.tv.as_ref()
+        {
+            stage.clear_narration("successor")?;
+        }
         return super::live_dice::line_state(client, id, state, card, interrupted);
     }
     if let Some(check) = line.check_roll.as_ref() {
@@ -2266,6 +2291,15 @@ fn line_command(
             }
         }
         return Ok(());
+    }
+    if state == LineState::Speaking || state == LineState::Opening {
+        let state_ref = client.borrow();
+        if let Some(stage) = state_ref.live.tv.as_ref() {
+            stage.focus_speaker(
+                crate::presentation::caption_speaker(line.role, &line.actor_id),
+                line.role == TableRole::Narrator,
+            )?;
+        }
     }
     mirror_splash_caption(state, line, slot);
     if battlefield_speech(id, state, line) {
@@ -2556,7 +2590,9 @@ pub(super) fn sound_changed(on: bool) {
 
 /// Media readiness wakes the same owner used by the conductor, even after a final idle line.
 pub(super) fn wake_plate_clock() {
-    ensure_frame();
+    // Callers may be inside a render that holds the client or motion borrow; arm the clock
+    // from a microtask so the wake can never re-borrow them.
+    wasm_bindgen_futures::spawn_local(async { ensure_frame() });
 }
 
 pub(super) fn clock_needs_work(
@@ -2655,10 +2691,30 @@ fn frame(timestamp: f64) {
     ensure_frame();
 }
 
+/// Read the renderer before any character can spend its playback or reading window.
+fn update_speaker_entry(motion: &mut Motion) {
+    let ready = motion.client.upgrade().is_some_and(|client| {
+        let state = client.borrow();
+        state
+            .live
+            .tv
+            .as_ref()
+            .is_none_or(|stage| match stage.speaker_entry_ready() {
+                Ok(ready) => ready,
+                Err(error) => {
+                    web_sys::console::error_2(&"scene entrance readiness failed".into(), &error);
+                    false
+                }
+            })
+    });
+    motion.conductor.set_speaker_entry_ready(ready);
+}
+
 /// Advances the conductor to `now` and applies what it commands.
 fn tick(now: u64) {
     let now = development_clock(now);
     let commands = with_motion(|motion| {
+        update_speaker_entry(motion);
         motion
             .conductor
             .set_battlefield_busy(super::live_battlefield::is_busy());
@@ -2979,6 +3035,7 @@ mod tests {
             settled: false,
             timing: LineTiming::Ordinary,
             detail: Detail::Line(LineDetail {
+                table_sequence: None,
                 speaker: restored.speaker.clone(),
                 actor_id: restored.actor_id.clone(),
                 role: TableRole::Npc,
@@ -3159,7 +3216,7 @@ mod tests {
             0,
             ViewPlan {
                 diff: Default::default(),
-                script: vec![super::script_line(&line, &[], &voices, false, false).unwrap()],
+                script: vec![super::script_line(&line, &[], &voices, false).unwrap()],
                 cast: vec![],
             },
         );
@@ -3171,7 +3228,7 @@ mod tests {
             1,
             ViewPlan {
                 diff: Default::default(),
-                script: vec![super::script_line(&line, &[], &voices, true, false).unwrap()],
+                script: vec![super::script_line(&line, &[], &voices, true).unwrap()],
                 cast: vec![],
             },
         );
@@ -3972,6 +4029,70 @@ mod tests {
     }
 
     #[test]
+    fn figureless_npc_table_line_requests_voice_and_uses_the_named_caption_slot() {
+        let mut line = feed_line(
+            24,
+            crate::presentation::TableRole::Npc,
+            "A widow's a grim wager.",
+        );
+        line.actor_id = "bandit".into();
+        line.speaker = "Dain Rusk".into();
+        let voice = VoiceLine {
+            role: "npc-id:bandit|Dain Rusk".into(),
+            text: line.text.clone(),
+        };
+        let script = super::script_line(&line, &[], std::slice::from_ref(&voice), false).unwrap();
+        assert_eq!(script.slot, Some(super::OFF_STAGE_SLOT));
+        assert!(script.voiceable);
+        let Detail::Line(detail) = script.detail else {
+            panic!("table line detail");
+        };
+        assert_eq!(detail.speaker, "Dain Rusk");
+        assert_eq!(detail.voice, Some(voice));
+    }
+
+    #[test]
+    fn hs48_merchant_action_is_a_silent_narrator_line_while_its_reply_remains_speech() {
+        use crate::presentation::{TableKind, TableRole};
+        let mut action = feed_line(
+            35,
+            TableRole::Npc,
+            "Mara Fenwick offers the apples for 1 CP.",
+        );
+        action.actor_id = "market-square-mara-fenwick".into();
+        action.speaker = "Mara Fenwick".into();
+        action.kind = TableKind::Action;
+        let voices = [VoiceLine {
+            role: crate::voice_line::NARRATOR_ROLE.into(),
+            text: action.text.clone(),
+        }];
+        let script = super::script_line(&action, &[], &voices, false).unwrap();
+        assert_eq!(script.slot, None);
+        assert!(!script.voiceable);
+        assert_eq!(
+            script.read_ms,
+            crate::stage_machines::reading_time_ms(&action.text)
+        );
+        let Detail::Line(detail) = script.detail else {
+            panic!("line detail")
+        };
+        assert_eq!(detail.table_sequence, Some(35));
+        assert_eq!(detail.role, TableRole::Narrator);
+        assert!(detail.actor_id.is_empty());
+        assert!(detail.voice.is_none());
+        assert_eq!(detail.text, action.text);
+
+        action.kind = TableKind::Speech;
+        let spoken = super::script_line(&action, &[], &[], false).unwrap();
+        assert_eq!(spoken.slot, Some(super::OFF_STAGE_SLOT));
+        let Detail::Line(detail) = spoken.detail else {
+            panic!("line detail")
+        };
+        assert_eq!(detail.role, TableRole::Npc);
+        assert_eq!(detail.speaker, "Mara Fenwick");
+    }
+
+    #[test]
     fn canonical_background_actor_id_selects_its_bubble_slot_without_focus_fallback() {
         use df_protocol::common as rpc;
         let view = rpc::ViewMessage {
@@ -4043,9 +4164,7 @@ mod tests {
                 0,
                 ViewPlan {
                     diff: Default::default(),
-                    script: vec![
-                        super::script_line(&caption, &cast, &voices, false, false).unwrap(),
-                    ],
+                    script: vec![super::script_line(&caption, &cast, &voices, false).unwrap()],
                     cast: super::cast_slots(&cast),
                 },
             );
@@ -4067,9 +4186,7 @@ mod tests {
                 1,
                 ViewPlan {
                     diff: Default::default(),
-                    script: vec![
-                        super::script_line(&caption, &cast, &voices, true, false).unwrap(),
-                    ],
+                    script: vec![super::script_line(&caption, &cast, &voices, true).unwrap()],
                     cast: super::cast_slots(&cast),
                 },
             );

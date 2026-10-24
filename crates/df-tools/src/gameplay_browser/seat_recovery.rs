@@ -2,6 +2,15 @@
 use super::*;
 
 pub(super) const REFUSED: &str = "That hero is being played on another phone.";
+pub(super) const ROOM_MOVED: &str = "This game has ended or moved. Scan the QR code on the TV, or enter its new room code to join the current game.";
+
+pub(super) fn wrong_room(answer: &rpc::ReclaimRoomResponse) -> bool {
+    matches!(
+        answer.outcome,
+        Some(rpc::reclaim_room_response::Outcome::Refused(code))
+            if code == rpc::SeatReclaimRefusal::SeatRoomCodeWrong as i32
+    )
+}
 
 fn storage() -> Result<web_sys::Storage, JsValue> {
     web_sys::window()
@@ -173,7 +182,10 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                             };
                         (code, state.generation, state.busy)
                     };
-                    if let Some(code) = code.filter(|_| !skip) {
+                    let now_ms = js_sys::Date::now() as u64;
+                    if let Some(code) = code
+                        .filter(|code| !skip && client.borrow_mut().seat_poll.ready(code, now_ms))
+                    {
                         let answer = call(rpc::ReclaimRoomRequest {
                             room_code: code.clone(),
                             operation_id: None,
@@ -183,8 +195,24 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                         if client.borrow().generation == generation
                             && client.borrow().credential.is_empty()
                         {
+                            let outcome = match &answer {
+                                Ok(answer) if wrong_room(answer) => {
+                                    super::phone_reconnect::PollOutcome::WrongRoom
+                                }
+                                Ok(answer) if answer.outcome.is_none() => {
+                                    super::phone_reconnect::PollOutcome::Available
+                                }
+                                Ok(_) => super::phone_reconnect::PollOutcome::Refused,
+                                Err(_) => super::phone_reconnect::PollOutcome::Failed,
+                            };
+                            client.borrow_mut().seat_poll.observe(
+                                &code,
+                                js_sys::Date::now() as u64,
+                                outcome,
+                            );
                             match answer {
                                 Ok(answer) => {
+                                    let moved = wrong_room(&answer);
                                     let heroes = if answer.outcome.is_none() {
                                         answer.away_heroes
                                     } else {
@@ -194,7 +222,7 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                                         let mut state = client.borrow_mut();
                                         let changed =
                                             state.away_heroes != heroes || state.room_code != code;
-                                        state.room_code = code;
+                                        state.room_code = code.clone();
                                         state.away_heroes = heroes;
                                         changed
                                     };
@@ -203,6 +231,9 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                                             &client.borrow(),
                                             "The available heroes could not be displayed. Try again.",
                                         );
+                                    }
+                                    if moved {
+                                        feedback(&client.borrow(), ROOM_MOVED);
                                     }
                                 }
                                 Err(_) => feedback(
@@ -213,7 +244,7 @@ pub(super) fn ensure_poll(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
                         }
                     }
                     drop(client);
-                    gloo_timers::future::TimeoutFuture::new(5000).await;
+                    gloo_timers::future::TimeoutFuture::new(1000).await;
                 }
             };
             let _cancelled = Abortable::new(run, registration).await;

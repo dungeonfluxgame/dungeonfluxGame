@@ -86,6 +86,11 @@ struct Director {
     plays_started: u64,
     /// Clips the watchdog released; read by checks on `data-voice-stalls`.
     stalls: u32,
+    /// When the pointer last woke the control (`now_ms`), so a moving mouse restarts its
+    /// visible spell a few times a second rather than on every event.
+    pointer_woken_ms: Option<u64>,
+    /// Alternates the control's `data-pointer` so each wake restarts its CSS fade-out.
+    pointer_tick: bool,
 }
 
 type Shared = Rc<RefCell<Director>>;
@@ -279,6 +284,8 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
         watch_seq: 0,
         plays_started: 0,
         stalls: 0,
+        pointer_woken_ms: None,
+        pointer_tick: false,
     }));
     shared.borrow().render_control();
     listen(&shared, audio.as_ref(), "playing", on_playing)?;
@@ -288,6 +295,7 @@ fn create(document: &Document) -> Result<Shared, JsValue> {
     listen(&shared, prompt.as_ref(), "click", on_control)?;
     listen(&shared, document.as_ref(), "pointerdown", on_gesture)?;
     listen(&shared, document.as_ref(), "keydown", on_gesture)?;
+    listen(&shared, document.as_ref(), "pointermove", on_pointer_move)?;
     Ok(shared)
 }
 
@@ -321,6 +329,25 @@ fn on_gesture(shared: &Shared, event: &Event) {
     if first {
         start_unlocked(shared);
     }
+}
+
+/// The control stays out of the picture until the mouse moves, then shows for 15 s after the
+/// last movement and fades (owner 2026-10-24). The timing lives in the stylesheet; each wake
+/// flips `data-pointer` between two names so the browser restarts the animation.
+fn on_pointer_move(shared: &Shared, _event: &Event) {
+    const WAKE_INTERVAL_MS: u64 = 250;
+    let now = now_ms();
+    let mut state = shared.borrow_mut();
+    if state
+        .pointer_woken_ms
+        .is_some_and(|woken| now.saturating_sub(woken) < WAKE_INTERVAL_MS)
+    {
+        return;
+    }
+    state.pointer_woken_ms = Some(now);
+    state.pointer_tick = !state.pointer_tick;
+    let tick = if state.pointer_tick { "a" } else { "b" };
+    let _woken = state.control.set_attribute("data-pointer", tick);
 }
 
 fn on_control(shared: &Shared, _event: &Event) {
@@ -389,7 +416,20 @@ fn signal_later(id: LineId, signal: ClipSignal) {
 
 /// Exposes the last media event on the existing sound control for browser smoke checks. This
 /// stays content-free: it identifies only the line id and media transition.
+pub(super) fn failure_diagnostic(source: &'static str, reason: &'static str) {
+    DIRECTOR.with_borrow(|director| {
+        if let Some(shared) = director
+            && let Some(root) = shared.borrow().control.parent_element()
+        {
+            super::presentation_timing::sound(&root, source, reason);
+        }
+    });
+}
+
 fn mark_media_event(shared: &Shared, event: &str, id: Option<LineId>) {
+    if matches!(event, "fetch-error" | "media-error") {
+        failure_diagnostic("voice", "failed");
+    }
     let value = id.map_or_else(|| event.to_owned(), |id| format!("{event}:{id}"));
     let _marked = shared
         .borrow()
@@ -588,6 +628,7 @@ fn refused(shared: &Shared, id: LineId, refusal: &JsValue) {
         .ok()
         .and_then(|name| name.as_string())
         .is_some_and(|name| name == "NotAllowedError");
+    failure_diagnostic("voice", if blocked { "blocked" } else { "failed" });
     let (released, relocked) = {
         let mut state = shared.borrow_mut();
         if !state

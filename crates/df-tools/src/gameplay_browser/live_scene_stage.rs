@@ -93,8 +93,9 @@ impl SceneGraphView {
                 .map(|actor| SceneActorView {
                     id: actor.id.clone(),
                     name: actor.name.clone(),
-                    art: actor.art.clone(),
-                    fallback_art: actor.fallback_art.clone(),
+                    art: crate::presentation::set_picture(&actor.art).unwrap_or_default(),
+                    fallback_art: crate::presentation::set_picture(&actor.fallback_art)
+                        .unwrap_or_default(),
                     spot: actor.spot.clone(),
                     anchor_x_permille: actor.anchor_x_permille,
                     anchor_y_permille: actor.anchor_y_permille,
@@ -306,7 +307,9 @@ impl StageLayer {
                 .root
                 .get_attribute("data-actor-id")
                 .unwrap_or_default();
-            let actor_present = graph.actors.iter().any(|actor| actor.id == actor_id);
+            let actor_present = graph.actors.iter().any(|actor| {
+                actor.id == actor_id && (!actor.art.is_empty() || !actor.fallback_art.is_empty())
+            });
             if !scene_changed && actor_present {
                 actor_index += 1;
                 continue;

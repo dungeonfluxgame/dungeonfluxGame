@@ -8,9 +8,12 @@ use super::live_exploration::{
 use super::live_lobby::{LobbyMember, LobbyModel, LobbyOfferModel, LobbyScreen};
 use super::live_tv::{TvMember, TvMode, TvModel, TvSpeaker, TvStage};
 use super::*;
+#[path = "phone_choices.rs"]
+mod phone_choices;
 use df_observe::presentation::VisualSource;
 use df_render::art_contract;
 use df_ui::{ConceptScene, JoinStage};
+use phone_choices::{is_simple_offer, phone_offer_choices};
 use std::collections::BTreeMap;
 
 /// The reviewed harbor photograph's stem, the art of every fixed harbor phase.
@@ -321,9 +324,10 @@ fn tv_model(input: &SceneInput<'_>) -> Result<TvModel, JsValue> {
                 status: match (member.character_ready, lobby) {
                     (false, _) => "Creating a hero…".to_owned(),
                     (true, true) => "Ready".to_owned(),
-                    (true, false) => {
+                    (true, false) if member.maximum_hit_points > 0 => {
                         format!("HP {}/{}", member.hit_points, member.maximum_hit_points)
                     }
+                    (true, false) => String::new(),
                 },
                 ready: member.character_ready,
             })
@@ -408,9 +412,11 @@ fn choice_icon(action_kind: i32) -> &'static str {
         Ok(rpc::GameplayActionKind::EscortCourier | rpc::GameplayActionKind::DefendCourier) => {
             "icon-shield"
         }
-        Ok(rpc::GameplayActionKind::BeginStory | rpc::GameplayActionKind::ChooseHarborScene) => {
-            "icon-journey"
-        }
+        Ok(
+            rpc::GameplayActionKind::BeginStory
+            | rpc::GameplayActionKind::ChooseHarborScene
+            | rpc::GameplayActionKind::Travel,
+        ) => "icon-journey",
         Ok(rpc::GameplayActionKind::ShortRest) => "icon-short-rest",
         _ => "icon-talk",
     }
@@ -418,15 +424,6 @@ fn choice_icon(action_kind: i32) -> &'static str {
 
 /// Offers that need no extra typed input become scene choices; the rest keep their
 /// existing controls in the dock. A travel with one destination needs no drop-down.
-fn is_simple_offer(offer: &rpc::GameplayActionOffer) -> bool {
-    offer.input_groups.is_empty()
-        && offer.destinations.len() <= 1
-        && !matches!(
-            rpc::GameplayActionKind::try_from(offer.action_kind),
-            Ok(rpc::GameplayActionKind::CreateCharacter
-                | rpc::GameplayActionKind::GreatswordAttack)
-        )
-}
 
 fn phone_choice_label(label: &str, tv_choices: &[String]) -> String {
     tv_choices
@@ -481,11 +478,13 @@ fn end_card_contact_ready(
     })
 }
 
+fn party_ready(members: &[rpc::PartyMemberView]) -> bool {
+    !members.is_empty() && members.iter().all(|member| member.character_ready)
+}
+
 fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, JsValue> {
     let (members, _) = party_members(input.journey);
-    let all_ready = !members.is_empty()
-        && members.iter().all(|member| member.readiness == "Ready")
-        && members.len() == 2;
+    let all_ready = party_ready(&input.journey.party);
     let begin = input
         .offers
         .iter()
@@ -510,7 +509,9 @@ fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, Js
         offer: begin.map(|offer| LobbyOfferModel {
             key: offer.offer_id.clone(),
             label: offer.label.clone(),
-            enabled: !client.busy && (client.last_confirmed || client.last_request.is_none()),
+            enabled: all_ready
+                && !client.busy
+                && (client.last_confirmed || client.last_request.is_none()),
             pending: client.busy,
         }),
     })
@@ -535,14 +536,18 @@ fn exploration_model(
             .offers
             .iter()
             .filter(|offer| is_simple_offer(offer))
-            .map(|offer| ExplorationChoiceModel {
-                id: offer.offer_id.clone(),
-                label: phone_choice_label(&offer.label, &input.journey.table_choices),
-                icon: choice_icon(offer.action_kind),
-                disabled_reason: downed
-                    .as_ref()
-                    .map(|state| state.disabled_reason())
-                    .or_else(|| choice_disabled_reason(client.busy, unconfirmed)),
+            .flat_map(|offer| {
+                phone_offer_choices(offer)
+                    .into_iter()
+                    .map(|(id, label)| ExplorationChoiceModel {
+                        id,
+                        label: phone_choice_label(&label, &input.journey.table_choices),
+                        icon: choice_icon(offer.action_kind),
+                        disabled_reason: downed
+                            .as_ref()
+                            .map(|state| state.disabled_reason())
+                            .or_else(|| choice_disabled_reason(client.busy, unconfirmed)),
+                    })
             })
             .collect()
     };
@@ -673,7 +678,12 @@ fn choice_disabled_reason(busy: bool, unconfirmed: bool) -> Option<&'static str>
 
 /// A choice or lobby action chosen on a screen: the server's own current offer is sent
 /// through the existing prepare/send path, or the choice is reported as ended.
-pub(super) fn submit_offer(client: &Rc<RefCell<Client>>, offer_id: &str) {
+
+pub(super) fn submit_offer(client: &Rc<RefCell<Client>>, choice_id: &str) {
+    let (offer_id, travel_option) = match choice_id.split_once('|') {
+        Some((offer, option)) => (offer, Some(option)),
+        None => (choice_id, None),
+    };
     let offer = client
         .borrow()
         .views
@@ -694,13 +704,53 @@ pub(super) fn submit_offer(client: &Rc<RefCell<Client>>, offer_id: &str) {
         );
         return;
     };
+    if let Some(group) = offer
+        .input_groups
+        .iter()
+        .find(|group| group.group_id == "dialogue-addressee")
+    {
+        if let [actor] = group.options.as_slice() {
+            if let Err(error) =
+                dialogue_recovery::address_actor(client, &offer.offer_id, &actor.label)
+            {
+                feedback(
+                    &client.borrow(),
+                    &format!("Could not open the conversation: {error:?}"),
+                );
+            }
+        }
+        return;
+    }
     // A single destination is the only one the server offered, so it is sent as chosen.
     let destination = match offer.destinations.as_slice() {
         [only] => only.destination,
         _ => rpc::HarborDestination::Unspecified as i32,
     };
     match prepare(client, &offer, None, false, false, destination) {
-        Ok(body) => send(client.clone(), body, false),
+        Ok(mut body) => {
+            if offer.action_kind == rpc::GameplayActionKind::Travel as i32 {
+                let Some(option) = travel_option.filter(|selected| {
+                    offer
+                        .input_groups
+                        .iter()
+                        .filter(|group| group.group_id == "travel")
+                        .any(|group| {
+                            group
+                                .options
+                                .iter()
+                                .any(|option| option.option_id == *selected)
+                        })
+                }) else {
+                    feedback(&client.borrow(), "Choose a current travel destination.");
+                    return;
+                };
+                body.action_choices = vec![rpc::JourneyChoice {
+                    group_id: "travel".to_owned(),
+                    option_id: option.to_owned(),
+                }];
+            }
+            send(client.clone(), body, false);
+        }
         Err(error) => feedback(&client.borrow(), &error),
     }
 }
@@ -1005,6 +1055,7 @@ fn render_display(
                 .set_attribute("data-context-generation", &generation)?;
         }
         stage.update_scene_graph_wire(graph.as_ref(), baked_revision)?;
+        stage.update_mural_wire(&input.scene.scene_contents_json)?;
         stage.set_end_rewards(&end_rewards(input.journey, encounter_xp))?;
         stage.set_end_card_ready(end_card_contact_ready(input.scene, graph.as_ref()))?;
         stage.update_scene_video_wire(
@@ -1437,6 +1488,48 @@ mod tests {
         lobby_art_source, phone_choice_label, should_show_dialogue_composer, speaker_portrait,
         tv_model, validated_join_scene_asset,
     };
+    use super::{party_members, party_ready};
+
+    #[test]
+    fn lobby_readiness_requires_every_joined_seat_for_one_through_six_players() {
+        assert!(!party_ready(&[]));
+        for count in 1..=6 {
+            let mut party = vec![
+                rpc::PartyMemberView {
+                    character_ready: true,
+                    ..Default::default()
+                };
+                count
+            ];
+            assert!(party_ready(&party));
+            party[count - 1].character_ready = false;
+            assert!(!party_ready(&party));
+        }
+    }
+
+    #[test]
+    fn phone_party_lists_keep_all_six_heroes_in_seat_order() {
+        let journey = rpc::JourneyView {
+            party: (1..=6)
+                .map(|index| rpc::PartyMemberView {
+                    name: format!("Accepted hero {index}"),
+                    character_ready: true,
+                    hit_points: 10,
+                    maximum_hit_points: 13,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let (lobby, exploration) = party_members(&journey);
+        assert_eq!(lobby.len(), 6);
+        assert_eq!(exploration.len(), 6);
+        for (index, member) in lobby.iter().enumerate() {
+            assert_eq!(member.name, journey.party[index].name);
+            assert_eq!(member.readiness, "Ready");
+            assert_eq!(exploration[index].name, member.name);
+        }
+    }
 
     #[test]
     fn scene_caption_waits_for_the_new_answer_instead_of_falling_back_to_the_purchase_line() {

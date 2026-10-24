@@ -695,6 +695,13 @@ pub(super) fn mount(
     } else {
         None
     };
+    if editor
+        .get_attribute("data-dialogue-offer")
+        .is_some_and(|id| !offers.iter().any(|offer| offer.offer_id == id))
+    {
+        editor.remove_attribute("data-dialogue-offer")?;
+        editor.set_placeholder("Your words?");
+    }
     update_typed_draft(&editor)?;
     let state = client.borrow();
     let recovery = &state.dialogue;
@@ -947,6 +954,25 @@ fn listen_for_intent(
     Ok(())
 }
 
+pub(super) fn address_actor(
+    client: &Rc<RefCell<Client>>,
+    offer_id: &str,
+    name: &str,
+) -> Result<(), JsValue> {
+    let state = client.borrow();
+    let editor = state
+        .dialogue
+        .editor()
+        .ok_or_else(|| JsValue::from_str("dialogue editor unavailable"))?;
+    editor.set_attribute("data-dialogue-offer", offer_id)?;
+    editor.set_placeholder(&format!("To {name}…"));
+    if let Some(panel) = editor.closest("details.say-more")? {
+        panel.set_attribute("open", "")?;
+    }
+    editor.focus()?;
+    Ok(())
+}
+
 pub(super) fn submit(client: Rc<RefCell<Client>>) {
     let prepared = (|| -> Result<_, String> {
         let state = client.borrow();
@@ -972,7 +998,12 @@ pub(super) fn submit(client: Rc<RefCell<Client>>) {
             text,
             context: rpc::DialogueContext::Unspecified as i32,
             finality: rpc::DialogueFinality::Final as i32,
-            offer_id: String::new(),
+            offer_id: state
+                .dialogue
+                .editor
+                .as_ref()
+                .and_then(|editor| editor.get_attribute("data-dialogue-offer"))
+                .unwrap_or_default(),
         })
     })();
     match prepared {

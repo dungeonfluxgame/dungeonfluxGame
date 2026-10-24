@@ -23,12 +23,15 @@ use crate::music_score::{
     ARRANGE_SECONDS, Bed, CueMemory, DUCK_LINE_ATTACK_SECONDS, DUCK_RELEASE_SECONDS,
     DUCK_SFX_ATTACK_SECONDS, DUCK_SFX_DECIBELS, DUCK_SFX_HOLD_SECONDS, DUCK_SFX_RELEASE_SECONDS,
     Facts, GENERATED_MUSIC_ROUTE, LAYER_TRACKS, LINE_BUSY_SCALE, LINE_FILTER_HERTZ, LOOP_SECONDS,
-    Outcome, Phase, PlaceMusic, SOMBRE_FILTER_HERTZ, STINGER_TAKES, Stinger, Suite,
+    Outcome, PacingBand, Phase, PlaceMusic, SOMBRE_FILTER_HERTZ, STINGER_TAKES, Stinger, Suite,
     TRANSITION_SECONDS, Tempo, VOICE_LUFS, ambience_path_of, arrangement_for, arrangements_for,
     bubble_hold_ms, colour_for, duck_decibels, effective_phase, facts_after_presentation,
     facts_with_plan, gain_for_decibels, gap_hold_active, line_presenting, mix_for, mix_level_lufs,
-    next_beat, next_take, place_music_of, scene_layer_gains, shared_path, stinger_between,
+    next_pacing_beat, next_take, place_music_of, scene_layer_gains, shared_path, stinger_between,
     stinger_track, suite_for, swap_boundary, tempo_of, unvoiced_hold_ms, wanted_layer_paths,
+};
+use crate::music_score::{
+    AmbientChange, EntryMemory, PlaceAudioPlan, ambient_changes, entry_handoff, place_audio_of,
 };
 use gloo_timers::callback::Interval;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -83,6 +86,43 @@ const BIG_SFX: &[&str] = &[
     "party-gathered",
 ];
 
+/// Colour the running place layers using only the server's phase and bounded intensity.
+/// No track/path changes: a conversation keeps the bed's playhead and shared loop grid.
+fn roleplay_layers(mut layers: [f32; 4], phase: Phase, intensity: u16) -> [f32; 4] {
+    let intensity = f32::from(intensity.min(1000)) / 1000.0;
+    layers[0] *= 0.85 + 0.15 * intensity;
+    layers[1] *= match phase {
+        Phase::Calm | Phase::Release => 0.9 + 0.1 * intensity,
+        _ => 0.6 + 0.4 * intensity,
+    };
+    layers[2] *= match phase {
+        Phase::Calm | Phase::Release => 0.25 * intensity,
+        _ => 0.3 + 0.7 * intensity,
+    };
+    layers[3] = 0.0;
+    layers
+}
+
+#[cfg(test)]
+mod roleplay_tests {
+    use super::*;
+
+    #[test]
+    fn live_music_intensity_and_warmth_mix_existing_layers_without_combat() {
+        let quiet = roleplay_layers([1.0; 4], Phase::Anticipation, 100);
+        let tense = roleplay_layers([1.0; 4], Phase::Anticipation, 600);
+        let warm = roleplay_layers([1.0; 4], Phase::Calm, 200);
+        assert!(tense[2] > quiet[2]);
+        assert!(warm[1] > tense[1]);
+        assert!(warm[2] < quiet[2]);
+        assert_eq!(tense[3], 0.0);
+        assert_eq!(
+            roleplay_layers([1.0; 4], Phase::Build, u16::MAX),
+            roleplay_layers([1.0; 4], Phase::Build, 1000)
+        );
+    }
+}
+
 /// Everything the mixer sets at one moment; a change of any field starts a glide.
 #[derive(Clone, Copy, PartialEq)]
 struct Applied {
@@ -96,10 +136,12 @@ struct Applied {
 }
 
 struct Ambient {
+    label: &'static str,
     /// Served path of the loop.
     track: String,
     gain: GainNode,
     source: AudioBufferSourceNode,
+    target: f32,
 }
 
 /// One looping layer voice: its own gain lets a suite or take swap crossfade voice by voice
@@ -125,11 +167,11 @@ struct Graph {
     duck: GainNode,
     filter: BiquadFilterNode,
     layers: [GainNode; 4],
-    #[allow(dead_code)]
     score_bus: GainNode,
     stinger_bus: GainNode,
     ambient_bus: GainNode,
     ambient: Option<Ambient>,
+    ambient_layers: Vec<Ambient>,
     /// Audio-clock time the four layers started together; the beat grid hangs from it.
     started_at: Option<f64>,
     /// Kept so the looping sources stay referenced for the page's lifetime.
@@ -145,6 +187,12 @@ struct Latest {
 }
 
 struct Director {
+    audio_plan: Option<PlaceAudioPlan>,
+    entry_memory: EntryMemory,
+    pending_entry: Option<(String, f64)>,
+    entry_until: f64,
+    entry_handoff_at: Option<f64>,
+    entry_voice: Option<LayerVoice>,
     document: Document,
     root: Element,
     graph: Option<Graph>,
@@ -174,6 +222,10 @@ struct Director {
     layer_alternate: bool,
     /// The layer tracks actually looping, if the layers have started.
     layer_tracks: Option<[String; 4]>,
+    /// Do not replace a scheduled variant before its boundary and crossfade have completed.
+    layer_switch_until: f64,
+    playing_band: PacingBand,
+    scheduled_band: Option<(PacingBand, f64)>,
     /// Current arrangement epoch on the audio clock, and the voicing in use.
     epoch: Option<u64>,
     arrangement: usize,
@@ -366,6 +418,7 @@ impl Graph {
             stinger_bus,
             ambient_bus,
             ambient: None,
+            ambient_layers: Vec::new(),
             started_at: None,
             voices: Vec::new(),
         })
@@ -396,12 +449,29 @@ impl Director {
 
     /// `connection` identifies the watch connection the view came from; a new one starts a new
     /// server cue sequence, so the consumed sequence is forgotten.
-    fn accept(&mut self, tempo: Tempo, facts: Facts, place: PlaceMusic, connection: u64) {
+    fn accept(
+        &mut self,
+        tempo: Tempo,
+        facts: Facts,
+        place: PlaceMusic,
+        connection: u64,
+        audio: Option<PlaceAudioPlan>,
+        lobby: bool,
+    ) {
         if connection != self.connection {
+            self.entry_memory = EntryMemory::default();
+            self.pending_entry = None;
             self.connection = connection;
             self.cues.reset();
             self.pending_outcome = None;
         }
+        if self.entry_memory.observe(lobby) && self.enabled && !self.document.hidden() {
+            let entry = audio
+                .as_ref()
+                .map_or("sting-reveal", |plan| &plan.entry_stinger);
+            self.pending_entry = Some((entry.to_owned(), js_sys::Date::now() + 2000.0));
+        }
+        self.audio_plan = audio;
         let outcome = facts.outcome;
         let facts = match presentation_sequences(&self.document) {
             Some((presented, latest)) => facts_after_presentation(facts, presented, latest),
@@ -426,7 +496,8 @@ impl Director {
         // A first view after a reconnect is a state, not a story change: no stinger for it.
         let stinger = previous
             .as_ref()
-            .and_then(|previous| stinger_between(&previous.facts, &facts));
+            .and_then(|previous| stinger_between(&previous.facts, &facts))
+            .filter(|_| self.pending_entry.is_none());
         self.latest = Some(Latest {
             place,
             tempo,
@@ -463,6 +534,25 @@ impl Director {
             if state == AudioContextState::Running {
                 settle(graph.context.suspend()?);
             }
+            if self.entry_until > 0.0
+                && let Some(graph) = self.graph.as_mut()
+            {
+                let now = graph.context.current_time();
+                if let Some(voice) = self.entry_voice.take() {
+                    AudioScheduledSourceNode::stop_with_when(&voice.node, now)?;
+                }
+                for voice in graph.voices.drain(..) {
+                    AudioScheduledSourceNode::stop_with_when(&voice.node, now)?;
+                }
+                graph.score_bus.gain().cancel_scheduled_values(now)?;
+                graph.score_bus.gain().set_value_at_time(1.0, now)?;
+                graph.started_at = None;
+                self.layer_tracks = None;
+                self.entry_until = 0.0;
+                self.entry_handoff_at = None;
+                super::presentation_timing::sound(&self.root, "music-entry", "cancelled-hidden");
+            }
+            self.pending_entry = None;
             self.publish();
             return Ok(Vec::new());
         }
@@ -471,9 +561,23 @@ impl Director {
             self.resync = true;
         }
         let wanted = self.tracks_to_fetch();
+        self.apply_entry()?;
+        if let Some(graph) = &self.graph {
+            let now = graph.context.current_time();
+            if self.entry_handoff_at.is_some_and(|at| now >= at) {
+                self.entry_handoff_at = None;
+                super::presentation_timing::sound(&self.root, "music-entry", "handoff-started");
+            }
+            if self.entry_until > 0.0 && now >= self.entry_until {
+                self.entry_until = 0.0;
+                self.entry_voice = None;
+                super::presentation_timing::sound(&self.root, "music-entry", "handoff-ended");
+            }
+        }
         self.ensure_layers()?;
         self.apply_bed()?;
         self.retarget()?;
+        self.apply_ambient_layers()?;
         self.publish();
         Ok(wanted)
     }
@@ -696,6 +800,15 @@ impl Director {
             }
         }
         wanted.extend(bed);
+        if let Some(plan) = &self.audio_plan {
+            wanted.extend(
+                plan.layers
+                    .iter()
+                    .filter(|layer| layer.status == "ready")
+                    .map(|layer| layer.path.clone())
+                    .filter(|path| !path.is_empty()),
+            );
+        }
         let mut fresh = Vec::new();
         for track in wanted {
             if self.requested.insert(track.clone()) {
@@ -709,12 +822,50 @@ impl Director {
     /// for: a suite or take change starts new voices exactly on the next loop boundary while
     /// the old ones fade out across it. No cut, no gap; every voice stays on the bar grid.
     fn ensure_layers(&mut self) -> Result<(), JsValue> {
+        if self
+            .graph
+            .as_ref()
+            .is_some_and(|graph| graph.context.current_time() < self.entry_until)
+        {
+            return Ok(());
+        }
+        if let Some((band, at)) = self.scheduled_band
+            && self
+                .graph
+                .as_ref()
+                .is_some_and(|graph| graph.context.current_time() >= at)
+        {
+            self.playing_band = band;
+            self.scheduled_band = None;
+            super::presentation_timing::sound(&self.root, "music-variant", "boundary-reached");
+        }
+        if self.layer_switch_until > 0.0
+            && self
+                .graph
+                .as_ref()
+                .is_some_and(|graph| graph.context.current_time() >= self.layer_switch_until)
+        {
+            self.layer_switch_until = 0.0;
+            super::presentation_timing::sound(&self.root, "music-variant", "crossfade-ended");
+        }
+        if self.wanted_suite() == self.suite
+            && self
+                .graph
+                .as_ref()
+                .is_some_and(|graph| graph.context.current_time() < self.layer_switch_until)
+        {
+            return Ok(());
+        }
         let Some(resolved) = self.resolved_layer_tracks() else {
             return Ok(());
         };
         if !self.enabled {
             return Ok(());
         }
+        let band = match self.latest.as_ref().map(|latest| &latest.place) {
+            Some(PlaceMusic::Ready { band, layers, .. }) if layers == &resolved => *band,
+            _ => PacingBand::Steady,
+        };
         if self.layer_tracks.is_none() {
             let Some(graph) = self.graph.as_mut() else {
                 return Ok(());
@@ -735,6 +886,7 @@ impl Director {
             }
             graph.started_at = Some(when);
             self.layer_tracks = Some(resolved);
+            self.playing_band = band;
             self.suite = self.wanted_suite();
             return Ok(());
         }
@@ -766,6 +918,15 @@ impl Director {
             )?;
         }
         graph.voices.drain(..retiring);
+        self.layer_switch_until = boundary + SWAP_CROSSFADE_SECONDS;
+        self.scheduled_band = Some((band, boundary));
+        super::presentation_timing::sound(&self.root, "music-variant", "scheduled");
+        self.root
+            .set_attribute("data-music-switch-boundary", &boundary.to_string())?;
+        self.root.set_attribute(
+            "data-music-switch-crossfade",
+            &SWAP_CROSSFADE_SECONDS.to_string(),
+        )?;
         self.layer_tracks = Some(resolved);
         self.suite = self.wanted_suite();
         Ok(())
@@ -780,7 +941,18 @@ impl Director {
         if !self.enabled {
             return Ok(());
         }
-        let wanted = ambience_path_of(&latest.place);
+        let layered = self.audio_plan.as_ref().is_some_and(|plan| {
+            plan.layers.is_empty()
+                || plan
+                    .layers
+                    .iter()
+                    .any(|layer| !layer.path.is_empty() && self.buffers.contains_key(&layer.path))
+        });
+        let wanted = if layered {
+            None
+        } else {
+            ambience_path_of(&latest.place)
+        };
         let playing = graph.ambient.as_ref().map(|ambient| ambient.track.as_str());
         if playing == wanted {
             return Ok(());
@@ -804,9 +976,11 @@ impl Director {
                     false,
                 )?;
                 Some(Ambient {
+                    label: "ambient-bed",
                     track: path.to_owned(),
                     gain,
                     source,
+                    target: 1.0,
                 })
             }
             None => None,
@@ -827,6 +1001,201 @@ impl Director {
             )?;
         }
         graph.ambient = incoming;
+        Ok(())
+    }
+
+    /// Layer identity is its immutable hub path; line/tempo updates glide gains only.
+    fn apply_ambient_layers(&mut self) -> Result<(), JsValue> {
+        let Some(graph) = self.graph.as_mut() else {
+            return Ok(());
+        };
+        if !self.enabled {
+            return Ok(());
+        }
+        let now = graph.context.current_time();
+        let speech = self.duck_reason == "voice" || self.duck_reason == "caption";
+        let desired = self
+            .audio_plan
+            .as_ref()
+            .map(|plan| plan.layers.as_slice())
+            .unwrap_or(&[]);
+        let playing: Vec<_> = graph
+            .ambient_layers
+            .iter()
+            .map(|voice| (voice.track.as_str(), voice.target))
+            .collect();
+        let targets: Vec<_> = desired
+            .iter()
+            .filter(|layer| !layer.path.is_empty() && self.buffers.contains_key(&layer.path))
+            .map(|layer| {
+                (
+                    layer.path.as_str(),
+                    f32::from(if speech {
+                        layer.speech_gain_permille
+                    } else {
+                        layer.gain_permille
+                    }) / 1000.0,
+                )
+            })
+            .collect();
+        let changes = ambient_changes(&playing, &targets);
+        for change in changes {
+            match change {
+                AmbientChange::Start(path, target) => {
+                    let Some(buffer) = self.buffers.get(&path) else {
+                        continue;
+                    };
+                    let gain = silent_gain(&graph.context, &graph.ambient_bus)?;
+                    let source = looping_source(&graph.context, buffer, &gain, Some(24.0))?;
+                    source.start_with_when(now)?;
+                    glide(
+                        &gain.gain(),
+                        Some(0.0),
+                        target,
+                        now,
+                        BED_CROSSFADE_SECONDS,
+                        BED_CROSSFADE_SECONDS,
+                        false,
+                    )?;
+                    let label = desired
+                        .iter()
+                        .find(|layer| layer.path == path)
+                        .map_or("ambient-layer", |layer| layer.kind.label());
+                    graph.ambient_layers.push(Ambient {
+                        label,
+                        track: path,
+                        gain,
+                        source,
+                        target,
+                    });
+                    super::presentation_timing::sound(&self.root, label, "started");
+                }
+                AmbientChange::Gain(path, target) => {
+                    if let Some(voice) = graph
+                        .ambient_layers
+                        .iter_mut()
+                        .find(|voice| voice.track == path)
+                    {
+                        glide(
+                            &voice.gain.gain(),
+                            Some(voice.target),
+                            target,
+                            now,
+                            BED_CROSSFADE_SECONDS,
+                            DUCK_LINE_ATTACK_SECONDS,
+                            false,
+                        )?;
+                        voice.target = target;
+                        super::presentation_timing::sound(&self.root, voice.label, "gain-changed");
+                    }
+                }
+                AmbientChange::Stop(path) => {
+                    if let Some(index) = graph
+                        .ambient_layers
+                        .iter()
+                        .position(|voice| voice.track == path)
+                    {
+                        let voice = graph.ambient_layers.remove(index);
+                        glide(
+                            &voice.gain.gain(),
+                            Some(voice.target),
+                            0.0,
+                            now,
+                            BED_CROSSFADE_SECONDS,
+                            BED_CROSSFADE_SECONDS,
+                            false,
+                        )?;
+                        AudioScheduledSourceNode::stop_with_when(
+                            &voice.source,
+                            now + BED_CROSSFADE_SECONDS,
+                        )?;
+                        super::presentation_timing::sound(&self.root, voice.label, "retiring");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The entry hit owns one short bar, then yields continuously to the living score.
+    fn apply_entry(&mut self) -> Result<(), JsValue> {
+        let Some((track, expires)) = self.pending_entry.clone() else {
+            return Ok(());
+        };
+        if !self.enabled || js_sys::Date::now() > expires {
+            self.pending_entry = None;
+            super::presentation_timing::sound(&self.root, "music-entry", "skipped-unavailable");
+            return Ok(());
+        }
+        let Some(resolved) = self.resolved_layer_tracks() else {
+            return Ok(());
+        };
+        let Some(buffer) = self.buffers.get(&shared_path(&track)) else {
+            return Ok(());
+        };
+        let Some((handoff, end)) = entry_handoff(buffer.duration()) else {
+            self.pending_entry = None;
+            return Ok(());
+        };
+        let Some(graph) = self.graph.as_mut() else {
+            return Ok(());
+        };
+        if graph.context.state() != AudioContextState::Running {
+            return Ok(());
+        }
+        let start = graph.context.current_time() + START_LEAD_SECONDS;
+        let gain = silent_gain(&graph.context, &graph.stinger_bus)?;
+        gain.gain().set_value_at_time(STINGER_LEVEL, start)?;
+        gain.gain()
+            .set_value_at_time(STINGER_LEVEL, start + handoff)?;
+        gain.gain().linear_ramp_to_value_at_time(0.0, start + end)?;
+        let source = graph.context.create_buffer_source()?;
+        source.set_buffer(Some(buffer));
+        source.connect_with_audio_node(&gain)?;
+        source.start_with_when(start)?;
+        AudioScheduledSourceNode::stop_with_when(&source, start + end)?;
+        self.entry_voice = Some(LayerVoice { node: source, gain });
+        let score = graph.score_bus.gain();
+        let now = graph.context.current_time();
+        score.cancel_scheduled_values(now)?;
+        score.set_value_at_time(score.value(), now)?;
+        score.linear_ramp_to_value_at_time(0.0, start)?;
+        score.set_value_at_time(0.0, start + handoff)?;
+        score.linear_ramp_to_value_at_time(1.0, start + end)?;
+        for voice in graph.voices.drain(..) {
+            AudioScheduledSourceNode::stop_with_when(&voice.node, start)?;
+        }
+        for (index, path) in resolved.iter().enumerate() {
+            let Some(buffer) = self.buffers.get(path) else {
+                continue;
+            };
+            let gain = silent_gain(&graph.context, &graph.layers[index])?;
+            gain.gain().set_value(1.0);
+            let source = looping_source(&graph.context, buffer, &gain, Some(LOOP_SECONDS))?;
+            source.start_with_when(start + handoff)?;
+            graph.voices.push(LayerVoice { node: source, gain });
+        }
+        graph.started_at = Some(start + handoff);
+        self.entry_until = start + end;
+        self.entry_handoff_at = Some(start + handoff);
+        self.layer_switch_until = 0.0;
+        self.scheduled_band = None;
+        self.playing_band = match self.latest.as_ref().map(|latest| &latest.place) {
+            Some(PlaceMusic::Ready { band, layers, .. }) if layers == &resolved => *band,
+            _ => PacingBand::Steady,
+        };
+        self.layer_tracks = Some(resolved);
+        self.pending_entry = None;
+        self.suite = self.wanted_suite();
+        self.root.set_attribute(
+            "data-tempo-entry",
+            &format!(
+                "TEMPO entry stinger={track} handoff_ms={} crossfade_ms={}",
+                handoff * 1000.0,
+                (end - handoff) * 1000.0
+            ),
+        )?;
+        super::presentation_timing::sound(&self.root, "music-entry", "stinger-scheduled");
         Ok(())
     }
 
@@ -888,6 +1257,12 @@ impl Director {
             table[3] * scales[3] * colour.layers[3],
         ];
         layers = scene_layer_gains(layers, latest.facts.in_combat);
+        let roleplay = !latest.facts.in_combat
+            && latest.facts.outcome.is_none()
+            && self.pending_outcome.is_none();
+        if roleplay {
+            layers = roleplay_layers(layers, phase, latest.tempo.intensity);
+        }
         let mut filter_hertz = (mix.filter_hertz * colour.filter_scale)
             .clamp(MINIMUM_FILTER_HERTZ, MAXIMUM_FILTER_HERTZ);
         if sombre {
@@ -923,7 +1298,15 @@ impl Director {
             } else {
                 [0.0; 4]
             },
-            ambient: mix.ambient * AMBIENT_LEVEL * colour.ambient_scale,
+            ambient: if self
+                .audio_plan
+                .as_ref()
+                .is_some_and(|plan| !plan.layers.is_empty())
+            {
+                AMBIENT_LEVEL
+            } else {
+                mix.ambient * AMBIENT_LEVEL * colour.ambient_scale
+            },
             score_bus: 1.0,
             stinger_bus: 1.0,
             filter_hertz,
@@ -942,6 +1325,11 @@ impl Director {
         } else {
             mix.rise_seconds
         };
+        let fall = if roleplay {
+            mix.fall_seconds.max(TRANSITION_SECONDS)
+        } else {
+            mix.fall_seconds
+        };
         let now = graph.context.current_time();
         let resync = self.resync;
         for (index, layer) in graph.layers.iter().enumerate() {
@@ -951,7 +1339,7 @@ impl Director {
                 target.layers[index],
                 now,
                 rise,
-                mix.fall_seconds,
+                fall,
                 resync,
             )?;
         }
@@ -1031,7 +1419,12 @@ impl Director {
         {
             return Ok(());
         }
-        let when = next_beat(graph.context.current_time(), graph.started_at);
+        let now = graph.context.current_time();
+        let band = self
+            .scheduled_band
+            .filter(|(_, at)| now >= *at)
+            .map_or(self.playing_band, |(band, _)| band);
+        let when = next_pacing_beat(now, graph.started_at, band);
         let gain = graph.context.create_gain()?;
         gain.gain().set_value(STINGER_LEVEL);
         gain.connect_with_audio_node(&graph.stinger_bus)?;
@@ -1078,6 +1471,20 @@ impl Director {
     /// colour, suite, takes, bed and ducking. A harness can check the whole mix from here
     /// without listening.
     fn publish(&mut self) {
+        let ambient: Vec<_> = self
+            .graph
+            .as_ref()
+            .into_iter()
+            .flat_map(|graph| &graph.ambient_layers)
+            .map(|voice| {
+                serde_json::json!({"kind":voice.label,"path":voice.track,
+                "gain_target":voice.target,"gain_now":voice.gain.gain().value()})
+            })
+            .collect();
+        let _published = self.root.set_attribute(
+            "data-music-ambient",
+            &serde_json::json!(ambient).to_string(),
+        );
         let latest = self.latest.as_ref();
         let gains = self.applied.map_or_else(
             || "null".to_owned(),
@@ -1097,7 +1504,9 @@ impl Director {
             |applied| {
                 format!(
                     "{{\"score\":{},\"ambient\":{},\"stinger\":{},\"duck\":{},\"master\":{}}}",
-                    applied.score_bus,
+                    self.graph
+                        .as_ref()
+                        .map_or(applied.score_bus, |graph| graph.score_bus.gain().value()),
                     applied.ambient,
                     applied.stinger_bus,
                     applied.duck,
@@ -1136,7 +1545,7 @@ impl Director {
 \"alternate_takes\":{},\"stinger_takes\":[{takes}],\"ducked\":{},\"duck_reason\":{},\
 \"duck_now\":{duck_now},\"music_db\":{},\"voice_db\":{:.1},\"duck_log\":{duck_log},\
 \"tick_ms\":{:.1},\"tick_ms_max\":{:.1},\
-\"sfx_count\":{},\"volume\":{},\"loaded\":{},\"missing\":{},\"stingers\":{},\"place\":{},\"error\":{}}}",
+\"sfx_count\":{},\"volume\":{},\"loaded\":{},\"missing\":{},\"stingers\":{},\"place\":{},\"pacing_band\":{},\"error\":{}}}",
             text(if self.enabled { "on" } else { "off" }),
             text(self.graph.as_ref().map_or("none", Graph::state_name)),
             optional_text(latest.map(|latest| latest.tempo.phase.name())),
@@ -1176,6 +1585,7 @@ impl Director {
                 PlaceMusic::Fallback { .. } => "fallback",
                 PlaceMusic::Ready { .. } => "ready",
             })),
+            text(self.playing_band.label()),
             optional_text(self.failure.as_deref()),
         );
         if snapshot != self.published {
@@ -1269,15 +1679,27 @@ pub(super) fn observe(client: &Rc<RefCell<Client>>) {
     super::live_battlefield::set_tempo(tempo.intensity);
     let facts = facts_with_plan(&scene, journey, display.place_music.as_ref());
     let place = place_music_of(display.place_music.as_ref());
+    let audio = place_audio_of(&scene);
+    let lobby = journey.phase == rpc::JourneyPhase::Room as i32
+        || journey.phase == rpc::JourneyPhase::CharacterCreation as i32;
     match director(&document, &root) {
         Ok(shared) => {
-            shared.borrow_mut().accept(tempo, facts, place, connection);
+            shared
+                .borrow_mut()
+                .accept(tempo, facts, place, connection, audio, lobby);
             tick(&shared);
         }
         Err(_) => {
+            super::presentation_timing::sound(&root, "music", "failed");
             let _marked = root.set_attribute("data-music", "unavailable");
         }
     }
+}
+
+/// Equal-revision generated music is presentation data. The delivery owner calls this
+/// alongside its art merge so a finished variant does not wait for a gameplay action.
+pub(super) fn merge_plan(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) -> bool {
+    crate::music_score::merge_place_music(shown, new)
 }
 
 fn director(document: &Document, root: &Element) -> Result<Shared, JsValue> {
@@ -1295,6 +1717,12 @@ fn create(document: &Document, root: &Element) -> Result<Shared, JsValue> {
     // session, while the pure rules stay unit-testable with controlled seeds.
     let seed = js_sys::Date::now() as u64;
     let shared = Rc::new(RefCell::new(Director {
+        audio_plan: None,
+        entry_memory: EntryMemory::default(),
+        pending_entry: None,
+        entry_until: 0.0,
+        entry_handoff_at: None,
+        entry_voice: None,
         document: document.clone(),
         root: root.clone(),
         graph: None,
@@ -1318,6 +1746,9 @@ fn create(document: &Document, root: &Element) -> Result<Shared, JsValue> {
         seed,
         layer_alternate: seed % 2 == 1,
         layer_tracks: None,
+        layer_switch_until: 0.0,
+        playing_band: PacingBand::Steady,
+        scheduled_band: None,
         epoch: None,
         arrangement: 0,
         arrange_phase: None,
@@ -1395,6 +1826,7 @@ fn tick(shared: &Shared) {
     let wanted = match state.step() {
         Ok(wanted) => wanted,
         Err(error) => {
+            super::presentation_timing::sound(&state.root, "music", "failed");
             state.fail(&error);
             Vec::new()
         }

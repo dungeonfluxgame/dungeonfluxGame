@@ -19,7 +19,7 @@ use super::{Service, actor, credential};
 const MAX_PRODUCERS: usize = 128;
 const UPLOAD_DEADLINE: Duration = Duration::from_secs(10);
 
-fn scope_hash(kind: &str, bytes: &[u8]) -> String {
+pub(super) fn scope_hash(kind: &str, bytes: &[u8]) -> String {
     let mut hash = Sha256::new();
     hash.update(b"df-presentation-scope-v1\0");
     hash.update(kind.as_bytes());
@@ -106,9 +106,8 @@ fn presentation_fields(
 ) {
     let resource_type = match event.kind {
         "voice-start" | "voice-end" | "voice-failed" => "voice",
-        "plate-requested" | "plate-loaded" | "plate-decoded" | "plate-shown" | "plate-kept" => {
-            "plate"
-        }
+        "plate-requested" | "plate-loaded" | "plate-decoded" | "plate-shown" | "plate-kept"
+        | "plate-crossfade" => "plate",
         "clip-requested" | "clip-ready" | "clip-shown" | "clip-ended" | "clip-hidden"
         | "clip-failed" => "video",
         _ => "browser_media",
@@ -125,9 +124,8 @@ fn presentation_fields(
     });
     let stage = component_stage.unwrap_or_else(|| match event.kind {
         "line-open" | "figure" | "figure-mounted" | "figure-shown" | "scene" | "plate-shown"
-        | "plate-kept" | "visual-source" | "check-shown" | "paint" | "paint-opportunity" => {
-            "projected"
-        }
+        | "plate-kept" | "plate-crossfade" | "visual-source" | "check-shown" | "paint"
+        | "paint-opportunity" => "projected",
         "line" | "voice-start" | "voice-end" | "clip-shown" | "clip-ended" => "played",
         "voice-failed" | "clip-failed" => "failed",
         "plate-requested" | "clip-requested" => "requested",
@@ -166,6 +164,10 @@ fn presentation_fields(
     let mut fields = serde_json::Map::from_iter([
         ("resource_type".to_owned(), serde_json::json!(resource_type)),
         ("resource_id".to_owned(), serde_json::json!(event.id)),
+        (
+            "table_sequence".to_owned(),
+            serde_json::json!(event.table_sequence),
+        ),
         ("scene_id".to_owned(), serde_json::json!(event.scene)),
         ("kind".to_owned(), serde_json::json!(event.kind)),
         ("stage".to_owned(), serde_json::json!(stage)),
@@ -232,6 +234,12 @@ fn presentation_fields(
             resource_type.to_owned(),
         ),
         ("gameplay.presentation.resource_id", event.id.to_string()),
+        (
+            "gameplay.presentation.table_sequence",
+            event
+                .table_sequence
+                .map_or_else(|| "none".to_owned(), |sequence| sequence.to_string()),
+        ),
         ("gameplay.presentation.scene_id", event.scene.to_string()),
         ("gameplay.presentation.kind", event.kind.to_owned()),
         ("gameplay.presentation.stage", stage.to_owned()),
@@ -506,6 +514,17 @@ impl PresentationIngress {
         let role = wait
             .await
             .map_err(|_| Status::unavailable("timing owner stopped"))??;
+        let basis = self.service.updates.borrow().basis();
+        let audit = df_observe::AuditContext {
+            operation: None,
+            seat: Some(df_observe::seat_hash(&binding)),
+            room: Some(df_observe::operation_hash(basis.session.as_bytes())),
+            revision: Some(format!(
+                "{}:{}",
+                basis.revision.epoch().get(),
+                basis.revision.sequence(),
+            )),
+        };
         let (records, replayed) = self.ledger.lock().await.record(
             TimingUpload {
                 binding,
@@ -518,9 +537,18 @@ impl PresentationIngress {
                 receive_unix_ms,
             },
             |event, line, timing, page_producer_hash| {
+                let _audit_scope = df_observe::audit_scope(audit.clone());
                 if let Some(timing) = timing.as_ref() {
-                    let (fields, attributes) =
+                    let (mut fields, attributes) =
                         presentation_fields(timing, &correlation, page_producer_hash);
+                    fields.insert(
+                        "audience".to_owned(),
+                        serde_json::json!(if role == LocalDemoRole::Display {
+                            "display"
+                        } else {
+                            "player"
+                        }),
+                    );
                     actor::record_audit_diagnostic(event, line, fields, &attributes);
                 } else {
                     actor::record_audit_line(event, line);
@@ -869,4 +897,44 @@ pub(super) async fn synthetic_probe(
     Ok(
         serde_json::json!({ "synthetic": true, "evidence": "authenticated ingress only; no browser or media observed", "producer": producer_hex, "accepted_records": first.accepted_records, "replayed": replay.replayed }),
     )
+}
+
+#[cfg(test)]
+pub(super) fn fake_display_upload(
+    events: Vec<presentation::TimingEvent>,
+    run: &[u8],
+) -> serde_json::Value {
+    let mut buffer = presentation::TimingBuffer::default();
+    for event in events {
+        buffer.push(event).unwrap();
+    }
+    let batch = buffer.batch().unwrap();
+    let correlation = scope_correlation(Some(b"test-room"), Some(run), "hs48-test");
+    let accepted = std::cell::RefCell::new(Vec::new());
+    let receipt = Ledger::default()
+        .record(
+            TimingUpload {
+                binding: [1; 32],
+                producer: [2; 16],
+                sequence: batch.sequence,
+                dropped: batch.dropped,
+                bytes: &batch.bytes,
+                role: LocalDemoRole::Display,
+                correlation: &correlation,
+                receive_unix_ms: 123_456,
+            },
+            |_, _, event, producer| {
+                if let Some(event) = event {
+                    let (mut fields, _) = presentation_fields(&event, &correlation, producer);
+                    fields.insert("audience".to_owned(), serde_json::json!("display"));
+                    accepted
+                        .borrow_mut()
+                        .push(serde_json::json!({"unix_ms":123456,"fields":fields}));
+                }
+            },
+        )
+        .unwrap();
+    assert_eq!(receipt, (batch.records, false));
+    assert!(buffer.acknowledge(batch.sequence));
+    serde_json::json!({"events":accepted.into_inner()})
 }

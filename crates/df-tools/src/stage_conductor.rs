@@ -43,8 +43,48 @@ pub(crate) fn request_timeline_reset() {
 
 pub(crate) type LineId = u64;
 
+/// Focus a covered plate on a measured head. Origins inside the layer keep every edge
+/// covered at scales >= 1, including while CSS interpolates between two speakers.
+pub(crate) fn plate_focus(
+    geometry: &crate::presentation::PlateGeometry,
+    speaker: crate::presentation::CaptionSpeaker<'_>,
+    narrator: bool,
+    frame: crate::plate_layout::PlateFrame,
+) -> Option<(f64, f64)> {
+    use crate::presentation::CaptionSpeaker;
+    let (head_x, head_y) = if narrator {
+        (geometry.head_x, geometry.head_y)
+    } else {
+        match speaker {
+            CaptionSpeaker::Hero(index) => geometry
+                .heroes
+                .iter()
+                .find(|hero| hero.index == index)
+                .map(|hero| (hero.head_x, hero.head_y))?,
+            CaptionSpeaker::Npc(id) => geometry
+                .actors
+                .iter()
+                .find(|actor| !id.is_empty() && actor.actor_id == id)
+                .map(|actor| (actor.head_x, actor.head_y))?,
+            CaptionSpeaker::Unknown => return None,
+        }
+    };
+    let width = frame.screen.width();
+    let height = frame.screen.height();
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let (x, y) = frame.head_center(head_x, head_y);
+    Some((
+        ((x - frame.screen.left) / width * 100.0).clamp(0.0, 100.0),
+        ((y - frame.screen.top) / height * 100.0).clamp(0.0, 100.0),
+    ))
+}
+
 const BEAT_CLIP_WAIT_MS: u64 = 1_500;
 const BEAT_SPEECH_CAP_MS: u64 = 10_000;
+// Reading and voice finish before Lingering; a waiting reply only needs this handoff pause.
+const QUEUED_LINE_LINGER_MS: u32 = 600;
 
 /// Managed checks share the line queue, but their roll-to-result handoff has no speech linger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -233,6 +273,8 @@ pub(crate) struct Conductor<D> {
     actors: Vec<ActorRun>,
     next_id: LineId,
     sound_on: bool,
+    speaker_entry_required: bool,
+    speaker_entry_ready: bool,
     /// The director is in its entrance state, which ends the scene's Entering.
     in_entrance: bool,
     battle: BattleState,
@@ -275,6 +317,8 @@ impl<D: Clone> Conductor<D> {
             actors: Vec::new(),
             next_id: 1,
             sound_on: false,
+            speaker_entry_required: false,
+            speaker_entry_ready: true,
             in_entrance: false,
             battle: BattleState::Absent,
             battle_since_ms: 0,
@@ -506,6 +550,12 @@ impl<D: Clone> Conductor<D> {
         self.sound_on = on;
     }
 
+    /// The display opts in before a scene change; readiness gates character play and opening.
+    pub(crate) fn set_speaker_entry_ready(&mut self, ready: bool) {
+        self.speaker_entry_required = true;
+        self.speaker_entry_ready = ready;
+    }
+
     /// Starts again at the current view with nothing queued: first view, reload, reconnect.
     /// Lines marked `settled` stand on screen at once; the others play from their start.
     pub(crate) fn restart(&mut self, now_ms: u64, plan: ViewPlan<D>) -> Vec<Command<D>> {
@@ -513,6 +563,7 @@ impl<D: Clone> Conductor<D> {
         self.retire_lines(now_ms, "replaced", &mut out);
         self.pending = None;
         self.in_entrance = false;
+        self.speaker_entry_ready = true;
         self.held.clear();
         self.held_exit = None;
         self.finishing = false;
@@ -752,6 +803,9 @@ impl<D: Clone> Conductor<D> {
 
     /// The painting changed under the wordmark: the pending successor is now the scene.
     fn on_swap(&mut self, now_ms: u64, out: &mut Vec<Command<D>>) {
+        if self.speaker_entry_required {
+            self.speaker_entry_ready = false;
+        }
         let pending = self.pending.take();
         self.move_scene(now_ms, SceneEvent::ExitDone, out);
         let Some(pending) = pending else {
@@ -1488,7 +1542,7 @@ impl<D: Clone> Conductor<D> {
                     let linger = if catching_up {
                         0
                     } else {
-                        u64::from(LINE_LINGER_MS)
+                        u64::from(LINE_LINGER_MS.min(QUEUED_LINE_LINGER_MS))
                     };
                     in_state >= linger
                 } else {
@@ -1552,6 +1606,15 @@ impl<D: Clone> Conductor<D> {
         else {
             return;
         };
+        if !self.speaker_entry_ready
+            && self.battle == BattleState::Absent
+            && self
+                .lines
+                .get(index)
+                .is_some_and(|run| run.line.slot.is_some())
+        {
+            return;
+        }
         if catching_up
             && self
                 .lines
@@ -1725,6 +1788,163 @@ mod tests {
         LINE_CLOSE_MS, READ_MAXIMUM_MS,
     };
 
+    #[test]
+    fn hs48_controlled_clock_aims_each_speaking_line_at_its_own_measured_head() {
+        use crate::{
+            plate_layout::{PlateFrame, Rect, Side},
+            presentation::{CaptionSpeaker, PlateActor, PlateGeometry, PlateHero},
+        };
+        let geometry = PlateGeometry {
+            figure_masks: Vec::new(),
+            bubble_side: Side::Left,
+            head_x: 500,
+            head_y: 400,
+            head_width: 80,
+            head_height: 90,
+            heroes: vec![PlateHero {
+                index: 2,
+                bubble_side: Side::Right,
+                head_x: 200,
+                head_y: 300,
+                head_width: 60,
+                head_height: 80,
+            }],
+            actors: vec![PlateActor {
+                actor_id: "dain".into(),
+                bubble_side: Side::Left,
+                head_x: 800,
+                head_y: 350,
+                head_width: 70,
+                head_height: 80,
+            }],
+        };
+        let frame = PlateFrame {
+            screen: Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            picture_width: 1920.0,
+            picture_height: 1080.0,
+        };
+        let mut conductor = TestConductor::new();
+        let mut commands = conductor.restart(
+            0,
+            plain(
+                vec![
+                    line("hero", false, Some(2)),
+                    line("npc", false, Some(6)),
+                    line("narrator", false, None),
+                    line("unknown", false, Some(7)),
+                ],
+                vec![2, 6, 7],
+            ),
+        );
+        let mut origin = (50.0, 40.0);
+        let mut observed = Vec::new();
+        for now in (0..25_000).step_by(100) {
+            commands.extend(conductor.on_tick(now));
+            for command in commands.drain(..) {
+                if let Command::Line {
+                    state: LineState::Speaking,
+                    detail,
+                    ..
+                } = command
+                {
+                    let (speaker, narrator) = match detail {
+                        "hero" => (CaptionSpeaker::Hero(2), false),
+                        "npc" => (CaptionSpeaker::Npc("dain"), false),
+                        "narrator" => (CaptionSpeaker::Unknown, true),
+                        _ => (CaptionSpeaker::Npc("missing"), false),
+                    };
+                    if let Some(target) = plate_focus(&geometry, speaker, narrator, frame) {
+                        origin = target;
+                    }
+                    observed.push((detail, origin));
+                }
+            }
+        }
+        assert_eq!(
+            observed,
+            vec![
+                ("hero", (20.0, 30.0)),
+                ("npc", (80.0, 35.0)),
+                ("narrator", (50.0, 40.0)),
+                ("unknown", (50.0, 40.0))
+            ]
+        );
+        let cropped = PlateFrame {
+            screen: Rect::new(0.0, 0.0, 600.0, 1080.0),
+            ..frame
+        };
+        assert_eq!(
+            plate_focus(&geometry, CaptionSpeaker::Hero(2), false, cropped)
+                .unwrap()
+                .0,
+            0.0
+        );
+        assert_eq!(
+            plate_focus(&geometry, CaptionSpeaker::Npc("dain"), false, cropped)
+                .unwrap()
+                .0,
+            100.0
+        );
+    }
+
+    #[test]
+    fn hs48_live_component_causes_cross_the_strict_capture_catalog() {
+        use crate::dice_roll::AttackDisplayAction::*;
+        use df_observe::presentation::{
+            ComponentPhase, EffectiveVisibility, PresentationComponent, TimingBuffer, TimingEvent,
+            decode,
+        };
+        for damage in [false, true] {
+            let mut buffer = TimingBuffer::default();
+            for action in [
+                OpenDie,
+                SettleDie,
+                OpenCard,
+                ReadCard,
+                OpenDamage,
+                SettleDamage,
+                Close,
+                Hide,
+            ] {
+                for (component, phase, reason) in action.records(damage) {
+                    buffer
+                        .push(TimingEvent::component_lifecycle(
+                            7,
+                            11,
+                            1000,
+                            component,
+                            phase,
+                            EffectiveVisibility::Visible,
+                            reason,
+                        ))
+                        .unwrap();
+                }
+            }
+            for reason in [
+                "settled",
+                "battle-begin",
+                "phase-change",
+                "dev-pause-capacity-resumed",
+                "attack-cancelled",
+            ] {
+                buffer
+                    .push(TimingEvent::component_lifecycle(
+                        9,
+                        11,
+                        2000,
+                        PresentationComponent::CheckCard,
+                        ComponentPhase::Hidden,
+                        EffectiveVisibility::Hidden,
+                        reason,
+                    ))
+                    .unwrap();
+            }
+            let batch = buffer.batch().unwrap();
+            assert_eq!(batch.dropped, 0);
+            assert_eq!(decode(&batch.bytes).unwrap().len(), batch.records);
+        }
+    }
+
     type TestConductor = Conductor<&'static str>;
     type TestCommand = Command<&'static str>;
 
@@ -1765,6 +1985,77 @@ mod tests {
             script,
             cast,
         }
+    }
+
+    #[test]
+    fn scene_entrance_holds_character_play_and_reading_until_picture_and_title_are_ready() {
+        let mut harness = Harness::new(Voice::working(1_000), true, vec![], vec![]);
+        harness.conductor.set_speaker_entry_ready(true);
+        harness.view(scene(
+            None,
+            vec![line("first speaker", true, Some(6))],
+            vec![6],
+        ));
+        // A decoded prefetched clip may arrive early. Neither it nor elapsed time may
+        // start playback or spend the line's reading window over the old picture.
+        harness.run_to(10_000);
+        assert!(harness.conductor.is_busy());
+        assert_eq!(harness.play_at("first speaker"), None);
+        assert_eq!(harness.opened("first speaker"), None);
+        assert!(
+            harness
+                .conductor
+                .lines
+                .iter()
+                .all(|run| run.opened_ms.is_none())
+        );
+        harness.conductor.set_speaker_entry_ready(true);
+        harness.run_to(16_000);
+        let played = harness.play_at("first speaker").unwrap();
+        let opened = harness.opened("first speaker").unwrap();
+        assert!(played >= 10_000);
+        assert_eq!(opened, played + 50);
+        assert_eq!(
+            harness.line_at("first speaker", LineState::Lingering),
+            Some(opened + u64::from(LINE_OPEN_MS) + 3_000)
+        );
+    }
+
+    #[test]
+    fn scene_entrance_allows_narrator_then_holds_first_character_and_releases_same_scene_lines() {
+        let mut harness = Harness::new(Voice::working(1_000), true, vec![], vec![]);
+        harness.conductor.set_speaker_entry_ready(false);
+        harness.view(scene(
+            None,
+            vec![
+                line("entry narrator", true, None),
+                line("first speaker", true, Some(6)),
+                line("same scene reply", true, Some(0)),
+            ],
+            vec![0, 6],
+        ));
+        harness.run_to(10_000);
+        assert!(harness.opened("entry narrator").is_some());
+        assert_eq!(harness.play_at("first speaker"), None);
+        harness.conductor.set_speaker_entry_ready(true);
+        harness.run_to(25_000);
+        assert!(harness.opened("first speaker").unwrap() >= 10_000);
+        assert!(
+            harness.opened("same scene reply").unwrap() > harness.opened("first speaker").unwrap()
+        );
+    }
+
+    #[test]
+    fn reconnect_restores_character_without_replaying_scene_entrance() {
+        let mut harness = Harness::new(Voice::working(1_000), true, vec![], vec![]);
+        harness.conductor.set_speaker_entry_ready(false);
+        let commands = harness.conductor.restart(
+            0,
+            plain(vec![line("restored speaker", true, Some(6))], vec![6]),
+        );
+        harness.record(commands);
+        harness.run_to(1_000);
+        assert!(harness.opened("restored speaker").is_some());
     }
 
     #[test]
@@ -1844,6 +2135,32 @@ mod tests {
         result.read_ms = read_ms;
         result.timing = LineTiming::CheckResult;
         vec![roll, result]
+    }
+
+    #[test]
+    fn a_roll_and_figureless_reply_never_reopen_the_previous_narrator() {
+        let mut harness = Harness::new(
+            Voice::working(1_000),
+            true,
+            vec![line("old narrator", true, None)],
+            vec![0],
+        );
+        harness.run_to(10_000);
+        let mut script = managed_check_script(4_000);
+        script.push(line("Dain Rusk", true, Some(usize::MAX)));
+        harness.view(plain(script, vec![0]));
+        harness.run_to(50_000);
+        let roll_opened = harness.opened("roll").unwrap();
+        let reply_opened = harness.opened("Dain Rusk").unwrap();
+        assert!(reply_opened > roll_opened);
+        assert!(harness.log.iter().all(|(at, command)| {
+            *at < roll_opened
+                || !matches!(
+                    command,
+                    Command::Line { detail: "old narrator", state, .. } if state.is_active()
+                )
+        }));
+        assert_eq!(harness.conductor.scene_state(), SceneState::AwaitingChoice);
     }
 
     #[test]
@@ -2598,7 +2915,7 @@ mod tests {
         assert_eq!(courier_opened, courier_play + 50);
         // The narrator comes first, and the character only after the narrator's clip and its
         // lingering have run.
-        assert!(courier_opened >= narration_opened + 3_000 + u64::from(LINE_LINGER_MS));
+        assert!(courier_opened >= narration_opened + 3_000 + u64::from(QUEUED_LINE_LINGER_MS));
         // The entrance (wordmark, title card, scene) finishes before the first line opens.
         let entering = harness
             .entered(StageState::EnteringScene)
@@ -2633,7 +2950,7 @@ mod tests {
             .expect("old line ends");
         let swap = harness.rendered()[1];
         assert!(
-            swap >= clip_end + u64::from(LINE_LINGER_MS),
+            swap >= clip_end + u64::from(QUEUED_LINE_LINGER_MS),
             "swap {swap} before end {clip_end}"
         );
         assert!(harness.opened("new narration").expect("new scene speaks") > swap);
@@ -2668,7 +2985,7 @@ mod tests {
         let first_open = harness.opened("a long reply").expect("long reply opens");
         let second_open = harness.opened("the next reply").expect("next reply opens");
         assert!(
-            second_open >= first_open + u64::from(READ_MAXIMUM_MS + LINE_LINGER_MS),
+            second_open >= first_open + u64::from(READ_MAXIMUM_MS + QUEUED_LINE_LINGER_MS),
             "successor opened before the human reading window elapsed: {first_open} -> {second_open}"
         );
     }
@@ -2689,6 +3006,41 @@ mod tests {
         harness.run_to(50_000);
         assert!(harness.line_at("long voice", LineState::Closing).unwrap() >= 40_000);
         assert!(harness.opened("successor").is_some());
+    }
+
+    #[test]
+    fn hs48_queued_reply_gets_a_short_linger_after_the_whole_reading_budget() {
+        let mut hero = line("hero", false, Some(0));
+        hero.read_ms = 9_400;
+        let mut harness = Harness::new(Voice::working(1_000), false, vec![hero], vec![0, 6]);
+        harness.run_to(1_000);
+        harness.view(plain(vec![line("reply", false, Some(6))], vec![0, 6]));
+        harness.run_to(15_000);
+        let opened = harness.opened("hero").unwrap();
+        let lingered = harness.line_at("hero", LineState::Lingering).unwrap();
+        let closed = harness.line_at("hero", LineState::Closing).unwrap();
+        assert_eq!(lingered - opened, 9_400 + u64::from(LINE_OPEN_MS));
+        assert_eq!(closed - lingered, 600);
+        // The established caption handoff overlaps the predecessor's closing fade.
+        assert_eq!(harness.opened("reply"), Some(closed));
+    }
+
+    #[test]
+    fn hs48_last_caption_stays_until_a_reply_arrives_without_restarting_its_linger() {
+        let mut harness = Harness::new(
+            Voice::working(1_000),
+            false,
+            vec![line("hero", false, Some(0))],
+            vec![0, 6],
+        );
+        harness.run_to(10_000);
+        assert_eq!(harness.focus(), Some(LineState::Lingering));
+        assert!(harness.line_at("hero", LineState::Closing).is_none());
+        harness.view(plain(vec![line("reply", false, Some(6))], vec![0, 6]));
+        harness.run_to(10_500);
+        let closed = harness.line_at("hero", LineState::Closing).unwrap();
+        assert!(closed <= 10_050);
+        assert_eq!(harness.opened("reply"), Some(closed));
     }
 
     #[test]
@@ -2771,8 +3123,7 @@ mod tests {
         // Reading time (3 s) plus the open and linger: comparable to a 3 s clip.
         let gap = courier - narration;
         assert!(
-            (3_000..=3_000 + u64::from(LINE_OPEN_MS) + u64::from(LINE_LINGER_MS) + 200)
-                .contains(&gap),
+            (3_000..=3_000 + u64::from(LINE_OPEN_MS + QUEUED_LINE_LINGER_MS) + 200).contains(&gap),
             "{gap}"
         );
     }
@@ -3056,6 +3407,33 @@ mod tests {
     }
 
     #[test]
+    fn figureless_npc_keeps_its_voice_and_full_reading_turn_after_a_hero() {
+        let mut reply = line("Dain Rusk", true, Some(usize::MAX));
+        reply.read_ms = 8_000;
+        let mut harness = Harness::new(Voice::working(10_000), true, Vec::new(), vec![0]);
+        harness.view(plain(
+            vec![
+                line("Sylvara", false, Some(0)),
+                reply,
+                line("newest narrator", false, None),
+            ],
+            vec![0],
+        ));
+        harness.run_to(40_000);
+        let hero_closed = harness.closing("Sylvara").unwrap();
+        let reply_opened = harness.opened("Dain Rusk").unwrap();
+        let reply_closed = harness.closing("Dain Rusk").unwrap();
+        assert!(reply_opened >= hero_closed);
+        assert!(harness.play_at("Dain Rusk").is_some());
+        assert!(reply_closed >= reply_opened + 10_000);
+        assert_eq!(
+            harness.conductor.actor_state(usize::MAX),
+            ActorState::Offstage
+        );
+        assert_eq!(harness.conductor.scene_state(), SceneState::AwaitingChoice);
+    }
+
+    #[test]
     fn actors_absent_from_the_next_scene_leave_before_the_backdrop_changes_and_stayers_stay() {
         let mut harness = Harness::new(Voice::working(1_000), false, Vec::new(), vec![0, 1, 2]);
         harness.run_to(500);
@@ -3088,11 +3466,15 @@ mod tests {
         harness.run_to(300);
         assert_eq!(harness.conductor.actor_state(2), ActorState::Idle);
         // The narration opens and speaks for 2 s, lingers and closes; the courier then opens.
-        let courier_opens = u64::from(LINE_OPEN_MS + 2_000 + LINE_LINGER_MS + LINE_CLOSE_MS);
+        let courier_opens = u64::from(LINE_OPEN_MS + 2_000 + QUEUED_LINE_LINGER_MS + LINE_CLOSE_MS);
         harness.run_to(courier_opens + u64::from(LINE_OPEN_MS) + 1_000);
         assert_eq!(harness.conductor.actor_state(2), ActorState::Speaking);
         harness.run_to(
-            courier_opens + 2 * u64::from(LINE_OPEN_MS) + 2_000 + u64::from(LINE_LINGER_MS) + 2_000,
+            courier_opens
+                + 2 * u64::from(LINE_OPEN_MS)
+                + 2_000
+                + u64::from(QUEUED_LINE_LINGER_MS)
+                + 2_000,
         );
         assert_eq!(harness.conductor.actor_state(2), ActorState::Idle);
     }

@@ -425,7 +425,6 @@ pub(crate) fn closing_card(
         heroes: journey
             .party
             .iter()
-            .take(2)
             .filter(|member| member.character_ready)
             .map(|member| CardHero {
                 name: member.name.clone(),
@@ -449,7 +448,6 @@ pub(crate) fn end_card(journey: &rpc::JourneyView, adventure: &str, outcome: &st
         heroes: journey
             .party
             .iter()
-            .take(2)
             .filter(|member| member.character_ready)
             .map(|member| CardHero {
                 name: member.name.clone(),
@@ -725,6 +723,124 @@ pub(crate) struct PlateGeometry {
     pub(crate) head_height: u32,
     pub(crate) heroes: Vec<PlateHero>,
     pub(crate) actors: Vec<PlateActor>,
+    pub(crate) figure_masks: Vec<PlateFigureMask>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlateFigureMask {
+    pub(crate) person: PlatePerson,
+    pub(crate) source_width: u32,
+    pub(crate) source_height: u32,
+    pub(crate) bounds: [u32; 4],
+    pub(crate) head_top: [u32; 2],
+    pub(crate) free_side: crate::plate_layout::Side,
+    pub(crate) inferred: bool,
+    pub(crate) mask_index: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlatePerson {
+    Hero(usize),
+    Actor(String),
+}
+
+impl PlateGeometry {
+    pub(crate) fn figure_mask(
+        &self,
+        hero_index: Option<usize>,
+        actor_id: &str,
+    ) -> Option<&PlateFigureMask> {
+        self.figure_masks.iter().find(|mask| match &mask.person {
+            PlatePerson::Hero(index) => hero_index == Some(*index),
+            PlatePerson::Actor(id) => {
+                hero_index.is_none() && !actor_id.is_empty() && id == actor_id
+            }
+        })
+    }
+}
+
+/// Project a crown point in source-image permille through the plate's current camera transform.
+/// The small rectangle lets bubble placement aim its tail at the crown instead of the face.
+pub(crate) fn plate_head_top_anchor(
+    frame: &crate::plate_layout::PlateFrame,
+    head_top: [u32; 2],
+) -> crate::plate_layout::Rect {
+    let (x, y) = frame.head_center(head_top[0], head_top[1]);
+    crate::plate_layout::Rect::new(x - 0.5, y, x + 0.5, y + 1.0)
+}
+
+#[cfg(test)]
+mod figure_mask_anchor_tests {
+    use super::plate_head_top_anchor;
+    use crate::plate_layout::{PlateFrame, Rect};
+
+    #[test]
+    fn figure_masks_wire_projection_keeps_a_hero_without_a_head_and_rejects_unknown_actors() {
+        use super::{PlatePerson, plate_of, rpc};
+        let mut scene = rpc::GameplayScene {
+            plate_state: rpc::PlateState::Ready as i32,
+            live_plate: format!("/gameplay/imagery/{}", "a".repeat(64)),
+            plate_layout: Some(rpc::PlateLayout {
+                bubble_side: rpc::PlateSide::Right as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mask = rpc::PlateFigureMask {
+            person: Some(rpc::plate_figure_mask::Person::HeroIndex(1)),
+            source_width: 400,
+            source_height: 200,
+            left: 40,
+            top: 20,
+            right: 140,
+            bottom: 200,
+            head_top_x_permille: 213,
+            head_top_y_permille: 100,
+            free_side: rpc::PlateSide::Left as i32,
+            inferred: true,
+            mask_index: 7,
+        };
+        let layout = scene.plate_layout.as_mut().unwrap();
+        layout.figure_masks.push(mask.clone());
+        layout.figure_masks.push(rpc::PlateFigureMask {
+            person: Some(rpc::plate_figure_mask::Person::ActorId("unknown".into())),
+            ..mask.clone()
+        });
+        layout
+            .figure_masks
+            .push(rpc::PlateFigureMask { right: 401, ..mask });
+        let geometry = plate_of(&scene).layout.unwrap();
+        assert!(geometry.heroes.is_empty());
+        assert_eq!(geometry.figure_masks.len(), 1);
+        let assigned = geometry.figure_mask(Some(1), "").unwrap();
+        assert_eq!(assigned.person, PlatePerson::Hero(1));
+        assert_eq!(assigned.head_top, [213, 100]);
+        assert_eq!(assigned.bounds, [40, 20, 140, 200]);
+        assert!(assigned.inferred);
+        assert!(geometry.figure_mask(Some(0), "").is_none());
+    }
+
+    #[test]
+    fn figure_masks_tv_anchor_uses_the_mask_crown_and_letterboxed_plate_transform() {
+        let frame = PlateFrame {
+            screen: Rect::new(0.0, 100.0, 1920.0, 980.0),
+            picture_width: 2560.0,
+            picture_height: 1440.0,
+        };
+        let crown = [213, 100];
+        let anchor = plate_head_top_anchor(&frame, crown);
+        assert!(((anchor.left + anchor.right) / 2.0 - 408.96).abs() < 0.001);
+        assert_eq!(anchor.top, 108.0);
+        assert!(anchor.top >= frame.screen.top && anchor.bottom <= frame.screen.bottom);
+        let zoomed = PlateFrame {
+            screen: Rect::new(-300.0, -100.0, 2220.0, 1180.0),
+            ..frame
+        };
+        let zoomed_anchor = plate_head_top_anchor(&zoomed, crown);
+        assert!(((zoomed_anchor.left + zoomed_anchor.right) / 2.0 - 236.76).abs() < 0.001);
+        assert_eq!(zoomed_anchor.top, -27.0);
+        assert_ne!(zoomed_anchor, anchor);
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -756,6 +872,46 @@ pub(crate) fn plate_of(scene: &rpc::GameplayScene) -> PlateView {
     };
     let layout = scene.plate_layout.as_ref().and_then(|layout| {
         Some(PlateGeometry {
+            figure_masks: layout
+                .figure_masks
+                .iter()
+                .filter_map(|figure| {
+                    let person = match figure.person.as_ref()? {
+                        rpc::plate_figure_mask::Person::HeroIndex(index) if *index < 6 => {
+                            PlatePerson::Hero(*index as usize)
+                        }
+                        rpc::plate_figure_mask::Person::ActorId(id)
+                            if scene.cast.iter().any(|actor| actor.id == *id) =>
+                        {
+                            PlatePerson::Actor(id.clone())
+                        }
+                        _ => return None,
+                    };
+                    if figure.source_width == 0
+                        || figure.source_height == 0
+                        || figure.source_width > 8192
+                        || figure.source_height > 8192
+                        || figure.left >= figure.right
+                        || figure.top >= figure.bottom
+                        || figure.right > figure.source_width
+                        || figure.bottom > figure.source_height
+                        || figure.head_top_x_permille > 1000
+                        || figure.head_top_y_permille > 1000
+                    {
+                        return None;
+                    }
+                    Some(PlateFigureMask {
+                        person,
+                        source_width: figure.source_width,
+                        source_height: figure.source_height,
+                        bounds: [figure.left, figure.top, figure.right, figure.bottom],
+                        head_top: [figure.head_top_x_permille, figure.head_top_y_permille],
+                        free_side: side_of(figure.free_side)?,
+                        inferred: figure.inferred,
+                        mask_index: figure.mask_index,
+                    })
+                })
+                .collect(),
             actors: layout
                 .actors
                 .iter()
@@ -865,7 +1021,6 @@ pub(crate) fn cast_of(journey: &rpc::JourneyView, scene: &rpc::GameplayScene) ->
         .party
         .iter()
         .enumerate()
-        .take(2)
         .filter(|(_, member)| member.character_ready)
         .map(|(index, member)| StageActor {
             slot: ActorSlot::Hero(index),
@@ -1179,7 +1334,10 @@ pub(crate) fn served_picture(reference: &str) -> Option<String> {
 /// or a reviewed photograph. A role token such as `live-room-photo` has no file of its own, so it
 /// answers `None` and is never handed to the browser as a URL.
 pub(crate) fn set_picture(reference: &str) -> Option<String> {
-    imagery_url(reference).or_else(|| served_picture(reference))
+    art_contract::player_hero_image(reference)
+        .map(str::to_owned)
+        .or_else(|| imagery_url(reference))
+        .or_else(|| served_picture(reference))
 }
 
 /// Which character speaks a caption. Identity is the party position or the server's actor id,
@@ -1353,6 +1511,38 @@ mod s08_stage_director;
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn six_heroes_keep_their_own_portraits_in_cast_and_closing_and_end_cards() {
+        let mut shown = journey(rpc::JourneyPhase::Complete, true, vec![]);
+        shown.party = (0..6)
+            .map(|index| rpc::PartyMemberView {
+                name: format!("Accepted hero {}", index + 1),
+                portrait: format!(
+                    "/gameplay/imagery/{}",
+                    char::from(b'a' + index).to_string().repeat(64)
+                ),
+                character_ready: true,
+                hit_points: 10,
+                maximum_hit_points: 13,
+                ..Default::default()
+            })
+            .collect();
+        let scene = scene();
+        let cast = cast_of(&shown, &scene);
+        assert_eq!(cast.len(), 6);
+        let closing = closing_card(&shown, &scene, "Home.", true);
+        let end = end_card(&shown, "Lantern", "Home.");
+        for card in [closing, end] {
+            assert_eq!(card.heroes.len(), 6);
+            for (index, member) in shown.party.iter().enumerate() {
+                assert_eq!(cast[index].slot, ActorSlot::Hero(index));
+                assert_eq!(cast[index].portrait, member.portrait);
+                assert_eq!(card.heroes[index].name, member.name);
+                assert_eq!(card.heroes[index].portrait, member.portrait);
+            }
+        }
+    }
 
     #[test]
     fn stale_combat_views_replayed_at_the_recorded_times_keep_health_and_turn() {
@@ -2373,6 +2563,7 @@ mod tests {
             live_plate: path.to_owned(),
             plate_state: state as i32,
             plate_layout: Some(rpc::PlateLayout {
+                figure_masks: Vec::new(),
                 actors: Vec::new(),
                 bubble_side: side as i32,
                 head_x_permille: 640,
@@ -4237,5 +4428,19 @@ mod battle_art {
         assert_eq!(set_picture("/live-room-photo"), None);
         assert_eq!(set_picture(art_contract::ROOM_PHOTO), None);
         assert_eq!(set_picture(&live('d')), Some(live('d')));
+    }
+}
+
+#[cfg(test)]
+mod hs48_portrait_tests {
+    #[test]
+    fn hs48_actor_picture_requires_a_served_image_and_never_fetches_neutral() {
+        for state in ["neutral", "/neutral", "pending", "failed", ""] {
+            assert_eq!(super::set_picture(state), None);
+        }
+        for prefix in ["/gameplay/imagery/", "/gameplay/creator-portrait/"] {
+            let path = format!("{prefix}{}", "a".repeat(64));
+            assert_eq!(super::set_picture(&path), Some(path));
+        }
     }
 }

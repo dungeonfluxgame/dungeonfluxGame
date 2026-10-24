@@ -14,6 +14,10 @@ use df_protocol::common as rpc;
 
 use crate::presentation::imagery_url;
 
+// The party mural (HS49) is generated art too: a ready mural at the same revision reaches the TV.
+#[path = "gameplay/living_scenes/mural_view.rs"]
+mod mural_view;
+
 fn well_formed(path: &str) -> bool {
     path.is_empty() || imagery_url(path).is_some()
 }
@@ -66,12 +70,78 @@ fn merge_loop(shown: &mut Option<rpc::JourneyView>, new: Option<&rpc::JourneyVie
     true
 }
 
+/// Content-free condition names for refused art; an unchanged valid snapshot is not a refusal.
+pub(crate) fn refusal_reason(
+    shown: &rpc::ViewMessage,
+    new: &rpc::ViewMessage,
+) -> Option<&'static str> {
+    let (shown_scene, new_scene, journey) = match (&shown.audience, &new.audience) {
+        (
+            Some(rpc::view_message::Audience::Display(shown)),
+            Some(rpc::view_message::Audience::Display(new)),
+        ) => (
+            shown.scene.as_ref(),
+            new.scene.as_ref(),
+            new.journey.as_ref(),
+        ),
+        (
+            Some(rpc::view_message::Audience::Player(shown)),
+            Some(rpc::view_message::Audience::Player(new)),
+        ) => {
+            if shown.scene.as_ref().map(|scene| &scene.title)
+                != new.scene.as_ref().map(|scene| &scene.title)
+            {
+                return Some("scene-title");
+            }
+            if new
+                .scene
+                .as_ref()
+                .is_some_and(|scene| !well_formed(&scene.live_plate))
+            {
+                return Some("plate-path");
+            }
+            return (!faces_well_formed(new.journey.as_ref())).then_some("face-path");
+        }
+        _ => return Some("audience"),
+    };
+    let (Some(shown), Some(new)) = (shown_scene, new_scene) else {
+        return (shown_scene.is_some() != new_scene.is_some()).then_some("scene-presence");
+    };
+    if shown.title != new.title {
+        Some("scene-title")
+    } else if shown.scene_asset != new.scene_asset {
+        Some("scene-asset")
+    } else if shown.cast.len() != new.cast.len() {
+        Some("cast-count")
+    } else if !shown
+        .cast
+        .iter()
+        .zip(&new.cast)
+        .all(|(old, new)| old.id == new.id)
+    {
+        Some("cast-identity")
+    } else if !well_formed(&new.live_backdrop) {
+        Some("backdrop-path")
+    } else if !well_formed(&new.live_plate) {
+        Some("plate-path")
+    } else if !new.cast.iter().all(|actor| well_formed(&actor.live_sprite)) {
+        Some("sprite-path")
+    } else if !faces_well_formed(journey) {
+        Some("face-path")
+    } else {
+        None
+    }
+}
+
 /// Copies the generated-art fields of `new` into `shown` and returns whether any changed. Nothing
 /// is copied unless both are views for the same audience of the same scene (title and authored
 /// painting) with the same cast, in the same order, and every art path in `new` is well formed.
 /// A display view carries the backdrop, the cast's cut-outs and the heroes' health faces; a
 /// player view only the heroes' health faces.
 pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) -> bool {
+    if refusal_reason(shown, new).is_some() {
+        return false;
+    }
     match (shown.audience.as_mut(), new.audience.as_ref()) {
         (
             Some(rpc::view_message::Audience::Display(shown)),
@@ -85,24 +155,6 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
             else {
                 return loop_changed;
             };
-            let same_scene = shown_scene.title == new_scene.title
-                && shown_scene.scene_asset == new_scene.scene_asset
-                && shown_scene.cast.len() == new_scene.cast.len()
-                && shown_scene
-                    .cast
-                    .iter()
-                    .zip(&new_scene.cast)
-                    .all(|(old, new)| old.id == new.id && old.sprite == new.sprite);
-            let well_formed_art = well_formed(&new_scene.live_backdrop)
-                && well_formed(&new_scene.live_plate)
-                && new_scene
-                    .cast
-                    .iter()
-                    .all(|actor| well_formed(&actor.live_sprite))
-                && faces_well_formed(new.journey.as_ref());
-            if !same_scene || !well_formed_art {
-                return false;
-            }
             let mut changed = shown_scene.live_backdrop != new_scene.live_backdrop;
             shown_scene
                 .live_backdrop
@@ -110,10 +162,16 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
             // PLAY-V09: the scene plate, its layout and its state are generated art too.
             changed |= shown_scene.live_plate != new_scene.live_plate
                 || shown_scene.plate_layout != new_scene.plate_layout
-                || shown_scene.plate_state != new_scene.plate_state;
+                || shown_scene.plate_state != new_scene.plate_state
+                || shown_scene.plate_update_pending != new_scene.plate_update_pending;
             shown_scene.live_plate.clone_from(&new_scene.live_plate);
             shown_scene.plate_layout.clone_from(&new_scene.plate_layout);
             shown_scene.plate_state = new_scene.plate_state;
+            shown_scene.plate_update_pending = new_scene.plate_update_pending;
+            changed |= mural_view::merge_scene_contents(
+                &mut shown_scene.scene_contents_json,
+                &new_scene.scene_contents_json,
+            );
             for (old, new) in shown_scene.cast.iter_mut().zip(&new_scene.cast) {
                 changed |= old.live_sprite != new.live_sprite;
                 old.live_sprite.clone_from(&new.live_sprite);
@@ -124,25 +182,22 @@ pub(crate) fn merge_art(shown: &mut rpc::ViewMessage, new: &rpc::ViewMessage) ->
             Some(rpc::view_message::Audience::Player(shown)),
             Some(rpc::view_message::Audience::Player(new)),
         ) => {
-            let same_scene = shown.scene.as_ref().map(|scene| &scene.title)
-                == new.scene.as_ref().map(|scene| &scene.title);
-            let plate_well_formed = new
-                .scene
-                .as_ref()
-                .is_none_or(|scene| well_formed(&scene.live_plate));
-            if !same_scene || !plate_well_formed || !faces_well_formed(new.journey.as_ref()) {
-                return false;
-            }
             // PLAY-V09: the scene plate goes to phones too (their scene picture).
             let mut changed = false;
             if let (Some(shown_scene), Some(new_scene)) = (shown.scene.as_mut(), new.scene.as_ref())
             {
                 changed |= shown_scene.live_plate != new_scene.live_plate
                     || shown_scene.plate_layout != new_scene.plate_layout
-                    || shown_scene.plate_state != new_scene.plate_state;
+                    || shown_scene.plate_state != new_scene.plate_state
+                    || shown_scene.plate_update_pending != new_scene.plate_update_pending;
                 shown_scene.live_plate.clone_from(&new_scene.live_plate);
                 shown_scene.plate_layout.clone_from(&new_scene.plate_layout);
                 shown_scene.plate_state = new_scene.plate_state;
+                shown_scene.plate_update_pending = new_scene.plate_update_pending;
+                changed |= mural_view::merge_scene_contents(
+                    &mut shown_scene.scene_contents_json,
+                    &new_scene.scene_contents_json,
+                );
             }
             changed | merge_faces(&mut shown.journey, new.journey.as_ref())
         }
@@ -156,6 +211,24 @@ mod tests {
 
     fn key(byte: char) -> String {
         format!("/gameplay/imagery/{}", byte.to_string().repeat(64))
+    }
+
+    fn set_plate(
+        view: &mut rpc::ViewMessage,
+        path: &str,
+        state: rpc::PlateState,
+        update_pending: bool,
+    ) {
+        let scene = match view.audience.as_mut() {
+            Some(rpc::view_message::Audience::Display(display)) => display.scene.as_mut(),
+            Some(rpc::view_message::Audience::Player(player)) => player.scene.as_mut(),
+            None => None,
+        };
+        if let Some(scene) = scene {
+            scene.live_plate = path.to_owned();
+            scene.plate_state = state as i32;
+            scene.plate_update_pending = update_pending;
+        }
     }
 
     fn view(backdrop: &str, sprite: &str, narration: &str, title: &str) -> rpc::ViewMessage {
@@ -335,6 +408,7 @@ mod tests {
             scene.live_plate = key('c');
             scene.plate_state = rpc::PlateState::Ready as i32;
             scene.plate_layout = Some(rpc::PlateLayout {
+                figure_masks: Vec::new(),
                 bubble_side: rpc::PlateSide::Left as i32,
                 head_x_permille: 640,
                 head_y_permille: 320,
@@ -357,6 +431,143 @@ mod tests {
             &mut shown,
             &view("/gameplay/imagery/x", "", "x", "The Heron Shrine")
         ));
+    }
+
+    #[test]
+    fn same_revision_plate_transitions_reach_displays_and_phones_for_each_party_size() {
+        for hero_count in [1, 4, 6] {
+            let party = (0..hero_count)
+                .map(|index| format!("Hero {index}"))
+                .collect::<Vec<_>>();
+            let party_names = party.iter().map(String::as_str).collect::<Vec<_>>();
+            for mut shown in [
+                view("", "", "Current line.", "The Heron Shrine"),
+                player_view(&[], &party_names),
+            ] {
+                if let Some(rpc::view_message::Audience::Display(display)) = shown.audience.as_mut()
+                {
+                    display.journey = Some(rpc::JourneyView {
+                        party: party
+                            .iter()
+                            .map(|name| rpc::PartyMemberView {
+                                name: name.clone(),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        ..Default::default()
+                    });
+                }
+                let mut ready = shown.clone();
+                set_plate(&mut ready, &key('a'), rpc::PlateState::Ready, false);
+                assert!(merge_art(&mut shown, &ready), "ready for {hero_count}");
+                assert_eq!(shown, ready);
+
+                let mut failed = shown.clone();
+                set_plate(&mut failed, "", rpc::PlateState::Failed, false);
+                assert!(merge_art(&mut shown, &failed), "failed for {hero_count}");
+                assert_eq!(shown, failed);
+
+                let mut pending = shown.clone();
+                set_plate(&mut pending, "", rpc::PlateState::Pending, true);
+                assert!(merge_art(&mut shown, &pending), "pending for {hero_count}");
+                assert_eq!(shown, pending);
+
+                let mut replaced = shown.clone();
+                set_plate(&mut replaced, &key('b'), rpc::PlateState::Ready, false);
+                assert!(
+                    merge_art(&mut shown, &replaced),
+                    "replacement for {hero_count}"
+                );
+                assert_eq!(shown, replaced);
+            }
+        }
+    }
+
+    #[test]
+    fn a_cast_sprite_change_does_not_block_same_revision_plate_and_live_sprite_art() {
+        let mut shown = view("", "", "Current line.", "The Heron Shrine");
+        let mut newer = view("", &key('d'), "Newer line.", "The Heron Shrine");
+        if let Some(rpc::view_message::Audience::Display(display)) = newer.audience.as_mut()
+            && let Some(scene) = display.scene.as_mut()
+        {
+            scene.cast[0].sprite = "sprite-patron-merchant-alt".to_owned();
+            scene.live_plate = key('c');
+            scene.plate_state = rpc::PlateState::Ready as i32;
+            scene.plate_layout = Some(rpc::PlateLayout {
+                figure_masks: Vec::new(),
+                actors: vec![rpc::PlateActorHead {
+                    actor_id: "merchant".to_owned(),
+                    head_x_permille: 640,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            scene.plate_update_pending = false;
+        }
+        assert!(merge_art(&mut shown, &newer));
+        let Some(rpc::view_message::Audience::Display(display)) = shown.audience.as_ref() else {
+            panic!("display view");
+        };
+        let scene = display.scene.as_ref().unwrap();
+        assert_eq!(scene.live_plate, key('c'));
+        assert_eq!(scene.plate_state, rpc::PlateState::Ready as i32);
+        assert!(!scene.plate_update_pending);
+        assert_eq!(
+            scene
+                .plate_layout
+                .as_ref()
+                .and_then(|layout| layout.actors.first())
+                .map(|actor| actor.head_x_permille),
+            Some(640)
+        );
+        assert_eq!(scene.cast[0].sprite, "sprite-patron-merchant");
+        assert_eq!(scene.cast[0].live_sprite, key('d'));
+        assert_eq!(display.narration, "Current line.");
+    }
+
+    #[test]
+    fn refused_art_names_the_guard_and_does_not_change_the_retained_scene() {
+        let original = view("", "", "Current narration.", "Salt quay");
+        for condition in [
+            "scene-title",
+            "scene-asset",
+            "cast-count",
+            "cast-identity",
+            "backdrop-path",
+            "plate-path",
+            "sprite-path",
+            "face-path",
+        ] {
+            let mut incoming = original.clone();
+            let Some(rpc::view_message::Audience::Display(display)) = &mut incoming.audience else {
+                unreachable!()
+            };
+            let scene = display.scene.as_mut().unwrap();
+            match condition {
+                "scene-title" => scene.title = "Another place".into(),
+                "scene-asset" => scene.scene_asset = "another-painting".into(),
+                "cast-count" => scene.cast.clear(),
+                "cast-identity" => scene.cast[0].id = "another-actor".into(),
+                "backdrop-path" => scene.live_backdrop = "/gameplay/imagery/short".into(),
+                "plate-path" => scene.live_plate = "https://elsewhere.test/plate".into(),
+                "sprite-path" => scene.cast[0].live_sprite = "/gameplay/imagery/../bad".into(),
+                "face-path" => {
+                    display.journey = Some(rpc::JourneyView {
+                        live_faces: vec![rpc::LiveFace {
+                            sprite: "/gameplay/imagery/short".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(refusal_reason(&original, &incoming), Some(condition));
+            let mut retained = original.clone();
+            assert!(!merge_art(&mut retained, &incoming));
+            assert_eq!(retained, original);
+        }
+        assert_eq!(refusal_reason(&original, &original), None);
     }
 
     #[test]

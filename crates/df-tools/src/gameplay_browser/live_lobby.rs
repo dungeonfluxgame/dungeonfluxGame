@@ -145,7 +145,7 @@ fn with_view<R>(
             location: &location,
             scene_label: "Lantern Wharf",
             narration: "Create your own hero on your phone, then step into the story together.",
-            connection: "Local browser room · two players · the server owns the game",
+            connection: "Local browser room · players · the server owns the game",
             notice: "Players join here",
             members: &[],
             objectives: &[],

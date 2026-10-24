@@ -15,7 +15,7 @@ const LIMITS: ExplorationLimits = ExplorationLimits {
         max_objectives: 4,
         max_text_bytes: 2048,
     },
-    max_choices: 4,
+    max_choices: 32,
     max_text_bytes: 2048,
     max_identifier_bytes: 128,
 };
@@ -132,7 +132,7 @@ fn with_view<R>(
             location: &model.location,
             scene_label: model.scene_label,
             narration: &model.whisper,
-            connection: "Local browser room · two players · the server owns the game",
+            connection: "Local browser room · players · the server owns the game",
             // The title is the screen's heading; the top bar names the place instead of
             // repeating it (the view refuses an empty text).
             notice: &model.location,

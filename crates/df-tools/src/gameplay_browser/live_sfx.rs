@@ -215,6 +215,7 @@ pub(super) fn sync() {
             match Engine::create(&document) {
                 Ok(engine) => *slot = Some(engine),
                 Err(_) => {
+                    live_voice::failure_diagnostic("sfx", "failed");
                     UNAVAILABLE.with(|flag| flag.set(true));
                     return false;
                 }
@@ -231,7 +232,27 @@ pub(super) fn sync() {
                 .set_value(if muted { 0.0 } else { 1.0 });
             // Resuming inside the gesture lets the browser start the clock; a refusal means
             // effects stay silent until the next gesture calls `sync` again.
-            let _resumed = engine.context.resume();
+            match engine.context.resume() {
+                Ok(resumed) => spawn_local(async move {
+                    // Page-owned diagnostic observation is bounded; dropping it never
+                    // cancels or changes the browser's actual audio resume operation.
+                    match futures::future::select(
+                        Box::pin(wasm_bindgen_futures::JsFuture::from(resumed)),
+                        Box::pin(gloo_timers::future::TimeoutFuture::new(5_000)),
+                    )
+                    .await
+                    {
+                        futures::future::Either::Left((Ok(_), _)) => {}
+                        futures::future::Either::Left((Err(_), _)) => {
+                            live_voice::failure_diagnostic("sfx", "blocked")
+                        }
+                        futures::future::Either::Right(_) => {
+                            live_voice::failure_diagnostic("sfx", "failed")
+                        }
+                    }
+                }),
+                Err(_) => live_voice::failure_diagnostic("sfx", "blocked"),
+            }
         }
     });
     if created {
@@ -247,7 +268,10 @@ pub(super) fn sync() {
 async fn load(cue: Cue) {
     let loaded = match fetch_decode(cue).await {
         Ok(buffer) => Loaded::Ready(buffer),
-        Err(_) => Loaded::Missing,
+        Err(_) => {
+            live_voice::failure_diagnostic("sfx", "failed");
+            Loaded::Missing
+        }
     };
     ENGINE.with(|slot| {
         if let Some(engine) = slot.borrow_mut().as_mut() {

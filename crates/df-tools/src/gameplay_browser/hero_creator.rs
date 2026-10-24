@@ -10,10 +10,13 @@ use df_protocol::common as rpc;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Document, Element, HtmlButtonElement, HtmlSelectElement, HtmlTextAreaElement};
 
+#[path = "hero_creation_choices.rs"]
+mod creation_choices;
 #[path = "hero_draft_storage.rs"]
 mod draft_storage;
 #[path = "hero_portrait_state.rs"]
 mod portrait_state;
+use creation_choices::{group_available, option_available};
 use prost::Message;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,6 +130,7 @@ pub(super) enum CreationEvent {
     Portrait {
         draft_version: u64,
         current: HeroDraft,
+        regenerate: bool,
     },
     Confirm(HeroDraft),
 }
@@ -194,16 +198,23 @@ struct Controls {
     draft_timer: Rc<RefCell<Option<gloo_timers::callback::Timeout>>>,
     storage_status: Element,
     loaded_hero: Rc<RefCell<Option<draft_storage::LoadedHero>>>,
+    selected_species: Rc<RefCell<String>>,
 }
 
 fn choices(controls: &[(rpc::JourneyGroup, HtmlSelectElement)]) -> Vec<rpc::JourneyChoice> {
-    controls
+    let mut selected = controls
         .iter()
         .map(|(group, select)| rpc::JourneyChoice {
             group_id: group.group_id.clone(),
             option_id: select.value(),
         })
-        .collect()
+        .collect();
+    let groups = controls
+        .iter()
+        .map(|(group, _)| group.clone())
+        .collect::<Vec<_>>();
+    creation_choices::retain_available(&groups, &mut selected);
+    selected
 }
 
 const NAME_HELP: &str =
@@ -221,26 +232,7 @@ fn missing_choices(
     } else if !df_rules::local_journey::valid_character_name(name) {
         missing.push(NAME_RULE.to_owned());
     }
-    for group in groups {
-        let choice = choices
-            .iter()
-            .find(|choice| choice.group_id == group.group_id);
-        let valid = choice
-            .and_then(|choice| {
-                group.options.iter().find(|option| {
-                    option.option_id == choice.option_id
-                        && (option.requires_group.is_empty()
-                            || choices.iter().any(|required| {
-                                required.group_id == option.requires_group
-                                    && option.requires_options.contains(&required.option_id)
-                            }))
-                })
-            })
-            .is_some();
-        if !valid {
-            missing.push(format!("Choose {}", group.label));
-        }
-    }
+    missing.extend(creation_choices::missing_groups(groups, choices));
     missing
 }
 
@@ -283,8 +275,9 @@ impl Controls {
 
     fn set_portrait_pending(&self, pending: bool) {
         self.portrait_pending.set(pending);
-        self.portrait_button
-            .set_disabled(pending || !self.design_complete() || !self.scenery_complete());
+        self.portrait_button.set_disabled(
+            pending || self.pending.get() || !self.design_complete() || !self.scenery_complete(),
+        );
         let shown = portrait_state::visibility(pending, self.portrait_version.get().is_some());
         if shown.animate {
             let _ = self.portrait_shadow.set_attribute("data-pending", "true");
@@ -325,6 +318,39 @@ impl Controls {
     }
 
     fn update_missing(&self) -> bool {
+        let species = self
+            .choices
+            .iter()
+            .find(|(group, _)| group.group_id == "species")
+            .map(|(_, input)| input.value())
+            .unwrap_or_default();
+        let changed_species = !self.selected_species.borrow().is_empty()
+            && *self.selected_species.borrow() != species;
+        *self.selected_species.borrow_mut() = species;
+        let raw = self
+            .choices
+            .iter()
+            .map(|(group, input)| rpc::JourneyChoice {
+                group_id: group.group_id.clone(),
+                option_id: input.value(),
+            })
+            .collect::<Vec<_>>();
+        for (group, input) in &self.choices {
+            if group
+                .options
+                .iter()
+                .any(|option| option.requires_group == "species")
+            {
+                if changed_species || !group_available(group, &raw) {
+                    input.set_value("");
+                }
+                if let [only] = group.options.as_slice()
+                    && option_available(only, &raw)
+                {
+                    input.set_value(&only.option_id);
+                }
+            }
+        }
         let draft = self.draft();
         if let Some(label) = self.scenery_custom.parent_element() {
             if self.scenery.value() == "custom" {
@@ -354,7 +380,7 @@ impl Controls {
         for (group, input) in &self.choices {
             if let Some(label) = input.parent_element() {
                 if !matches!(group.group_id.as_str(), "species" | "class" | "background") {
-                    if supported {
+                    if supported && group_available(group, &draft.choices) {
                         let _ = label.remove_attribute("hidden");
                     } else {
                         let _ = label.set_attribute("hidden", "");
@@ -546,7 +572,10 @@ impl Controls {
                 .set_text_content(Some(&format!("Still needed: {}.", missing.join("; "))));
         }
         self.portrait_button.set_disabled(
-            self.portrait_pending.get() || !self.design_complete() || !self.scenery_complete(),
+            self.pending.get()
+                || self.portrait_pending.get()
+                || !self.design_complete()
+                || !self.scenery_complete(),
         );
         if !self.design_complete() {
             self.portrait_status.set_text_content(Some(
@@ -683,6 +712,7 @@ impl Controls {
         )?;
         *self.loaded_hero.borrow_mut() = stored.loaded_hero.clone();
         self.name.set_value(&selected.name);
+        self.selected_species.borrow_mut().clear();
         for (group, input) in &self.choices {
             if let Some(choice) = selected
                 .choices
@@ -706,6 +736,12 @@ impl Controls {
                     option.set_attribute("value", &choice.option_id)?;
                 }
                 input.set_value(&choice.option_id);
+            } else if group
+                .options
+                .iter()
+                .any(|option| option.requires_group == "species")
+            {
+                input.set_value("");
             }
         }
         for (group, input) in &self.appearance {
@@ -1258,6 +1294,7 @@ impl HeroCreator {
             text_reviewed: Rc::new(Cell::new(true)),
             draft_timer: Rc::new(RefCell::new(None)),
             loaded_hero: Rc::new(RefCell::new(None)),
+            selected_species: Rc::new(RefCell::new(String::new())),
             storage_status: node(
                 document,
                 &footer,
@@ -1342,6 +1379,9 @@ impl HeroCreator {
                 let controls = surface.controls.clone();
                 let siblings = swatches.clone();
                 surface.listen(button.clone(), "click", move |_| {
+                    if controls.pending.get() {
+                        return;
+                    }
                     control.set_value(&choice);
                     if let Ok(buttons) = siblings.query_selector_all("button") {
                         for index in 0..buttons.length() {
@@ -1429,7 +1469,8 @@ impl HeroCreator {
             controls.portrait_button.clone().unchecked_into(),
             "click",
             move |_| {
-                if controls.portrait_pending.get()
+                if controls.pending.get()
+                    || controls.portrait_pending.get()
                     || !controls.design_complete()
                     || !controls.scenery_complete()
                 {
@@ -1446,6 +1487,8 @@ impl HeroCreator {
                 event(CreationEvent::Portrait {
                     draft_version: controls.look_version.get(),
                     current: controls.draft(),
+                    regenerate: controls.portrait_operation.get() != 0
+                        || controls.portrait_version.get().is_some(),
                 });
             },
         )?;
@@ -1469,7 +1512,8 @@ impl HeroCreator {
             controls.confirm.clone().unchecked_into(),
             "click",
             move |_| {
-                if controls.update_missing() {
+                if !controls.pending.get() && controls.update_missing() {
+                    controls.save_draft();
                     controls.pending.set(true);
                     controls.update_missing();
                     on_event(CreationEvent::Confirm(controls.draft()));
@@ -1545,6 +1589,10 @@ impl HeroCreator {
         self.controls.draft()
     }
 
+    pub(super) fn current_draft(&self) -> HeroDraft {
+        self.controls.draft()
+    }
+
     pub(super) fn dispose(self) -> Result<(), JsValue> {
         if self.controls.draft_timer.borrow_mut().take().is_some() {
             self.controls.save_draft();
@@ -1554,10 +1602,44 @@ impl HeroCreator {
         Ok(())
     }
 
+    /// Confirmation stays pending across same-phase view redraws and portrait polling.
+    pub(super) fn is_pending(&self) -> bool {
+        self.controls.pending.get()
+    }
+
     /// The caller clears pending only after a durable outcome or a preparation failure.
     pub(super) fn set_pending(&self, pending: bool) {
         self.controls.pending.set(pending);
         self.controls.update_missing();
+        if let Ok(inputs) = self.root.query_selector_all("textarea, select, button") {
+            for index in 0..inputs.length() {
+                if let Some(input) = inputs
+                    .item(index)
+                    .and_then(|node| node.dyn_into::<Element>().ok())
+                {
+                    if pending && !input.has_attribute("disabled") {
+                        let _ = input.set_attribute("data-lock-disabled", "");
+                        let _ = input.set_attribute("disabled", "");
+                    } else if !pending && input.has_attribute("data-lock-disabled") {
+                        let _ = input.remove_attribute("disabled");
+                        let _ = input.remove_attribute("data-lock-disabled");
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn look_version(&self) -> u64 {
+        self.controls.look_version.get()
+    }
+
+    pub(super) fn has_current_portrait(&self) -> bool {
+        self.controls.portrait_version.get() == Some(self.controls.look_version.get())
+    }
+
+    pub(super) fn keep_draft(&self) {
+        self.controls.draft_timer.borrow_mut().take();
+        self.controls.save_draft();
     }
 
     /// Stale previews cannot overwrite typing or menu corrections made after dispatch.
@@ -1624,6 +1706,9 @@ impl HeroCreator {
 
     pub(super) fn observe_portrait_operation(&self, operation_hash: u64) {
         self.controls.portrait_operation.set(operation_hash);
+        self.controls
+            .portrait_button
+            .set_text_content(Some("Regenerate portrait"));
     }
 
     pub(super) fn observe_portrait_visibility(&self, hidden: bool) {
@@ -1941,6 +2026,7 @@ mod tests {
                 CreationEvent::Portrait {
                     draft_version,
                     current,
+                    ..
                 } => {
                     let _ = (draft_version, current);
                 }
@@ -1987,9 +2073,14 @@ mod tests {
         assert_eq!(surface.draft().name, "Maren");
         assert!(surface.apply_preview(1, &initial, &["Review your details".to_owned()]));
         surface.set_pending(true);
+        assert!(surface.is_pending());
+        assert!(surface.controls.name.disabled());
+        assert!(surface.controls.portrait_button.disabled());
         assert!(surface.controls.confirm.disabled());
         assert!(!surface.apply_preview(2, &initial, &[]));
         surface.set_pending(false);
+        assert!(!surface.is_pending());
+        assert!(!surface.controls.name.disabled());
         assert!(!surface.controls.confirm.disabled());
         surface.show_error("Choose again");
         assert_eq!(
@@ -2083,6 +2174,224 @@ fn mark_library_choice(list: &Element, chosen: Option<&Element>) {
             let _ = item.set_attribute("aria-pressed", if pressed { "true" } else { "false" });
         }
     }
+    if let Some(picker) = list.parent_element()
+        && let Ok(Some(row)) = picker.query_selector(".hero-library-removal")
+    {
+        let _ = row.remove_attribute("data-confirming");
+        let _ = row.toggle_attribute_with_force("hidden", chosen.is_none());
+        if let Some(chosen) = chosen {
+            let name = chosen.get_attribute("data-hero-name").unwrap_or_default();
+            if let Ok(Some(quiet)) = row.query_selector(".hero-library-remove-quiet") {
+                quiet.set_text_content(Some(&format!("Remove {name} from your heroes")));
+            }
+            if let Ok(Some(prompt)) = row.query_selector(".hero-library-remove-prompt") {
+                prompt.set_text_content(Some(&format!(
+                    "Remove {name} for good? Games you already played keep their copy."
+                )));
+            }
+        }
+    }
+}
+
+fn mount_library_removal(
+    creator: &mut HeroCreator,
+    client: &Rc<RefCell<super::Client>>,
+    document: &Document,
+    picker: &Element,
+    list: &Element,
+) -> Result<(), JsValue> {
+    let row = node(document, picker, "div", "hero-library-removal", "")?;
+    row.set_attribute("hidden", "")?;
+    let quiet = node(document, &row, "button", "hero-library-remove-quiet", "")?;
+    quiet.set_attribute("type", "button")?;
+    let confirmation = node(
+        document,
+        &row,
+        "div",
+        "hero-library-remove-confirmation",
+        "",
+    )?;
+    node(
+        document,
+        &confirmation,
+        "p",
+        "hero-library-remove-prompt",
+        "",
+    )?;
+    let remove = node(
+        document,
+        &confirmation,
+        "button",
+        "hero-library-remove-confirm",
+        "Remove",
+    )?;
+    remove.set_attribute("type", "button")?;
+    let keep = node(
+        document,
+        &confirmation,
+        "button",
+        "hero-library-remove-keep",
+        "Keep",
+    )?;
+    keep.set_attribute("type", "button")?;
+    let status = node(document, picker, "p", "hero-library-status", "")?;
+    status.set_attribute("role", "status")?;
+    let confirming = row.clone();
+    let focus = keep.clone();
+    creator.listen(quiet.clone(), "click", move |_| {
+        let _ = confirming.set_attribute("data-confirming", "true");
+        if let Some(button) = focus.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = button.focus();
+        }
+    })?;
+    let cancel = row.clone();
+    let focus = quiet.clone();
+    creator.listen(keep.clone(), "click", move |_| {
+        let _ = cancel.remove_attribute("data-confirming");
+        if let Some(button) = focus.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = button.focus();
+        }
+    })?;
+    let cancel = row.clone();
+    let focus = quiet;
+    let busy = remove.clone();
+    creator.listen(row.clone(), "keydown", move |event| {
+        if event
+            .dyn_ref::<web_sys::KeyboardEvent>()
+            .is_some_and(|event| event.key() == "Escape")
+            && !busy.has_attribute("disabled")
+        {
+            event.prevent_default();
+            let _ = cancel.remove_attribute("data-confirming");
+            if let Some(button) = focus.dyn_ref::<web_sys::HtmlElement>() {
+                let _ = button.focus();
+            }
+        }
+    })?;
+    let weak = Rc::downgrade(client);
+    let list = list.clone();
+    let remove_button = remove.clone();
+    creator.listen(remove, "click", move |_| {
+        if remove_button.has_attribute("disabled") {
+            return;
+        }
+        let Ok(Some(mark)) = list.query_selector(".hero-library-item[aria-pressed=true]") else {
+            return;
+        };
+        let Some(hero_id) = mark
+            .get_attribute("data-hero-id")
+            .and_then(|id| id.parse::<i64>().ok())
+        else {
+            return;
+        };
+        let name = mark.get_attribute("data-hero-name").unwrap_or_default();
+        let Some(owner) = weak.upgrade() else {
+            return;
+        };
+        let state = owner.borrow();
+        let Some(creator) = state.creation.as_ref() else {
+            return;
+        };
+        if creator.controls.pending.get() {
+            return;
+        }
+        let key = match library_key(false) {
+            Ok(Some(key)) => key,
+            _ => {
+                status.set_text_content(Some(&format!(
+                    "{name} could not be removed. Your heroes are unchanged."
+                )));
+                let _ = row.remove_attribute("data-confirming");
+                return;
+            }
+        };
+        creator.set_pending(true);
+        let credential = state.credential.clone();
+        drop(state);
+        let _ = remove_button.set_attribute("disabled", "");
+        let _ = keep.set_attribute("disabled", "");
+        let weak = weak.clone();
+        let row = row.clone();
+        let list = list.clone();
+        let status = status.clone();
+        let remove = remove_button.clone();
+        let keep = keep.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = async {
+                let (connection, mut library) = connect_library().await?;
+                let request =
+                    library_request(rpc::DeleteHeroRequest { key, hero_id }, &credential)?;
+                let result = library.delete_hero(request).await;
+                connection.close();
+                result.map_err(|status| {
+                    library_failed(&weak, 3, status.code());
+                    "Hero could not be removed".to_owned()
+                })
+            }
+            .await;
+            if !row.is_connected() {
+                return;
+            }
+            let Some(owner) = weak.upgrade() else {
+                return;
+            };
+            {
+                let state = owner.borrow();
+                let Some(creator) = state.creation.as_ref() else {
+                    return;
+                };
+                creator.set_pending(false);
+                let _ = remove.remove_attribute("disabled");
+                let _ = keep.remove_attribute("disabled");
+                let _ = row.remove_attribute("data-confirming");
+                if result.is_err() {
+                    status.set_text_content(Some(&format!(
+                        "{name} could not be removed. Your heroes are unchanged."
+                    )));
+                    return;
+                }
+                // A repeated delete (removed=false) is the same desired absence.
+                if creator
+                    .controls
+                    .loaded_hero
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|hero| hero.hero_id == hero_id)
+                {
+                    creator.controls.loaded_hero.borrow_mut().take();
+                    creator.controls.draft_timer.borrow_mut().take();
+                    creator.controls.save_draft();
+                }
+                mark_library_choice(&list, None);
+                status.set_text_content(Some(&format!("{name} was removed from your heroes.")));
+            }
+            let _ = mark.class_list().add_1("hero-library-removing");
+            let reduced = web_sys::window()
+                .and_then(|window| window.get_computed_style(&mark).ok().flatten())
+                .and_then(|style| style.get_property_value("transition-duration").ok())
+                .is_some_and(|duration| duration == "0s");
+            if !reduced {
+                gloo_timers::future::TimeoutFuture::new(180).await;
+            }
+            if !row.is_connected() {
+                return;
+            }
+            mark.remove();
+            if list
+                .query_selector(".hero-library-item")
+                .ok()
+                .flatten()
+                .is_none()
+                && let Some(picker) = list.parent_element()
+                && let Ok(Some(note)) = picker.query_selector(".hero-library-note")
+            {
+                note.set_text_content(Some(
+                    "Heroes you confirm are kept here for your next adventure.",
+                ));
+            }
+        });
+    })?;
+    Ok(())
 }
 
 /// "Dwarf fighter" from the library row's species and class option ids.
@@ -2098,6 +2407,22 @@ fn library_design_label(species: &str, class: &str) -> String {
 
 type LibraryClient =
     rpc::hero_library_service_client::HeroLibraryServiceClient<df_rpc_bridge::BrowserChannel>;
+fn library_failed(
+    weak: &std::rc::Weak<std::cell::RefCell<super::Client>>,
+    operation: u32,
+    code: tonic::Code,
+) {
+    if let Some(client) = weak.upgrade() {
+        super::presentation_timing::diagnostic(
+            &client.borrow().root,
+            crate::client_diagnostics::Diagnostic::LibraryFailed,
+            0,
+            code as u32,
+            operation,
+        );
+    }
+}
+
 async fn connect_library() -> Result<(df_rpc_bridge::BrowserConnection, LibraryClient), String> {
     let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
     let (connection, channel) = df_rpc_bridge::BrowserConnection::connect(&url)
@@ -2334,7 +2659,10 @@ pub(super) fn sync_library(
                     .save_my_seat_hero(library_request(body, &credential)?)
                     .await;
                 connection.close();
-                result.map_err(|_| "Hero not yet saved".to_owned())
+                result.map_err(|status| {
+                    library_failed(&weak, 4, status.code());
+                    "Hero not yet saved".to_owned()
+                })
             }
             .await;
             LIBRARY_SAVING.with(|saving| saving.set(false));
@@ -2406,10 +2734,14 @@ pub(super) fn sync_library(
     node(&document, &new, "span", "hero-library-arch", "+")?
         .set_attribute("aria-hidden", "true")?;
     node(&document, &new, "strong", "", "New hero")?;
+    mount_library_removal(creator, client, &document, &picker, &list)?;
     let defaults = creator.initial_draft.clone();
     let controls = creator.controls.clone();
     let chosen = list.clone();
     creator.listen(new, "click", move |_| {
+        if controls.pending.get() {
+            return;
+        }
         mark_library_choice(&chosen, None);
         let mut draft = defaults.clone();
         draft.loaded_hero = None;
@@ -2448,7 +2780,8 @@ pub(super) fn sync_library(
                             &credential,
                         )?)
                         .await
-                        .map_err(|_| {
+                        .map_err(|status| {
+                            library_failed(&weak, 1, status.code());
                             "Your heroes are unavailable. You can still make a new hero.".to_owned()
                         })?
                         .into_inner();
@@ -2496,6 +2829,8 @@ pub(super) fn sync_library(
                 let button = node(&document, &list, "button", "hero-library-item", "")?;
                 button.set_attribute("type", "button")?;
                 button.set_attribute("aria-pressed", "false")?;
+                button.set_attribute("data-hero-id", &row.hero_id.to_string())?;
+                button.set_attribute("data-hero-name", &row.name)?;
                 let arch = node(&document, &button, "span", "hero-library-arch", "")?;
                 if row.portrait.is_empty() {
                     let initial = row
@@ -2555,7 +2890,7 @@ pub(super) fn sync_library(
                             connection.close();
                             result
                                 .map(|response| response.into_inner())
-                                .map_err(|_| "Hero could not load".to_owned())
+                                .map_err(|status| { library_failed(&weak, 2, status.code()); "Hero could not load".to_owned() })
                         }
                         .await;
                         let Some(client) = weak.upgrade() else {

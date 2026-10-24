@@ -32,6 +32,7 @@ struct Capture {
     generation: u64,
     buffer: TimingBuffer,
     lines: HashMap<u64, TimingEvent>,
+    table_sequences: VecDeque<(u64, u64)>,
     closed_lines: VecDeque<TimingEvent>,
     components: HashMap<(PresentationComponent, u64, u64), ActiveComponent>,
     abort: Option<AbortHandle>,
@@ -70,6 +71,8 @@ impl Drop for Capture {
 
 thread_local! {
     static CAPTURES: RefCell<Vec<Capture>> = const { RefCell::new(Vec::new()) };
+    static PRECONNECT: RefCell<Vec<(web_sys::Element, crate::client_diagnostics::PreconnectBuffer)>> = const { RefCell::new(Vec::new()) };
+    static PRECONNECT_DROPPED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NEXT_COMPONENT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
     // The queue lag of the combat beat whose component record is written next.
     static NEXT_LAG_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
@@ -84,6 +87,7 @@ fn now_ms() -> Option<u64> {
         .map(|clock| clock.now())
         .filter(|time| time.is_finite() && *time >= 0.0);
     if measured.is_none() {
+        PRECONNECT_DROPPED.with(|dropped| dropped.set(dropped.get().saturating_add(1)));
         web_sys::console::warn_1(&"Presentation timing clock unavailable".into());
     }
     measured.map(|time| time as u64)
@@ -127,15 +131,51 @@ pub(super) fn next_component_id() -> u64 {
     })
 }
 
-fn retain(capture: &mut Capture, event: TimingEvent) {
-    if let Err(error) = capture.buffer.push(event) {
-        web_sys::console::warn_1(
-            &format!(
-                "Presentation timing capture refused: {error:?}; dropped={}",
-                capture.buffer.dropped()
-            )
-            .into(),
-        );
+/// Bind the conductor's page-local id to the server's public table sequence before mounting.
+pub(super) fn bind_line(id: u64, sequence: Option<u64>) {
+    let Some(sequence) = sequence else {
+        return;
+    };
+    displays(|capture| {
+        if !capture.table_sequences.iter().any(|(line, _)| *line == id) {
+            if capture.table_sequences.len() == 256 {
+                capture.table_sequences.pop_front();
+            }
+            capture.table_sequences.push_back((id, sequence));
+        }
+    });
+}
+
+fn retain(capture: &mut Capture, mut event: TimingEvent) {
+    if matches!(
+        event.kind,
+        "line" | "line-open" | "voice-start" | "voice-end" | "voice-failed"
+    ) || matches!(
+        event.component,
+        Some(
+            PresentationComponent::Subtitle
+                | PresentationComponent::SpeechBubble
+                | PresentationComponent::Dice
+        )
+    ) {
+        event.table_sequence = capture
+            .table_sequences
+            .iter()
+            .find(|(id, _)| *id == event.id)
+            .map(|(_, sequence)| *sequence);
+    }
+    if let Err(error) = capture.buffer.push(event.clone()) {
+        // Report loss in the next authenticated batch. A saturated buffer must not also
+        // flood the browser console every animation frame while its tunnel is recovering.
+        if capture.buffer.dropped().is_power_of_two() {
+            web_sys::console::warn_1(
+                &format!(
+                    "Presentation timing capture refused: {error:?}; dropped={}; event={event:?}",
+                    capture.buffer.dropped()
+                )
+                .into(),
+            );
+        }
     }
 }
 
@@ -203,12 +243,18 @@ pub(super) fn sound(root: &web_sys::Element, source: &'static str, reason: &'sta
         return;
     };
     let event = TimingEvent::lifecycle("sound", reason, identity(source), 0, now);
-    CAPTURES.with_borrow_mut(|captures| {
+    let delivered = CAPTURES.with_borrow_mut(|captures| {
+        let mut delivered = false;
         captures.retain(|capture| capture.client.strong_count() != 0);
         for capture in captures.iter_mut().filter(|capture| capture.root == *root) {
             retain(capture, event.clone());
+            delivered = true;
         }
+        delivered
     });
+    if !delivered {
+        preconnect(root, event);
+    }
 }
 
 /// Page diagnostics reuse the existing bounded lifecycle upload and authenticated PHONE ingress.
@@ -223,12 +269,35 @@ pub(super) fn diagnostic(
         return;
     };
     let event = diagnostic.event(operation_hash, attempt, delay_ms, now);
-    CAPTURES.with_borrow_mut(|captures| {
+    let delivered = CAPTURES.with_borrow_mut(|captures| {
+        let mut delivered = false;
         for capture in captures
             .iter_mut()
             .filter(|capture| capture.root == *root || capture.root.contains(Some(root)))
         {
             retain(capture, event.clone());
+            delivered = true;
+        }
+        delivered
+    });
+    if !delivered {
+        preconnect(root, event);
+    }
+}
+
+fn preconnect(root: &web_sys::Element, event: TimingEvent) {
+    PRECONNECT.with_borrow_mut(|pages| {
+        if let Some((_, buffer)) = pages
+            .iter_mut()
+            .find(|(page, _)| page == root || page.contains(Some(root)))
+        {
+            buffer.push(event);
+        } else if pages.len() < 8 {
+            let mut buffer = crate::client_diagnostics::PreconnectBuffer::default();
+            buffer.push(event);
+            pages.push((root.clone(), buffer));
+        } else {
+            PRECONNECT_DROPPED.with(|dropped| dropped.set(dropped.get().saturating_add(1)));
         }
     });
 }
@@ -375,6 +444,38 @@ pub(super) fn close_reason(id: u64, reason: &'static str) {
 /// next component record carries it as `lag_ms` (taken, so it is written once).
 pub(super) fn note_lag(lag_ms: u64) {
     NEXT_LAG_MS.set(Some(lag_ms));
+}
+
+/// A measured scene-to-picture or picture-to-first-speaker gap, on the page clock.
+pub(super) fn entry_gap(
+    element: &web_sys::Element,
+    component: PresentationComponent,
+    id: u64,
+    scene: &str,
+    started_ms: f64,
+) {
+    let Some(now) = now_ms() else {
+        return;
+    };
+    if !started_ms.is_finite() || started_ms < 0.0 || started_ms > now as f64 {
+        report_loss(1);
+        return;
+    }
+    let event = component_event(
+        id,
+        identity(scene),
+        now,
+        component,
+        ComponentPhase::Opened,
+        effective_visibility(Some(element)),
+        "scene-change",
+        0,
+        Some(now),
+        None,
+        None,
+        Some(now.saturating_sub(started_ms as u64)),
+    );
+    displays(|capture| retain(capture, event.clone()));
 }
 
 /// Record one real presentation-component transition after the UI applies it. The element is
@@ -821,7 +922,9 @@ pub(super) fn voice_at(id: u64, state: ClipState, now: u64) {
         let mut event = event.clone();
         event.kind = kind;
         event.reason = reason;
-        event.at_ms = now;
+        // A start buffered before subtitle mount is reported after that mount. The observation
+        // keeps its actual voice timestamp; the report must cover every fact it carries.
+        event.at_ms = now.max(event.at_ms);
         retain(capture, event);
     });
 }
@@ -868,13 +971,14 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
             }
             captures.push(Capture {
                 client: weak.clone(),
-                root,
+                root: root.clone(),
                 display,
                 scope: scope.clone(),
                 producer,
                 generation: 0,
                 buffer: TimingBuffer::default(),
                 lines: HashMap::new(),
+                table_sequences: VecDeque::new(),
                 closed_lines: VecDeque::new(),
                 components: HashMap::new(),
                 abort: None,
@@ -886,6 +990,22 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
         let capture = captures
             .iter_mut()
             .find(|capture| capture.client.ptr_eq(&weak))?;
+        PRECONNECT.with_borrow_mut(|pages| {
+            let mut index = 0;
+            while index < pages.len() {
+                if capture.root == pages[index].0 || capture.root.contains(Some(&pages[index].0)) {
+                    let (_, mut pending) = pages.remove(index);
+                    let (events, dropped) = pending.drain();
+                    capture.buffer.report_loss(dropped);
+                    for event in events {
+                        retain(capture, event);
+                    }
+                } else {
+                    index += 1;
+                }
+            }
+        });
+        PRECONNECT_DROPPED.with(|dropped| capture.buffer.report_loss(dropped.replace(0)));
         if let Some(old) = capture.abort.replace(abort) {
             old.abort();
         }
@@ -893,6 +1013,13 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
         Some(capture.generation)
     });
     let Some(generation) = setup else {
+        diagnostic(
+            &root,
+            crate::client_diagnostics::Diagnostic::TelemetryCaptureFailed,
+            0,
+            1,
+            0,
+        );
         web_sys::console::warn_1(&"Presentation timing producer unavailable".into());
         return;
     };
@@ -901,8 +1028,12 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
             let mut rpc_client = TimingClient::new(channel)
                 .max_encoding_message_size(df_rpc_bridge::RPC_MESSAGE_BYTES)
                 .max_decoding_message_size(1024);
+            // At most four sequential batches per second, with one request in flight.
+            // This drains scene-transition bursts without enlarging the bounded buffer.
+            let mut delay_ms = 1_000;
             loop {
-                gloo_timers::future::TimeoutFuture::new(1_000).await;
+                gloo_timers::future::TimeoutFuture::new(delay_ms).await;
+                delay_ms = 1_000;
                 if weak.strong_count() == 0 {
                     break;
                 }
@@ -910,6 +1041,8 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
                     let capture = captures.iter_mut().find(|capture| {
                         capture.client.ptr_eq(&weak) && capture.generation == generation
                     })?;
+                    PRECONNECT_DROPPED
+                        .with(|dropped| capture.buffer.report_loss(dropped.replace(0)));
                     if capture.display {
                         let (events, lost) = df_observe::presentation::drain_display_capture();
                         capture.buffer.report_loss(lost);
@@ -917,7 +1050,16 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
                             retain(capture, event);
                         }
                     }
-                    Some((capture.producer.clone(), capture.buffer.batch().ok()?))
+                    match capture.buffer.batch() {
+                        Ok(batch) => Some((capture.producer.clone(), batch)),
+                        Err(df_observe::presentation::TimingError::Empty) => None,
+                        Err(error) => {
+                            web_sys::console::warn_1(
+                                &format!("Presentation timing batch refused: {error:?}").into(),
+                            );
+                            None
+                        }
+                    }
                 });
                 let Some((producer, batch)) = batch else {
                     continue;
@@ -933,7 +1075,15 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
                     break;
                 };
                 request.set_timeout(Duration::from_secs(10));
-                match rpc_client.upload(request).await {
+                // grpc-timeout is server metadata. A half-open browser transport needs a
+                // local deadline too, otherwise this sole flush owner can wait forever.
+                let response = super::view_delivery::bounded_view_wait(
+                    rpc_client.upload(request),
+                    TimeoutFuture::new(10_000),
+                )
+                .await
+                .unwrap_or_else(|_| Err(tonic::Status::deadline_exceeded("timing upload stalled")));
+                match response {
                     Ok(response) => {
                         let response = response.into_inner();
                         if response.batch_sequence == batch.sequence
@@ -946,20 +1096,40 @@ pub(super) fn connect(client: &Rc<RefCell<Client>>, channel: BrowserChannel) {
                                     capture.buffer.acknowledge(batch.sequence);
                                 }
                             });
+                            delay_ms = 250;
                         } else {
+                            if let Some(client) = weak.upgrade() {
+                                diagnostic(
+                                    &client.borrow().root,
+                                    crate::client_diagnostics::Diagnostic::TelemetryReceiptMismatch,
+                                    0,
+                                    1,
+                                    0,
+                                );
+                            }
                             web_sys::console::warn_1(
                                 &"Presentation timing receipt mismatch".into(),
                             );
                         }
                     }
                     Err(error) => {
-                        // Stable retry is bounded to one request/second, with only one in flight.
+                        if let Some(client) = weak.upgrade() {
+                            diagnostic(
+                                &client.borrow().root,
+                                crate::client_diagnostics::Diagnostic::TelemetryUploadFailed,
+                                0,
+                                error.code() as u32,
+                                0,
+                            );
+                        }
+                        // Retry the immutable batch after backoff; never retire a healthy
+                        // game watch just because its best-effort diagnostics failed.
                         // Capture remains best-effort across a native process restart.
                         web_sys::console::warn_1(
                             &format!("Presentation timing upload failed: {:?}", error.code())
                                 .into(),
                         );
-                        gloo_timers::future::TimeoutFuture::new(4_000).await;
+                        delay_ms = 5_000;
                     }
                 }
             }
@@ -990,9 +1160,17 @@ pub(super) fn paint(client: &Rc<RefCell<Client>>) {
             return None;
         }
         if times.len() == 8 {
+            PRECONNECT_DROPPED.with(|dropped| dropped.set(dropped.get().saturating_add(1)));
             web_sys::console::warn_1(&"Presentation first-usable capacity".into());
             return None;
         }
+        diagnostic(
+            &root,
+            crate::client_diagnostics::Diagnostic::PageStarted,
+            0,
+            0,
+            0,
+        );
         times.push((weak.clone(), now));
         Some(now)
     });
@@ -1081,7 +1259,10 @@ fn schedule_paint(capture: &mut Capture, weak: Weak<RefCell<Client>>, second: bo
     }) as Box<dyn FnMut(f64)>);
     match window.request_animation_frame(callback.as_ref().unchecked_ref()) {
         Ok(id) => capture.frames.push((id, callback)),
-        Err(_) => web_sys::console::warn_1(&"Presentation timing paint frame unavailable".into()),
+        Err(_) => {
+            capture.buffer.report_loss(1);
+            web_sys::console::warn_1(&"Presentation timing paint frame unavailable".into());
+        }
     }
 }
 

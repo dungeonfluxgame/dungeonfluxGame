@@ -24,6 +24,7 @@ mod live_theme;
 mod live_tv;
 mod live_voice;
 mod phone_controls;
+mod phone_reconnect;
 mod presentation_timing;
 mod public_scene_assets;
 mod seat_recovery;
@@ -64,6 +65,7 @@ struct Client {
     reclaim_request: Option<rpc::ReclaimRoomRequest>,
     away_heroes: Vec<rpc::AwayHero>,
     seat_poll_abort: Option<AbortHandle>,
+    seat_poll: phone_reconnect::ReclaimPoll,
     last_request: Option<rpc::SubmitActionRequest>,
     first_attack: Option<rpc::SubmitActionRequest>,
     last_confirmed: bool,
@@ -78,6 +80,7 @@ struct Client {
     callbacks: Vec<Callback>,
     creation: Option<hero_creator::HeroCreator>,
     creation_preview: Option<(Rc<()>, AbortHandle)>,
+    creator_poll: Option<(Rc<()>, AbortHandle)>,
     /// The creation offer of the view the form is drawn in: a confirm always sends this one,
     /// never the offer the form was first built with.
     creation_offer: Option<rpc::GameplayActionOffer>,
@@ -111,6 +114,8 @@ struct VisibilityWatch {
 
 #[derive(Default)]
 struct Reconnect {
+    /// Last validated frame, including the server's equal-revision idle snapshots.
+    last_view_ms: Option<f64>,
     /// Retries made since the connection last delivered a view.
     attempt: u32,
     /// Diagnostic copy of this retry's scheduled delay, carried into its outcome record.
@@ -138,6 +143,9 @@ impl Drop for Client {
         }
         if let Some(scene) = self.scene_delivery.take() {
             let _cleanup = scene.dispose();
+        }
+        if let Some((_, abort)) = self.creator_poll.take() {
+            abort.abort();
         }
         if let Some(creation) = self.creation.take() {
             let _cleanup = creation.dispose();
@@ -580,6 +588,10 @@ fn use_room_code(client: &Rc<RefCell<Client>>, typed: &str) -> bool {
         );
         return false;
     };
+    if client.borrow().seat_poll.wrong_room(&code) {
+        feedback(&client.borrow(), seat_recovery::ROOM_MOVED);
+        return false;
+    }
     let different_reclaim_room = {
         let state = client.borrow();
         state.room_code != code && state.reclaim_request.is_some()
@@ -605,7 +617,32 @@ const ROOM_CONNECTION_UNAVAILABLE: &str = "Room connection unavailable";
 /// What the server says when its saved state is gone for good (`SESSION_LOST_MESSAGE`).
 const SERVER_LOST: &str = "The game server lost its saved state and must be restarted";
 
+fn record_diagnostic(
+    client: &Rc<RefCell<Client>>,
+    diagnostic: crate::client_diagnostics::Diagnostic,
+    operation: u64,
+    code: u32,
+    ms: u32,
+) {
+    presentation_timing::diagnostic(&client.borrow().root, diagnostic, operation, code, ms);
+}
+
 fn join_room(client: Rc<RefCell<Client>>) {
+    if client
+        .borrow()
+        .seat_poll
+        .wrong_room(&client.borrow().room_code)
+    {
+        feedback(&client.borrow(), seat_recovery::ROOM_MOVED);
+        return;
+    }
+    record_diagnostic(
+        &client,
+        crate::client_diagnostics::Diagnostic::JoinStarted,
+        0,
+        0,
+        0,
+    );
     let prepared = (|| -> Result<_, String> {
         let mut state = client.borrow_mut();
         if state.busy {
@@ -636,11 +673,25 @@ fn join_room(client: Rc<RefCell<Client>>) {
     };
     wasm_bindgen_futures::spawn_local(async move {
         let reclaiming = reclaim.is_some();
+        let operation_hash = body
+            .operation_id
+            .as_ref()
+            .and_then(|id| id.value.as_deref())
+            .map_or(0, crate::client_diagnostics::operation_hash);
         let run = async {
             if let Some(reclaim) = reclaim {
-                return seat_recovery::call(reclaim)
-                    .await
-                    .map(|reply| rpc::JoinRoomResponse {
+                return seat_recovery::call(reclaim).await.map(|reply| {
+                    if client.borrow().generation == generation && seat_recovery::wrong_room(&reply)
+                    {
+                        let mut state = client.borrow_mut();
+                        let code = state.room_code.clone();
+                        state.seat_poll.observe(
+                            &code,
+                            js_sys::Date::now() as u64,
+                            phone_reconnect::PollOutcome::WrongRoom,
+                        );
+                    }
+                    rpc::JoinRoomResponse {
                         outcome: reply.outcome.map(|outcome| match outcome {
                             rpc::reclaim_room_response::Outcome::Joined(joined) => {
                                 rpc::join_room_response::Outcome::Joined(joined)
@@ -651,12 +702,20 @@ fn join_room(client: Rc<RefCell<Client>>) {
                                 })
                             }
                         }),
-                    });
+                    }
+                });
             }
             let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
-            let (connection, channel) = BrowserConnection::connect(&url)
-                .await
-                .map_err(|_| ROOM_CONNECTION_UNAVAILABLE.to_owned())?;
+            let (connection, channel) = BrowserConnection::connect(&url).await.map_err(|_| {
+                record_diagnostic(
+                    &client,
+                    crate::client_diagnostics::Diagnostic::JoinFailed,
+                    operation_hash,
+                    tonic::Code::Unavailable as u32,
+                    0,
+                );
+                ROOM_CONNECTION_UNAVAILABLE.to_owned()
+            })?;
             if let Err(error) = recover_adventure(&client, channel.clone()).await {
                 connection.close();
                 return Err(error);
@@ -671,6 +730,13 @@ fn join_room(client: Rc<RefCell<Client>>) {
                 .await
                 .map(|reply| reply.into_inner())
                 .map_err(|status| {
+                    record_diagnostic(
+                        &client,
+                        crate::client_diagnostics::Diagnostic::JoinFailed,
+                        operation_hash,
+                        status.code() as u32,
+                        0,
+                    );
                     if status.code() == tonic::Code::DataLoss {
                         SERVER_LOST.to_owned()
                     } else {
@@ -733,6 +799,13 @@ fn join_room(client: Rc<RefCell<Client>>) {
                             .and_then(|id| id.value.as_ref())
                             .is_none_or(|bytes| bytes.len() != 16)
                     {
+                        record_diagnostic(
+                            &client,
+                            crate::client_diagnostics::Diagnostic::JoinFailed,
+                            operation_hash,
+                            tonic::Code::DataLoss as u32,
+                            0,
+                        );
                         feedback(
                             &client.borrow(),
                             "The joined scope is incomplete. Confirm the same join.",
@@ -761,6 +834,13 @@ fn join_room(client: Rc<RefCell<Client>>) {
                     let recovery_saved = seat_recovery::clear(&client);
                     connect(client.clone());
                     if saved.is_err() || recovery_saved.is_err() {
+                        record_diagnostic(
+                            &client,
+                            crate::client_diagnostics::Diagnostic::LocalStorageFailed,
+                            operation_hash,
+                            1,
+                            0,
+                        );
                         feedback(
                             &client.borrow(),
                             "This browser cannot remember your game, so a reload would start over.",
@@ -768,6 +848,13 @@ fn join_room(client: Rc<RefCell<Client>>) {
                     }
                 }
                 Some(rpc::join_room_response::Outcome::Refused(refusal)) => {
+                    record_diagnostic(
+                        &client,
+                        crate::client_diagnostics::Diagnostic::JoinRefused,
+                        operation_hash,
+                        refusal.code as u32,
+                        0,
+                    );
                     if reclaiming {
                         client.borrow_mut().join_request = None;
                         if seat_recovery::clear(&client).is_err() {
@@ -778,7 +865,15 @@ fn join_room(client: Rc<RefCell<Client>>) {
                             return;
                         }
                         let _rendered = render_join(&client);
-                        feedback(&client.borrow(), seat_recovery::REFUSED);
+                        let state = client.borrow();
+                        feedback(
+                            &state,
+                            if state.seat_poll.wrong_room(&state.room_code) {
+                                seat_recovery::ROOM_MOVED
+                            } else {
+                                seat_recovery::REFUSED
+                            },
+                        );
                         return;
                     }
                     // A refusal is the join's final answer, not an uncertain one, so it must not
@@ -854,6 +949,13 @@ fn record_join_retry(error: &str, retries: &mut u32) -> bool {
 
 /// Repeats the pending join after a backoff while the page shows "Reconnecting…".
 fn schedule_join_retry(client: &Rc<RefCell<Client>>, preparing: bool) {
+    record_diagnostic(
+        client,
+        crate::client_diagnostics::Diagnostic::JoinRetry,
+        0,
+        client.borrow().join_retries,
+        0,
+    );
     let (token, wait) = {
         let mut state = client.borrow_mut();
         state.reconnect.token += 1;
@@ -891,8 +993,7 @@ fn schedule_join_retry(client: &Rc<RefCell<Client>>, preparing: bool) {
         }
     });
 }
-/// Listens for the page returning to the front. A page that was hidden has most likely lost its
-/// socket while it slept, so it reconnects at once instead of waiting out a retry backoff.
+/// Resync a sleeping page without retiring a recently active tunnel on a brief tab switch.
 fn attach_visibility(document: &Document, client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
     let hidden_since: Rc<std::cell::Cell<Option<f64>>> = Rc::new(std::cell::Cell::new(None));
     let weak = Rc::downgrade(client);
@@ -906,8 +1007,19 @@ fn attach_visibility(document: &Document, client: &Rc<RefCell<Client>>) -> Resul
         }
         if document_hidden {
             hidden_since.set(Some(js_sys::Date::now()));
-        } else if hidden_since.take().is_some() {
-            reconnect_now(&client);
+        } else {
+            let needs_reconnect = {
+                let state = client.borrow();
+                view_delivery::needs_foreground_reconnect(
+                    state.connection.is_some(),
+                    state.reconnect.last_view_ms,
+                    js_sys::Date::now(),
+                )
+            };
+            if hidden_since.take().is_some() && needs_reconnect {
+                reconnect_now(&client);
+            }
+            restart_creator_poll(&client);
         }
     }) as Box<dyn FnMut(web_sys::Event)>);
     document
@@ -959,6 +1071,9 @@ fn connect(client: Rc<RefCell<Client>>) {
             clear_view_scope(&mut state)?;
         }
         status(&state, "Connecting to your saved game…");
+        if state.role == "display" {
+            show_notice(&state, Some("Connection lost. Reconnecting…"));
+        }
         Ok((
             state.generation,
             state.credential.clone(),
@@ -989,7 +1104,13 @@ fn connect(client: Rc<RefCell<Client>>) {
                 owned.borrow().reconnect.delay_ms,
             );
             let url = crate::browser::tunnel_url("/gameplay/tunnel")?;
-            let (connection, channel) = BrowserConnection::connect(&url).await.map_err(|_| {
+            let (connection, channel) = view_delivery::bounded_view_wait(
+                BrowserConnection::connect(&url),
+                gloo_timers::future::TimeoutFuture::new(view_delivery::VIEW_SILENCE_MS),
+            )
+            .await
+            .map_err(|_| "Game connection timed out")?
+            .map_err(|_| {
                 presentation_timing::diagnostic(
                     &owned.borrow().root,
                     crate::client_diagnostics::Diagnostic::ReconnectFailed,
@@ -1003,7 +1124,13 @@ fn connect(client: Rc<RefCell<Client>>) {
                 connection.close();
                 return Ok::<(), String>(());
             }
-            if let Err(error) = recover_adventure(&owned, channel.clone()).await {
+            let recovery = view_delivery::bounded_view_wait(
+                recover_adventure(&owned, channel.clone()),
+                gloo_timers::future::TimeoutFuture::new(view_delivery::VIEW_SILENCE_MS),
+            )
+            .await
+            .map_err(|_| "Current adventure recovery timed out")?;
+            if let Err(error) = recovery {
                 connection.close();
                 return Err(error);
             }
@@ -1044,37 +1171,64 @@ fn connect(client: Rc<RefCell<Client>>) {
             // Reconnect refreshes local input/busy state from the retained snapshot.
             // A duplicate server frame never replaces that snapshot.
             redraw_current(&owned).map_err(|_| "Saved view could not be displayed")?;
+            restart_creator_poll(&owned);
             let body = rpc::WatchViewRequest {
                 session_id: session,
                 run_id: run,
                 client_binding_id: binding,
                 after_revision: observed,
             };
-            let mut stream = sessions
-                .watch(request(body, &credential)?)
-                .await
-                .map_err(|error| match error.code() {
-                    tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
-                        SAVED_GAME_REFUSED
-                    }
-                    tonic::Code::DataLoss => SERVER_LOST,
-                    _ => "Saved game view unavailable",
-                })?
-                .into_inner();
+            let mut stream =
+                view_delivery::wait_for_view(sessions.watch(request(body, &credential)?))
+                    .await
+                    .map_err(|error| {
+                        record_diagnostic(
+                            &owned,
+                            crate::client_diagnostics::Diagnostic::WatchRefused,
+                            0,
+                            error.code() as u32,
+                            0,
+                        );
+                        match error.code() {
+                            tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => {
+                                SAVED_GAME_REFUSED
+                            }
+                            tonic::Code::DataLoss => SERVER_LOST,
+                            _ => "Saved game view unavailable",
+                        }
+                    })?
+                    .into_inner();
             status(&owned.borrow(), "Connected · server owns the saved game");
-            while let Some(view) = stream.message().await.map_err(|status| {
-                if status.code() == tonic::Code::PermissionDenied {
-                    SAVED_GAME_REFUSED
-                } else {
-                    "Connection interrupted; reconnect to recover"
-                }
-            })? {
+            while let Some(view) = view_delivery::wait_for_view(stream.message())
+                .await
+                .map_err(|status| {
+                    record_diagnostic(
+                        &owned,
+                        crate::client_diagnostics::Diagnostic::StreamInterrupted,
+                        0,
+                        status.code() as u32,
+                        0,
+                    );
+                    if status.code() == tonic::Code::PermissionDenied {
+                        SAVED_GAME_REFUSED
+                    } else {
+                        "Connection interrupted; reconnect to recover"
+                    }
+                })?
+            {
                 if owned.borrow().generation != generation {
                     return Ok(());
                 }
                 // A view that cannot be drawn is reported (redraw_current logs why) and the stream
                 // stays open: dropping it would reconnect, receive the same view and fail again.
                 if receive_view(&owned, &view_generation, scope, view).is_err() {
+                    record_diagnostic(
+                        &owned,
+                        crate::client_diagnostics::Diagnostic::ViewRenderFailed,
+                        0,
+                        1,
+                        0,
+                    );
                     status(&owned.borrow(), "Server view could not be displayed");
                 }
             }
@@ -1084,6 +1238,13 @@ fn connect(client: Rc<RefCell<Client>>) {
         if owned.borrow().generation == generation {
             let refused = matches!(&result, Ok(Err(error)) if error == SAVED_GAME_REFUSED);
             if owned.borrow().role == "player" && refused {
+                record_diagnostic(
+                    &owned,
+                    crate::client_diagnostics::Diagnostic::SavedSeatForgotten,
+                    0,
+                    1,
+                    0,
+                );
                 forget_saved_game(&owned, "That hero is being played on another phone.");
                 return;
             }
@@ -1154,7 +1315,16 @@ async fn recover_adventure(
         .max_encoding_message_size(8192)
         .current_adventure(request)
         .await
-        .map_err(|_| "Current adventure unavailable".to_owned())?
+        .map_err(|status| {
+            record_diagnostic(
+                client,
+                crate::client_diagnostics::Diagnostic::CurrentAdventureFailed,
+                0,
+                status.code() as u32,
+                0,
+            );
+            "Current adventure unavailable".to_owned()
+        })?
         .into_inner();
     let recovery = {
         let state = client.borrow();
@@ -1192,11 +1362,23 @@ const RECONNECTING: &str = "Reconnecting…";
 
 /// Shows `text` as the page's connection notice, or removes the notice.
 fn show_notice(client: &Client, text: Option<&str>) {
-    let Ok(existing) = client.root.query_selector(".df-reconnecting") else {
+    let Ok(notices) = client.root.query_selector_all(".df-reconnecting") else {
         return;
     };
+    // Recovery redraws can retain a notice in more than one mounted surface. Clear every
+    // retained copy on acceptance; updating only the first left a stale banner on the TV.
+    let existing = notices
+        .item(0)
+        .and_then(|node| node.dyn_into::<Element>().ok());
+    for index in 0..notices.length() {
+        if (text.is_none() || index > 0)
+            && let Some(notice) = notices.item(index)
+            && let Some(parent) = notice.parent_node()
+        {
+            let _removed = parent.remove_child(&notice);
+        }
+    }
     match (text, existing) {
-        (None, Some(notice)) => notice.remove(),
         (Some(text), Some(notice)) => notice.set_text_content(Some(text)),
         (Some(text), None) => {
             let Ok(notice) = client.document.create_element("div") else {
@@ -1208,7 +1390,7 @@ fn show_notice(client: &Client, text: Option<&str>) {
             notice.set_text_content(Some(text));
             let _added = client.root.append_child(&notice);
         }
-        (None, None) => {}
+        (None, _) => {}
     }
 }
 
@@ -1227,6 +1409,11 @@ fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
         state.reconnect.token += 1;
         let jitter = (js_sys::Math::random() * 1000.0) as u32;
         let wait = crate::reconnect::delay(state.reconnect.attempt, jitter);
+        let wait = if state.role == "display" {
+            wait.min(std::time::Duration::from_secs(2))
+        } else {
+            wait
+        };
         state.reconnect.attempt = state.reconnect.attempt.saturating_add(1);
         state.reconnect.delay_ms = wait.as_millis().min(u128::from(u32::MAX)) as u32;
         let preparing = state.preparing_adventure
@@ -1256,6 +1443,8 @@ fn schedule_reconnect(client: &Rc<RefCell<Client>>, refused: bool, lost: bool) {
                 NEW_ADVENTURE
             } else if lost {
                 SERVER_LOST
+            } else if state.role == "display" {
+                "Connection lost. Reconnecting…"
             } else {
                 RECONNECTING
             }),
@@ -1329,6 +1518,11 @@ fn prepare(
     })
 }
 fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: bool) {
+    let operation_hash = body
+        .operation_id
+        .as_ref()
+        .and_then(|id| id.value.as_deref())
+        .map_or(0, crate::client_diagnostics::operation_hash);
     let prepared = (|| -> Result<_, String> {
         let mut state = client.borrow_mut();
         if state.busy {
@@ -1352,6 +1546,13 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
     let (mut action, credential, generation) = match prepared {
         Ok(value) => value,
         Err(error) => {
+            record_diagnostic(
+                &client,
+                crate::client_diagnostics::Diagnostic::SubmitFailed,
+                operation_hash,
+                tonic::Code::FailedPrecondition as u32,
+                0,
+            );
             if let Some(creator) = client.borrow().creation.as_ref() {
                 creator.set_pending(false);
                 creator.show_error(&error);
@@ -1361,39 +1562,123 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
         }
     };
     wasm_bindgen_futures::spawn_local(async move {
+        let started = web_time::Instant::now();
+        record_diagnostic(
+            &client,
+            crate::client_diagnostics::Diagnostic::SubmitSent,
+            operation_hash,
+            0,
+            0,
+        );
+        let mut creation_refusal = None;
         let result = match request(body.clone(), &credential) {
             Ok(request) => action
                 .submit(request)
                 .await
                 .map(|response| response.into_inner())
-                .map_err(|status| match classify_submit_failure(status.code()) {
-                    SubmitFailure::Refused => ACTION_REFUSAL_FEEDBACK,
-                    SubmitFailure::ServerLost => SERVER_LOST,
-                    SubmitFailure::Unknown
-                        if body.action_kind
-                            == rpc::GameplayActionKind::StartNewAdventure as i32 =>
+                .map_err(|status| {
+                    record_diagnostic(
+                        &client,
+                        crate::client_diagnostics::Diagnostic::SubmitFailed,
+                        operation_hash,
+                        status.code() as u32,
+                        started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+                    );
+                    if body.character.is_some()
+                        && classify_submit_failure(status.code()) == SubmitFailure::Refused
                     {
-                        NEW_ADVENTURE
+                        creation_refusal = Some(creation_status_reason(status.code()));
                     }
-                    SubmitFailure::Unknown => {
-                        "Outcome unknown. Confirm the same operation or reconnect."
+                    match classify_submit_failure(status.code()) {
+                        SubmitFailure::Refused => ACTION_REFUSAL_FEEDBACK,
+                        SubmitFailure::ServerLost => SERVER_LOST,
+                        SubmitFailure::Unknown
+                            if body.action_kind
+                                == rpc::GameplayActionKind::StartNewAdventure as i32 =>
+                        {
+                            NEW_ADVENTURE
+                        }
+                        SubmitFailure::Unknown => {
+                            "Outcome unknown. Confirm the same operation or reconnect."
+                        }
                     }
                 }),
-            Err(_) => Err(ACTION_REFUSAL_FEEDBACK),
+            Err(_) => {
+                record_diagnostic(
+                    &client,
+                    crate::client_diagnostics::Diagnostic::SubmitFailed,
+                    operation_hash,
+                    tonic::Code::InvalidArgument as u32,
+                    started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+                );
+                Err(ACTION_REFUSAL_FEEDBACK)
+            }
         };
+        if let Ok(response) = &result {
+            let code = match response.outcome.as_ref() {
+                Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) => {
+                    match receipt.outcome.as_ref() {
+                        Some(rpc::decision_receipt::Outcome::Rejected(rejection)) => {
+                            rejection.code as u32
+                        }
+                        _ => 0,
+                    }
+                }
+                Some(rpc::submit_action_response::Outcome::OperationObservation(observation)) => {
+                    observation.code as u32
+                }
+                None => tonic::Code::DataLoss as u32,
+            };
+            record_diagnostic(
+                &client,
+                crate::client_diagnostics::Diagnostic::SubmitAnswered,
+                operation_hash,
+                code,
+                started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+            );
+        }
         if client.borrow().generation != generation {
             return;
+        }
+        if body.character.is_some()
+            && let Ok(response) = &result
+            && let Some(rpc::submit_action_response::Outcome::CommittedDecision(receipt)) =
+                &response.outcome
+            && receipt.operation_id == body.operation_id
+            && receipt.session_id == body.session_id
+            && receipt.run_id == body.run_id
+            && let Some(rpc::decision_receipt::Outcome::Rejected(rejected)) = &receipt.outcome
+        {
+            creation_refusal = Some(creation_rejection_reason(rejected.code));
         }
         let message = {
             let mut state = client.borrow_mut();
             state.busy = false;
-            let message = complete_action_response(&mut state, &body, result);
-            if message == ACTION_REFUSAL_FEEDBACK
-                && body.character.is_some()
-                && let Some(creator) = state.creation.as_ref()
-            {
-                creator.set_pending(false);
-                creator.show_error("Your hero could not be saved. Your details are still here.");
+            let mut message = complete_action_response(&mut state, &body, result);
+            if body.character.is_some() && (creation_refusal.is_some() || state.last_accepted) {
+                let cleared = load_creator_work(&state).and_then(|mut work| {
+                    if state.last_accepted && work.lock.as_ref().is_some_and(|lock| lock.portrait_missing) {
+                        message = "Your hero joined without a portrait. Your own hero image will appear when ready.".to_owned();
+                    }
+                    work.lock = None;
+                    save_creator_work(&state, &work)
+                });
+                if let Some(reason) = creation_refusal {
+                    state.last_request = None;
+                    state.last_confirmed = true;
+                    state.last_accepted = false;
+                    if let Some(creator) = state.creation.as_ref() {
+                        creator.set_pending(false);
+                        creator.show_error(&format!(
+                            "The table could not accept this hero: {reason}. Your draft is kept."
+                        ));
+                    }
+                }
+                if let Err(error) = cleared
+                    && let Some(creator) = state.creation.as_ref()
+                {
+                    creator.show_error(&error);
+                }
             }
             message
         };
@@ -1406,6 +1691,38 @@ fn send(client: Rc<RefCell<Client>>, body: rpc::SubmitActionRequest, replay: boo
             feedback(&client.borrow(), &message);
         }
     });
+}
+
+fn creation_status_reason(code: tonic::Code) -> &'static str {
+    match code {
+        tonic::Code::InvalidArgument => "review the hero's name, appearance and selected options",
+        tonic::Code::PermissionDenied => "this phone no longer has permission for that seat",
+        tonic::Code::FailedPrecondition | tonic::Code::Aborted => {
+            "the table changed; review the current hero options"
+        }
+        tonic::Code::ResourceExhausted => "the table is busy; try Confirm again shortly",
+        _ => "the table could not validate this design right now",
+    }
+}
+
+fn creation_rejection_reason(code: i32) -> &'static str {
+    match rpc::RejectionCode::try_from(code).ok() {
+        Some(rpc::RejectionCode::StaleOffer | rpc::RejectionCode::RevisionConflict) => {
+            "the table changed; review the current hero options"
+        }
+        Some(rpc::RejectionCode::InvalidSelection) => "review the hero's name and selected options",
+        Some(rpc::RejectionCode::Paused) => "the adventure is paused",
+        Some(rpc::RejectionCode::WrongTurn) => "the table is not accepting this seat's hero yet",
+        Some(rpc::RejectionCode::ResourceMissing | rpc::RejectionCode::CapabilityUnavailable) => {
+            "the rules for this design could not be prepared; ask the host to check the table"
+        }
+        Some(
+            rpc::RejectionCode::RecoveryRequired
+            | rpc::RejectionCode::OperationConflict
+            | rpc::RejectionCode::OperationExpired,
+        ) => "the table needs to recover this confirmation; reconnect before trying again",
+        _ => "the table could not validate this design right now",
+    }
 }
 fn complete_action_response(
     state: &mut Client,
@@ -1583,7 +1900,10 @@ fn creation(
                     && request.action_kind == rpc::GameplayActionKind::CreateCharacter as i32
             });
         existing.set_pending(
-            state.busy || accepted || (!state.last_confirmed && state.last_request.is_some()),
+            existing.is_pending()
+                || state.busy
+                || accepted
+                || (!state.last_confirmed && state.last_request.is_some()),
         );
         if existing.root().parent_element().as_ref() != Some(surface) {
             surface.append_child(existing.root())?;
@@ -1643,263 +1963,667 @@ fn creation(
                 hero_creator::CreationEvent::Portrait {
                     draft_version,
                     current,
-                } => portrait_creation(&client, draft_version, current),
-                hero_creator::CreationEvent::Confirm(draft) => {
-                    cancel_creation_preview(&mut client.borrow_mut());
-                    let prepared = (|| {
-                        let offered = client.borrow().creation_offer.clone().ok_or_else(|| {
-                            "Your hero options changed. Review them again.".to_owned()
-                        })?;
-                        let selection = draft
-                            .selection()
-                            .map_err(|_| "Choose all your hero's details.".to_owned())?;
-                        prepare(
-                            &client,
-                            &offered,
-                            Some(selection),
-                            false,
-                            false,
-                            rpc::HarborDestination::Unspecified as i32,
-                        )
-                    })();
-                    match prepared {
-                        Ok(body) => send(client, body, false),
-                        Err(error) => {
-                            if let Some(creator) = client.borrow().creation.as_ref() {
-                                creator.set_pending(false);
-                                creator.show_error(&error);
-                            }
-                        }
-                    }
-                }
+                    regenerate,
+                } => portrait_creation(&client, draft_version, current, regenerate),
+                hero_creator::CreationEvent::Confirm(draft) => confirm_creation(&client, draft),
             }
         },
     )?;
     client.borrow_mut().creation = Some(created);
+    resume_creator_work(client);
     Ok(())
+}
+
+// Persist the exact envelopes before dispatch. A lost response never buys a new portrait
+// or creates a second hero, including after a page reload.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreatorWork {
+    portrait: Option<CreatorPortrait>,
+    lock: Option<CreatorLock>,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreatorPortrait {
+    request: Vec<u8>,
+    regenerate: bool,
+    sent: bool,
+    terminal: bool,
+    #[serde(default)]
+    ready: bool,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreatorLock {
+    request: Vec<u8>,
+    portrait_finished: bool,
+    sent: bool,
+    #[serde(default)]
+    portrait_missing: bool,
+}
+
+impl CreatorWork {
+    fn begin_confirmation(&mut self, request: rpc::SubmitActionRequest, approved: bool) {
+        use prost::Message;
+        self.lock = Some(CreatorLock {
+            request: request.encode_to_vec(),
+            portrait_finished: approved
+                || self
+                    .portrait
+                    .as_ref()
+                    .is_some_and(|portrait| portrait.terminal),
+            sent: false,
+            portrait_missing: !approved
+                && self
+                    .portrait
+                    .as_ref()
+                    .is_some_and(|portrait| portrait.terminal && !portrait.ready),
+        });
+    }
+}
+
+fn creator_work_key(client: &Client) -> String {
+    use prost::Message;
+    use sha2::{Digest, Sha256};
+    let mut scope = client.credential.as_bytes().to_vec();
+    scope.extend(
+        client
+            .session
+            .as_ref()
+            .map(Message::encode_to_vec)
+            .unwrap_or_default(),
+    );
+    scope.extend(
+        client
+            .run
+            .as_ref()
+            .map(Message::encode_to_vec)
+            .unwrap_or_default(),
+    );
+    format!("df.creator.operations.v1.{:x}", Sha256::digest(scope))
+}
+
+fn creator_storage() -> Result<web_sys::Storage, String> {
+    web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .ok_or_else(|| "This browser could not keep the operation for recovery. Your draft is kept; allow browser storage and Confirm again.".to_owned())
+}
+
+fn load_creator_work(client: &Client) -> Result<CreatorWork, String> {
+    let text = creator_storage()?
+        .get_item(&creator_work_key(client))
+        .map_err(|_| {
+            "This browser could not read the saved operation. Your draft is kept.".to_owned()
+        })?;
+    match text {
+        None => Ok(CreatorWork::default()),
+        Some(text) if text.len() <= 256 * 1024 => serde_json::from_str(&text).map_err(|_| {
+            "This browser could not read the saved operation. Your draft is kept.".to_owned()
+        }),
+        Some(_) => Err("The saved operation could not be read. Your draft is kept.".to_owned()),
+    }
+}
+
+fn save_creator_work(client: &Client, work: &CreatorWork) -> Result<(), String> {
+    let text = serde_json::to_string(work)
+        .map_err(|_| "The operation could not be kept. Your draft is kept.".to_owned())?;
+    if text.len() > 256 * 1024 {
+        return Err("The operation could not be kept. Your draft is kept.".to_owned());
+    }
+    creator_storage()?
+        .set_item(&creator_work_key(client), &text)
+        .map_err(|_| {
+            "This browser could not keep the operation for recovery. Your draft is kept.".to_owned()
+        })
+}
+
+fn creator_error(client: &Rc<RefCell<Client>>, message: &str) {
+    if let Some(creator) = client.borrow().creation.as_ref() {
+        creator.set_pending(false);
+        creator.show_error(message);
+    }
+}
+
+fn portrait_design(body: &rpc::HeroPortraitRequest) -> Vec<u8> {
+    use prost::Message;
+    // Names and private story do not define the public visual design.
+    rpc::HeroPortraitRequest {
+        identity: body.identity.as_ref().map(|identity| rpc::HeroIdentity {
+            appearance: identity.appearance.clone(),
+            ..Default::default()
+        }),
+        species: body.species.clone(),
+        character_class: body.character_class.clone(),
+        background: body.background.clone(),
+        scenery: body.scenery.clone(),
+        ..Default::default()
+    }
+    .encode_to_vec()
+}
+
+fn new_creator_portrait(
+    client: &Client,
+    version: u64,
+    current: &hero_creator::HeroDraft,
+) -> Result<rpc::HeroPortraitRequest, String> {
+    let selected = |group: &str| {
+        current
+            .choices
+            .iter()
+            .find(|choice| choice.group_id == group)
+            .map(|choice| choice.option_id.clone())
+            .unwrap_or_default()
+    };
+    Ok(rpc::HeroPortraitRequest {
+        session_id: client.session.clone(),
+        run_id: client.run.clone(),
+        client_binding_id: client.binding.clone(),
+        observed_revision: client.revision,
+        operation_id: Some(operation()?),
+        draft_revision: version,
+        identity: Some(
+            current
+                .identity
+                .to_rpc()
+                .map_err(|_| "Choose your appearance details.")?,
+        ),
+        species: selected("species"),
+        character_class: selected("class"),
+        background: selected("background"),
+        scenery: current.portrait_scenery.clone(),
+    })
+}
+
+fn portrait_rpc_message(code: tonic::Code) -> (&'static str, &'static str) {
+    match code {
+        tonic::Code::InvalidArgument => (
+            "failed",
+            "Review your public appearance and selected portrait scenery. Your draft is kept.",
+        ),
+        tonic::Code::FailedPrecondition => (
+            "failed",
+            "Your portrait cannot be created right now. Ask the host to check the table. Your draft is kept.",
+        ),
+        tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => (
+            "failed",
+            "Reconnect to your seat to check this portrait. Your draft is kept.",
+        ),
+        tonic::Code::NotFound => (
+            "unknown",
+            "The table cannot find this portrait request. Your draft is kept; no new request was sent.",
+        ),
+        _ => (
+            "unknown",
+            "Lost touch with the table - checking your portrait again...",
+        ),
+    }
+}
+
+fn retain_creator_portrait(
+    work: &mut CreatorWork,
+    body: rpc::HeroPortraitRequest,
+    regenerate: bool,
+) {
+    use prost::Message;
+    let matches = work
+        .portrait
+        .as_ref()
+        .and_then(|portrait| rpc::HeroPortraitRequest::decode(portrait.request.as_slice()).ok())
+        .is_some_and(|saved| portrait_design(&saved) == portrait_design(&body));
+    if regenerate || !matches {
+        work.portrait = Some(CreatorPortrait {
+            request: body.encode_to_vec(),
+            regenerate,
+            sent: false,
+            terminal: false,
+            ready: false,
+        });
+    }
 }
 
 fn portrait_creation(
     client: &Rc<RefCell<Client>>,
-    draft_version: u64,
+    version: u64,
     current: hero_creator::HeroDraft,
+    regenerate: bool,
 ) {
-    let prepared = (|| -> Result<_, String> {
+    let prepared = (|| {
         let state = client.borrow();
-        let species = current
-            .choices
-            .iter()
-            .find(|choice| choice.group_id == "species")
-            .map(|choice| choice.option_id.clone())
-            .unwrap_or_default();
-        let body = rpc::HeroPortraitRequest {
-            session_id: state.session.clone(),
-            run_id: state.run.clone(),
-            client_binding_id: state.binding.clone(),
-            observed_revision: state.revision,
-            operation_id: Some(operation()?),
-            draft_revision: draft_version,
-            identity: Some(
-                current
-                    .identity
-                    .to_rpc()
-                    .map_err(|_| "Choose your appearance details")?,
-            ),
-            species,
-            scenery: current.portrait_scenery.clone(),
-            character_class: current
-                .choices
-                .iter()
-                .find(|choice| choice.group_id == "class")
-                .map(|choice| choice.option_id.clone())
-                .unwrap_or_default(),
-            background: current
-                .choices
-                .iter()
-                .find(|choice| choice.group_id == "background")
-                .map(|choice| choice.option_id.clone())
-                .unwrap_or_default(),
-        };
-        Ok((
-            state
-                .action
-                .clone()
-                .ok_or("Reconnect before generating a portrait")?,
-            body,
-            state.credential.clone(),
-            state.generation,
-        ))
+        let mut work = load_creator_work(&state)?;
+        if work.lock.is_some() {
+            return Ok(());
+        }
+        let body = new_creator_portrait(&state, version, &current)?;
+        retain_creator_portrait(&mut work, body, regenerate);
+        // Explicit Generate also re-reads a retained terminal result; it never resends it.
+        if let Some(portrait) = &mut work.portrait {
+            portrait.terminal = false;
+        }
+        if let Some(creator) = state.creation.as_ref() {
+            creator.keep_draft();
+        }
+        save_creator_work(&state, &work)
     })();
-    let (mut action, body, credential, generation) = match prepared {
-        Ok(value) => value,
+    match prepared {
+        Ok(()) => restart_creator_poll(client),
         Err(error) => {
             if let Some(creator) = client.borrow().creation.as_ref() {
-                creator.apply_portrait(draft_version, "failed", "", &error);
+                creator.apply_portrait(version, "failed", "", &error);
             }
-            presentation_timing::diagnostic(
-                &client.borrow().root,
-                crate::client_diagnostics::Diagnostic::PortraitStoppedInvalidRequest,
-                0,
-                0,
-                0,
+        }
+    }
+}
+
+fn confirm_creation(client: &Rc<RefCell<Client>>, draft: hero_creator::HeroDraft) {
+    cancel_creation_preview(&mut client.borrow_mut());
+    let prepared = (|| {
+        let mut work = load_creator_work(&client.borrow())?;
+        if work.lock.is_some() {
+            return Ok(());
+        }
+        let offered = client
+            .borrow()
+            .creation_offer
+            .clone()
+            .ok_or_else(|| "Your hero options changed. Review them again.".to_owned())?;
+        let selection = draft
+            .selection()
+            .map_err(|_| "Choose all your hero's details.".to_owned())?;
+        let body = prepare(
+            client,
+            &offered,
+            Some(selection),
+            false,
+            false,
+            rpc::HarborDestination::Unspecified as i32,
+        )?;
+        let state = client.borrow();
+        let creator = state
+            .creation
+            .as_ref()
+            .ok_or_else(|| "Review your hero again.".to_owned())?;
+        let approved = creator.has_current_portrait();
+        if !approved {
+            retain_creator_portrait(
+                &mut work,
+                new_creator_portrait(&state, creator.look_version(), &draft)?,
+                false,
             );
+        }
+        work.begin_confirmation(body, approved);
+        creator.keep_draft();
+        save_creator_work(&state, &work)?;
+        creator.set_pending(true);
+        Ok::<_, String>(())
+    })();
+    match prepared {
+        Ok(()) => restart_creator_poll(client),
+        Err(error) => creator_error(client, &error),
+    }
+}
+
+fn restart_creator_poll(client: &Rc<RefCell<Client>>) {
+    if let Some((_, abort)) = client.borrow_mut().creator_poll.take() {
+        abort.abort();
+    }
+    resume_creator_work(client);
+}
+
+fn resume_creator_work(client: &Rc<RefCell<Client>>) {
+    use prost::Message;
+    let prepared = (|| {
+        let state = client.borrow();
+        if state.creation.is_none()
+            || state.action.is_none()
+            || state.creator_poll.is_some()
+            || state.busy
+        {
+            return Ok(None);
+        }
+        let work = load_creator_work(&state)?;
+        if let Some(lock) = &work.lock {
+            if let Some(creator) = state.creation.as_ref() {
+                creator.set_pending(true);
+            }
+            if lock.sent && state.last_request.is_some() {
+                return Ok(None);
+            }
+        } else if work
+            .portrait
+            .as_ref()
+            .is_none_or(|portrait| portrait.terminal)
+        {
+            return Ok(None);
+        }
+        let creator = state
+            .creation
+            .as_ref()
+            .ok_or_else(|| "Review your hero again.".to_owned())?;
+        let version = creator.look_version();
+        if work.lock.is_none()
+            && let Some(portrait) = &work.portrait
+        {
+            let saved =
+                rpc::HeroPortraitRequest::decode(portrait.request.as_slice()).map_err(|_| {
+                    "The saved portrait request could not be read. Your draft is kept.".to_owned()
+                })?;
+            let current = new_creator_portrait(&state, version, &creator.current_draft())?;
+            if portrait_design(&saved) != portrait_design(&current) {
+                return Ok(None);
+            }
+        }
+        Ok::<_, String>(Some((work, state.generation, version)))
+    })();
+    let (mut work, generation, version) = match prepared {
+        Ok(Some(value)) => value,
+        Ok(None) => return,
+        Err(error) => {
+            creator_error(client, &error);
             return;
         }
     };
-    let operation_hash = crate::client_diagnostics::operation_hash(
-        body.operation_id
-            .as_ref()
-            .and_then(|id| id.value.as_deref())
-            .unwrap_or_default(),
-    );
-    let root = client.borrow().root.clone();
-    if let Some(creator) = client.borrow().creation.as_ref() {
-        creator.observe_portrait_operation(operation_hash);
-    }
-    presentation_timing::diagnostic(
-        &root,
-        crate::client_diagnostics::Diagnostic::PortraitRequestStart,
-        operation_hash,
-        0,
-        0,
-    );
+    let (abort, registration) = AbortHandle::new_pair();
+    let token = Rc::new(());
+    client.borrow_mut().creator_poll = Some((token.clone(), abort));
     let weak = Rc::downgrade(client);
+    let root = client.borrow().root.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        use crate::client_diagnostics::Diagnostic;
-        let mut first = true;
-        let mut timer_started: Option<f64> = None;
-        for attempt in 0..240 {
-            if let Some(started) = timer_started.take() {
-                let elapsed = (js_sys::Date::now() - started).max(0.0) as u32;
-                if elapsed > 1_500 {
-                    presentation_timing::diagnostic(
-                        &root,
-                        Diagnostic::PortraitTimerThrottled,
-                        operation_hash,
-                        attempt,
-                        elapsed,
-                    );
-                }
-            }
-            let Some(client) = weak.upgrade() else {
-                return;
-            };
-            if client.borrow().generation != generation {
-                presentation_timing::diagnostic(
-                    &root,
-                    Diagnostic::PortraitStoppedScopeChanged,
-                    operation_hash,
-                    attempt,
-                    0,
-                );
-                return;
-            }
-            if client.borrow().creation.is_none() {
-                presentation_timing::diagnostic(
-                    &root,
-                    Diagnostic::PortraitStoppedCreatorClosed,
-                    operation_hash,
-                    attempt,
-                    0,
-                );
-                return;
-            }
-            if client.borrow().document.hidden() {
-                presentation_timing::diagnostic(
-                    &root,
-                    Diagnostic::PortraitPageHidden,
-                    operation_hash,
-                    attempt,
-                    0,
-                );
-            }
-            let result = match request(body.clone(), &credential) {
-                Ok(mut request) => {
-                    request.set_timeout(std::time::Duration::from_secs(10));
-                    if first {
-                        action.request_hero_portrait(request).await
-                    } else {
-                        action.get_hero_portrait(request).await
+        let result = Abortable::new(async {
+            let needs_portrait = work.lock.as_ref().is_none_or(|lock| !lock.portrait_finished);
+            if needs_portrait && let Some(mut portrait) = work.portrait.clone() {
+                let body = rpc::HeroPortraitRequest::decode(portrait.request.as_slice())
+                    .map_err(|_| {
+                        presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitStoppedInvalidRequest, 0, 0, 0);
+                        "The saved portrait request could not be read. Your draft is kept.".to_owned()
+                    })?;
+                let operation_hash = crate::client_diagnostics::operation_hash(body.operation_id.as_ref()
+                    .and_then(|id| id.value.as_deref()).unwrap_or_default());
+                let mut timer_started: Option<f64> = None;
+                for attempt in 0..240 {
+                    let Some(client) = weak.upgrade() else { return Ok(None); };
+                    let is_lock = work.lock.is_some();
+                    let (mut action, credential, root) = {
+                    let state = client.borrow();
+                    if state.generation != generation {
+                        presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitStoppedScopeChanged, operation_hash, attempt, 0);
+                        return Ok(None);
                     }
-                }
-                Err(_) => {
-                    presentation_timing::diagnostic(
-                        &root,
-                        Diagnostic::PortraitStoppedInvalidRequest,
-                        operation_hash,
-                        attempt,
-                        0,
-                    );
-                    return;
-                }
-            };
-            first = false;
-            let pending = match result {
-                Ok(response) => {
-                    let response = response.into_inner();
-                    let diagnostic = match response.state.as_str() {
-                        "pending" => Diagnostic::PortraitPollPending,
-                        "ready" => Diagnostic::PortraitPollReady,
-                        "failed" => Diagnostic::PortraitPollFailed,
-                        _ => Diagnostic::PortraitPollUnknown,
+                    if state.creation.is_none() {
+                        presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitStoppedCreatorClosed, operation_hash, attempt, 0);
+                        return Ok(None);
+                    }
+                    let Some(action) = state.action.clone() else { return Ok(None); };
+                    let credential = state.credential.clone();
+                    let root = state.root.clone();
+                    if state.creation.as_ref().is_none_or(|creator| creator.look_version() != version) {
+                        return Ok(None);
+                    }
+                    if let Some(creator) = state.creation.as_ref() {
+                        creator.observe_portrait_operation(operation_hash);
+                        if attempt == 0 {
+                            creator.apply_portrait(version, "pending", "", if portrait.sent { "Checking your portrait..." } else { "Preparing your portrait..." });
+                        }
+                    }
+                    (action, credential, root)
                     };
-                    presentation_timing::diagnostic(&root, diagnostic, operation_hash, attempt, 0);
-                    if let Some(creator) = client.borrow().creation.as_ref() {
-                        creator.apply_portrait(
-                            response.draft_revision,
-                            &response.state,
-                            &response.image_uri,
-                            &response.message,
-                        );
+                    if let Some(started) = timer_started.take() {
+                        let elapsed = (js_sys::Date::now() - started).max(0.0) as u32;
+                        if elapsed > 1_500 {
+                            presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitTimerThrottled, operation_hash, attempt, elapsed);
+                        }
                     }
-                    response.state == "pending"
-                }
-                Err(error) => {
-                    presentation_timing::diagnostic(
-                        &root,
-                        Diagnostic::PortraitStoppedRpcFailed,
-                        operation_hash,
-                        attempt,
-                        0,
-                    );
-                    if let Some(creator) = client.borrow().creation.as_ref() {
-                        creator.apply_portrait(draft_version, "unknown", "", error.message());
+                    let dispatch = !portrait.sent;
+                    if dispatch {
+                        presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitRequestStart, operation_hash, attempt, 0);
                     }
-                    false
+                    portrait.sent = true;
+                    work.portrait = Some(portrait.clone());
+                    save_creator_work(&client.borrow(), &work)?;
+                    let mut request = request(body.clone(), &credential)
+                        .map_err(|_| "Reconnect to check your portrait. Your draft is kept.".to_owned())?;
+                    request.set_timeout(std::time::Duration::from_secs(10));
+                    if portrait.regenerate { request.metadata_mut().insert("x-df-portrait-regenerate", tonic::metadata::MetadataValue::from_static("true")); }
+                    let response = if dispatch { action.request_hero_portrait(request).await } else { action.get_hero_portrait(request).await };
+                    if client.borrow().generation != generation { return Ok(None); }
+                    let pending = match response {
+                        Ok(response) => {
+                            let response = response.into_inner();
+                            portrait.ready = response.state == "ready";
+                            let diagnostic = match response.state.as_str() {
+                                "pending" => crate::client_diagnostics::Diagnostic::PortraitPollPending,
+                                "ready" => crate::client_diagnostics::Diagnostic::PortraitPollReady,
+                                "failed" => crate::client_diagnostics::Diagnostic::PortraitPollFailed,
+                                _ => crate::client_diagnostics::Diagnostic::PortraitPollUnknown,
+                            };
+                            presentation_timing::diagnostic(&root, diagnostic, operation_hash, attempt, 0);
+                            if let Some(creator) = client.borrow().creation.as_ref() {
+                                creator.apply_portrait(version, &response.state, &response.image_uri, &response.message);
+                                if is_lock && response.state != "pending" && response.state != "ready" {
+                                    creator.show_error("Your portrait could not be completed. Joining without it; your own hero image will appear when ready.");
+                                }
+                            }
+                            response.state == "pending"
+                        }
+                        Err(error) => {
+                            portrait.ready = false;
+                            // The shared diagnostic records the transport failure. Raw trailers
+                            // and transport messages must never become player-facing portrait copy.
+                            presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitStoppedRpcFailed,
+                                operation_hash, attempt, 0);
+                            if let Some(creator) = client.borrow().creation.as_ref() {
+                                let (state, message) = portrait_rpc_message(error.code());
+                                creator.apply_portrait(version, state, "", message);
+                                if is_lock { creator.show_error("The portrait result is unknown. Joining without it; no new portrait request was sent."); }
+                            }
+                            if !is_lock && matches!(error.code(), tonic::Code::Unavailable | tonic::Code::Cancelled | tonic::Code::DeadlineExceeded | tonic::Code::Unknown) {
+                                return Ok(None); // Foreground/reconnect resumes Get for this operation.
+                            }
+                            false
+                        }
+                    };
+                    if !pending {
+                        presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitStoppedTerminal, operation_hash, attempt, 0);
+                        portrait.terminal = true;
+                        break;
+                    }
+                    drop(client);
+                    timer_started = Some(js_sys::Date::now());
+                    gloo_timers::future::TimeoutFuture::new(1000).await;
                 }
-            };
-            if !pending {
-                presentation_timing::diagnostic(
-                    &root,
-                    Diagnostic::PortraitStoppedTerminal,
-                    operation_hash,
-                    attempt,
-                    0,
-                );
-                return;
+                if !portrait.terminal {
+                    presentation_timing::diagnostic(&root, crate::client_diagnostics::Diagnostic::PortraitStoppedExhausted, operation_hash, 240, 0);
+                    portrait.terminal = true;
+                    if let Some(client) = weak.upgrade() && let Some(creator) = client.borrow().creation.as_ref() {
+                        creator.apply_portrait(body.draft_revision, "unknown", "", "The portrait result is unknown. No automatic retry was sent.");
+                    }
+                }
+                work.portrait = Some(portrait);
             }
-            timer_started = Some(js_sys::Date::now());
-            drop(client);
-            gloo_timers::future::TimeoutFuture::new(1000).await;
+            let Some(client) = weak.upgrade() else { return Ok(None); };
+            if let Some(lock) = &mut work.lock {
+                if !lock.portrait_finished {
+                    lock.portrait_missing = work.portrait.as_ref().is_none_or(|portrait| !portrait.ready);
+                }
+                if !lock.sent {
+                    // Other seats can change the table while the portrait is being made.
+                    // Refresh the offer only before the first submit, then freeze these bytes.
+                    let mut body = rpc::SubmitActionRequest::decode(lock.request.as_slice())
+                        .map_err(|_| "The saved confirmation could not be read. Your draft is kept.".to_owned())?;
+                    let state = client.borrow();
+                    body.observed_revision = state.revision;
+                    if let Some(offer) = &state.creation_offer { body.offer_id = offer.offer_id.clone(); }
+                    lock.request = body.encode_to_vec();
+                }
+                lock.portrait_finished = true;
+                lock.sent = true;
+            }
+            save_creator_work(&client.borrow(), &work)?;
+            work.lock.as_ref().map(|lock| rpc::SubmitActionRequest::decode(lock.request.as_slice())
+                .map_err(|_| "The saved confirmation could not be read. Your draft is kept.".to_owned())).transpose()
+        }, registration).await;
+        let Some(client) = weak.upgrade() else {
+            return;
+        };
+        let current = client
+            .borrow()
+            .creator_poll
+            .as_ref()
+            .is_some_and(|(active, _)| Rc::ptr_eq(active, &token));
+        if !current {
+            return;
         }
-        presentation_timing::diagnostic(
-            &root,
-            Diagnostic::PortraitStoppedExhausted,
-            operation_hash,
-            240,
-            0,
-        );
-        if let Some(client) = weak.upgrade() {
-            if let Some(creator) = client.borrow().creation.as_ref() {
-                creator.apply_portrait(
-                    draft_version,
-                    "unknown",
-                    "",
-                    "The result is unknown. No automatic retry was sent.",
-                );
-            }
+        client.borrow_mut().creator_poll.take();
+        match result {
+            Ok(Ok(Some(body))) => send(client, body, false),
+            Ok(Err(error)) => creator_error(&client, &error),
+            _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod creator_operation_tests {
+    use super::*;
+    use prost::Message;
+
+    fn portrait(operation: u8, revision: u64) -> rpc::HeroPortraitRequest {
+        rpc::HeroPortraitRequest {
+            operation_id: Some(rpc::OperationId {
+                value: Some(vec![operation; 16]),
+            }),
+            draft_revision: revision,
+            species: "dwarf".to_owned(),
+            character_class: "fighter-1".to_owned(),
+            background: "soldier".to_owned(),
+            identity: Some(rpc::HeroIdentity {
+                appearance: Some(rpc::HeroAppearance {
+                    public_description: "Silver horns".to_owned(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn lock_in_reload_keeps_exact_portrait_and_create_operations_and_never_redispatches_portrait() {
+        let mut work = CreatorWork::default();
+        let original = portrait(1, 4);
+        retain_creator_portrait(&mut work, original.clone(), false);
+        work.portrait.as_mut().unwrap().sent = true;
+        let create = rpc::SubmitActionRequest {
+            operation_id: Some(rpc::OperationId {
+                value: Some(vec![2; 16]),
+            }),
+            action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+            ..Default::default()
+        };
+        work.lock = Some(CreatorLock {
+            request: create.encode_to_vec(),
+            portrait_finished: false,
+            sent: false,
+            portrait_missing: false,
+        });
+        let encoded = serde_json::to_vec(&work).unwrap();
+        let mut reloaded: CreatorWork = serde_json::from_slice(&encoded).unwrap();
+        retain_creator_portrait(&mut reloaded, portrait(3, 99), false);
+        let retained = reloaded.portrait.unwrap();
+        assert!(retained.sent, "recovery must issue Get, never Request");
+        assert_eq!(
+            rpc::HeroPortraitRequest::decode(retained.request.as_slice()).unwrap(),
+            original
+        );
+        let lock = reloaded.lock.unwrap();
+        assert_eq!(
+            rpc::SubmitActionRequest::decode(lock.request.as_slice()).unwrap(),
+            create
+        );
+        assert!(!lock.portrait_finished);
+        assert!(!lock.sent);
+    }
+
+    #[test]
+    fn generate_reuses_identical_design_but_explicit_regenerate_gets_a_new_operation() {
+        let mut work = CreatorWork::default();
+        retain_creator_portrait(&mut work, portrait(1, 1), false);
+        work.portrait.as_mut().unwrap().sent = true;
+        work.portrait.as_mut().unwrap().terminal = true;
+        retain_creator_portrait(&mut work, portrait(2, 2), false);
+        assert_eq!(
+            rpc::HeroPortraitRequest::decode(work.portrait.as_ref().unwrap().request.as_slice())
+                .unwrap()
+                .operation_id,
+            portrait(1, 1).operation_id
+        );
+        assert!(work.portrait.as_ref().unwrap().terminal);
+        retain_creator_portrait(&mut work, portrait(3, 2), true);
+        let fresh = work.portrait.unwrap();
+        assert_eq!(
+            rpc::HeroPortraitRequest::decode(fresh.request.as_slice())
+                .unwrap()
+                .operation_id,
+            portrait(3, 2).operation_id
+        );
+        assert!(!fresh.sent);
+        assert!(!fresh.terminal);
+    }
+
+    #[test]
+    fn confirmation_waits_for_one_portrait_and_approved_ready_or_failed_designs_do_not_dispatch() {
+        let create = rpc::SubmitActionRequest {
+            action_kind: rpc::GameplayActionKind::CreateCharacter as i32,
+            ..Default::default()
+        };
+        let mut missing = CreatorWork::default();
+        retain_creator_portrait(&mut missing, portrait(1, 1), false);
+        missing.begin_confirmation(create.clone(), false);
+        assert!(!missing.lock.as_ref().unwrap().portrait_finished);
+        assert!(!missing.portrait.as_ref().unwrap().sent);
+
+        let mut approved = CreatorWork::default();
+        approved.begin_confirmation(create.clone(), true);
+        assert!(approved.portrait.is_none());
+        assert!(approved.lock.as_ref().unwrap().portrait_finished);
+        assert!(!approved.lock.as_ref().unwrap().portrait_missing);
+
+        for ready in [true, false] {
+            let mut terminal = missing.clone();
+            terminal.portrait.as_mut().unwrap().sent = true;
+            terminal.portrait.as_mut().unwrap().terminal = true;
+            terminal.portrait.as_mut().unwrap().ready = ready;
+            terminal.begin_confirmation(create.clone(), false);
+            let lock = terminal.lock.unwrap();
+            assert!(
+                lock.portrait_finished,
+                "ready, refused and unknown outcomes must all proceed to CreateCharacter"
+            );
+            assert_eq!(lock.portrait_missing, !ready);
+            assert_eq!(
+                rpc::SubmitActionRequest::decode(lock.request.as_slice()).unwrap(),
+                create
+            );
+            assert!(terminal.portrait.unwrap().sent, "no second paid request");
+        }
+    }
+
+    #[test]
+    fn portrait_rpc_and_creation_refusals_use_player_words_without_transport_or_internal_codes() {
+        assert_eq!(
+            portrait_rpc_message(tonic::Code::Unavailable).1,
+            "Lost touch with the table - checking your portrait again..."
+        );
+        for code in [
+            rpc::RejectionCode::InvalidSelection,
+            rpc::RejectionCode::CapabilityUnavailable,
+            rpc::RejectionCode::StaleOffer,
+            rpc::RejectionCode::RecoveryRequired,
+        ] {
+            let message = creation_rejection_reason(code as i32);
+            assert!(!message.is_empty());
+            assert!(!message.contains(&format!("{code:?}")));
+        }
+    }
 }
 
 fn preview_creation(
@@ -2425,34 +3149,72 @@ fn receive_view(
             }
         }
     }
-    let acceptance = {
+    let (acceptance, art_changed, art_refusal) = {
         let mut state = client.borrow_mut();
         let views = state
             .views
             .as_mut()
             .ok_or_else(|| JsValue::from_str("view owner absent"))?;
-        let accepted = views
-            .accept(generation, scope, view.clone())
+        let art_refusal = views
+            .current()
+            .filter(|shown| shown.revision == view.revision)
+            .and_then(|shown| crate::live_art::refusal_reason(shown, &view));
+        let (accepted, art_changed) = views
+            .accept_with_art(generation, scope, view.clone(), |shown, new| {
+                crate::layout_contract::merge_layout(shown, new)
+                    | crate::live_art::merge_art(shown, new)
+                    | live_music::merge_plan(shown, new)
+            })
             .map_err(|_| JsValue::from_str("server view scope or projection invalid"))?;
-        // PLAY-L01: the display's view of an equal revision that differs only in generated art
-        // replaces the shown one and redraws; nothing else is accepted at an equal revision.
-        if matches!(
-            accepted,
-            ConnectionViewAcceptance::View(ViewAcceptance::Duplicate { .. })
-        ) && views.accept_art_update(generation, scope, &view, |shown, new| {
-            crate::layout_contract::merge_layout(shown, new)
-                | crate::live_art::merge_art(shown, new)
-        }) {
-            drop(state);
-            live_battlefield::camera_view(client, &view);
-            if let Some(rpc::view_message::Audience::Display(display)) = &view.audience {
-                layout::apply(client, &display.layout_json, display.layout_revision)?;
-            }
-            redraw_current(client)?;
-            return live_health::phone_sync(client);
-        }
-        accepted
+        (accepted, art_changed, art_refusal)
     };
+    if matches!(
+        acceptance,
+        ConnectionViewAcceptance::View(ViewAcceptance::Applied | ViewAcceptance::Duplicate { .. })
+    ) {
+        let root = client.borrow().root.clone();
+        if let Some(reason) = art_refusal {
+            if root.get_attribute("data-art-update-refused").as_deref() != Some(reason) {
+                root.set_attribute("data-art-update-refused", reason)?;
+                presentation_timing::component(
+                    None,
+                    df_observe::presentation::PresentationComponent::PlateIncoming,
+                    presentation_timing::identity(reason),
+                    "same-revision-art-refused",
+                    df_observe::presentation::ComponentPhase::Failed,
+                    "failed",
+                    0,
+                );
+            }
+        } else {
+            root.remove_attribute("data-art-update-refused")?;
+        }
+    }
+    if art_changed {
+        let mut state = client.borrow_mut();
+        state.reconnect.attempt = 0;
+        state.reconnect.last_view_ms = Some(js_sys::Date::now());
+        show_notice(&state, None);
+        drop(state);
+        live_battlefield::camera_view(client, &view);
+        if let Some(rpc::view_message::Audience::Display(display)) = &view.audience {
+            layout::apply(client, &display.layout_json, display.layout_revision)?;
+        }
+        redraw_current(client)?;
+        // New art (a ready plate) may be waiting on the presentation clock, which sleeps
+        // once idle; wake it so the scene's entry can finish.
+        live_motion::wake_plate_clock();
+        // A music variant (REF-066) can arrive at an unchanged revision too.
+        live_music::observe(client);
+        live_health::phone_sync(client)?;
+        // A table-talk update may carry art too. Its lines still go to the director below.
+        if matches!(
+            acceptance,
+            ConnectionViewAcceptance::View(ViewAcceptance::Duplicate { .. })
+        ) {
+            return Ok(());
+        }
+    }
     if matches!(
         acceptance,
         ConnectionViewAcceptance::View(ViewAcceptance::Applied | ViewAcceptance::Duplicate { .. })
@@ -2461,11 +3223,15 @@ fn receive_view(
         live_battlefield::camera_view(client, &view);
         layout::apply(client, &display.layout_json, display.layout_revision)?;
     }
-    if acceptance != ConnectionViewAcceptance::ObsoleteGeneration {
+    if matches!(
+        acceptance,
+        ConnectionViewAcceptance::View(ViewAcceptance::Applied | ViewAcceptance::Duplicate { .. })
+    ) {
         // Any view (even one already held) proves the connection is good again.
         {
             let mut state = client.borrow_mut();
             state.reconnect.attempt = 0;
+            state.reconnect.last_view_ms = Some(js_sys::Date::now());
             show_notice(&state, None);
         }
         auto_confirm(client);
@@ -2518,6 +3284,13 @@ fn redraw_current(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         && let Err(error) = render(client, view)
     {
         // A view that cannot be drawn must never fail silently into a blank screen.
+        record_diagnostic(
+            client,
+            crate::client_diagnostics::Diagnostic::ViewRenderFailed,
+            0,
+            1,
+            0,
+        );
         web_sys::console::error_2(&JsValue::from_str("gameplay view not drawn:"), &error);
         return Err(error);
     }
@@ -2726,7 +3499,7 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
         show_notice(&client.borrow(), Some(NEW_ADVENTURE));
         return Ok(());
     }
-    if journey.party.len() > 2 || offers.len() > 12 {
+    if journey.party.len() > df_rules::local_journey::MAXIMUM_PARTY || offers.len() > 12 {
         return Err(JsValue::from_str("server view exceeds bound"));
     }
     let offers = if role == "player" {
@@ -2786,6 +3559,9 @@ fn render_view(client: &Rc<RefCell<Client>>, view: rpc::ViewMessage) -> Result<(
     hero_creator::sync_library(client, &journey)?;
     cancel_creation_preview(&mut client.borrow_mut());
     client.borrow_mut().creation_offer = None;
+    if let Some((_, abort)) = client.borrow_mut().creator_poll.take() {
+        abort.abort();
+    }
     if let Some(creation) = client.borrow_mut().creation.take() {
         creation
             .dispose()
@@ -3099,6 +3875,7 @@ fn new_client(
         reclaim_request: None,
         away_heroes: Vec::new(),
         seat_poll_abort: None,
+        seat_poll: phone_reconnect::ReclaimPoll::default(),
         last_request: None,
         first_attack: None,
         last_confirmed: false,
@@ -3110,6 +3887,7 @@ fn new_client(
         callbacks: Vec::new(),
         creation: None,
         creation_preview: None,
+        creator_poll: None,
         creation_offer: None,
         live: live_screens::LiveScreens::default(),
         chrome: live_chrome::Chrome::default(),
@@ -3185,6 +3963,13 @@ fn resume_or_join(client: &Rc<RefCell<Client>>) -> Result<(), JsValue> {
         }
         Ok(None) => render_join(client)?,
         Err(_) => {
+            record_diagnostic(
+                client,
+                crate::client_diagnostics::Diagnostic::LocalStorageFailed,
+                0,
+                1,
+                0,
+            );
             render_join(client)?;
             feedback(
                 &client.borrow(),
@@ -3228,6 +4013,11 @@ pub(super) fn start() -> Result<(), JsValue> {
 #[cfg(feature = "public-scene-delivery-fixture")]
 pub mod fixture {
     use super::*;
+    #[wasm_bindgen::prelude::wasm_bindgen]
+    pub fn same_revision_art_reproduction() {
+        super::live_tv::same_revision_art_delivery_reaches_stage_without_waiting_for_the_director();
+    }
+
     thread_local! {
         static CLIENT: RefCell<Option<Rc<RefCell<Client>>>> = const { RefCell::new(None) };
         static CONNECTION: RefCell<Option<RpcConnection<()>>> = const { RefCell::new(None) };
@@ -3312,6 +4102,7 @@ pub mod fixture {
             .to_owned(),
             speaker_portrait: String::new(),
             plate_update_pending: false,
+            ..Default::default()
         };
         let journey = rpc::JourneyView {
             phase: rpc::JourneyPhase::Opening as i32,
@@ -3432,6 +4223,40 @@ pub mod fixture {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn accepted_connection_clears_every_retained_reconnect_notice() {
+        use super::*;
+        let document = web_sys::window().unwrap().document().unwrap();
+        let root = document.create_element("section").unwrap();
+        let client = new_client(&document, root.clone(), "display").unwrap();
+        for _ in 0..2 {
+            node(
+                &document,
+                &root,
+                "div",
+                "df-reconnecting",
+                "Connection lost. Reconnecting…",
+            )
+            .unwrap();
+        }
+        show_notice(&client.borrow(), None);
+        assert_eq!(
+            root.query_selector_all(".df-reconnecting")
+                .unwrap()
+                .length(),
+            0
+        );
+        show_notice(&client.borrow(), Some("Reconnecting…"));
+        assert_eq!(
+            root.query_selector_all(".df-reconnecting")
+                .unwrap()
+                .length(),
+            1
+        );
+        show_notice(&client.borrow(), None);
+        assert!(root.query_selector(".df-reconnecting").unwrap().is_none());
+    }
+
     #[test]
     fn missing_server_identity_metadata_keeps_a_readable_creation_page() {
         use super::*;
@@ -3578,6 +4403,18 @@ mod tests {
             )
         );
         assert_eq!(editor.value(), "Maren");
+        client.borrow().creation.as_ref().unwrap().set_pending(true);
+        creation(&client, &surface, &offer, &action).unwrap();
+        assert!(client.borrow().creation.as_ref().unwrap().is_pending());
+        assert!(editor.disabled());
+        assert_eq!(editor.value(), "Maren");
+        client
+            .borrow()
+            .creation
+            .as_ref()
+            .unwrap()
+            .set_pending(false);
+        assert!(!editor.disabled());
         assert_eq!(
             surface
                 .query_selector_all(".hero-creator")

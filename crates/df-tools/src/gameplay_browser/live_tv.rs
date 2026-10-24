@@ -33,12 +33,15 @@ use web_sys::{Event, HtmlImageElement};
 #[path = "live_scene_stage.rs"]
 mod live_scene_stage;
 pub(super) use live_scene_stage::SceneGraphView;
+#[path = "../gameplay/living_scenes/mural_view.rs"]
+mod mural_view;
+#[path = "live_tv_status.rs"]
+mod status;
+use status::plate_loading_visible;
 
 pub(super) const GENERATED: &str = "/assets/ui/generated";
 // PLAY-Q01: the server's QR code of the join link (see gameplay/join_link.rs).
 const JOIN_QR: &str = "/gameplay/join-qr.svg";
-/// The party cards a scene shows.
-const PARTY_SLOTS: usize = 2;
 /// The lobby row always shows every seat of the table (open seats pad a smaller party), all in one
 /// row (REF-062).
 const PARTY_MAX: usize = 6;
@@ -189,6 +192,7 @@ struct LowerThird {
 
 pub(super) struct TvStage {
     root: Element,
+    mural_art: Element,
     art: Element,
     art_previous: Element,
     plate: PlateLayer,
@@ -293,23 +297,17 @@ fn plate_loading_timing(stage: &Element, visible: bool, scene: &str) {
 }
 
 fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str) {
-    let plate_ready = stage.get_attribute("data-plate-state").as_deref() == Some("ready");
+    let plate_state = stage.get_attribute("data-plate-server-state");
     if let Some(pending) = server_pending {
-        if pending && !plate_ready {
+        if pending {
             let _ = stage.set_attribute("data-plate-server-pending", "");
         } else {
             let _ = stage.remove_attribute("data-plate-server-pending");
         }
     }
-    let client_pending = stage
-        .query_selector(".tv-plate")
-        .ok()
-        .flatten()
-        .is_some_and(|plate| plate.has_attribute("data-loading"));
     let visible = plate_loading_visible(
-        plate_ready,
+        plate_state.as_deref(),
         stage.has_attribute("data-plate-server-pending"),
-        client_pending,
     );
     let was_visible = stage.has_attribute("data-plate-loading");
     if visible {
@@ -332,10 +330,6 @@ fn sync_plate_loading(stage: &Element, server_pending: Option<bool>, scene: &str
         let _ = indicator.set_attribute("data-loading-component-scene", scene);
         plate_loading_timing(stage, true, scene);
     }
-}
-
-fn plate_loading_visible(plate_ready: bool, server_pending: bool, client_pending: bool) -> bool {
-    !plate_ready && (server_pending || client_pending)
 }
 
 fn can_retain_plate_for_scene(
@@ -703,6 +697,27 @@ pub(super) fn refresh_timing_visibility(stage: &Element) {
                     "ready",
                     1000,
                 );
+                if !stage.has_attribute("data-entry-speaker-shown")
+                    && let Some(now) = web_sys::window()
+                        .and_then(|window| window.performance())
+                        .map(|clock| clock.now())
+                {
+                    let _set = stage.set_attribute("data-entry-picture-ms", &now.to_string());
+                    if let Some(started) = stage
+                        .get_attribute("data-entry-start-ms")
+                        .and_then(|value| value.parse().ok())
+                    {
+                        super::presentation_timing::entry_gap(
+                            &frame,
+                            df_observe::presentation::PresentationComponent::PlateIncoming,
+                            super::presentation_timing::identity(
+                                &image.get_attribute("data-src").unwrap_or_default(),
+                            ),
+                            &scene,
+                            started,
+                        );
+                    }
+                }
             }
         }
         let playing = frame
@@ -1689,6 +1704,7 @@ fn activate_plate_request_at(
         }
         let has_layout = layout.is_some();
         let _applied = figures.set_plate(layout, size);
+        let _focused = refresh_plate_focus(root, &figures);
         if bitmap_changed {
             let _retained = figures.retain_plate_captions_in_named_lane();
         }
@@ -1788,6 +1804,39 @@ fn image_dimensions(image: &Element) -> Option<(f64, f64)> {
         .then_some((width, height))
 }
 
+fn refresh_plate_focus(root: &Element, figures: &Figures) -> Result<(), JsValue> {
+    use crate::presentation::CaptionSpeaker;
+    let Some(zoom) = root.query_selector(".tv-plate-zoom")? else {
+        return Ok(());
+    };
+    let key = zoom.get_attribute("data-focus-key").unwrap_or_default();
+    let (speaker, narrator) = match zoom.get_attribute("data-focus-role").as_deref() {
+        Some("narrator") => (CaptionSpeaker::Unknown, true),
+        Some("hero") => {
+            let Ok(index) = key.parse() else {
+                return Ok(());
+            };
+            (CaptionSpeaker::Hero(index), false)
+        }
+        Some("npc") => (CaptionSpeaker::Npc(&key), false),
+        _ => return Ok(()),
+    };
+    let Some((geometry, (picture_width, picture_height))) = figures.plate_geometry() else {
+        return Ok(());
+    };
+    // Measure the untransformed viewport, never the zoom's already transformed bounds.
+    let bounds = root.get_bounding_client_rect();
+    let frame = PlateFrame {
+        screen: Rect::new(0.0, 0.0, bounds.width(), bounds.height()),
+        picture_width,
+        picture_height,
+    };
+    if let Some((x, y)) = crate::stage_conductor::plate_focus(&geometry, speaker, narrator, frame) {
+        zoom.set_attribute("style", &format!("--head-x:{x}%;--head-y:{y}%"))?;
+    }
+    Ok(())
+}
+
 fn plate_head_style(
     layout: &crate::presentation::PlateGeometry,
     picture_size: Option<(f64, f64)>,
@@ -1807,8 +1856,8 @@ fn plate_head_style(
     let (x, y) = frame.head_center(layout.head_x, layout.head_y);
     Some(format!(
         "--head-x:{}%;--head-y:{}%",
-        x / width * 100.0,
-        y / height * 100.0
+        (x / width * 100.0).clamp(0.0, 100.0),
+        (y / height * 100.0).clamp(0.0, 100.0)
     ))
 }
 
@@ -1824,6 +1873,10 @@ impl TvStage {
         let home_loop = live_home_video::HomeLoop::new(document, loop_layer)?;
         let kill_shot = live_kill_shot::KillShotPlayer::new(document, &root)?;
         let atmosphere = node(document, &root, "div", "tv-atmosphere", "")?;
+        let mural = node(document, &root, "div", "tv-mural", "")?;
+        mural.set_attribute("aria-hidden", "true")?;
+        let mural_art = node(document, &mural, "img", "tv-mural-art", "")?;
+        mural_art.set_attribute("alt", "")?;
         let mut plate = mount_plate(document, &root)?;
         let scene_graph = live_scene_stage::StageLayer::mount(document, &root)?;
         node(document, &root, "div", "tv-scrim", "")?;
@@ -1915,7 +1968,7 @@ impl TvStage {
 
         let party_bar = node(document, &safe, "section", "tv-partybar", "")?;
         let party = node(document, &roster_slot, "div", "tv-party party", "")?;
-        let mut cards = Vec::with_capacity(PARTY_SLOTS);
+        let mut cards = Vec::with_capacity(PARTY_MAX);
         for _ in 0..PARTY_MAX {
             let card = node(document, &party, "article", "tv-card", "")?;
             let (_, glyph, image) = portrait(document, &card, "tv-portrait")?;
@@ -1946,6 +1999,7 @@ impl TvStage {
         node(document, &root, "div", "tv-peek", "")?;
         Ok(Self {
             root,
+            mural_art,
             art,
             art_previous,
             plate,
@@ -2010,6 +2064,20 @@ impl TvStage {
     ) -> Result<(), JsValue> {
         self.scene_graph.update(&self.root, graph, baked_revision)?;
         sync_shot(&self.root)
+    }
+
+    pub(super) fn update_mural_wire(&self, contents: &str) -> Result<(), JsValue> {
+        let mural = mural_view::MuralView::from_scene_contents(contents);
+        if let Some(mural) = mural.filter(|mural| mural.state == mural_view::MuralState::Ready) {
+            if self.mural_art.get_attribute("src").as_deref() != Some(&mural.url) {
+                self.mural_art.set_attribute("src", &mural.url)?;
+            }
+            self.root.set_attribute("data-mural", "ready")?;
+        } else {
+            self.root.remove_attribute("data-mural")?;
+            self.mural_art.remove_attribute("src")?;
+        }
+        Ok(())
     }
 
     pub(super) fn update_scene_graph_wire(
@@ -2427,6 +2495,45 @@ impl TvStage {
         Ok(())
     }
 
+    /// Aim the existing zoom transition at this line's measured head in the displayed bitmap.
+    pub(super) fn focus_speaker(
+        &self,
+        speaker: crate::presentation::CaptionSpeaker<'_>,
+        narrator: bool,
+    ) -> Result<(), JsValue> {
+        use crate::presentation::CaptionSpeaker;
+        let Some(zoom) = self.plate.root.query_selector(".tv-plate-zoom")? else {
+            return Ok(());
+        };
+        // Snapshot inherited focus before a later bitmap can change the scene's default.
+        // These are the stylesheet's existing fallbacks when no scene head is available yet.
+        if !zoom.has_attribute("style")
+            && let Some(window) = web_sys::window()
+            && let Some(style) = window.get_computed_style(&zoom)?
+        {
+            let x = style.get_property_value("--head-x")?;
+            let y = style.get_property_value("--head-y")?;
+            zoom.set_attribute(
+                "style",
+                &format!(
+                    "--head-x:{};--head-y:{}",
+                    if x.trim().is_empty() { "50%" } else { x.trim() },
+                    if y.trim().is_empty() { "45%" } else { y.trim() },
+                ),
+            )?;
+        }
+        let (role, key) = match (narrator, speaker) {
+            (true, _) => ("narrator", String::new()),
+            (false, CaptionSpeaker::Hero(index)) => ("hero", index.to_string()),
+            (false, CaptionSpeaker::Npc(id)) => ("npc", id.to_owned()),
+            (false, CaptionSpeaker::Unknown) => ("unknown", String::new()),
+        };
+        // Retain the target even before art arrives, then reproject when a bitmap applies.
+        zoom.set_attribute("data-focus-role", role)?;
+        zoom.set_attribute("data-focus-key", &key)?;
+        refresh_plate_focus(&self.plate.root, &self.figures)
+    }
+
     /// Which speaker the stage's words belong to; the stylesheet shows the Dungeon Master's
     /// caption or the character's bubble accordingly, never both.
     pub(super) fn set_speaker(&self, speaker: &str) -> Result<(), JsValue> {
@@ -2441,6 +2548,8 @@ impl TvStage {
     /// Decoded requests and active dissolves keep the existing presentation clock alive.
     pub(super) fn plate_needs_clock(&self) -> bool {
         self.plate.root.has_attribute("data-transition")
+            || (self.root.has_attribute("data-entry-start-ms")
+                && !self.root.has_attribute("data-entry-speaker-ready"))
             || self.plate.images.iter().any(|image| {
                 plate_request_matches(&self.plate.root, image)
                     && plate_request_ready(&self.plate.root, image)
@@ -2453,12 +2562,13 @@ impl TvStage {
         // The existing conductor clock owns recovery when transitionend is lost (for
         // example a background tab). No detached timeout may retire a newer dissolve.
         if self.plate.root.has_attribute("data-transition")
-            && self
-                .plate
-                .root
-                .get_attribute("data-transition-at")
-                .and_then(|at| at.parse::<f64>().ok())
-                .is_some_and(|at| now - at >= 1100.0)
+            && status::plate_transition_expired(
+                self.plate
+                    .root
+                    .get_attribute("data-transition-at")
+                    .and_then(|at| at.parse::<f64>().ok()),
+                now,
+            )
         {
             self.plate.root.remove_attribute("data-transition")?;
             self.plate.root.remove_attribute("data-previous")?;
@@ -2491,6 +2601,14 @@ impl TvStage {
         state: LineState,
         text: &str,
     ) -> Result<bool, JsValue> {
+        // A closing predecessor cannot reclaim the box after a roll or a newer caption.
+        if id < self.last_narrator_line.get()
+            || (!state.is_active()
+                && self.narration.get_attribute("data-component-id").as_deref()
+                    != Some(&id.to_string()))
+        {
+            return Ok(false);
+        }
         if state.is_active() {
             self.retire_scene_context("successor")?;
         }
@@ -2624,8 +2742,8 @@ impl TvStage {
         Ok(opened)
     }
 
-    /// Empties the Dungeon Master's box: a new scene starts with none of the old scene's words.
-    pub(super) fn clear_narration(&self) -> Result<(), JsValue> {
+    /// Retires prior words when a new scene, roll or character caption owns the display.
+    pub(super) fn clear_narration(&self, reason: &'static str) -> Result<(), JsValue> {
         let component_id = self
             .narration
             .get_attribute("data-component-id")
@@ -2641,7 +2759,7 @@ impl TvStage {
                 id,
                 &component_scene,
                 df_observe::presentation::ComponentPhase::Closing,
-                "scene-change",
+                reason,
                 0,
             );
         }
@@ -2651,7 +2769,7 @@ impl TvStage {
             .and_then(|caption| caption.get_attribute("data-line-id"))
             .and_then(|id| id.parse::<u64>().ok())
         {
-            super::presentation_timing::close_reason(id, "scene-change");
+            super::presentation_timing::close_reason(id, reason);
             super::presentation_timing::line(
                 id,
                 LineState::Done,
@@ -2674,7 +2792,7 @@ impl TvStage {
                 id,
                 &component_scene,
                 df_observe::presentation::ComponentPhase::Hidden,
-                "scene-change",
+                reason,
                 0,
             );
         }
@@ -2953,9 +3071,10 @@ impl TvStage {
             _ => set_hidden(&self.speaker, true)?,
         }
         let announce = self.drawn.get() && lobby;
-        // The lobby shows all six seats, with open seats for the empty ones, in one row; a scene
-        // keeps its two cards.
-        let shown = if lobby { PARTY_MAX } else { PARTY_SLOTS };
+        // Open seats belong to the lobby; scenes show every present party member.
+        let shown = if lobby { PARTY_MAX } else { model.party.len() };
+        self.party
+            .set_attribute("style", &format!("--seats:{}", shown.max(1)))?;
         self.roster
             .set_attribute("data-count", &shown.to_string())?;
         let mut newly_ready = false;
@@ -3006,7 +3125,7 @@ impl TvStage {
         }
         let seats = model.party.len();
         let ready_seats = model.party.iter().filter(|member| member.ready).count();
-        let gathered = lobby && seats >= PARTY_SLOTS && ready_seats == seats;
+        let gathered = lobby && seats > 0 && ready_seats == seats;
         let was_gathered = self.roster.has_attribute("data-gathered");
         if gathered {
             self.roster.set_attribute("data-gathered", "")?;
@@ -3156,6 +3275,32 @@ impl TvStage {
     /// come up on it (a reload tells nothing again).
     fn begin_entry(&self, narration_over: bool) -> Result<(), JsValue> {
         self.narration_floor.set(self.last_narrator_line.get());
+        let scene = self
+            .root
+            .get_attribute("data-scene-key")
+            .unwrap_or_default();
+        self.root.set_attribute("data-entry-scene-key", &scene)?;
+        self.root.remove_attribute("data-entry-speaker-shown")?;
+        self.root.remove_attribute("data-entry-speaker-ready")?;
+        self.root.remove_attribute("data-entry-title-cleared-ms")?;
+        self.root.remove_attribute("data-entry-start-ms")?;
+        self.root.remove_attribute("data-entry-picture-ms")?;
+        // A new scene must leave the previous plate before its own picture is ready.
+        // Otherwise sync_shot's same-scene latch can keep the old photograph on stage.
+        self.root.remove_attribute("data-shot")?;
+        if self.drawn.get()
+            && let Some(now) = web_sys::window()
+                .and_then(|window| window.performance())
+                .map(|clock| clock.now())
+        {
+            self.root
+                .set_attribute("data-entry-start-ms", &now.to_string())?;
+            // update() already mounted this scene's place art. It is the permitted fallback
+            // while a generated plate is pending, and has its own measured dissolve budget.
+            self.root
+                .set_attribute("data-entry-picture-ms", &now.to_string())?;
+            super::presentation_timing::media("scene", &scene, &scene, "scene-change", 0);
+        }
         if narration_over {
             self.root.set_attribute("data-narration-over", "")?;
         } else {
@@ -3169,12 +3314,61 @@ impl TvStage {
         self.root.set_attribute("data-shot-tick", tick)
     }
 
+    /// The conductor asks before starting a character's audio or reading timer. Narration
+    /// can establish the scene; a character waits for its picture and title-card exit.
+    pub(super) fn speaker_entry_ready(&self) -> Result<bool, JsValue> {
+        self.plate_clock_at(js_sys::Date::now())?;
+        let Some(now) = web_sys::window()
+            .and_then(|window| window.performance())
+            .map(|clock| clock.now())
+        else {
+            return Ok(false);
+        };
+        self.speaker_entry_ready_at(now)
+    }
+
+    fn speaker_entry_ready_at(&self, now: f64) -> Result<bool, JsValue> {
+        if self.root.has_attribute("data-entry-speaker-shown")
+            || self.root.has_attribute("data-entry-speaker-ready")
+        {
+            return Ok(true);
+        }
+        let started = self
+            .root
+            .get_attribute("data-entry-start-ms")
+            .and_then(|value| value.parse::<f64>().ok());
+        if started.is_some_and(|started| now - started >= status::ESTABLISHING_BEAT_MS)
+            && !self.root.has_attribute("data-entry-title-cleared-ms")
+        {
+            self.narration_over()?;
+            self.root
+                .set_attribute("data-entry-title-cleared-ms", &now.to_string())?;
+        }
+        let picture = self
+            .root
+            .get_attribute("data-entry-picture-ms")
+            .and_then(|value| value.parse::<f64>().ok());
+        let title = self
+            .root
+            .get_attribute("data-entry-title-cleared-ms")
+            .and_then(|value| value.parse::<f64>().ok());
+        let ready = status::speaker_entry_ready(started, picture, now)
+            && (started.is_none()
+                || title
+                    .is_some_and(|cleared| now - cleared >= status::PLATE_TRANSITION_RECOVERY_MS));
+        if ready {
+            self.root.set_attribute("data-entry-speaker-ready", "")?;
+        }
+        Ok(ready)
+    }
+
     /// Check payloads are presented only at their position in the shared conductor queue.
     pub(super) fn begin_check(
         &self,
         check: &super::live_stage::CheckDisplay,
         settled: bool,
     ) -> Result<(), JsValue> {
+        self.clear_narration("successor")?;
         self.figures.begin_check(check, settled)?;
         self.retire_scene_context("successor")?;
         self.root.set_attribute("data-check-active", "")?;
@@ -3222,8 +3416,10 @@ impl TvStage {
         if matches!(
             bubble.kind,
             super::live_stage::BubbleKind::Speech | super::live_stage::BubbleKind::Typed
-        ) {
+        ) || position == usize::MAX
+        {
             if state.is_active() {
+                self.clear_narration("successor")?;
                 // Action call-outs still use the figure layer and can leave these fallback
                 // markers set; clear the actual stage when dialogue takes ownership of the lane.
                 self.root.remove_attribute("data-unplaced-line")?;
@@ -3371,6 +3567,22 @@ impl TvStage {
             .root
             .set_attribute("data-component-type", "subtitle")?;
         if created {
+            if state.is_active() && !self.root.has_attribute("data-entry-speaker-shown") {
+                self.root.set_attribute("data-entry-speaker-shown", "")?;
+                if let Some(shown) = self
+                    .root
+                    .get_attribute("data-entry-picture-ms")
+                    .and_then(|value| value.parse().ok())
+                {
+                    super::presentation_timing::entry_gap(
+                        &lower.root,
+                        df_observe::presentation::PresentationComponent::Subtitle,
+                        id,
+                        &scene,
+                        shown,
+                    );
+                }
+            }
             super::presentation_timing::component(
                 None,
                 df_observe::presentation::PresentationComponent::Subtitle,
@@ -3429,7 +3641,7 @@ impl TvStage {
     /// only once the narration of the scene's entry is over. A new picture for the scene already
     /// on screen (a mood edit) comes in as a focus pull.
     fn set_plate(&self, plate: &PlateView, scene_key: &str, narrated: bool) -> Result<(), JsValue> {
-        if self.plate.seen.borrow().as_str() != scene_key {
+        if self.root.get_attribute("data-entry-scene-key").as_deref() != Some(scene_key) {
             self.begin_entry(!narrated || !self.drawn.get())?;
         }
         let shown = self.apply_plate(plate, scene_key);
@@ -3439,14 +3651,19 @@ impl TvStage {
 
     fn apply_plate(&self, plate: &PlateView, scene_key: &str) -> Result<(), JsValue> {
         let layer = &self.plate;
+        self.root
+            .set_attribute("data-plate-server-state", plate.state.name())?;
         let current_scene = self.root.get_attribute("data-scene-key").as_deref() == Some(scene_key);
         sync_plate_loading(
             &self.root,
-            Some(plate.update_pending && current_scene),
+            Some(plate.state == PlateState::Pending && current_scene),
             scene_key,
         );
         if layer.root.has_attribute("data-transition") {
             *layer.deferred.borrow_mut() = Some((plate.clone(), scene_key.to_owned()));
+            // The conductor clock retires a dissolve whose transitionend was lost, then applies
+            // this plate. An idle clock never ticks again on its own, so wake it here.
+            super::live_motion::wake_plate_clock();
             return Ok(());
         }
         if layer.seen.borrow().as_str() != scene_key {
@@ -3600,6 +3817,7 @@ impl TvStage {
                 }
                 self.figures
                     .latch_plate_geometry(layout, layer.picture_size.get())?;
+                refresh_plate_focus(&layer.root, &self.figures)?;
             }
             return Ok(());
         }
@@ -3738,6 +3956,139 @@ impl TvStage {
     }
 }
 
+#[cfg(any(test, feature = "public-scene-delivery-fixture"))]
+pub(super) fn same_revision_art_delivery_reaches_stage_without_waiting_for_the_director() {
+    use super::{GameplayViews, RpcConnection, ViewRole, ViewScope, new_client};
+
+    for table_talk_current in [false, true] {
+        for talk_advances in [false, true] {
+            let document = web_sys::window().unwrap().document().unwrap();
+            let parent = document.create_element("section").unwrap();
+            document.body().unwrap().append_child(&parent).unwrap();
+            let client = new_client(&document, parent.clone(), "display").unwrap();
+            let connection = RpcConnection::new(());
+            let generation = connection.generation();
+            let scope = ViewScope::from_wire(
+                Some(&rpc::SessionId {
+                    value: Some(vec![1; 16]),
+                }),
+                Some(&rpc::RunId {
+                    value: Some(vec![2; 16]),
+                }),
+                Some(&rpc::ClientBindingId {
+                    value: Some(vec![3; 16]),
+                }),
+                ViewRole::Display,
+            )
+            .unwrap();
+            let mut views = GameplayViews::new(scope, generation.clone());
+            let mut pending = rpc::ViewMessage {
+                revision: Some(rpc::SessionRevision {
+                    epoch: Some(rpc::RecoveryEpoch { value: Some(1) }),
+                    sequence: Some(14),
+                }),
+                audience: Some(rpc::view_message::Audience::Display(
+                    rpc::DisplayGameplayView {
+                        narration: "The enforcer has stepped aside.".into(),
+                        scene: Some(rpc::GameplayScene {
+                            title: "Salt quay".into(),
+                            scene_asset: "live-room-photo".into(),
+                            plate_state: rpc::PlateState::Pending as i32,
+                            ..Default::default()
+                        }),
+                        journey: Some(rpc::JourneyView {
+                            phase: rpc::JourneyPhase::Opening as i32,
+                            join_path: "/gameplay/player?room=HS34".into(),
+                            join_url: "http://table.test/gameplay/player?room=HS34".into(),
+                            party: (0..6)
+                                .map(|index| rpc::PartyMemberView {
+                                    name: format!("Hero {index}"),
+                                    ..Default::default()
+                                })
+                                .collect(),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )),
+            };
+            views
+                .accept_with_art(&generation, scope, pending.clone(), |_, _| false)
+                .unwrap();
+            if table_talk_current {
+                let Some(rpc::view_message::Audience::Display(display)) = &mut pending.audience
+                else {
+                    unreachable!()
+                };
+                display.journey.as_mut().unwrap().presentation_sequence = 1;
+                views
+                    .accept_with_art(&generation, scope, pending.clone(), |_, _| false)
+                    .unwrap();
+            }
+            client.borrow_mut().views = Some(views);
+            super::redraw_current(&client).unwrap();
+            let stage_root = client.borrow().live.tv.as_ref().unwrap().root().clone();
+            assert_eq!(
+                stage_root
+                    .get_attribute("data-plate-server-state")
+                    .as_deref(),
+                Some("pending")
+            );
+            let mut ready = pending;
+            let Some(rpc::view_message::Audience::Display(display)) = &mut ready.audience else {
+                unreachable!()
+            };
+            if talk_advances {
+                display.journey.as_mut().unwrap().presentation_sequence += 1;
+            }
+            let scene = display.scene.as_mut().unwrap();
+            let plate_path = format!("/gameplay/imagery/{}", "a".repeat(64));
+            scene.live_plate = plate_path.clone();
+            scene.plate_state = rpc::PlateState::Ready as i32;
+            super::receive_view(&client, &generation, scope, ready).unwrap();
+            assert_eq!(
+                stage_root
+                    .get_attribute("data-plate-server-state")
+                    .as_deref(),
+                Some("ready")
+            );
+            assert!(
+                stage_root
+                    .query_selector_all(".tv-plate-img")
+                    .unwrap()
+                    .length()
+                    == 2
+            );
+            assert!(
+                stage_root
+                    .query_selector(&format!(".tv-plate-img[src='{plate_path}']"))
+                    .unwrap()
+                    .is_some()
+            );
+            assert_eq!(
+                client
+                    .borrow()
+                    .views
+                    .as_ref()
+                    .unwrap()
+                    .current_revision()
+                    .unwrap()
+                    .sequence(),
+                14
+            );
+            client
+                .borrow_mut()
+                .live
+                .tv
+                .take()
+                .unwrap()
+                .dispose()
+                .unwrap();
+            parent.remove();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::rpc;
@@ -3754,6 +4105,105 @@ mod tests {
         document.body().unwrap().append_child(&parent).unwrap();
         let stage = TvStage::mount(&document, &parent).unwrap();
         (parent, stage)
+    }
+
+    #[test]
+    fn hs48_speaker_origin_survives_late_art_and_tracks_the_displayed_bitmap() {
+        use crate::{
+            plate_layout::Side,
+            presentation::{CaptionSpeaker, PlateActor, PlateGeometry, PlateHero},
+        };
+        let (parent, stage) = mounted_stage();
+        stage
+            .plate
+            .root
+            .set_attribute("style", "position:fixed;width:1000px;height:1000px")
+            .unwrap();
+        let zoom = stage
+            .plate
+            .root
+            .query_selector(".tv-plate-zoom")
+            .unwrap()
+            .unwrap();
+        stage.focus_speaker(CaptionSpeaker::Unknown, false).unwrap();
+        let held_origin = zoom.get_attribute("style");
+        assert!(held_origin.is_some());
+        stage.focus_speaker(CaptionSpeaker::Hero(2), false).unwrap();
+        assert_eq!(zoom.get_attribute("style"), held_origin);
+        let mut geometry = PlateGeometry {
+            figure_masks: Vec::new(),
+            bubble_side: Side::Left,
+            head_x: 500,
+            head_y: 400,
+            head_width: 80,
+            head_height: 90,
+            heroes: vec![PlateHero {
+                index: 2,
+                bubble_side: Side::Right,
+                head_x: 200,
+                head_y: 300,
+                head_width: 60,
+                head_height: 80,
+            }],
+            actors: vec![PlateActor {
+                actor_id: "dain".into(),
+                bubble_side: Side::Left,
+                head_x: 800,
+                head_y: 350,
+                head_width: 70,
+                head_height: 80,
+            }],
+        };
+        stage
+            .figures
+            .set_plate(Some(geometry.clone()), Some((1000.0, 1000.0)))
+            .unwrap();
+        super::refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
+        assert_eq!(
+            zoom.get_attribute("style").as_deref(),
+            Some("--head-x:20%;--head-y:30%")
+        );
+        stage
+            .focus_speaker(CaptionSpeaker::Npc("dain"), false)
+            .unwrap();
+        assert_eq!(
+            zoom.get_attribute("style").as_deref(),
+            Some("--head-x:80%;--head-y:35%")
+        );
+        geometry.actors[0].head_x = 700;
+        stage
+            .figures
+            .set_plate(Some(geometry.clone()), Some((1000.0, 1000.0)))
+            .unwrap();
+        super::refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
+        assert_eq!(
+            zoom.get_attribute("style").as_deref(),
+            Some("--head-x:70%;--head-y:35%")
+        );
+        stage.focus_speaker(CaptionSpeaker::Unknown, false).unwrap();
+        geometry.actors[0].head_x = 600;
+        stage
+            .figures
+            .set_plate(Some(geometry), Some((1000.0, 1000.0)))
+            .unwrap();
+        super::refresh_plate_focus(&stage.plate.root, &stage.figures).unwrap();
+        assert_eq!(
+            zoom.get_attribute("style").as_deref(),
+            Some("--head-x:70%;--head-y:35%")
+        );
+        stage
+            .focus_speaker(CaptionSpeaker::Npc("missing"), false)
+            .unwrap();
+        assert_eq!(
+            zoom.get_attribute("style").as_deref(),
+            Some("--head-x:70%;--head-y:35%")
+        );
+        stage.focus_speaker(CaptionSpeaker::Unknown, true).unwrap();
+        assert_eq!(
+            zoom.get_attribute("style").as_deref(),
+            Some("--head-x:50%;--head-y:40%")
+        );
+        finish_stage(parent, stage);
     }
 
     fn seed_active_plate(stage: &TvStage) {
@@ -3781,17 +4231,482 @@ mod tests {
         *stage.plate.seen.borrow_mut() = "old-scene".to_owned();
     }
 
+    #[test]
+    fn same_revision_art_delivery_reaches_stage_without_waiting_for_the_director() {
+        super::same_revision_art_delivery_reaches_stage_without_waiting_for_the_director();
+    }
+
+    #[test]
+    fn idle_clock_stale_transition_applies_deferred_art_and_completes_title_entry() {
+        let (parent, stage) = mounted_stage();
+        stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+        stage.root.set_attribute("data-scene-key", "entry").unwrap();
+        *stage.plate.seen.borrow_mut() = "entry".into();
+        stage
+            .root
+            .set_attribute("data-plate-state", "pending")
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-shot", "establishing")
+            .unwrap();
+        stage.narration_over().unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-transition", "0")
+            .unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-transition-at", "10000")
+            .unwrap();
+        assert!(!super::super::live_motion::clock_needs_work(false, None));
+        stage
+            .apply_plate(
+                &PlateView {
+                    state: PlateState::Ready,
+                    url: Some("/gameplay/imagery/ready".into()),
+                    ..Default::default()
+                },
+                "entry",
+            )
+            .unwrap();
+        assert!(stage.plate.deferred.borrow().is_some());
+        assert!(super::super::live_motion::clock_needs_work(
+            false,
+            Some(&stage)
+        ));
+        stage.plate_clock_at(11000.0).unwrap();
+        assert!(stage.plate.deferred.borrow().is_some());
+        stage.plate_clock_at(11100.0).unwrap();
+        assert!(stage.plate.deferred.borrow().is_none());
+        let image = stage
+            .plate
+            .images
+            .iter()
+            .find(|image| {
+                image.get_attribute("data-src").as_deref() == Some("/gameplay/imagery/ready")
+            })
+            .unwrap();
+        let request = image.get_attribute("data-request").unwrap();
+        image.set_attribute("data-decoded", &request).unwrap();
+        stage.plate_clock_at(11200.0).unwrap();
+        assert!(stage.root.has_attribute("data-plate-loaded"));
+        assert_eq!(
+            stage.root.get_attribute("data-shot").as_deref(),
+            Some("plate")
+        );
+        assert!(stage.root.has_attribute("data-narration-over"));
+        assert_eq!(
+            stage.plate.root.get_attribute("data-applied-request"),
+            Some(request)
+        );
+        finish_stage(parent, stage);
+    }
+
     fn finish_stage(parent: web_sys::Element, stage: TvStage) {
         stage.dispose().unwrap();
         parent.remove();
     }
 
     #[test]
+    fn same_scene_art_updates_preserve_entry_deadline_and_first_speaker_waits_for_title_exit() {
+        let (parent, stage) = mounted_stage();
+        stage.root.set_attribute("data-scene-key", "entry").unwrap();
+        stage
+            .root
+            .set_attribute("data-entry-scene-key", "entry")
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-entry-start-ms", "1000")
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-entry-picture-ms", "1500")
+            .unwrap();
+        stage.drawn.set(true);
+        stage
+            .plate
+            .root
+            .set_attribute("data-transition", "0")
+            .unwrap();
+        stage
+            .plate
+            .root
+            .set_attribute("data-transition-at", "1000")
+            .unwrap();
+        stage
+            .set_plate(
+                &PlateView {
+                    state: PlateState::Ready,
+                    url: Some("/gameplay/imagery/ready".into()),
+                    ..Default::default()
+                },
+                "entry",
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            stage.root.get_attribute("data-entry-start-ms").as_deref(),
+            Some("1000")
+        );
+        assert!(!stage.speaker_entry_ready_at(5999.0).unwrap());
+        assert!(!stage.speaker_entry_ready_at(6000.0).unwrap());
+        assert!(stage.root.has_attribute("data-narration-over"));
+        assert!(!stage.speaker_entry_ready_at(7099.0).unwrap());
+        assert!(stage.speaker_entry_ready_at(7100.0).unwrap());
+        // Once a speaker has entered, later art in this same scene cannot reclose its lane.
+        stage
+            .root
+            .set_attribute("data-entry-speaker-shown", "")
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-entry-picture-ms", "8000")
+            .unwrap();
+        assert!(stage.speaker_entry_ready_at(8000.0).unwrap());
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn delayed_plate_and_missing_art_fallback_release_entry_without_reclosing_same_scene() {
+        for picture in [8_000.0, 1_000.0] {
+            let (parent, stage) = mounted_stage();
+            stage.root.set_attribute("data-tv-mode", "scene").unwrap();
+            stage
+                .root
+                .set_attribute("data-entry-start-ms", "1000")
+                .unwrap();
+            stage
+                .root
+                .set_attribute("data-entry-picture-ms", &picture.to_string())
+                .unwrap();
+            assert!(super::super::live_motion::clock_needs_work(
+                false,
+                Some(&stage)
+            ));
+            assert!(!stage.speaker_entry_ready_at(6_000.0).unwrap());
+            let ready_at = if picture == 8_000.0 { 9_100.0 } else { 7_100.0 };
+            assert!(!stage.speaker_entry_ready_at(ready_at - 1.0).unwrap());
+            assert!(stage.speaker_entry_ready_at(ready_at).unwrap());
+            assert!(!super::super::live_motion::clock_needs_work(
+                false,
+                Some(&stage)
+            ));
+            stage
+                .root
+                .set_attribute("data-entry-picture-ms", "15000")
+                .unwrap();
+            assert!(stage.speaker_entry_ready_at(15_000.0).unwrap());
+            finish_stage(parent, stage);
+        }
+    }
+
+    #[test]
+    fn hero_typing_and_speaking_intents_use_measured_plate_heads_above_hidden_figures() {
+        use crate::{
+            plate_layout::Side,
+            presentation::{ActorSlot, PlateGeometry, PlateHero, SceneFamily, StageActor},
+            stage_conductor::IntentKind,
+        };
+
+        let (parent, stage) = mounted_stage();
+        let document = parent.owner_document().unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(&format!(
+            "{}\n{}\n{}",
+            include_str!("live_tv.css"),
+            include_str!("live_stage.css"),
+            include_str!("live_plate.css")
+        )));
+        parent.append_child(&style).unwrap();
+        seed_active_plate(&stage);
+        stage
+            .figures
+            .update(
+                &[StageActor {
+                    slot: ActorSlot::Hero(0),
+                    actor_id: "hero-1".into(),
+                    name: "Brakka".into(),
+                    role: "Hero".into(),
+                    sprite: String::new(),
+                    portrait: String::new(),
+                    hit_points: Some((10, 13)),
+                    speaking: false,
+                    down: false,
+                    live_sprite: None,
+                }],
+                "intent-scene",
+                crate::stage_depth::DEFAULT,
+                SceneFamily::Interior,
+                super::StageMode::Scene,
+            )
+            .unwrap();
+        stage
+            .root
+            .set_attribute("data-battle-state", "absent")
+            .unwrap();
+        stage.root.remove_attribute("data-sound-gate").unwrap();
+        let figure = stage
+            .root
+            .query_selector(".tv-fig[data-slot=hero-1]")
+            .unwrap()
+            .unwrap();
+        let body = figure.query_selector(".tv-fig-body").unwrap().unwrap();
+        let window = web_sys::window().unwrap();
+        let mut previous_left = None;
+        for (head_x, kind) in [(250, IntentKind::Typing), (650, IntentKind::Speaking)] {
+            stage
+                .figures
+                .set_plate(
+                    Some(PlateGeometry {
+                        figure_masks: Vec::new(),
+                        bubble_side: Side::Right,
+                        head_x: 900,
+                        head_y: 200,
+                        head_width: 50,
+                        head_height: 80,
+                        heroes: vec![PlateHero {
+                            index: 0,
+                            bubble_side: Side::Right,
+                            head_x,
+                            head_y: 350,
+                            head_width: 50,
+                            head_height: 80,
+                        }],
+                        actors: vec![],
+                    }),
+                    Some((1920.0, 1080.0)),
+                )
+                .unwrap();
+            stage
+                .figures
+                .set_intent(0, 21, LineState::Composing, kind, "Brakka")
+                .unwrap();
+            let loader = stage
+                .root
+                .query_selector(".tv-plate-bubbles .tv-intent")
+                .unwrap()
+                .unwrap();
+            let host = loader.parent_element().unwrap();
+            assert!(!host.has_attribute("hidden"));
+            assert_eq!(
+                window
+                    .get_computed_style(&body)
+                    .unwrap()
+                    .unwrap()
+                    .get_property_value("visibility")
+                    .unwrap(),
+                "hidden"
+            );
+            assert_eq!(
+                window
+                    .get_computed_style(&loader)
+                    .unwrap()
+                    .unwrap()
+                    .get_property_value("visibility")
+                    .unwrap(),
+                "visible"
+            );
+            let bounds = loader.get_bounding_client_rect();
+            assert!(bounds.width() > 0.0 && bounds.height() > 0.0);
+            assert!(host.has_attribute("data-tail"));
+            if let Some(left) = previous_left {
+                assert!(
+                    bounds.left() > left + 100.0,
+                    "the intent follows the measured head, not the cut-out"
+                );
+            }
+            previous_left = Some(bounds.left());
+            assert_eq!(
+                loader.get_attribute("data-intent").as_deref(),
+                Some(if matches!(kind, IntentKind::Speaking) {
+                    "speaking"
+                } else {
+                    "typing"
+                })
+            );
+        }
+        stage
+            .figures
+            .set_intent(0, 21, LineState::Done, IntentKind::Speaking, "Brakka")
+            .unwrap();
+        assert!(stage.root.query_selector(".tv-intent").unwrap().is_none());
+        finish_stage(parent, stage);
+    }
+
+    #[test]
+    fn six_hero_scene_renders_every_party_card_and_figure_and_hud_card() {
+        use super::{TvMember, TvMode, TvModel};
+        use crate::presentation::{ActorSlot, SceneFamily, StageActor};
+        let (parent, stage) = mounted_stage();
+        let document = parent.owner_document().unwrap();
+        let style = document.create_element("style").unwrap();
+        style.set_text_content(Some(&format!(
+            "{}\n{}\n{}",
+            include_str!("live_tv.css"),
+            include_str!("live_stage.css"),
+            include_str!("live_plate.css")
+        )));
+        parent.append_child(&style).unwrap();
+        let cast = (0..6)
+            .map(|index| StageActor {
+                slot: ActorSlot::Hero(index),
+                actor_id: String::new(),
+                name: format!("Accepted hero {}", index + 1),
+                role: "Hero".into(),
+                sprite: String::new(),
+                portrait: format!(
+                    "/gameplay/imagery/{}",
+                    char::from(b'a' + index as u8).to_string().repeat(64)
+                ),
+                hit_points: Some((10, 13)),
+                speaking: false,
+                down: false,
+                live_sprite: None,
+            })
+            .collect::<Vec<_>>();
+        let model = TvModel {
+            mode: TvMode::Scene,
+            title: "Six heroes".into(),
+            lede: String::new(),
+            speaker: None,
+            room_code: "SIX".into(),
+            join_host: "table.test".into(),
+            party: cast
+                .iter()
+                .map(|hero| TvMember {
+                    name: hero.name.clone(),
+                    status: "HP 10/13".into(),
+                    ready: true,
+                })
+                .collect(),
+            art: String::new(),
+            art_fallback: "",
+            art_source: df_observe::presentation::VisualSource::Other,
+            cast,
+            place: "A quiet room".into(),
+            rules_note: String::new(),
+            choices: Vec::new(),
+            choice_hints_hidden: true,
+            family: SceneFamily::Interior,
+            floor: crate::stage_depth::DEFAULT,
+            scene_key: "six-hero-scene".into(),
+            visual_scene_id: "six-hero-scene".into(),
+            home: None,
+            home_video: None,
+            plate: PlateView::default(),
+            adventure_name: String::new(),
+            narrated: false,
+            end: None,
+            check: None,
+        };
+        stage.update(&model).unwrap();
+        // A same-phase update must retain all seats and their standing places.
+        stage.update(&model).unwrap();
+        assert_eq!(
+            stage
+                .party
+                .query_selector_all(".tv-card:not([hidden])")
+                .unwrap()
+                .length(),
+            6
+        );
+        assert_eq!(
+            stage
+                .root
+                .query_selector_all(".tv-fig[data-slot^=hero][data-present=true]")
+                .unwrap()
+                .length(),
+            6
+        );
+        assert_eq!(
+            stage
+                .root
+                .query_selector_all(".tv-hud-card[data-slot^=hero][data-present=true]")
+                .unwrap()
+                .length(),
+            6
+        );
+        for (index, card) in stage.cards.iter().enumerate() {
+            assert_eq!(card.name.text_content().unwrap(), model.party[index].name);
+            assert_eq!(card.status.text_content().as_deref(), Some("HP 10/13"));
+        }
+        stage
+            .lower_third(
+                1,
+                crate::presentation::CaptionSpeaker::Hero(5),
+                "Accepted hero 6",
+                "All six of us are here.",
+                LineState::Speaking,
+            )
+            .unwrap();
+        let mut previous_right = 0.0;
+        for card in &stage.cards {
+            let bounds = card.root.get_bounding_client_rect();
+            assert!(bounds.width() > 0.0);
+            assert!(bounds.left() >= previous_right);
+            previous_right = bounds.right();
+        }
+        let party = stage.party.get_bounding_client_rect();
+        let dialogue = stage.lower.root.get_bounding_client_rect();
+        assert!(
+            dialogue.bottom() <= party.top(),
+            "dialogue must clear the compact party strip"
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
     fn ready_plate_suppresses_stale_loading_state() {
-        assert!(!plate_loading_visible(true, true, false));
-        assert!(!plate_loading_visible(true, false, true));
-        assert!(plate_loading_visible(false, true, false));
-        assert!(plate_loading_visible(false, false, true));
+        assert!(!plate_loading_visible(Some("ready"), true));
+        assert!(!plate_loading_visible(Some("failed"), true));
+        assert!(plate_loading_visible(Some("pending"), true));
+        assert!(!plate_loading_visible(Some("pending"), false));
+    }
+
+    #[test]
+    fn terminal_plate_clears_loading_before_an_active_dissolve_finishes() {
+        for state in [PlateState::Ready, PlateState::Failed] {
+            let (parent, stage) = mounted_stage();
+            stage.root.set_attribute("data-scene-key", "quay").unwrap();
+            stage
+                .apply_plate(
+                    &PlateView {
+                        state: PlateState::Pending,
+                        update_pending: true,
+                        ..Default::default()
+                    },
+                    "quay",
+                )
+                .unwrap();
+            assert!(stage.root.has_attribute("data-plate-loading"));
+            stage
+                .plate
+                .root
+                .set_attribute("data-transition", "focus")
+                .unwrap();
+            stage.plate.root.set_attribute("data-loading", "").unwrap();
+            stage
+                .apply_plate(
+                    &PlateView {
+                        state,
+                        // Old same-revision metadata and client decode cannot extend this notice.
+                        update_pending: true,
+                        url: (state == PlateState::Ready)
+                            .then(|| "/gameplay/imagery/ready".to_owned()),
+                        ..Default::default()
+                    },
+                    "quay",
+                )
+                .unwrap();
+            assert!(!stage.root.has_attribute("data-plate-loading"));
+            assert!(!stage.root.has_attribute("data-plate-server-pending"));
+            assert!(stage.plate.deferred.borrow().is_some());
+            finish_stage(parent, stage);
+        }
     }
 
     #[test]
@@ -3833,6 +4748,7 @@ mod tests {
             .figures
             .set_plate(
                 Some(PlateGeometry {
+                    figure_masks: Vec::new(),
                     actors: Vec::new(),
                     bubble_side: crate::plate_layout::Side::Right,
                     head_x: 500,
@@ -4060,6 +4976,7 @@ mod tests {
             )
             .unwrap();
         let mut geometry = PlateGeometry {
+            figure_masks: Vec::new(),
             bubble_side: Side::Right,
             head_x: 400,
             head_y: 300,
@@ -4562,10 +5479,7 @@ mod tests {
                 .as_deref(),
             Some("A letter lies on the table.")
         );
-        assert_eq!(
-            stage.narration.text_content().as_deref(),
-            Some("A reply has arrived.")
-        );
+        assert_eq!(stage.narration.text_content().as_deref(), Some(""));
         stage
             .narrator_line(2, LineState::Opening, "The current scene speaks.")
             .unwrap();
@@ -5024,6 +5938,76 @@ mod tests {
     }
 
     #[test]
+    fn roll_and_figureless_reply_retire_old_narration_without_resurrecting_it() {
+        use super::super::live_stage::{BubbleKind, CheckDisplay, LineBubble};
+        let (parent, stage) = mounted_stage();
+        stage
+            .narrator_line(21, LineState::Opening, "Finn has no coin you could lift.")
+            .unwrap();
+        stage
+            .narrator_line(21, LineState::Done, "Finn has no coin you could lift.")
+            .unwrap();
+        stage
+            .begin_check(
+                &CheckDisplay {
+                    sequence: 22,
+                    hero_name: "Sylvara".into(),
+                    intention: "Ask about the wager".into(),
+                    ability_skill: "Charisma".into(),
+                    faces: vec![(12, true)],
+                    roll_mode: 0,
+                    modifier: 0,
+                    total: 12,
+                    succeeded: true,
+                    finding: "Dain answers.".into(),
+                },
+                false,
+            )
+            .unwrap();
+        stage.finish_check(22).unwrap();
+        assert_eq!(stage.narration.text_content().as_deref(), Some(""));
+        stage
+            .narrator_line(21, LineState::Done, "Finn has no coin you could lift.")
+            .unwrap();
+        assert_eq!(stage.narration.text_content().as_deref(), Some(""));
+        stage
+            .character_line(
+                usize::MAX,
+                24,
+                LineState::Opening,
+                &LineBubble {
+                    kind: BubbleKind::Speech,
+                    speaker_actor: crate::presentation::CaptionSpeaker::Unknown,
+                    speaker: "Dain Rusk",
+                    text: "A widow's a grim wager.",
+                    voiced: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            stage.lower.name.text_content().as_deref(),
+            Some("Dain Rusk")
+        );
+        assert_eq!(
+            stage.lower.text.text_content().as_deref(),
+            Some("A widow's a grim wager.")
+        );
+        stage.set_speaker("").unwrap();
+        assert_eq!(stage.narration.text_content().as_deref(), Some(""));
+        stage
+            .narrator_line(25, LineState::Opening, "The newest narration.")
+            .unwrap();
+        stage
+            .narrator_line(21, LineState::Closing, "Finn has no coin you could lift.")
+            .unwrap();
+        assert_eq!(
+            stage.narration.text_content().as_deref(),
+            Some("The newest narration.")
+        );
+        finish_stage(parent, stage);
+    }
+
+    #[test]
     fn completed_narration_does_not_overlap_a_character_subtitle() {
         let (parent, stage) = mounted_stage();
         let style_node = super::node(
@@ -5071,5 +6055,68 @@ mod tests {
     fn completed_narration_stays_visible_while_the_table_waits() {
         let css = include_str!("live_stage.css");
         assert!(css.contains(".tv-dm[data-line-state=done] .tv-narration:not(:empty)"));
+    }
+}
+
+/// Executes the real WASM DOM boundary in the owned, provider-free browser fixture.
+#[cfg(any(test, feature = "public-scene-delivery-fixture"))]
+#[cfg_attr(
+    feature = "public-scene-delivery-fixture",
+    wasm_bindgen::prelude::wasm_bindgen
+)]
+pub fn party_mural_dom_check() -> Result<String, JsValue> {
+    let document = web_sys::window()
+        .ok_or_else(|| JsValue::from_str("window absent"))?
+        .document()
+        .ok_or_else(|| JsValue::from_str("document absent"))?;
+    let parent = document.create_element("section")?;
+    document
+        .body()
+        .ok_or_else(|| JsValue::from_str("body absent"))?
+        .append_child(&parent)?;
+    let result = (|| {
+        let stage = TvStage::mount(&document, &parent)?;
+        let url = format!("/gameplay/imagery/{}", "a".repeat(64));
+        let contents = serde_json::json!({"party_mural":{"state":"ready","url":url}}).to_string();
+        stage.update_mural_wire(&contents)?;
+        stage.update_mural_wire(&contents)?;
+        let mural = stage
+            .root
+            .query_selector(":scope > .tv-mural")?
+            .ok_or_else(|| JsValue::from_str("direct mural layer absent"))?;
+        if mural.get_attribute("aria-hidden").as_deref() != Some("true")
+            || stage.mural_art.get_attribute("alt").as_deref() != Some("")
+            || stage.mural_art.get_attribute("src").as_deref() != Some(&url)
+            || stage.root.get_attribute("data-mural").as_deref() != Some("ready")
+        {
+            return Err(JsValue::from_str("ready mural DOM mismatch"));
+        }
+        if stage.root.query_selector_all(".tv-mural")?.length() != 1 {
+            return Err(JsValue::from_str("mural duplicated across repeated views"));
+        }
+        for contents in [
+            "{\"party_mural\":{\"state\":\"pending\",\"url\":\"\"}}",
+            "{\"party_mural\":{\"state\":\"failed\",\"url\":\"\"}}",
+            "{\"party_mural\":{\"state\":\"ready\",\"url\":\"https://elsewhere/image\"}}",
+            "{}",
+        ] {
+            stage.update_mural_wire(contents)?;
+            if stage.root.has_attribute("data-mural") || stage.mural_art.has_attribute("src") {
+                return Err(JsValue::from_str("unready or invalid mural retained"));
+            }
+        }
+        stage.update_mural_wire(&contents)?;
+        stage.dispose()?;
+        Ok("party mural WASM DOM: ready, repeated view, pending, failed, invalid URL, missing member and ready recovery passed".to_owned())
+    })();
+    parent.remove();
+    result
+}
+
+#[cfg(test)]
+mod mural_dom_tests {
+    #[test]
+    fn party_mural_sets_one_image_and_stage_attribute_from_validated_server_contents() {
+        super::party_mural_dom_check().unwrap();
     }
 }

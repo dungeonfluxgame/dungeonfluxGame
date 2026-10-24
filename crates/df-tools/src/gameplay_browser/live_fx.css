@@ -54,16 +54,25 @@
 .tv-card{overflow:hidden}
 .tv-card[data-state=empty]{animation:df-seat-breathe 4.6s ease-in-out infinite}
 @keyframes df-seat-breathe{0%,100%{opacity:.5}50%{opacity:.72}}
-.tv-card[data-state=creating]::after{content:'';position:absolute;top:0;bottom:0;left:0;width:45%;pointer-events:none;background:linear-gradient(100deg,transparent,#f0d9a866,transparent);animation:df-forge 2s linear infinite}
-@keyframes df-forge{from{transform:translateX(-120%)}to{transform:translateX(320%)}}
-.tv-card[data-state=creating]{box-shadow:0 0 calc(var(--u)*1.4) #e0b87755,0 calc(var(--u)*1) calc(var(--u)*3) #000a}
+/* A seat whose hero is being made (owner 2026-10-24: "more classy"): one calm, deliberate motion
+   instead of four busy ones. The die rests, dimmed, with an ember breathing in it; a single fine
+   gold arc travels the portrait's rim; a soft light passes over the card every few seconds; the
+   name sits in italic and the status line breathes. Reduced motion keeps the still die and arc. */
+.tv-card[data-state=creating]{box-shadow:0 0 calc(var(--u)*1.1) #e0b87733,0 calc(var(--u)*1) calc(var(--u)*3) #000a}
+.tv-card[data-state=creating]::after{content:'';position:absolute;inset:0;width:auto;pointer-events:none;background:linear-gradient(105deg,transparent 30%,#f0d9a81f 46%,#fff1d22e 50%,#f0d9a81f 54%,transparent 70%);background-size:260% 100%;background-position:130% 0;animation:df-forge-sheen 7s cubic-bezier(.45,0,.25,1) infinite}
+@keyframes df-forge-sheen{0%,35%{background-position:130% 0}100%{background-position:-130% 0}}
 .tv-card[data-state=creating] .tv-portrait-glyph{display:none}
-.tv-card[data-state=creating] .tv-portrait-img{background:url(/assets/ui/generated/d20) center/72% no-repeat;animation:df-turn 2.6s linear infinite}
-.tv-card[data-state=creating] .tv-portrait::before{content:'';position:absolute;inset:0;z-index:1;background:radial-gradient(circle at 18% 30%,#ffd98a 0 .12vw,transparent .3vw),radial-gradient(circle at 80% 24%,#ffd98a 0 .1vw,transparent .28vw),radial-gradient(circle at 64% 82%,#ffd98a 0 .12vw,transparent .3vw);animation:df-sparks 1.3s ease-in-out infinite}
+.tv-card[data-state=creating] .tv-portrait-img{background:url(/assets/ui/generated/d20) center/64% no-repeat;filter:saturate(.75) brightness(.8) drop-shadow(0 0 .3vw #e8b46a00);animation:df-forge-ember 3.6s ease-in-out infinite}
+@keyframes df-forge-ember{0%,100%{filter:saturate(.75) brightness(.78) drop-shadow(0 0 .2vw #e8b46a22)}50%{filter:saturate(.95) brightness(1.02) drop-shadow(0 0 .9vw #e8b46a99)}}
+.tv-card[data-state=creating] .tv-portrait::before{content:'';position:absolute;inset:0;z-index:1;border-radius:inherit;pointer-events:none;padding:max(1.5px,calc(var(--u)*.09));background:conic-gradient(from var(--forge-angle,0deg),transparent 0 70%,#f3d79b 86%,#fff1d2 90%,transparent 92%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:df-forge-arc 9s linear infinite}
+@property --forge-angle{syntax:'<angle>';inherits:false;initial-value:0deg}
+@keyframes df-forge-arc{to{--forge-angle:360deg}}
+.tv-card[data-state=creating] .tv-member-name{font-style:italic;letter-spacing:.01em}
+.tv-card[data-state=creating] .tv-member-status{animation:df-forge-status 3.6s ease-in-out infinite}
+@keyframes df-forge-status{0%,100%{opacity:.6}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.tv-card[data-state=creating]::after,.tv-card[data-state=creating] .tv-portrait-img,.tv-card[data-state=creating] .tv-member-status{animation:none}.tv-card[data-state=creating] .tv-portrait::before{animation-duration:40s}}
 @keyframes df-turn{to{transform:rotate(360deg)}}
-@keyframes df-sparks{0%,100%{opacity:.15}50%{opacity:1}}
 .tv-card[data-state=creating] .tv-member-role{display:none}
-.tv-card[data-state=creating] .tv-member-name::after{content:'...';display:inline-block;clip-path:inset(0 100% 0 0);animation:df-dots 1.4s steps(4) infinite}
 @keyframes df-dots{to{clip-path:inset(0 0 0 0)}}
 .tv-card[data-reveal] .tv-portrait{animation:df-reveal .9s cubic-bezier(.2,1.2,.4,1) backwards}
 .tv-card[data-reveal]::before{content:'';position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 calc(var(--u)*2.4) #ffe29a;animation:df-gold-flash 1.2s ease-out both}

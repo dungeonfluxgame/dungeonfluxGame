@@ -40,9 +40,9 @@ use std::{cell::Cell, time::Duration};
 use web_sys::Event;
 
 const GENERATED: &str = live_tv::GENERATED;
-const HEROES: usize = 2;
+const HEROES: usize = 6;
 const SLOTS: usize = HEROES + MAX_NPCS;
-/// Two hero cards and the foe's.
+/// Every hero has a HUD card, followed by the foe's.
 const HUD_CARDS: usize = HEROES + 1;
 const FOE_CARD: usize = HEROES;
 /// Hit-point fraction, in percent, under which a figure breathes heavier and shows a vignette.
@@ -298,6 +298,8 @@ fn slot_position(position: usize) -> f32 {
         0.15
     } else if position == 1 {
         0.87
+    } else if position < HEROES {
+        [0.25, 0.75, 0.37, 0.63][position - 2]
     } else {
         0.68
     }
@@ -717,7 +719,8 @@ impl Figures {
                     }
                     let depth = match (arrange, role) {
                         ("combat", _) => Depth::Flat,
-                        (_, None) => Depth::Near,
+                        (_, None) if position < 2 => Depth::Near,
+                        (_, None) => Depth::Mid,
                         ("stage", Some("back")) => Depth::Far,
                         _ => Depth::Mid,
                     };
@@ -1649,6 +1652,83 @@ impl Figures {
         }
     }
 
+    /// The cinematic letterbox bars (the stage's `::before`/`::after`, live_tv.css) are drawn
+    /// over the picture, so bubbles and panels keep to the band between them (owner 2026-10-24:
+    /// a hero's bubble ran under the top bar). Zero while the stage is full-frame.
+    fn letterbox_bar_height(&self, window: &web_sys::Window) -> f64 {
+        let Some(stage) = self.root.parent_element() else {
+            return 0.0;
+        };
+        let Ok(Some(style)) = window.get_computed_style_with_pseudo_elt(&stage, "::before") else {
+            return 0.0;
+        };
+        let drawn = style
+            .get_property_value("content")
+            .is_ok_and(|content| !content.is_empty() && content != "none");
+        if !drawn {
+            return 0.0;
+        }
+        style
+            .get_property_value("height")
+            .ok()
+            .and_then(|height| height.trim_end_matches("px").parse::<f64>().ok())
+            .filter(|height| height.is_finite() && *height > 0.0)
+            .unwrap_or(0.0)
+    }
+
+    /// A hero without a measured head uses a named panel in their own part of the free band.
+    fn place_hero_panel(&self, speaker: &Figure, index: usize) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let (Some(width), Some(height)) = (
+            window.inner_width().ok().and_then(|value| value.as_f64()),
+            window.inner_height().ok().and_then(|value| value.as_f64()),
+        ) else {
+            return;
+        };
+        let host = &speaker.bubbles;
+        if !host
+            .parent_element()
+            .is_some_and(|parent| parent.is_same_node(Some(self.plate_bubbles.as_ref())))
+        {
+            let _moved = self.plate_bubbles.append_child(host);
+        }
+        let _shown = host.remove_attribute("hidden");
+        let _tail = host.remove_attribute("data-tail");
+        let _reason = host.set_attribute("data-anchor-fallback", "named-hero-panel");
+        let _label = host.set_attribute("aria-label", &speaker.name_text.borrow());
+        let portal = self.plate_bubbles.get_bounding_client_rect();
+        let scale_x = if self.plate_bubbles.client_width() > 0 && portal.width() > 0.0 {
+            portal.width() / f64::from(self.plate_bubbles.client_width())
+        } else {
+            1.0
+        };
+        let scale_y = if self.plate_bubbles.client_height() > 0 && portal.height() > 0.0 {
+            portal.height() / f64::from(self.plate_bubbles.client_height())
+        } else {
+            1.0
+        };
+        let bar = self.letterbox_bar_height(&window);
+        let column = width / HEROES as f64;
+        let panel_width = (column - 16.0).max(1.0);
+        let _measure = host.set_attribute(
+            "style",
+            &format!("left:0;top:0;right:auto;width:{}px", panel_width / scale_x),
+        );
+        let top = (height - bar - 16.0 - host.get_bounding_client_rect().height()).max(bar + 16.0);
+        let _placed = host.set_attribute(
+            "style",
+            &format!(
+                "left:{}px;top:{}px;right:auto;width:{}px;max-height:{}px;overflow:auto",
+                (column * index as f64 + 8.0 - portal.left()) / scale_x,
+                (top - portal.top()) / scale_y,
+                panel_width / scale_x,
+                (height - 2.0 * bar - 32.0).max(1.0) / scale_y,
+            ),
+        );
+    }
+
     /// Rules findings stay readable even when this bitmap has no safe character anchor.
     fn place_check_panel(&self, speaker: &Figure) {
         let Some(window) = web_sys::window() else {
@@ -1726,8 +1806,9 @@ impl Figures {
                 ),
             );
             let size = host.get_bounding_client_rect();
+            let bar = self.letterbox_bar_height(&window);
             if let Some(rect) = plate_layout::place_panel(
-                Rect::new(0.0, 0.0, width, height),
+                Rect::new(0.0, bar, width, height - bar),
                 (size.width(), size.height()),
                 &avoid,
             ) {
@@ -1801,6 +1882,15 @@ impl Figures {
         // PLAY-V09: over a scene plate the bubble stands beside the speaker's head in the picture.
         let geometry = self.plate.borrow().clone();
         if geometry.is_none() && self.plate_size.get().is_some() {
+            if let Some(index) = self
+                .figures
+                .iter()
+                .take(HEROES)
+                .position(|figure| figure.root.is_same_node(Some(speaker.root.as_ref())))
+            {
+                self.place_hero_panel(speaker, index);
+                return;
+            }
             let _hidden = speaker.bubbles.set_attribute("hidden", "");
             let _reason = speaker
                 .bubbles
@@ -1826,7 +1916,8 @@ impl Figures {
             .ok()
             .and_then(|value| value.as_f64())
             .unwrap_or(1080.0);
-        let screen = (0.0, 0.0, width, height);
+        let bar = self.letterbox_bar_height(&window);
+        let screen = (0.0, bar, width, height - bar);
         let mut avoid: Vec<(f64, f64, f64, f64)> = Vec::new();
         let (left, top, right, bottom) = rectangle(&speaker.body);
         let (span, tall) = (right - left, bottom - top);
@@ -1950,6 +2041,11 @@ impl Figures {
         self.set_plate(geometry, picture_size)
     }
 
+    /// Geometry of the displayed bitmap, shared by bubble anchors and speaker focus.
+    pub(super) fn plate_geometry(&self) -> Option<(PlateGeometry, (f64, f64))> {
+        Some((self.plate.borrow().clone()?, self.plate_size.get()?))
+    }
+
     /// PLAY-V09: tells the stage that a scene plate with this layout covers the cut-outs (or, with
     /// `None`, that none does). The bubbles then stand in the plate's own layer and are placed
     /// from the layout; without a plate they return to their figures.
@@ -2055,7 +2151,8 @@ impl Figures {
             dimension(window.inner_width(), 1920.0),
             dimension(window.inner_height(), 1080.0),
         );
-        let screen = Rect::new(0.0, 0.0, width, height);
+        let bar = self.letterbox_bar_height(&window);
+        let screen = Rect::new(0.0, bar, width, height - bar);
         let portal = self.plate_bubbles.get_bounding_client_rect();
         let scale = |screen: f64, css: i32| {
             if screen > 0.0 && css > 0 {
@@ -2104,52 +2201,124 @@ impl Figures {
             .strip_prefix("hero-")
             .and_then(|number| number.parse::<usize>().ok())
             .and_then(|number| number.checked_sub(1));
-        let (head, side, mut avoid) = match hero_index {
-            Some(index) => match geometry.heroes.iter().find(|hero| hero.index == index) {
-                Some(hero) => (
-                    frame.head_box(hero.head_x, hero.head_y, hero.head_width, hero.head_height),
-                    hero.bubble_side,
-                    vec![speaker_head],
-                ),
-                None => {
-                    let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
-                    let _reason = bubble_owner
-                        .bubbles
-                        .set_attribute("data-anchor-fallback", "missing-hero-head");
-                    return;
-                }
-            },
-            None => {
-                let id = bubble_owner
-                    .root
-                    .get_attribute("data-actor-id")
-                    .unwrap_or_default();
-                let Some(actor) = geometry
-                    .actors
-                    .iter()
-                    .find(|actor| actor.actor_id == id && !id.is_empty())
-                else {
-                    let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
-                    let _reason = bubble_owner
-                        .bubbles
-                        .set_attribute("data-anchor-fallback", "missing-actor-head");
-                    return;
-                };
-                let _reason = bubble_owner
-                    .bubbles
-                    .remove_attribute("data-anchor-fallback");
-                (
+        let actor_id = bubble_owner
+            .root
+            .get_attribute("data-actor-id")
+            .unwrap_or_default();
+        let mask = geometry.figure_mask(hero_index, &actor_id);
+        let (head, side, mut avoid, head_top) = if let Some(mask) = mask {
+            let head_width =
+                ((mask.bounds[2] - mask.bounds[0]) * 1000 / mask.source_width).clamp(30, 140);
+            let head_height = (head_width * mask.source_width / mask.source_height).clamp(40, 180);
+            let measured = geometry
+                .heroes
+                .iter()
+                .find(|hero| Some(hero.index) == hero_index)
+                .map(|hero| {
+                    frame.head_box(hero.head_x, hero.head_y, hero.head_width, hero.head_height)
+                })
+                .or_else(|| {
+                    geometry
+                        .actors
+                        .iter()
+                        .find(|actor| hero_index.is_none() && actor.actor_id == actor_id)
+                        .map(|actor| {
+                            frame.head_box(
+                                actor.head_x,
+                                actor.head_y,
+                                actor.head_width,
+                                actor.head_height,
+                            )
+                        })
+                });
+            (
+                measured.unwrap_or_else(|| {
                     frame.head_box(
-                        actor.head_x,
-                        actor.head_y,
-                        actor.head_width,
-                        actor.head_height,
+                        mask.head_top[0],
+                        mask.head_top[1] + head_height / 2,
+                        head_width,
+                        head_height,
+                    )
+                }),
+                mask.free_side,
+                vec![speaker_head],
+                mask.head_top,
+            )
+        } else {
+            match hero_index {
+                Some(index) => match geometry.heroes.iter().find(|hero| hero.index == index) {
+                    Some(hero) => (
+                        frame.head_box(hero.head_x, hero.head_y, hero.head_width, hero.head_height),
+                        hero.bubble_side,
+                        vec![speaker_head],
+                        [
+                            hero.head_x,
+                            hero.head_y.saturating_sub(hero.head_height / 2),
+                        ],
                     ),
-                    actor.bubble_side,
-                    Vec::new(),
-                )
+                    None => {
+                        self.place_hero_panel(bubble_owner, index);
+                        return;
+                    }
+                },
+                None => {
+                    let id = bubble_owner
+                        .root
+                        .get_attribute("data-actor-id")
+                        .unwrap_or_default();
+                    let Some(actor) = geometry
+                        .actors
+                        .iter()
+                        .find(|actor| actor.actor_id == id && !id.is_empty())
+                    else {
+                        let _hidden = bubble_owner.bubbles.set_attribute("hidden", "");
+                        let _reason = bubble_owner
+                            .bubbles
+                            .set_attribute("data-anchor-fallback", "missing-actor-head");
+                        return;
+                    };
+                    let _reason = bubble_owner
+                        .bubbles
+                        .remove_attribute("data-anchor-fallback");
+                    (
+                        frame.head_box(
+                            actor.head_x,
+                            actor.head_y,
+                            actor.head_width,
+                            actor.head_height,
+                        ),
+                        actor.bubble_side,
+                        Vec::new(),
+                        [
+                            actor.head_x,
+                            actor.head_y.saturating_sub(actor.head_height / 2),
+                        ],
+                    )
+                }
             }
         };
+        let _reason = bubble_owner
+            .bubbles
+            .remove_attribute("data-anchor-fallback");
+        let _source = bubble_owner.bubbles.set_attribute(
+            "data-anchor-source",
+            if mask.is_some() {
+                "sam31-mask"
+            } else {
+                "named-head"
+            },
+        );
+        let crown = crate::presentation::plate_head_top_anchor(&frame, head_top);
+        // Keep the head's horizontal span for the placement search's distance bound, while
+        // moving its vertical target to the crown. The whole head remains an obstacle below.
+        let anchor = Rect::new(
+            crown.left - head.width() / 2.0,
+            crown.top,
+            crown.right + head.width() / 2.0,
+            crown.bottom,
+        );
+        avoid.push(head);
+        fallback_avoid.push(head);
         for hero in &geometry.heroes {
             let box_ = frame.head_box(hero.head_x, hero.head_y, hero.head_width, hero.head_height);
             if Some(hero.index) != hero_index {
@@ -2239,8 +2408,14 @@ impl Figures {
                 f64::from(container.client_width()) * scale_x,
                 f64::from(container.client_height()) * scale_y,
             );
-            placement =
-                plate_layout::place_bubble_near_head(screen, head, side, size, tail_offset, &avoid);
+            placement = plate_layout::place_bubble_near_head(
+                screen,
+                anchor,
+                side,
+                size,
+                tail_offset,
+                &avoid,
+            );
             if placement.is_some() {
                 break;
             }
@@ -2253,7 +2428,7 @@ impl Figures {
             );
             placement = plate_layout::place_bubble_near_head(
                 screen,
-                head,
+                anchor,
                 side,
                 size,
                 tail_offset,
@@ -2265,7 +2440,7 @@ impl Figures {
             return;
         };
         let _set = container.set_attribute("data-side", placed.side.name());
-        let (edge, tail_x, tail_y) = placed.tail(head);
+        let (edge, tail_x, tail_y) = placed.tail(anchor);
         let _set = container.set_attribute("data-tail", edge);
         let _set = container.set_attribute(
             "style",
@@ -2355,6 +2530,7 @@ impl Figures {
                 loader.set_attribute("data-managed", "")?;
                 loader.set_attribute("data-hero", hero)?;
                 loader.set_attribute("aria-hidden", "true")?;
+                node(&self.document, &loader, "span", "tv-intent-name", hero)?;
                 let dots = node(&self.document, &loader, "span", "tv-intent-dots", "")?;
                 for _ in 0..3 {
                     node(&self.document, &dots, "i", "", "")?;
@@ -2887,6 +3063,21 @@ mod tests {
     use df_observe::presentation::ComponentPhase;
 
     #[test]
+    fn six_hero_standing_places_and_the_npc_slots_are_distinct() {
+        use super::{ActorSlot, HEROES, MAX_NPCS, index, slot_at, slot_name};
+        assert_eq!(HEROES, 6);
+        for position in 0..HEROES + MAX_NPCS {
+            assert_eq!(index(slot_at(position)), Some(position));
+        }
+        for position in 0..6 {
+            assert_eq!(index(ActorSlot::Hero(position)), Some(position));
+            assert_eq!(slot_name(position), format!("hero-{}", position + 1));
+        }
+        assert_eq!(index(ActorSlot::Hero(6)), None);
+        assert_eq!(index(ActorSlot::Npc(0)), Some(6));
+    }
+
+    #[test]
     fn check_without_image_heads_has_a_measured_named_panel_with_roll_and_finding() {
         use super::{CheckDisplay, Figures};
         let window = web_sys::window().unwrap();
@@ -3129,6 +3320,73 @@ mod tests {
     }
 
     #[test]
+    fn all_six_missing_hero_heads_keep_named_intent_panels_visible() {
+        use super::{Figures, HEROES};
+        use crate::{
+            plate_layout::Side, presentation::PlateGeometry, stage_conductor::IntentKind,
+            stage_machines::LineState,
+        };
+        let document = web_sys::window().unwrap().document().unwrap();
+        let parent = document.create_element("section").unwrap();
+        document.body().unwrap().append_child(&parent).unwrap();
+        let figures = Figures::mount(&document, &parent).unwrap();
+        figures
+            .set_plate(
+                Some(PlateGeometry {
+                    figure_masks: Vec::new(),
+                    actors: Vec::new(),
+                    bubble_side: Side::Right,
+                    head_x: 500,
+                    head_y: 200,
+                    head_width: 100,
+                    head_height: 100,
+                    heroes: Vec::new(),
+                }),
+                Some((1920.0, 1080.0)),
+            )
+            .unwrap();
+        let mut positions = Vec::new();
+        for index in 0..HEROES {
+            let hero = &figures.figures[index];
+            let name = format!("Hero {}", index + 1);
+            *hero.name_text.borrow_mut() = name.clone();
+            figures
+                .set_intent(
+                    index,
+                    index as u64 + 1,
+                    LineState::Composing,
+                    IntentKind::Typing,
+                    &name,
+                )
+                .unwrap();
+            assert!(!hero.bubbles.has_attribute("hidden"));
+            assert_eq!(
+                hero.bubbles
+                    .get_attribute("data-anchor-fallback")
+                    .as_deref(),
+                Some("named-hero-panel")
+            );
+            assert!(hero.bubbles.text_content().unwrap().contains(&name));
+            positions.push(hero.bubbles.get_attribute("style").unwrap());
+            figures
+                .set_intent(
+                    index,
+                    index as u64 + 1,
+                    LineState::Composing,
+                    IntentKind::Speaking,
+                    &name,
+                )
+                .unwrap();
+            assert!(!hero.bubbles.has_attribute("hidden"));
+        }
+        positions.sort();
+        positions.dedup();
+        assert_eq!(positions.len(), HEROES);
+        figures.dispose();
+        parent.remove();
+    }
+
+    #[test]
     fn unplaceable_plate_line_uses_named_lane_and_next_fitting_line_restores_host() {
         use super::{BubbleKind, Figures, LineBubble};
         use crate::{plate_layout::Side, presentation::PlateGeometry, stage_machines::LineState};
@@ -3143,13 +3401,21 @@ mod tests {
         figures
             .set_plate(
                 Some(PlateGeometry {
+                    figure_masks: Vec::new(),
                     actors: Vec::new(),
                     bubble_side: Side::Right,
                     head_x: 500,
                     head_y: 200,
                     head_width: 100,
                     head_height: 100,
-                    heroes: vec![],
+                    heroes: vec![crate::presentation::PlateHero {
+                        index: 0,
+                        bubble_side: Side::Right,
+                        head_x: 100,
+                        head_y: 600,
+                        head_width: 100,
+                        head_height: 100,
+                    }],
                 }),
                 Some((1920.0, 1080.0)),
             )

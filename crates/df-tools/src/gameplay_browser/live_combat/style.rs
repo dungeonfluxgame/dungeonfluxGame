@@ -278,13 +278,13 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 @S[data-role=display] .combat-roll-panel>.tv-dice .tv-die{overflow:visible;flex:none}
 @S[data-role=display] .combat-roll:nth-child(n+4){display:none}
 @S[data-role=display] .combat-initiative{grid-area:cast;padding:calc(var(--u)*.8) calc(var(--u)*1.2)}
-@S[data-role=display] .combat-actors{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*1.2)}
-@S[data-role=display] .combat-actor{min-width:0;gap:calc(var(--u)*1);padding:calc(var(--u)*.5) calc(var(--u)*.7);border:1px solid #b69b6640;border-radius:calc(var(--u)*.4);background:#ffffff08}
+@S[data-role=display] .combat-actors{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:calc(var(--u)*1.2)}
+@S[data-role=display] .combat-actor{min-width:0;gap:calc(var(--u)*.5);padding:calc(var(--u)*.5);border:1px solid #b69b6640;border-radius:calc(var(--u)*.4);background:#ffffff08}
 @S[data-role=display] .combat-actor:first-child{padding-top:calc(var(--u)*.5);border-top:1px solid #b69b6640}
 @S[data-role=display] .combat-actor[data-active=true]{border-color:#f0c985;background:linear-gradient(135deg,#d3a2594d,#d3a25914);box-shadow:0 0 calc(var(--u)*1.4) #e0b87755}
-@S[data-role=display] .combat-actor .combat-initiative-value{flex:none;width:calc(var(--u)*5.4);height:calc(var(--u)*5.4);min-width:0;max-width:none;padding:0;font-size:calc(var(--u)*2.4)}
-@S[data-role=display] .combat-actor h3{font-size:calc(var(--u)*1.9)}
-@S[data-role=display] .combat-actor .combat-muted{margin:0;font-size:calc(var(--u)*1.25)}
+@S[data-role=display] .combat-actor .combat-initiative-value{flex:none;width:calc(var(--u)*3.2);height:calc(var(--u)*3.2);min-width:0;max-width:none;padding:0;font-size:calc(var(--u)*2.4)}
+@S[data-role=display] .combat-actor h3{font-size:calc(var(--u)*1.15);overflow-wrap:anywhere}
+@S[data-role=display] .combat-actor .combat-muted{margin:0;font-size:calc(var(--u)*1)}
 @S[data-role=display] .combat-hp{height:calc(var(--u)*1.7);margin-top:calc(var(--u)*.3);border-radius:calc(var(--u)*.85)}
 @S[data-role=display] .combat-hp-text{font-size:calc(var(--u)*1.25);line-height:calc(var(--u)*1.7)}
 @S[data-role=display] .combat-resources{display:none}
@@ -301,7 +301,7 @@ body:has(.tv-stage[data-tv-mode=combat])>main{min-height:0}
 @S[data-role=display] .df-aftermath .aftermath-lower>.aftermath-panel{padding:0;background:none;border:0;border-image:none;box-shadow:none}
 @S[data-role=display] .df-aftermath .aftermath-panel h2,@S[data-role=display] .df-aftermath .aftermath-next-context{display:none}
 @S[data-role=display] .df-aftermath .aftermath-empty{margin:0;font:calc(var(--u)*1.7)/1.3 var(--serif,Georgia,serif);color:#f0cf8e;text-shadow:0 2px 12px #000}
-@S[data-role=display] .df-aftermath .aftermath-party{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:calc(var(--u)*1.4)}
+@S[data-role=display] .df-aftermath .aftermath-party{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*1.4)}
 @S[data-role=display] .df-aftermath .aftermath-member{gap:calc(var(--u)*1.2);padding:calc(var(--u)*.8) calc(var(--u)*1.1);text-align:left;border:1px solid #d9b77a8c;border-radius:calc(var(--u)*.5);background:linear-gradient(135deg,#0f1a22e6,#070d13f0)}
 @S[data-role=display] .df-aftermath .aftermath-member:first-child{padding-top:calc(var(--u)*.8);border-top:1px solid #d9b77a8c}
 @S[data-role=display] .df-aftermath .aftermath-portrait{width:calc(var(--u)*5.4);height:calc(var(--u)*5.4);font-size:calc(var(--u)*2.4)}
