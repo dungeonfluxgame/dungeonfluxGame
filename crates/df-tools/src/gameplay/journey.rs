@@ -589,8 +589,8 @@ pub(super) fn name(state: &GameState, who: EntityId) -> Result<String, Repositor
         .choices
         .iter()
         .find(|choice| choice.offer.as_str() == "name")
-        .map(|choice| choice.selected.as_str().to_owned())
         .ok_or(RepositoryError::InvalidCandidate)
+        .and_then(|choice| stored_name(choice.selected.as_str()))
 }
 
 /// Returns a stable, non-display identity for an entity participating in a scene.
@@ -1862,6 +1862,21 @@ pub(super) fn combat_round(current: &Checkpoint) -> Result<u32, CombatRoundError
     Ok(round)
 }
 
+/// A hero name is kept in a revision label. A name the label alphabet can hold is stored as typed,
+/// as every save before REF-061 did; any other name ("Vix Ashlantern", "D'Artagnan") is stored as
+/// `hx:` and its UTF-8 bytes in hex. Typed names never contain `:`, so the two forms cannot collide.
+pub(super) fn stored_name_label(name: &str) -> Result<df_types::RevisionLabel, RepositoryError> {
+    match df_types::RevisionLabel::new(Some(name)) {
+        Ok(label) if !name.contains(':') => Ok(label),
+        _ => model::label(&format!("hx:{}", hex(name.as_bytes()))),
+    }
+}
+pub(super) fn stored_name(label: &str) -> Result<String, RepositoryError> {
+    match label.strip_prefix("hx:") {
+        Some(encoded) => String::from_utf8(unhex(encoded)?).map_err(bad),
+        None => Ok(label.to_owned()),
+    }
+}
 pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -3585,7 +3600,7 @@ fn accept_character_at_level(
         return Err(RepositoryError::InvalidCandidate);
     }
     let source = rule()?;
-    let name_label = model::label(name)?;
+    let name_label = stored_name_label(name)?;
     let mut selected = choices
         .iter()
         .map(|(offer, selected)| AcceptedChoice {
@@ -4670,7 +4685,7 @@ pub(super) fn recreated_heroes(state: &GameState) -> Result<GameState, Repositor
             .filter(|choice| choice.offer.as_str() != "test-fighter-level")
             .map(|choice| {
                 let value = if choice.offer.as_str() == "name" {
-                    model::label(&hex(choice.selected.as_str().as_bytes()))?
+                    model::label(&hex(stored_name(choice.selected.as_str())?.as_bytes()))?
                 } else {
                     choice.selected.clone()
                 };

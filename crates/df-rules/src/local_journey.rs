@@ -601,7 +601,9 @@ pub const SRD_521_BASELINE: Srd521Baseline = Srd521Baseline {
     gaming_sets: GAMING_SETS,
 };
 
-const MAXIMUM_CHARACTER_NAME_BYTES: usize = 24;
+/// Longest hero name a player can type, in characters.
+pub const MAXIMUM_CHARACTER_NAME_CHARACTERS: usize = 32;
+const MAXIMUM_CHARACTER_NAME_BYTES: usize = 48;
 const ATTACK_DIE_SIDES: u32 = 20;
 const NATURAL_MISS: u32 = 1;
 const MINIMUM_WEAPON_DICE: usize = 1;
@@ -612,6 +614,34 @@ const fn permitted_damage_sides(sides: u8) -> bool {
     matches!(sides, 4 | 6 | 8 | 10 | 12)
 }
 
+/// A hero name is one or more words of letters from any alphabet. Single spaces, apostrophes, hyphens,
+/// periods and underscores may join letters ("Vix Ashlantern", "D'Artagnan", "Jean-Luc", "St. Brynn");
+/// the name starts with a letter and ends with a letter or a period.
+pub fn valid_character_name(name: &str) -> bool {
+    if name.is_empty()
+        || name.len() > MAXIMUM_CHARACTER_NAME_BYTES
+        || name.chars().count() > MAXIMUM_CHARACTER_NAME_CHARACTERS
+    {
+        return false;
+    }
+    let mut previous: Option<char> = None;
+    for character in name.chars() {
+        if !character.is_alphabetic() {
+            let joins = matches!(character, ' ' | '\'' | '\u{2019}' | '-' | '.' | '_');
+            let follows = match previous {
+                Some(letter) if letter.is_alphabetic() => true,
+                Some('.') => character == ' ',
+                _ => false,
+            };
+            if !joins || !follows {
+                return false;
+            }
+        }
+        previous = Some(character);
+    }
+    previous.is_some_and(|last| last.is_alphabetic() || last == '.')
+}
+
 /// Validate the explicit supported offers, never accept a client-derived stat or roll.
 pub fn validate_character(
     rules: &CreationRules<'_>,
@@ -619,12 +649,7 @@ pub fn validate_character(
     choices: &[(&str, &str)],
 ) -> Result<LegalCharacter, JourneyRuleError> {
     rules.validate()?;
-    if name.is_empty()
-        || name.len() > MAXIMUM_CHARACTER_NAME_BYTES
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'-' | b'_'))
-    {
+    if !valid_character_name(name) {
         return Err(JourneyRuleError::InvalidName);
     }
     if choices.len() != BUILD_GROUPS.len() {
@@ -1739,10 +1764,44 @@ mod tests {
     #[test]
     fn baseline_character_rejections_keep_their_typed_errors() {
         let rules = CreationRules::srd_521();
-        for name in ["", "Has Space", "123", "Åsa", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"] {
+        for name in [
+            "",
+            "123",
+            "R2-D2",
+            " Vix",
+            "Vix ",
+            "Vix  Ash",
+            "Vix--Ash",
+            "-Vix",
+            "Vix!",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFG",
+        ] {
             assert_eq!(
                 validate_character(&rules, name, &choices()),
-                Err(JourneyRuleError::InvalidName)
+                Err(JourneyRuleError::InvalidName),
+                "{name:?}"
+            );
+        }
+    }
+    #[test]
+    fn hero_names_may_be_simple_or_several_words_in_any_alphabet() {
+        let rules = CreationRules::srd_521();
+        for name in [
+            "Vix",
+            "Vix Ashlantern",
+            "Thorin Oakenshield II",
+            "D'Artagnan",
+            "Ka\u{2019}rel",
+            "Jean-Luc",
+            "St. Brynn",
+            "Brynn Jr.",
+            "Åsa",
+            "Ælfwyn of the Red_Hill",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF",
+        ] {
+            assert!(
+                validate_character(&rules, name, &choices()).is_ok(),
+                "{name:?}"
             );
         }
         assert_eq!(

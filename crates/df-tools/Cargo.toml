@@ -25,6 +25,7 @@ df-protocol = { path = "../df-protocol" }
 df-client = { path = "../df-client" }
 df-types = { path = "../df-types" }
 df-rpc-bridge = { path = "../df-rpc-bridge" }
+df-rules = { path = "../df-rules" }
 df-observe = { path = "../df-observe" }
 bytes.workspace = true
 sha2 = "=0.10.9"
@@ -54,7 +55,6 @@ df-world = { path = "../df-world" }
 df-persistence = { path = "../df-persistence" }
 df-provider-api = { path = "../df-provider-api" }
 df-providers = { path = "../df-providers" }
-df-rules = { path = "../df-rules" }
 df-session = { path = "../df-session" }
 df-tempo = { path = "../df-tempo" }
 df-render = { path = "../df-render" }

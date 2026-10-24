@@ -206,6 +206,10 @@ fn choices(controls: &[(rpc::JourneyGroup, HtmlSelectElement)]) -> Vec<rpc::Jour
         .collect()
 }
 
+const NAME_HELP: &str =
+    "One name or several, up to 32 letters. Spaces, apostrophes and hyphens are welcome.";
+const NAME_RULE: &str = "Use letters for your hero's name, with single spaces, apostrophes or hyphens between them (up to 32)";
+
 fn missing_choices(
     name: &str,
     groups: &[rpc::JourneyGroup],
@@ -214,12 +218,8 @@ fn missing_choices(
     let mut missing = Vec::new();
     if name.trim().is_empty() {
         missing.push("Name your hero".to_owned());
-    } else if name.len() > 24
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'-' | b'_'))
-    {
-        missing.push("Use up to 24 letters, dashes or underscores for your hero's name".to_owned());
+    } else if !df_rules::local_journey::valid_character_name(name) {
+        missing.push(NAME_RULE.to_owned());
     }
     for group in groups {
         let choice = choices
@@ -381,6 +381,20 @@ impl Controls {
             .map(|(group, _)| group.clone())
             .collect();
         let mut missing = missing_choices(&draft.name, &groups, &draft.choices);
+        let name_invalid =
+            !draft.name.is_empty() && !df_rules::local_journey::valid_character_name(&draft.name);
+        let _ = self
+            .name
+            .set_attribute("aria-invalid", if name_invalid { "true" } else { "false" });
+        if let Some(help) = self
+            .name
+            .parent_element()
+            .and_then(|label| label.next_element_sibling())
+            .filter(|help| help.class_name() == "hero-name-help")
+        {
+            help.set_text_content(Some(if name_invalid { NAME_RULE } else { NAME_HELP }));
+            let _ = help.set_attribute("data-invalid", if name_invalid { "true" } else { "false" });
+        }
         if !self.text_reviewed.get()
             && (!self.appearance_text.value().trim().is_empty()
                 || !self.backstory_text.value().trim().is_empty())
@@ -900,15 +914,16 @@ impl HeroCreator {
             "hero-intro",
             "Give them a face. A past. A reason to step into the unknown.",
         )?;
-        let name = text_input(document, &editor, "Name your hero", "", 24)?;
-        name.set_placeholder("Your hero’s name");
-        node(
+        let name = text_input(
             document,
             &editor,
-            "p",
-            "hero-name-help",
-            "Up to 24 letters; hyphens and underscores are welcome.",
+            "Name your hero",
+            "",
+            df_rules::local_journey::MAXIMUM_CHARACTER_NAME_CHARACTERS as u32,
         )?;
+        name.set_placeholder("Your hero’s name");
+        let name_help = node(document, &editor, "p", "hero-name-help", NAME_HELP)?;
+        name_help.set_attribute("aria-live", "polite")?;
         let basics = node(document, &editor, "div", "hero-basics", "")?;
         let design_status = node(document, &editor, "p", "hero-design-status", "")?;
         design_status.set_attribute("aria-live", "polite")?;
@@ -1850,17 +1865,31 @@ mod tests {
     #[test]
     fn invalid_names_are_explained_before_confirmation() {
         for name in [
-            "Maren of the Coast",
+            "Maren  Coast",
             "123",
-            "Mären",
-            "abcdefghijklmnopqrstuvwxy",
+            " Maren",
+            "abcdefghijklmnopqrstuvwxyzabcdefg",
         ] {
-            assert_eq!(
-                missing_choices(name, &[], &[]),
-                ["Use up to 24 letters, dashes or underscores for your hero's name"]
-            );
+            assert_eq!(missing_choices(name, &[], &[]), [NAME_RULE]);
         }
-        assert!(missing_choices("Maren-Coast", &[], &[]).is_empty());
+        for name in [
+            "Maren-Coast",
+            "Maren of the Coast",
+            "Mären",
+            "Vix Ashlantern",
+        ] {
+            assert!(missing_choices(name, &[], &[]).is_empty(), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn saved_heroes_are_labelled_by_species_and_class() {
+        assert_eq!(library_design_label("dwarf", "fighter-1"), "Dwarf fighter");
+        assert_eq!(
+            library_design_label("half-elf", "eldritch-knight-1"),
+            "Half-elf eldritch knight"
+        );
+        assert_eq!(library_design_label("", ""), "");
     }
 
     #[test]
@@ -2038,6 +2067,33 @@ fn library_key(create: bool) -> Result<Option<Vec<u8>>, JsValue> {
         .collect::<String>();
     storage.set_item(draft_storage::LIBRARY_KEY, &encoded)?;
     Ok(Some(key.to_vec()))
+}
+
+/// Marks the saved hero now in the creator; `None` when the player starts a new hero.
+fn mark_library_choice(list: &Element, chosen: Option<&Element>) {
+    let Ok(items) = list.query_selector_all(".hero-library-item") else {
+        return;
+    };
+    for index in 0..items.length() {
+        if let Some(item) = items
+            .item(index)
+            .and_then(|node| node.dyn_into::<Element>().ok())
+        {
+            let pressed = chosen.is_some_and(|chosen| chosen == &item);
+            let _ = item.set_attribute("aria-pressed", if pressed { "true" } else { "false" });
+        }
+    }
+}
+
+/// "Dwarf fighter" from the library row's species and class option ids.
+fn library_design_label(species: &str, class: &str) -> String {
+    let mut letters = species.chars();
+    let species = letters
+        .next()
+        .map(|first| first.to_uppercase().chain(letters).collect::<String>())
+        .unwrap_or_default();
+    let class = class.trim_end_matches("-1").replace('-', " ");
+    format!("{species} {class}").trim().to_owned()
 }
 
 type LibraryClient =
@@ -2335,12 +2391,26 @@ pub(super) fn sync_library(
     if let Some(layout) = creator.root.query_selector(".hero-layout")? {
         creator.root.insert_before(&picker, Some(&layout))?;
     }
-    node(&document, &picker, "h2", "", "Your heroes")?;
-    let new = node(&document, &picker, "button", "hero-library-new", "New hero")?;
+    let heading = node(&document, &picker, "div", "hero-library-head", "")?;
+    node(&document, &heading, "h2", "", "Your heroes")?;
+    let note = node(
+        &document,
+        &heading,
+        "p",
+        "hero-library-note",
+        "Play a saved hero again, or begin a new one.",
+    )?;
+    let list = node(&document, &picker, "div", "hero-library-list", "")?;
+    let new = node(&document, &list, "button", "hero-library-new", "")?;
     new.set_attribute("type", "button")?;
+    node(&document, &new, "span", "hero-library-arch", "+")?
+        .set_attribute("aria-hidden", "true")?;
+    node(&document, &new, "strong", "", "New hero")?;
     let defaults = creator.initial_draft.clone();
     let controls = creator.controls.clone();
+    let chosen = list.clone();
     creator.listen(new, "click", move |_| {
+        mark_library_choice(&chosen, None);
         let mut draft = defaults.clone();
         draft.loaded_hero = None;
         draft.appearance_text.clear();
@@ -2354,7 +2424,6 @@ pub(super) fn sync_library(
             controls.save_draft();
         }
     })?;
-    let list = node(&document, &picker, "div", "hero-library-list", "")?;
     let credential = state.credential.clone();
     drop(state);
     let key = match library_key(false) {
@@ -2418,11 +2487,27 @@ pub(super) fn sync_library(
             if !list.is_connected() {
                 return Ok(());
             }
+            if rows.heroes.is_empty() {
+                note.set_text_content(Some(
+                    "Heroes you confirm are kept here for your next adventure.",
+                ));
+            }
             for row in rows.heroes {
                 let button = node(&document, &list, "button", "hero-library-item", "")?;
                 button.set_attribute("type", "button")?;
-                if !row.portrait.is_empty() {
-                    let image = node(&document, &button, "img", "", "")?;
+                button.set_attribute("aria-pressed", "false")?;
+                let arch = node(&document, &button, "span", "hero-library-arch", "")?;
+                if row.portrait.is_empty() {
+                    let initial = row
+                        .name
+                        .chars()
+                        .next()
+                        .map(String::from)
+                        .unwrap_or_default();
+                    node(&document, &arch, "span", "hero-library-initial", &initial)?
+                        .set_attribute("aria-hidden", "true")?;
+                } else {
+                    let image = node(&document, &arch, "img", "", "")?;
                     image.set_attribute("alt", "")?;
                     image.set_attribute("src", &portrait_data(&row)?)?;
                 }
@@ -2431,13 +2516,11 @@ pub(super) fn sync_library(
                     &document,
                     &button,
                     "span",
-                    "",
-                    &format!(
-                        "{} / {}",
-                        row.species,
-                        row.character_class.trim_end_matches("-1")
-                    ),
+                    "hero-library-meta",
+                    &library_design_label(&row.species, &row.character_class),
                 )?;
+                let chosen = list.clone();
+                let mark = button.clone();
                 let weak = Rc::downgrade(&client);
                 let key = key.clone();
                 let credential = credential.clone();
@@ -2451,6 +2534,9 @@ pub(super) fn sync_library(
                     if creator.controls.pending.get() {return;}
                     creator.set_pending(true);
                     creator.show_error("Loading your hero...");
+                    let _ = mark.set_attribute("aria-busy", "true");
+                    let chosen = chosen.clone();
+                    let mark = mark.clone();
                     let version=Some(creator.controls.version.get());
                     drop(state);
                     wasm_bindgen_futures::spawn_local(async move {
@@ -2480,6 +2566,7 @@ pub(super) fn sync_library(
                             return;
                         };
                         creator.set_pending(false);
+                        let _ = mark.remove_attribute("aria-busy");
                         if Some(creator.controls.version.get()) != version {
                             creator.show_error("Your newer edits are kept. Choose the saved hero again to replace them.");
                             return;
@@ -2487,12 +2574,14 @@ pub(super) fn sync_library(
                         creator.show_error("");
                         match result {
                             Ok(loaded) => {
-                                if let (Some(hero), Some(summary)) = (loaded.hero, loaded.summary)
-                                    && creator.apply_library(hero, summary).is_err()
-                                {
+                                if let (Some(hero), Some(summary)) = (loaded.hero, loaded.summary) {
+                                    if creator.apply_library(hero, summary).is_ok() {
+                                        mark_library_choice(&chosen, Some(&mark));
+                                    } else {
                                         creator.show_error(
                                             "Hero details could not load. Your draft is kept.",
                                         );
+                                    }
                                 }
                             }
                             Err(_) => creator

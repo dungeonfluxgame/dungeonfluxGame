@@ -1516,7 +1516,7 @@ fn recovery_creation_body_passes_actual_source_character_validator() {
     assert!(matches!(
         df_rules::local_journey::validate_character(
             &df_rules::local_journey::CreationRules::srd_521(),
-            "Recovery Fighter",
+            "Recovery Fighter 2",
             &selections
         ),
         Err(df_rules::local_journey::JourneyRuleError::InvalidName)

@@ -552,6 +552,32 @@ fn every_package_completes_creation_without_a_stock_portrait_choice() {
     });
 }
 #[test]
+fn heroes_with_several_words_or_apostrophes_in_their_name_complete_creation() {
+    live_pack(|| {
+        for name in ["Vix Ashlantern", "D'Artagnan", "Ælfwyn of the Red-Hill"] {
+            let current = joined_room();
+            let member = MemberId::from_bytes(&MEMBERS[0]).unwrap();
+            let mut choices = PHONE_SHARED.to_vec();
+            choices.push(("build-package", "melee-vanguard"));
+            let mut request = phone_create(&current, 3, name, &choices);
+            request.character.as_mut().unwrap().identity = Some(
+                super::super::hero_identity::Identity::from_menus(&[])
+                    .unwrap()
+                    .to_rpc(),
+            );
+            let input = creator_input(&current, member, &request);
+            let next = model::HarborEngine
+                .decide_admitted(&current, &input, OperationId::from_bytes(&[3; 16]).unwrap())
+                .unwrap_or_else(|error| panic!("{name:?} refused: {error:?}"));
+            let entity = player_entity(member, &next).unwrap();
+            assert_eq!(
+                super::super::journey::name(next.state(), entity).unwrap(),
+                name
+            );
+        }
+    });
+}
+#[test]
 fn archer_creation_sheet_states_the_longbow_attack_and_its_ammunition() {
     live_pack(|| {
         let current = seat_hero(
