@@ -21,6 +21,7 @@ pub(in crate::gameplay) fn street_door() -> SceneWayOut {
 
 pub(in crate::gameplay) fn request() -> CreationRequest {
     CreationRequest {
+        run_seed: "hs69-fixture-run".to_owned(),
         adventure: "Marek's Cloth Shop".to_owned(),
         origin_id: "place-mareks-cloth-shop".to_owned(),
         origin_name: "Marek's Cloth Shop".to_owned(),
@@ -97,11 +98,103 @@ pub(in crate::gameplay) fn answer(place: &Value, people: &Value, things: &Value)
         place["stalls"] = json!([]);
         place["mentioned_stalls"] = json!([]);
     }
+    // Generated output now declares all sellers explicitly; legacy stored builds stay valid.
+    place["traders"] = json!(
+        place["wares"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|ware| ware["seller"].as_str())
+            .filter(|seller| people
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|person| person["name"] == *seller))
+            .collect::<std::collections::BTreeSet<_>>()
+    );
     json!({
         "place": place.to_string(),
         "people": people.to_string(),
         "things": things.to_string(),
     })
+}
+
+pub(in crate::gameplay) fn persona_answer(prompt: &str) -> Value {
+    let facts: Value = prompt
+        .lines()
+        .find_map(|line| line.strip_prefix("FACTS: "))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .unwrap();
+    let temperament = &facts["drawn_temperament"];
+    let role = facts["person"]["role"].as_str().unwrap();
+    let (experience, signature) = match role {
+        "carter" => (
+            "guiding heavy wagons through crowded streets",
+            "Easy on the axle.",
+        ),
+        "spice seller" => (
+            "weighing delicate spices for impatient customers",
+            "A pinch tells the tale.",
+        ),
+        "fish seller" => (
+            "sorting the dawn catch beside the cold river",
+            "Fresh with the tide.",
+        ),
+        _ => (
+            "learning the daily work from experienced neighbours",
+            "A little care carries far.",
+        ),
+    };
+    let axis = |name| temperament[name].as_str().unwrap();
+    let (energy_cause, pace) = match axis("energy") {
+        "low" => ("saving strength through long shifts", "Slow, measured"),
+        "high" => ("quick responses to bustling trade", "Quick, animated"),
+        _ => ("an even rhythm through daily routine", "Even, unhurried"),
+    };
+    let (nerve_cause, delivery) = match axis("nerve") {
+        "nervous" => (
+            "caution after a costly mistake",
+            "hedges and verbal fidgets",
+        ),
+        "bold" => ("confidence from solving hard problems", "direct assertions"),
+        _ => ("composure through familiar duties", "composed answers"),
+    };
+    let warmth_cause = match axis("warmth") {
+        "cool" => "Difficult customers taught reserve",
+        "warm" => "Regulars became friends",
+        _ => "Fair dealing taught courtesy",
+    };
+    let talk_cause = if axis("talk") == "terse" {
+        "busy hours taught brevity"
+    } else {
+        "long waits encouraged stories"
+    };
+    let humour_cause = match axis("humour") {
+        "dry" => "mishaps invited wry understatement",
+        "jokey" => "jokes eased daily fatigue",
+        _ => "honest craft discouraged mockery",
+    };
+    let backstory = format!(
+        "Work as a {role}, {experience}, taught {energy_cause} and {nerve_cause}. {warmth_cause}, {talk_cause}, and {humour_cause}.",
+    );
+    let speech = format!(
+        "{pace} pace; {delivery}, {} trade vocabulary, {} phrasing and {} humour.",
+        axis("warmth"),
+        axis("talk"),
+        axis("humour")
+    );
+    json!({"persona": json!({"temperament": temperament, "backstory":backstory,
+        "speech":speech, "catchphrase":signature}).to_string()})
+}
+
+pub(in crate::gameplay) fn persona_replies(count: usize) -> Vec<Reply> {
+    (0..count)
+        .map(|_| Reply::Compute(std::sync::Arc::new(persona_answer)))
+        .collect()
+}
+
+pub(in crate::gameplay) fn accepting_persona_judge(count: usize) -> FakeEndpoint {
+    FakeEndpoint::start((0..count).map(|_| choice("o1")).collect())
 }
 
 fn built() -> PlaceRecord {
@@ -163,6 +256,27 @@ async fn local_reference_judges_a_plausible_unrecorded_stall_under_a_schema() {
             .to_string()
             .contains("avoid duplicating")
     );
+}
+
+#[test]
+fn every_stall_belongs_to_its_bound_keeper() {
+    let record = built();
+    assert!(!record.stalls.is_empty());
+    let model = record.expand().unwrap().model;
+    for stall in &record.stalls {
+        let key = crate::gameplay::place::name_key(&stall.name);
+        let thing = model
+            .things
+            .iter()
+            .find(|thing| crate::gameplay::place::name_key(&thing.name) == key)
+            .expect("the stall is a thing in the place");
+        let keeper = model
+            .people
+            .iter()
+            .find(|person| person.name == stall.keeper)
+            .expect("the keeper is a person in the place");
+        assert_eq!(thing.owner_id.as_deref(), Some(keeper.id.as_str()));
+    }
 }
 
 #[test]
@@ -474,7 +588,7 @@ fn a_place_that_would_not_fit_the_checkpoint_text_is_refused_not_truncated() {
     assert_eq!(result.unwrap_err(), CreationError::Invalid("too_large"));
 }
 
-fn jev(endpoint: &FakeEndpoint) -> ApproachModel {
+pub(in crate::gameplay) fn jev(endpoint: &FakeEndpoint) -> ApproachModel {
     ApproachModel::configured(Some(ApproachSettings {
         credential: "jev-fixture-sentinel".to_owned(),
         base_url: format!("http://{}", endpoint.address),
@@ -837,16 +951,27 @@ fn common_nouns_are_stored_in_lower_case_and_proper_names_keep_their_capitals() 
 async fn creation_gives_the_storyteller_the_canon_and_the_table_and_retries_once_naming_the_rule() {
     let mut wrong = place_slot();
     wrong["speaker"] = json!("Nobody");
-    let endpoint = FakeEndpoint::start(vec![
-        Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
-        Reply::Output(answer(&place_slot(), &people_slot(), &things_slot())),
-    ]);
+    let endpoint = FakeEndpoint::start(
+        [
+            vec![
+                Reply::Output(answer(&wrong, &people_slot(), &things_slot())),
+                Reply::Output(answer(&place_slot(), &people_slot(), &things_slot())),
+            ],
+            persona_replies(3),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
     let cache = cache_directory("place-creation-retry");
     let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
-    let record = create(&storyteller, &request()).await.expect("place");
+    let judge = accepting_persona_judge(3);
+    let record = create(&storyteller, &jev(&judge), &request())
+        .await
+        .expect("place");
     assert_eq!(record.name, "Market Street");
     assert_eq!(record.origin.id, "place-mareks-cloth-shop");
-    assert_eq!(endpoint.connections(), 2);
+    assert_eq!(endpoint.connections(), 5);
     let bodies = endpoint.bodies();
     let first = bodies[0]["input"].as_str().unwrap();
     let second = bodies[1]["input"].as_str().unwrap();
@@ -869,7 +994,9 @@ async fn creation_gives_the_storyteller_the_canon_and_the_table_and_retries_once
 async fn a_place_the_storyteller_cannot_make_is_not_made() {
     let off = Storyteller::disabled();
     assert_eq!(
-        create(&off, &request()).await.unwrap_err(),
+        create(&off, &ApproachModel::default(), &request())
+            .await
+            .unwrap_err(),
         CreationError::Off
     );
     let mut wrong = place_slot();
@@ -882,7 +1009,9 @@ async fn a_place_the_storyteller_cannot_make_is_not_made() {
     let cache = cache_directory("place-creation-refused");
     let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
     assert_eq!(
-        create(&storyteller, &request()).await.unwrap_err(),
+        create(&storyteller, &ApproachModel::default(), &request())
+            .await
+            .unwrap_err(),
         CreationError::Invalid("kind")
     );
     assert_eq!(endpoint.connections(), 3, "two retries, then it stops");
@@ -894,7 +1023,9 @@ async fn a_place_the_storyteller_cannot_make_is_not_made() {
         &cache_directory("place-creation-down"),
     );
     assert_eq!(
-        create(&storyteller, &request()).await.unwrap_err(),
+        create(&storyteller, &ApproachModel::default(), &request())
+            .await
+            .unwrap_err(),
         CreationError::Model
     );
 }
@@ -1047,21 +1178,227 @@ async fn generated_market_retries_a_single_vendor_layout_then_admits_several_sta
         .as_array_mut()
         .unwrap()
         .retain(|ware| ware["seller"] == "Wenna");
-    let endpoint = FakeEndpoint::start(vec![
-        Reply::Output(answer(&missing, &people_slot(), &things_slot())),
-        Reply::Output(answer(&place_slot(), &people_slot(), &things_slot())),
-    ]);
+    let endpoint = FakeEndpoint::start(
+        [
+            vec![
+                Reply::Output(answer(&missing, &people_slot(), &things_slot())),
+                Reply::Output(answer(&place_slot(), &people_slot(), &things_slot())),
+            ],
+            persona_replies(3),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
     let cache = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/lanes/HS40/market-generation")
         .join(std::process::id().to_string());
     let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
-    let market = create(&storyteller, &request()).await.unwrap();
+    let judge = accepting_persona_judge(3);
+    let market = create(&storyteller, &jev(&judge), &request())
+        .await
+        .unwrap();
     assert_eq!(market.stalls.len(), 3);
-    assert_eq!(endpoint.connections(), 2);
+    assert_eq!(endpoint.connections(), 5);
     assert!(
         endpoint.bodies()[1]["input"]
             .as_str()
             .unwrap()
             .contains("invalid_place")
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs69_seeded_personas_are_distinct_persisted_and_old_record_migration_is_idempotent() {
+    let asked = request();
+    let mut record = built();
+    let old_json = serde_json::to_string(&record).unwrap();
+    assert!(!old_json.contains("temperament"));
+    record = serde_json::from_str(&old_json).unwrap();
+    let endpoint = FakeEndpoint::start(persona_replies(3));
+    let judge = accepting_persona_judge(3);
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS69/persona-migration")
+        .join(std::process::id().to_string());
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    author_personas(&storyteller, &jev(&judge), &asked, &mut record)
+        .await
+        .unwrap();
+    for (index, person) in record.people.iter().enumerate() {
+        let persona = person.persona.as_ref().unwrap();
+        assert!(persona.validate());
+        assert!(record.people.iter().take(index).all(|other| {
+            persona
+                .temperament
+                .differences(other.persona.as_ref().unwrap().temperament)
+                >= 2
+        }));
+        println!(
+            "HS69 PERSONA {} {}",
+            person.name,
+            serde_json::to_string(persona).unwrap()
+        );
+    }
+    let saved = serde_json::to_string(&record).unwrap();
+    let mut loaded: PlaceRecord = serde_json::from_str(&saved).unwrap();
+    assert_eq!(loaded, record);
+    author_personas(
+        &Storyteller::disabled(),
+        &ApproachModel::default(),
+        &asked,
+        &mut loaded,
+    )
+    .await
+    .unwrap();
+    assert_eq!(loaded, record);
+    let expanded = loaded.expand().unwrap();
+    for (draft, person) in loaded.people.iter().zip(&expanded.model.people) {
+        assert_eq!(draft.persona, person.persona);
+    }
+    assert_eq!(endpoint.connections(), 3);
+    assert_eq!(judge.connections(), 3);
+    let mut reordered = built();
+    reordered.people.reverse();
+    let reordered_endpoint = FakeEndpoint::start(persona_replies(3));
+    let reordered_judge = accepting_persona_judge(3);
+    let reordered_teller = teller(
+        reordered_endpoint.address,
+        0,
+        Duration::from_secs(5),
+        &directory.join("reordered"),
+    );
+    author_personas(
+        &reordered_teller,
+        &jev(&reordered_judge),
+        &asked,
+        &mut reordered,
+    )
+    .await
+    .unwrap();
+    for person in &reordered.people {
+        assert_eq!(
+            person.persona,
+            record
+                .people
+                .iter()
+                .find(|other| other.name == person.name)
+                .unwrap()
+                .persona
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs69_jev_rejection_regenerates_only_the_rejected_person() {
+    let mut record = built();
+    let place_before = record.clone();
+    let endpoint = FakeEndpoint::start(persona_replies(4));
+    let judge = FakeEndpoint::start(vec![choice("o2"), choice("o1"), choice("o1"), choice("o1")]);
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS69/persona-retry")
+        .join(std::process::id().to_string());
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    author_personas(&storyteller, &jev(&judge), &request(), &mut record)
+        .await
+        .unwrap();
+    let bodies = endpoint.bodies();
+    let facts: Vec<Value> = bodies
+        .iter()
+        .map(|body| {
+            body["input"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .find_map(|line| line.strip_prefix("FACTS: "))
+                .map(|line| serde_json::from_str(line).unwrap())
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        facts
+            .iter()
+            .map(|facts| facts["person"]["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["Hobb", "Hobb", "Wenna", "Yara"]
+    );
+    assert_eq!(facts[0]["drawn_temperament"], facts[1]["drawn_temperament"]);
+    assert!(
+        !facts[1]["previous_answer_problem"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    for person in &mut record.people {
+        person.persona = None;
+    }
+    assert_eq!(record, place_before);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn hs69_draw_uses_run_place_and_name_and_persona_bounds_are_strict() {
+    let draw = |run: &str, place: &str, name: &str| {
+        place::Temperament::draw(run, place, name, &[]).unwrap()
+    };
+    let first = draw("run-a", "place-a", "Hobb");
+    assert_eq!(first, draw("run-a", "place-a", "Hobb"));
+    assert!((0..20).any(|index| draw(&format!("run-{index}"), "place-a", "Hobb") != first));
+    assert!((0..20).any(|index| draw("run-a", &format!("place-{index}"), "Hobb") != first));
+    assert!((0..20).any(|index| draw("run-a", "place-a", &format!("Local{index}")) != first));
+    let mut persona = place::PersonPersona {
+        temperament: first,
+        backstory: "Cart work taught a patient manner.".into(),
+        speech: "Slow, plain trade words.".into(),
+        catchphrase: "Easy on the axle.".into(),
+    };
+    assert!(persona.validate());
+    persona.catchphrase = "x".repeat(65);
+    assert!(!persona.validate());
+    persona.catchphrase = "Easy.".into();
+    persona.speech = format!("{}Slow.{}", " ".repeat(100), " ".repeat(100));
+    assert!(!persona.validate());
+    persona.speech = "Slow.".into();
+    persona.backstory = "One. Two. Three.".into();
+    assert!(!persona.validate());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn hs69_identity_pass_cannot_supply_an_unjudged_persona() {
+    let malicious = json!({"temperament":{"energy":"high","nerve":"bold","warmth":"cool","talk":"terse","humour":"dry"},
+        "backstory":"A different trade taught a different manner.","speech":"An unrelated voice.","catchphrase":"Unjudged."});
+    let mut people = people_slot();
+    for person in people.as_array_mut().unwrap() {
+        person["persona"] = malicious.clone();
+    }
+    let endpoint = FakeEndpoint::start(
+        [
+            vec![Reply::Output(answer(
+                &place_slot(),
+                &people,
+                &things_slot(),
+            ))],
+            persona_replies(3),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+    let judge = accepting_persona_judge(3);
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../artifacts/tmp/lanes/HS69/persona-identity")
+        .join(std::process::id().to_string());
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &directory);
+    let record = create(&storyteller, &jev(&judge), &request())
+        .await
+        .unwrap();
+    assert!(
+        record
+            .people
+            .iter()
+            .all(|person| person.persona.as_ref().unwrap().catchphrase != "Unjudged.")
+    );
+    assert_eq!(judge.connections(), 3);
+    assert_eq!(endpoint.connections(), 4);
+    std::fs::remove_dir_all(directory).unwrap();
 }

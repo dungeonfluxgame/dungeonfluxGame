@@ -19,7 +19,7 @@ use crate::gameplay::{
     startup_configuration::{ApproachSettings, ContentRating, VoiceOff},
     storyteller::{
         Storyteller,
-        tests::{FakeEndpoint, Reply, cache_directory, teller},
+        tests::{FakeEndpoint as RawEndpoint, Reply, cache_directory, teller},
     },
     table_log::TableLog,
     voice::Voice,
@@ -28,6 +28,85 @@ use df_persistence::local_demo_scope::LocalDemoRole;
 use df_session::inbox::{ActorLoop, AdmissionSequence, Reducer, bounded_inbox};
 use std::sync::Arc;
 use tokio::sync::{Semaphore, watch};
+
+/// Existing move scripts describe routing, place identity and travel narration. Persona calls
+/// are a separate stage: serve their fixtures without consuming a scripted route/travel answer.
+struct FakeEndpoint {
+    endpoint: RawEndpoint,
+    address: std::net::SocketAddr,
+}
+
+fn persona_request(body: &Value) -> bool {
+    body["state"]["task"] == "person_persona_judgement"
+        || body["input"]
+            .as_str()
+            .and_then(|prompt| prompt.lines().find_map(|line| line.strip_prefix("FACTS: ")))
+            .and_then(|facts| serde_json::from_str::<Value>(facts).ok())
+            .is_some_and(|facts| facts["task"] == "person_persona")
+}
+
+fn completed_fixture(body: &Value, output: String) -> Value {
+    json!({"object":"response","id":"resp_hs69_fixture","status":"completed",
+        "model":body["model"], "metadata":body["metadata"], "text":body["text"],
+        "error":null,"incomplete_details":null,
+        "output":[{"type":"message","role":"assistant","status":"completed",
+            "content":[{"type":"output_text","text":output,"annotations":[]}]}],
+        "usage":{"input_tokens":100,"output_tokens":40,"total_tokens":140,
+            "input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}})
+}
+
+impl FakeEndpoint {
+    fn start(script: Vec<Reply>) -> Self {
+        let script = std::sync::Mutex::new(std::collections::VecDeque::from(script));
+        let respond = Arc::new(move |body: &Value| {
+            if body["state"]["task"] == "person_persona_judgement" {
+                let Reply::Status(status, response) = choice("o1") else {
+                    unreachable!()
+                };
+                return (status, response);
+            }
+            if persona_request(body) {
+                let output = crate::gameplay::place_creation::tests::persona_answer(
+                    body["input"].as_str().unwrap(),
+                );
+                return (200, completed_fixture(body, output.to_string()));
+            }
+            let Some(reply) = script.lock().unwrap().pop_front() else {
+                return (503, json!({"error":"primary fixture script exhausted"}));
+            };
+            match reply {
+                Reply::Status(status, response) => (status, response),
+                Reply::Output(output) => (200, completed_fixture(body, output.to_string())),
+                Reply::OutputText(output) => (200, completed_fixture(body, output)),
+                Reply::Compute(compute) => (
+                    200,
+                    completed_fixture(body, compute(body["input"].as_str().unwrap()).to_string()),
+                ),
+                Reply::ComputeResponse(compute) => compute(body),
+                _ => panic!("unsupported primary script in the persona-aware move fixture"),
+            }
+        });
+        let endpoint = RawEndpoint::start(
+            (0..128)
+                .map(|_| Reply::ComputeResponse(respond.clone()))
+                .collect(),
+        );
+        let address = endpoint.address;
+        Self { endpoint, address }
+    }
+
+    fn primary_bodies(&self) -> Vec<Value> {
+        self.endpoint
+            .bodies()
+            .into_iter()
+            .filter(|body| !persona_request(body))
+            .collect()
+    }
+
+    fn primary_connections(&self) -> usize {
+        self.primary_bodies().len()
+    }
+}
 
 const HOME: &str = "place-mareks-cloth-shop";
 const STREET: &str = "place-market-street";
@@ -56,6 +135,32 @@ fn street(shop_scene_model: &SceneModel) -> PlaceRecord {
         &things_slot().to_string(),
     )
     .expect("the fixture street is valid")
+}
+
+/// A newly admitted market already has personas; legacy None records remain in `street()`
+/// for the separate serialization/migration cases.
+fn admitted_market(shop_scene_model: &SceneModel) -> PlaceRecord {
+    let mut record = street(shop_scene_model);
+    let mut drawn = Vec::new();
+    for person in &mut record.people {
+        let temperament = place::Temperament::draw(
+            "hs69-market-fixture",
+            &record.place_id,
+            &person.name,
+            &drawn,
+        )
+        .unwrap();
+        drawn.push(temperament);
+        let answer = place_creation::tests::persona_answer(&format!(
+            "FACTS: {}",
+            json!({
+                "person":person, "drawn_temperament":temperament,
+            })
+        ));
+        person.persona = Some(serde_json::from_str(answer["persona"].as_str().unwrap()).unwrap());
+    }
+    record.validate().unwrap();
+    record
 }
 
 fn operation(number: u8) -> OperationId {
@@ -279,6 +384,7 @@ fn seen_picture_reference_moves_to_a_generated_spot_and_return_reuses_it() {
             "You gather at the fruit stand. Mira offers crisp apples in shallow baskets; Market Street stays in view behind you."
         );
         place["wares"] = json!([{"seller":"Mira Fen", "name":"apple", "description":"A crisp red apple from the basket.", "price_cp":2}]);
+        place["traders"] = json!(["Mira Fen"]);
         place["exits"] = json!([]);
         place["landmarks"] = json!([]);
         place["market"] = json!(false);
@@ -328,9 +434,12 @@ fn seen_picture_reference_moves_to_a_generated_spot_and_return_reuses_it() {
             spot_id
         );
         assert_eq!(place::created(table.current().state()).unwrap().len(), 2);
-        assert_eq!(story.connections(), 1);
-        assert_eq!(choices.connections(), 2);
-        let request = story.bodies()[0]["input"].as_str().unwrap().to_owned();
+        assert_eq!(story.primary_connections(), 1);
+        assert_eq!(choices.primary_connections(), 2);
+        let request = story.primary_bodies()[0]["input"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         assert!(request.contains("local_spot") && request.contains("arrival_question"));
         assert!(request.contains("red apples") && request.contains("Market Street"));
     });
@@ -363,7 +472,7 @@ fn an_impossible_local_reference_is_refused_specifically_in_fiction_without_a_mo
             rpc::DialogueDisposition::Rejected as i32
         );
         assert_eq!(table.current(), street);
-        assert_eq!(story.connections(), 1);
+        assert_eq!(story.primary_connections(), 1);
     });
 }
 
@@ -851,6 +960,7 @@ impl Table {
             table_log: table.clone(),
             social: SocialLedger::none(),
             living: LivingScenes::disabled(),
+            look_ahead: Arc::default(),
         };
         let owner = std::thread::spawn(move || {
             pack::with_test_pack(loaded, || {
@@ -1037,14 +1147,14 @@ fn a_leaving_line_goes_through_jev_and_the_storyteller_to_a_committed_move_the_t
         assert_eq!(place::created(now.state()).unwrap().len(), 1);
         // Jev was asked once, with the line as quoted data; the storyteller once, with the
         // town's canon and the table's own words in the facts it was given.
-        assert_eq!(exits.connections(), 1);
+        assert_eq!(exits.primary_connections(), 1);
         assert!(
-            exits.bodies()[0]
+            exits.primary_bodies()[0]
                 .to_string()
                 .contains("I follow Brakka out of the shop")
         );
-        assert_eq!(storyteller.connections(), 1);
-        let asked = storyteller.bodies()[0]["input"]
+        assert_eq!(storyteller.primary_connections(), 1);
+        let asked = storyteller.primary_bodies()[0]["input"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -1119,7 +1229,11 @@ fn the_party_comes_back_through_the_way_back_and_a_second_trip_makes_nothing_new
         assert_eq!(runtime::scene(now.state()).unwrap().title, "Market Street");
         assert_eq!(place::entries(now.state()).unwrap().len(), 3);
         assert_eq!(place::created(now.state()).unwrap().len(), 1);
-        assert_eq!(storyteller.connections(), 1, "the street was made once");
+        assert_eq!(
+            storyteller.primary_connections(),
+            1,
+            "the street was made once"
+        );
         assert_eq!(table.lines().len(), 3);
     });
 }
@@ -1149,7 +1263,7 @@ fn narration_never_claims_a_change_that_did_not_happen() {
         assert!(reply.is_none());
         assert!(table.lines().is_empty());
         assert_eq!(table.current(), opening);
-        assert_eq!(storyteller.connections(), 0);
+        assert_eq!(storyteller.primary_connections(), 0);
 
         // A move that failed its own check goes nowhere, and Jev is not even asked.
         let unasked = FakeEndpoint::start(vec![choice("o1")]);
@@ -1174,7 +1288,7 @@ fn narration_never_claims_a_change_that_did_not_happen() {
             ))
             .is_none()
         );
-        assert_eq!(unasked.connections(), 0);
+        assert_eq!(unasked.primary_connections(), 0);
         assert!(table.lines().is_empty());
 
         // Jev names the door but the storyteller cannot make the place beyond it: the party stays
@@ -1287,7 +1401,7 @@ fn only_a_succeeded_move_act_is_put_to_the_exits() {
             ))
             .is_none()
         );
-        assert_eq!(exits.connections(), 0);
+        assert_eq!(exits.primary_connections(), 0);
         assert_eq!(table.current(), opening);
     });
 }
@@ -1338,8 +1452,8 @@ fn the_dev_route_moves_to_an_exit_and_to_a_known_place_through_the_same_owner() 
             runtime::scene(table.current().state()).unwrap().title,
             "Marek’s Cloth Shop"
         );
-        assert_eq!(storyteller.connections(), 1);
-        assert_eq!(exits.connections(), 0);
+        assert_eq!(storyteller.primary_connections(), 1);
+        assert_eq!(exits.primary_connections(), 0);
         // A place the run does not have is refused, and the report says where each exit leads.
         assert!(matches!(
             run(table
@@ -1407,6 +1521,31 @@ fn travel_voice(
     (exits, storyteller, voice)
 }
 
+fn rename_slot_person(answer: &mut Value, index: usize, name: &str) {
+    let mut people: Value = serde_json::from_str(answer["people"].as_str().unwrap()).unwrap();
+    let previous = people[index]["name"].as_str().unwrap().to_owned();
+    people[index]["name"] = json!(name);
+    let mut place: Value = serde_json::from_str(answer["place"].as_str().unwrap()).unwrap();
+    for (collection, field) in [
+        ("wares", "seller"),
+        ("services", "provider"),
+        ("stalls", "keeper"),
+    ] {
+        for entry in place[collection].as_array_mut().unwrap() {
+            if entry[field] == previous {
+                entry[field] = json!(name);
+            }
+        }
+    }
+    for trader in place["traders"].as_array_mut().unwrap() {
+        if *trader == previous {
+            *trader = json!(name);
+        }
+    }
+    answer["place"] = json!(place.to_string());
+    answer["people"] = json!(people.to_string());
+}
+
 #[test]
 fn a_stated_destination_no_exit_leads_to_is_made_from_the_heros_words_and_reached_by_a_journey() {
     with_shop(|opening, loaded| {
@@ -1437,8 +1576,8 @@ fn a_stated_destination_no_exit_leads_to_is_made_from_the_heros_words_and_reache
         assert_eq!(model_of(&now).ways_out[0].beyond_place_id, HOME);
         assert_eq!(place::created(now.state()).unwrap().len(), 1);
         // The storyteller was given the hero's own destination and the places and people in use.
-        assert_eq!(exits.connections(), 1);
-        let asked = storyteller.bodies()[0]["input"]
+        assert_eq!(exits.primary_connections(), 1);
+        let asked = storyteller.primary_bodies()[0]["input"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -1499,9 +1638,9 @@ fn a_journey_reaches_a_place_the_run_has_by_name_and_makes_nothing() {
             runtime::scene(table.current().state()).unwrap().title,
             "Marek\u{2019}s Cloth Shop"
         );
-        let criteria = exits.bodies()[0]["questions"]["q1"]["criteria"].to_string();
+        let criteria = exits.primary_bodies()[0]["questions"]["q1"]["criteria"].to_string();
         assert!(criteria.contains("Marek") && !criteria.contains("journey to Market Street"));
-        assert_eq!(storyteller.connections(), 0, "nothing is made");
+        assert_eq!(storyteller.primary_connections(), 0, "nothing is made");
         assert_eq!(place::created(table.current().state()).unwrap().len(), 2);
         // The journey replays like any move.
         let recovered = native::persisted(&table.current());
@@ -1546,7 +1685,7 @@ fn a_landmark_of_a_place_becomes_a_destination_made_under_its_own_name() {
             &performed_move(true),
         )));
         assert_eq!(told, "Brynn leads the party on to The Bell Tower.");
-        let asked = storyteller.bodies()[0]["input"]
+        let asked = storyteller.primary_bodies()[0]["input"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -1600,7 +1739,7 @@ fn a_hailed_carriage_becomes_a_journey_with_a_travel_beat_told_after_the_move() 
         );
         assert_eq!(lines[2].1, "Brynn leads the party on to The City Centre.");
         assert!(
-            jev.bodies()[0]
+            jev.primary_bodies()[0]
                 .to_string()
                 .contains("wave down a passing carriage")
         );
@@ -1637,7 +1776,7 @@ fn a_ride_through_a_listed_service_names_the_fare_and_moves_under_its_own_operat
         );
         assert_eq!((fare.price_cp, fare.provider.as_str()), (10, "Hobb"));
         // The place is made before any fare is paid, so a paid fare never goes nowhere.
-        assert_eq!(storyteller.connections(), 1);
+        assert_eq!(storyteller.primary_connections(), 1);
         let told = replied(run(table.service.take_ride([1; 32], &request, ride, true)));
         assert!(
             told.starts_with("Hobb drives Brynn and the party away from Market Street"),
@@ -1678,8 +1817,12 @@ fn buying_a_ride_service_starts_the_journey_and_any_other_service_does_not() {
                 .ride_after_service([1; 32], &request, &scene, service))
             .is_none()
         );
-        assert_eq!(jev.connections(), 1);
-        assert!(jev.bodies()[0].to_string().contains("wagon directions"));
+        assert_eq!(jev.primary_connections(), 1);
+        assert!(
+            jev.primary_bodies()[0]
+                .to_string()
+                .contains("wagon directions")
+        );
         assert_eq!(table.current(), out);
         // A ride: the journey starts at once.
         let (_jev, _storyteller, voice) = travel_voice(
@@ -1737,7 +1880,8 @@ fn a_plain_look_at_a_created_place_needs_no_roll_and_tells_its_people_and_goods(
         assert_eq!(room.id, "room");
         let response = run(table
             .service
-            .plain_observation(&request, &scene, &room, "Brynn", 0))
+            .plain_observation([1; 32], &request, &scene, &room, "Brynn", 0))
+        .expect("authenticated observation")
         .expect("a plain look");
         let told = response.npc_reply;
         assert!(
@@ -1765,7 +1909,8 @@ fn a_plain_look_at_a_created_place_needs_no_roll_and_tells_its_people_and_goods(
         let wenna = target_named(&scene, "Wenna");
         let told = run(table
             .service
-            .plain_observation(&request, &scene, &wenna, "Brynn", 0))
+            .plain_observation([1; 32], &request, &scene, &wenna, "Brynn", 0))
+        .expect("authenticated observation")
         .expect("a plain look")
         .npc_reply;
         assert!(told.starts_with("Brynn looks at Wenna."), "{told}");
@@ -1774,7 +1919,8 @@ fn a_plain_look_at_a_created_place_needs_no_roll_and_tells_its_people_and_goods(
         assert!(
             run(table
                 .service
-                .plain_observation(&request, &scene, &wenna, "Brynn", 0))
+                .plain_observation([1; 32], &request, &scene, &wenna, "Brynn", 0))
+            .expect("authenticated observation")
             .is_none()
         );
         assert!(
@@ -1868,12 +2014,16 @@ fn likely_exit_prepares_one_destination_and_photo_then_opening_reuses_it_without
             let lane = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../artifacts/tmp/lanes/P1/arena-preparation-test")
                 .join(std::process::id().to_string());
-            let voice = Arc::new(NpcVoice::new(Arc::new(teller(
-                storyteller.address,
-                0,
-                Duration::from_secs(5),
-                &lane.join("text"),
-            ))));
+            let judge = FakeEndpoint::start(vec![]);
+            let voice = voice_of(
+                &judge,
+                teller(
+                    storyteller.address,
+                    0,
+                    Duration::from_secs(5),
+                    &lane.join("text"),
+                ),
+            );
             let mut table = Table::start(opening.clone(), loaded, voice);
             let fixture = imagery::tests::DirectionFixture::photographic(&lane.join("imagery"));
             table.service.living = LivingScenes::start(
@@ -1947,7 +2097,7 @@ fn likely_exit_prepares_one_destination_and_photo_then_opening_reuses_it_without
                 "photo completion requests the world before the fight"
             );
             assert_eq!(
-                storyteller.connections(),
+                storyteller.primary_connections(),
                 1,
                 "one place/people/things creation"
             );
@@ -1965,7 +2115,7 @@ fn likely_exit_prepares_one_destination_and_photo_then_opening_reuses_it_without
                 .await
                 .unwrap_or_else(|_| panic!("opening reuses the prepared arena"));
             assert_eq!(
-                storyteller.connections(),
+                storyteller.primary_connections(),
                 1,
                 "opening must not create another record"
             );
@@ -2059,9 +2209,9 @@ fn place_move_travel_line_reaches_market_square_for_one_four_and_six_heroes() {
                     .count(),
                 1
             );
-            assert_eq!(exits.connections(), 1);
+            assert_eq!(exits.primary_connections(), 1);
             assert!(
-                exits.bodies()[0]
+                exits.primary_bodies()[0]
                     .to_string()
                     .contains("Let's go to the market square.")
             );
@@ -2110,7 +2260,7 @@ fn place_move_travel_refuses_the_unresolved_enforcer_and_unstarted_room() {
 #[test]
 fn market_departure_to_a_recorded_stall_keeps_its_keeper_and_stock_and_reuses_the_spot() {
     with_shop(|opening, loaded| {
-        let market = street(&model_of(&opening));
+        let market = admitted_market(&model_of(&opening));
         let current = commit(&opening, 120, "street-door", STREET, Some(&market)).unwrap();
         let mut spot = named_place("fish stall");
         let mut draft: Value = serde_json::from_str(spot["place"].as_str().unwrap()).unwrap();
@@ -2125,9 +2275,7 @@ fn market_departure_to_a_recorded_stall_keeps_its_keeper_and_stock_and_reuses_th
             "The party gathers at Yara's fish stall. Herring costs 2 cp and trout 3 cp; Market Street stays behind them."
         );
         spot["place"] = json!(draft.to_string());
-        let mut people: Value = serde_json::from_str(spot["people"].as_str().unwrap()).unwrap();
-        people[2]["name"] = json!("Yara");
-        spot["people"] = json!(people.to_string());
+        rename_slot_person(&mut spot, 2, "Yara");
         // The departure judge says stay: this is inside the place. The local judge picks fish.
         let (_choices, story, voice) = travel_voice(
             vec![choice("o7"), choice("o3"), choice("o1")],
@@ -2158,6 +2306,7 @@ fn market_departure_to_a_recorded_stall_keeps_its_keeper_and_stock_and_reuses_th
         assert_eq!(keeper.id, original_keeper.id);
         assert_eq!(keeper.coin_cp, original_keeper.coin_cp);
         assert_eq!(keeper.description, original_keeper.description);
+        assert_eq!(keeper.persona, original_keeper.persona);
         let goods = model
             .offers
             .iter()
@@ -2192,12 +2341,70 @@ fn market_departure_to_a_recorded_stall_keeps_its_keeper_and_stock_and_reuses_th
                 .place_id,
             close_id
         );
-        assert_eq!(story.connections(), 1);
-        let sent = story.bodies()[0]["input"].as_str().unwrap().to_owned();
+        assert_eq!(story.primary_connections(), 1);
+        let sent = story.primary_bodies()[0]["input"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         assert!(
             sent.contains("local_stall")
                 && sent.contains("arrival_question")
                 && sent.contains("Yara")
+        );
+    });
+}
+
+#[test]
+fn walking_to_a_stall_leaves_out_people_the_market_already_has_instead_of_failing() {
+    with_shop(|opening, loaded| {
+        let market = admitted_market(&model_of(&opening));
+        let current = commit(&opening, 130, "street-door", STREET, Some(&market)).unwrap();
+        let mut spot = named_place("fish stall");
+        let mut draft: Value = serde_json::from_str(spot["place"].as_str().unwrap()).unwrap();
+        draft["speaker"] = json!("");
+        draft["greeting"] = json!("");
+        draft["exits"] = json!([]);
+        draft["landmarks"] = json!([]);
+        draft["market"] = json!(false);
+        draft["stalls"] = json!([]);
+        draft["mentioned_stalls"] = json!([]);
+        draft["narration"] = json!("The party gathers at Yara's fish stall by the fountain.");
+        spot["place"] = json!(draft.to_string());
+        // The generator stands Hobb (who already keeps the cart stall) at the fish stall too, and
+        // gives the keeper an out-of-range purse; both are the market's own people.
+        rename_slot_person(&mut spot, 0, "Hobb");
+        rename_slot_person(&mut spot, 2, "Yara");
+        let mut people: Value = serde_json::from_str(spot["people"].as_str().unwrap()).unwrap();
+        people[2]["purse_cp"] = json!(u64::from(place::MAXIMUM_PURSE_CP) + 1);
+        spot["people"] = json!(people.to_string());
+        let (_choices, _story, voice) = travel_voice(
+            vec![choice("o7"), choice("o3"), choice("o1")],
+            vec![Reply::Output(spot)],
+            "walk-to-stall-known-people",
+        );
+        let table = Table::start(current, loaded, voice);
+        let scene = runtime::scene(table.current().state()).unwrap();
+        let reply = run(table.service.travel_by_line(
+            [1; 32],
+            &line(&table, 131, "I walk over to the fish stall by the fountain."),
+            &scene,
+        ))
+        .unwrap();
+        let told = replied(Some(reply));
+        assert!(!told.contains("clear destination"), "{told}");
+        let model = model_of(&table.current());
+        let original = market.expand().unwrap().model;
+        let yara = |people: &[crate::gameplay::adventure::scene_model::ScenePerson]| {
+            people
+                .iter()
+                .find(|person| person.name == "Yara")
+                .map(|person| (person.id.clone(), person.persona.clone()))
+        };
+        assert_eq!(yara(&model.people), yara(&original.people));
+        assert_eq!(
+            model.people.iter().filter(|person| person.name == "Hobb").count(),
+            0,
+            "Hobb stays the market's own person, not a second copy at the stall"
         );
     });
 }
@@ -2226,5 +2433,453 @@ fn market_look_lists_distinct_stalls_and_their_goods_for_the_next_choice() {
             line.contains("fish stall") && line.contains("herring"),
             "{line}"
         );
+    });
+}
+
+fn with_hs57_free_roam(run: impl FnOnce(Table, PlaceRecord)) {
+    // The production prepared-place cache is process-wide; synthetic worlds cannot overlap.
+    static WORLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _world = WORLD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    with_shop(|opening, mut loaded| {
+        let scene = runtime::scene(opening.state()).unwrap();
+        let destination = street(&model_of(&opening));
+        let mut gate = destination.clone();
+        gate.place_id = HOME.to_owned();
+        gate.name = scene.setting.as_ref().unwrap().name.clone();
+        gate.speaker.clear();
+        gate.greeting.clear();
+        static NEXT_WORLD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let number = NEXT_WORLD.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        loaded.pack.beat_script.as_mut().unwrap().free_roam =
+            Some(crate::gameplay::adventure::free_roam::World {
+                city: crate::gameplay::adventure::free_roam::City {
+                    name: format!("HS57 City {number}"),
+                    character: "a city of public streets".into(),
+                    mood: "quiet".into(),
+                    time_of_day: destination.origin.time_of_day.clone(),
+                    weather: destination.origin.weather.clone(),
+                },
+                gate,
+                ahead: vec![crate::gameplay::adventure::free_roam::PreparedPlace {
+                    from: HOME.into(),
+                    exit: "street-door".into(),
+                    place: destination.clone(),
+                }],
+            });
+        pack::with_test_pack(loaded.clone(), || {
+            let table = Table::start(
+                opening,
+                loaded,
+                Arc::new(NpcVoice::new(Arc::new(Storyteller::disabled()))),
+            );
+            run(table, destination);
+        });
+    });
+}
+
+struct Hs57Fake {
+    release: Arc<Semaphore>,
+    entered: Arc<Semaphore>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    cancelled: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Hs57Fake {
+    fn install(service: &Service, prototype: PlaceRecord, clash: bool) -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let fake = Self {
+            release: Arc::new(Semaphore::new(0)),
+            entered: Arc::new(Semaphore::new(0)),
+            calls: Arc::new(AtomicUsize::new(0)),
+            cancelled: Arc::new(AtomicUsize::new(0)),
+        };
+        let (release, entered, calls, cancelled) = (
+            fake.release.clone(),
+            fake.entered.clone(),
+            fake.calls.clone(),
+            fake.cancelled.clone(),
+        );
+        *service.look_ahead.generator.lock().unwrap() = Some(Arc::new(move |request| {
+            let count = calls.fetch_add(1, Ordering::SeqCst);
+            let mut record = prototype.clone();
+            let exit = request.exit.as_ref().unwrap();
+            record.name = if clash && count < 2 {
+                "Shared Square".into()
+            } else {
+                format!("Prepared {} {}", request.origin_name, exit.id)
+            };
+            record.place_id = place::place_id(&record.name, &request.taken_ids);
+            record.origin.id = request.origin_id.clone();
+            record.origin.name = request.origin_name.clone();
+            record.origin.time_of_day = request.time_of_day.clone();
+            record.origin.weather = request.weather.clone();
+            record.speaker.clear();
+            record.greeting.clear();
+            record.narration = format!("You arrive at {}.", record.name);
+            for (index, person) in record.people.iter_mut().enumerate() {
+                let previous = person.name.clone();
+                person.name = format!("Citizen{count}x{index}");
+                for ware in &mut record.wares {
+                    if ware.seller == previous {
+                        ware.seller = person.name.clone();
+                    }
+                }
+                for service in &mut record.services {
+                    if service.provider == previous {
+                        service.provider = person.name.clone();
+                    }
+                }
+                for stall in &mut record.stalls {
+                    if stall.keeper == previous {
+                        stall.keeper = person.name.clone();
+                    }
+                }
+            }
+            record.validate().unwrap();
+            let (release, entered, cancelled) =
+                (release.clone(), entered.clone(), cancelled.clone());
+            Box::pin(async move {
+                struct Pending(Arc<AtomicUsize>, bool);
+                impl Drop for Pending {
+                    fn drop(&mut self) {
+                        if self.1 {
+                            self.0.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
+                let mut pending = Pending(cancelled, true);
+                entered.add_permits(1);
+                release.acquire().await.unwrap().forget();
+                pending.1 = false;
+                Ok(record)
+            })
+        }));
+        fake
+    }
+
+    async fn wait_for_calls(&self, count: u32) {
+        tokio::time::timeout(Duration::from_secs(5), self.entered.acquire_many(count))
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+    }
+}
+
+#[test]
+fn hs57_prepared_move_commits_while_two_slow_neighbours_are_pending() {
+    with_hs57_free_roam(|table, destination| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let narration = destination.narration.clone();
+        let fake = Hs57Fake::install(&table.service, destination, false);
+        runtime.block_on(async {
+            let started = Instant::now();
+            let moved = tokio::time::timeout(
+                Duration::from_secs(1),
+                table
+                    .service
+                    .move_party_through([1; 32], operation(200), "street-door"),
+            )
+            .await
+            .unwrap()
+            .unwrap_or_else(|_| panic!("prepared destination moves"));
+            let move_ms = started.elapsed().as_millis();
+            assert_eq!(moved.to, STREET);
+            assert_eq!(moved.line, narration);
+            fake.wait_for_calls(2).await;
+            assert_eq!(fake.release.available_permits(), 0);
+            assert!(
+                crate::gameplay::adventure::free_roam::prepared(&table.current())
+                    .iter()
+                    .all(|ready| ready.from != STREET)
+            );
+            println!("HS57 prepared_move_ms={move_ms} pending_neighbours=2");
+            table.service.look_ahead.cancel();
+            tokio::task::yield_now().await;
+            assert_eq!(fake.cancelled.load(std::sync::atomic::Ordering::SeqCst), 2);
+        });
+    });
+}
+
+#[test]
+fn hs57_second_move_cancels_stale_neighbours_and_preserves_prepared_memory() {
+    with_hs57_free_roam(|table, destination| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fake = Hs57Fake::install(&table.service, destination, false);
+        runtime.block_on(async {
+            table
+                .service
+                .move_party_through([1; 32], operation(201), "street-door")
+                .await
+                .unwrap_or_else(|_| panic!("prepared destination moves"));
+            fake.wait_for_calls(2).await;
+            let started = Instant::now();
+            table
+                .service
+                .move_party_to_known([1; 32], operation(202), HOME)
+                .await
+                .unwrap_or_else(|_| panic!("known return moves"));
+            tokio::task::yield_now().await;
+            assert_eq!(fake.cancelled.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert!(
+                crate::gameplay::adventure::free_roam::prepared(&table.current())
+                    .iter()
+                    .all(|ready| ready.from != STREET)
+            );
+            println!(
+                "HS57 cancel_on_second_move_ms={} cancelled=2",
+                started.elapsed().as_millis()
+            );
+            table.service.look_ahead.cancel();
+        });
+    });
+}
+
+#[test]
+fn hs57_concurrent_neighbours_regenerate_a_name_clash_before_remembering() {
+    with_hs57_free_roam(|table, destination| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fake = Hs57Fake::install(&table.service, destination, true);
+        runtime.block_on(async {
+            table
+                .service
+                .move_party_through([1; 32], operation(203), "street-door")
+                .await
+                .unwrap_or_else(|_| panic!("prepared destination moves"));
+            fake.wait_for_calls(2).await;
+            let started = Instant::now();
+            fake.release.add_permits(3);
+            fake.wait_for_calls(1).await;
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if crate::gameplay::adventure::free_roam::prepared(&table.current())
+                        .iter()
+                        .filter(|ready| ready.from == STREET)
+                        .count()
+                        == 2
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let prepared = crate::gameplay::adventure::free_roam::prepared(&table.current());
+            let neighbours: Vec<_> = prepared
+                .iter()
+                .filter(|ready| ready.from == STREET)
+                .collect();
+            assert_ne!(neighbours[0].place.name, neighbours[1].place.name);
+            assert_ne!(neighbours[0].place.place_id, neighbours[1].place.place_id);
+            assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+            println!(
+                "HS57 concurrent_clash_ms={} initial_in_flight=2 regenerations=1",
+                started.elapsed().as_millis()
+            );
+        });
+    });
+}
+
+#[test]
+fn hs57_move_into_pending_neighbour_reuses_only_its_generation() {
+    with_hs57_free_roam(|table, destination| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fake = Hs57Fake::install(&table.service, destination, false);
+        runtime.block_on(async {
+            table.service.move_party_through([1; 32], operation(204), "street-door")
+                .await.unwrap_or_else(|_| panic!("prepared destination moves"));
+            fake.wait_for_calls(2).await;
+            let exit = model_of(&table.current()).ways_out.into_iter()
+                .find(|exit| exit.id != place::WAY_BACK).unwrap();
+            let mut moving = Box::pin(table.service.move_party_through([1; 32], operation(205), &exit.id));
+            tokio::select! {
+                _ = &mut moving => panic!("pending destination must wait for its existing generation"),
+                () = tokio::task::yield_now() => {}
+            }
+            assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+            fake.release.add_permits(1);
+            let started = Instant::now();
+            let moved = tokio::time::timeout(Duration::from_secs(2), moving).await.unwrap()
+                .unwrap_or_else(|_| panic!("in-flight destination moves when released"));
+            assert_eq!(moved.exit, exit.id);
+            assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 2,
+                "the sibling stays pending; travel must not request a duplicate destination");
+            println!("HS57 reuse_after_release_ms={} generation_calls=2", started.elapsed().as_millis());
+            table.service.look_ahead.cancel();
+        });
+    });
+}
+
+#[test]
+fn hs57_startup_warmup_returns_before_generating_neighbours() {
+    with_hs57_free_roam(|table, destination| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fake = Hs57Fake::install(&table.service, destination, false);
+        runtime.block_on(async {
+            table
+                .service
+                .move_party_through([1; 32], operation(206), "street-door")
+                .await
+                .unwrap_or_else(|_| panic!("prepared destination moves"));
+            table.service.look_ahead.cancel();
+            let started = Instant::now();
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                table.service.prepare_free_roam_current(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            println!(
+                "HS57 startup_warmup_return_ms={}",
+                started.elapsed().as_millis()
+            );
+            fake.wait_for_calls(2).await;
+            assert_eq!(fake.release.available_permits(), 0);
+            table.service.look_ahead.cancel();
+        });
+    });
+}
+
+#[test]
+fn hs57_last_service_owner_drop_aborts_pending_lookahead() {
+    with_hs57_free_roam(|table, destination| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fake = Hs57Fake::install(&table.service, destination, false);
+        let owner = Arc::downgrade(&table.service.look_ahead);
+        runtime.block_on(async move {
+            table
+                .service
+                .move_party_through([1; 32], operation(207), "street-door")
+                .await
+                .unwrap_or_else(|_| panic!("prepared destination moves"));
+            fake.wait_for_calls(2).await;
+            drop(table);
+            tokio::task::yield_now().await;
+            assert!(
+                owner.upgrade().is_none(),
+                "task data must not keep its owner alive"
+            );
+            assert_eq!(fake.cancelled.load(std::sync::atomic::Ordering::SeqCst), 2);
+        });
+    });
+}
+
+#[test]
+fn hs57_failed_generation_does_not_remember_a_destination() {
+    with_hs57_free_roam(|table, _| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        *table.service.look_ahead.generator.lock().unwrap() = Some(Arc::new(|_| {
+            Box::pin(async { Err(place_creation::CreationError::Model) })
+        }));
+        runtime.block_on(async {
+            table
+                .service
+                .move_party_through([1; 32], operation(208), "street-door")
+                .await
+                .unwrap_or_else(|_| panic!("prepared destination moves"));
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let complete = table
+                        .service
+                        .look_ahead
+                        .lock()
+                        .as_ref()
+                        .is_some_and(|batch| {
+                            batch
+                                .exits
+                                .iter()
+                                .all(|exit| matches!(*exit.outcome.borrow(), AheadOutcome::Failed))
+                        });
+                    if complete {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(
+                crate::gameplay::adventure::free_roam::prepared(&table.current())
+                    .iter()
+                    .all(|ready| ready.from != STREET)
+            );
+        });
+    });
+}
+
+#[test]
+fn hs57_dropped_move_caller_audits_cancellation_without_duplicate_generation() {
+    with_hs57_free_roam(|table, destination| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fake = Hs57Fake::install(&table.service, destination, false);
+        runtime.block_on(async {
+            table
+                .service
+                .move_party_through([1; 32], operation(209), "street-door")
+                .await
+                .unwrap_or_else(|_| panic!("prepared destination moves"));
+            fake.wait_for_calls(2).await;
+            let exit = model_of(&table.current())
+                .ways_out
+                .into_iter()
+                .find(|exit| exit.id != place::WAY_BACK)
+                .unwrap();
+            let mut moving = Box::pin(table.service.move_party_through(
+                [1; 32],
+                operation(210),
+                &exit.id,
+            ));
+            tokio::select! {
+                _ = &mut moving => panic!("destination still pending"),
+                () = tokio::task::yield_now() => {}
+            }
+            drop(moving);
+            assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert_eq!(
+                runtime::scene(table.current().state())
+                    .unwrap()
+                    .setting
+                    .unwrap()
+                    .place_id,
+                STREET
+            );
+            assert!(
+                actor::audit_lines_containing("PLACE move outcome=cancelled ms=")
+                    .iter()
+                    .any(|line| line.contains(&format!(
+                        "operation_hash={}",
+                        df_observe::operation_hash(operation(210).as_bytes())
+                    )))
+            );
+            table.service.look_ahead.cancel();
+        });
     });
 }

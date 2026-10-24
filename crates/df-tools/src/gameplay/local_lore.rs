@@ -498,6 +498,19 @@ impl LocalLore {
         Ok(())
     }
 
+    /// Read only the first matching retained decision, preserving journal order.
+    pub(in crate::gameplay) fn find_development_decision(
+        &self,
+        keep: impl Fn(&super::fact_backfill::FactDecision) -> bool,
+    ) -> Option<super::fact_backfill::FactDecision> {
+        self.decisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|kept| keep(kept))
+            .cloned()
+    }
+
     pub(in crate::gameplay) fn development_decisions(
         &self,
     ) -> Vec<super::fact_backfill::FactDecision> {
@@ -1304,6 +1317,7 @@ mod tests {
             decision: Decision::Backfill,
             reason: Reason::HarmlessMissingDetail,
             fact: Some(fact),
+            answer: None,
         };
         let saved = json!({"schema":SCHEMA, "adventure_seed":"seed-a", "scenes":[], "decisions":[decision]});
         fs::write(dir.join(FILE_NAME), saved.to_string()).unwrap();

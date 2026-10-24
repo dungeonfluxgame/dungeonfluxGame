@@ -379,15 +379,19 @@ impl PlaceMusic {
         };
         match status {
             MusicStatus::Ready(ready) => {
-                locked(&self.inner.state)
+                let newly_playing = locked(&self.inner.state)
                     .playing
-                    .insert(place.to_owned(), set.clone());
-                for band in set.band().neighbours() {
-                    self.request_variant(
-                        place,
-                        &MusicSetSpec::in_band(spec.clone(), *band),
-                        hub.as_ref(),
-                    );
+                    .insert(place.to_owned(), set.clone())
+                    .as_ref()
+                    != Some(&set);
+                if newly_playing {
+                    for band in set.band().neighbours() {
+                        self.request_variant(
+                            place,
+                            &MusicSetSpec::in_band(spec.clone(), *band),
+                            hub.as_ref(),
+                        );
+                    }
                 }
                 ready_plan(spec, &set, ready)
             }

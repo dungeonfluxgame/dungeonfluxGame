@@ -96,8 +96,6 @@ pub(in crate::gameplay) const CALL_DEADLINE: Duration = Duration::from_secs(120)
 pub(in crate::gameplay) const SET_DEADLINE: Duration = Duration::from_secs(300);
 /// The hub's own bound on a job, a little past the generator's so the generator reports first.
 const HUB_TIMEOUT: Duration = Duration::from_secs(330);
-/// An idle worker looks for queued work this often.
-const WORKER_POLL: Duration = Duration::from_millis(250);
 
 /// The hub's description of one place's music set.
 #[derive(Clone, Debug)]
@@ -371,7 +369,7 @@ impl HubMusic {
             loop {
                 let jobs = hub.take_jobs(1);
                 if jobs.is_empty() {
-                    tokio::time::sleep(WORKER_POLL).await;
+                    hub.wait_for_work().await;
                     continue;
                 }
                 for job in jobs {

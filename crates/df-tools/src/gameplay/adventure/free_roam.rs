@@ -10,6 +10,7 @@ use super::{
 };
 use crate::gameplay::{
     actor::record_audit_line,
+    approach_model::ApproachModel,
     pack::{self, Scene, SceneKey},
     place::{self, PlaceRecord},
     place_creation::{self, CreationError, CreationRequest},
@@ -135,6 +136,15 @@ pub(crate) fn world() -> Option<World> {
     pack::with_content(|content| content.beat_script.as_ref()?.free_roam.clone())
 }
 
+pub(crate) fn is_active() -> bool {
+    pack::with_content(|content| {
+        content
+            .beat_script
+            .as_ref()
+            .is_some_and(|script| script.free_roam.is_some())
+    })
+}
+
 /// A bounded presentation cache for the current session/run and exact immutable world.
 #[derive(Default)]
 struct Ahead {
@@ -164,25 +174,84 @@ pub(crate) fn prepared(current: &df_model::checkpoint::Checkpoint) -> Vec<Prepar
             ahead.scope = scope;
             ahead.places = world.ahead.clone();
             ahead.world = Some(world);
+            crate::gameplay::journey::living_scene::invalidate_projection_memos();
         }
         ahead.places.clone()
     })
 }
 
-pub(crate) fn remember(current: &df_model::checkpoint::Checkpoint, prepared: PreparedPlace) {
+/// Atomically rejects clashes between concurrently generated speculative places.
+pub(crate) fn remember(
+    current: &df_model::checkpoint::Checkpoint,
+    prepared: PreparedPlace,
+) -> bool {
     let _ = self::prepared(current);
     with_ahead(|ahead| {
-        if !ahead
+        if let Some(known) = ahead
             .places
             .iter()
-            .any(|known| known.from == prepared.from && known.exit == prepared.exit)
+            .find(|known| known.from == prepared.from && known.exit == prepared.exit)
         {
-            // Discard only speculative cache entries. Visited places remain in the checkpoint.
-            if ahead.places.len() >= 64 {
-                ahead.places.remove(0);
-            }
-            ahead.places.push(prepared);
+            return known.place == prepared.place;
         }
+        if ahead.places.iter().any(|known| {
+            known.place.place_id == prepared.place.place_id
+                || place::name_key(&known.place.name) == place::name_key(&prepared.place.name)
+                || known.place.people.iter().any(|known_person| {
+                    prepared.place.people.iter().any(|person| {
+                        place::name_key(&known_person.name) == place::name_key(&person.name)
+                            || known_person
+                                .name
+                                .split_whitespace()
+                                .next()
+                                .map(place::name_key)
+                                == person.name.split_whitespace().next().map(place::name_key)
+                    })
+                })
+        }) {
+            return false;
+        }
+        // Discard only speculative cache entries. Visited places remain in the checkpoint.
+        if ahead.places.len() >= 64 {
+            ahead.places.remove(0);
+        }
+        ahead.places.push(prepared);
+        crate::gameplay::journey::living_scene::invalidate_projection_memos();
+        true
+    })
+}
+
+/// Keep the original way id and alias while naming its prepared destination honestly.
+fn name_exits(
+    from: &str,
+    exits: &mut [crate::gameplay::adventure::scene_model::SceneWayOut],
+    ahead: &[PreparedPlace],
+) {
+    for exit in exits {
+        let Some(ready) = ahead
+            .iter()
+            .find(|ready| ready.from == from && ready.exit == exit.id)
+        else {
+            continue;
+        };
+        place::name_exit(exit, &ready.place.name);
+    }
+}
+
+pub(crate) fn name_prepared_exits(
+    from: &str,
+    exits: &mut [crate::gameplay::adventure::scene_model::SceneWayOut],
+) {
+    let Some(world) = world() else {
+        return;
+    };
+    with_ahead(|ahead| {
+        let places = if ahead.world.as_ref() == Some(&world) {
+            &ahead.places
+        } else {
+            &world.ahead
+        };
+        name_exits(from, exits, places);
     });
 }
 
@@ -267,8 +336,9 @@ async fn city(storyteller: &Storyteller, seed: u64) -> Result<City, CreationErro
     Err(last)
 }
 
-fn gate_request(city: &City) -> CreationRequest {
+fn gate_request(city: &City, run_seed: &str) -> CreationRequest {
     CreationRequest {
+        run_seed: run_seed.to_owned(),
         adventure: city.description(), origin_id: "place-city-approach".into(),
         origin_name: format!("Road outside {}", city.name),
         origin_short: "the public road outside the city wall".into(),
@@ -287,8 +357,9 @@ pub(crate) fn onward_request(
     origin: &PlaceRecord,
     exit: crate::gameplay::adventure::scene_model::SceneWayOut,
     prepared: &[PreparedPlace],
+    run_seed: &str,
 ) -> CreationRequest {
-    let mut request = gate_request(city);
+    let mut request = gate_request(city, run_seed);
     request.origin_id = origin.place_id.clone();
     request.origin_name = origin.name.clone();
     request.origin_short = origin.short.clone();
@@ -328,8 +399,9 @@ pub(crate) async fn generate(
     rules_mode: RulesMode,
     rating: ContentRating,
     storyteller: &Storyteller,
+    model: &ApproachModel,
 ) -> Result<GeneratedAdventure, CreationError> {
-    let result = generate_inner(seed, rules_mode, rating, storyteller).await;
+    let result = generate_inner(seed, rules_mode, rating, storyteller, model).await;
     audit(
         "city_and_gate",
         if result.is_ok() { "ready" } else { "failed" },
@@ -343,6 +415,7 @@ async fn generate_inner(
     rules_mode: RulesMode,
     rating: ContentRating,
     storyteller: &Storyteller,
+    model: &ApproachModel,
 ) -> Result<GeneratedAdventure, CreationError> {
     let mut loaded = pack::load_from_bytes(PACK, TUNING).map_err(|error| {
         record_audit_line(
@@ -362,7 +435,9 @@ async fn generate_inner(
         "city",
     );
     let city = city_result?;
-    let gate_result = place_creation::create_gate(storyteller, &gate_request(&city)).await;
+    let run_seed = seed.to_string();
+    let gate_result =
+        place_creation::create_gate(storyteller, model, &gate_request(&city, &run_seed)).await;
     audit(
         "gate",
         if gate_result.is_ok() {
@@ -385,8 +460,8 @@ async fn generate_inner(
         .filter(|exit| exit.id != place::WAY_BACK)
         .take(2)
     {
-        let request = onward_request(&city, &gate, exit.clone(), &ahead);
-        let result = place_creation::create_silent(storyteller, &request).await;
+        let request = onward_request(&city, &gate, exit.clone(), &ahead, &run_seed);
+        let result = place_creation::create_silent(storyteller, model, &request).await;
         audit(
             "look_ahead",
             if result.is_ok() { "ready" } else { "failed" },
@@ -410,6 +485,7 @@ async fn generate_inner(
             .and_then(|setting| setting.model.as_mut())
         {
             model.ways_out.retain(|exit| exit.id != place::WAY_BACK);
+            name_exits(&gate.place_id, &mut model.ways_out, &ahead);
         }
         // The manifest's live urban exterior role validates pack imagery; the generated room
         // remains keyed by this city's unique place_id and its own descriptions.
@@ -509,7 +585,7 @@ mod tests {
 
     fn cache(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../artifacts/tmp/lanes/HS38")
+            .join("../../artifacts/tmp/lanes/HS55/tmp")
             .join(format!("{name}-{}", std::process::id()))
     }
 
@@ -545,6 +621,9 @@ mod tests {
                 .find_map(|line| line.strip_prefix("FACTS: "))
                 .map(|line| serde_json::from_str(line).unwrap())
                 .unwrap();
+            if facts["task"] == "person_persona" {
+                return fixtures::persona_answer(prompt);
+            }
             if facts["task"] == "free_roam_city" {
                 return json!({
                     "name": "Alder", "character": "a canal city of pale stone and busy workshops",
@@ -596,7 +675,53 @@ mod tests {
             })).collect::<Vec<_>>();
             fixtures::answer(&place, &json!(people), &fixtures::things_slot())
         });
-        FakeEndpoint::start((0..16).map(|_| Reply::Compute(compute.clone())).collect())
+        FakeEndpoint::start((0..64).map(|_| Reply::Compute(compute.clone())).collect())
+    }
+
+    #[test]
+    fn hs54_prepared_exit_completion_invalidates_same_checkpoint_views() {
+        let endpoint = endpoint();
+        let directory = std::env::temp_dir().join(format!("hs54-ahead-{}", std::process::id()));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let storyteller = teller(endpoint.address, 0, Duration::from_secs(10), &directory);
+        let generated = runtime
+            .block_on(generate(
+                868,
+                RulesMode::Standard,
+                ContentRating::default(),
+                &storyteller,
+                &fixtures::jev(&fixtures::accepting_persona_judge(32)),
+            ))
+            .unwrap();
+        let (loaded, _) =
+            super::super::record::reload(&generated.documents(true).unwrap()).unwrap();
+        pack::with_test_pack(loaded, || {
+            let current = native::act(&native::prepared(), native::first(), 5, "begin-story");
+            let mut ready = prepared(&current)[0].clone();
+            // A synthetic newly completed preparation names this same exit differently.
+            ready.place.name = "Alder Eastern Walk".into();
+            with_ahead(|ahead| ahead.places.retain(|place| place.exit != ready.exit));
+            journey::living_scene::invalidate_projection_memos();
+            let before =
+                wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
+            let identity = pack::cache_identity();
+            remember(&current, ready.clone());
+            assert!(identity != pack::cache_identity());
+            let after =
+                wire::journey_view(&current, LocalDemoRole::Display, native::first()).unwrap();
+            assert_ne!(before, after);
+            let Some(df_protocol::common::view_message::Audience::Display(display)) =
+                after.audience
+            else {
+                panic!("display")
+            };
+            let scene = display.scene.unwrap();
+            assert!(scene.scene_contents_json.contains("Alder Eastern Walk"));
+        });
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     struct Owner {
@@ -673,6 +798,7 @@ mod tests {
                 RulesMode::Standard,
                 ContentRating::default(),
                 &storyteller,
+                &fixtures::jev(&fixtures::accepting_persona_judge(32)),
             ))
             .unwrap();
         let (loaded, _) =
@@ -681,8 +807,29 @@ mod tests {
             let opening = native::act(&native::prepared(), native::first(), 5, "begin-story");
             let gate = world().unwrap().gate;
             let first = prepared(&opening)[0].clone();
+            let scene = crate::gameplay::beat_script_runtime::scene(opening.state()).unwrap();
+            let model = scene.setting.as_ref().unwrap().model.as_ref().unwrap();
+            let way = model
+                .ways_out
+                .iter()
+                .find(|way| way.id == first.exit)
+                .unwrap();
+            assert_eq!(way.name, format!("way to {}", first.place.name));
+            let original = gate
+                .exits
+                .iter()
+                .find(|exit| place::slug(&exit.name) == first.exit)
+                .unwrap();
+            assert!(way.aliases.contains(&original.name));
+            for name in [&original.name, &first.place.name, &way.name] {
+                assert!(
+                    matches!(crate::gameplay::place_move::resolve_target(&opening, name).unwrap(),
+                    crate::gameplay::place_move::DevTarget::Exit(id) if id == first.exit)
+                );
+            }
             let (updates_in, updates) = watch::channel(opening.clone());
             let (sender, inbox): (_, ActorLoop<actor::Call>) = bounded_inbox();
+            let persona_judge = fixtures::accepting_persona_judge(32);
             let service = Service {
                 portraits: Portraits::disabled(),
                 display_credential: [0; 32],
@@ -691,10 +838,14 @@ mod tests {
                 updates: updates.clone(),
                 streams: Arc::new(Semaphore::new(2)),
                 voice: Voice::disabled(VoiceOff::Qualification),
-                npc_voice: Arc::new(NpcVoice::new(Arc::new(storyteller))),
+                npc_voice: Arc::new(
+                    NpcVoice::new(Arc::new(storyteller))
+                        .with_approach_model(fixtures::jev(&persona_judge)),
+                ),
                 table_log: TableLog::new(),
                 social: SocialLedger::none(),
                 living: LivingScenes::disabled(),
+                look_ahead: Arc::default(),
             };
             let owner = std::thread::spawn(move || {
                 pack::with_test_pack(loaded, || {
@@ -714,10 +865,23 @@ mod tests {
                     "",
                 ))
                 .unwrap_or_else(|_| panic!("the prepared exit is reachable"));
+            runtime.block_on(service.look_ahead.wait());
             assert_eq!(moved.to, first.place.place_id);
             assert_eq!(moved.line, first.place.narration);
             assert!(moved.created);
             let now = updates.borrow().clone();
+            let options = crate::gameplay::place_move::travel_options(&now).unwrap();
+            for ready in prepared(&now).iter().filter(|ready| ready.from == moved.to) {
+                let option = options
+                    .iter()
+                    .find(|option| option.id == format!("exit:{}", ready.exit))
+                    .unwrap();
+                assert_eq!(
+                    option.label,
+                    format!("Travel via way to {}", ready.place.name)
+                );
+                assert_ne!(ready.place.name, first.place.name);
+            }
             assert_eq!(
                 prepared(&now)
                     .iter()
@@ -725,10 +889,39 @@ mod tests {
                     .count(),
                 2
             );
-            let creation_calls = endpoint.bodies().len();
+            let tasks: Vec<String> = endpoint
+                .bodies()
+                .iter()
+                .map(|body| {
+                    let facts: Value = body["input"]
+                        .as_str()
+                        .unwrap()
+                        .lines()
+                        .find_map(|line| line.strip_prefix("FACTS: "))
+                        .map(|line| serde_json::from_str(line).unwrap())
+                        .unwrap();
+                    facts["task"].as_str().unwrap().to_owned()
+                })
+                .collect();
+            let creation_calls = tasks
+                .iter()
+                .filter(|task| matches!(task.as_str(), "free_roam_city" | "create_place"))
+                .count();
             assert_eq!(
                 creation_calls, 6,
                 "two new neighbours; the arrival itself reuses its prepared record"
+            );
+            assert_eq!(
+                tasks
+                    .iter()
+                    .filter(|task| task.as_str() == "person_persona")
+                    .count(),
+                12
+            );
+            assert_eq!(
+                tasks.len(),
+                18,
+                "six city/place calls and twelve per-person calls"
             );
             let before_refill = now.clone();
             with_ahead(|ahead| *ahead = Ahead::default());
@@ -755,6 +948,17 @@ mod tests {
                     "",
                 ))
                 .unwrap_or_else(|_| panic!("return to the gate"));
+            // Restored legacy labels are corrected from the durable move, even with no cache.
+            with_ahead(|ahead| ahead.places.clear());
+            let mut restored_ways = gate.expand().unwrap().model.ways_out;
+            place::name_bound_exits(updates.borrow().state(), &gate.place_id, &mut restored_ways)
+                .unwrap();
+            let restored_way = restored_ways
+                .iter()
+                .find(|way| way.id == first.exit)
+                .unwrap();
+            assert_eq!(restored_way.name, format!("way to {}", first.place.name));
+            assert!(restored_way.aliases.contains(&original.name));
             with_ahead(|ahead| *ahead = Ahead::default());
             runtime
                 .block_on(service.move_party_toward(
@@ -764,6 +968,7 @@ mod tests {
                     "",
                 ))
                 .unwrap_or_else(|_| panic!("return to the known street refills ahead"));
+            runtime.block_on(service.look_ahead.wait());
             let now = updates.borrow().clone();
             assert_eq!(
                 prepared(&now)
@@ -783,6 +988,7 @@ mod tests {
                 .unwrap_or_else(|_| {
                     panic!("landmark travel creates and enters its actual destination")
                 });
+            runtime.block_on(service.look_ahead.wait());
             assert_eq!(moved.place_name, landmark.name);
             let now = updates.borrow().clone();
             let made = place::created(now.state()).unwrap();
@@ -813,6 +1019,7 @@ mod tests {
             RulesMode::Standard,
             ContentRating::default(),
             &storyteller,
+            &fixtures::jev(&fixtures::accepting_persona_judge(32)),
         )
         .await
         .unwrap();
@@ -875,14 +1082,18 @@ mod tests {
         std::fs::remove_dir_all(resume_directory).unwrap();
         let social = SocialLedger::open(record.dossiers, &record.seed, None).unwrap();
         let story = StoryFacts::from_pack(&loaded.pack);
-        let mut landmark_request = gate_request(&world.city);
+        let mut landmark_request = gate_request(&world.city, "867");
         landmark_request.origin_id = world.gate.place_id.clone();
         landmark_request.origin_name = world.gate.name.clone();
         landmark_request.landmark = Some(world.gate.landmarks[0].clone());
         landmark_request.place_names = vec![world.gate.name.clone()];
-        let landmark = place_creation::create_silent(&storyteller, &landmark_request)
-            .await
-            .unwrap();
+        let landmark = place_creation::create_silent(
+            &storyteller,
+            &fixtures::jev(&fixtures::accepting_persona_judge(3)),
+            &landmark_request,
+        )
+        .await
+        .unwrap();
         pack::with_test_pack(loaded, || {
             let lobby = native::prepared();
             let lobby_view =
@@ -1056,7 +1267,7 @@ mod tests {
             assert_eq!(report["city"]["name"], "Alder");
             assert_eq!(report["prepared_ahead"].as_array().unwrap().len(), 2);
         });
-        assert_eq!(endpoint.bodies().len(), 5);
+        assert_eq!(endpoint.bodies().len(), 15);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1068,7 +1279,8 @@ mod tests {
                 7,
                 RulesMode::Standard,
                 ContentRating::default(),
-                &storyteller
+                &storyteller,
+                &ApproachModel::default(),
             )
             .await
             .is_err()
@@ -1085,6 +1297,7 @@ mod tests {
             RulesMode::Standard,
             ContentRating::default(),
             &storyteller,
+            &fixtures::jev(&fixtures::accepting_persona_judge(32)),
         )
         .await
         .unwrap();

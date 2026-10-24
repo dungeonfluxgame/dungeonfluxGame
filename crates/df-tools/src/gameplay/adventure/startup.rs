@@ -82,6 +82,7 @@ pub(crate) async fn prepare(
     configuration: &tokio_postgres::Config,
     current: &Path,
     storyteller: &Storyteller,
+    persona_model: &crate::gameplay::approach_model::ApproachModel,
 ) -> Result<PreparedAdventure, StartupError> {
     let database = configuration
         .get_dbname()
@@ -106,7 +107,7 @@ pub(crate) async fn prepare(
         return super::campaign_startup::select(settings, current, database, state);
     }
     let fresh = match &state {
-        AdventureStartup::Fresh => Some(fresh_adventure(settings, storyteller).await?),
+        AdventureStartup::Fresh => Some(fresh_adventure(settings, storyteller, persona_model).await?),
         AdventureStartup::Stored(_) => None,
     };
     select_with(settings, current, database, state, fresh)
@@ -217,7 +218,7 @@ async fn fresh_adventure_requests_emotional_profiles_for_generated_dossiers() {
         chapter_type: None,
     };
 
-    let fresh = fresh_adventure(&settings, &storyteller).await.unwrap();
+    let fresh = fresh_adventure(&settings, &storyteller, &crate::gameplay::approach_model::ApproachModel::default()).await.unwrap();
     let profile_requests = endpoint
         .bodies()
         .iter()
@@ -255,6 +256,7 @@ async fn fresh_adventure_requests_emotional_profiles_for_generated_dossiers() {
 async fn fresh_adventure(
     settings: &AdventureSettings,
     storyteller: &Storyteller,
+    persona_model: &crate::gameplay::approach_model::ApproachModel,
 ) -> Result<FreshAdventure, StartupError> {
     if settings.mode == super::super::startup_configuration::AdventureMode::FreeRoam {
         let seed = match settings.seed {
@@ -262,7 +264,7 @@ async fn fresh_adventure(
             None => u64::from_le_bytes(model::random::<8>().map_err(|_| StartupError::Seed)?),
         };
         let generated =
-            super::free_roam::generate(seed, settings.rules_mode, content_rating(), storyteller)
+            super::free_roam::generate(seed, settings.rules_mode, content_rating(), storyteller, persona_model)
                 .await
                 .map_err(StartupError::FreeRoam)?;
         return Ok(FreshAdventure {

@@ -10,14 +10,18 @@
 //! leads, create the place when the run does not have it yet, and ask the session owner to commit
 //! the move. The table is told about a move only from the committed result.
 
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant},
+};
 
 use df_model::checkpoint::Checkpoint;
 use df_protocol::common as rpc;
 use df_types::OperationId;
+use futures::{StreamExt, stream::FuturesUnordered};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use super::{
     Service,
@@ -43,6 +47,157 @@ const CREATION_DEADLINE: Duration = Duration::from_secs(90);
 const RECENT_LINES: usize = 10;
 const RECENT_LINE_CHARACTERS: usize = 200;
 const STATEMENT_LIMIT: usize = 8;
+
+tokio::task_local! {
+    /// The input boundary scopes this across heading judgement and the resulting move.
+    pub(super) static HERO_LINE_STARTED: Instant;
+}
+
+fn move_started() -> Instant {
+    HERO_LINE_STARTED
+        .try_with(|started| *started)
+        .unwrap_or_else(|_| Instant::now())
+}
+
+#[derive(Clone)]
+enum AheadOutcome {
+    Pending,
+    Ready(Arc<place::PlaceRecord>),
+    Failed,
+    Cancelled,
+}
+
+struct AheadExit {
+    id: String,
+    outcome: watch::Sender<AheadOutcome>,
+}
+
+struct AheadBatch {
+    origin: String,
+    basis: df_model::checkpoint::Basis,
+    token: Arc<()>,
+    started: Instant,
+    operation: Option<u64>,
+    exits: Vec<AheadExit>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+fn audit_ahead(from: &str, exit: &str, outcome: &str, started: Instant, operation: Option<u64>) {
+    let correlation = operation
+        .map(|operation| format!(" operation_hash={operation}"))
+        .unwrap_or_default();
+    actor::record_audit_line(
+        "gameplay.free_roam",
+        format!(
+            "FREE_ROAM look_ahead from={from} exit={exit} outcome={outcome} ms={}{correlation}",
+            started.elapsed().as_millis()
+        ),
+    );
+}
+
+impl AheadBatch {
+    fn cancel_pending(&self) {
+        for exit in &self.exits {
+            if matches!(*exit.outcome.borrow(), AheadOutcome::Pending) {
+                exit.outcome.send_replace(AheadOutcome::Cancelled);
+                audit_ahead(
+                    &self.origin,
+                    &exit.id,
+                    "cancelled",
+                    self.started,
+                    self.operation,
+                );
+            }
+        }
+    }
+}
+
+impl Drop for AheadBatch {
+    fn drop(&mut self) {
+        self.cancel_pending();
+        self.task.abort();
+    }
+}
+
+/// Shared by service clones; the final owner aborts its retained task on drop.
+#[derive(Default)]
+pub(super) struct LookAhead {
+    batch: Mutex<Option<AheadBatch>>,
+    #[cfg(test)]
+    generator: Mutex<Option<NeighbourGenerator>>,
+}
+
+#[cfg(test)]
+type NeighbourGenerator = Arc<
+    dyn Fn(
+            &CreationRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<place::PlaceRecord, place_creation::CreationError>,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
+impl LookAhead {
+    pub(super) fn cancel(&self) {
+        self.lock().take();
+    }
+
+    #[cfg(test)]
+    pub(super) async fn wait(&self) {
+        let waits: Vec<_> = self
+            .lock()
+            .as_ref()
+            .map(|batch| {
+                batch
+                    .exits
+                    .iter()
+                    .map(|exit| exit.outcome.subscribe())
+                    .collect()
+            })
+            .unwrap_or_default();
+        tokio::time::timeout(CREATION_DEADLINE, async {
+            for mut outcome in waits {
+                while matches!(*outcome.borrow_and_update(), AheadOutcome::Pending) {
+                    outcome.changed().await.unwrap();
+                }
+                assert!(matches!(*outcome.borrow(), AheadOutcome::Ready(_)));
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<AheadBatch>> {
+        self.batch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+struct MoveCancellation {
+    started: Instant,
+    operation: OperationId,
+    active: bool,
+}
+
+impl Drop for MoveCancellation {
+    fn drop(&mut self) {
+        if self.active {
+            actor::record_audit_line(
+                "gameplay.place",
+                format!(
+                    "PLACE move outcome=cancelled ms={} operation_hash={}",
+                    self.started.elapsed().as_millis(),
+                    df_observe::operation_hash(self.operation.as_bytes())
+                ),
+            );
+        }
+    }
+}
 
 /// Why a move was not made.
 pub(super) enum MoveError {
@@ -167,10 +322,11 @@ pub(super) fn travel_options(
     }
     let state = current.state();
     let scene = beat_script_runtime::scene(state)?;
-    let Some(snapshot) = journey::living_scene::snapshot(state, &scene)? else {
+    let Some(mut snapshot) = journey::living_scene::snapshot(state, &scene)? else {
         return Ok(vec![]);
     };
     let party = place::whereabouts(state, &scene)?;
+    place::name_bound_exits(state, &party.here, &mut snapshot.model.ways_out)?;
     let mut options = Vec::new();
     let mut reached = Vec::new();
     for exit in snapshot.model.ways_out.iter().filter(|exit| exit.open) {
@@ -211,6 +367,8 @@ pub(super) fn travel_options(
 
 /// A move that is ready to commit: its destination is resolved and, when it is new, made.
 pub(super) struct PreparedMove {
+    started: Instant,
+    cancellation: Option<MoveCancellation>,
     operation: OperationId,
     expected_basis: df_model::checkpoint::Basis,
     from: String,
@@ -292,12 +450,17 @@ pub(in crate::gameplay) fn destination_scene(
         place::scene_of(record, base)?
     };
     if free_roam.is_some() {
-        let snapshot = journey::living_scene::snapshot(current.state(), &scene)?
+        let mut snapshot = journey::living_scene::snapshot(current.state(), &scene)?
             .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
         let setting = scene
             .setting
             .as_mut()
             .ok_or(df_session::submission::RepositoryError::InvalidCandidate)?;
+        place::name_bound_exits(
+            current.state(),
+            &setting.place_id,
+            &mut snapshot.model.ways_out,
+        )?;
         setting.model = Some(snapshot.model);
     }
     Ok(scene)
@@ -492,8 +655,7 @@ impl Service {
                     tonic::Status::unavailable("free-roam current place record absent")
                 })?
         };
-        self.prepare_free_roam_neighbours(&current, &scene, &record)
-            .await;
+        self.start_free_roam_neighbours(current, scene, record, move_started(), None);
         Ok(())
     }
 
@@ -525,10 +687,11 @@ impl Service {
     fn choices(&self, scene: &pack::Scene) -> Option<Choices> {
         let current = self.updates.borrow().clone();
         let state = current.state();
-        let snapshot = journey::living_scene::snapshot(state, scene)
+        let mut snapshot = journey::living_scene::snapshot(state, scene)
             .ok()
             .flatten()?;
         let party = place::whereabouts(state, scene).ok()?;
+        place::name_bound_exits(state, &party.here, &mut snapshot.model.ways_out).ok()?;
         let exits: Vec<SceneWayOut> = snapshot
             .model
             .ways_out
@@ -963,9 +1126,6 @@ impl Service {
         if let Some(reason) = travel_blocker(&self.updates.borrow()).map_err(state_failure)? {
             return Err(tonic::Status::failed_precondition(reason).into());
         }
-        if !matches!(&target, MoveTarget::Spot(_)) {
-            self.prepare_free_roam_current().await?;
-        }
         let prepared = self.prepare_move(operation, target, goal).await?;
         self.commit_prepared(credential, prepared).await
     }
@@ -1018,7 +1178,7 @@ impl Service {
             self.living.prepare_arena_photograph(&record)?;
             return Ok(());
         }
-        let prepared = tokio::time::timeout(
+        let mut prepared = tokio::time::timeout(
             CREATION_DEADLINE,
             self.prepare_move(operation, MoveTarget::Exit(exit.clone()), ""),
         )
@@ -1027,6 +1187,9 @@ impl Service {
             audit_refusal(&source, &exit, "arena_creation_deadline");
             MoveError::Refused(PlaceRefusal::CreationUnavailable)
         })??;
+        if let Some(cancellation) = &mut prepared.cancellation {
+            cancellation.active = false;
+        }
         if !source_matches(&self.updates.borrow()) || prepared.from != source {
             return Err(tonic::Status::failed_precondition("fight source changed").into());
         }
@@ -1046,6 +1209,34 @@ impl Service {
         operation: OperationId,
         target: MoveTarget,
         goal: &str,
+    ) -> Result<PreparedMove, MoveError> {
+        let started = move_started();
+        let mut cancellation = MoveCancellation {
+            started,
+            operation,
+            active: true,
+        };
+        let result = self
+            .prepare_move_inner(operation, target, goal, started)
+            .await;
+        match result {
+            Ok(mut prepared) => {
+                prepared.cancellation = Some(cancellation);
+                Ok(prepared)
+            }
+            Err(error) => {
+                cancellation.active = false;
+                Err(error)
+            }
+        }
+    }
+
+    async fn prepare_move_inner(
+        &self,
+        operation: OperationId,
+        target: MoveTarget,
+        goal: &str,
+        started: Instant,
     ) -> Result<PreparedMove, MoveError> {
         let current = self.updates.borrow().clone();
         let state = current.state();
@@ -1124,7 +1315,7 @@ impl Service {
                     audit_refusal(&party.here, &exit_id, PlaceRefusal::RunFull.label());
                     return Err(PlaceRefusal::RunFull.into());
                 }
-                let ready = super::adventure::free_roam::prepared(&current)
+                let mut ready = super::adventure::free_roam::prepared(&current)
                     .into_iter()
                     .find(|ready| {
                         ready.from == party.here
@@ -1134,6 +1325,17 @@ impl Service {
                                         == place::name_key(&ready.place.name)
                                 }))
                     });
+                if ready.is_none()
+                    && let Some(record) = self
+                        .await_free_roam_destination(&current, &party.here, &exit_id)
+                        .await?
+                {
+                    ready = Some(super::adventure::free_roam::PreparedPlace {
+                        from: party.here.clone(),
+                        exit: exit_id.clone(),
+                        place: record,
+                    });
+                }
                 let mut request = self
                     .creation_request(
                         &current,
@@ -1196,15 +1398,15 @@ impl Service {
                         .taken_ids
                         .extend(ahead.iter().map(|ready| ready.place.place_id.clone()));
                 }
-                let (storyteller, _) = self.npc_voice.hero_identity_models();
+                let (storyteller, persona_model) = self.npc_voice.hero_identity_models();
                 let made = match ready {
                     Some(ready) => Ok(Ok(ready.place)),
                     None => {
                         tokio::time::timeout(CREATION_DEADLINE, async {
                             if free_roam.is_some() || spot.is_some() {
-                                place_creation::create_silent(storyteller, &request).await
+                                place_creation::create_silent(storyteller, persona_model, &request).await
                             } else {
-                                place_creation::create(storyteller, &request).await
+                                place_creation::create(storyteller, persona_model, &request).await
                             }
                         })
                         .await
@@ -1238,10 +1440,6 @@ impl Service {
                 destination_scene(&current, record, &scene),
                 super::living_scenes::PlateAheadSource::Generated,
             );
-            if spot.is_none() {
-                self.prepare_free_roam_neighbours(&current, &scene, record)
-                    .await;
-            }
         }
         let to_short = match &created {
             Some(record) => record.short.clone(),
@@ -1252,6 +1450,8 @@ impl Service {
                 .unwrap_or_default(),
         };
         Ok(PreparedMove {
+            started,
+            cancellation: None,
             operation,
             expected_basis: current.basis(),
             from: party.here,
@@ -1266,23 +1466,34 @@ impl Service {
     async fn commit_prepared(
         &self,
         credential: [u8; 32],
-        prepared: PreparedMove,
+        mut prepared: PreparedMove,
     ) -> Result<Box<Moved>, MoveError> {
         if let Some(reason) = travel_blocker(&self.updates.borrow()).map_err(state_failure)? {
+            if let Some(cancellation) = &mut prepared.cancellation {
+                cancellation.active = false;
+            }
             return Err(tonic::Status::failed_precondition(reason).into());
         }
-        self.commit_move(
-            credential,
-            MoveProposal {
-                operation: prepared.operation,
-                expected_basis: prepared.expected_basis,
-                from: prepared.from,
-                exit: prepared.exit,
-                to: prepared.to,
-                created: prepared.created,
-            },
-        )
-        .await
+        let started = prepared.started;
+        let mut cancellation = prepared.cancellation.take();
+        let result = self
+            .commit_move(
+                credential,
+                started,
+                MoveProposal {
+                    operation: prepared.operation,
+                    expected_basis: prepared.expected_basis,
+                    from: prepared.from,
+                    exit: prepared.exit,
+                    to: prepared.to,
+                    created: prepared.created,
+                },
+            )
+            .await;
+        if let Some(cancellation) = &mut cancellation {
+            cancellation.active = false;
+        }
+        result
     }
 
     /// Moves the party straight to a place the run already has (development only: no exit is
@@ -1298,6 +1509,7 @@ impl Service {
         let party = place::whereabouts(current.state(), &scene).map_err(state_failure)?;
         self.commit_move(
             credential,
+            move_started(),
             MoveProposal {
                 operation,
                 expected_basis: current.basis(),
@@ -1313,8 +1525,10 @@ impl Service {
     async fn commit_move(
         &self,
         credential: [u8; 32],
+        started: Instant,
         proposal: MoveProposal,
     ) -> Result<Box<Moved>, MoveError> {
+        let operation = df_observe::operation_hash(proposal.operation.as_bytes());
         let (reply, wait) = oneshot::channel();
         self.actor
             .try_submit(actor::Call::PlaceMove {
@@ -1335,23 +1549,87 @@ impl Service {
                 if super::adventure::free_roam::world().is_some() {
                     moved.line = moved.narration.clone();
                 }
+                self.start_after_move(&moved, started, operation);
                 Ok(moved)
             }
             MoveOutcome::Refused(reason) => Err(MoveError::Refused(reason)),
         }
     }
 
-    /// Bounded owned look-ahead before arrival, never an authoritative move or a detached job.
-    async fn prepare_free_roam_neighbours(
-        &self,
-        current: &Checkpoint,
-        base: &pack::Scene,
-        origin: &place::PlaceRecord,
-    ) {
-        let Some(world) = super::adventure::free_roam::world() else {
+    fn start_after_move(&self, moved: &Moved, started: Instant, operation: u64) {
+        // Replacement cancels the old origin even when the new place has no onward exits.
+        self.look_ahead.lock().take();
+        let current = self.updates.borrow().clone();
+        let Ok(scene) = beat_script_runtime::scene(current.state()) else {
             return;
         };
-        let Ok(scene) = destination_scene(current, origin, base) else {
+        let record = place::created(current.state())
+            .ok()
+            .and_then(|mut places| places.remove(&moved.to))
+            .or_else(|| {
+                super::adventure::free_roam::world()
+                    .filter(|world| world.gate.place_id == moved.to)
+                    .map(|world| world.gate)
+            });
+        if let Some(record) = record {
+            self.start_free_roam_neighbours(current, scene, record, started, Some(operation));
+        }
+    }
+
+    async fn await_free_roam_destination(
+        &self,
+        current: &Checkpoint,
+        from: &str,
+        exit: &str,
+    ) -> Result<Option<place::PlaceRecord>, MoveError> {
+        let waiting = self.look_ahead.lock().as_ref().and_then(|batch| {
+            (batch.origin == from
+                && batch.basis.session == current.basis().session
+                && batch.basis.run == current.basis().run)
+                .then(|| {
+                    batch
+                        .exits
+                        .iter()
+                        .find(|entry| entry.id == exit)
+                        .map(|entry| entry.outcome.subscribe())
+                })
+                .flatten()
+        });
+        let Some(mut waiting) = waiting else {
+            return Ok(None);
+        };
+        tokio::time::timeout(CREATION_DEADLINE, async {
+            loop {
+                match waiting.borrow_and_update().clone() {
+                    AheadOutcome::Ready(record) => return Ok(Some(record.as_ref().clone())),
+                    AheadOutcome::Failed | AheadOutcome::Cancelled => {
+                        return Err(MoveError::Refused(PlaceRefusal::CreationUnavailable));
+                    }
+                    AheadOutcome::Pending => {}
+                }
+                waiting
+                    .changed()
+                    .await
+                    .map_err(|_| MoveError::Refused(PlaceRefusal::CreationUnavailable))?;
+            }
+        })
+        .await
+        .map_err(|_| MoveError::Refused(PlaceRefusal::CreationUnavailable))?
+    }
+
+    /// The owner retains the whole warm-up, including memory recall before generation.
+    fn start_free_roam_neighbours(
+        &self,
+        current: Checkpoint,
+        base: pack::Scene,
+        origin: place::PlaceRecord,
+        started: Instant,
+        operation: Option<u64>,
+    ) {
+        if super::adventure::free_roam::world().is_none() {
+            return;
+        }
+        let Ok(scene) = destination_scene(&current, &origin, &base) else {
             return;
         };
         let Some(model) = scene
@@ -1361,107 +1639,246 @@ impl Service {
         else {
             return;
         };
-        let home = match place::home_id(&pack::scene(pack::SceneKey::Opening)) {
-            Ok(home) => home,
-            Err(_) => {
-                audit_refusal(&origin.place_id, "ahead", "look_ahead_home");
-                return;
-            }
-        };
-        for exit in model
+        let exits: Vec<_> = model
             .ways_out
             .iter()
             .filter(|exit| exit.open && exit.id != place::WAY_BACK)
             .take(2)
-        {
-            match place::destination(current.state(), &home, &origin.place_id, exit) {
-                Ok(Destination::Created(record)) => {
-                    self.prepare_place_media(
-                        destination_scene(current, &record, base),
-                        super::living_scenes::PlateAheadSource::Travel,
-                    );
-                    continue;
-                }
-                Ok(Destination::Home) => {
-                    self.prepare_place_media(
-                        destination_scene(current, &world.gate, base),
-                        super::living_scenes::PlateAheadSource::Travel,
-                    );
-                    continue;
-                }
-                Ok(Destination::Story { .. }) => continue,
-                Ok(Destination::Create { .. }) => {}
-                Err(_) => {
-                    audit_refusal(&origin.place_id, &exit.id, "look_ahead_state");
-                    continue;
+            .cloned()
+            .collect();
+        let mut owner = self.look_ahead.lock();
+        if owner.as_ref().is_some_and(|batch| {
+            batch.origin == origin.place_id
+                && batch.basis.session == current.basis().session
+                && batch.basis.run == current.basis().run
+        }) {
+            if let Some(batch) = owner.as_ref() {
+                for exit in &batch.exits {
+                    if let AheadOutcome::Ready(record) = &*exit.outcome.borrow() {
+                        super::adventure::free_roam::remember(
+                            &current,
+                            super::adventure::free_roam::PreparedPlace {
+                                from: origin.place_id.clone(),
+                                exit: exit.id.clone(),
+                                place: record.as_ref().clone(),
+                            },
+                        );
+                    }
                 }
             }
-            let ahead = super::adventure::free_roam::prepared(current);
-            if let Some(ready) = ahead
-                .iter()
-                .find(|ready| ready.from == origin.place_id && ready.exit == exit.id)
-            {
-                self.prepare_place_media(
-                    destination_scene(current, &ready.place, base),
-                    super::living_scenes::PlateAheadSource::Generated,
-                );
-                continue;
-            }
-            let request = self
-                .creation_request(current, &scene, model, Some(exit), None, "", None)
-                .await;
-            let mut request = match request {
-                Ok(request) => request,
-                Err(_) => {
-                    audit_refusal(&origin.place_id, &exit.id, "look_ahead_state");
-                    continue;
-                }
+            return;
+        }
+        owner.take();
+        let token = Arc::new(());
+        let weak = Arc::downgrade(&self.look_ahead);
+        // The worker owns data clones, but never the Arc that retains its own handle.
+        let mut worker = self.clone();
+        worker.look_ahead = Arc::default();
+        let statuses: Vec<_> = exits
+            .iter()
+            .map(|exit| AheadExit {
+                id: exit.id.clone(),
+                outcome: watch::channel(AheadOutcome::Pending).0,
+            })
+            .collect();
+        let destinations: Vec<_> = exits
+            .into_iter()
+            .zip(statuses.iter().map(|entry| entry.outcome.clone()))
+            .collect();
+        let job_token = token.clone();
+        let job_origin = origin.clone();
+        let basis = current.basis();
+        let mut updates = self.updates.clone();
+        let task = tokio::spawn(async move {
+            let work = async {
+                let mut pending: FuturesUnordered<_> = destinations
+                    .into_iter()
+                    .map(|(exit, outcome)| {
+                        worker.generate_free_roam_neighbour(
+                            &current,
+                            &scene,
+                            &job_origin,
+                            exit,
+                            outcome,
+                            &weak,
+                            &job_token,
+                            started,
+                            operation,
+                        )
+                    })
+                    .collect();
+                while pending.next().await.is_some() {}
             };
+            tokio::select! {
+                () = work => {}
+                () = async { while updates.changed().await.is_ok() {} } => {
+                    if let Some(owner) = weak.upgrade() {
+                        let batch = owner.lock();
+                        if let Some(batch) = batch.as_ref().filter(|batch| Arc::ptr_eq(&batch.token, &job_token)) {
+                            batch.cancel_pending();
+                        }
+                    }
+                }
+            }
+        });
+        *owner = Some(AheadBatch {
+            origin: origin.place_id,
+            basis,
+            token,
+            started,
+            operation,
+            exits: statuses,
+            task,
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn generate_free_roam_neighbour(
+        &self,
+        current: &Checkpoint,
+        scene: &pack::Scene,
+        origin: &place::PlaceRecord,
+        exit: SceneWayOut,
+        outcome: watch::Sender<AheadOutcome>,
+        owner: &Weak<LookAhead>,
+        token: &Arc<()>,
+        started: Instant,
+        operation: Option<u64>,
+    ) {
+        let mut cancellation = outcome.subscribe();
+        let generation = tokio::time::timeout(CREATION_DEADLINE, async {
+            let world = super::adventure::free_roam::world().ok_or(())?;
+            let home = place::home_id(&pack::scene(pack::SceneKey::Opening)).map_err(|_| ())?;
+            let destination = place::destination(current.state(), &home, &origin.place_id, &exit)
+                .map_err(|_| ())?;
+            let named = match &destination {
+                Destination::Create { named } => named.clone(),
+                _ => None,
+            };
+            let existing = match destination {
+                Destination::Created(record) => Some(*record),
+                Destination::Home => Some(world.gate),
+                Destination::Story { .. } => return Err(()),
+                Destination::Create { .. } => super::adventure::free_roam::prepared(current)
+                    .into_iter()
+                    .find(|ready| ready.from == origin.place_id && ready.exit == exit.id)
+                    .map(|ready| ready.place),
+            };
+            if let Some(record) = existing {
+                return Ok(record);
+            }
+            let model = scene
+                .setting
+                .as_ref()
+                .and_then(|setting| setting.model.as_ref())
+                .ok_or(())?;
+            let mut request = self
+                .creation_request(current, scene, model, Some(&exit), named, "", None)
+                .await
+                .map_err(|_| ())?;
             request.adventure = world.city.description();
             request.canon["city"] = json!(world.city);
-            request
-                .place_names
-                .extend(ahead.iter().map(|ready| ready.place.name.clone()));
             request.place_names.push(origin.name.clone());
-            request
-                .taken_ids
-                .extend(ahead.iter().map(|ready| ready.place.place_id.clone()));
             request.taken_ids.push(origin.place_id.clone());
-            request.people_names.extend(
-                ahead
-                    .iter()
-                    .flat_map(|ready| ready.place.people.iter().map(|person| person.name.clone())),
-            );
-            let (storyteller, _) = self.npc_voice.hero_identity_models();
-            match tokio::time::timeout(
-                CREATION_DEADLINE,
-                place_creation::create_silent(storyteller, &request),
-            )
-            .await
-            {
-                Ok(Ok(record)) => {
-                    self.prepare_place_media(
-                        destination_scene(current, &record, base),
-                        super::living_scenes::PlateAheadSource::Generated,
-                    );
-                    actor::record_audit_line(
-                        "gameplay.free_roam",
-                        format!(
-                            "FREE_ROAM look_ahead from={} exit={} place={} outcome=ready",
-                            origin.place_id, exit.id, record.place_id
-                        ),
-                    );
-                    super::adventure::free_roam::remember(
-                        current,
-                        super::adventure::free_roam::PreparedPlace {
-                            from: origin.place_id.clone(),
-                            exit: exit.id.clone(),
-                            place: record,
-                        },
-                    );
+            let (storyteller, persona_model) = self.npc_voice.hero_identity_models();
+            for _ in 0..2 {
+                let ahead = super::adventure::free_roam::prepared(current);
+                request
+                    .place_names
+                    .extend(ahead.iter().map(|ready| ready.place.name.clone()));
+                request
+                    .taken_ids
+                    .extend(ahead.iter().map(|ready| ready.place.place_id.clone()));
+                request.people_names.extend(
+                    ahead.iter().flat_map(|ready| {
+                        ready.place.people.iter().map(|person| person.name.clone())
+                    }),
+                );
+                #[cfg(test)]
+                let generator = owner.upgrade().and_then(|owner| {
+                    owner
+                        .generator
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone()
+                });
+                #[cfg(test)]
+                let made = match generator {
+                    Some(generator) => generator(&request).await,
+                    None => place_creation::create_silent(storyteller, persona_model, &request).await,
+                };
+                #[cfg(not(test))]
+                let made = place_creation::create_silent(storyteller, persona_model, &request).await;
+                let record = made.map_err(|_| ())?;
+                let Some(owner) = owner.upgrade() else {
+                    return Err(());
+                };
+                let batch = owner.lock();
+                if !batch
+                    .as_ref()
+                    .is_some_and(|batch| Arc::ptr_eq(&batch.token, token))
+                {
+                    return Err(());
                 }
-                Ok(Err(error)) => audit_refusal(&origin.place_id, &exit.id, error.label()),
-                Err(_) => audit_refusal(&origin.place_id, &exit.id, "look_ahead_deadline"),
+                if !matches!(*outcome.borrow(), AheadOutcome::Pending) {
+                    return Err(());
+                }
+                let latest = self.updates.borrow().clone();
+                if latest.basis().session != current.basis().session
+                    || latest.basis().run != current.basis().run
+                {
+                    return Err(());
+                }
+                if beat_script_runtime::scene(latest.state())
+                    .ok()
+                    .and_then(|scene| scene.setting)
+                    .is_none_or(|setting| setting.place_id != origin.place_id)
+                {
+                    outcome.send_replace(AheadOutcome::Cancelled);
+                    audit_ahead(&origin.place_id, &exit.id, "cancelled", started, operation);
+                    return Err(());
+                }
+                if super::adventure::free_roam::remember(
+                    current,
+                    super::adventure::free_roam::PreparedPlace {
+                        from: origin.place_id.clone(),
+                        exit: exit.id.clone(),
+                        place: record.clone(),
+                    },
+                ) {
+                    outcome.send_replace(AheadOutcome::Ready(Arc::new(record.clone())));
+                    audit_ahead(&origin.place_id, &exit.id, "ready", started, operation);
+                    return Ok(record);
+                }
+                // The other concurrent result reserved this name/id first; regenerate against it.
+            }
+            Err(())
+        });
+        let result = tokio::select! {
+            result = generation => result,
+            () = async {
+                loop {
+                    if matches!(*cancellation.borrow_and_update(), AheadOutcome::Cancelled) { break; }
+                    if cancellation.changed().await.is_err() { break; }
+                }
+            } => return,
+        };
+        match result {
+            Ok(Ok(record)) => {
+                self.prepare_place_media(
+                    destination_scene(current, &record, scene),
+                    super::living_scenes::PlateAheadSource::Generated,
+                );
+                if matches!(*outcome.borrow(), AheadOutcome::Pending) {
+                    outcome.send_replace(AheadOutcome::Ready(Arc::new(record)));
+                    audit_ahead(&origin.place_id, &exit.id, "ready", started, operation);
+                }
+            }
+            _ => {
+                if matches!(*outcome.borrow(), AheadOutcome::Pending) {
+                    outcome.send_replace(AheadOutcome::Failed);
+                    audit_ahead(&origin.place_id, &exit.id, "failed", started, operation);
+                }
             }
         }
     }
@@ -1562,6 +1979,7 @@ impl Service {
             None => String::new(),
         };
         Ok(CreationRequest {
+            run_seed: format!("{:?}", current.basis().run),
             adventure: pack::scene(pack::SceneKey::Opening).title,
             origin_id: setting.place_id.clone(),
             origin_name: setting.name.clone(),
@@ -1601,9 +2019,12 @@ pub(super) fn resolve_target(current: &Checkpoint, wanted: &str) -> Result<DevTa
     let unavailable = |_| "the current place is unavailable".to_owned();
     let state = current.state();
     let scene = beat_script_runtime::scene(state).map_err(unavailable)?;
-    let snapshot = journey::living_scene::snapshot(state, &scene)
+    let mut snapshot = journey::living_scene::snapshot(state, &scene)
         .map_err(unavailable)?
         .ok_or_else(|| "the current place has no scene model".to_owned())?;
+    let party = place::whereabouts(state, &scene).map_err(unavailable)?;
+    place::name_bound_exits(state, &party.here, &mut snapshot.model.ways_out)
+        .map_err(unavailable)?;
     let wanted = wanted.trim();
     let same = |text: &str| text.eq_ignore_ascii_case(wanted);
     if let Some(exit) = snapshot.model.ways_out.iter().find(|exit| {

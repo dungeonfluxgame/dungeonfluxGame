@@ -4,7 +4,7 @@ use super::super::pack::{FindingSkill, SceneKey};
 use super::setting::{SceneSetting, SettingKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const SCHEMA: &str =
     include_str!("../../../../../content/adventure-tables/scene-model.schema.json");
@@ -152,6 +152,8 @@ pub(crate) struct ScenePerson {
     pub(crate) attitudes: BTreeMap<String, StartingAttitude>,
     pub(crate) knowledge: Vec<SceneKnowledge>,
     pub(crate) wants: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) persona: Option<crate::gameplay::place::PersonPersona>,
     /// Private purse used only by server-authorized NPC commerce actions.
     #[serde(default)]
     pub(crate) coin_cp: u32,
@@ -307,6 +309,15 @@ impl SceneOffer {
             format!("item-{}", self.id)
         } else {
             self.item_id.clone()
+        }
+    }
+
+    /// Same answer as `canonical_item_id() == target_id`, without allocating a String per probe.
+    pub(crate) fn has_item_id(&self, target_id: &str) -> bool {
+        if self.item_id.is_empty() {
+            target_id.strip_prefix("item-") == Some(self.id.as_str())
+        } else {
+            self.item_id == target_id
         }
     }
 }
@@ -626,7 +637,7 @@ impl SceneModel {
     pub(crate) fn offer(&self, target_id: &str) -> Option<&SceneOffer> {
         self.offers
             .iter()
-            .find(|offer| offer.canonical_item_id() == target_id || offer.id == target_id)
+            .find(|offer| offer.has_item_id(target_id) || offer.id == target_id)
     }
 
     /// Finite stock is available until the same concrete item is materialized as a thing.
@@ -780,8 +791,16 @@ impl SceneModel {
                         || SceneInventoryLocation::Scene {
                             position: thing.position.clone(),
                         },
-                        |holder_id| SceneInventoryLocation::Held {
-                            holder_id: holder_id.clone(),
+                        |holder_id| {
+                            if matches!(thing.position.as_str(), "worn" | "sheathed" | "stowed") {
+                                SceneInventoryLocation::Scene {
+                                    position: format!("{} by {holder_id}", thing.position),
+                                }
+                            } else {
+                                SceneInventoryLocation::Held {
+                                    holder_id: holder_id.clone(),
+                                }
+                            }
                         },
                     ),
                     available: thing.holder_id.is_none() && thing.in_scene && thing.portable,
@@ -813,19 +832,26 @@ impl SceneModel {
     }
 
     pub(crate) fn public_contents(&self) -> Result<String, SceneModelError> {
-        let mut contents: Value = serde_json::from_str(&self.picture_state()?)
-            .map_err(|_| SceneModelError::Serialization)?;
+        // Built as a Value directly: no serialize-then-parse round trip of the picture state.
+        let mut contents = self.picture_state_value();
         let visible_people = self
             .people
             .iter()
             .map(|person| person.id.as_str())
             .collect::<BTreeSet<_>>();
+        // First-match index, identical to the former `iter().find` by ID: built once per call.
+        let thing_index = self
+            .things
+            .iter()
+            .rev()
+            .map(|thing| (thing.id.as_str(), thing))
+            .collect::<HashMap<_, _>>();
         if let Some(things) = contents.get_mut("things").and_then(Value::as_array_mut) {
             for view in things {
                 let Some(thing) = view
                     .get("id")
                     .and_then(Value::as_str)
-                    .and_then(|id| self.things.iter().find(|thing| thing.id == id))
+                    .and_then(|id| thing_index.get(id).copied())
                 else {
                     continue;
                 };
@@ -842,17 +868,6 @@ impl SceneModel {
                         .filter(|owner| visible_people.contains(owner))
                 );
             }
-        }
-        // A carried stack (twenty arrows, ten rations) is one entry in the shared contents: its
-        // extra units would otherwise repeat it per unit, and six heroes' starting gear pushed the
-        // view past the client's 64 KiB decode limit (2026-10-24, the TV could not connect).
-        if let Some(things) = contents.get_mut("things").and_then(Value::as_array_mut) {
-            things.retain(|view| {
-                !view
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .is_some_and(is_extra_unit)
-            });
         }
         contents["offers"] = serde_json::json!(
             self.offers
@@ -876,10 +891,7 @@ impl SceneModel {
             .inventory()
             .into_iter()
             .filter_map(|mut entry| {
-                if is_extra_unit(&entry.item_id) {
-                    return None;
-                }
-                if let Some(thing) = self.things.iter().find(|thing| thing.id == entry.item_id) {
+                if let Some(thing) = thing_index.get(entry.item_id.as_str()).copied() {
                     if !thing.in_scene || !thing.publicly_visible {
                         return None;
                     }
@@ -918,6 +930,12 @@ impl SceneModel {
 
     /// Visible material only: private knowledge, undiscovered clues and searches never reach art.
     pub(crate) fn picture_state(&self) -> Result<String, SceneModelError> {
+        serde_json::to_string(&self.picture_state_value())
+            .map_err(|_| SceneModelError::Serialization)
+    }
+
+    /// The picture state as a Value, so projections extend it without serializing and re-parsing.
+    fn picture_state_value(&self) -> Value {
         let people = self
             .people
             .iter()
@@ -939,8 +957,21 @@ impl SceneModel {
                         self.people
                             .iter()
                             .find(|person| person.id == holder_id)
-                            .map(|person| format!("held by {}", person.name))
-                            .unwrap_or_else(|| "held in the scene".into())
+                            .map(|person| {
+                                let carriage = match thing.position.as_str() {
+                                    "worn" => "worn",
+                                    "sheathed" => "sheathed or slung",
+                                    "stowed" => "stowed",
+                                    _ => "held",
+                                };
+                                format!("{carriage} by {}", person.name)
+                            })
+                            .unwrap_or_else(|| match thing.position.as_str() {
+                                "worn" | "sheathed" | "stowed" => {
+                                    format!("{} in the scene", thing.position)
+                                }
+                                _ => "held in the scene".into(),
+                            })
                     },
                 );
                 serde_json::json!({
@@ -962,11 +993,10 @@ impl SceneModel {
                 })
             })
             .collect::<Vec<_>>();
-        serde_json::to_string(&serde_json::json!({
+        serde_json::json!({
             "time_of_day": self.time_of_day, "weather": self.weather,
             "people": people, "things": things, "ways_out": ways_out,
-        }))
-        .map_err(|_| SceneModelError::Serialization)
+        })
     }
 
     /// Table fallback is generated before prose so the same room facts guide narration and art.
@@ -1344,7 +1374,7 @@ impl SceneModel {
             SceneFightOutcome::Dead | SceneFightOutcome::Unconscious
         ) {
             for thing in &mut self.things {
-                if thing.holder_id.as_deref() == Some(person_id) {
+                if thing.holder_id.as_deref() == Some(person_id) && thing.position != "worn" {
                     thing.in_use = false;
                 }
             }
@@ -2117,6 +2147,7 @@ fn named_people(
                 },
             ],
             wants: format!("wants the party's errand concerning {stake} to reach a clear end"),
+            persona: None,
             coin_cp: if setting.kind == SettingKind::Shop {
                 5_000
             } else {
@@ -2269,6 +2300,7 @@ fn background_people(
                 },
             ],
             wants,
+            persona: None,
             coin_cp: 500,
             passive_perception: default_passive_perception(),
         });
@@ -3351,8 +3383,57 @@ fn matching_people<'a>(people: &'a [ScenePerson], line: &str) -> Vec<&'a ScenePe
         .collect()
 }
 
-/// The second and later units of a carried stack (`equipment-<id>-unit-<n>`), which the shared
-/// scene contents show once, as the stack's first unit.
-fn is_extra_unit(id: &str) -> bool {
-    id.starts_with("equipment-") && id.contains("-unit-")
+#[cfg(test)]
+mod hs54_projection_tests {
+    use super::*;
+    #[test]
+    fn public_contents_preserves_drawn_legacy_units_and_reports_carriage() {
+        let mut model: SceneModel = serde_json::from_slice(include_bytes!(
+            "../../../../../content/merchant-shop/scene-model.json"
+        ))
+        .unwrap();
+        let holder = model.people[0].id.clone();
+        let name = model.people[0].name.clone();
+        let mut thing = model.things[0].clone();
+        thing.id = "equipment-source-unit-1".into();
+        thing.holder_id = Some(holder.clone());
+        thing.in_scene = true;
+        thing.publicly_visible = true;
+        model.things = vec![thing];
+        for position in ["drawn", "worn", "sheathed", "stowed"] {
+            model.things[0].position = position.into();
+            let public: Value = serde_json::from_str(&model.public_contents().unwrap()).unwrap();
+            assert_eq!(public["things"][0]["id"], "equipment-source-unit-1");
+            assert_eq!(public["inventory"][0]["item_id"], "equipment-source-unit-1");
+            let inventory = model.inventory();
+            if position == "drawn" {
+                assert!(matches!(
+                    inventory[0].location,
+                    SceneInventoryLocation::Held { .. }
+                ));
+                assert_eq!(public["things"][0]["position"], format!("held by {name}"));
+            } else {
+                assert!(matches!(
+                    inventory[0].location,
+                    SceneInventoryLocation::Scene { .. }
+                ));
+                assert!(
+                    !public["things"][0]["position"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("held")
+                );
+            }
+        }
+        model.things[0].publicly_visible = false;
+        let public: Value = serde_json::from_str(&model.public_contents().unwrap()).unwrap();
+        assert!(public["things"].as_array().unwrap().is_empty());
+        assert!(
+            public["inventory"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| entry["item_id"] != "equipment-source-unit-1")
+        );
+    }
 }

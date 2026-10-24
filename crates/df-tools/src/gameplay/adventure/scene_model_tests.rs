@@ -65,6 +65,7 @@ fn merchant_shop() -> SceneModel {
 
 fn add_test_hero(model: &mut SceneModel, id: &str, name: &str) {
     model.people.push(ScenePerson {
+        persona: None,
         id: id.to_owned(),
         name: name.to_owned(),
         role: "hero".into(),

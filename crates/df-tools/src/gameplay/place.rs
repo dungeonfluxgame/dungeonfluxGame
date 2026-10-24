@@ -23,6 +23,7 @@ use df_render::art_contract;
 use df_session::submission::RepositoryError;
 use df_types::{OperationId, SessionRevision};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::{
     adventure::{
@@ -165,6 +166,162 @@ pub(in crate::gameplay) struct PersonDraft {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in crate::gameplay) stat_block: Option<PersonStatBlock>,
     pub(in crate::gameplay) knowledge: Vec<String>,
+    /// Committed expressive identity; absent only in saves predating generated personas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::gameplay) persona: Option<PersonPersona>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Energy {
+    Low,
+    Steady,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Nerve {
+    Nervous,
+    Steady,
+    Bold,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Warmth {
+    Cool,
+    Polite,
+    Warm,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Talk {
+    Terse,
+    Chatty,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Humour {
+    Dry,
+    Earnest,
+    Jokey,
+}
+
+/// Closed draws supplied to the author before any persona prose is written.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Temperament {
+    pub(crate) energy: Energy,
+    pub(crate) nerve: Nerve,
+    pub(crate) warmth: Warmth,
+    pub(crate) talk: Talk,
+    pub(crate) humour: Humour,
+}
+
+impl Temperament {
+    pub(in crate::gameplay) fn differences(self, other: Self) -> usize {
+        [
+            self.energy != other.energy,
+            self.nerve != other.nerve,
+            self.warmth != other.warmth,
+            self.talk != other.talk,
+            self.humour != other.humour,
+        ]
+        .into_iter()
+        .filter(|different| *different)
+        .count()
+    }
+
+    fn from_number(mut number: u16) -> Self {
+        let energy = match number % 3 {
+            0 => Energy::Low,
+            1 => Energy::Steady,
+            _ => Energy::High,
+        };
+        number /= 3;
+        let nerve = match number % 3 {
+            0 => Nerve::Nervous,
+            1 => Nerve::Steady,
+            _ => Nerve::Bold,
+        };
+        number /= 3;
+        let warmth = match number % 3 {
+            0 => Warmth::Cool,
+            1 => Warmth::Polite,
+            _ => Warmth::Warm,
+        };
+        number /= 3;
+        let talk = if number.is_multiple_of(2) {
+            Talk::Terse
+        } else {
+            Talk::Chatty
+        };
+        number /= 2;
+        let humour = match number % 3 {
+            0 => Humour::Dry,
+            1 => Humour::Earnest,
+            _ => Humour::Jokey,
+        };
+        Self {
+            energy,
+            nerve,
+            warmth,
+            talk,
+            humour,
+        }
+    }
+
+    /// A versioned hash gives a stable draw without process-global random state. Rejection
+    /// sampling over the finite 162 profiles separates every neighbour on at least two axes.
+    pub(in crate::gameplay) fn draw(
+        run_seed: &str,
+        place_id: &str,
+        name: &str,
+        previous: &[Self],
+    ) -> Option<Self> {
+        if previous.len() >= MAXIMUM_PEOPLE {
+            return None;
+        }
+        let mut hash = Sha256::new();
+        for part in ["person-temperament-1", run_seed, place_id, name] {
+            hash.update((part.len() as u64).to_le_bytes());
+            hash.update(part.as_bytes());
+        }
+        let digest = hash.finalize();
+        let start = u16::from_le_bytes([digest[0], digest[1]]) % 162;
+        // At most five people: each prior profile excludes only ten of the 162 profiles.
+        (0..162)
+            .map(|offset| Self::from_number((start + offset) % 162))
+            .find(|candidate| {
+                previous
+                    .iter()
+                    .all(|other| candidate.differences(*other) >= 2)
+            })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PersonPersona {
+    pub(crate) temperament: Temperament,
+    pub(crate) backstory: String,
+    pub(crate) speech: String,
+    pub(crate) catchphrase: String,
+}
+
+impl PersonPersona {
+    pub(in crate::gameplay) fn validate(&self) -> bool {
+        within(&self.backstory, 320)
+            && self.backstory.chars().count() <= 320
+            && (1..=2).contains(&sentences(&self.backstory).len())
+            && within(&self.speech, 180)
+            && self.speech.chars().count() <= 180
+            && within(&self.catchphrase, 64)
+            && self.catchphrase.chars().count() <= 64
+    }
 }
 
 /// Person stat blocks implemented by the SRD 5.2.1 tactical rules. The storyteller chooses
@@ -392,6 +549,7 @@ impl PlaceRecord {
                     })
                     .collect(),
                 wants: person.wants.trim().to_owned(),
+                persona: person.persona.clone(),
                 coin_cp: person.purse_cp,
                 passive_perception: 10,
             });
@@ -466,7 +624,19 @@ impl PlaceRecord {
                     value_cp: None,
                     use_effect: "It can be handled and examined.".to_owned(),
                     position: thing.position.trim().to_owned(),
-                    owner_id: None,
+                    // A stall belongs to the keeper bound to it by exact name, as that person's
+                    // ScenePerson id; other scenery has no owner.
+                    owner_id: self
+                        .stalls
+                        .iter()
+                        .find(|stall| name_key(&stall.name) == name_key(&thing.name))
+                        .map(|stall| {
+                            format!(
+                                "{}-{}",
+                                self.person_prefix(&stall.keeper),
+                                slug(&stall.keeper)
+                            )
+                        }),
                     in_use: false,
                     in_scene: true,
                     publicly_visible: true,
@@ -584,6 +754,10 @@ impl PlaceRecord {
                 || !within(&person.position, 32)
                 || !within(&person.wants, 60)
                 || person.purse_cp > MAXIMUM_PURSE_CP
+                || person
+                    .persona
+                    .as_ref()
+                    .is_some_and(|persona| !persona.validate())
                 || !(1..=3).contains(&person.knowledge.len())
                 || person.knowledge.iter().any(|line| !within(line, 80))
                 || slug(&person.name).is_empty()
@@ -875,6 +1049,52 @@ pub(in crate::gameplay) fn destination_of(
     resolve(state, home, Some(place_id.to_owned()))
 }
 
+/// Display names follow durable travel bindings even after speculative caches are rebuilt.
+pub(in crate::gameplay) fn name_bound_exits(
+    state: &GameState,
+    here: &str,
+    exits: &mut [SceneWayOut],
+) -> Result<(), RepositoryError> {
+    let Some(world) = super::adventure::free_roam::world() else {
+        return Ok(());
+    };
+    super::adventure::free_roam::name_prepared_exits(here, exits);
+    for exit in exits {
+        let name = match destination(state, &world.gate.place_id, here, exit)? {
+            Destination::Home => &world.gate.name,
+            Destination::Created(record) => {
+                name_exit(exit, &record.name);
+                continue;
+            }
+            Destination::Create { .. } | Destination::Story { .. } => continue,
+        };
+        name_exit(exit, name);
+    }
+    Ok(())
+}
+
+pub(in crate::gameplay) fn name_exit(exit: &mut SceneWayOut, destination: &str) {
+    let name = format!("way to {destination}");
+    if exit.name != name {
+        if !exit.aliases.contains(&exit.name) {
+            exit.aliases.push(exit.name.clone());
+        }
+        exit.name = name;
+    }
+    if !exit.aliases.iter().any(|alias| alias == destination) {
+        exit.aliases.push(destination.to_owned());
+    }
+}
+
+/// Navigation labels do not change the physical opening already used for a room photograph.
+pub(in crate::gameplay) fn physical_way_names(model: &mut SceneModel) {
+    for exit in &mut model.ways_out {
+        if let Some(original) = exit.aliases.first() {
+            exit.name = original.clone();
+        }
+    }
+}
+
 fn resolve(
     state: &GameState,
     home: &str,
@@ -1109,13 +1329,6 @@ pub(in crate::gameplay) fn people_in_use(
 /// The scene a beat's party stood in when the decision at `revision` was made: the beat's own
 /// scene, or the created place of the last move made in this beat before that decision. A replay
 /// of an observation made in a created place reads that place, not the beat's own scene.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the observation replay calls it once the TRAVEL request lands"
-    )
-)]
 pub(in crate::gameplay) fn scene_at(
     state: &GameState,
     beat: &str,
@@ -1190,6 +1403,7 @@ pub(in crate::gameplay) fn scene_of(
     let Expanded { mut model, cast } = place
         .expand()
         .map_err(|_| RepositoryError::InvalidCandidate)?;
+    super::adventure::free_roam::name_prepared_exits(&place.place_id, &mut model.ways_out);
     let key_label = base.key.source_label().replace('-', "_");
     for person in &mut model.people {
         person.present_in = vec![key_label.clone()];
