@@ -17,6 +17,7 @@ or a claim that source, generated schemas or game/runtime services already exist
 The authorized development planning database is now provisioned; its records are
 plans, not implemented or verified game features.
 
+- [Game refinement](game-refinement.md): ongoing refinement decisions and open launch-flow discussion.
 - [Mandatory coding style](coding-style.md): required Rust formatting, naming,
   contracts, ownership/errors, async behavior, instrumentation, and review gates.
 - [Browser client architecture](client-architecture.md): agreed shared-display and
